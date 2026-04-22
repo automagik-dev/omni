@@ -6,7 +6,7 @@
  * omni providers create --name <name> --schema <schema> --base-url <url> [--api-key <key>]
  *   Claude Code: --project-path <path> [--max-turns <n>] [--permission-mode <mode>]
  *   OpenClaw: --default-agent-id <id>
- *   Genie: --agent-name <name> --target-agent <name> [--team-name <template>]
+ *   nats-genie: --agent-name <name> --target-agent <name> [--team-name <template>]
  * omni providers update <id> [--name <name>] [--base-url <url>] [--api-key <key>] [--schema-config <json>]
  * omni providers setup openclaw --gateway-url <url> --gateway-token <token> --agent-id <id>
  * omni providers agents <id>
@@ -62,7 +62,7 @@ function validateCreateOptions(options: {
     return 'Claude Code providers require --project-path.\nExample: omni providers create --name "My Project" --schema claude-code --base-url http://localhost:8882 --project-path /home/user/myproject';
   }
   if (options.schema === 'nats-genie' && (!options.agentName || !options.targetAgent)) {
-    return 'Genie providers require --agent-name and --target-agent.\nExample: omni providers create --name "My Genie" --schema nats-genie --base-url "file:///home/user/.claude/teams" --agent-name omni --target-agent team-lead --team-name "workspace-{chat_id}"';
+    return 'nats-genie providers require --agent-name and --target-agent.\nExample: omni providers create --name "My Nats Genie" --schema nats-genie --base-url "file:///home/user/.claude/teams" --agent-name omni --target-agent team-lead --team-name "workspace-{chat_id}"';
   }
   return null;
 }
@@ -368,12 +368,12 @@ export function createProvidersCommand(): Command {
     .option('--permission-mode <mode>', 'Permission mode: default, acceptEdits, bypassPermissions, plan (claude-code)')
     .option('--model <model>', 'Model override (claude-code)')
     .option('--system-prompt <prompt>', 'System prompt prepended to agent (claude-code)')
-    // Genie options
-    .option('--agent-name <name>', 'Agent identity / "from" field (required for genie)')
-    .option('--target-agent <name>', 'Target agent inbox to deliver to (required for genie)')
+    // nats-genie options
+    .option('--agent-name <name>', 'Agent identity / "from" field (required for nats-genie)')
+    .option('--target-agent <name>', 'Target agent inbox to deliver to (required for nats-genie)')
     .option(
       '--team-name <template>',
-      'Team name template, supports {chat_id}, {thread_id}, {sender_id} (genie, default: omni-{chat_id})',
+      'Team name template, supports {chat_id}, {thread_id}, {sender_id} (nats-genie, default: omni-{chat_id})',
     )
     .action(handleCreate);
 
@@ -465,10 +465,10 @@ export function createProvidersCommand(): Command {
     .option('--no-stream', 'Disable streaming by default')
     .option('--active', 'Set provider active')
     .option('--no-active', 'Set provider inactive')
-    // Schema-specific options (genie)
-    .option('--agent-name <name>', 'Agent identity (genie)')
-    .option('--target-agent <name>', 'Target agent inbox (genie)')
-    .option('--team-name <template>', 'Team name template (genie)')
+    // Schema-specific options (nats-genie)
+    .option('--agent-name <name>', 'Agent identity (nats-genie)')
+    .option('--target-agent <name>', 'Target agent inbox (nats-genie)')
+    .option('--team-name <template>', 'Team name template (nats-genie)')
     // Schema-specific options (claude-code)
     .option('--project-path <path>', 'Project directory path (claude-code)')
     .option('--max-turns <number>', 'Max conversation turns (claude-code)', Number.parseInt)
