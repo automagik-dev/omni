@@ -23,6 +23,7 @@ import {
   type SystemCalls,
   ensureInternalPortFree,
   findProcessOnPort,
+  isAddressInUse,
   isPopulatedPgserveDir,
   killOrphanedPostgres,
   killPostgresByPid,
@@ -609,5 +610,47 @@ describe('isPopulatedPgserveDir', () => {
 
   test('returns false when dir does not exist at all', () => {
     expect(isPopulatedPgserveDir(join(tmpdir(), `pgserve-missing-${Date.now()}`))).toBe(false);
+  });
+});
+
+/**
+ * Regression guard for automagik-dev/omni#469.
+ *
+ * `tryStartOnPort` relies on `isAddressInUse` to convert a port-conflict throw
+ * into a `null` return, so the `MAX_PORT_RETRIES` loop can advance to port+1.
+ * If this check drifts behind Bun's error wording, the fallback silently
+ * disengages and a simple port collision surfaces as a fatal main() crash.
+ *
+ * Both wordings below are observed in production:
+ *   - Bun.listen (bun ≥ 1.3.11): "Failed to listen at 127.0.0.1"
+ *   - pgserve wrapper:           "Failed to listen on 0.0.0.0:54321"
+ */
+describe('isAddressInUse', () => {
+  test('matches Bun.listen wording ("Failed to listen at <hostname>", no port)', () => {
+    expect(isAddressInUse(new Error('Failed to listen at 127.0.0.1'))).toBe(true);
+  });
+
+  test('matches pgserve wrapper wording ("Failed to listen on <hostname>:<port>")', () => {
+    expect(isAddressInUse(new Error('Failed to listen on 0.0.0.0:54321'))).toBe(true);
+  });
+
+  test('matches canonical Node/libuv EADDRINUSE errno string', () => {
+    expect(isAddressInUse(new Error('listen EADDRINUSE: address already in use 0.0.0.0:54321'))).toBe(true);
+  });
+
+  test('matches lowercase "address already in use" fragment alone', () => {
+    expect(isAddressInUse(new Error('bind failed: address already in use'))).toBe(true);
+  });
+
+  test('accepts non-Error throwables by stringifying them', () => {
+    expect(isAddressInUse('Failed to listen at ::1')).toBe(true);
+    expect(isAddressInUse({ toString: () => 'EADDRINUSE' })).toBe(true);
+  });
+
+  test('returns false for unrelated errors so they propagate as fatal', () => {
+    expect(isAddressInUse(new Error('ENOENT: no such file or directory'))).toBe(false);
+    expect(isAddressInUse(new Error('permission denied'))).toBe(false);
+    expect(isAddressInUse(undefined)).toBe(false);
+    expect(isAddressInUse(null)).toBe(false);
   });
 });

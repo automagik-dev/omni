@@ -211,10 +211,30 @@ export function validatePgserveDataDir(config: PgserveConfig): string | null {
   return resolved;
 }
 
-function isAddressInUse(error: unknown): boolean {
+/**
+ * Decide whether a caught error indicates the listener port is already bound,
+ * so `tryStartOnPort` can return `null` and let the retry loop advance to the
+ * next port instead of surfacing a fatal crash.
+ *
+ * Wording is deliberately broad because the error originates in two layers:
+ *   - `Bun.listen` (bun ≥ 1.3.11, Linux x64) throws `"Failed to listen at <hostname>"`
+ *     (preposition **at**, no port) when `reusePort` is not set and the port is taken.
+ *   - pgserve's own wrapper has historically thrown
+ *     `"Failed to listen on <hostname>:<port>"` (preposition **on**, with port).
+ *   - `Node` / `libuv` surfaces `EADDRINUSE` / "address already in use".
+ *
+ * Bun's internal string is an implementation detail that can drift between versions;
+ * matching both prepositions keeps the port-retry fallback resilient without
+ * coupling to a specific runtime build. See automagik-dev/omni#469.
+ */
+export function isAddressInUse(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
-  // pgserve throws "Failed to listen on 0.0.0.0:<port>" when the proxy port is taken
-  return msg.includes('EADDRINUSE') || msg.includes('address already in use') || msg.includes('Failed to listen on');
+  return (
+    msg.includes('EADDRINUSE') ||
+    msg.includes('address already in use') ||
+    msg.includes('Failed to listen on') ||
+    msg.includes('Failed to listen at')
+  );
 }
 
 function buildDatabaseUrl(port: number): string {
