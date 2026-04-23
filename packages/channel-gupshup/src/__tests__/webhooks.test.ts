@@ -3,13 +3,17 @@
  *
  * Verifies:
  * - Gupshup native payload shapes (all 8 message types)
- * - event_type filtering (non-user_input ignored)
+ * - event_type routing (user_input / async_response / click_to_chat_advertise
+ *   → processInboundMessage; known non-message events dropped; unknown
+ *   event_types fail-open with WARN — incident #503)
  * - Deduplication (second identical webhook is dropped)
  * - Location lat/lng string-to-float conversion
  * - Reply context extraction
  */
 
 import { describe, expect, it } from 'bun:test';
+import { handleGupshupWebhook } from '../handlers/webhooks';
+import type { GupshupPlugin } from '../plugin';
 
 // ─────────────────────────────────────────────────────────────
 // Native payload fixtures (from real Gupshup webhooks)
@@ -242,12 +246,14 @@ describe('Gupshup native inbound payload shapes', () => {
     expect(rc.id).toBe('03309zQxh2vOdjjUI6ly3y');
   });
 
-  it('non-user_input event_type is not a message', () => {
+  it('known non-message event_type (message_event) is not processed as a message', () => {
     const payload = makePayload(
       { type: 'text', text: 'x', from: '551196', timestamp: 1, id: 'wamid.x' },
       { event_type: 'message_event' },
     );
-    expect(payload.event_type).not.toBe('user_input');
+    // Semantic shift post-2026-04-22: async_response is now a message event,
+    // so the denylist-based check uses a known non-message type instead.
+    expect(payload.event_type).toBe('message_event');
   });
 
   it('sender name resolved from senderobj.display', () => {
@@ -317,5 +323,213 @@ describe('Gupshup inbound dedup — cache behavior', () => {
 
     cache.dispose();
     expect(cache.size).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// handleGupshupWebhook — event_type routing (incident #503)
+// ─────────────────────────────────────────────────────────────
+
+interface HandlerLogCall {
+  level: 'debug' | 'info' | 'warn' | 'error';
+  message: string;
+  data?: Record<string, unknown>;
+}
+
+function makeHandlerHarness() {
+  const logs: HandlerLogCall[] = [];
+  const received: Array<{
+    instanceId: string;
+    externalId: string;
+    from: string;
+    content: { type: string; text?: string };
+  }> = [];
+
+  const logger = {
+    debug: (message: string, data?: Record<string, unknown>) => {
+      logs.push({ level: 'debug', message, data });
+    },
+    info: (message: string, data?: Record<string, unknown>) => {
+      logs.push({ level: 'info', message, data });
+    },
+    warn: (message: string, data?: Record<string, unknown>) => {
+      logs.push({ level: 'warn', message, data });
+    },
+    error: (message: string, data?: Record<string, unknown>) => {
+      logs.push({ level: 'error', message, data });
+    },
+    child: () => logger,
+  };
+
+  const plugin = {
+    getLogger: () => logger,
+    handleMessageReceived: async (params: {
+      instanceId: string;
+      externalId: string;
+      from: string;
+      content: { type: string; text?: string };
+    }) => {
+      received.push({
+        instanceId: params.instanceId,
+        externalId: params.externalId,
+        from: params.from,
+        content: params.content,
+      });
+    },
+  } as unknown as GupshupPlugin;
+
+  return { plugin, logs, received };
+}
+
+function makeWebhookRequest(payload: Record<string, unknown>): Request {
+  return new Request('https://example.com/api/v2/channels/gupshup/inst-gs-handler/webhook', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: JSON.stringify(payload),
+  });
+}
+
+const TEXT_MESSAGEOBJ = {
+  type: 'text',
+  text: 'Oi',
+  from: '5511960008976',
+  timestamp: 1776273477,
+  id: 'wamid.HANDLER_TEST_001',
+  raw: {
+    payload: { text: 'Oi' },
+    sender: { phone: '5511960008976', name: 'Gustavo Batista' },
+    id: 'wamid.HANDLER_TEST_001',
+    source: '5511960008976',
+    type: 'text',
+  },
+};
+
+describe('handleGupshupWebhook — event_type routing (incident #503)', () => {
+  it('async_response text message is processed end-to-end (post-cutover)', async () => {
+    const { plugin, logs, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    const epoch = Date.now();
+    const payload = {
+      ...BASE,
+      event_type: 'async_response',
+      request_id: `5521975469499_d4296fbd-42ad-4a44-b5fb-6178182b23ef_${epoch}`,
+      stack_id: epoch,
+      messageHeader: { ...BASE.messageHeader, event_type: 'async_response' },
+      messageobj: { ...TEXT_MESSAGEOBJ, id: 'wamid.ASYNC_RESPONSE_001' },
+    };
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(payload),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('wamid.ASYNC_RESPONSE_001');
+    expect(received[0]?.content.text).toBe('Oi');
+    // No WARN for known message event_type
+    expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unknown event_type'))).toHaveLength(0);
+  });
+
+  it('user_input text message is still processed (regression guard)', async () => {
+    const { plugin, received, logs } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    const payload = {
+      ...BASE,
+      event_type: 'user_input',
+      messageobj: { ...TEXT_MESSAGEOBJ, id: 'wamid.USER_INPUT_001' },
+    };
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(payload),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('wamid.USER_INPUT_001');
+    expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unknown event_type'))).toHaveLength(0);
+  });
+
+  it('click_to_chat_advertise text message is processed', async () => {
+    const { plugin, received, logs } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    const payload = {
+      ...BASE,
+      event_type: 'click_to_chat_advertise',
+      messageobj: { ...TEXT_MESSAGEOBJ, id: 'wamid.CTCA_001' },
+    };
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(payload),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('wamid.CTCA_001');
+    expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unknown event_type'))).toHaveLength(0);
+  });
+
+  it('message_event delivery receipt is ignored (processInboundMessage not called)', async () => {
+    const { plugin, received, logs } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    const payload = {
+      ...BASE,
+      event_type: 'message_event',
+      messageobj: { ...TEXT_MESSAGEOBJ, id: 'wamid.DELIVERY_RECEIPT_001' },
+    };
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(payload),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(0);
+    const debugDrop = logs.find((l) => l.level === 'debug' && l.message.includes('known non-message event'));
+    expect(debugDrop).toBeDefined();
+    expect(debugDrop?.data?.event_type).toBe('message_event');
+  });
+
+  it('unknown event_type with valid messageobj is processed AND WARN is logged (fail-open)', async () => {
+    const { plugin, received, logs } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    const payload = {
+      ...BASE,
+      event_type: 'v3_message',
+      messageHeader: { ...BASE.messageHeader, event_type: 'v3_message' },
+      messageobj: { ...TEXT_MESSAGEOBJ, id: 'wamid.UNKNOWN_EVENT_001' },
+    };
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(payload),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('wamid.UNKNOWN_EVENT_001');
+    const warn = logs.find((l) => l.level === 'warn' && l.message.includes('unknown event_type'));
+    expect(warn).toBeDefined();
+    expect(warn?.data?.event_type).toBe('v3_message');
+    expect(warn?.data?.messageHeaderEventType).toBe('v3_message');
+    expect(warn?.data?.messageType).toBe('text');
+    expect(warn?.data?.sender).toBe(BASE.sender);
   });
 });

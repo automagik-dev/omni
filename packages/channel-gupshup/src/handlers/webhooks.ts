@@ -6,8 +6,12 @@
  * Wire format: Content-Type is application/x-www-form-urlencoded but the body
  * is raw JSON — JSON.parse(await request.text()) is the correct parse strategy.
  *
- * Only event_type === 'user_input' is processed. All other event types (status
- * updates, billing, etc.) are acknowledged with 200 and discarded.
+ * Message-bearing event_types (`user_input`, `async_response`,
+ * `click_to_chat_advertise`) are dispatched to processInboundMessage. Known
+ * non-message events (status, billing, opt-in/out, etc.) are acknowledged with
+ * 200 and discarded at DEBUG. Unknown event_types that pass schema validation
+ * fail-open (processed + WARN) so Gupshup format drift surfaces in logs
+ * instead of silently dropping messages (see incident 2026-04-22 #503).
  *
  * Webhook verification: query param `?token=X` is compared against instance
  * `webhookVerifyToken`. If not set, skip token check.
@@ -99,6 +103,26 @@ const GupshupNativeWebhookSchema = z
 
 // Download guard for media (100MB limit)
 const _downloadGuard = createInboundDedupeCache;
+
+// Known event_type values that carry a user message in messageobj.
+// Unknown values still fall through to processInboundMessage (schema validation
+// is the real gate) but are logged at WARN so format drift is visible.
+const KNOWN_MESSAGE_EVENT_TYPES = new Set<string>([
+  'user_input', // legacy — pre-2026-04-22 format
+  'async_response', // current — post-2026-04-22 17:58 BRT cutover
+  'click_to_chat_advertise', // ad click → message from FB/IG ad
+]);
+
+// Known event_type values that are NOT messages (status/billing/etc.)
+const KNOWN_NON_MESSAGE_EVENT_TYPES = new Set<string>([
+  'message_event', // delivery/read receipts
+  'billing_event',
+  'opt_in',
+  'opt_out',
+  'template_event',
+  'system_event',
+  'account_event',
+]);
 
 // ─────────────────────────────────────────────────────────────
 // Payload extraction — handles multiple Gupshup envelope formats
@@ -243,10 +267,24 @@ export async function handleGupshupWebhook(
 
   const webhook = result.data as unknown as GupshupNativeInboundWebhook;
 
-  // Only process user input events — ignore status, billing, etc.
-  if (webhook.event_type !== 'user_input') {
-    logger.debug('[gupshup] non-user_input event ignored', { instanceId, event_type: webhook.event_type });
+  if (KNOWN_NON_MESSAGE_EVENT_TYPES.has(webhook.event_type)) {
+    logger.debug('[gupshup] known non-message event ignored', {
+      instanceId,
+      event_type: webhook.event_type,
+    });
     return new Response('OK', { status: 200 });
+  }
+
+  if (!KNOWN_MESSAGE_EVENT_TYPES.has(webhook.event_type)) {
+    // Unknown event_type that passed schema validation (has valid messageobj).
+    // Fail-open: process it + WARN so operators notice format drift early.
+    logger.warn('[gupshup] unknown event_type with valid messageobj — processing anyway', {
+      instanceId,
+      event_type: webhook.event_type,
+      messageHeaderEventType: webhook.messageHeader?.event_type,
+      messageType: webhook.messageobj?.type,
+      sender: webhook.sender,
+    });
   }
 
   await processInboundMessage(plugin, instanceId, webhook, dedupeCache);
