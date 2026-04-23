@@ -85,6 +85,12 @@ interface ExtractedContent {
 type MessageContent = proto.IMessage;
 type ContentExtractor = (message: MessageContent) => ExtractedContent | null;
 
+function getDocumentMessage(
+  message: MessageContent | undefined | null,
+): proto.Message.IDocumentMessage | null | undefined {
+  return message?.documentMessage ?? message?.documentWithCaptionMessage?.message?.documentMessage;
+}
+
 /**
  * Content extractors for each message type
  * Each extractor handles one specific message type
@@ -125,14 +131,17 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
     }),
   },
   {
-    check: (m) => !!m.documentMessage,
-    extract: (m) => ({
-      type: 'document',
-      filename: m.documentMessage?.fileName ?? undefined,
-      mimeType: m.documentMessage?.mimetype ?? 'application/octet-stream',
-      caption: m.documentMessage?.caption ?? undefined,
-      mediaUrl: m.documentMessage?.url ?? undefined,
-    }),
+    check: (m) => !!getDocumentMessage(m),
+    extract: (m) => {
+      const document = getDocumentMessage(m);
+      return {
+        type: 'document',
+        filename: document?.fileName ?? undefined,
+        mimeType: document?.mimetype ?? 'application/octet-stream',
+        caption: document?.caption ?? undefined,
+        mediaUrl: document?.url ?? undefined,
+      };
+    },
   },
   {
     check: (m) => !!m.stickerMessage,
@@ -461,7 +470,7 @@ function getMessageContextInfo(msg: WAMessage): proto.IContextInfo | null | unde
     message?.extendedTextMessage?.contextInfo ??
     message?.imageMessage?.contextInfo ??
     message?.videoMessage?.contextInfo ??
-    message?.documentMessage?.contextInfo
+    getDocumentMessage(message)?.contextInfo
   );
 }
 

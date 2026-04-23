@@ -8,6 +8,10 @@
 
 import type { WAMessage } from 'baileys';
 
+function getDocumentMessage(message: NonNullable<WAMessage['message']>) {
+  return message.documentMessage ?? message.documentWithCaptionMessage?.message?.documentMessage;
+}
+
 /**
  * Get media size from message if available
  */
@@ -27,8 +31,9 @@ export function getMediaSize(msg: WAMessage): number | undefined {
     return Number(message.videoMessage.fileLength);
   }
 
-  if (message.documentMessage?.fileLength) {
-    return Number(message.documentMessage.fileLength);
+  const documentMessage = getDocumentMessage(message);
+  if (documentMessage?.fileLength) {
+    return Number(documentMessage.fileLength);
   }
 
   if (message.stickerMessage?.fileLength) {

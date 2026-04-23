@@ -2660,11 +2660,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   private getMessageContextInfo(rawMessage: WAMessage): proto.IContextInfo | null | undefined {
     const message = rawMessage.message;
+    const documentMessage = message?.documentMessage ?? message?.documentWithCaptionMessage?.message?.documentMessage;
     return (
       message?.extendedTextMessage?.contextInfo ??
       message?.imageMessage?.contextInfo ??
       message?.videoMessage?.contextInfo ??
-      message?.documentMessage?.contextInfo
+      documentMessage?.contextInfo
     );
   }
 
@@ -3727,6 +3728,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private extractMediaContent(
     message: NonNullable<WAMessage['message']>,
   ): { type: string; mimeType?: string; caption?: string } | null {
+    const documentMessage = message.documentMessage ?? message.documentWithCaptionMessage?.message?.documentMessage;
     if (message.imageMessage) {
       return {
         type: 'image',
@@ -3744,11 +3746,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         caption: message.videoMessage.caption ?? undefined,
       };
     }
-    if (message.documentMessage) {
+    if (documentMessage) {
       return {
         type: 'document',
-        mimeType: message.documentMessage.mimetype ?? 'application/octet-stream',
-        caption: message.documentMessage.caption ?? undefined,
+        mimeType: documentMessage.mimetype ?? 'application/octet-stream',
+        caption: documentMessage.caption ?? undefined,
       };
     }
     if (message.stickerMessage) {

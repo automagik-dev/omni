@@ -40,6 +40,10 @@ export interface DetectedMedia {
   isVoiceNote?: boolean;
 }
 
+function getDocumentMessage(message: NonNullable<WAMessage['message']>) {
+  return message.documentMessage ?? message.documentWithCaptionMessage?.message?.documentMessage;
+}
+
 /**
  * Detect media type from a Baileys message
  */
@@ -71,11 +75,12 @@ export function detectMediaType(msg: WAMessage): DetectedMedia | null {
     };
   }
 
-  if (message.documentMessage) {
+  const documentMessage = getDocumentMessage(message);
+  if (documentMessage) {
     return {
       type: 'document',
-      mimeType: message.documentMessage.mimetype || 'application/octet-stream',
-      filename: message.documentMessage.fileName || undefined,
+      mimeType: documentMessage.mimetype || 'application/octet-stream',
+      filename: documentMessage.fileName || undefined,
     };
   }
 
