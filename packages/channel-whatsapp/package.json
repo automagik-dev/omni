@@ -18,7 +18,7 @@
     "@omni/channel-sdk": "workspace:*",
     "@omni/core": "workspace:*",
     "audio-decode": "workspace:*",
-    "baileys": "file:vendor/baileys-d077902.tgz",
+    "baileys": "file:vendor/baileys-8e5093c.tgz",
     "node-cache": "^5.1.2",
     "pino": "^9.6.0"
   },
