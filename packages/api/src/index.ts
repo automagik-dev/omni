@@ -380,6 +380,46 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
   process.on('SIGTERM', shutdown);
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve chat UUID → channel-native external_id for a call_agent invocation.
+ *
+ * Symmetric with the send_message action (above) which already auto-resolves
+ * UUIDs for the same reason: system-initiated events (chat.idle_timeout) emit
+ * payload.chatId as the internal chats.id UUID, but the seller dispatch path
+ * carries the external_id (e.g. WA phone). Without resolution, the agent
+ * runner's computeSessionId produces session_ids that diverge from sessions
+ * created by the seller path.
+ *
+ * Also resolves senderId — extractAgentCallContext falls back senderId=chatId
+ * when payload.from/senderId are absent (follow-up events).
+ *
+ * On missing chat row, logs a warning and falls through with the raw UUID so
+ * the call still runs (avoids hard-failing the automation action).
+ */
+async function resolveCallAgentChatIds(
+  services: ReturnType<typeof createApp>['services'],
+  ctx: { chatId: string; senderId: string; instanceId: string },
+): Promise<{ chatId: string; senderId: string }> {
+  if (!UUID_RE.test(ctx.chatId)) {
+    return { chatId: ctx.chatId, senderId: ctx.senderId };
+  }
+  try {
+    const chat = await services.chats.getById(ctx.chatId, { includeHidden: true });
+    return {
+      chatId: chat.externalId,
+      senderId: ctx.senderId === ctx.chatId ? chat.externalId : ctx.senderId,
+    };
+  } catch {
+    log.warn('call_agent: chat UUID not resolvable, using raw value (session may diverge)', {
+      chatId: ctx.chatId,
+      instanceId: ctx.instanceId,
+    });
+    return { chatId: ctx.chatId, senderId: ctx.senderId };
+  }
+}
+
 /**
  * Setup event bus related services (plugins, persistence, workers)
  * Extracted to reduce main() complexity
@@ -440,6 +480,12 @@ async function setupEventBusServices(
         const instance = await services.instances.getById(ctx.instanceId);
         if (!instance) throw new Error(`Instance not found: ${ctx.instanceId}`);
 
+        // System-initiated events (chat.idle_timeout) emit payload.chatId as
+        // the internal chats.id UUID; the seller dispatch path carries the
+        // channel-native external_id. Resolve UUID → external_id so the
+        // computed session_id matches sessions created by the seller path.
+        const { chatId: resolvedChatId, senderId: resolvedSenderId } = await resolveCallAgentChatIds(services, ctx);
+
         const agentFkId = ctx.agentId ?? instance.agentId;
         if (!agentFkId) throw new Error(`No agent configured for instance ${instance.id}`);
 
@@ -482,8 +528,8 @@ async function setupEventBusServices(
         // progressively. See issue #410.
         const result = await services.agentRunner.runOrStream({
           instance: runInstance,
-          chatId: ctx.chatId,
-          senderId: ctx.senderId,
+          chatId: resolvedChatId,
+          senderId: resolvedSenderId,
           senderName: ctx.senderName,
           chatType: 'dm',
           messages: ctx.messages,
