@@ -268,6 +268,16 @@ describe('ClaudeCodeClient', () => {
       expect(mcpServers.gateway.url).toBe('https://mcp.example.com/v1');
     });
 
+    it('forwards explicit pathToClaudeCodeExecutable to SDK options', () => {
+      const client = new ClaudeCodeClient({
+        ...baseConfig,
+        pathToClaudeCodeExecutable: '/opt/claude/claude',
+      });
+      const options = getBuildOptions(client)(baseRequest);
+
+      expect(options.pathToClaudeCodeExecutable).toBe('/opt/claude/claude');
+    });
+
     it('URL-encodes param values safely', () => {
       const mcpServers = {
         gateway: { type: 'http' as const, url: 'https://mcp.example.com/v1' },

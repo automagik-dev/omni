@@ -43,7 +43,7 @@ const providerBaseSchema = z.object({
     .describe(
       'Schema-specific config. Required fields by schema: ' +
         'agno: { agentId }, openclaw: { defaultAgentId }, ' +
-        'claude-code: { projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }, ' +
+        'claude-code: { projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers?, pathToClaudeCodeExecutable? }, ' +
         'webhook: { mode?, retries? }. ' +
         'Note: apiKey in schemaConfig overrides the provider-level apiKey.',
     ),
