@@ -41,7 +41,7 @@ help:
 	@echo "  make test-file F=<path>  Run a specific test file"
 	@echo ""
 	@echo "Database:"
-	@echo "  make db-push       Push schema changes (dev)"
+	@echo "  make db-push       Push schema changes (dev-only; requires I_KNOW_WHAT_IM_DOING=1)"
 	@echo "  make db-migrate    Run migrations (prod)"
 	@echo "  make db-studio     Open Drizzle Studio"
 	@echo "  make db-reset      Reset database (DESTRUCTIVE)"
@@ -254,6 +254,21 @@ check: typecheck lint dead-code test
 # ============================================================================
 
 db-push:
+	@if [ "$$I_KNOW_WHAT_IM_DOING" != "1" ]; then \
+		echo "drizzle-kit push is DISABLED by default (issue #407)."; \
+		echo ""; \
+		echo "drizzle-kit push and migrateDb() are INCOMPATIBLE. Push creates"; \
+		echo "tables without migration journal entries; the API's auto-migrate"; \
+		echo "then crashes with 'relation already exists' or leaves columns in"; \
+		echo "a drifted state (see CLAUDE.md: 'Database & Migrations')."; \
+		echo ""; \
+		echo "For dev-only schema exploration, rerun with I_KNOW_WHAT_IM_DOING=1:"; \
+		echo "  I_KNOW_WHAT_IM_DOING=1 make db-push"; \
+		echo ""; \
+		echo "For any shared / staging / production DB, use migrations instead:"; \
+		echo "  cd packages/db && bunx drizzle-kit generate"; \
+		exit 1; \
+	fi
 	@set -a && . ./.env && set +a && cd packages/db && bunx drizzle-kit push --force
 
 db-migrate:

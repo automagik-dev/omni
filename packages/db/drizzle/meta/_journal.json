@@ -218,6 +218,13 @@
       "when": 1777300000000,
       "tag": "0030_twilio_whatsapp_channel",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1777400000000,
+      "tag": "0031_reconcile_gupshup_columns",
+      "breakpoints": true
     }
   ]
 }
