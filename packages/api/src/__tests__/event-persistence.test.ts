@@ -6,6 +6,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { randomUUID } from 'node:crypto';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { omniEvents } from '@omni/db';
@@ -116,6 +117,80 @@ describeWithDb('Event Persistence Handler', () => {
       expect(persisted?.chatId).toBe('chat-123');
       expect(persisted?.status).toBe('received');
       expect(persisted?.rawPayload).toEqual({ foo: 'bar' });
+    });
+
+    test('uses UUID event id as persisted omni_events primary key', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const eventId = randomUUID();
+      const testEvent = {
+        id: eventId,
+        type: 'message.received',
+        timestamp: Date.now(),
+        payload: {
+          externalId: 'ext-recv-uuid-id',
+          chatId: 'chat-123',
+          from: 'user-456',
+          content: {
+            type: 'audio',
+            mediaUrl: 'file:///tmp/test.ogg',
+            mimeType: 'audio/ogg',
+          },
+          rawPayload: { id: 'raw-audio' },
+        },
+        metadata: {
+          correlationId: 'corr-uuid-id',
+          instanceId: null,
+          channelType: 'whatsapp-baileys',
+        },
+      };
+
+      await emitEvent('message.received', testEvent);
+
+      const [persisted] = await db
+        .select()
+        .from(omniEvents)
+        .where(eq(omniEvents.externalId, 'ext-recv-uuid-id'))
+        .limit(1);
+
+      expect(persisted).toBeDefined();
+      expect(persisted?.id).toBe(eventId);
+      expect(persisted?.contentType).toBe('audio');
+      expect(persisted?.mediaMimeType).toBe('audio/ogg');
+    });
+
+    test('is idempotent when the same UUID event is redelivered', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const eventId = randomUUID();
+      const testEvent = {
+        id: eventId,
+        type: 'message.received',
+        timestamp: Date.now(),
+        payload: {
+          externalId: 'ext-recv-redelivery',
+          chatId: 'chat-123',
+          from: 'user-456',
+          content: {
+            type: 'audio',
+            mediaUrl: 'file:///tmp/test-redelivery.ogg',
+            mimeType: 'audio/ogg',
+          },
+        },
+        metadata: {
+          correlationId: 'corr-redelivery',
+          instanceId: null,
+          channelType: 'whatsapp-baileys',
+        },
+      };
+
+      await emitEvent('message.received', testEvent);
+      await emitEvent('message.received', testEvent);
+
+      const persisted = await db.select().from(omniEvents).where(eq(omniEvents.id, eventId));
+
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0]?.externalId).toBe('ext-recv-redelivery');
     });
 
     test('handles image content type', async () => {

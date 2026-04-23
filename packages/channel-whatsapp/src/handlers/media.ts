@@ -7,6 +7,7 @@
  */
 
 import type { WAMessage } from 'baileys';
+import { getDocumentMessage } from '../utils/message';
 
 /**
  * Get media size from message if available
@@ -27,8 +28,9 @@ export function getMediaSize(msg: WAMessage): number | undefined {
     return Number(message.videoMessage.fileLength);
   }
 
-  if (message.documentMessage?.fileLength) {
-    return Number(message.documentMessage.fileLength);
+  const documentMessage = getDocumentMessage(message);
+  if (documentMessage?.fileLength) {
+    return Number(documentMessage.fileLength);
   }
 
   if (message.stickerMessage?.fileLength) {

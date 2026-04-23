@@ -20,6 +20,7 @@ import { fromJid, isLidJid, isUserJid, resolveCanonicalJid, resolveToPhoneJidLeg
 import type { WhatsAppPlugin } from '../plugin';
 import type { DecryptFailureTracker } from '../utils/decrypt-failure-tracker';
 import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
+import { getDocumentMessage, getMessageContextInfo } from '../utils/message';
 import { getMediaSize } from './media';
 
 const log = createLogger('whatsapp:messages');
@@ -125,14 +126,17 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
     }),
   },
   {
-    check: (m) => !!m.documentMessage,
-    extract: (m) => ({
-      type: 'document',
-      filename: m.documentMessage?.fileName ?? undefined,
-      mimeType: m.documentMessage?.mimetype ?? 'application/octet-stream',
-      caption: m.documentMessage?.caption ?? undefined,
-      mediaUrl: m.documentMessage?.url ?? undefined,
-    }),
+    check: (m) => !!getDocumentMessage(m),
+    extract: (m) => {
+      const document = getDocumentMessage(m);
+      return {
+        type: 'document',
+        filename: document?.fileName ?? undefined,
+        mimeType: document?.mimetype ?? 'application/octet-stream',
+        caption: document?.caption ?? undefined,
+        mediaUrl: document?.url ?? undefined,
+      };
+    },
   },
   {
     check: (m) => !!m.stickerMessage,
@@ -450,19 +454,6 @@ function extractPhoneFromVcard(vcard: string): string | undefined {
     return telMatch[1].replace(/[\s-]/g, '');
   }
   return undefined;
-}
-
-/**
- * Extract contextInfo from text and caption-bearing message types.
- */
-function getMessageContextInfo(msg: WAMessage): proto.IContextInfo | null | undefined {
-  const message = msg.message;
-  return (
-    message?.extendedTextMessage?.contextInfo ??
-    message?.imageMessage?.contextInfo ??
-    message?.videoMessage?.contextInfo ??
-    message?.documentMessage?.contextInfo
-  );
 }
 
 /**

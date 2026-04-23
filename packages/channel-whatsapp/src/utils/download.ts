@@ -9,6 +9,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { WAMessage } from 'baileys';
 import { downloadMediaMessage } from 'baileys';
+import { getDocumentMessage } from './message';
 
 /**
  * Result of downloading media
@@ -71,11 +72,12 @@ export function detectMediaType(msg: WAMessage): DetectedMedia | null {
     };
   }
 
-  if (message.documentMessage) {
+  const documentMessage = getDocumentMessage(message);
+  if (documentMessage) {
     return {
       type: 'document',
-      mimeType: message.documentMessage.mimetype || 'application/octet-stream',
-      filename: message.documentMessage.fileName || undefined,
+      mimeType: documentMessage.mimetype || 'application/octet-stream',
+      filename: documentMessage.fileName || undefined,
     };
   }
 

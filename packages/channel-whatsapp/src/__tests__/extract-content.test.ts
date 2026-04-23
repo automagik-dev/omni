@@ -74,6 +74,28 @@ describe('extractContent — mediaUrl hoist (omni#500)', () => {
     expect(content?.filename).toBe('contract.pdf');
   });
 
+  it('unwraps documentWithCaptionMessage into document content', () => {
+    const content = extractContent(
+      wrap({
+        documentWithCaptionMessage: {
+          message: {
+            documentMessage: {
+              url: 'https://mmg.whatsapp.net/v/t62.7119-24/doc-caption.enc?oe=6',
+              mimetype: 'application/pdf',
+              fileName: 'proposal.pdf',
+              caption: 'segue proposta',
+            },
+          },
+        },
+      }),
+    );
+    expect(content?.type).toBe('document');
+    expect(content?.mediaUrl).toBe('https://mmg.whatsapp.net/v/t62.7119-24/doc-caption.enc?oe=6');
+    expect(content?.filename).toBe('proposal.pdf');
+    expect(content?.caption).toBe('segue proposta');
+    expect(content?.mimeType).toBe('application/pdf');
+  });
+
   it('hoists stickerMessage.url into mediaUrl', () => {
     const content = extractContent(
       wrap({

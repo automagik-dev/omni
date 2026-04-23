@@ -41,6 +41,7 @@ import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } f
 import { DecryptFailureTracker } from './utils/decrypt-failure-tracker';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 import { type MentionResolution, resolveMentions } from './utils/mention-resolver';
+import { getDocumentMessage, getMessageContextInfo } from './utils/message';
 import { type RateLimitManager, createRateLimitManager, isRateLimitError } from './utils/rate-limit';
 
 // Re-export for external consumers that previously imported from this module
@@ -2656,19 +2657,6 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Resolve contextInfo from text and caption-bearing message types.
-   */
-  private getMessageContextInfo(rawMessage: WAMessage): proto.IContextInfo | null | undefined {
-    const message = rawMessage.message;
-    return (
-      message?.extendedTextMessage?.contextInfo ??
-      message?.imageMessage?.contextInfo ??
-      message?.videoMessage?.contextInfo ??
-      message?.documentMessage?.contextInfo
-    );
-  }
-
-  /**
    * Handle incoming message
    * @internal
    */
@@ -2746,7 +2734,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     };
 
     // Extract mentionedJids from contextInfo (WhatsApp mentions)
-    const contextInfo = this.getMessageContextInfo(rawMessage);
+    const contextInfo = getMessageContextInfo(rawMessage);
     if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
       extendedPayload.mentionedJids = contextInfo.mentionedJid;
 
@@ -3727,6 +3715,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private extractMediaContent(
     message: NonNullable<WAMessage['message']>,
   ): { type: string; mimeType?: string; caption?: string } | null {
+    const documentMessage = getDocumentMessage(message);
     if (message.imageMessage) {
       return {
         type: 'image',
@@ -3744,11 +3733,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         caption: message.videoMessage.caption ?? undefined,
       };
     }
-    if (message.documentMessage) {
+    if (documentMessage) {
       return {
         type: 'document',
-        mimeType: message.documentMessage.mimetype ?? 'application/octet-stream',
-        caption: message.documentMessage.caption ?? undefined,
+        mimeType: documentMessage.mimetype ?? 'application/octet-stream',
+        caption: documentMessage.caption ?? undefined,
       };
     }
     if (message.stickerMessage) {
