@@ -1,0 +1,36 @@
+{
+  "source": "channel",
+  "sender": "5511900000001",
+  "channel": "whatsapp",
+  "isGroup": false,
+  "destination": 558007779070,
+  "botname": "wFXLdg7dVyO1H9eKL9l9fSL5",
+  "event_type": "message_event",
+  "postbackText": null,
+  "senderobj": {
+    "channelid": "5511900000001",
+    "display": "Test User",
+    "channeltype": "whatsapp"
+  },
+  "contextobj": {
+    "senderName": "Test User",
+    "channeltype": "whatsapp",
+    "contexttype": "p2p",
+    "contextid": "5511900000001"
+  },
+  "messageobj": {
+    "id": "wamid.TEST_DELIVERY_001",
+    "type": "text",
+    "from": "5511900000001",
+    "timestamp": 1776300100,
+    "text": "delivered"
+  },
+  "messageHeader": {
+    "event_type": "message_event",
+    "nsTraceId": "DELIVERY000001-0000000000000001",
+    "project_id": "31569577"
+  },
+  "metadata": {
+    "status": "delivered"
+  }
+}
