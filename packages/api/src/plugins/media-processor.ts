@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import type { ChannelType, EventBus, MessageReceivedPayload } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
-import { mediaContent, messages } from '@omni/db';
+import { mediaContent, messages, omniEvents } from '@omni/db';
 import {
   type MediaProcessingService,
   createMediaProcessingService,
@@ -32,6 +32,7 @@ import type { Services } from '../services';
 import { MediaStorageService } from '../services/media-storage';
 
 const log = createLogger('media-processor');
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Media types that should be processed
@@ -80,6 +81,10 @@ function inferProcessingType(contentType?: string): 'transcription' | 'descripti
 function shouldProcess(contentType: string | undefined): boolean {
   if (!contentType) return false;
   return PROCESSABLE_MEDIA_TYPES.has(contentType);
+}
+
+function isUuid(value: string | undefined): value is string {
+  return typeof value === 'string' && UUID_RE.test(value);
 }
 
 /**
@@ -250,6 +255,41 @@ async function resolveMediaPath(
   };
 }
 
+async function resolveSafeMediaContentEventId(
+  ctx: MediaProcessorContext,
+  eventId: string | undefined,
+): Promise<string | null> {
+  if (!isUuid(eventId)) return null;
+
+  // media_content is audit/replay metadata, so do not block media.processed for long.
+  // Event persistence runs concurrently with this processor and should normally win within milliseconds.
+  const maxWaitMs = 250;
+  const pollMs = 50;
+  const deadline = Date.now() + maxWaitMs;
+
+  while (true) {
+    try {
+      const [event] = await ctx.db
+        .select({ id: omniEvents.id })
+        .from(omniEvents)
+        .where(eq(omniEvents.id, eventId))
+        .limit(1);
+
+      if (event) return event.id;
+    } catch (error) {
+      log.debug('Failed to validate media_content event FK', { eventId, error: String(error) });
+      return null;
+    }
+
+    if (Date.now() >= deadline) {
+      log.debug('Skipping media_content event FK; omni_event not found', { eventId });
+      return null;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
 /**
  * Store processing result in database and update message
  */
@@ -273,8 +313,10 @@ async function persistProcessingResult(
 
   // Store result in media_content table (non-critical analytics/audit record)
   try {
+    const safeEventId = await resolveSafeMediaContentEventId(ctx, eventId);
+
     await ctx.db.insert(mediaContent).values({
-      eventId: eventId ?? undefined,
+      eventId: safeEventId,
       mediaId: messageId,
       processingType: result.processingType,
       content: result.content ?? '',
@@ -585,3 +627,8 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
 
   log.info('Media processor initialized');
 }
+
+export const __test__ = {
+  persistProcessingResult,
+  resolveSafeMediaContentEventId,
+};
