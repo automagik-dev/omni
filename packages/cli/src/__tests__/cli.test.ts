@@ -14,6 +14,40 @@ import { join } from 'node:path';
 import { spawn, spawnSync } from 'bun';
 import { MOCK_API_KEY, startMockApi, stopMockApi } from './mock-api';
 
+/**
+ * Pre-suite guard (#413): fail fast if a prior test run leaked a PM2 god
+ * daemon attached to a `.omni-test` PM2_HOME. Leaving these around pollutes
+ * the host and can confuse a subsequent suite that rebinds the same PM2
+ * socket path.
+ */
+function assertNoLeakedTestDaemons(): void {
+  const ps = spawnSync({ cmd: ['ps', '-eo', 'pid,args'], stdout: 'pipe', stderr: 'pipe' });
+  if (ps.exitCode !== 0) return; // non-fatal — if ps is unavailable, skip the guard
+  const output = new TextDecoder().decode(ps.stdout);
+  // Anchored to args start to avoid matching processes that merely mention
+  // the string (e.g. this source file itself, grep commands, transcripts).
+  const pattern = /^PM2\s+[^:]*:\s*God Daemon\s+\([^)]*\.omni-test[^)]*\)/;
+  const leaked: string[] = [];
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const pidMatch = trimmed.match(/^\d+\s+(.*)$/);
+    const args = pidMatch?.[1] ?? '';
+    if (!pattern.test(args)) continue;
+    leaked.push(trimmed);
+  }
+  if (leaked.length > 0) {
+    const pids = leaked
+      .map((l) => l.match(/^(\d+)\s/)?.[1])
+      .filter((p): p is string => p !== undefined)
+      .join(' ');
+    const hint = pids ? `  # or: kill ${pids}\n` : '';
+    throw new Error(
+      `Pre-suite leak guard (#413): ${leaked.length} stale PM2 god daemon(s) detected:\n${leaked.join('\n')}\n\nKill them before re-running this suite:\n  make kill-stale-test-daemons\n${hint}`,
+    );
+  }
+}
+
 // Use source entry point directly — avoids stale dist/index.js issues
 const CLI_PATH = join(import.meta.dir, '../index.ts');
 
@@ -98,6 +132,9 @@ function assertSuccess(result: CliResult, context: string): void {
 
 describe('CLI Basic Tests', () => {
   beforeAll(() => {
+    // Fail fast if a prior run left a god daemon around (#413). Runs before
+    // any other setup so the error surfaces cleanly at suite startup.
+    assertNoLeakedTestDaemons();
     // Create test config directory
     if (!existsSync(TEST_CONFIG_DIR)) {
       mkdirSync(TEST_CONFIG_DIR, { recursive: true });

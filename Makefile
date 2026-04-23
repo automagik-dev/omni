@@ -6,7 +6,7 @@
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
-        kill-ghosts reset sdk-generate \
+        kill-ghosts kill-stale-test-daemons reset sdk-generate \
         cli cli-build cli-build-full cli-link \
         migrate-messages migrate-messages-dry \
         _init-db-wait _sync-db
@@ -39,6 +39,7 @@ help:
 	@echo "  make test-api      Run API package tests only"
 	@echo "  make test-db       Run DB package tests only"
 	@echo "  make test-file F=<path>  Run a specific test file"
+	@echo "  make kill-stale-test-daemons  Sweep leaked PM2 god daemons from CLI tests (#413)"
 	@echo ""
 	@echo "Database:"
 	@echo "  make db-push       Push schema changes (dev-only; requires I_KNOW_WHAT_IM_DOING=1)"
@@ -365,6 +366,11 @@ kill-ghosts:
 	-lsof -ti :4222 | xargs kill -9 2>/dev/null || true
 	-lsof -ti :8432 | xargs kill -9 2>/dev/null || true
 	@echo "Ghost cleanup complete"
+
+# Sweep up leaked PM2 god daemons spawned by CLI tests (issue #413).
+# Stale daemons have a PM2_HOME under /tmp/.omni-test-* that no longer exists.
+kill-stale-test-daemons:
+	@bun scripts/kill-stale-test-daemons.ts
 
 # ============================================================================
 # Utilities

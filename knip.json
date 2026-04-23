@@ -2,7 +2,7 @@
   "$schema": "https://unpkg.com/knip@5.85.0/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["scripts/test-messaging.ts"],
+      "entry": ["scripts/test-messaging.ts", "scripts/kill-stale-test-daemons.ts"],
       "project": ["scripts/**/*.ts"],
       "ignore": [
         "scripts/backfill-*.ts",
