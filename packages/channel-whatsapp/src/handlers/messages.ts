@@ -104,6 +104,7 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
       type: 'image',
       caption: m.imageMessage?.caption ?? undefined,
       mimeType: m.imageMessage?.mimetype ?? 'image/jpeg',
+      mediaUrl: m.imageMessage?.url ?? undefined,
     }),
   },
   {
@@ -111,6 +112,7 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
     extract: (m) => ({
       type: 'audio',
       mimeType: m.audioMessage?.mimetype ?? 'audio/ogg',
+      mediaUrl: m.audioMessage?.url ?? undefined,
     }),
   },
   {
@@ -119,6 +121,7 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
       type: 'video',
       caption: m.videoMessage?.caption ?? undefined,
       mimeType: m.videoMessage?.mimetype ?? 'video/mp4',
+      mediaUrl: m.videoMessage?.url ?? undefined,
     }),
   },
   {
@@ -128,6 +131,7 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
       filename: m.documentMessage?.fileName ?? undefined,
       mimeType: m.documentMessage?.mimetype ?? 'application/octet-stream',
       caption: m.documentMessage?.caption ?? undefined,
+      mediaUrl: m.documentMessage?.url ?? undefined,
     }),
   },
   {
@@ -135,6 +139,7 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
     extract: (m) => ({
       type: 'sticker',
       mimeType: m.stickerMessage?.mimetype ?? 'image/webp',
+      mediaUrl: m.stickerMessage?.url ?? undefined,
     }),
   },
   {
@@ -421,7 +426,7 @@ function extractUnknownContent(message: MessageContent): ExtractedContent | null
  * Extract content from a Baileys message using handler map
  * Falls back to 'unknown' type for unrecognized messages to ensure nothing is lost
  */
-function extractContent(msg: WAMessage): ExtractedContent | null {
+export function extractContent(msg: WAMessage): ExtractedContent | null {
   const message = msg.message;
   if (!message) return null;
 
