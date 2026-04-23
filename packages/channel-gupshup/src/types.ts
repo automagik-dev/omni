@@ -96,7 +96,7 @@ export interface GupshupNativeInboundWebhook {
   isGroup?: boolean;
   destination: string | number;
   botname: string; // instance identifier
-  event_type: string; // "user_input" for inbound messages
+  event_type: string; // "user_input" / "async_response" / "click_to_chat_advertise" for inbound messages; non-message events (message_event, billing_event, etc.) are dropped upstream
   message?: string; // redundant — prefer messageobj
   postbackText?: string | null;
   senderobj: GupshupNativeSenderObj;
