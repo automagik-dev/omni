@@ -99,21 +99,21 @@ export class AgnoClient implements IAgentClient {
 
     const entries: AgentDiscoveryEntry[] = [
       ...agents.map((a) => ({
-        id: a.agent_id,
+        id: a.id ?? a.agent_id,
         name: a.name,
         type: 'agent' as const,
         description: a.description,
         metadata: a.model ? { model: a.model } : undefined,
       })),
       ...teams.map((t) => ({
-        id: t.team_id,
+        id: t.id ?? t.team_id,
         name: t.name,
         type: 'team' as const,
         description: t.description,
         metadata: t.mode ? { mode: t.mode, memberCount: t.members?.length } : undefined,
       })),
       ...workflows.map((w) => ({
-        id: w.workflow_id,
+        id: w.id ?? w.workflow_id,
         name: w.name,
         type: 'workflow' as const,
         description: w.description,

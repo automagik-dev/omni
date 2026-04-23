@@ -145,9 +145,14 @@ export type StreamDelta =
 
 /**
  * Agent entity from Agno
+ *
+ * agno 2.5+ returns `id` at the top level. `agent_id` is kept optional for
+ * backward compatibility with pre-2.5 deployments.
  */
 export interface AgnoAgent {
-  agent_id: string;
+  id: string;
+  /** @deprecated pre-agno-2.5 field; use `id` */
+  agent_id?: string;
   name: string;
   model?: {
     provider?: string;
@@ -159,23 +164,34 @@ export interface AgnoAgent {
 
 /**
  * Team entity from Agno
+ *
+ * agno 2.5+ returns `id` at the top level. `team_id` is kept optional for
+ * backward compatibility with pre-2.5 deployments.
  */
 export interface AgnoTeam {
-  team_id: string;
+  id: string;
+  /** @deprecated pre-agno-2.5 field; use `id` */
+  team_id?: string;
   name: string;
   description?: string;
   mode?: string;
   members?: Array<{
     agent_id: string;
+    id?: string;
     role?: string;
   }>;
 }
 
 /**
  * Workflow entity from Agno
+ *
+ * agno 2.5+ returns `id` at the top level. `workflow_id` is kept optional for
+ * backward compatibility with pre-2.5 deployments.
  */
 export interface AgnoWorkflow {
-  workflow_id: string;
+  id: string;
+  /** @deprecated pre-agno-2.5 field; use `id` */
+  workflow_id?: string;
   name: string;
   description?: string;
 }
