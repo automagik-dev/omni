@@ -21,6 +21,7 @@ import { createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
 import type { DedupeCache } from '@omni/channel-sdk';
 import { z } from 'zod';
 
+import { type GupshupWebhookHandled, recordGupshupWebhookReceived, seenEventTypes } from '../observability';
 import type { GupshupPlugin } from '../plugin';
 import type { GupshupNativeInboundWebhook, GupshupNativeMessageObj } from '../types';
 
@@ -251,6 +252,11 @@ export async function handleGupshupWebhook(
 
   if (!parsed) {
     // Can't parse at all — ack and move on, we already logged the raw body
+    recordGupshupWebhookReceived(logger, {
+      instanceId,
+      event_type: 'unparsed',
+      handled: 'dropped_unrecognized_shape',
+    });
     return new Response('OK', { status: 200 });
   }
 
@@ -262,20 +268,46 @@ export async function handleGupshupWebhook(
       parsed,
     });
     // Fail-open: always ack so Gupshup doesn't retry
+    const parsedEventType =
+      parsed !== null && typeof parsed === 'object' && 'event_type' in parsed
+        ? String((parsed as { event_type: unknown }).event_type ?? 'unparsed')
+        : 'unparsed';
+    recordGupshupWebhookReceived(logger, {
+      instanceId,
+      event_type: parsedEventType,
+      handled: 'dropped_unrecognized_shape',
+    });
     return new Response('OK', { status: 200 });
   }
 
   const webhook = result.data as unknown as GupshupNativeInboundWebhook;
+
+  // First-seen WARN — fires once per process per event_type value. Would have
+  // caught the 2026-04-22 async_response cutover at webhook #1.
+  if (seenEventTypes.markIfFirst(webhook.event_type)) {
+    logger.warn('[gupshup] first time seeing this event_type', {
+      instanceId,
+      event_type: webhook.event_type,
+      knownMessage: KNOWN_MESSAGE_EVENT_TYPES.has(webhook.event_type),
+      knownNonMessage: KNOWN_NON_MESSAGE_EVENT_TYPES.has(webhook.event_type),
+    });
+  }
 
   if (KNOWN_NON_MESSAGE_EVENT_TYPES.has(webhook.event_type)) {
     logger.debug('[gupshup] known non-message event ignored', {
       instanceId,
       event_type: webhook.event_type,
     });
+    recordGupshupWebhookReceived(logger, {
+      instanceId,
+      event_type: webhook.event_type,
+      handled: 'dropped_known_non_message',
+    });
     return new Response('OK', { status: 200 });
   }
 
-  if (!KNOWN_MESSAGE_EVENT_TYPES.has(webhook.event_type)) {
+  const knownMessageEvent = KNOWN_MESSAGE_EVENT_TYPES.has(webhook.event_type);
+  if (!knownMessageEvent) {
     // Unknown event_type that passed schema validation (has valid messageobj).
     // Fail-open: process it + WARN so operators notice format drift early.
     logger.warn('[gupshup] unknown event_type with valid messageobj — processing anyway', {
@@ -287,7 +319,24 @@ export async function handleGupshupWebhook(
     });
   }
 
-  await processInboundMessage(plugin, instanceId, webhook, dedupeCache);
+  const processed = await processInboundMessage(plugin, instanceId, webhook, dedupeCache);
+
+  // Unknown event_type wins the label — the alerting signal is format drift
+  // detection, independent of whether the downstream extraction succeeded.
+  let handled: GupshupWebhookHandled;
+  if (!knownMessageEvent) {
+    handled = 'dropped_unknown_fail_open';
+  } else if (!processed) {
+    handled = 'dropped_empty_content';
+  } else {
+    handled = 'processed';
+  }
+
+  recordGupshupWebhookReceived(logger, {
+    instanceId,
+    event_type: webhook.event_type,
+    handled,
+  });
 
   return new Response('OK', { status: 200 });
 }
@@ -301,18 +350,18 @@ async function processInboundMessage(
   instanceId: string,
   webhook: GupshupNativeInboundWebhook,
   dedupeCache: DedupeCache,
-): Promise<void> {
+): Promise<boolean> {
   const msg = webhook.messageobj;
   const from = webhook.sender;
 
   // Dedupe by sender phone + message ID
   const dedupeKey = `${from.trim()}:${msg.id}`;
   if (dedupeCache.isDuplicate(instanceId, dedupeKey, 'gupshup', plugin.getLogger() as import('@omni/core').Logger)) {
-    return;
+    return false;
   }
 
   const content = extractContent(msg);
-  if (!content) return;
+  if (!content) return false;
 
   // Sanitize text
   if (content.text) {
@@ -320,7 +369,7 @@ async function processInboundMessage(
       instanceId,
       messageId: msg.id,
     });
-    if (!sanitized.ok) return;
+    if (!sanitized.ok) return false;
     content.text = sanitized.text;
   }
 
@@ -344,6 +393,7 @@ async function processInboundMessage(
     platformTimestamp,
     replyTo,
   });
+  return true;
 }
 
 // ─────────────────────────────────────────────────────────────
