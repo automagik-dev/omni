@@ -20,6 +20,7 @@ import { fromJid, isLidJid, isUserJid, resolveCanonicalJid, resolveToPhoneJidLeg
 import type { WhatsAppPlugin } from '../plugin';
 import type { DecryptFailureTracker } from '../utils/decrypt-failure-tracker';
 import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
+import { getDocumentMessage, getMessageContextInfo } from '../utils/message';
 import { getMediaSize } from './media';
 
 const log = createLogger('whatsapp:messages');
@@ -84,12 +85,6 @@ interface ExtractedContent {
 
 type MessageContent = proto.IMessage;
 type ContentExtractor = (message: MessageContent) => ExtractedContent | null;
-
-function getDocumentMessage(
-  message: MessageContent | undefined | null,
-): proto.Message.IDocumentMessage | null | undefined {
-  return message?.documentMessage ?? message?.documentWithCaptionMessage?.message?.documentMessage;
-}
 
 /**
  * Content extractors for each message type
@@ -459,19 +454,6 @@ function extractPhoneFromVcard(vcard: string): string | undefined {
     return telMatch[1].replace(/[\s-]/g, '');
   }
   return undefined;
-}
-
-/**
- * Extract contextInfo from text and caption-bearing message types.
- */
-function getMessageContextInfo(msg: WAMessage): proto.IContextInfo | null | undefined {
-  const message = msg.message;
-  return (
-    message?.extendedTextMessage?.contextInfo ??
-    message?.imageMessage?.contextInfo ??
-    message?.videoMessage?.contextInfo ??
-    getDocumentMessage(message)?.contextInfo
-  );
 }
 
 /**

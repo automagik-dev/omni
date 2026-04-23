@@ -6,14 +6,13 @@
  */
 
 import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni/core';
-import { JOURNEY_STAGES, createLogger, getJourneyTracker } from '@omni/core';
+import { JOURNEY_STAGES, createLogger, getJourneyTracker, isValidUuid } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
 import { type ChannelType, type ContentType, channelTypes, chats, contentTypes, omniEvents } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
 
 const log = createLogger('event-persistence');
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Safely map channel type - defaults to 'discord' if unknown
@@ -39,7 +38,7 @@ function mapContentType(contentType: string | undefined): ContentType | null {
 }
 
 function eventIdInsert(eventId: string | undefined): Partial<Pick<NewOmniEvent, 'id'>> {
-  return eventId && UUID_RE.test(eventId) ? { id: eventId } : {};
+  return eventId && isValidUuid(eventId) ? { id: eventId } : {};
 }
 
 /**

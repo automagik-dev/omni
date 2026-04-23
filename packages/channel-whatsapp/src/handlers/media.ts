@@ -7,10 +7,7 @@
  */
 
 import type { WAMessage } from 'baileys';
-
-function getDocumentMessage(message: NonNullable<WAMessage['message']>) {
-  return message.documentMessage ?? message.documentWithCaptionMessage?.message?.documentMessage;
-}
+import { getDocumentMessage } from '../utils/message';
 
 /**
  * Get media size from message if available

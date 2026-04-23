@@ -41,6 +41,7 @@ import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } f
 import { DecryptFailureTracker } from './utils/decrypt-failure-tracker';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 import { type MentionResolution, resolveMentions } from './utils/mention-resolver';
+import { getDocumentMessage, getMessageContextInfo } from './utils/message';
 import { type RateLimitManager, createRateLimitManager, isRateLimitError } from './utils/rate-limit';
 
 // Re-export for external consumers that previously imported from this module
@@ -2656,20 +2657,6 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Resolve contextInfo from text and caption-bearing message types.
-   */
-  private getMessageContextInfo(rawMessage: WAMessage): proto.IContextInfo | null | undefined {
-    const message = rawMessage.message;
-    const documentMessage = message?.documentMessage ?? message?.documentWithCaptionMessage?.message?.documentMessage;
-    return (
-      message?.extendedTextMessage?.contextInfo ??
-      message?.imageMessage?.contextInfo ??
-      message?.videoMessage?.contextInfo ??
-      documentMessage?.contextInfo
-    );
-  }
-
-  /**
    * Handle incoming message
    * @internal
    */
@@ -2747,7 +2734,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     };
 
     // Extract mentionedJids from contextInfo (WhatsApp mentions)
-    const contextInfo = this.getMessageContextInfo(rawMessage);
+    const contextInfo = getMessageContextInfo(rawMessage);
     if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
       extendedPayload.mentionedJids = contextInfo.mentionedJid;
 
@@ -3728,7 +3715,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private extractMediaContent(
     message: NonNullable<WAMessage['message']>,
   ): { type: string; mimeType?: string; caption?: string } | null {
-    const documentMessage = message.documentMessage ?? message.documentWithCaptionMessage?.message?.documentMessage;
+    const documentMessage = getDocumentMessage(message);
     if (message.imageMessage) {
       return {
         type: 'image',

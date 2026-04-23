@@ -18,7 +18,7 @@
 
 import { join } from 'node:path';
 import type { ChannelType, EventBus, MessageReceivedPayload } from '@omni/core';
-import { createLogger } from '@omni/core';
+import { createLogger, isValidUuid } from '@omni/core';
 import type { Database } from '@omni/db';
 import { mediaContent, messages, omniEvents } from '@omni/db';
 import {
@@ -32,7 +32,6 @@ import type { Services } from '../services';
 import { MediaStorageService } from '../services/media-storage';
 
 const log = createLogger('media-processor');
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Media types that should be processed
@@ -84,7 +83,7 @@ function shouldProcess(contentType: string | undefined): boolean {
 }
 
 function isUuid(value: string | undefined): value is string {
-  return typeof value === 'string' && UUID_RE.test(value);
+  return typeof value === 'string' && isValidUuid(value);
 }
 
 /**

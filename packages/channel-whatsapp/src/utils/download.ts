@@ -9,6 +9,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { WAMessage } from 'baileys';
 import { downloadMediaMessage } from 'baileys';
+import { getDocumentMessage } from './message';
 
 /**
  * Result of downloading media
@@ -38,10 +39,6 @@ export interface DetectedMedia {
   duration?: number;
   /** Is this a voice note (ptt) */
   isVoiceNote?: boolean;
-}
-
-function getDocumentMessage(message: NonNullable<WAMessage['message']>) {
-  return message.documentMessage ?? message.documentWithCaptionMessage?.message?.documentMessage;
 }
 
 /**
