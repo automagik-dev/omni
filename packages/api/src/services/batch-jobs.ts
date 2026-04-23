@@ -755,12 +755,12 @@ export class BatchJobService {
       return this.failedResult(`MIME type not processable: ${mimeType}`);
     }
 
-    const filePath = await this.resolveFilePath(instanceId, message, mimeType);
-    if (!filePath) {
-      return this.failedResult('No media file path available');
+    const resolved = await this.resolveFilePath(instanceId, message, mimeType);
+    if (!resolved.ok) {
+      return this.failedResult(resolved.reason);
     }
 
-    const fullPath = join(this.mediaStorage.getBasePath(), filePath);
+    const fullPath = join(this.mediaStorage.getBasePath(), resolved.path);
     const result = await this.mediaService.process(fullPath, mimeType, {
       language: 'pt',
       caption: message.textContent ?? undefined,
@@ -790,15 +790,24 @@ export class BatchJobService {
   }
 
   /**
-   * Resolve file path - download from URL if needed
+   * Resolve file path - download from URL if needed.
+   *
+   * Returns a tagged result so callers can surface the real reason a file
+   * could not be resolved (missing local path, missing url, download failure).
+   * Previously all three paths collapsed into a generic "No media file path
+   * available" error, which made #500 diagnosis impossible.
    */
-  private async resolveFilePath(instanceId: string, message: Message, mimeType: string): Promise<string | null> {
+  private async resolveFilePath(
+    instanceId: string,
+    message: Message,
+    mimeType: string,
+  ): Promise<{ ok: true; path: string } | { ok: false; reason: string }> {
     if (message.mediaLocalPath) {
-      return message.mediaLocalPath;
+      return { ok: true, path: message.mediaLocalPath };
     }
 
     if (!message.mediaUrl) {
-      return null;
+      return { ok: false, reason: 'No media_url and no media_local_path on message' };
     }
 
     try {
@@ -810,9 +819,15 @@ export class BatchJobService {
         message.platformTimestamp ?? undefined,
       );
       await this.mediaStorage.updateMessageLocalPath(message.id, result.localPath);
-      return result.localPath;
-    } catch {
-      return null;
+      return { ok: true, path: result.localPath };
+    } catch (error) {
+      const reason = `storeFromUrl failed: ${error instanceof Error ? error.message : String(error)}`;
+      log.warn('storeFromUrl failed during batch retrofill', {
+        messageId: message.id,
+        mediaUrl: message.mediaUrl,
+        error: reason,
+      });
+      return { ok: false, reason };
     }
   }
 
