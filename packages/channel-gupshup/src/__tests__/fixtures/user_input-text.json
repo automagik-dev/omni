@@ -1,0 +1,46 @@
+{
+  "source": "channel",
+  "sender": "5511900000001",
+  "channel": "whatsapp",
+  "isGroup": false,
+  "destination": 558007779070,
+  "botname": "wFXLdg7dVyO1H9eKL9l9fSL5",
+  "event_type": "user_input",
+  "message": "Oi",
+  "postbackText": null,
+  "senderobj": {
+    "channelid": "5511900000001",
+    "display": "Test User",
+    "channeltype": "whatsapp"
+  },
+  "contextobj": {
+    "senderName": "Test User",
+    "botname": "wFXLdg7dVyO1H9eKL9l9fSL5",
+    "channeltype": "whatsapp",
+    "contexttype": "p2p",
+    "contextid": "5511900000001",
+    "cc": "55",
+    "dc": "11900000001"
+  },
+  "messageobj": {
+    "id": "wamid.TEST_USER_INPUT_TEXT_001",
+    "type": "text",
+    "from": "5511900000001",
+    "timestamp": 1776273477,
+    "text": "Oi",
+    "raw": {
+      "payload": { "text": "Oi" },
+      "sender": { "phone": "5511900000001", "name": "Test User" },
+      "id": "wamid.TEST_USER_INPUT_TEXT_001",
+      "source": "5511900000001",
+      "type": "text"
+    }
+  },
+  "messageHeader": {
+    "event_type": "user_input",
+    "nsTraceId": "1715A9A85A3EECC-000000000000157A",
+    "project_id": "31569577",
+    "x-gs-priority": 4
+  },
+  "metadata": {}
+}

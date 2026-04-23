@@ -1,0 +1,35 @@
+{
+  "source": "channel",
+  "sender": "5511900000001",
+  "channel": "whatsapp",
+  "isGroup": false,
+  "destination": 558007779070,
+  "botname": "wFXLdg7dVyO1H9eKL9l9fSL5",
+  "event_type": "billing_event",
+  "postbackText": null,
+  "senderobj": {
+    "channelid": "5511900000001",
+    "channeltype": "whatsapp"
+  },
+  "contextobj": {
+    "channeltype": "whatsapp",
+    "contexttype": "p2p",
+    "contextid": "5511900000001"
+  },
+  "messageobj": {
+    "id": "wamid.TEST_BILLING_001",
+    "type": "text",
+    "from": "5511900000001",
+    "timestamp": 1776300200,
+    "text": "billing-notification"
+  },
+  "messageHeader": {
+    "event_type": "billing_event",
+    "nsTraceId": "BILLING00000001-0000000000000002",
+    "project_id": "31569577"
+  },
+  "metadata": {
+    "billing_category": "conversation",
+    "pricing_model": "CBP"
+  }
+}
