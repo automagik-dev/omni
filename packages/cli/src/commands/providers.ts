@@ -17,11 +17,69 @@
  */
 
 import { PROVIDER_SCHEMAS, type ProviderSchema } from '@omni/core';
+import type { AgnoAgent, AgnoTeam, AgnoWorkflow } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveProviderId } from '../resolve.js';
 import { createSetupCommand } from './providers-setup.js';
+
+/**
+ * Map agno 2.5+ (`id`) and pre-2.5 (`agent_id`) agent shapes to the list row.
+ */
+function mapAgnoAgentRow(a: AgnoAgent): {
+  id: string | undefined;
+  name: string;
+  model: string;
+  description: string;
+} {
+  return {
+    id: a.id ?? a.agent_id,
+    name: a.name,
+    model: a.model?.name ?? '-',
+    description: a.description?.slice(0, 50) ?? '-',
+  };
+}
+
+/**
+ * Map agno 2.5+ (`id`) and pre-2.5 (`team_id`) team shapes to the list row.
+ */
+function mapAgnoTeamRow(t: AgnoTeam): {
+  id: string | undefined;
+  name: string;
+  mode: string;
+  members: number;
+  description: string;
+} {
+  return {
+    id: t.id ?? t.team_id,
+    name: t.name,
+    mode: t.mode ?? '-',
+    members: t.members?.length ?? 0,
+    description: t.description?.slice(0, 50) ?? '-',
+  };
+}
+
+/**
+ * Map agno 2.5+ (`id`) and pre-2.5 (`workflow_id`) workflow shapes to the list row.
+ */
+function mapAgnoWorkflowRow(w: AgnoWorkflow): {
+  id: string | undefined;
+  name: string;
+  description: string;
+} {
+  return {
+    id: w.id ?? w.workflow_id,
+    name: w.name,
+    description: w.description?.slice(0, 50) ?? '-',
+  };
+}
+
+export const __testables = {
+  mapAgnoAgentRow,
+  mapAgnoTeamRow,
+  mapAgnoWorkflowRow,
+};
 
 // Single source of truth: derive VALID_SCHEMAS from @omni/core (DEC-12)
 const VALID_SCHEMAS: readonly string[] = PROVIDER_SCHEMAS;
@@ -396,12 +454,7 @@ export function createProvidersCommand(): Command {
       try {
         const agents = await client.providers.listAgents(resolvedId);
 
-        const items = agents.map((a) => ({
-          id: a.agent_id,
-          name: a.name,
-          model: a.model?.name ?? '-',
-          description: a.description?.slice(0, 50) ?? '-',
-        }));
+        const items = agents.map(mapAgnoAgentRow);
 
         output.list(items, { emptyMessage: 'No agents found.' });
       } catch (err) {
@@ -421,13 +474,7 @@ export function createProvidersCommand(): Command {
       try {
         const teams = await client.providers.listTeams(resolvedId);
 
-        const items = teams.map((t) => ({
-          id: t.team_id,
-          name: t.name,
-          mode: t.mode ?? '-',
-          members: t.members?.length ?? 0,
-          description: t.description?.slice(0, 50) ?? '-',
-        }));
+        const items = teams.map(mapAgnoTeamRow);
 
         output.list(items, { emptyMessage: 'No teams found.' });
       } catch (err) {
@@ -447,11 +494,7 @@ export function createProvidersCommand(): Command {
       try {
         const workflows = await client.providers.listWorkflows(resolvedId);
 
-        const items = workflows.map((w) => ({
-          id: w.workflow_id,
-          name: w.name,
-          description: w.description?.slice(0, 50) ?? '-',
-        }));
+        const items = workflows.map(mapAgnoWorkflowRow);
 
         output.list(items, { emptyMessage: 'No workflows found.' });
       } catch (err) {
