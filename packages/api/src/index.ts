@@ -11,7 +11,16 @@ import './instrument';
 import { type ChannelRegistry, isVoiceCapable } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
 import type { Database } from '@omni/db';
-import { agents, applyMigrations, closeDb, createDb, instances } from '@omni/db';
+import {
+  API_CRITICAL_COLUMNS,
+  agents,
+  applyMigrations,
+  closeDb,
+  createDb,
+  formatDriftReport,
+  instances,
+  verifyCriticalColumns,
+} from '@omni/db';
 import * as Sentry from '@sentry/bun';
 import { eq, sql } from 'drizzle-orm';
 import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
@@ -634,6 +643,26 @@ async function main() {
     throw error;
   }
   log.info('Database migrations complete', { durationMs: Date.now() - migrationStart });
+
+  // Issue #407: migration 0018_supreme_puma was marked applied on a production
+  // DB whose columns had never actually been renamed, so every /instances/*
+  // query 500'd on "column gupshup_callback_url does not exist". Verify the
+  // columns Drizzle depends on actually exist; if not, fail startup with a
+  // clear, actionable error rather than serving traffic in a broken state.
+  try {
+    const driftReport = await verifyCriticalColumns(db, API_CRITICAL_COLUMNS);
+    if (!driftReport.ok) {
+      log.error(formatDriftReport(driftReport), { drift: driftReport.drift });
+      await closeDb();
+      await stopEmbeddedPgserve();
+      process.exit(1);
+    }
+  } catch (error) {
+    log.error('Schema drift check failed', { error: String(error) });
+    await closeDb();
+    await stopEmbeddedPgserve();
+    process.exit(1);
+  }
 
   // Content-aware boot banner — surfaces the #412 "fresh empty data dir" symptom
   // immediately after migrations. A zero count on a deploy that used to have
