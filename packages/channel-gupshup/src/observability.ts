@@ -51,23 +51,18 @@ export function recordGupshupWebhookReceived(logger: Logger, dimensions: Gupshup
 }
 
 /**
- * Creates a first-seen event_type tracker. Separate from the module state so
- * tests can get an isolated set instead of bleeding across test runs.
+ * Shared per-process first-seen event_type tracker used by the webhook handler.
+ * Returns true the first time each value is seen; false thereafter.
  */
-export function createSeenEventTypesTracker() {
+function createSeenEventTypesTracker() {
   const seen = new Set<string>();
   return {
-    /** Returns true the first time each value is seen; false thereafter. */
     markIfFirst(value: string): boolean {
       if (seen.has(value)) return false;
       seen.add(value);
       return true;
     },
-    size(): number {
-      return seen.size;
-    },
   };
 }
 
-/** Shared per-process tracker used by the webhook handler. */
 export const seenEventTypes = createSeenEventTypesTracker();
