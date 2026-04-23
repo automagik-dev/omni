@@ -272,8 +272,28 @@ describe('AgnoClient', () => {
   // --- IAgentClient interface: discover() ---
 
   describe('discover', () => {
-    it('returns combined agents, teams, and workflows', async () => {
-      // Three sequential fetches: agents, teams, workflows
+    it('returns combined agents, teams, and workflows (agno 2.5 shape)', async () => {
+      // agno 2.5+ exposes `id` at the top level of each entity — regression for #509.
+      mockImpl
+        .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 'a1', name: 'Agent 1' }]), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 't1', name: 'Team 1' }]), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 'w1', name: 'Workflow 1' }]), { status: 200 }));
+
+      const client = new AgnoClient(config);
+      const entries = await client.discover();
+
+      expect(entries).toHaveLength(3);
+      expect(entries[0]).toMatchObject({ id: 'a1', name: 'Agent 1', type: 'agent' });
+      expect(entries[1]).toMatchObject({ id: 't1', name: 'Team 1', type: 'team' });
+      expect(entries[2]).toMatchObject({ id: 'w1', name: 'Workflow 1', type: 'workflow' });
+      // Every entry must have a defined id — guards against the #509 regression.
+      for (const entry of entries) {
+        expect(entry.id).toBeDefined();
+        expect(entry.id).not.toBe(undefined);
+      }
+    });
+
+    it('falls back to legacy agent_id/team_id/workflow_id fields (pre-agno-2.5)', async () => {
       mockImpl
         .mockResolvedValueOnce(new Response(JSON.stringify([{ agent_id: 'a1', name: 'Agent 1' }]), { status: 200 }))
         .mockResolvedValueOnce(new Response(JSON.stringify([{ team_id: 't1', name: 'Team 1' }]), { status: 200 }))
@@ -285,14 +305,14 @@ describe('AgnoClient', () => {
       const entries = await client.discover();
 
       expect(entries).toHaveLength(3);
-      expect(entries[0]).toMatchObject({ id: 'a1', name: 'Agent 1', type: 'agent' });
-      expect(entries[1]).toMatchObject({ id: 't1', name: 'Team 1', type: 'team' });
-      expect(entries[2]).toMatchObject({ id: 'w1', name: 'Workflow 1', type: 'workflow' });
+      expect(entries[0]).toMatchObject({ id: 'a1', type: 'agent' });
+      expect(entries[1]).toMatchObject({ id: 't1', type: 'team' });
+      expect(entries[2]).toMatchObject({ id: 'w1', type: 'workflow' });
     });
 
     it('returns partial results when some endpoints fail', async () => {
       mockImpl
-        .mockResolvedValueOnce(new Response(JSON.stringify([{ agent_id: 'a1', name: 'Agent 1' }]), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 'a1', name: 'Agent 1' }]), { status: 200 }))
         .mockRejectedValueOnce(new Error('Teams endpoint down'))
         .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }));
 
@@ -309,8 +329,8 @@ describe('AgnoClient', () => {
   describe('listAgents', () => {
     it('returns list of agents on success', async () => {
       const agents = [
-        { agent_id: 'agent-1', name: 'Test Agent' },
-        { agent_id: 'agent-2', name: 'Another Agent' },
+        { id: 'agent-1', name: 'Test Agent' },
+        { id: 'agent-2', name: 'Another Agent' },
       ];
 
       mockImpl.mockResolvedValueOnce(
@@ -363,7 +383,7 @@ describe('AgnoClient', () => {
 
   describe('listTeams', () => {
     it('returns list of teams on success', async () => {
-      const teams = [{ team_id: 'team-1', name: 'Test Team' }];
+      const teams = [{ id: 'team-1', name: 'Test Team' }];
 
       mockImpl.mockResolvedValueOnce(
         new Response(JSON.stringify(teams), {
@@ -381,7 +401,7 @@ describe('AgnoClient', () => {
 
   describe('listWorkflows', () => {
     it('returns list of workflows on success', async () => {
-      const workflows = [{ workflow_id: 'wf-1', name: 'Test Workflow' }];
+      const workflows = [{ id: 'wf-1', name: 'Test Workflow' }];
 
       mockImpl.mockResolvedValueOnce(
         new Response(JSON.stringify(workflows), {
