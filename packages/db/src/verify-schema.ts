@@ -38,11 +38,17 @@ export async function verifyCriticalColumns(db: Database, expectations: ColumnEx
   }
 
   const tables = expectations.map((e) => e.table);
+  // Bind each table name as its own placeholder via sql.join — passing the raw
+  // JS array as a single parameter makes Postgres try to parse it as an array
+  // literal and fail with "malformed array literal" (issue #407 CI regression).
   const rows = await db.execute<{ table_name: string; column_name: string }>(sql`
     SELECT table_name, column_name
     FROM information_schema.columns
     WHERE table_schema = 'public'
-      AND table_name = ANY(${tables})
+      AND table_name IN (${sql.join(
+        tables.map((t) => sql`${t}`),
+        sql`, `,
+      )})
   `);
 
   const liveColumns = new Map<string, Set<string>>();

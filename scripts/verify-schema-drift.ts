@@ -10,7 +10,13 @@
  *   DATABASE_URL=postgres://... bun run db:verify-drift
  */
 
-import { API_CRITICAL_COLUMNS, closeDb, createDb, formatDriftReport, verifyCriticalColumns } from '@omni/db';
+import {
+  API_CRITICAL_COLUMNS,
+  closeDb,
+  createDb,
+  formatDriftReport,
+  verifyCriticalColumns,
+} from '../packages/db/src/index';
 
 async function main(): Promise<number> {
   const db = createDb();
