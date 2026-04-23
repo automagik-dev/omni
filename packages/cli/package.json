@@ -41,6 +41,7 @@
   "devDependencies": {
     "@omni/api": "workspace:*",
     "@omni/channel-discord": "workspace:*",
+    "@omni/channel-gupshup": "workspace:*",
     "@omni/channel-sdk": "workspace:*",
     "@omni/channel-slack": "workspace:*",
     "@omni/channel-telegram": "workspace:*",
