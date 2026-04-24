@@ -1466,10 +1466,6 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
 
   const instance = await services.instances.getById(data.instanceId);
 
-  if (instance.channel !== 'gupshup') {
-    return c.json({ error: 'Handoff is only supported on Gupshup instances' }, 400);
-  }
-
   if (!channelRegistry) {
     throw new OmniError({
       code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
@@ -1488,21 +1484,39 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
     });
   }
 
+  // Resolve the recipient for every channel — even when we won't push a
+  // native payload we still want the audit row to record a real platform
+  // identifier (phone/JID) rather than the caller's input, which may be
+  // an Omni Person UUID. See issue #537 + gemini review on #538.
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
-  const outgoingMessage: OutgoingMessage = {
-    to: resolvedTo,
-    content: { type: 'text', text: data.text } as OutgoingContent,
-    metadata: {
-      isHandoff: true,
-      dadosLead: data.dadosLead ?? data.extraInfo,
-      motivoHandoff: data.motivoHandoff,
-      handoffFields: data.handoffFields,
-    },
-  };
+  // Channels that declare `canHandoff: true` receive a channel-specific
+  // HANDOFF payload (currently only Gupshup). For every other channel the
+  // route still runs the channel-agnostic side effects below — agentPaused,
+  // follow-up disarm, audit row — so agents can pause themselves on any
+  // channel. The user-facing farewell is the agent's responsibility on
+  // channels without native handoff. See issue #537.
+  const hasNativeHandoff = plugin.capabilities?.canHandoff === true;
 
-  const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
-  handleSendResult(result, { channelType: instance.channel, instanceId: data.instanceId, operation: 'send handoff' });
+  let channelSendResult: Awaited<ReturnType<typeof plugin.sendMessage>> | null = null;
+  if (hasNativeHandoff) {
+    const outgoingMessage: OutgoingMessage = {
+      to: resolvedTo,
+      content: { type: 'text', text: data.text } as OutgoingContent,
+      metadata: {
+        isHandoff: true,
+        dadosLead: data.dadosLead ?? data.extraInfo,
+        motivoHandoff: data.motivoHandoff,
+        handoffFields: data.handoffFields,
+      },
+    };
+    channelSendResult = await plugin.sendMessage(data.instanceId, outgoingMessage);
+    handleSendResult(channelSendResult, {
+      channelType: instance.channel,
+      instanceId: data.instanceId,
+      operation: 'send handoff',
+    });
+  }
 
   // Set agentPaused — chains: chat.handoff_activated → follow-up disarm + agent stop
   await services.chats.update(data.chatId, {
@@ -1524,16 +1538,17 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
     .values({
       instanceId: data.instanceId,
       chatUuid: data.chatId, // chatId in this route is the DB UUID of the chat
-      chatId: data.to, // raw phone/JID used as chat identifier on the channel
-      toPhone: data.to,
+      chatId: resolvedTo, // resolved platform identifier (phone/JID)
+      toPhone: resolvedTo,
       text: data.text,
       extraInfo: data.dadosLead ?? data.extraInfo ?? null,
       agentId: instance.agentId ?? null,
-      externalMessageId: result.messageId ?? null,
+      externalMessageId: channelSendResult?.messageId ?? null,
       handoffFields: data.handoffFields ?? null,
       sentAt: new Date(),
       metadata: {
         instanceChannel: instance.channel,
+        channelHandoffSupported: hasNativeHandoff,
         ...(data.motivoHandoff ? { motivoHandoff: data.motivoHandoff } : {}),
       },
     })
@@ -1542,9 +1557,9 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
   return c.json(
     {
       data: {
-        messageId: result.messageId,
-        status: 'sent',
-        timestamp: result.timestamp,
+        messageId: channelSendResult?.messageId ?? null,
+        status: hasNativeHandoff ? 'sent' : 'paused',
+        timestamp: channelSendResult?.timestamp ?? Date.now(),
       },
     },
     201,
