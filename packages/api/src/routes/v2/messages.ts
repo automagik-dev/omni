@@ -1484,6 +1484,12 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
     });
   }
 
+  // Resolve the recipient for every channel — even when we won't push a
+  // native payload we still want the audit row to record a real platform
+  // identifier (phone/JID) rather than the caller's input, which may be
+  // an Omni Person UUID. See issue #537 + gemini review on #538.
+  const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
+
   // Channels that declare `canHandoff: true` receive a channel-specific
   // HANDOFF payload (currently only Gupshup). For every other channel the
   // route still runs the channel-agnostic side effects below — agentPaused,
@@ -1494,7 +1500,6 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
 
   let channelSendResult: Awaited<ReturnType<typeof plugin.sendMessage>> | null = null;
   if (hasNativeHandoff) {
-    const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
     const outgoingMessage: OutgoingMessage = {
       to: resolvedTo,
       content: { type: 'text', text: data.text } as OutgoingContent,
@@ -1533,8 +1538,8 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
     .values({
       instanceId: data.instanceId,
       chatUuid: data.chatId, // chatId in this route is the DB UUID of the chat
-      chatId: data.to, // raw phone/JID used as chat identifier on the channel
-      toPhone: data.to,
+      chatId: resolvedTo, // resolved platform identifier (phone/JID)
+      toPhone: resolvedTo,
       text: data.text,
       extraInfo: data.dadosLead ?? data.extraInfo ?? null,
       agentId: instance.agentId ?? null,
