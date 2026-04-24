@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from '
 import type { EventBus, FollowUpSequenceConfig } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatFollowUpState, chats, instances } from '@omni/db';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { FollowUpSweeperService } from '../services/follow-up-sweeper';
 import { describeWithDb, getTestDb } from './db-helper';
 
@@ -212,8 +212,13 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     expect(row.disarmReason).toBeNull();
     expect(row.sequenceIndex).toBe(0);
 
-    // Reset chat settings for subsequent tests.
-    await db.update(chats).set({ settings: {} }).where(eq(chats.id, testChatId));
+    // Remove only the `agentPaused` key we added — preserves any other
+    // settings that might be present on the test chat (defensive; merge,
+    // don't overwrite).
+    await db
+      .update(chats)
+      .set({ settings: sql`${chats.settings} - 'agentPaused'` })
+      .where(eq(chats.id, testChatId));
   });
 
   test('future-due rows are not swept', async () => {

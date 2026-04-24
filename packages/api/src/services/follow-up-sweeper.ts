@@ -122,7 +122,13 @@ export class FollowUpSweeperService {
             // sweeper fires idle_timeout after `/send/handoff` has set
             // agentPaused but before the `chat.handoff_activated` disarm
             // has committed. See issue #528.
-            sql`(${chats.settings}->>'agentPaused')::boolean IS DISTINCT FROM true`,
+            //
+            // Compare the JSONB text form directly rather than casting to
+            // boolean — `->>` returns NULL for missing keys and `'true'` /
+            // `'false'` for booleans. `IS DISTINCT FROM 'true'` is null-safe
+            // and avoids a runtime cast error if a non-boolean value ever
+            // lands in `settings.agentPaused`.
+            sql`(${chats.settings}->>'agentPaused') IS DISTINCT FROM 'true'`,
           ),
         )
         .orderBy(chatFollowUpState.nextFireAt)
