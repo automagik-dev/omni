@@ -1509,6 +1509,16 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
     settings: { agentPaused: true },
   });
 
+  // Close the race between chat.handoff_activated (two NATS hops away) and the
+  // next sweeper tick (every 15s). Idempotent with the event-driven disarm in
+  // follow-up-hooks.ts — disarmActive is a no-op on already-disarmed rows.
+  // See issue #528.
+  await services.followUpLifecycle.disarm({
+    chatId: data.chatId,
+    instanceId: data.instanceId,
+    reason: 'handoff',
+  });
+
   // Persist full handoff payload for auditing and traceability
   db.insert(handoffLogs)
     .values({

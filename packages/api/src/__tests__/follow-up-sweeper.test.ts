@@ -182,6 +182,40 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     expect(publishedEvents).toHaveLength(0);
   });
 
+  test('paused chat (settings.agentPaused=true) is not swept even when armed and due', async () => {
+    // Issue #528 — closes the race where the sweeper fires chat.idle_timeout
+    // after `/send/handoff` has set agentPaused but before the
+    // chat.handoff_activated → follow-up-hooks disarm has committed.
+    const past = new Date(Date.now() - 60_000);
+
+    await db
+      .update(chats)
+      .set({ settings: { agentPaused: true } })
+      .where(eq(chats.id, testChatId));
+
+    await db.insert(chatFollowUpState).values({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      sequenceConfig: config(),
+      sequenceIndex: 0,
+      lastAgentMessageAt: new Date(Date.now() - MS_PER_MINUTE),
+      nextFireAt: past,
+    });
+
+    const stats = await service.sweep();
+    expect(stats.scanned).toBe(0);
+    expect(publishedEvents).toHaveLength(0);
+
+    // Row remains armed — the sweeper skipped it, it didn't disarm it.
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBeNull();
+    expect(row.sequenceIndex).toBe(0);
+
+    // Reset chat settings for subsequent tests.
+    await db.update(chats).set({ settings: {} }).where(eq(chats.id, testChatId));
+  });
+
   test('future-due rows are not swept', async () => {
     const future = new Date(Date.now() + 5 * MS_PER_MINUTE);
 
