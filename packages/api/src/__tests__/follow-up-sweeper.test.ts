@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from '
 import type { EventBus, FollowUpSequenceConfig } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatFollowUpState, chats, instances } from '@omni/db';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { FollowUpSweeperService } from '../services/follow-up-sweeper';
 import { describeWithDb, getTestDb } from './db-helper';
 
@@ -83,6 +83,13 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
 
   afterEach(async () => {
     await db.delete(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
+    // Defensive cleanup — if a test wrote `settings.agentPaused`, strip only
+    // that key. Runs unconditionally so a failed test can't leak paused
+    // state into subsequent cases sharing `testChatId`.
+    await db
+      .update(chats)
+      .set({ settings: sql`${chats.settings} - 'agentPaused'` })
+      .where(eq(chats.id, testChatId));
   });
 
   afterAll(async () => {
@@ -188,9 +195,13 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     // chat.handoff_activated → follow-up-hooks disarm has committed.
     const past = new Date(Date.now() - 60_000);
 
+    // Merge `agentPaused: true` into `settings` without overwriting other
+    // keys. `jsonb_set` + `COALESCE` handles the null-settings case.
     await db
       .update(chats)
-      .set({ settings: { agentPaused: true } })
+      .set({
+        settings: sql`jsonb_set(COALESCE(${chats.settings}, '{}'::jsonb), '{agentPaused}', 'true'::jsonb)`,
+      })
       .where(eq(chats.id, testChatId));
 
     await db.insert(chatFollowUpState).values({
@@ -211,9 +222,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
     expect(row.disarmReason).toBeNull();
     expect(row.sequenceIndex).toBe(0);
-
-    // Reset chat settings for subsequent tests.
-    await db.update(chats).set({ settings: {} }).where(eq(chats.id, testChatId));
+    // Settings cleanup happens in `afterEach` so it runs even on failure.
   });
 
   test('future-due rows are not swept', async () => {
