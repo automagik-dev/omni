@@ -105,6 +105,16 @@ export interface ChannelCapabilities {
   /** Can stream partial response updates (thinking/content/final/error) */
   canStreamResponse?: boolean;
 
+  /**
+   * Whether the channel exposes a native handoff protocol (e.g. a dedicated
+   * `HANDOFF` message type that pops a ticket in an operator UI). Only
+   * channels with `canHandoff: true` receive a channel-specific payload from
+   * `POST /messages/send/handoff`; for every other channel the route still
+   * runs the channel-agnostic side effects (`agentPaused=true`, follow-up
+   * disarm, audit log). See issue #537.
+   */
+  canHandoff?: boolean;
+
   // ─────────────────────────────────────────────────────────────
   // Messaging-window constraints (issue #404)
   // ─────────────────────────────────────────────────────────────
