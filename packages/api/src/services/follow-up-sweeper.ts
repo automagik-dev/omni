@@ -27,7 +27,7 @@ import {
 } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatFollowUpState, chats, instances } from '@omni/db';
-import { and, eq, isNull, lte } from 'drizzle-orm';
+import { and, eq, isNull, lte, sql } from 'drizzle-orm';
 
 const log = createLogger('follow-up-sweeper');
 
@@ -114,7 +114,17 @@ export class FollowUpSweeperService {
         .from(chatFollowUpState)
         .leftJoin(chats, eq(chatFollowUpState.chatId, chats.id))
         .leftJoin(instances, eq(chatFollowUpState.instanceId, instances.id))
-        .where(and(isNull(chatFollowUpState.disarmReason), lte(chatFollowUpState.nextFireAt, now)))
+        .where(
+          and(
+            isNull(chatFollowUpState.disarmReason),
+            lte(chatFollowUpState.nextFireAt, now),
+            // Skip chats with agentPaused=true — closes the race where the
+            // sweeper fires idle_timeout after `/send/handoff` has set
+            // agentPaused but before the `chat.handoff_activated` disarm
+            // has committed. See issue #528.
+            sql`(${chats.settings}->>'agentPaused')::boolean IS DISTINCT FROM true`,
+          ),
+        )
         .orderBy(chatFollowUpState.nextFireAt)
         .limit(limit)
         // Lock only the state row, not the joined chat row — FOR UPDATE can't
