@@ -74,6 +74,25 @@ describe('isTransientDispatchError', () => {
     expect(isTransientDispatchError({ code: 'ECONNREFUSED', toString: () => 'ECONNREFUSED' })).toBe(true);
     expect(isTransientDispatchError(undefined)).toBe(false);
   });
+
+  it('matches error.code when message does not contain the pattern', () => {
+    // Some HTTP clients set the system error code on `.code` only, with a
+    // generic `message`. Should still classify as transient.
+    const err = Object.assign(new Error('upstream connection problem'), { code: 'ECONNREFUSED' });
+    expect(isTransientDispatchError(err)).toBe(true);
+  });
+
+  it('matches numeric error.status in the 5xx range', () => {
+    expect(isTransientDispatchError(Object.assign(new Error('boom'), { status: 502 }))).toBe(true);
+    expect(isTransientDispatchError(Object.assign(new Error('boom'), { status: 599 }))).toBe(true);
+    // 4xx must NOT classify as transient.
+    expect(isTransientDispatchError(Object.assign(new Error('boom'), { status: 400 }))).toBe(false);
+    expect(isTransientDispatchError(Object.assign(new Error('boom'), { status: 499 }))).toBe(false);
+  });
+
+  it('also reads statusCode (axios-style) for the 5xx check', () => {
+    expect(isTransientDispatchError(Object.assign(new Error('boom'), { statusCode: 503 }))).toBe(true);
+  });
 });
 
 describe('runWithTransientDispatchRetry', () => {
@@ -172,5 +191,28 @@ describe('runWithTransientDispatchRetry', () => {
   it('exposes the canonical transient pattern set', () => {
     // Sanity check the patterns are wired and at least cover the known cases.
     expect(TRANSIENT_DISPATCH_ERROR_PATTERNS.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('logs error.code and error.status fields on retry when present', async () => {
+    let n = 0;
+    const fn = mock(async () => {
+      n += 1;
+      if (n === 1) {
+        throw Object.assign(new Error('upstream blip'), { code: 'ECONNRESET', status: 502 });
+      }
+      return 'ok';
+    });
+    const { logger, warns } = makeLogger();
+
+    const result = await runWithTransientDispatchRetry(fn, CTX, {
+      sleeper: noopSleeper,
+      logger,
+    });
+
+    expect(result).toBe('ok');
+    expect(warns).toHaveLength(1);
+    expect(warns[0]?.fields.code).toBe('ECONNRESET');
+    expect(warns[0]?.fields.status).toBe(502);
+    expect(warns[0]?.fields.error).toBe('upstream blip');
   });
 });

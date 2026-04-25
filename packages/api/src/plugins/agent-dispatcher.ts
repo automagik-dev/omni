@@ -401,9 +401,24 @@ export const TRANSIENT_DISPATCH_ERROR_PATTERNS: readonly RegExp[] = [
 /** Backoff schedule. 3 retries → 4 attempts total, ~7.5s worst-case latency. */
 export const TRANSIENT_DISPATCH_RETRY_DELAYS_MS: readonly number[] = [500, 2000, 5000];
 
-export function isTransientDispatchError(error: unknown): boolean {
+/** Best-effort extraction of common transport-layer fields from arbitrary error shapes. */
+function extractErrorFields(error: unknown): { msg: string; code?: string; status?: number } {
   const msg = error instanceof Error ? error.message : String(error);
-  return TRANSIENT_DISPATCH_ERROR_PATTERNS.some((p) => p.test(msg));
+  if (typeof error !== 'object' || error === null) return { msg };
+  const obj = error as Record<string, unknown>;
+  const code = typeof obj.code === 'string' ? obj.code : undefined;
+  const status =
+    typeof obj.status === 'number' ? obj.status : typeof obj.statusCode === 'number' ? obj.statusCode : undefined;
+  return { msg, code, status };
+}
+
+export function isTransientDispatchError(error: unknown): boolean {
+  const { msg, code, status } = extractErrorFields(error);
+  // 5xx via numeric status (HTTP clients that surface it as a property).
+  if (typeof status === 'number' && status >= 500 && status < 600) return true;
+  // Pattern match against both the message and any error.code (some libs put
+  // ECONNREFUSED / ETIMEDOUT in `code` only, not in `message`).
+  return TRANSIENT_DISPATCH_ERROR_PATTERNS.some((p) => p.test(msg) || (typeof code === 'string' && p.test(code)));
 }
 
 /**
@@ -440,13 +455,16 @@ export async function runWithTransientDispatchRetry<T>(
       if (isLast || !transient(error)) {
         throw error;
       }
+      const { msg, code, status } = extractErrorFields(error);
       logger.warn('agent_dispatch_transient_retry', {
         instanceId: context.instanceId,
         chatId: context.chatId,
         traceId: context.traceId,
         attempt: attempt + 1,
         nextDelayMs: delays[attempt],
-        error: error instanceof Error ? error.message : String(error),
+        error: msg,
+        code,
+        status,
       });
       await sleeper(delays[attempt] ?? 0);
     }
