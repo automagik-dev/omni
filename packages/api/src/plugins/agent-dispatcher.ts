@@ -373,6 +373,89 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Retry-with-backoff for transient agent-provider failures (issue #540)
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Patterns that classify an error as a transient infrastructure failure
+ * (network glitch, provider restart, upstream 5xx, socket reset). These are
+ * the cases where waiting a few seconds and retrying is likely to succeed
+ * — typically a `pm2 restart` of the agent backend or a fleeting blip.
+ *
+ * Anything that does NOT match these is treated as terminal (4xx, validation,
+ * configuration, "agent not found", etc.) and bubbles out immediately so the
+ * user sees an error instead of waiting through retries we know will fail.
+ */
+export const TRANSIENT_DISPATCH_ERROR_PATTERNS: readonly RegExp[] = [
+  /ECONNREFUSED/i,
+  /ECONNRESET/i,
+  /ETIMEDOUT/i,
+  /EAI_AGAIN/i,
+  /fetch failed/i,
+  /socket hang up/i,
+  /network request failed/i,
+  /\b5\d{2}\b/, // 5xx HTTP status codes embedded in error messages
+];
+
+/** Backoff schedule. 3 retries → 4 attempts total, ~7.5s worst-case latency. */
+export const TRANSIENT_DISPATCH_RETRY_DELAYS_MS: readonly number[] = [500, 2000, 5000];
+
+export function isTransientDispatchError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return TRANSIENT_DISPATCH_ERROR_PATTERNS.some((p) => p.test(msg));
+}
+
+/**
+ * Run an agent-dispatch operation with retry on transient errors.
+ *
+ * Returns when the operation succeeds. Re-throws after the final attempt or
+ * immediately on a terminal (non-transient) error. Each retry attempt logs
+ * `agent_dispatch_transient_retry` at WARN with `attempt` (1-indexed) and
+ * the underlying error string, so format drift / new transient signatures
+ * surface in logs.
+ */
+export async function runWithTransientDispatchRetry<T>(
+  fn: () => Promise<T>,
+  context: { instanceId: string; chatId: string; traceId?: string },
+  options: {
+    delaysMs?: readonly number[];
+    isTransient?: (error: unknown) => boolean;
+    sleeper?: (ms: number) => Promise<void>;
+    logger?: { warn: (msg: string, fields: Record<string, unknown>) => void };
+  } = {},
+): Promise<T> {
+  const delays = options.delaysMs ?? TRANSIENT_DISPATCH_RETRY_DELAYS_MS;
+  const transient = options.isTransient ?? isTransientDispatchError;
+  const sleeper = options.sleeper ?? sleep;
+  const logger = options.logger ?? log;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const isLast = attempt === delays.length;
+      if (isLast || !transient(error)) {
+        throw error;
+      }
+      logger.warn('agent_dispatch_transient_retry', {
+        instanceId: context.instanceId,
+        chatId: context.chatId,
+        traceId: context.traceId,
+        attempt: attempt + 1,
+        nextDelayMs: delays[attempt],
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sleeper(delays[attempt] ?? 0);
+    }
+  }
+  // Unreachable — the loop always either returns or throws — but keeps TS
+  // happy without a non-null assertion.
+  throw lastError;
+}
+
 const CHANNEL_MESSAGE_LIMITS: Record<string, number> = {
   discord: 2000,
   'whatsapp-baileys': 65536,
@@ -2635,23 +2718,27 @@ async function processAgentResponse(
   );
 
   try {
-    await dispatchToAgent(
-      services,
-      instance,
-      messages,
-      triggerType,
-      channel,
-      chatId,
-      senderId,
-      personId,
-      senderName,
-      traceId,
-      senderAgentId,
-      perThreadExtraContext,
-      db,
+    await runWithTransientDispatchRetry(
+      () =>
+        dispatchToAgent(
+          services,
+          instance,
+          messages,
+          triggerType,
+          channel,
+          chatId,
+          senderId,
+          personId,
+          senderName,
+          traceId,
+          senderAgentId,
+          perThreadExtraContext,
+          db,
+        ),
+      { instanceId: instance.id, chatId, traceId },
     );
   } catch (error) {
-    log.error('Failed to process agent response', {
+    log.error('agent_dispatch_failed_after_retries', {
       instanceId: instance.id,
       chatId,
       error: String(error),
