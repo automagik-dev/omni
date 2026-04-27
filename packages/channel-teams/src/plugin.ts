@@ -3,16 +3,22 @@
  *
  * Subclasses `BaseChannelPlugin` to claim the `'teams'` channel slot.
  *
- * - Group 3 (this commit) wires `connect()`, `disconnect()`, and
- *   `handleWebhook()` against the Bot Framework Connector REST protocol +
- *   AAD client-credentials OAuth flow.
- * - Group 4 (separate commit) fills `sendMessage()` with text/media/typing/
- *   reaction senders.
+ * - Group 3 wires `connect()`, `disconnect()`, and `handleWebhook()`.
+ * - Group 4 fills `sendMessage()` with text/media/typing/reaction senders.
  *
- * The plugin speaks the Bot Framework wire protocol directly via
- * `BotFrameworkClient` instead of pulling in `botbuilder` /
- * `botframework-connector`; see `connection/bot-framework-client.ts` for
- * the rationale.
+ * Inbound auth: every Bot Framework activity arrives signed with a JWT in
+ * the `Authorization` header. Validating that JWT is mandatory — without it
+ * any caller who knows the webhook URL can forge activities. Per DESIGN §4.2
+ * we delegate that validation to `botbuilder`'s `CloudAdapter`, which fetches
+ * Microsoft's OpenID metadata, verifies signature/issuer/audience/exp/nbf,
+ * and only then invokes our dispatch logic. We adapt the Hono `Request` /
+ * `Response` to the minimal Node-compatible shape `CloudAdapter.process`
+ * expects.
+ *
+ * Outbound auth: we keep our custom `BotFrameworkClient` (AAD client-creds +
+ * direct REST POSTs) for sending activities. The Bot Framework SDK's outbound
+ * stack is significantly heavier and we already own the small wire surface;
+ * see `connection/bot-framework-client.ts` for the rationale.
  */
 
 import { BaseChannelPlugin, createDownloadGuard, createInboundDedupeCache } from '@omni/channel-sdk';
@@ -29,6 +35,11 @@ import type {
 } from '@omni/channel-sdk';
 import type { Logger } from '@omni/core';
 import type { ChannelType, ContentType } from '@omni/core/types';
+import {
+  CloudAdapter,
+  ConfigurationBotFrameworkAuthentication,
+  ConfigurationServiceClientCredentialFactory,
+} from 'botbuilder';
 
 import { TEAMS_CAPABILITIES } from './capabilities';
 import { BotFrameworkClient, TokenAcquisitionError, validateCredentials } from './connection';
@@ -45,11 +56,34 @@ import {
 import type { TeamsActivityMeta, TeamsConfig, TeamsConnectionOptions, TeamsReplyToMode } from './types';
 import { TeamsError, TeamsErrorCode } from './types';
 
+/**
+ * Minimal shape of `botbuilder`'s `CloudAdapter` we depend on. Typed as an
+ * interface (not the concrete class) so tests can swap in a fake adapter
+ * without instantiating the real one.
+ */
+export interface TeamsCloudAdapter {
+  process(
+    req: { body?: Record<string, unknown>; headers: Record<string, string | string[] | undefined>; method?: string },
+    res: TeamsCloudAdapterResponse,
+    logic: (turnContext: { activity: unknown }) => Promise<void>,
+  ): Promise<void>;
+}
+
+export interface TeamsCloudAdapterResponse {
+  socket: unknown;
+  status(code: number): unknown;
+  send(body?: unknown): unknown;
+  end(...args: unknown[]): unknown;
+  header(name: string, value: unknown): unknown;
+}
+
 interface TeamsInstanceState {
   /** Resolved configuration (credentials + tenant + options) */
   config: TeamsConfig;
   /** Bot Framework REST client for outbound calls */
   client: BotFrameworkClient;
+  /** Bot Framework adapter that validates inbound JWTs and runs the logic callback. */
+  cloudAdapter: TeamsCloudAdapter;
   /** Per-instance inbound dedupe cache */
   dedupeCache: DedupeCache;
   /**
@@ -141,6 +175,7 @@ export class TeamsPlugin extends BaseChannelPlugin {
     }
 
     const client = new BotFrameworkClient({ options: connectionOptions });
+    const cloudAdapter = this.buildCloudAdapter(connectionOptions);
     const dedupeCache = createInboundDedupeCache();
     const downloadGuard = createDownloadGuard({
       maxSizeBytes: TEAMS_CAPABILITIES.maxFileSize,
@@ -150,6 +185,7 @@ export class TeamsPlugin extends BaseChannelPlugin {
     this.teamsInstances.set(instanceId, {
       config: teamsConfig,
       client,
+      cloudAdapter,
       dedupeCache,
       downloadGuard,
       serviceUrls: new Map(),
@@ -340,8 +376,14 @@ export class TeamsPlugin extends BaseChannelPlugin {
    *   `POST /api/v2/channels/teams/{instanceId}/webhook`
    *
    * The host webhook router strips the prefix and hands us the request as-is.
-   * We always reply 200 (or 401 on auth) so Bot Framework doesn't retry
-   * a malformed activity in a tight loop.
+   *
+   * **Auth (CRITICAL):** Bot Framework signs every activity with a JWT in
+   * the `Authorization` header. We delegate validation to the per-instance
+   * `CloudAdapter` — it fetches Microsoft's OpenID metadata, verifies the
+   * signature/issuer/audience/exp/nbf, and only then invokes our dispatch
+   * logic. Without this, anyone who learns the webhook URL can forge
+   * activities. On failure the adapter writes 401 to the response object;
+   * we relay that status back to the caller.
    */
   async handleWebhook(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -358,41 +400,115 @@ export class TeamsPlugin extends BaseChannelPlugin {
       return new Response('Instance not connected', { status: 404 });
     }
 
-    let body: string;
+    // Body parsing is fail-open with 200 — Bot Framework retries 5xx in a
+    // tight loop, and a malformed body is almost always a misconfigured
+    // probe, not a real retry-worthy condition. Only the JWT path can
+    // produce a 401 (and it does so via the adapter's response object).
+    let bodyText: string;
     try {
-      body = await request.text();
+      bodyText = await request.text();
     } catch {
-      return new Response('OK', { status: 200 });
+      return new Response('', { status: 200 });
     }
 
-    if (body.length === 0) {
-      return new Response('OK', { status: 200 });
+    if (bodyText.length === 0) {
+      return new Response('', { status: 200 });
     }
-    if (body.length > 1024 * 1024) {
-      this.logger.warn('[teams] oversized webhook body rejected', { instanceId, size: body.length });
-      return new Response('OK', { status: 200 });
+    if (bodyText.length > 1024 * 1024) {
+      this.logger.warn('[teams] oversized webhook body rejected', { instanceId, size: bodyText.length });
+      return new Response('', { status: 200 });
     }
 
-    let activity: InboundActivity;
+    let parsedBody: Record<string, unknown>;
     try {
-      activity = JSON.parse(body) as InboundActivity;
+      parsedBody = JSON.parse(bodyText) as Record<string, unknown>;
     } catch {
-      this.logger.warn('[teams] webhook body is not valid JSON', { instanceId, preview: body.slice(0, 256) });
-      return new Response('OK', { status: 200 });
+      this.logger.warn('[teams] webhook body is not valid JSON', { instanceId, preview: bodyText.slice(0, 256) });
+      return new Response('', { status: 200 });
+    }
+    if (!parsedBody || typeof parsedBody !== 'object') {
+      return new Response('', { status: 200 });
     }
 
+    const authHeader = request.headers.get('authorization') ?? request.headers.get('Authorization') ?? undefined;
+
+    const fakeReq = {
+      body: parsedBody,
+      headers: {
+        authorization: authHeader,
+        'content-type': request.headers.get('content-type') ?? 'application/json',
+      } as Record<string, string | string[] | undefined>,
+      method: request.method,
+    };
+
+    const captured: { status: number; body?: string } = { status: 200 };
+    const fakeRes: TeamsCloudAdapterResponse = {
+      socket: undefined,
+      status(code: number) {
+        captured.status = code;
+        return fakeRes;
+      },
+      send(body?: unknown) {
+        if (body !== undefined && body !== null) {
+          captured.body = typeof body === 'string' ? body : JSON.stringify(body);
+        }
+        return fakeRes;
+      },
+      end(..._args: unknown[]) {
+        return fakeRes;
+      },
+      header(_name: string, _value: unknown) {
+        return fakeRes;
+      },
+    };
+
     try {
-      await this.dispatchActivity(instanceId, activity, state);
+      await state.cloudAdapter.process(fakeReq, fakeRes, async (turnContext) => {
+        const activity = turnContext.activity as InboundActivity;
+        try {
+          await this.dispatchActivity(instanceId, activity, state);
+        } catch (err) {
+          this.logger.error('[teams] activity dispatch failed', {
+            instanceId,
+            error: err instanceof Error ? err.message : String(err),
+            activityType: activity?.type,
+            activityId: activity?.id,
+          });
+        }
+      });
     } catch (err) {
-      this.logger.error('[teams] activity dispatch failed', {
+      this.logger.error('[teams] cloudAdapter.process threw', {
         instanceId,
         error: err instanceof Error ? err.message : String(err),
-        activityType: activity?.type,
-        activityId: activity?.id,
       });
+      return new Response('Internal error', { status: 500 });
     }
 
-    return new Response('', { status: 200 });
+    return new Response(captured.body ?? '', { status: captured.status });
+  }
+
+  /**
+   * Build a `CloudAdapter` configured with the bot's app credentials. The
+   * adapter validates inbound JWTs against Microsoft's published OpenID
+   * metadata and rejects anything signed by a different issuer or for a
+   * different audience.
+   *
+   * Single-tenant deployments require `tenantId` to scope the issuer.
+   * `MultiTenant` (the default) accepts the public Bot Framework issuer.
+   *
+   * Override seam: tests that exercise webhook auth replace `cloudAdapter`
+   * on the per-instance state via `registerInstanceForTests` instead of
+   * stubbing this method.
+   */
+  protected buildCloudAdapter(connectionOptions: TeamsConnectionOptions): TeamsCloudAdapter {
+    const credentialsFactory = new ConfigurationServiceClientCredentialFactory({
+      MicrosoftAppId: connectionOptions.appId,
+      MicrosoftAppPassword: connectionOptions.appPassword,
+      MicrosoftAppType: connectionOptions.appType,
+      MicrosoftAppTenantId: connectionOptions.tenantId,
+    });
+    const auth = new ConfigurationBotFrameworkAuthentication({}, credentialsFactory);
+    return new CloudAdapter(auth) as unknown as TeamsCloudAdapter;
   }
 
   /**

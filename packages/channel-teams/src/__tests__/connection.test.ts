@@ -22,7 +22,31 @@ import type {
 } from '@omni/channel-sdk';
 
 import { TeamsPlugin } from '../plugin';
+import type { TeamsCloudAdapter } from '../plugin';
+import type { TeamsConnectionOptions } from '../types';
 import { TeamsError, TeamsErrorCode } from '../types';
+
+/**
+ * Permissive plugin used by handleWebhook tests below.
+ *
+ * The production plugin builds a real `CloudAdapter` whose `process()` checks
+ * the inbound JWT against Microsoft's OpenID metadata. For the dispatch /
+ * dedupe / event-emission tests we don't care about JWT mechanics — those
+ * are covered separately in `jwt-validation.test.ts`. Here we substitute a
+ * fake adapter that simply runs the logic callback with the parsed activity
+ * so we can assert the post-auth dispatch behaviour in isolation.
+ */
+class PermissiveTeamsPlugin extends TeamsPlugin {
+  protected override buildCloudAdapter(_connectionOptions: TeamsConnectionOptions): TeamsCloudAdapter {
+    return {
+      async process(req, res, logic) {
+        await logic({ activity: req.body });
+        res.status(200);
+        res.end();
+      },
+    };
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // Mock factories
@@ -337,7 +361,7 @@ describe('TeamsPlugin.handleWebhook', () => {
 
   it('emits message.received for an inbound text activity', async () => {
     const { context, events } = makeMockContext();
-    const plugin = new TeamsPlugin();
+    const plugin = new PermissiveTeamsPlugin();
     await plugin.initialize(context);
 
     const handle = withMockedFetch(() =>
@@ -385,7 +409,7 @@ describe('TeamsPlugin.handleWebhook', () => {
 
   it('emits reaction.received for inbound messageReaction activities', async () => {
     const { context, events } = makeMockContext();
-    const plugin = new TeamsPlugin();
+    const plugin = new PermissiveTeamsPlugin();
     await plugin.initialize(context);
 
     const handle = withMockedFetch(() =>
@@ -429,7 +453,7 @@ describe('TeamsPlugin.handleWebhook', () => {
 
   it('dedupes repeated activity IDs within the same conversation', async () => {
     const { context, events } = makeMockContext();
-    const plugin = new TeamsPlugin();
+    const plugin = new PermissiveTeamsPlugin();
     await plugin.initialize(context);
 
     const handle = withMockedFetch(() =>
@@ -467,7 +491,7 @@ describe('TeamsPlugin.handleWebhook', () => {
 
   it('safely ignores non-message activity types (typing/conversationUpdate/etc.)', async () => {
     const { context, events } = makeMockContext();
-    const plugin = new TeamsPlugin();
+    const plugin = new PermissiveTeamsPlugin();
     await plugin.initialize(context);
 
     const handle = withMockedFetch(() =>

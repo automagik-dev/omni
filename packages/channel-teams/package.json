@@ -16,6 +16,7 @@
   "dependencies": {
     "@omni/channel-sdk": "workspace:*",
     "@omni/core": "workspace:*",
+    "botbuilder": "^4.23.3",
     "zod": "^3.24.1"
   },
   "devDependencies": {

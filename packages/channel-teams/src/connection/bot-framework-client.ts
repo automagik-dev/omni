@@ -1,20 +1,30 @@
 /**
- * Bot Framework Connector REST client.
+ * Bot Framework Connector REST client — **outbound only**.
  *
  * Outbound activities go to `{serviceUrl}/v3/conversations/{conversationId}/activities`
  * with a Bearer token acquired via the AAD client-credentials flow.
  *
- * We deliberately speak the wire protocol directly (instead of pulling in
- * `botbuilder` + `botframework-connector`) for two reasons:
+ * Scope clarification:
+ * - Outbound (this file): the bot calls Microsoft. We sign requests with a
+ *   short-lived AAD token; the wire protocol is small and well-documented,
+ *   so a direct REST client is fine.
+ * - Inbound (`plugin.ts → handleWebhook`): Microsoft calls us. Every request
+ *   carries a JWT in the `Authorization` header that MUST be validated
+ *   against Microsoft's published OpenID metadata before we trust the
+ *   activity. That validation is delegated to `botbuilder`'s `CloudAdapter`
+ *   — we do NOT reimplement JWT verification here.
  *
- * 1. The official SDK adds ~7 MB of transitive dependencies and an Express
- *    runtime adapter we don't use; Omni already owns its HTTP router.
- * 2. The wire protocol is small and documented (just JSON activities + a
- *    Bearer token) — the only state we need is the service URL per
- *    conversation, which the inbound handler captures.
+ * We deliberately speak the outbound wire protocol directly (instead of
+ * pulling in `botframework-connector` for outbound too) for two reasons:
  *
- * If a future requirement needs the SDK's TurnContext middleware stack we
- * can drop it in behind this thin facade.
+ * 1. The official outbound stack adds significant transitive dependencies
+ *    we don't use; Omni already owns its HTTP router.
+ * 2. The outbound wire protocol is small and documented (just JSON
+ *    activities + a Bearer token) — the only state we need is the service
+ *    URL per conversation, which the inbound handler captures.
+ *
+ * If a future requirement needs the SDK's TurnContext middleware stack on
+ * outbound we can drop it in behind this thin facade.
  */
 
 import type { TeamsConnectionOptions } from '../types';
