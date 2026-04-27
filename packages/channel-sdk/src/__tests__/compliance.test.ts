@@ -31,6 +31,7 @@ import {
   DiscordPlugin,
 } from '../../../channel-discord/src/index';
 import { SLACK_CAPABILITIES, SlackError, SlackErrorCode, SlackPlugin } from '../../../channel-slack/src/index';
+import { TEAMS_CAPABILITIES, TeamsError, TeamsErrorCode, TeamsPlugin } from '../../../channel-teams/src/index';
 import {
   TELEGRAM_CAPABILITIES,
   TelegramError,
@@ -128,6 +129,20 @@ const channels: ChannelDescriptor[] = [
     handlerSourcePaths: [channelPath('twilio-whatsapp', 'handlers', 'webhooks.ts')],
     errorSourcePath: channelPath('twilio-whatsapp', 'utils', 'errors.ts'),
   },
+  {
+    name: 'teams',
+    packageName: '@omni/channel-teams',
+    pluginClass: TeamsPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: TeamsError,
+    capabilities: TEAMS_CAPABILITIES,
+    pluginSourcePath: channelPath('teams', 'plugin.ts'),
+    handlerSourcePaths: [
+      channelPath('teams', 'handlers', 'messages.ts'),
+      channelPath('teams', 'handlers', 'attachments.ts'),
+      channelPath('teams', 'handlers', 'reactions.ts'),
+    ],
+    errorSourcePath: channelPath('teams', 'types.ts'),
+  },
 ];
 
 function readSource(path: string): string {
@@ -192,14 +207,15 @@ const errorConstructorArgs: Record<string, unknown[]> = {
   discord: [DiscordErrorCode.SEND_FAILED, 'compliance test'],
   slack: [SlackErrorCode.SEND_FAILED, 'compliance test'],
   'twilio-whatsapp': [TwilioWhatsAppErrorCode.SEND_FAILED, 'compliance test'],
+  teams: [TeamsErrorCode.SEND_FAILED, 'compliance test'],
 };
 
 // Group 1: Infrastructure
 
 describe('SDK compliance test infrastructure', () => {
-  it('has descriptors for all 5 channels', () => {
+  it('has descriptors for all 6 channels', () => {
     const names = channels.map((c) => c.name).sort();
-    expect(names).toEqual(['discord', 'slack', 'telegram', 'twilio-whatsapp', 'whatsapp']);
+    expect(names).toEqual(['discord', 'slack', 'teams', 'telegram', 'twilio-whatsapp', 'whatsapp']);
   });
 
   for (const channel of channels) {

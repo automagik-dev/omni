@@ -17,8 +17,8 @@
  * can drop it in behind this thin facade.
  */
 
-import { acquireAccessToken, type TeamsAccessToken } from './auth';
 import type { TeamsConnectionOptions } from '../types';
+import { type TeamsAccessToken, acquireAccessToken } from './auth';
 
 /** Outbound Bot Framework activity payload — type-only mirror of the SDK shape. */
 export interface BotActivityPayload {

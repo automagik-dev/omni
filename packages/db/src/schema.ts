@@ -39,6 +39,7 @@ export const channelTypes = [
   'discord',
   'slack',
   'telegram',
+  'teams',
   'a2a',
   'gupshup',
   'twilio-whatsapp',

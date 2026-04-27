@@ -65,11 +65,7 @@ export async function editMessage(
 /**
  * Delete an already-sent message (Bot Framework `deleteActivity`).
  */
-export async function deleteMessage(
-  _conversationId: string,
-  _activityId: string,
-  logger: Logger,
-): Promise<void> {
+export async function deleteMessage(_conversationId: string, _activityId: string, logger: Logger): Promise<void> {
   logger.debug('teams.deleteMessage stub invoked');
   NOT_IMPLEMENTED('deleteMessage');
 }

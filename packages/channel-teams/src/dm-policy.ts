@@ -27,10 +27,7 @@ const DEFAULT_REJECTION_MESSAGE =
  * `userId` should be the sender's AAD object ID when available (`from.aadObjectId`),
  * with the legacy `from.id` as a fallback for guest accounts.
  */
-export function shouldAcceptDm(
-  userId: string,
-  config: TeamsDmPolicyConfig,
-): { accepted: boolean; reason?: string } {
+export function shouldAcceptDm(userId: string, config: TeamsDmPolicyConfig): { accepted: boolean; reason?: string } {
   switch (config.policy) {
     case 'open':
       return { accepted: true };
