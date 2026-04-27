@@ -1,5 +1,45 @@
 set -e
 
+# ============================================================================
+# pre-push gate: typecheck + tests must be GREEN before any push leaves here.
+#
+# Why so strict? Code freeze + dog-food season. Every coding agent that pushes
+# from this repo inherits the contract: zero typecheck errors, zero failing
+# tests. If you (human or agent) hit a failure here, FIX IT — even if the
+# failure was already on dev. "It was already broken" is not an exception;
+# the hook stays strict so the repo state monotonically improves.
+#
+# Common causes + how to fix them:
+#
+#   • Typecheck error in packages/cli referencing SDK types
+#       → SDK dist/ is stale. Run `cd packages/sdk && bun run build`,
+#         then re-push. The hook auto-builds SDK if dist/ is missing
+#         entirely, but a stale dist (older than source) is harder to
+#         detect — always rebuild after touching packages/sdk/src.
+#
+#   • Logger / Buffer / formatter tests failing in full suite but
+#     passing in isolation
+#       → Some other test file is calling `mock.module('@omni/core', ...)`
+#         with a truncated surface. Bun's mock.module is process-wide,
+#         not file-scoped — the truncated mock contaminates every other
+#         test that resolves @omni/core. Drop the mock.module call from
+#         the dispatcher / api test (the tests usually do not assert on
+#         logger output anyway), or spread `require('@omni/core')` over
+#         the overrides so unrelated modules keep their real exports.
+#
+#   • Unrelated test failures
+#       → Bisect: `bun test <suspect_file> packages/core/src/logger`.
+#         If failing only in pairs, the suspect is poisoning shared state.
+#         Reach for spyOn/local fixtures over mock.module.
+#
+#   • Force push to main/master
+#       → Refused by design. Main is production; merge through the
+#         rolling PR process.
+#
+# DO NOT bypass with --no-verify unless explicitly authorized for the
+# specific push by the human owner. The hook is the contract.
+# ============================================================================
+
 # Block force pushes to main/master (pre-push receives: remote url on $1 $2, refs on stdin)
 remote="$1"
 while read local_ref local_oid remote_ref remote_oid; do
@@ -12,10 +52,29 @@ done
 
 # Build SDK dist if missing (CLI typecheck depends on SDK type declarations)
 if [ ! -d packages/sdk/dist ]; then
-  echo "Building SDK (dist/ missing)..."
+  echo "Building SDK (dist/ missing) — re-running typecheck against fresh dist..."
   cd packages/sdk && bun run build && cd ../..
 fi
 
-make typecheck
+echo "▶ pre-push: typecheck"
+if ! make typecheck; then
+  echo ""
+  echo "✗ typecheck failed."
+  echo "  → If errors reference SDK types, run: cd packages/sdk && bun run build"
+  echo "  → Then re-push. See hook header for full guidance."
+  exit 1
+fi
 
-bun test
+echo "▶ pre-push: full test suite"
+if ! bun test; then
+  echo ""
+  echo "✗ tests failed."
+  echo "  → If Logger / Buffer tests fail in the full suite but pass in"
+  echo "    isolation, hunt for a mock.module('@omni/core', ...) call in"
+  echo "    api/cli test files — that's the usual culprit. See hook"
+  echo "    header for full guidance."
+  echo "  → Bisect with: bun test <suspect_file> packages/core/src/logger"
+  exit 1
+fi
+
+echo "✓ pre-push gates passed."
