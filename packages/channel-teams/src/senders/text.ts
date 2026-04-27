@@ -52,14 +52,18 @@ export async function sendTextMessage(
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i] ?? '';
+    // Teams threads strictly: a `message` posted to a channel id without a
+    // `replyToId` starts a NEW thread. If the caller supplied a `replyToId`
+    // every chunk must reply there; otherwise chunks 1..N reply to chunk 0
+    // so a long answer arrives as one threaded conversation, not N roots.
+    // See DEEP_REVIEW.md A.3.
+    const chunkReplyToId = i === 0 ? options.replyToId : (options.replyToId ?? lastActivityId);
     try {
       const response = await ctx.sendActivity({
         type: 'message',
         text: chunk,
         textFormat: formatMode === 'passthrough' ? 'plain' : 'markdown',
-        // Only thread the first chunk — follow-up chunks render inline so the
-        // chat doesn't fork into a tree of micro-replies.
-        replyToId: i === 0 ? options.replyToId : undefined,
+        replyToId: chunkReplyToId,
       });
       lastActivityId = response.id;
     } catch (error) {

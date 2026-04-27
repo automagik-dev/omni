@@ -8,8 +8,12 @@
  *
  * Notable Teams traits encoded here:
  * - `canSendTyping: true` — Bot Framework supports the `typing` activity.
- * - `canEditMessage: true` / `canDeleteMessage: true` — supported via the
- *   Bot Framework Connector (`updateActivity`, `deleteActivity`).
+ * - `canEditMessage: false` / `canDeleteMessage: false` — `tools.editMessage`
+ *   and `tools.deleteMessage` are stubs in v1; Bot Framework's
+ *   `updateActivity` / `deleteActivity` plumbing lands in a follow-up wish.
+ *   The capability flag must stay `false` while the implementations throw
+ *   `UNSUPPORTED_ACTIVITY` so the dispatcher never routes through them.
+ *   See DEEP_REVIEW.md B.1.
  * - `canSendReaction: true` — Teams allows bots to add limited reactions
  *   (`like`, `heart`, `laugh`, `surprised`, `sad`, `angry`).
  * - `canStreamResponse: false` — Teams has no native streaming surface for
@@ -33,8 +37,8 @@ export const TEAMS_CAPABILITIES: ChannelCapabilities = {
   canReceiveDeliveryReceipts: false,
 
   // Message operations
-  canEditMessage: true,
-  canDeleteMessage: true,
+  canEditMessage: false,
+  canDeleteMessage: false,
   canReplyToMessage: true,
   canForwardMessage: false,
 

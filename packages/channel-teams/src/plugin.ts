@@ -441,7 +441,15 @@ export class TeamsPlugin extends BaseChannelPlugin {
       method: request.method,
     };
 
-    const captured: { status: number; body?: string } = { status: 200 };
+    // Capture status, headers, and body from the adapter so we can
+    // reconstruct the outgoing `Response`. CloudAdapter calls `header()`
+    // for invoke-activity responses (e.g. Content-Type for invokeResponse
+    // bodies) and may serialise objects through `send()`. See DEEP_REVIEW
+    // .md A.4.
+    const captured: { status: number; body?: string; headers: Record<string, string> } = {
+      status: 200,
+      headers: {},
+    };
     const fakeRes: TeamsCloudAdapterResponse = {
       socket: undefined,
       status(code: number) {
@@ -450,14 +458,22 @@ export class TeamsPlugin extends BaseChannelPlugin {
       },
       send(body?: unknown) {
         if (body !== undefined && body !== null) {
-          captured.body = typeof body === 'string' ? body : JSON.stringify(body);
+          if (typeof body === 'object') {
+            captured.body = JSON.stringify(body);
+            if (!captured.headers['content-type']) {
+              captured.headers['content-type'] = 'application/json';
+            }
+          } else {
+            captured.body = String(body);
+          }
         }
         return fakeRes;
       },
       end(..._args: unknown[]) {
         return fakeRes;
       },
-      header(_name: string, _value: unknown) {
+      header(name: string, value: unknown) {
+        captured.headers[name.toLowerCase()] = String(value);
         return fakeRes;
       },
     };
@@ -484,7 +500,10 @@ export class TeamsPlugin extends BaseChannelPlugin {
       return new Response('Internal error', { status: 500 });
     }
 
-    return new Response(captured.body ?? '', { status: captured.status });
+    return new Response(captured.body ?? '', {
+      status: captured.status,
+      headers: captured.headers,
+    });
   }
 
   /**
@@ -524,9 +543,15 @@ export class TeamsPlugin extends BaseChannelPlugin {
     if (typeof activity.type !== 'string') return;
 
     // Capture the service URL the moment we see it — Bot Framework's
-    // "trust on first use" pattern is exactly this map.
+    // "trust on first use" pattern is exactly this map. The key MUST match
+    // `deriveChatId` so outbound senders find it: for channel posts the
+    // chat id is `channelData.channel.id`, not `conversation.id` (which
+    // is the thread root). See DEEP_REVIEW.md A.1.
     if (activity.serviceUrl && activity.conversation?.id) {
-      state.serviceUrls.set(activity.conversation.id, activity.serviceUrl);
+      const conversationType = activity.conversation.conversationType;
+      const channelId = activity.channelData?.channel?.id;
+      const chatId = conversationType === 'channel' && channelId ? channelId : activity.conversation.id;
+      state.serviceUrls.set(chatId, activity.serviceUrl);
     }
 
     switch (activity.type) {
@@ -569,7 +594,9 @@ export class TeamsPlugin extends BaseChannelPlugin {
       return;
     }
 
-    state.lastActivityIds.set(parsed.meta.conversationId, parsed.meta.activityId);
+    // Key on `parsed.chatId` (matches `deriveChatId`) so outbound `replyToMode`
+    // resolution finds it for channel posts. See DEEP_REVIEW.md A.2.
+    state.lastActivityIds.set(parsed.chatId, parsed.meta.activityId);
 
     const timings = parsed.platformTimestamp ? this.captureInboundTimings(parsed.platformTimestamp) : undefined;
 

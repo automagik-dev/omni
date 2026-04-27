@@ -26,8 +26,12 @@ describe('TEAMS_CAPABILITIES', () => {
   });
 
   it('declares message-mutation operations', () => {
-    expect(TEAMS_CAPABILITIES.canEditMessage).toBe(true);
-    expect(TEAMS_CAPABILITIES.canDeleteMessage).toBe(true);
+    // Edit/delete are scoped out for v1: tools.ts stubs throw
+    // UNSUPPORTED_ACTIVITY, so the capability flags stay false until the
+    // Bot Framework `updateActivity`/`deleteActivity` plumbing lands. See
+    // DEEP_REVIEW.md B.1.
+    expect(TEAMS_CAPABILITIES.canEditMessage).toBe(false);
+    expect(TEAMS_CAPABILITIES.canDeleteMessage).toBe(false);
     expect(TEAMS_CAPABILITIES.canReplyToMessage).toBe(true);
   });
 

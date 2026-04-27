@@ -76,14 +76,28 @@ describe('sendTextMessage', () => {
     expect(ctx.calls[0]).toMatchObject({ type: 'message', text: 'hello world', textFormat: 'markdown' });
   });
 
-  it('threads only the first chunk when replyToId is set', async () => {
+  it('threads every chunk under the supplied replyToId so the chain stays in one thread', async () => {
+    // Teams channels: a `message` posted to a channel id without `replyToId`
+    // starts a new thread. Chunks of a single response must all share the
+    // same anchor — see DEEP_REVIEW.md A.3.
     const ctx = makeContext();
     const text = `${'a'.repeat(4_000)}\n\n${'b'.repeat(4_000)}`;
     await sendTextMessage(ctx, { text, replyToId: 'parent-1' }, silentLogger);
     expect(ctx.calls.length).toBeGreaterThanOrEqual(2);
-    expect(ctx.calls[0]?.replyToId).toBe('parent-1');
+    for (let i = 0; i < ctx.calls.length; i++) {
+      expect(ctx.calls[i]?.replyToId).toBe('parent-1');
+    }
+  });
+
+  it('chunks without an explicit replyToId chain to the first chunk so the thread is linear', async () => {
+    const ctx = makeContext((_a, i) => ({ id: `chunk-${i}` }));
+    const text = `${'a'.repeat(4_000)}\n\n${'b'.repeat(4_000)}`;
+    await sendTextMessage(ctx, { text }, silentLogger);
+    expect(ctx.calls.length).toBeGreaterThanOrEqual(2);
+    // Chunk 0 starts the thread (no replyToId); subsequent chunks reply to chunk-0
+    expect(ctx.calls[0]?.replyToId).toBeUndefined();
     for (let i = 1; i < ctx.calls.length; i++) {
-      expect(ctx.calls[i]?.replyToId).toBeUndefined();
+      expect(ctx.calls[i]?.replyToId).toBe('chunk-0');
     }
   });
 
