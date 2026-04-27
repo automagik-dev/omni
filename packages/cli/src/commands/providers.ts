@@ -16,8 +16,8 @@
  * omni providers delete <id>
  */
 
-import { PROVIDER_SCHEMAS, type ProviderSchema } from '@omni/core';
 import type { AgnoAgent, AgnoTeam, AgnoWorkflow } from '@automagik/omni-sdk';
+import { PROVIDER_SCHEMAS, type ProviderSchema } from '@omni/core';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';

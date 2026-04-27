@@ -18,19 +18,21 @@ mock.module('../loader', () => ({
   getPlugin: mock(() => Promise.resolve(undefined)),
 }));
 
-mock.module('@omni/core', () => {
-  return {
-    createLogger: () => ({
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-      debug: () => {},
-    }),
-    generateCorrelationId: (prefix: string) => `${prefix}-test`,
-    OmniError: class OmniError extends Error {},
-    ERROR_CODES: {},
-  };
-});
+// REMOVED: previous version mocked '@omni/core' via mock.module to swap
+// out createLogger / generateCorrelationId / OmniError / ERROR_CODES.
+// Even with `child()` and a full surface restored, the mock was
+// poisoning packages/core/src/logger/__tests__/logger.test.ts in the
+// full suite — 13 Logger tests failed whenever this file ran in the
+// same bun process. The dispatcher tests do not assert on logger
+// output, so the simplest sound fix is to drop the @omni/core mock
+// entirely and let the real implementations pass through. Real
+// createLogger writes to stdout/stderr during these tests, which is
+// noise but harmless; tests assert on the dispatcher's behavior, not
+// on log lines.
+//
+// If a future test in this file needs deterministic log capture, use
+// spyOn(process.stdout, 'write') in beforeEach scoped to that
+// describe — local mocks don't leak across files.
 
 import {
   TRANSIENT_DISPATCH_ERROR_PATTERNS,

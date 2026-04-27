@@ -33,11 +33,20 @@ mock.module('../loader', () => ({
   getPlugin: mock(() => Promise.resolve(undefined)),
 }));
 
-// Mock @omni/core selectively — only mock classes/functions the dispatcher needs.
-// IMPORTANT: Do NOT mock createLogger here — bun's mock.module merges with the
-// real module, and mocking createLogger contaminates concurrent test files
-// (logger.test.ts) because bun applies the mock process-wide.
+// Mock @omni/core selectively. Bun's mock.module is a TOTAL replacement,
+// not a merge — the previous comment that claimed "merge behavior"
+// was incorrect, which is why logger.test.ts (and 12 sibling Logger
+// tests) failed in the full suite: their `createLogger` and friends
+// vanished into our truncated factory return. The fix is to require()
+// the real module before the mock takes effect and spread its exports
+// over our overrides, so unrelated tests that import @omni/core still
+// see the real surface.
 mock.module('@omni/core', () => {
+  // biome-ignore lint/suspicious/noExplicitAny: spread the real surface
+  // without typing it — the mock's job is to override, not to assert
+  // module shape.
+  const real: any = require('@omni/core');
+
   // We need to provide the class constructors for agent providers
   class MockAgnoAgentProvider {
     readonly schema = 'agno' as const;
@@ -86,9 +95,12 @@ mock.module('@omni/core', () => {
   // paths but shares the module graph via Bun's deduplication).
   // No dispatcher test exercises the OpenClaw code path (all use schema: 'agno').
 
-  // createLogger is NOT mocked — the real implementation passes through via
-  // bun's merge behavior, keeping logger.test.ts and other test files working.
   return {
+    // Spread real exports first so createLogger / configureLogging /
+    // LogBuffer / OmniError / ERROR_CODES / etc. all keep their real
+    // implementations when other test files import @omni/core.
+    ...real,
+    // Override only what the dispatcher tests need to be deterministic.
     AgnoAgentProvider: MockAgnoAgentProvider,
     WebhookAgentProvider: MockWebhookAgentProvider,
     createProviderClient: mock(() => ({})),
