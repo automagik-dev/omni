@@ -247,6 +247,24 @@ export function createApp(
     return plugin.handleWebhook(c.req.raw);
   });
 
+  // Public Microsoft Teams webhook endpoint — auth-exempt; the plugin delegates JWT validation
+  // to botbuilder's CloudAdapter (verifies signature + iss + aud + exp on every inbound activity).
+  // Must be mounted before protectedApp so Bot Framework Connector (no x-api-key) can reach it.
+  app.post('/api/v2/channels/teams/:instanceId/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('teams');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Teams plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Protected routes
   const protectedApp = new Hono<{ Variables: AppVariables }>();
   protectedApp.use('*', authMiddleware);
