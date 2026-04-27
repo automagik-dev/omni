@@ -32,7 +32,7 @@ describe('channel-teams scaffold', () => {
     expect(teamsPlugin.capabilities).toBe(TEAMS_CAPABILITIES);
     expect(TEAMS_CAPABILITIES.canSendText).toBe(true);
     expect(TEAMS_CAPABILITIES.canSendMedia).toBe(true);
-    expect(TEAMS_CAPABILITIES.canSendReaction).toBe(true);
+    expect(TEAMS_CAPABILITIES.canSendReaction).toBe(false);
     expect(TEAMS_CAPABILITIES.canSendTyping).toBe(true);
     expect(TEAMS_CAPABILITIES.canHandleDMs).toBe(true);
     expect(TEAMS_CAPABILITIES.canHandleThreads).toBe(true);

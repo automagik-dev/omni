@@ -1,0 +1,392 @@
+{
+  "_meta": {
+    "source": "Synthesised from Microsoft Bot Framework Activity schema v3 + Teams channel data extensions. Field shapes match what bots receive in production but identifiers (`id`, `from.id`, `conversation.id`, `serviceUrl`, `channelData.tenant.id`, etc.) are anonymised. Replace with real captures from the first deployed bot when available — see channel-discord/test/fixtures and channel-whatsapp/test/fixtures for the eventual format.",
+    "schema_references": [
+      "https://learn.microsoft.com/en-us/azure/bot-service/rest-api/bot-framework-rest-connector-activities",
+      "https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/conversation-basics",
+      "https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/subscribe-to-conversation-events"
+    ],
+    "anonymisation": {
+      "tenantId": "00000000-0000-0000-0000-000000000001",
+      "appId": "00000000-0000-0000-0000-000000000099",
+      "teamId": "19:team-fixture@thread.tacv2",
+      "channelId": "19:channel-fixture@thread.tacv2",
+      "userIds": "29:1aaaa…29:1zzzz (per-tenant Bot Framework user ids)",
+      "userAad": "11111111-2222-3333-4444-555555555555 (AAD object id)",
+      "serviceUrl": "https://smba.trafficmanager.net/teams/"
+    }
+  },
+
+  "message.text.dm": [
+    {
+      "id": "synthetic.message.text.dm.1",
+      "description": "Inbound DM, plain text — most common shape",
+      "payload": {
+        "type": "message",
+        "id": "1700000000000",
+        "timestamp": "2026-04-27T10:00:00.000Z",
+        "localTimestamp": "2026-04-27T07:00:00.000-03:00",
+        "serviceUrl": "https://smba.trafficmanager.net/teams/",
+        "channelId": "msteams",
+        "from": {
+          "id": "29:1aaaaUserA",
+          "name": "Alice Tester",
+          "aadObjectId": "11111111-2222-3333-4444-555555555555"
+        },
+        "conversation": {
+          "conversationType": "personal",
+          "tenantId": "00000000-0000-0000-0000-000000000001",
+          "id": "a:1personalConversationA"
+        },
+        "recipient": {
+          "id": "28:00000000-0000-0000-0000-000000000099",
+          "name": "Omni Test Bot"
+        },
+        "text": "lixei",
+        "textFormat": "plain",
+        "locale": "pt-BR",
+        "channelData": {
+          "tenant": { "id": "00000000-0000-0000-0000-000000000001" }
+        },
+        "entities": [{ "type": "clientInfo", "locale": "pt-BR", "country": "BR", "platform": "Windows" }]
+      }
+    }
+  ],
+
+  "message.text.channel.mention": [
+    {
+      "id": "synthetic.message.text.channel.mention.1",
+      "description": "Channel post that @-mentions the bot. Note: text contains the <at> tag; handlers/messages.ts is expected to strip via TurnContext.removeRecipientMention semantics.",
+      "payload": {
+        "type": "message",
+        "id": "1700000001000",
+        "timestamp": "2026-04-27T10:01:00.000Z",
+        "serviceUrl": "https://smba.trafficmanager.net/teams/",
+        "channelId": "msteams",
+        "from": {
+          "id": "29:1bbbbUserB",
+          "name": "Bob Tester",
+          "aadObjectId": "11111111-2222-3333-4444-66666666666b"
+        },
+        "conversation": {
+          "isGroup": true,
+          "conversationType": "channel",
+          "tenantId": "00000000-0000-0000-0000-000000000001",
+          "id": "19:channel-fixture@thread.tacv2;messageid=1700000001000"
+        },
+        "recipient": {
+          "id": "28:00000000-0000-0000-0000-000000000099",
+          "name": "Omni Test Bot"
+        },
+        "text": "<at>Omni Test Bot</at> ping",
+        "textFormat": "plain",
+        "locale": "en-US",
+        "channelData": {
+          "teamsChannelId": "19:channel-fixture@thread.tacv2",
+          "teamsTeamId": "19:team-fixture@thread.tacv2",
+          "channel": { "id": "19:channel-fixture@thread.tacv2" },
+          "team": { "id": "19:team-fixture@thread.tacv2", "name": "Engineering" },
+          "tenant": { "id": "00000000-0000-0000-0000-000000000001" }
+        },
+        "entities": [
+          {
+            "type": "mention",
+            "mentioned": {
+              "id": "28:00000000-0000-0000-0000-000000000099",
+              "name": "Omni Test Bot"
+            },
+            "text": "<at>Omni Test Bot</at>"
+          }
+        ]
+      }
+    }
+  ],
+
+  "message.text.channel.threadReply": [
+    {
+      "id": "synthetic.message.text.channel.threadReply.1",
+      "description": "Reply to a previous channel post — replyToId points at the root activity.",
+      "payload": {
+        "type": "message",
+        "id": "1700000002000",
+        "replyToId": "1700000001000",
+        "timestamp": "2026-04-27T10:02:00.000Z",
+        "serviceUrl": "https://smba.trafficmanager.net/teams/",
+        "channelId": "msteams",
+        "from": {
+          "id": "29:1ccccUserC",
+          "name": "Carol Tester",
+          "aadObjectId": "11111111-2222-3333-4444-77777777777c"
+        },
+        "conversation": {
+          "isGroup": true,
+          "conversationType": "channel",
+          "tenantId": "00000000-0000-0000-0000-000000000001",
+          "id": "19:channel-fixture@thread.tacv2;messageid=1700000001000"
+        },
+        "recipient": {
+          "id": "28:00000000-0000-0000-0000-000000000099",
+          "name": "Omni Test Bot"
+        },
+        "text": "got it",
+        "textFormat": "plain",
+        "channelData": {
+          "teamsChannelId": "19:channel-fixture@thread.tacv2",
+          "teamsTeamId": "19:team-fixture@thread.tacv2",
+          "channel": { "id": "19:channel-fixture@thread.tacv2" },
+          "team": { "id": "19:team-fixture@thread.tacv2" },
+          "tenant": { "id": "00000000-0000-0000-0000-000000000001" }
+        }
+      }
+    }
+  ],
+
+  "message.attachment.image": [
+    {
+      "id": "synthetic.message.attachment.image.1",
+      "description": "DM with an inline PNG attachment served by Teams CDN. `contentUrl` requires the bot's bearer token to fetch.",
+      "payload": {
+        "type": "message",
+        "id": "1700000003000",
+        "timestamp": "2026-04-27T10:03:00.000Z",
+        "serviceUrl": "https://smba.trafficmanager.net/teams/",
+        "channelId": "msteams",
+        "from": {
+          "id": "29:1aaaaUserA",
+          "name": "Alice Tester",
+          "aadObjectId": "11111111-2222-3333-4444-555555555555"
+        },
+        "conversation": {
+          "conversationType": "personal",
+          "tenantId": "00000000-0000-0000-0000-000000000001",
+          "id": "a:1personalConversationA"
+        },
+        "recipient": {
+          "id": "28:00000000-0000-0000-0000-000000000099",
+          "name": "Omni Test Bot"
+        },
+        "text": "",
+        "attachments": [
+          {
+            "contentType": "image/png",
+            "contentUrl": "https://contoso.sharepoint.com/teams/example/Shared%20Documents/Apps/screenshot-fixture.png",
+            "name": "screenshot.png"
+          }
+        ],
+        "channelData": {
+          "tenant": { "id": "00000000-0000-0000-0000-000000000001" }
+        }
+      }
+    }
+  ],
+
+  "message.attachment.file": [
+    {
+      "id": "synthetic.message.attachment.file.1",
+      "description": "Channel post with a Teams file attachment. The download flow uses `content.downloadUrl` (a SAS URL valid for ~30 min).",
+      "payload": {
+        "type": "message",
+        "id": "1700000004000",
+        "timestamp": "2026-04-27T10:04:00.000Z",
+        "serviceUrl": "https://smba.trafficmanager.net/teams/",
+        "channelId": "msteams",
+        "from": {
+          "id": "29:1bbbbUserB",
+          "name": "Bob Tester",
+          "aadObjectId": "11111111-2222-3333-4444-66666666666b"
+        },
+        "conversation": {
+          "isGroup": true,
+          "conversationType": "channel",
+          "tenantId": "00000000-0000-0000-0000-000000000001",
+          "id": "19:channel-fixture@thread.tacv2"
+        },
+        "recipient": {
+          "id": "28:00000000-0000-0000-0000-000000000099",
+          "name": "Omni Test Bot"
+        },
+        "text": "see attached",
+        "attachments": [
+          {
+            "contentType": "application/vnd.microsoft.teams.file.download.info",
+            "name": "design.pdf",
+            "content": {
+              "downloadUrl": "https://contoso-my.sharepoint.com/personal/bob/_layouts/15/download.aspx?UniqueId=fixture-sas-token",
+              "uniqueId": "01234567-89ab-cdef-0123-456789abcdef",
+              "fileType": "pdf",
+              "etag": "{01234567-89ab-cdef-0123-456789abcdef},2"
+            }
+          }
+        ],
+        "channelData": {
+          "channel": { "id": "19:channel-fixture@thread.tacv2" },
+          "team": { "id": "19:team-fixture@thread.tacv2" },
+          "tenant": { "id": "00000000-0000-0000-0000-000000000001" }
+        }
+      }
+    }
+  ],
+
+  "messageReaction.added": [
+    {
+      "id": "synthetic.messageReaction.added.1",
+      "description": "User adds a `like` reaction to a previous bot message. `replyToId` is the id of the bot's outbound activity.",
+      "payload": {
+        "type": "messageReaction",
+        "id": "1700000005000",
+        "timestamp": "2026-04-27T10:05:00.000Z",
+        "serviceUrl": "https://smba.trafficmanager.net/teams/",
+        "channelId": "msteams",
+        "from": {
+          "id": "29:1aaaaUserA",
+          "name": "Alice Tester",
+          "aadObjectId": "11111111-2222-3333-4444-555555555555"
+        },
+        "conversation": {
+          "conversationType": "personal",
+          "tenantId": "00000000-0000-0000-0000-000000000001",
+          "id": "a:1personalConversationA"
+        },
+        "recipient": {
+          "id": "28:00000000-0000-0000-0000-000000000099",
+          "name": "Omni Test Bot"
+        },
+        "replyToId": "1700000099000",
+        "reactionsAdded": [{ "type": "like" }],
+        "channelData": {
+          "tenant": { "id": "00000000-0000-0000-0000-000000000001" }
+        }
+      }
+    }
+  ],
+
+  "messageReaction.removed": [
+    {
+      "id": "synthetic.messageReaction.removed.1",
+      "description": "User removes a previously added `heart` reaction.",
+      "payload": {
+        "type": "messageReaction",
+        "id": "1700000006000",
+        "timestamp": "2026-04-27T10:06:00.000Z",
+        "serviceUrl": "https://smba.trafficmanager.net/teams/",
+        "channelId": "msteams",
+        "from": {
+          "id": "29:1aaaaUserA",
+          "name": "Alice Tester",
+          "aadObjectId": "11111111-2222-3333-4444-555555555555"
+        },
+        "conversation": {
+          "conversationType": "personal",
+          "tenantId": "00000000-0000-0000-0000-000000000001",
+          "id": "a:1personalConversationA"
+        },
+        "recipient": {
+          "id": "28:00000000-0000-0000-0000-000000000099",
+          "name": "Omni Test Bot"
+        },
+        "replyToId": "1700000099000",
+        "reactionsRemoved": [{ "type": "heart" }],
+        "channelData": {
+          "tenant": { "id": "00000000-0000-0000-0000-000000000001" }
+        }
+      }
+    }
+  ],
+
+  "conversationUpdate.botAdded": [
+    {
+      "id": "synthetic.conversationUpdate.botAdded.1",
+      "description": "Bot is added to a team / installed in the tenant. `membersAdded[].id` includes the bot's own `recipient.id`. Handlers should treat this as 'bot installed' (log + emit nothing in v1).",
+      "payload": {
+        "type": "conversationUpdate",
+        "id": "1700000007000",
+        "timestamp": "2026-04-27T10:07:00.000Z",
+        "serviceUrl": "https://smba.trafficmanager.net/teams/",
+        "channelId": "msteams",
+        "from": {
+          "id": "29:1xxxxAdmin",
+          "aadObjectId": "11111111-2222-3333-4444-aaaaaaaaaaaa"
+        },
+        "conversation": {
+          "isGroup": true,
+          "conversationType": "channel",
+          "tenantId": "00000000-0000-0000-0000-000000000001",
+          "id": "19:channel-fixture@thread.tacv2"
+        },
+        "recipient": {
+          "id": "28:00000000-0000-0000-0000-000000000099",
+          "name": "Omni Test Bot"
+        },
+        "membersAdded": [{ "id": "28:00000000-0000-0000-0000-000000000099" }],
+        "channelData": {
+          "eventType": "teamMemberAdded",
+          "team": { "id": "19:team-fixture@thread.tacv2" },
+          "tenant": { "id": "00000000-0000-0000-0000-000000000001" }
+        }
+      }
+    }
+  ],
+
+  "messageUpdate.edit": [
+    {
+      "id": "synthetic.messageUpdate.edit.1",
+      "description": "User edits a previous message. `id` is the activity being edited (same id as the original message).",
+      "payload": {
+        "type": "messageUpdate",
+        "id": "1700000008000",
+        "timestamp": "2026-04-27T10:08:00.000Z",
+        "serviceUrl": "https://smba.trafficmanager.net/teams/",
+        "channelId": "msteams",
+        "from": {
+          "id": "29:1aaaaUserA",
+          "name": "Alice Tester",
+          "aadObjectId": "11111111-2222-3333-4444-555555555555"
+        },
+        "conversation": {
+          "conversationType": "personal",
+          "tenantId": "00000000-0000-0000-0000-000000000001",
+          "id": "a:1personalConversationA"
+        },
+        "recipient": {
+          "id": "28:00000000-0000-0000-0000-000000000099",
+          "name": "Omni Test Bot"
+        },
+        "text": "lixei (edited)",
+        "channelData": {
+          "eventType": "editMessage",
+          "tenant": { "id": "00000000-0000-0000-0000-000000000001" }
+        }
+      }
+    }
+  ],
+
+  "messageDelete.softDelete": [
+    {
+      "id": "synthetic.messageDelete.softDelete.1",
+      "description": "User soft-deletes a previous message. Bot Framework signals via `messageDelete` + `channelData.eventType: 'softDeleteMessage'`.",
+      "payload": {
+        "type": "messageDelete",
+        "id": "1700000009000",
+        "timestamp": "2026-04-27T10:09:00.000Z",
+        "serviceUrl": "https://smba.trafficmanager.net/teams/",
+        "channelId": "msteams",
+        "from": {
+          "id": "29:1aaaaUserA",
+          "aadObjectId": "11111111-2222-3333-4444-555555555555"
+        },
+        "conversation": {
+          "conversationType": "personal",
+          "tenantId": "00000000-0000-0000-0000-000000000001",
+          "id": "a:1personalConversationA"
+        },
+        "recipient": {
+          "id": "28:00000000-0000-0000-0000-000000000099"
+        },
+        "channelData": {
+          "eventType": "softDeleteMessage",
+          "tenant": { "id": "00000000-0000-0000-0000-000000000001" }
+        }
+      }
+    }
+  ]
+}

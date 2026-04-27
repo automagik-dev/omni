@@ -167,6 +167,38 @@ describe('BotFrameworkClient.sendActivity', () => {
       expect((err as BotFrameworkRequestError).httpStatus).toBe(503);
     }
   });
+
+  it('passes an AbortSignal so a hung Microsoft endpoint cannot stall the call', async () => {
+    const { fetchImpl, calls } = buildFetch([tokenResponse, () => jsonResponse(200, { id: 'a' })]);
+
+    const client = new BotFrameworkClient({ options, fetchImpl, requestTimeoutMs: 50 });
+    await client.sendActivity('https://example.com', 'conv', { type: 'message' });
+
+    // Token request signal
+    expect(calls[0]?.init?.signal).toBeInstanceOf(AbortSignal);
+    // Send activity signal
+    expect(calls[1]?.init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('aborts the underlying fetch when the timeout elapses', async () => {
+    const calls: RecordedCall[] = [];
+    const fetchImpl = mock(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      // First call returns the token quickly so we can reach sendActivity
+      if (calls.length === 1) {
+        return jsonResponse(200, { access_token: 't', expires_in: 3600, token_type: 'Bearer' });
+      }
+      // Second call: simulate a hung endpoint that resolves only when aborted
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new BotFrameworkClient({ options, fetchImpl, requestTimeoutMs: 30 });
+    await expect(client.sendActivity('https://example.com', 'conv', { type: 'message' })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+  });
 });
 
 describe('BotFrameworkClient.replyToActivity', () => {

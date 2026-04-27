@@ -28,7 +28,7 @@
  */
 
 import type { TeamsConnectionOptions } from '../types';
-import { type TeamsAccessToken, acquireAccessToken } from './auth';
+import { type TeamsAccessToken, acquireAccessToken, resolveRequestTimeoutMs } from './auth';
 
 /** Outbound Bot Framework activity payload — type-only mirror of the SDK shape. */
 export interface BotActivityPayload {
@@ -65,6 +65,12 @@ export interface BotFrameworkClientOptions {
   fetchImpl?: typeof fetch;
   /** Skew (ms) subtracted from token expiry to refresh proactively */
   refreshSkewMs?: number;
+  /**
+   * Per-request timeout in milliseconds. Defaults to `TEAMS_REQUEST_TIMEOUT_MS`
+   * (env, default 15s) — see {@link resolveRequestTimeoutMs}. Tests may pass
+   * a small value to assert abort behaviour.
+   */
+  requestTimeoutMs?: number;
 }
 
 /**
@@ -75,6 +81,7 @@ export class BotFrameworkClient {
   private readonly options: TeamsConnectionOptions;
   private readonly fetchImpl: typeof fetch;
   private readonly refreshSkewMs: number;
+  private readonly requestTimeoutMs: number;
   private cachedToken: TeamsAccessToken | null = null;
   private inflight: Promise<TeamsAccessToken> | null = null;
 
@@ -82,6 +89,12 @@ export class BotFrameworkClient {
     this.options = opts.options;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.refreshSkewMs = opts.refreshSkewMs ?? 60_000;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? resolveRequestTimeoutMs();
+  }
+
+  /** Bound `AbortSignal` enforcing the per-request timeout. */
+  private timeoutSignal(): AbortSignal {
+    return AbortSignal.timeout(this.requestTimeoutMs);
   }
 
   /**
@@ -94,7 +107,7 @@ export class BotFrameworkClient {
     }
     if (this.inflight) return this.inflight;
 
-    this.inflight = acquireAccessToken(this.options, this.fetchImpl).then((token) => {
+    this.inflight = acquireAccessToken(this.options, this.fetchImpl, this.timeoutSignal()).then((token) => {
       this.cachedToken = token;
       this.inflight = null;
       return token;
@@ -125,6 +138,7 @@ export class BotFrameworkClient {
         'content-type': 'application/json',
       },
       body: JSON.stringify(activity),
+      signal: this.timeoutSignal(),
     });
 
     if (!response.ok) {
@@ -157,6 +171,7 @@ export class BotFrameworkClient {
         'content-type': 'application/json',
       },
       body: JSON.stringify({ ...activity, replyToId: activityId }),
+      signal: this.timeoutSignal(),
     });
 
     if (!response.ok) {

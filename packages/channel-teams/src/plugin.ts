@@ -57,6 +57,23 @@ import type { TeamsActivityMeta, TeamsConfig, TeamsConnectionOptions, TeamsReply
 import { TeamsError, TeamsErrorCode } from './types';
 
 /**
+ * Default cap (bytes) on inbound attachment downloads. Operators can override
+ * via `TEAMS_DOWNLOAD_MAX_BYTES` (parsed as integer, must be > 0). Falls back
+ * to 100 MiB if unset or unparseable. This is decoupled from
+ * `TEAMS_CAPABILITIES.maxFileSize` (which caps OUTBOUND proactive uploads at
+ * the Bot Framework 4 MiB limit) — inbound downloads can come from OneDrive
+ * or other Teams-hosted stores and may be much larger.
+ */
+export const DEFAULT_TEAMS_DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024;
+
+export function resolveDownloadMaxBytes(): number {
+  const raw = process.env.TEAMS_DOWNLOAD_MAX_BYTES;
+  if (!raw) return DEFAULT_TEAMS_DOWNLOAD_MAX_BYTES;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TEAMS_DOWNLOAD_MAX_BYTES;
+}
+
+/**
  * Minimal shape of `botbuilder`'s `CloudAdapter` we depend on. Typed as an
  * interface (not the concrete class) so tests can swap in a fake adapter
  * without instantiating the real one.
@@ -178,7 +195,7 @@ export class TeamsPlugin extends BaseChannelPlugin {
     const cloudAdapter = this.buildCloudAdapter(connectionOptions);
     const dedupeCache = createInboundDedupeCache();
     const downloadGuard = createDownloadGuard({
-      maxSizeBytes: TEAMS_CAPABILITIES.maxFileSize,
+      maxSizeBytes: resolveDownloadMaxBytes(),
     });
 
     this.teamsConfigs.set(instanceId, teamsConfig);

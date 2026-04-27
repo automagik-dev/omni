@@ -14,7 +14,11 @@ describe('TEAMS_CAPABILITIES', () => {
   it('declares core messaging surface', () => {
     expect(TEAMS_CAPABILITIES.canSendText).toBe(true);
     expect(TEAMS_CAPABILITIES.canSendMedia).toBe(true);
-    expect(TEAMS_CAPABILITIES.canSendReaction).toBe(true);
+    // Bot Framework accepts the outbound `messageReaction` activity but Teams
+    // does not render bot-authored reactions in the client; sending reactions
+    // requires Microsoft Graph (out of v1 scope). The dispatcher MUST NOT
+    // route reaction sends through this plugin for `'teams'` instances.
+    expect(TEAMS_CAPABILITIES.canSendReaction).toBe(false);
     expect(TEAMS_CAPABILITIES.canSendTyping).toBe(true);
   });
 

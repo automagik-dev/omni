@@ -66,8 +66,15 @@ broadcast and Adaptive Card *outbound* are deferred.
 ## Environment variables
 
 The plugin is per-tenant; credentials live on `InstanceConfig.config`. The
-`.env.example` file documents the optional global runtime defaults
-(`TEAMS_DEFAULT_SERVICE_URL`, `TEAMS_REQUEST_TIMEOUT_MS`, …).
+`.env.example` documents two optional global runtime overrides:
+
+| Variable | Default | Wired into |
+|----------|---------|------------|
+| `TEAMS_REQUEST_TIMEOUT_MS` | `15000` | `acquireAccessToken` + `BotFrameworkClient.{sendActivity,replyToActivity}` (per-request `AbortSignal.timeout`) |
+| `TEAMS_DOWNLOAD_MAX_BYTES` | `104857600` (100 MiB) | `createDownloadGuard` for inbound attachment downloads |
+
+`serviceUrl` is captured per-conversation on the first inbound activity (Bot
+Framework "trust on first use"); there is no global default service URL.
 
 ## Running tests
 

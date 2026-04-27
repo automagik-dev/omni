@@ -40,7 +40,7 @@ omni's multi-tenant model maps to Teams as **one bot registration per tenant**:
    }
    ```
 4. Operator points the Azure Bot **messaging endpoint** at
-   `${WEBHOOK_BASE_URL}/webhooks/teams/<instance-id>` (matches the telegram +
+   `${WEBHOOK_BASE_URL}/api/v2/channels/teams/<instance-id>/webhook` (matches the telegram +
    gupshup webhook routing pattern omni already runs).
 5. Operator side-loads / publishes the Teams app manifest into the tenant. The
    plugin's `manifest.ts` exposes `buildTeamsManifest(instance)` so operators
@@ -61,12 +61,12 @@ of silently accepting bad credentials (mirrors the `channel-gupshup` taxonomy).
 |------|:--:|------|
 | `canSendText` | `true` | `MessageFactory.text()` |
 | `canSendMedia` | `true` | Image/audio/video/document via `attachments[]` (`contentUrl` or hosted upload) |
-| `canSendReaction` | `true` | `messageReaction` activity (likes / heart / laugh / surprised / sad / angry) |
+| `canSendReaction` | `false` | Bot Framework accepts the activity but Teams does not render bot-authored reactions; outbound reactions need Microsoft Graph (deferred) |
 | `canSendTyping` | `true` | `typing` activity |
 | `canReceiveReadReceipts` | `false` | Bot Framework does not surface read receipts to bots |
 | `canReceiveDeliveryReceipts` | `false` | Connector confirms acceptance, not user-side delivery |
-| `canEditMessage` | `true` | `updateActivity()` on the captured `activity.id` |
-| `canDeleteMessage` | `true` | `deleteActivity()` on the captured `activity.id` |
+| `canEditMessage` | `false` | `tools.editMessage` is a stub in v1; Bot Framework `updateActivity()` plumbing lands in a follow-up wish |
+| `canDeleteMessage` | `false` | `tools.deleteMessage` is a stub in v1; Bot Framework `deleteActivity()` plumbing lands in a follow-up wish |
 | `canReplyToMessage` | `true` | Channel posts → `replyToId`; threads modeled via the conversation's `topicId` |
 | `canForwardMessage` | `false` | No first-class forward primitive in Teams; out of scope |
 | `canSendContact` | `false` | Adaptive Card workaround only — deferred |
@@ -130,7 +130,7 @@ const adapter = new CloudAdapter(authConfig);
 adapter.onTurnError = (context, error) => this.handleTurnError(instanceId, context, error);
 
 await pluginContext.webhooks.register({
-  path: `/webhooks/teams/${instanceId}`,
+  path: `/api/v2/channels/teams/${instanceId}/webhook`,
   handler: async (req, res) => {
     await adapter.process(req, res, (turnContext) => this.processActivity(instanceId, turnContext));
   },
@@ -189,7 +189,7 @@ omni instance create \
   --config '{"microsoftAppId":"...","microsoftAppPassword":"...","microsoftAppType":"MultiTenant"}'
 
 # 4. Point the Azure Bot messaging endpoint at:
-#    https://<your-omni-host>/webhooks/teams/<instance-id>
+#    https://<your-omni-host>/api/v2/channels/teams/<instance-id>/webhook
 
 # 5. Side-load the manifest:
 omni teams manifest export <instance-id> > teams-app.zip

@@ -50,14 +50,35 @@ const TOKEN_PATH = '/oauth2/v2.0/token';
 const BOT_FRAMEWORK_SCOPE = 'https://api.botframework.com/.default';
 
 /**
+ * Default request timeout for AAD token acquisition + Bot Framework REST calls.
+ * Operators can override via `TEAMS_REQUEST_TIMEOUT_MS` (parsed as milliseconds).
+ * Falls back to 15s if unset or unparseable. A finite timeout is required so a
+ * hung Microsoft endpoint cannot stall the omni connect/send pipeline.
+ */
+export const DEFAULT_TEAMS_REQUEST_TIMEOUT_MS = 15_000;
+
+export function resolveRequestTimeoutMs(): number {
+  const raw = process.env.TEAMS_REQUEST_TIMEOUT_MS;
+  if (!raw) return DEFAULT_TEAMS_REQUEST_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TEAMS_REQUEST_TIMEOUT_MS;
+}
+
+/**
  * Acquire an access token using the OAuth2 client-credentials flow.
  *
  * Returns the bearer token plus its absolute expiry. Throws on non-2xx
  * responses; the caller is responsible for translating into a `TeamsError`.
+ *
+ * Each call is bounded by `TEAMS_REQUEST_TIMEOUT_MS` (default 15s) via
+ * `AbortSignal.timeout()` — a hung AAD endpoint will reject with `AbortError`
+ * instead of stalling indefinitely. Tests can pass a custom `signal` to
+ * override.
  */
 export async function acquireAccessToken(
   options: TeamsConnectionOptions,
   fetchImpl: typeof fetch = fetch,
+  signal: AbortSignal = AbortSignal.timeout(resolveRequestTimeoutMs()),
 ): Promise<TeamsAccessToken> {
   const authority = resolveAuthority(options);
   const body = new URLSearchParams({
@@ -71,6 +92,7 @@ export async function acquireAccessToken(
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
+    signal,
   });
 
   if (!response.ok) {
@@ -108,8 +130,9 @@ export async function acquireAccessToken(
 export async function validateCredentials(
   options: TeamsConnectionOptions,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<TeamsAccessToken> {
-  return acquireAccessToken(options, fetchImpl);
+  return acquireAccessToken(options, fetchImpl, signal);
 }
 
 export class TokenAcquisitionError extends Error {

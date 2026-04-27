@@ -9,8 +9,13 @@
  * Capability matrix support (see `capabilities.ts`):
  * - `canSendText`     → `sendTextMessage`
  * - `canSendMedia`    → `sendMediaMessage` (+ `sendMediaFromUrl`, `sendMediaFromBuffer`)
- * - `canSendReaction` → `sendReaction`
  * - `canSendTyping`   → `sendTyping`
+ *
+ * `sendReaction` is exported but `canSendReaction` is `false` for Teams: the
+ * Bot Framework Connector accepts the activity, but the Teams client does not
+ * render bot-authored reactions (Microsoft Graph would be required, out of v1).
+ * The sender stays exported for non-Teams Bot Framework channels (Direct Line
+ * etc.) — the dispatcher MUST NOT route reaction sends through it for Teams.
  */
 
 export { sendTextMessage } from './text';
