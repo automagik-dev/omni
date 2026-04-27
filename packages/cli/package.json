@@ -8,12 +8,23 @@
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    }
+  },
   "files": ["dist", "bin", "db"],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun run build:types",
+    "build": "bun run build:sdk-subpath && bun build ./src/index.ts --outdir ./dist --target bun && bun run build:types",
+    "build:sdk-subpath": "cd ../sdk && bun run build && cd ../cli && mkdir -p ./dist/sdk && cp -r ../sdk/dist/. ./dist/sdk/",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "dev": "echo 'CLI package - no dev server (use: bun run ./src/index.ts <command>)'",
     "typecheck": "tsc --noEmit",
