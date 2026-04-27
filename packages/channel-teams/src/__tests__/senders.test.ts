@@ -79,7 +79,7 @@ describe('sendTextMessage', () => {
   it('threads every chunk under the supplied replyToId so the chain stays in one thread', async () => {
     // Teams channels: a `message` posted to a channel id without `replyToId`
     // starts a new thread. Chunks of a single response must all share the
-    // same anchor — see DEEP_REVIEW.md A.3.
+    // same anchor — see REVIEW.md A.3.
     const ctx = makeContext();
     const text = `${'a'.repeat(4_000)}\n\n${'b'.repeat(4_000)}`;
     await sendTextMessage(ctx, { text, replyToId: 'parent-1' }, silentLogger);

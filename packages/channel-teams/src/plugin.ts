@@ -444,7 +444,7 @@ export class TeamsPlugin extends BaseChannelPlugin {
     // Capture status, headers, and body from the adapter so we can
     // reconstruct the outgoing `Response`. CloudAdapter calls `header()`
     // for invoke-activity responses (e.g. Content-Type for invokeResponse
-    // bodies) and may serialise objects through `send()`. See DEEP_REVIEW
+    // bodies) and may serialise objects through `send()`. See REVIEW
     // .md A.4.
     const captured: { status: number; body?: string; headers: Record<string, string> } = {
       status: 200,
@@ -546,7 +546,7 @@ export class TeamsPlugin extends BaseChannelPlugin {
     // "trust on first use" pattern is exactly this map. The key MUST match
     // `deriveChatId` so outbound senders find it: for channel posts the
     // chat id is `channelData.channel.id`, not `conversation.id` (which
-    // is the thread root). See DEEP_REVIEW.md A.1.
+    // is the thread root). See REVIEW.md A.1.
     if (activity.serviceUrl && activity.conversation?.id) {
       const conversationType = activity.conversation.conversationType;
       const channelId = activity.channelData?.channel?.id;
@@ -595,7 +595,7 @@ export class TeamsPlugin extends BaseChannelPlugin {
     }
 
     // Key on `parsed.chatId` (matches `deriveChatId`) so outbound `replyToMode`
-    // resolution finds it for channel posts. See DEEP_REVIEW.md A.2.
+    // resolution finds it for channel posts. See REVIEW.md A.2.
     state.lastActivityIds.set(parsed.chatId, parsed.meta.activityId);
 
     const timings = parsed.platformTimestamp ? this.captureInboundTimings(parsed.platformTimestamp) : undefined;

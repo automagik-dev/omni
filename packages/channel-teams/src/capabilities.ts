@@ -13,7 +13,7 @@
  *   `updateActivity` / `deleteActivity` plumbing lands in a follow-up wish.
  *   The capability flag must stay `false` while the implementations throw
  *   `UNSUPPORTED_ACTIVITY` so the dispatcher never routes through them.
- *   See DEEP_REVIEW.md B.1.
+ *   See REVIEW.md B.1.
  * - `canSendReaction: true` — Teams allows bots to add limited reactions
  *   (`like`, `heart`, `laugh`, `surprised`, `sad`, `angry`).
  * - `canStreamResponse: false` — Teams has no native streaming surface for

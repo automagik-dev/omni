@@ -2,7 +2,7 @@
  * Regression tests for the Gemini Code Assist findings on PR #543.
  *
  * Each `describe` corresponds to a finding in
- * `.genie/wishes/teams-channel/DEEP_REVIEW.md` (sections A.1–A.4) and
+ * `.genie/wishes/teams-channel/REVIEW.md` (sections A.1–A.4) and
  * locks the post-fix contract. Removing the fix from production code
  * would flip the assertions red.
  */
