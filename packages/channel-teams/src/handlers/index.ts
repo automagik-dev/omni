@@ -8,7 +8,7 @@
 export type { InboundActivity, MentionEntity, TeamsChannelData } from './activity-types';
 export { extractAttachments } from './attachments';
 export type { AttachmentExtractionResult, ExtractedMedia } from './attachments';
-export { classifyConversation, deriveChatId, extractTeamsChannelData, toActivityMeta } from './conversation';
+export { classifyConversation, deriveChatId, toActivityMeta } from './conversation';
 export { parseMentions, stripMentionMarkup } from './mentions';
 export type { MentionParseResult, ParsedMention } from './mentions';
 export { parseInboundMessage } from './messages';

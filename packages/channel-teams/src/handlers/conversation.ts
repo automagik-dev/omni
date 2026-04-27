@@ -28,7 +28,7 @@ export function classifyConversation(activity: InboundActivity): {
   return { isDm, conversationType };
 }
 
-export function extractTeamsChannelData(activity: InboundActivity): TeamsChannelData | undefined {
+function extractTeamsChannelData(activity: InboundActivity): TeamsChannelData | undefined {
   return activity.channelData;
 }
 

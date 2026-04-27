@@ -6,12 +6,7 @@
  * model) and are stored in the per-instance state map.
  */
 
-export { BotFrameworkClient, BotFrameworkRequestError } from './bot-framework-client';
+export { BotFrameworkClient } from './bot-framework-client';
 export type { BotActivityPayload, SendActivityResult, BotFrameworkClientOptions } from './bot-framework-client';
-export {
-  acquireAccessToken,
-  validateCredentials,
-  resolveAuthority,
-  TokenAcquisitionError,
-} from './auth';
+export { validateCredentials, TokenAcquisitionError } from './auth';
 export type { TeamsAccessToken } from './auth';
