@@ -10,7 +10,7 @@
  * @see media-processing-batch wish
  */
 
-import type { BatchJobType, CostEstimate, OmniClient, ProcessableContentType } from '@omni/sdk';
+import type { BatchJobType, CostEstimate, OmniClient, ProcessableContentType } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';

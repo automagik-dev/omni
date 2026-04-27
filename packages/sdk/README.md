@@ -1,4 +1,4 @@
-# @omni/sdk
+# @automagik/omni-sdk
 
 > TypeScript SDK for the Omni v2 API
 
@@ -7,13 +7,13 @@ Auto-generated from OpenAPI spec with type-safe wrapper and full IDE autocomplet
 ## Installation
 
 ```bash
-bun add @omni/sdk
+bun add @automagik/omni-sdk
 ```
 
 ## Quick Start
 
 ```typescript
-import { createOmniClient } from '@omni/sdk';
+import { createOmniClient } from '@automagik/omni-sdk';
 
 const omni = createOmniClient({
   baseUrl: 'http://localhost:8882',
@@ -468,7 +468,7 @@ console.log(health.status); // 'healthy' | 'degraded' | 'unhealthy'
 All errors are thrown as `OmniApiError`:
 
 ```typescript
-import { createOmniClient, OmniApiError } from '@omni/sdk';
+import { createOmniClient, OmniApiError } from '@automagik/omni-sdk';
 
 try {
   await omni.instances.get('non-existent-id');
@@ -524,7 +524,7 @@ import type {
   SyncJobCreated,
   SyncJobSummary,
   SyncJobStatus,
-} from '@omni/sdk';
+} from '@automagik/omni-sdk';
 ```
 
 ### Low-level Types
@@ -532,7 +532,7 @@ import type {
 For advanced type manipulation, you can import the generated OpenAPI types:
 
 ```typescript
-import type { paths, components, operations } from '@omni/sdk';
+import type { paths, components, operations } from '@automagik/omni-sdk';
 ```
 
 ## Development

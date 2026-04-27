@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import type { AgnoAgent, AgnoTeam, AgnoWorkflow } from '@omni/sdk';
+import type { AgnoAgent, AgnoTeam, AgnoWorkflow } from '@automagik/omni-sdk';
 import { __testables } from '../providers';
 
 const { mapAgnoAgentRow, mapAgnoTeamRow, mapAgnoWorkflowRow } = __testables;

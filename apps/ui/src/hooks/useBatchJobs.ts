@@ -1,5 +1,5 @@
 import { getClient } from '@/lib/sdk';
-import type { BatchJob, CreateBatchJobBody, ListBatchJobsParams } from '@omni/sdk';
+import type { BatchJob, CreateBatchJobBody, ListBatchJobsParams } from '@automagik/omni-sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 /**

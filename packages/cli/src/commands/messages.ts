@@ -6,7 +6,7 @@
  * omni messages read --batch --instance <id> --chat <id> --ids <id1,id2,...>
  */
 
-import type { Chat, Message, OmniClient } from '@omni/sdk';
+import type { Chat, Message, OmniClient } from '@automagik/omni-sdk';
 import { Command, Option } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';

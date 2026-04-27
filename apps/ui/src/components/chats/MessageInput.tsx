@@ -4,7 +4,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { usePresence } from '@/hooks/usePresence';
 import { useSendContact, useSendLocation, useSendPoll } from '@/hooks/useSpecialMessages';
 import { cn } from '@/lib/utils';
-import type { SendContactBody, SendLocationBody, SendPollBody } from '@omni/sdk';
+import type { SendContactBody, SendLocationBody, SendPollBody } from '@automagik/omni-sdk';
 import { BarChart3, Contact, FileText, Image, MapPin, Mic, Paperclip, Send, Smile, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';

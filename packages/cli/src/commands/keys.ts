@@ -11,7 +11,7 @@
  * interactive TTY. Any non-TTY invocation (pipe, redirect, CI) is refused.
  */
 
-import type { ApiKeyRecord, ApiKeyStatus, OmniClient } from '@omni/sdk';
+import type { ApiKeyRecord, ApiKeyStatus, OmniClient } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';

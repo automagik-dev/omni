@@ -13,7 +13,7 @@ import {
 import { useChats } from '@/hooks/useChats';
 import { useInstances } from '@/hooks/useInstances';
 import { cn } from '@/lib/utils';
-import type { BatchJob, BatchJobStatus, BatchJobType } from '@omni/sdk';
+import type { BatchJob, BatchJobStatus, BatchJobType } from '@automagik/omni-sdk';
 import {
   AlertTriangle,
   CheckCircle2,

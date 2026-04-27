@@ -1,11 +1,11 @@
 /**
- * @omni/sdk - TypeScript SDK for Omni v2 API
+ * @automagik/omni-sdk - TypeScript SDK for Omni v2 API
  *
  * Auto-generated types from OpenAPI spec with type-safe wrapper.
  *
  * @example
  * ```typescript
- * import { createOmniClient } from '@omni/sdk';
+ * import { createOmniClient } from '@automagik/omni-sdk';
  *
  * const omni = createOmniClient({
  *   baseUrl: 'http://localhost:8882',

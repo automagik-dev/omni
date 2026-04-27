@@ -2,7 +2,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { getChatDisplayName } from '@/lib/chat-utils';
 import { cn } from '@/lib/utils';
-import type { Chat, Instance } from '@omni/sdk';
+import type { Chat, Instance } from '@automagik/omni-sdk';
 import { ArrowLeft, Bot, BotOff, Hash, Megaphone, MessageCircle, Mic, Radio, Search, User, Users } from 'lucide-react';
 import { useState } from 'react';
 import { MessageSearch } from './MessageSearch';

@@ -2,7 +2,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { useChatParticipants, useSendMedia, useSendMessage, useToggleAgent } from '@/hooks/useChats';
 import { flattenAndReverseMessages, useInfiniteMessages } from '@/hooks/useInfiniteMessages';
 import { useInstance } from '@/hooks/useInstances';
-import type { Chat } from '@omni/sdk';
+import type { Chat } from '@automagik/omni-sdk';
 import { MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChatHeader } from './ChatHeader';

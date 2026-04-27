@@ -12,7 +12,7 @@ import {
   useEnableAutomation,
 } from '@/hooks/useAutomations';
 import { cn } from '@/lib/utils';
-import type { Automation, CreateAutomationBody } from '@omni/sdk';
+import type { Automation, CreateAutomationBody } from '@automagik/omni-sdk';
 import {
   ArrowRight,
   Check,

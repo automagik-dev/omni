@@ -1,6 +1,6 @@
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
-import type { SendReactionBody } from '@omni/sdk';
+import type { SendReactionBody } from '@automagik/omni-sdk';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 /**

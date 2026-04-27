@@ -40,7 +40,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createOmniClient } from '@omni/sdk';
+import { createOmniClient } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import { type Config, type ServerConfig, loadConfig, loadServerConfig, saveConfig } from '../config.js';
 import { getHealthCheckUrl } from '../health.js';

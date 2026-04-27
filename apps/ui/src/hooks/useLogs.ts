@@ -1,6 +1,6 @@
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
-import type { ListLogsParams } from '@omni/sdk';
+import type { ListLogsParams } from '@automagik/omni-sdk';
 import { useQuery } from '@tanstack/react-query';
 
 /**

@@ -15,7 +15,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { useAccessRules, useCheckAccess, useCreateAccessRule, useDeleteAccessRule } from '@/hooks/useAccessRules';
 import { useInstances } from '@/hooks/useInstances';
 import { cn, formatDateTime } from '@/lib/utils';
-import type { AccessRule, CreateAccessRuleBody } from '@omni/sdk';
+import type { AccessRule, CreateAccessRuleBody } from '@automagik/omni-sdk';
 import { AlertCircle, CheckCircle2, Plus, Search, Shield, ShieldBan, ShieldCheck, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 

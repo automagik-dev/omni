@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toaster';
 import { useUpdateSetting } from '@/hooks/useSettings';
 import { cn } from '@/lib/utils';
-import type { Setting } from '@omni/sdk';
+import type { Setting } from '@automagik/omni-sdk';
 import { Check, Eye, EyeOff, Pencil, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 

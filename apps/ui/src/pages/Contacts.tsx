@@ -6,7 +6,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { useInfiniteContacts } from '@/hooks/useContacts';
 import { useInstances } from '@/hooks/useInstances';
 import { cn } from '@/lib/utils';
-import type { Contact } from '@omni/sdk';
+import type { Contact } from '@automagik/omni-sdk';
 import { BookUser, Server } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 

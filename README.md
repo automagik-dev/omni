@@ -369,7 +369,7 @@ omni dead-letters list --limit 20              # Failed events
 
 **TypeScript**
 ```typescript
-import { createOmniClient } from '@omni/sdk';
+import { createOmniClient } from '@automagik/omni-sdk';
 const omni = createOmniClient({
   baseUrl: 'http://localhost:8882',
   apiKey: 'your-api-key',

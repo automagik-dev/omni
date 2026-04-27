@@ -7,7 +7,7 @@
  * omni events timeline <person-id>
  */
 
-import type { Event, OmniClient } from '@omni/sdk';
+import type { Event, OmniClient } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { getOutputFormat, loadConfig } from '../config.js';

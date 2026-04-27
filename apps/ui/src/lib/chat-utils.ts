@@ -1,4 +1,4 @@
-import type { Chat } from '@omni/sdk';
+import type { Chat } from '@automagik/omni-sdk';
 
 /**
  * Format external ID for display when no name is available

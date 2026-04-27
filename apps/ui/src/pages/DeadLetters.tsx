@@ -20,7 +20,7 @@ import {
   useRetryDeadLetter,
 } from '@/hooks/useDeadLetters';
 import { cn, formatDateTime } from '@/lib/utils';
-import type { DeadLetter } from '@omni/sdk';
+import type { DeadLetter } from '@automagik/omni-sdk';
 import {
   Archive,
   CheckCircle2,

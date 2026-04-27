@@ -7,7 +7,7 @@ import { useInstances } from '@/hooks/useInstances';
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
 import { formatRelativeTime } from '@/lib/utils';
-import type { EventAnalytics, EventMetrics } from '@omni/sdk';
+import type { EventAnalytics, EventMetrics } from '@automagik/omni-sdk';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, AlertCircle, Database, Gauge, Radio, RefreshCw, Server, TrendingUp } from 'lucide-react';
 

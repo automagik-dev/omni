@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import type { OmniClient } from '@omni/sdk';
+import type { OmniClient } from '@automagik/omni-sdk';
 import { __testables } from '../keys';
 
 const { ADMIN_CONFIRMATION_PHRASE, handleCreate, promptAdminConfirmation } = __testables;

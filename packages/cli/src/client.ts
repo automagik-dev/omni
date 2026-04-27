@@ -4,7 +4,7 @@
  * Creates SDK client from config and handles auth errors.
  */
 
-import { type OmniClient, createOmniClient } from '@omni/sdk';
+import { type OmniClient, createOmniClient } from '@automagik/omni-sdk';
 import { hasAuth, loadConfig } from './config.js';
 import * as output from './output.js';
 import { VERSION } from './version.js';

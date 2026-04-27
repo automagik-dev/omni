@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import type { Event } from '@omni/sdk';
+import type { Event } from '@automagik/omni-sdk';
 import { formatEventLine, isErrorEvent, isNoisyEvent, passesStreamFilters } from '../commands/events';
 
 function makeEvent(overrides: Partial<Event> = {}): Event {

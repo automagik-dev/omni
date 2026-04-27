@@ -11,7 +11,7 @@ import {
   usePairInstance,
 } from '@/hooks/useInstances';
 import { cn } from '@/lib/utils';
-import type { Channel, Instance } from '@omni/sdk';
+import type { Channel, Instance } from '@automagik/omni-sdk';
 import { ArrowLeft, ArrowRight, Check, Phone, QrCode, X } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useEffect, useState } from 'react';

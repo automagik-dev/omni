@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { useMergePersons, usePersons } from '@/hooks/usePersons';
 import { cn } from '@/lib/utils';
-import type { Person } from '@omni/sdk';
+import type { Person } from '@automagik/omni-sdk';
 import { GitMerge, Search, Users, X } from 'lucide-react';
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';

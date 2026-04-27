@@ -7,7 +7,7 @@
  * omni auth recover
  */
 
-import { createOmniClient } from '@omni/sdk';
+import { createOmniClient } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import { deleteConfigValue, getConfigDir, getConfigPath, loadConfig, loadServerConfig, saveConfig } from '../config.js';
 import * as output from '../output.js';

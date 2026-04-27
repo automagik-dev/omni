@@ -22,7 +22,7 @@
  */
 
 import { createInterface } from 'node:readline';
-import { createOmniClient } from '@omni/sdk';
+import { createOmniClient } from '@automagik/omni-sdk';
 import chalk from 'chalk';
 import { Command } from 'commander';
 import ora from 'ora';

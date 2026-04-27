@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import type { Contact } from '@omni/sdk';
+import type { Contact } from '@automagik/omni-sdk';
 import { Building, Phone, User, Users } from 'lucide-react';
 
 interface ContactCardProps {

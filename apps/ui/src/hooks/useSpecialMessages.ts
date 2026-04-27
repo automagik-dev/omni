@@ -1,6 +1,6 @@
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
-import type { SendContactBody, SendLocationBody, SendPollBody } from '@omni/sdk';
+import type { SendContactBody, SendLocationBody, SendPollBody } from '@automagik/omni-sdk';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 /**

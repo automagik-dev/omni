@@ -12,7 +12,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, extname } from 'node:path';
-import type { OmniClient } from '@omni/sdk';
+import type { OmniClient } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { type ResolvedContext, resolveContext, resolveReplyTo } from '../context.js';

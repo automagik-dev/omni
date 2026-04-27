@@ -12,7 +12,7 @@
  * omni chats participants <id>
  */
 
-import type { Channel, Chat, Message, OmniClient } from '@omni/sdk';
+import type { Channel, Chat, Message, OmniClient } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';

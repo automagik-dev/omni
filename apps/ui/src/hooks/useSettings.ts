@@ -1,6 +1,6 @@
 import { queryKeys } from '@/lib/query';
 import { apiFetch, getClient } from '@/lib/sdk';
-import type { ListSettingsParams, Setting } from '@omni/sdk';
+import type { ListSettingsParams, Setting } from '@automagik/omni-sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 

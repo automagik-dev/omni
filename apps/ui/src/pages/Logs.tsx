@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { useLogs } from '@/hooks/useLogs';
 import { cn, formatDateTime } from '@/lib/utils';
-import type { ListLogsParams } from '@omni/sdk';
+import type { ListLogsParams } from '@automagik/omni-sdk';
 import { Check, ChevronDown, ChevronRight, Copy, FileText, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
 

@@ -1,6 +1,6 @@
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
-import type { CreateInstanceBody, ListInstancesParams } from '@omni/sdk';
+import type { CreateInstanceBody, ListInstancesParams } from '@automagik/omni-sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 /**

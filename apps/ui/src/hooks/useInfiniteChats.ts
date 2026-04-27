@@ -1,6 +1,6 @@
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
-import type { ListChatsParams } from '@omni/sdk';
+import type { ListChatsParams } from '@automagik/omni-sdk';
 import { useInfiniteQuery } from '@tanstack/react-query';
 
 const PAGE_SIZE = 50;

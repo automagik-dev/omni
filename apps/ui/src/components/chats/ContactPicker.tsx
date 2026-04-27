@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { SendContactBody } from '@omni/sdk';
+import type { SendContactBody } from '@automagik/omni-sdk';
 import { useState } from 'react';
 
 interface ContactPickerProps {

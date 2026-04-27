@@ -1,7 +1,7 @@
 import { ChatList, ChatPanel } from '@/components/chats';
 import { Spinner } from '@/components/ui/spinner';
 import { useChat } from '@/hooks/useChats';
-import type { Chat } from '@omni/sdk';
+import type { Chat } from '@automagik/omni-sdk';
 import { MessageSquare } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 

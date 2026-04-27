@@ -47,7 +47,7 @@
     "@omni/channel-telegram": "workspace:*",
     "@omni/channel-whatsapp": "workspace:*",
     "@omni/core": "workspace:*",
-    "@omni/sdk": "workspace:*",
+    "@automagik/omni-sdk": "workspace:*",
     "@types/node": "^22.10.3",
     "@types/qrcode-terminal": "^0.12.2",
     "typescript": "^5.7.3"

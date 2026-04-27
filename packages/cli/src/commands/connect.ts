@@ -9,7 +9,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import type { OmniClient } from '@omni/sdk';
+import type { OmniClient } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';

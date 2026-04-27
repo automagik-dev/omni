@@ -38,7 +38,7 @@ In production, the API serves the built UI:
 - **Tailwind v4** - CSS framework (CSS-first config)
 - **TypeScript** - Type safety
 - **Biome** - Linting and formatting
-- **@omni/sdk** - API client
+- **@automagik/omni-sdk** - API client
 
 ## Scripts
 

@@ -9,7 +9,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, extname } from 'node:path';
-import { OmniApiError, type OmniClient } from '@omni/sdk';
+import { OmniApiError, type OmniClient } from '@automagik/omni-sdk';
 import chalk, { Chalk, type ChalkInstance } from 'chalk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';

@@ -17,7 +17,7 @@
  */
 
 import { PROVIDER_SCHEMAS, type ProviderSchema } from '@omni/core';
-import type { AgnoAgent, AgnoTeam, AgnoWorkflow } from '@omni/sdk';
+import type { AgnoAgent, AgnoTeam, AgnoWorkflow } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';

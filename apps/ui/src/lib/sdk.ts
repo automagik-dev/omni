@@ -4,7 +4,7 @@
  * Creates and manages the Omni SDK client instance.
  */
 
-import { type OmniClient, createOmniClient } from '@omni/sdk';
+import { type OmniClient, createOmniClient } from '@automagik/omni-sdk';
 
 let client: OmniClient | null = null;
 

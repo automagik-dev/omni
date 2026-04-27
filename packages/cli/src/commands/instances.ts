@@ -18,7 +18,7 @@
  * omni instances syncs <id> [job-id]
  */
 
-import type { Channel } from '@omni/sdk';
+import type { Channel } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import qrcode from 'qrcode-terminal';
 import { getClient } from '../client.js';

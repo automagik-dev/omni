@@ -6,7 +6,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { useUpdateInstance } from '@/hooks/useInstances';
 import { useCheckProviderHealth, useProviderAgents, useProviders } from '@/hooks/useProviders';
 import { cn } from '@/lib/utils';
-import type { Instance } from '@omni/sdk';
+import type { Instance } from '@automagik/omni-sdk';
 import { Bot, Check, RefreshCw, Zap } from 'lucide-react';
 import { useEffect, useState } from 'react';
 

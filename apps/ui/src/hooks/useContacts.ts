@@ -1,6 +1,6 @@
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
-import type { ListContactsParams } from '@omni/sdk';
+import type { ListContactsParams } from '@automagik/omni-sdk';
 import { useInfiniteQuery } from '@tanstack/react-query';
 
 /**

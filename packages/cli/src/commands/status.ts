@@ -4,7 +4,7 @@
  * omni status - Show API health and connection info
  */
 
-import type { OmniClient } from '@omni/sdk';
+import type { OmniClient } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import { getOptionalClient } from '../client.js';
 import { getConfigDir, hasAuth, loadConfig } from '../config.js';

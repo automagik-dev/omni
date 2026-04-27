@@ -2,7 +2,7 @@ import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { flattenChats, useInfiniteChats } from '@/hooks/useInfiniteChats';
 import { useInstances } from '@/hooks/useInstances';
-import type { Chat } from '@omni/sdk';
+import type { Chat } from '@automagik/omni-sdk';
 import { MessageSquare, Search } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChatListItem } from './ChatListItem';

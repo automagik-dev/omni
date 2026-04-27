@@ -1,7 +1,7 @@
 import { toast } from '@/components/ui/toaster';
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
-import type { CreateAccessRuleBody, ListAccessRulesParams } from '@omni/sdk';
+import type { CreateAccessRuleBody, ListAccessRulesParams } from '@automagik/omni-sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 /**

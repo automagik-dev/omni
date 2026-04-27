@@ -9,7 +9,7 @@
  */
 
 import * as readline from 'node:readline';
-import type { Channel } from '@omni/sdk';
+import type { Channel } from '@automagik/omni-sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { loadConfig } from '../config.js';

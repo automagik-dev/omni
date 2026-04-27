@@ -1,5 +1,5 @@
 import { getClient } from '@/lib/sdk';
-import type { Automation, CreateAutomationBody } from '@omni/sdk';
+import type { Automation, CreateAutomationBody } from '@automagik/omni-sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 /**

@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge';
 import { cn, formatRelativeTime } from '@/lib/utils';
-import type { Person } from '@omni/sdk';
+import type { Person } from '@automagik/omni-sdk';
 import { User } from 'lucide-react';
 
 interface PersonCardProps {

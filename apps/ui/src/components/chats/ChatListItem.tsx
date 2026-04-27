@@ -1,7 +1,7 @@
 import { Badge } from '@/components/ui/badge';
 import { getChatDisplayName } from '@/lib/chat-utils';
 import { cn, formatRelativeTime, truncate } from '@/lib/utils';
-import type { Chat } from '@omni/sdk';
+import type { Chat } from '@automagik/omni-sdk';
 import { Hash, Megaphone, MessageCircle, Mic, Radio, User, Users } from 'lucide-react';
 
 interface ChatListItemProps {
