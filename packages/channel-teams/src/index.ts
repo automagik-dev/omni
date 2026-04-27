@@ -2,24 +2,25 @@
  * Microsoft Teams Channel Plugin for Omni v2
  *
  * Provides Microsoft Teams messaging via the Bot Framework Connector REST
- * protocol. The plugin is auto-discovered by the channel-sdk scanner — no
- * manual registration is needed in production.
+ * protocol. This module ONLY exports the plugin instance — registration is
+ * owned by the consumer (the channel-sdk auto-discovery scanner picks it up
+ * in dev/test, the bundled CLI server entry registers it explicitly in
+ * production), mirroring the discord/telegram/slack/gupshup convention.
+ * Self-registering on import would double-register when imported by the
+ * bundled server.
  *
  * @example
  * ```typescript
  * import teamsPlugin from '@omni/channel-teams';
  *
- * // Plugin is auto-discovered by channel-sdk scanner
- * // Or manually register:
- * channelRegistry.register(teamsPlugin);
+ * // Auto-discovered by the channel-sdk scanner. For bundled builds it is
+ * // registered explicitly in cli/src/bundled-server-entry.ts.
  * ```
  */
 
-import { channelRegistry } from '@omni/channel-sdk';
 import { TeamsPlugin } from './plugin';
 
 const plugin = new TeamsPlugin();
-channelRegistry.register(plugin);
 
 export default plugin;
 

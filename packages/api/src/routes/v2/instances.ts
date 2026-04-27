@@ -155,6 +155,18 @@ const createInstanceSchema = z.object({
     .nullable()
     .describe('Public Twilio inbound webhook URL for signature validation'),
   twilioValidateSignature: z.boolean().default(true).describe('Validate X-Twilio-Signature on webhooks'),
+  microsoftAppId: z.string().optional().nullable().describe('Microsoft Entra App (Bot) ID — Azure Bot resource GUID'),
+  microsoftAppPassword: z.string().optional().nullable().describe('Microsoft Entra App client secret'),
+  microsoftAppTenantId: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('Azure AD tenant GUID (required for SingleTenant deployments)'),
+  microsoftAppType: z
+    .enum(['MultiTenant', 'SingleTenant', 'UserAssignedMSI'])
+    .optional()
+    .nullable()
+    .describe('Bot Framework app type (default: MultiTenant)'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
     .default('on')
@@ -239,6 +251,10 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   twilioMessagingServiceSid: z.string().nullable().optional(),
   twilioStatusCallbackUrl: z.string().nullable().optional(),
   twilioWebhookUrl: z.string().nullable().optional(),
+  microsoftAppId: z.string().nullable().optional(),
+  microsoftAppPassword: z.string().nullable().optional(),
+  microsoftAppTenantId: z.string().nullable().optional(),
+  microsoftAppType: z.enum(['MultiTenant', 'SingleTenant', 'UserAssignedMSI']).nullable().optional(),
   // NOT NULL fields in DB - cannot be set to null
   // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
   // triggerMode, messageDebounce* all have NOT NULL constraints
@@ -448,6 +464,10 @@ type InstanceConnectionOptionsInput = {
   twilioStatusCallbackUrl?: string | null;
   twilioWebhookUrl?: string | null;
   twilioValidateSignature?: boolean | null;
+  microsoftAppId?: string | null;
+  microsoftAppPassword?: string | null;
+  microsoftAppTenantId?: string | null;
+  microsoftAppType?: 'MultiTenant' | 'SingleTenant' | 'UserAssignedMSI' | null;
 };
 
 function applyTelegramConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
@@ -482,6 +502,16 @@ function applyTwilioWhatsAppConnectionOptions(
   }
 }
 
+function applyTeamsConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
+  // The Teams plugin reads these from `credentials.{appId,appPassword,tenantId}`
+  // first then `options.*` as fallback (mirrors slack/telegram). We propagate
+  // both so either lookup path works.
+  if (input.microsoftAppId) options.appId = input.microsoftAppId;
+  if (input.microsoftAppPassword) options.appPassword = input.microsoftAppPassword;
+  if (input.microsoftAppTenantId) options.tenantId = input.microsoftAppTenantId;
+  if (input.microsoftAppType) options.appType = input.microsoftAppType;
+}
+
 function applyChannelSpecificConnectionOptions(
   options: Record<string, unknown>,
   input: InstanceConnectionOptionsInput,
@@ -498,6 +528,9 @@ function applyChannelSpecificConnectionOptions(
       return;
     case 'twilio-whatsapp':
       applyTwilioWhatsAppConnectionOptions(options, input);
+      return;
+    case 'teams':
+      applyTeamsConnectionOptions(options, input);
       return;
   }
 }
@@ -521,15 +554,50 @@ function getPluginFromRegistry(
   return channelRegistry?.get(channel as Parameters<ChannelRegistry['get']>[0]);
 }
 
+/**
+ * Lift the channel-specific credentials out of the merged `options` bag and
+ * pass them on `credentials` (the canonical channel-sdk slot) so per-plugin
+ * code can read either `credentials.*` (preferred) or `options.*` (legacy).
+ *
+ * Today only the Teams plugin requires this split — `appId`, `appPassword`,
+ * `tenantId`, `appType` belong on `credentials`; other channels accept their
+ * tokens in `options` for backwards compatibility.
+ */
+function extractCredentialsFromOptions(channel: string, options: Record<string, unknown>): Record<string, unknown> {
+  if (channel !== 'teams') return {};
+  const credentials: Record<string, unknown> = {};
+  for (const key of ['appId', 'appPassword', 'tenantId', 'appType']) {
+    if (options[key] !== undefined) credentials[key] = options[key];
+  }
+  return credentials;
+}
+
+function applyTeamsRestartOptions(
+  restartOptions: Record<string, unknown>,
+  instance: {
+    microsoftAppId?: string | null;
+    microsoftAppPassword?: string | null;
+    microsoftAppTenantId?: string | null;
+    microsoftAppType?: string | null;
+  },
+): void {
+  if (instance.microsoftAppId) restartOptions.appId = instance.microsoftAppId;
+  if (instance.microsoftAppPassword) restartOptions.appPassword = instance.microsoftAppPassword;
+  if (instance.microsoftAppTenantId) restartOptions.tenantId = instance.microsoftAppTenantId;
+  if (instance.microsoftAppType) restartOptions.appType = instance.microsoftAppType;
+}
+
 async function connectInstanceWithPlugin(
   plugin: ChannelPlugin,
   instanceId: string,
   options: Record<string, unknown>,
+  channel?: string,
 ): Promise<string | undefined> {
   try {
+    const credentials = channel ? extractCredentialsFromOptions(channel, options) : {};
     await plugin.connect(instanceId, {
       instanceId,
-      credentials: {},
+      credentials,
       options,
     });
     return undefined;
@@ -550,7 +618,7 @@ async function triggerCreateConnection(
     return;
   }
 
-  const errorMessage = await connectInstanceWithPlugin(plugin, instanceId, options);
+  const errorMessage = await connectInstanceWithPlugin(plugin, instanceId, options, channel);
   if (errorMessage) {
     log.error('Failed to connect instance', { instanceId, error: errorMessage });
     return;
@@ -1172,7 +1240,7 @@ instancesRoutes.post(
 
     hydrateConnectionOptionsForInstance(plugin, instance, connectionOptions);
 
-    const errorMessage = await connectInstanceWithPlugin(plugin, id, connectionOptions);
+    const errorMessage = await connectInstanceWithPlugin(plugin, id, connectionOptions, instance.channel);
     if (errorMessage) {
       return c.json(
         {
@@ -1273,6 +1341,9 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
       restartOptions.twilioWebhookUrl = instance.twilioWebhookUrl;
       restartOptions.twilioValidateSignature = instance.twilioValidateSignature;
     }
+    if (instance.channel === 'teams') {
+      applyTeamsRestartOptions(restartOptions, instance);
+    }
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
       restartOptions.whatsapp = {
@@ -1280,7 +1351,8 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
         markOnlineOnConnect: instance.markOnlineOnConnect,
       };
     }
-    await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
+    const restartCredentials = extractCredentialsFromOptions(instance.channel, restartOptions);
+    await plugin.connect(id, { instanceId: id, credentials: restartCredentials, options: restartOptions });
   } catch (error) {
     return c.json(
       {

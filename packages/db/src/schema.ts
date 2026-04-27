@@ -686,6 +686,16 @@ export const instances = pgTable(
     twilioWebhookUrl: text('twilio_webhook_url'),
     twilioValidateSignature: boolean('twilio_validate_signature').notNull().default(true),
 
+    // ---- Microsoft Teams (Bot Framework) Configuration ----
+    /** Microsoft Entra App (Bot) ID — Azure Bot resource GUID */
+    microsoftAppId: varchar('microsoft_app_id', { length: 128 }),
+    /** Microsoft Entra App client secret — persisted for reconnection */
+    microsoftAppPassword: text('microsoft_app_password'),
+    /** Azure AD tenant GUID — required for SingleTenant deployments */
+    microsoftAppTenantId: varchar('microsoft_app_tenant_id', { length: 128 }),
+    /** Bot Framework app type: MultiTenant (default) | SingleTenant | UserAssignedMSI */
+    microsoftAppType: varchar('microsoft_app_type', { length: 32 }),
+
     // ---- Agent Reference ----
     /** FK to agents table (phase 3: replaces legacy agentProviderId + agentId varchar). */
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),

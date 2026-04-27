@@ -33,6 +33,7 @@ const VALID_CHANNELS: Channel[] = [
   'telegram',
   'gupshup',
   'twilio-whatsapp',
+  'teams',
 ];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 
@@ -133,6 +134,10 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'twilioStatusCallbackUrl', opts.twilioStatusCallbackUrl);
   setVal(body, 'twilioWebhookUrl', opts.twilioWebhookUrl);
   setBool(body, 'twilioValidateSignature', opts.twilioValidateSignature);
+  setVal(body, 'microsoftAppId', opts.teamsAppId);
+  setVal(body, 'microsoftAppPassword', opts.teamsAppPassword);
+  setVal(body, 'microsoftAppTenantId', opts.teamsTenantId);
+  setVal(body, 'microsoftAppType', opts.teamsAppType);
   setVal(body, 'bridgeTmuxSession', opts.bridgeTmuxSession);
   if (opts.triggerEvents !== undefined) {
     const raw = opts.triggerEvents as string;
@@ -370,6 +375,14 @@ export function createInstancesCommand(): Command {
     .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation')
     .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
     .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
+    // Microsoft Teams (Bot Framework)
+    .option('--teams-app-id <id>', 'Microsoft Entra App (Bot) ID — the GUID from the Azure Bot resource')
+    .option('--teams-app-password <secret>', 'Microsoft Entra App client secret')
+    .option('--teams-tenant-id <id>', 'Azure AD tenant GUID (required for SingleTenant deployments)')
+    .option(
+      '--teams-app-type <type>',
+      'Bot app type: MultiTenant | SingleTenant | UserAssignedMSI (default: MultiTenant)',
+    )
     // Bridge tmux session override (parity with `update`; propagated via NATS env)
     .option(
       '--bridge-tmux-session <name>',
@@ -891,6 +904,11 @@ export function createInstancesCommand(): Command {
     .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation (use "null" to clear)')
     .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
     .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
+    // Microsoft Teams (Bot Framework)
+    .option('--teams-app-id <id>', 'Microsoft Entra App (Bot) ID (use "null" to clear)')
+    .option('--teams-app-password <secret>', 'Microsoft Entra App client secret (use "null" to clear)')
+    .option('--teams-tenant-id <id>', 'Azure AD tenant GUID (use "null" to clear)')
+    .option('--teams-app-type <type>', 'Bot app type: MultiTenant | SingleTenant | UserAssignedMSI')
     // Trigger events
     .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')
     // WhatsApp profile name (separate endpoint)

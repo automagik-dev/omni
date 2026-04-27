@@ -311,3 +311,80 @@ describe('B.1 — capability matrix matches implementation', () => {
     expect(plugin.capabilities.canDeleteMessage).toBe(false);
   });
 });
+
+describe('Filipe round 2 — chatId vs Bot Framework conversation.id (channel-context outbound)', () => {
+  it('sendMessage to a channel uses the captured Bot Framework conversation.id, not the Omni chatId', async () => {
+    const { context } = makeMockContext();
+    const plugin = new StubbedTeamsPlugin(() => makePermissiveAdapter());
+    await plugin.initialize(context);
+
+    // Install a single mock that routes by URL — kept active for the whole
+    // test so the BotFrameworkClient's captured fetchImpl uses it during
+    // both AAD acquisition (in connect) and the outbound activity POST.
+    const sendUrls: string[] = [];
+    const handle = withMockedFetch((input) => {
+      const url = typeof input === 'string' ? input : (input as { url: string }).url;
+      if (url.includes('/oauth2/v2.0/token')) {
+        return new Response(JSON.stringify({ access_token: 'tok', expires_in: 3600, token_type: 'Bearer' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('/v3/conversations/')) {
+        sendUrls.push(url);
+        return new Response(JSON.stringify({ id: 'act-out-1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('not handled', { status: 500 });
+    });
+
+    try {
+      const cfg: InstanceConfig = {
+        instanceId: 'inst-channel-out',
+        credentials: { appId: 'app-id-x', appPassword: 'secret' },
+      };
+      await plugin.connect('inst-channel-out', cfg);
+
+      // 1) Inbound channel post: chatId becomes channel.id; Bot Framework
+      //    conversation.id is the thread root. Plugin must remember both.
+      await plugin.handleWebhook(
+        new Request('http://localhost/api/v2/channels/teams/inst-channel-out/webhook', {
+          method: 'POST',
+          body: JSON.stringify({
+            type: 'message',
+            id: 'act-channel-in-1',
+            timestamp: '2026-04-27T12:00:00Z',
+            serviceUrl: 'https://smba.trafficmanager.net/teams/',
+            from: { id: '29:user', aadObjectId: 'aad-user' },
+            conversation: {
+              id: '19:thread-root@thread.tacv2;messageid=999',
+              conversationType: 'channel',
+            },
+            recipient: { id: '28:bot' },
+            text: 'lixei',
+            channelData: { team: { id: 'team-X' }, channel: { id: 'channel-Z' } },
+          }),
+        }),
+      );
+
+      // 2) Outbound to chatId='channel-Z'. Plugin must rewrite to the
+      //    captured Bot Framework conversation.id when calling /v3/conversations/.
+      await plugin.sendMessage('inst-channel-out', {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        to: 'channel-Z' as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        content: { type: 'text', text: 'reply' } as any,
+      });
+    } finally {
+      handle.restore();
+    }
+
+    expect(sendUrls.length).toBeGreaterThan(0);
+    const sendUrl = sendUrls[0] ?? '';
+    // URL must contain the URL-encoded THREAD-ROOT conversation.id, NOT chatId.
+    expect(sendUrl).toContain(encodeURIComponent('19:thread-root@thread.tacv2;messageid=999'));
+    expect(sendUrl).not.toMatch(/\/conversations\/channel-Z\/activities/);
+  });
+});

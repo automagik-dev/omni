@@ -94,6 +94,7 @@ export type Channel =
   | 'a2a'
   | 'gupshup'
   | 'twilio-whatsapp'
+  | 'teams'
   | 'internal';
 
 // Paginated response helper

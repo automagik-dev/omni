@@ -40,10 +40,14 @@ describe('channel-teams scaffold', () => {
     expect(TEAMS_CAPABILITIES.supportedMediaTypes.length).toBeGreaterThan(0);
   });
 
-  it('registers itself with the channel registry on import', () => {
-    const registered = channelRegistry.get('teams');
-    expect(registered).toBeDefined();
-    expect(registered).toBe(teamsPlugin);
+  it('does not self-register on import (registration is owned by the loader)', () => {
+    // Mirrors discord/telegram/slack/gupshup convention. The bundled CLI
+    // server entry registers the plugin explicitly; auto-discovery picks it
+    // up in dev. Self-registering here would double-register in bundled mode.
+    channelRegistry.unregister('teams');
+    expect(channelRegistry.get('teams')).toBeUndefined();
+    channelRegistry.register(teamsPlugin);
+    expect(channelRegistry.get('teams')).toBe(teamsPlugin);
   });
 });
 

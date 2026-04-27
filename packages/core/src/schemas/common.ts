@@ -79,6 +79,7 @@ export const ChannelTypeSchema = z.enum([
   'telegram',
   'gupshup',
   'twilio-whatsapp',
+  'teams',
 ]);
 
 /**

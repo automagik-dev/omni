@@ -225,6 +225,13 @@
       "when": 1777400000000,
       "tag": "0031_reconcile_gupshup_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1777500000000,
+      "tag": "0032_teams_channel",
+      "breakpoints": true
     }
   ]
 }

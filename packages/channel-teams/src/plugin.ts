@@ -109,10 +109,19 @@ interface TeamsInstanceState {
    * guard enforces the SDK contract (size cap + cancel hook).
    */
   downloadGuard: DownloadGuard;
-  /** Last-seen `serviceUrl` per conversation id (set on first inbound activity) */
+  /** Last-seen `serviceUrl` per chatId (Omni id; set on first inbound activity) */
   serviceUrls: Map<string, string>;
-  /** Last activity id per conversation (used for sendTyping / replyToMode='all') */
+  /** Last activity id per chatId (used for sendTyping / replyToMode='all') */
   lastActivityIds: Map<string, string>;
+  /**
+   * Bot Framework conversation.id per Omni chatId. For DMs they're identical;
+   * for channel posts the chatId is `channelData.channel.id` (stable across
+   * renames) but the actual Bot Framework conversation.id is the
+   * `19:xxx@thread.tacv2;messageid=N` thread root that Bot Framework REST
+   * needs at `/v3/conversations/{conversationId}/activities`. Without this
+   * map, channel-context outbound posts hit 404.
+   */
+  conversationIds: Map<string, string>;
 }
 
 export class TeamsPlugin extends BaseChannelPlugin {
@@ -207,6 +216,7 @@ export class TeamsPlugin extends BaseChannelPlugin {
       downloadGuard,
       serviceUrls: new Map(),
       lastActivityIds: new Map(),
+      conversationIds: new Map(),
     });
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -247,31 +257,44 @@ export class TeamsPlugin extends BaseChannelPlugin {
   // ─────────────────────────────────────────────────────────────
 
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
-    const conversationId = message.to;
+    // `message.to` is the Omni `chatId` (set by the channel router from the
+    // inbound `chatId` we emit). For DMs that's the same as Bot Framework's
+    // `conversation.id`; for channel posts it's `channelData.channel.id` and
+    // we need to look up the actual `conversation.id` (the thread-root
+    // `19:xxx@thread.tacv2;messageid=N`) before calling Bot Framework REST,
+    // otherwise `/v3/conversations/{conversationId}/activities` returns 404.
+    const chatId = message.to;
     const state = this.teamsInstances.get(instanceId);
 
     if (!state) {
       return this.failOutbound(
         instanceId,
-        conversationId,
+        chatId,
         new TeamsError(TeamsErrorCode.NOT_CONNECTED, `Teams instance ${instanceId} is not connected`),
       );
     }
 
-    const serviceUrl = state.serviceUrls.get(conversationId) ?? state.config.serviceUrl;
+    const serviceUrl = state.serviceUrls.get(chatId) ?? state.config.serviceUrl;
     if (!serviceUrl) {
       return this.failOutbound(
         instanceId,
-        conversationId,
+        chatId,
         new TeamsError(
           TeamsErrorCode.SEND_FAILED,
-          `Teams instance ${instanceId} has no serviceUrl for conversation ${conversationId} — receive an inbound activity first or set TeamsConfig.serviceUrl`,
+          `Teams instance ${instanceId} has no serviceUrl for chat ${chatId} — receive an inbound activity first or set TeamsConfig.serviceUrl`,
         ),
       );
     }
 
+    // For DMs, conversationIds.get() returns chatId. For channel posts it
+    // returns the Bot Framework `conversation.id` captured on inbound. If
+    // no inbound has been seen yet we fall back to chatId — which works for
+    // DMs and is the only sane default; channel-context proactive sends
+    // without prior inbound aren't supported in v1.
+    const conversationId = state.conversationIds.get(chatId) ?? chatId;
+
     const ctx = createBotFrameworkSendContext({ client: state.client, serviceUrl, conversationId });
-    const replyToId = this.resolveReplyToId(state, conversationId, message);
+    const replyToId = this.resolveReplyToId(state, chatId, message);
     const correlationId = message.metadata?.correlationId as string | undefined;
 
     try {
@@ -284,13 +307,13 @@ export class TeamsPlugin extends BaseChannelPlugin {
       if (correlationId) this.captureT11(correlationId);
 
       if (messageId) {
-        state.lastActivityIds.set(conversationId, messageId);
+        state.lastActivityIds.set(chatId, messageId);
       }
 
       await this.emitMessageSent({
         instanceId,
         externalId: messageId,
-        chatId: conversationId,
+        chatId,
         threadId: message.threadId,
         to: message.to,
         content: { type: message.content.type, text: message.content.text },
@@ -326,7 +349,8 @@ export class TeamsPlugin extends BaseChannelPlugin {
       );
     }
 
-    const ctx = createBotFrameworkSendContext({ client: state.client, serviceUrl, conversationId: chatId });
+    const conversationId = state.conversationIds.get(chatId) ?? chatId;
+    const ctx = createBotFrameworkSendContext({ client: state.client, serviceUrl, conversationId });
     const replyToId = state.lastActivityIds.get(chatId);
     await sendTyping(ctx, { replyToId }, this.logger);
   }
@@ -363,7 +387,8 @@ export class TeamsPlugin extends BaseChannelPlugin {
         `Teams instance ${instanceId} has no serviceUrl for conversation ${chatId} — receive an inbound activity first or set TeamsConfig.serviceUrl`,
       );
     }
-    const ctx = createBotFrameworkSendContext({ client: state.client, serviceUrl, conversationId: chatId });
+    const conversationId = state.conversationIds.get(chatId) ?? chatId;
+    const ctx = createBotFrameworkSendContext({ client: state.client, serviceUrl, conversationId });
     await sendReaction(ctx, { targetActivityId: messageId, emoji, add }, this.logger);
   }
 
@@ -559,16 +584,24 @@ export class TeamsPlugin extends BaseChannelPlugin {
     if (!activity || typeof activity !== 'object') return;
     if (typeof activity.type !== 'string') return;
 
-    // Capture the service URL the moment we see it — Bot Framework's
-    // "trust on first use" pattern is exactly this map. The key MUST match
-    // `deriveChatId` so outbound senders find it: for channel posts the
-    // chat id is `channelData.channel.id`, not `conversation.id` (which
-    // is the thread root). See REVIEW.md A.1.
+    // Capture the service URL + Bot Framework conversation.id the moment we
+    // see them. Trust on first use, per Bot Framework convention.
+    //
+    // Two maps because the Omni `chatId` (used by `deriveChatId`) and the
+    // Bot Framework `conversation.id` diverge for channel posts:
+    //   - `chatId`           = `channelData.channel.id` (stable across thread roots)
+    //   - `conversation.id`  = `19:xxx@thread.tacv2;messageid=N` (thread root)
+    //
+    // `serviceUrls` MUST be keyed by chatId so outbound senders find it via
+    // `deriveChatId` (see REVIEW.md A.1). `conversationIds` maps that same
+    // chatId back to the actual Bot Framework conversation.id required by
+    // `/v3/conversations/{conversationId}/activities`.
     if (activity.serviceUrl && activity.conversation?.id) {
       const conversationType = activity.conversation.conversationType;
       const channelId = activity.channelData?.channel?.id;
       const chatId = conversationType === 'channel' && channelId ? channelId : activity.conversation.id;
       state.serviceUrls.set(chatId, activity.serviceUrl);
+      state.conversationIds.set(chatId, activity.conversation.id);
     }
 
     switch (activity.type) {

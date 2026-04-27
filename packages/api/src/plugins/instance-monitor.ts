@@ -152,6 +152,10 @@ function buildInstanceConnectOptions(instance: {
   twilioStatusCallbackUrl?: string | null;
   twilioWebhookUrl?: string | null;
   twilioValidateSignature?: boolean | null;
+  microsoftAppId?: string | null;
+  microsoftAppPassword?: string | null;
+  microsoftAppTenantId?: string | null;
+  microsoftAppType?: string | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
@@ -169,7 +173,25 @@ function buildInstanceConnectOptions(instance: {
   if (instance.channel === 'twilio-whatsapp') {
     applyTwilioWhatsAppOptions(options, instance);
   }
+  if (instance.channel === 'teams') {
+    applyTeamsOptions(options, instance);
+  }
   return options;
+}
+
+function applyTeamsOptions(
+  options: Record<string, unknown>,
+  instance: {
+    microsoftAppId?: string | null;
+    microsoftAppPassword?: string | null;
+    microsoftAppTenantId?: string | null;
+    microsoftAppType?: string | null;
+  },
+): void {
+  if (instance.microsoftAppId) options.appId = instance.microsoftAppId;
+  if (instance.microsoftAppPassword) options.appPassword = instance.microsoftAppPassword;
+  if (instance.microsoftAppTenantId) options.tenantId = instance.microsoftAppTenantId;
+  if (instance.microsoftAppType) options.appType = instance.microsoftAppType;
 }
 
 function applyGupshupOptions(
@@ -268,9 +290,19 @@ async function connectInstance(
     options.presence = instance.discordPresence;
   }
 
+  // Lift channel-specific credentials onto the canonical `credentials` slot so
+  // plugins that read from `credentials.*` (Teams) get them; legacy plugins
+  // that read from `options.*` are unaffected because both are populated.
+  const credentials: Record<string, unknown> = {};
+  if (instance.channel === 'teams') {
+    for (const key of ['appId', 'appPassword', 'tenantId', 'appType']) {
+      if (options[key] !== undefined) credentials[key] = options[key];
+    }
+  }
+
   await plugin.connect(instance.id, {
     instanceId: instance.id,
-    credentials: {},
+    credentials,
     options,
   });
 }

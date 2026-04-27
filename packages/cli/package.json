@@ -44,6 +44,7 @@
     "@omni/channel-gupshup": "workspace:*",
     "@omni/channel-sdk": "workspace:*",
     "@omni/channel-slack": "workspace:*",
+    "@omni/channel-teams": "workspace:*",
     "@omni/channel-telegram": "workspace:*",
     "@omni/channel-whatsapp": "workspace:*",
     "@omni/core": "workspace:*",

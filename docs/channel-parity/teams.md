@@ -110,8 +110,8 @@ right after `emitMessageReceived()` returns.
 | omni payload | Teams activity | Sender |
 |--------------|----------------|--------|
 | `{ type: 'text' }` | `MessageFactory.text(content)` | `senders/text.ts` |
-| `{ type: 'media', mediaType: 'image' }` | attachment with `contentType: 'image/*'` | `senders/media.ts` |
-| `{ type: 'media', mediaType: 'audio' \| 'video' \| 'document' }` | attachment with the matching MIME / `application/vnd.microsoft.teams.file.download.info` for files | `senders/media.ts` |
+| `{ type: 'media', mediaType: 'image' \| 'audio' \| 'video' }` | attachment with the matching MIME (inline bytes ≤ 4 MiB) | `senders/media.ts` |
+| `{ type: 'media', mediaType: 'document' }` | hyperlink card pointing at the public `mediaUrl` (Teams file UPLOAD into a channel needs FileConsentCard or Microsoft Graph + SharePoint — not implemented in v1) | `senders/media.ts` |
 | `{ type: 'reaction', emoji }` | `messageReaction` activity (`reactionsAdded` / `reactionsRemoved`) | `senders/reaction.ts` |
 | `{ type: 'typing' }` | `Activity.typing` | `senders/typing.ts` |
 | `replyTo` set | `replyToId` populated on the outgoing activity | shared by all senders |

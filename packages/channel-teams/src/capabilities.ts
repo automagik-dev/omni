@@ -75,14 +75,19 @@ export const TEAMS_CAPABILITIES: ChannelCapabilities = {
   // Limits
   maxMessageLength: 28_000,
 
-  // Bot Framework attachment cap is 4MB per attachment for proactive uploads;
-  // OneDrive-backed downloads are larger but require Graph permissions which
-  // are out of scope for v1.
+  // Bot Framework proactive `MessageFactory.attachment` accepts inline
+  // image/audio/video bytes up to ~4 MiB and renders them in Teams via the
+  // standard attachment renderer. Generic `application/*` (PDF, docs, etc.)
+  // can be SENT as link cards but file UPLOAD into a Teams channel/group
+  // requires the FileConsentCard flow (personal scope only) or Microsoft
+  // Graph + SharePoint (any scope). Neither is implemented in v1, so we
+  // only declare the inline media types that actually work end-to-end.
+  // Operators sending PDFs/docs today should host the file and pass a
+  // public `mediaUrl` — the plugin will render it as a hyperlink card.
   supportedMediaTypes: [
     { mimeType: 'image/*', maxSize: 4 * 1024 * 1024 },
     { mimeType: 'audio/*', maxSize: 4 * 1024 * 1024 },
     { mimeType: 'video/*', maxSize: 4 * 1024 * 1024 },
-    { mimeType: 'application/*', maxSize: 4 * 1024 * 1024 },
   ],
 
   maxFileSize: 4 * 1024 * 1024,
