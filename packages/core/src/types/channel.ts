@@ -8,6 +8,7 @@ export const CHANNEL_TYPES = [
   'discord',
   'slack',
   'telegram',
+  'teams',
   'a2a',
   'gupshup',
   'twilio-whatsapp',
