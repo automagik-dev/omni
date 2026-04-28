@@ -33,6 +33,19 @@ step()    { printf "\n${BOLD}${CYAN}▸ %s${NC}\n" "$*"; }
 
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+# Read persisted update channel from ~/.omni/config.json. If the user previously
+# ran `omni update --next`, we honor that on reinstall instead of silently
+# downgrading them to @latest. Defaults to `latest` when no config exists or
+# the field is missing.
+omni_channel() {
+  local cfg="$HOME/.omni/config.json"
+  if [[ -f "$cfg" ]] && grep -q '"updateChannel"[[:space:]]*:[[:space:]]*"next"' "$cfg" 2>/dev/null; then
+    printf 'next'
+  else
+    printf 'latest'
+  fi
+}
+
 ask_yn() {
   local prompt="$1" default="${2:-y}" yn
   if [[ "$default" == "y" ]]; then
@@ -142,12 +155,14 @@ ensure_pm2() {
 install_cli_only() {
   step "Installing Omni CLI (global)"
 
-  info "Installing @automagik/omni from npm..."
-  if bun add -g @automagik/omni 2>/dev/null && has_cmd omni; then
-    ok "omni $(omni --version) installed from npm"
+  local channel
+  channel="$(omni_channel)"
+  info "Installing @automagik/omni@${channel} from npm..."
+  if bun add -g "@automagik/omni@${channel}" 2>/dev/null && has_cmd omni; then
+    ok "omni $(omni --version) installed from npm (channel: ${channel})"
     return 0
   fi
-  fail "npm install failed. Check your network and try again: bun add -g @automagik/omni"
+  fail "npm install failed. Check your network and try again: bun add -g @automagik/omni@${channel}"
 }
 
 # ============================================================================
@@ -159,11 +174,13 @@ install_full_server() {
 
   ensure_pm2
 
-  info "Installing @automagik/omni from npm..."
-  if ! bun add -g @automagik/omni 2>/dev/null || ! has_cmd omni; then
-    fail "npm install failed. Check your network and try again: bun add -g @automagik/omni"
+  local channel
+  channel="$(omni_channel)"
+  info "Installing @automagik/omni@${channel} from npm..."
+  if ! bun add -g "@automagik/omni@${channel}" 2>/dev/null || ! has_cmd omni; then
+    fail "npm install failed. Check your network and try again: bun add -g @automagik/omni@${channel}"
   fi
-  ok "omni $(omni --version) installed"
+  ok "omni $(omni --version) installed (channel: ${channel})"
 
   info "Running omni install (this will download NATS, configure PM2, etc.)..."
   omni install --non-interactive
