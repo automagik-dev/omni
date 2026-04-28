@@ -170,6 +170,29 @@ const getMarkerPath = () => {
 };
 
 // ---------------------------------------------------------------------------
+// Read persisted update channel
+//
+// `omni update --next` writes `updateChannel: "next"` to ~/.omni/config.json,
+// but this runner has historically hardcoded `bun add -g @automagik/omni`
+// (which resolves to @latest = stable), silently downgrading users who
+// explicitly opted into the next channel. Read the persisted choice so the
+// install/update paths here respect the user's intent. Defaults to `latest`.
+// ---------------------------------------------------------------------------
+
+const getUpdateChannel = () => {
+  try {
+    const cfgPath = join(homedir(), '.omni', 'config.json');
+    if (!existsSync(cfgPath)) return 'latest';
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+    return cfg.updateChannel === 'next' ? 'next' : 'latest';
+  } catch {
+    return 'latest';
+  }
+};
+
+const omniPackageSpec = () => `@automagik/omni@${getUpdateChannel()}`;
+
+// ---------------------------------------------------------------------------
 // Subcommand: setup
 // ---------------------------------------------------------------------------
 
@@ -186,18 +209,19 @@ const cmdSetup = () => {
     // 2. Find omni (before install/update)
     let omniPath = findOmni(bunPath);
 
+    const spec = omniPackageSpec();
     if (!omniPath) {
-      // Install omni CLI
-      log('omni-setup', 'Installing @automagik/omni CLI...');
-      const install = exec(bunPath, ['add', '-g', '@automagik/omni'], { stdio: ['pipe', 'inherit', 'inherit'] });
+      // Install omni CLI on the user's persisted channel
+      log('omni-setup', `Installing ${spec}...`);
+      const install = exec(bunPath, ['add', '-g', spec], { stdio: ['pipe', 'inherit', 'inherit'] });
       if (install.status !== 0) {
-        log('omni-setup', 'Install failed -- you can install manually: bun add -g @automagik/omni');
+        log('omni-setup', `Install failed -- you can install manually: bun add -g ${spec}`);
         process.exit(0);
       }
     } else {
-      // Update omni CLI to latest
-      log('omni-setup', 'Updating @automagik/omni CLI...');
-      const updateResult = exec(bunPath, ['add', '-g', '@automagik/omni@latest'], { stdio: ['pipe', 'inherit', 'inherit'] });
+      // Update omni CLI on the user's persisted channel (next or latest)
+      log('omni-setup', `Updating to ${spec}...`);
+      const updateResult = exec(bunPath, ['add', '-g', spec], { stdio: ['pipe', 'inherit', 'inherit'] });
       if (updateResult.status !== 0) {
         log('omni-setup', 'Update failed -- continuing with current version');
       }
@@ -265,10 +289,11 @@ const cmdHealth = () => {
     // 2. Find omni — if missing, auto-install (first-time setup)
     let omniPath = findOmni(bunPath);
     if (!omniPath) {
-      log('omni', 'CLI not found -- installing...');
-      const install = exec(bunPath, ['add', '-g', '@automagik/omni'], { stdio: ['pipe', 'inherit', 'inherit'] });
+      const spec = omniPackageSpec();
+      log('omni', `CLI not found -- installing ${spec}...`);
+      const install = exec(bunPath, ['add', '-g', spec], { stdio: ['pipe', 'inherit', 'inherit'] });
       if (install.status !== 0) {
-        log('omni', 'Install failed -- run manually: bun add -g @automagik/omni');
+        log('omni', `Install failed -- run manually: bun add -g ${spec}`);
         process.exit(0);
       }
       omniPath = findOmni(bunPath);
@@ -364,7 +389,7 @@ const cmdRun = (args) => {
   const omniPath = findOmni(bunPath);
 
   if (!omniPath) {
-    log('omni', 'CLI not found. Install with: bun add -g @automagik/omni');
+    log('omni', `CLI not found. Install with: bun add -g ${omniPackageSpec()}`);
     process.exit(1);
   }
 

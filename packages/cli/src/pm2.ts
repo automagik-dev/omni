@@ -21,12 +21,18 @@ export const PM2_PROCESSES = {
  * throttling. This is the fix for the 2026-04-09 incident where a crash loop
  * grew `omni-api-error.log` to 283 GB because pm2 had no `--max-restarts` or
  * log rotation configured. See WISH: omni-install-resilience.
+ *
+ * `killTimeoutMs` was added by WISH: pm2-log-noise-and-bumps — the API has a
+ * 15 s graceful shutdown (`packages/api/src/index.ts:327`) but pm2's default
+ * `kill_timeout` is 1600 ms, so SIGKILL was firing before pgserve/NATS could
+ * drain. We pad to 20 s = 15 s graceful + 5 s headroom for Sentry flush.
  */
 export const PM2_HARDENED_DEFAULTS = {
   maxRestarts: 10,
   restartDelayMs: 5000,
   apiMaxMemory: '2G',
   natsMaxMemory: '1G',
+  killTimeoutMs: 20000,
   logDateFormat: 'YYYY-MM-DD HH:mm:ss.SSS',
 } as const;
 
@@ -84,6 +90,8 @@ export function buildPm2StartArgs(options: Pm2StartArgsOptions): string[] {
     String(PM2_HARDENED_DEFAULTS.restartDelayMs),
     '--max-memory-restart',
     maxMemory,
+    '--kill-timeout',
+    String(PM2_HARDENED_DEFAULTS.killTimeoutMs),
     '--log-date-format',
     PM2_HARDENED_DEFAULTS.logDateFormat,
     '--output',
