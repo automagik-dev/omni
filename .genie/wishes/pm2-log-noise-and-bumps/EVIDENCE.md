@@ -1,0 +1,54 @@
+# Evidence — pm2-log-noise-and-bumps
+
+## Baseline (captured 2026-04-28, before any service restart with fixes applied)
+
+State of `~/.omni/logs/` and `~/.pm2/pm2.log` immediately before the wish landed.
+
+| Metric | Count | Notes |
+|--------|-------|-------|
+| `bad NAK delay value` in `omni-nats-error.log` | 6 | Each entry has a fractional ns delay (e.g. `1869139323.8630936`). The corresponding NAK redelivery is rejected by the NATS server, so the message gets immediate redelivery with no backoff. |
+| `failed to kill - retrying in 100ms` in `~/.pm2/pm2.log` | 824 | One per 100 ms retry; PM2 SIGKILLs after 1600 ms. |
+| `Closing open session in favor of incoming prekey bundle` in `omni-api-error.log` | ~1000+ (sample); actual far higher | Log emitted from `@whiskeysockets/libsignal-node/src/session_builder.js:74` via `console.warn` — bypasses omni's pino logger. |
+| `Failed to connect` in `omni-api-error.log` | 96,716,257 | DB connection storm on every API restart, caused by PM2 SIGKILLing pgserve dirty before it can drain. |
+
+### File sizes
+
+```
+omni-api-error.log    33,482.6 MB apparent  (sparse)
+omni-nats-error.log      147.3 KB
+~/.omni/logs/ total       1.1 GB on disk
+```
+
+The 33 GB apparent size is a sparse file — same failure mode as the 2026-04-09 incident (283 GB) referenced in `packages/cli/src/pm2.ts:23`. The hardened `--max-restarts` and log paths added by WISH `omni-install-resilience` prevent the disk-fill but don't stop the log storm.
+
+### Code under test (before fix)
+
+| File | Line | Issue |
+|------|------|-------|
+| `packages/core/src/events/nats/consumer.ts` | 149 | `return Math.min(delay + jitter, maxDelayMs)` — float, due to `Math.random()`-based jitter. |
+| `packages/cli/src/pm2.ts` | 71-104 | `buildPm2StartArgs` lacks `--kill-timeout`, so PM2's default 1600 ms applies. |
+| `packages/api/package.json` | 46 | `"pgserve": "^1.1.10"`. Latest stable is 1.2.0. |
+| `packages/channel-whatsapp/vendor/baileys-8e5093c.tgz` | — | Vendored Baileys commit `8e5093c`. |
+
+### Reference verification
+
+```
+$ ~/.pm2/pm2.log
+2026-04-28T14:02:50: PM2 log: SIGTERM timeout      : 1600
+```
+PM2's effective `kill_timeout` is 1600 ms while the API's graceful shutdown handler at `packages/api/src/index.ts:327-330` uses a 15 000 ms forceExitTimer. SIGKILL fires ~13.4 s before the API has finished draining DB + NATS + Sentry.
+
+```
+$ node_modules/.bun/nats@2.29.3/.../jsmsg.js
+nak(millis) {
+  payload = StringCodec().encode(`-NAK ${JSON.stringify({ delay: nanos(millis) })}`);
+}
+function nanos(millis) { return millis * 1000000; }
+```
+`nanos` preserves fractional ms → fractional ns in the JSON payload → Go server unmarshal into `time.Duration` (int64) fails → "bad NAK delay value".
+
+---
+
+## Post-fix
+
+_To be captured after Group 5 verification._
