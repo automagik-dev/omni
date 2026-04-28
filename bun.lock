@@ -216,7 +216,7 @@
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
         "audio-decode": "workspace:*",
-        "baileys": "file:vendor/baileys-8e5093c.tgz",
+        "baileys": "file:vendor/baileys-ca61ac14.tgz",
         "node-cache": "^5.1.2",
         "pino": "^9.6.0",
       },
@@ -1174,7 +1174,7 @@
 
     "axios": ["axios@1.13.5", "", { "dependencies": { "follow-redirects": "^1.15.11", "form-data": "^4.0.5", "proxy-from-env": "^1.1.0" } }, "sha512-cz4ur7Vb0xS4/KUN0tPWe44eqxrIu31me+fbang3ijiNscE129POzipJJA6zniq2C/Z6sJCjMimjS8Lc/GAs8Q=="],
 
-    "baileys": ["baileys@vendor/baileys-8e5093c.tgz", { "dependencies": { "@cacheable/node-cache": "^1.4.0", "@hapi/boom": "^9.1.3", "async-mutex": "^0.5.0", "libsignal": "git+https://github.com/whiskeysockets/libsignal-node", "lru-cache": "^11.1.0", "music-metadata": "^11.7.0", "p-queue": "^9.0.0", "pino": "^9.6", "protobufjs": "^7.2.4", "whatsapp-rust-bridge": "0.5.2", "ws": "^8.13.0" }, "peerDependencies": { "audio-decode": "^2.1.3", "jimp": "^1.6.0", "link-preview-js": "^3.0.0", "sharp": "*" }, "optionalPeers": ["audio-decode", "jimp", "link-preview-js"] }, "sha512-aiNocDO0KyRpUAu42Kr1ZvD2PWcVgxG3LyXSY+z/f5vNEocHgSVWz1NJ/T40oBYH4k+OnyCgZJEwUYDyqS63Iw=="],
+    "baileys": ["baileys@vendor/baileys-ca61ac14.tgz", { "dependencies": { "@cacheable/node-cache": "^1.4.0", "@hapi/boom": "^9.1.3", "async-mutex": "^0.5.0", "libsignal": "git+https://github.com/whiskeysockets/libsignal-node", "lru-cache": "^11.1.0", "music-metadata": "11.12.1", "p-queue": "^9.0.0", "pino": "^9.6", "protobufjs": "^7.2.4", "whatsapp-rust-bridge": "0.5.3", "ws": "^8.13.0" }, "peerDependencies": { "audio-decode": "^2.1.3", "jimp": "^1.6.0", "link-preview-js": "^3.0.0", "sharp": "*" }, "optionalPeers": ["audio-decode", "jimp", "link-preview-js"] }, "sha512-JOcJHcKwWkiiyIHHEziEJtfPdhY5r2M62/o4IkEQRE8EE3oAWLzY8VRCC/NNIgR1nKCcALXzJQYqYVJsQoQrag=="],
 
     "balanced-match": ["balanced-match@4.0.4", "", {}, "sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA=="],
 
@@ -2138,7 +2138,7 @@
 
     "webidl-conversions": ["webidl-conversions@3.0.1", "", {}, "sha512-2JAn3z8AR6rjK8Sm8orRC0h/bcl/DqL7tRPdGZ4I1CjdF+EaMLmYxBHyXuKL849eucPFhvBoxMsflfOb8kxaeQ=="],
 
-    "whatsapp-rust-bridge": ["whatsapp-rust-bridge@0.5.2", "", {}, "sha512-6KBRNvxg6WMIwZ/euA8qVzj16qxMBzLllfmaJIP1JGAAfSvwn6nr8JDOMXeqpXPEOl71UfOG+79JwKEoT2b1Fw=="],
+    "whatsapp-rust-bridge": ["whatsapp-rust-bridge@0.5.3", "", {}, "sha512-Xb3GAgtWQQJ30oI4a4pjM4+YUeli9CMLTwTIewUrb+AJMFElIkiT5uo+j1Zhc+amiV0Jj+LfX76c/EEZirJbGA=="],
 
     "whatwg-url": ["whatwg-url@5.0.0", "", { "dependencies": { "tr46": "~0.0.3", "webidl-conversions": "^3.0.0" } }, "sha512-saE57nupxk6v3HY35+jzBwYa0rKSy0XR8JSxZPwgLr7ys0IBzhGviA1/TUGJLmSVqs8pb9AnvICXEuOHLprYTw=="],
 

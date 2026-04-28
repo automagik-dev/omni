@@ -49,6 +49,41 @@ function nanos(millis) { return millis * 1000000; }
 
 ---
 
-## Post-fix
+## Group 4 — Baileys vendor bump
 
-_To be captured after Group 5 verification._
+**Old:** `vendor/baileys-8e5093c.tgz` (upstream commit `8e5093c`)
+**New:** `vendor/baileys-ca61ac14.tgz` (upstream commit `ca61ac14d8f62b8dfdabf14ac3d62786b462faba`)
+**Upstream date:** 2026-04-25
+**Upstream version:** `7.0.0-rc.9` (unchanged — version field hasn't been bumped between SHAs)
+**Procedure:** `git clone WhiskeySockets/Baileys` → `bun install` → `bun run build` → `npm pack` → drop tarball into `packages/channel-whatsapp/vendor/` → update `package.json` → `bun install` at omni root → typecheck + tests.
+
+### Commits between `8e5093c..ca61ac14d8` (upstream `WhiskeySockets/Baileys`)
+
+```
+ca61ac14d8 fix: duplicate imports in chats.ts (#2496)
+3451ade8c3 fix(chats): update abprops query to fix bad-request error (#2473)
+25a4ef73df feat: add initial username INBOUND and Usync support (#2480)
+1453b06b09 fix: pin music-metadata to 11.12.1 to avoid missing TypeScript decl
+60bec03a8d Enrich call event types (#2355)
+c727b42605 fix: streamline JID handling by removing redundant checks
+8ca9316a10 fix(chats): add validation for jid and pn_jid in updateBlockStatus
+402f479ee8 feat: complete tctoken lifecycle with expiration, pruning and re-issue
+ac90a2d765 fix: improve app state sync resilience (verified against WA Web)
+77c8d3f718 perf: optimize history sync memory and CPU usage (#2333)
+d9811963d2 feat: album message sending (#2058)
+```
+
+11 commits. 6 fixes, 4 features, 1 enrichment. No upstream commit explicitly addresses the libsignal `Closing open session in favor of incoming prekey bundle` log line — that noise is expected to persist until upstream demotes it. (Confirmed: emitted by `@whiskeysockets/libsignal-node/src/session_builder.js:74` via `console.warn`, separate package not changed by this bump.)
+
+### Validation
+
+- `bun install` at omni root: clean.
+- `bunx turbo typecheck`: 21/21 successful (12.4 s).
+- `bun test packages/channel-whatsapp`: 375 pass / 0 fail / 1107 expect() calls (21.5 s).
+- Live WhatsApp send/receive smoke check: deferred to Group 5 (post-restart with all four fixes applied).
+
+---
+
+## Post-fix (Group 5)
+
+_To be captured after Group 5 verification: clean `pm2 delete all && omni start`, 10-min observation window, before/after grep counts, WhatsApp smoke check._
