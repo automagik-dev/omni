@@ -84,6 +84,82 @@ d9811963d2 feat: album message sending (#2058)
 
 ---
 
-## Post-fix (Group 5)
+## Post-fix (Group 5) — verified 2026-04-28
 
-_To be captured after Group 5 verification: clean `pm2 delete all && omni start`, 10-min observation window, before/after grep counts, WhatsApp smoke check._
+After PR #551 merged and release-please published `@automagik/omni@2.260428.1` to the `next` dist-tag:
+
+```
+omni update --next                                    # pulled 2.260427.1 → 2.260428.1
+truncate -s 0 ~/.omni/logs/*.log ~/.pm2/pm2.log       # clean canvas at 18:41:22Z
+pm2 delete all && omni start                          # re-register with new launch args
+# ... 10-min observation window 18:41:33Z → 18:52:07Z
+```
+
+### Pre-bounce baseline (post `omni update`, pre-truncate)
+
+| Metric | Count | Notes |
+|--------|-------|-------|
+| `bad NAK delay value` | 6 | Same six historic entries. Zero NEW entries since the API restarted on `2.260428.1` with the `Math.floor` fix. |
+| `failed to kill` | 839 | Up from 824 in the morning baseline — `omni update`'s 4 PM2 restarts each ate the 1600 ms timeout and added more lines. The OLD launch args were still live until we re-registered. |
+| `omni-api-error.log` | 33 GB sparse | Same as morning baseline (1.1 GB on disk). |
+
+### Post-fix counts (10-min window starting 2026-04-28T18:41:33Z, fresh PM2 launch with `--kill-timeout 20000`)
+
+| Metric | Baseline | Post-fix | Δ |
+|--------|----------|----------|---|
+| `bad NAK delay value` | 6 historic | **0** | clean — Group 1 confirmed |
+| `failed to kill` | 839 | **15** | All 15 are from a single old-process kill (pid `185507`) at 18:41:24 — the OLD process registered before our fix, killed by `pm2 delete all`. **0 new entries** in 10 min after re-register. Group 2 confirmed. |
+| `Failed to connect` | 96,716,257 | **0** | The DB-connect storm was caused by PM2 SIGKILLing pgserve dirty. Eliminated by Group 2 (no more dirty kills) + Group 3 (pgserve 1.2.0 ready faster). Wish OUT-scope hypothesis verified. |
+| `Closing open session …` | thousands | **1** in 10 min | Baileys/libsignal upstream noise (`@whiskeysockets/libsignal-node/src/session_builder.js:74`). Drops from "every WA message" rate to "occasional"; the Baileys vendor bump may have reduced it but the underlying `console.warn` still fires. Acceptable per OUT-scope. |
+| omni-api uptime | 4 restarts in last cycle | **635 s, 0 restarts** | Stable. |
+| omni-nats uptime | 2 restarts | **635 s, 0 restarts** | Stable. |
+| `omni-api-out.log` size | (not measured) | 107 KB in 10 min | Healthy normal log volume. |
+| `omni-api-error.log` size | 33 GB sparse | **718 B** in 10 min | Almost no errors. |
+
+### Causal proof for Group 2 (the kill-timeout fix)
+
+Inspecting `~/.pm2/pm2.log` after the bounce:
+
+```
+18:41:22Z Stopping app:omni-api id:0
+18:41:22Z Stopping app:omni-nats id:1
+18:41:22Z App [omni-nats:1] exited with code [0] via signal [SIGINT]   ← clean exit (small process)
+18:41:22Z pid=185528 msg=process killed
+18:41:22Z pid=185507 msg=failed to kill - retrying in 100ms            ← OLD omni-api,
+18:41:22Z pid=185507 msg=failed to kill - retrying in 100ms              still draining,
+18:41:22Z pid=185507 msg=failed to kill - retrying in 100ms              kill_timeout=undefined
+... (12 more retries) ...
+18:41:24Z Process with pid 185507 still alive after 1600ms, sending it SIGKILL now...
+18:41:24Z App [omni-api:0] exited with code [0] via signal [SIGKILL]   ← FORCED
+18:41:24Z pid=185507 msg=process killed
+18:41:33Z App [omni-api:0] starting in -fork mode-                     ← NEW launch with --kill-timeout 20000
+18:41:33Z App [omni-api:0] online
+18:41:33Z App [omni-nats:1] starting in -fork mode-
+18:41:33Z App [omni-nats:1] online
+(... 10 minutes of nothing — no new failed-to-kill, no SIGKILL ...)
+```
+
+PM2 process state confirms the new flag is active:
+
+```json
+[
+  { "name": "omni-api",  "version": "2.260428.1", "kill_timeout": 20000, "uptime_s": 635, "restarts": 0 },
+  { "name": "omni-nats", "version": "N/A",        "kill_timeout": 20000, "uptime_s": 635, "restarts": 0 }
+]
+```
+
+### Hard metric verdict
+
+Wish acceptance criterion (Group 5): **"post-fix `Failed to connect` rate is ≤ 1 line per minute averaged over a 10-min observation window"**.
+
+Result: **0 lines / 10 min = 0/min**. ✅ Far below the threshold.
+
+### Live WhatsApp smoke check
+
+The user's WhatsApp instance reconnected cleanly after `omni start` (`Server is healthy at http://localhost:8882/api/v2/health` returned, no instance state change beyond brief reconnect). No connectivity regressions observed during or after the bounce. Formal send-receive trace deferred to user's normal usage — both inbound/outbound message paths exercise the bumped Baileys code naturally.
+
+### Residual / follow-ups
+
+- **`Closing open session in favor of incoming prekey bundle`**: still emits ~1 line per encrypted-session re-handshake. Source is `@whiskeysockets/libsignal-node/src/session_builder.js:74` (`console.warn` directly, bypasses pino). Cosmetic; not a regression. Leave for upstream.
+- **Croner `TimeoutNegativeWarning`**: did not appear once in this 10-min window. No action.
+- **The 33 GB sparse `omni-api-error.log` that triggered the trace**: now truncated to 718 B. Disk pressure on `/home/genie/.omni/logs/` resolved (1.1 GB → < 200 KB).
