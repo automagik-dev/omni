@@ -146,7 +146,10 @@ export function calculateBackoffDelay(
   // Add jitter (±10%)
   const jitter = delay * 0.1 * (Math.random() * 2 - 1);
 
-  return Math.min(delay + jitter, maxDelayMs);
+  // Floor to integer ms: nats.js sends `delay * 1e6` as nanos, and the NATS
+  // server unmarshals it into a Go int64 `time.Duration`. Fractional values
+  // get rejected with `bad NAK delay value`, breaking the redelivery backoff.
+  return Math.floor(Math.min(delay + jitter, maxDelayMs));
 }
 
 /**
