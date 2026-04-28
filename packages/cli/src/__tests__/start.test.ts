@@ -33,6 +33,13 @@ describe('PM2_HARDENED_DEFAULTS', () => {
   test('nats memory limit is set', () => {
     expect(PM2_HARDENED_DEFAULTS.natsMaxMemory).toMatch(/^\d+[MG]$/);
   });
+
+  test('killTimeoutMs covers the 15 s graceful shutdown', () => {
+    // The api graceful-shutdown handler has a 15 000 ms forceExitTimer
+    // (packages/api/src/index.ts:327). pm2 must wait at least that long
+    // before SIGKILL or it kills the process mid-drain.
+    expect(PM2_HARDENED_DEFAULTS.killTimeoutMs).toBeGreaterThanOrEqual(15000);
+  });
 });
 
 describe('getPm2LogDir / getPm2LogPaths', () => {
@@ -103,6 +110,12 @@ describe('buildPm2StartArgs — api launch', () => {
     expect(apiArgs[errIdx + 1]).toContain('omni-api-error.log');
   });
 
+  test('includes --kill-timeout 20000', () => {
+    expect(apiArgs).toContain('--kill-timeout');
+    const idx = apiArgs.indexOf('--kill-timeout');
+    expect(apiArgs[idx + 1]).toBe('20000');
+  });
+
   test('includes --interpreter bash when provided', () => {
     expect(apiArgs).toContain('--interpreter');
     const idx = apiArgs.indexOf('--interpreter');
@@ -130,6 +143,12 @@ describe('buildPm2StartArgs — nats launch', () => {
   test('includes the hardened restart flags', () => {
     expect(natsArgs).toContain('--max-restarts');
     expect(natsArgs).toContain('--restart-delay');
+  });
+
+  test('includes --kill-timeout 20000 for nats too', () => {
+    expect(natsArgs).toContain('--kill-timeout');
+    const idx = natsArgs.indexOf('--kill-timeout');
+    expect(natsArgs[idx + 1]).toBe('20000');
   });
 
   test('forwards scriptArgs after a "--" separator', () => {
