@@ -115,6 +115,17 @@ export interface ChannelCapabilities {
    */
   canHandoff?: boolean;
 
+  /**
+   * Whether the channel exposes a native terminal-close protocol (e.g. a
+   * dedicated `CLOSE_CONTACT` message type that closes the journey on the
+   * provider side). Only channels with `canCloseContact: true` receive a
+   * channel-specific payload from `POST /messages/send/close-contact`; for
+   * every other channel the route still runs the channel-agnostic side
+   * effects (`agentPaused=true`, optional `closed=true`, follow-up disarm,
+   * audit log). See issue #559.
+   */
+  canCloseContact?: boolean;
+
   // ─────────────────────────────────────────────────────────────
   // Messaging-window constraints (issue #404)
   // ─────────────────────────────────────────────────────────────

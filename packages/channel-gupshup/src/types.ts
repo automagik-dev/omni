@@ -15,7 +15,7 @@ export interface GupshupConfig {
 
 // Outbound message shape (internal)
 export interface GupshupOutboundMessage {
-  type: 'TEXT' | 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER' | 'LOCATION' | 'HANDOFF';
+  type: 'TEXT' | 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER' | 'LOCATION' | 'HANDOFF' | 'CLOSE_CONTACT';
   text?: string;
   url?: string;
   caption?: string;
@@ -27,6 +27,10 @@ export interface GupshupOutboundMessage {
   dados_lead?: string;
   motivo_handoff?: string;
   handoff_fields?: Record<string, unknown>;
+  // Close-contact fields (issue #559) — present only on type === 'CLOSE_CONTACT'
+  close_reason?: string;
+  close_outcome?: string;
+  close_fields?: Record<string, unknown>;
 }
 
 // ─────────────────────────────────────────────────────────────

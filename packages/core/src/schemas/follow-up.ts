@@ -31,6 +31,7 @@ export const DisarmReasonSchema = z.enum([
   'agent_error',
   'send_failed',
   'session_cleared',
+  'contact_closed',
 ]);
 
 export type DisarmReason = z.infer<typeof DisarmReasonSchema>;
