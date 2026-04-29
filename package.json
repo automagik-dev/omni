@@ -1,6 +1,6 @@
 {
   "name": "omni-v2",
-  "version": "2.260429.3",
+  "version": "2.260429.4",
   "private": true,
   "type": "module",
   "workspaces": ["packages/*", "apps/*"],
