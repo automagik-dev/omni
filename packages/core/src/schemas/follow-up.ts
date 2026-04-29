@@ -22,6 +22,11 @@ import { z } from 'zod';
  * - `send_failed` — outbound send failed after render.
  * - `session_cleared` — user cleared the agent session (e.g. trash emoji).
  */
+/**
+ * Keep in sync with:
+ *   - `packages/core/src/events/types.ts` → `FollowUpDisarmReason` type union
+ *   - `packages/db/src/schema.ts` → `followUpDisarmReasons` const tuple
+ */
 export const DisarmReasonSchema = z.enum([
   'customer_replied',
   'handoff',

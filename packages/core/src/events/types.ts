@@ -671,7 +671,13 @@ export interface AgentTaskCancelledPayload {
  * @see issue #404 — Configurable Idle-Chat Follow-Up Sequences
  */
 
-/** Reasons a follow-up sequence was disarmed. Kept in sync with DisarmReasonSchema in schemas/follow-up.ts. */
+/**
+ * Reasons a follow-up sequence was disarmed.
+ *
+ * Keep in sync with:
+ *   - `packages/core/src/schemas/follow-up.ts` → `DisarmReasonSchema` (zod runtime)
+ *   - `packages/db/src/schema.ts` → `followUpDisarmReasons` const tuple
+ */
 export type FollowUpDisarmReason =
   | 'customer_replied'
   | 'handoff'

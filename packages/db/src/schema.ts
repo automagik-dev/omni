@@ -2781,6 +2781,20 @@ export const turnsRelations = relations(turns, ({ one }) => ({
 // CHAT FOLLOW-UP STATE (Idle-chat follow-up sequences)
 // ============================================================================
 
+/**
+ * Disarm reason values persisted in `chat_follow_up_state.disarm_reason`.
+ *
+ * The column type is `varchar(32)` — there is NO CHECK constraint or pg
+ * enum at the DB level. Validation lives in the TypeScript layer via
+ * `$type<FollowUpDisarmReasonDb>()` and the matching zod
+ * `DisarmReasonSchema`. Adding a value here is a pure type change; no
+ * migration is needed unless a future revision wants to harden this with
+ * a CHECK or a pg ENUM.
+ *
+ * Keep in sync with:
+ *   - `packages/core/src/events/types.ts` → `FollowUpDisarmReason`
+ *   - `packages/core/src/schemas/follow-up.ts` → `DisarmReasonSchema`
+ */
 export const followUpDisarmReasons = [
   'customer_replied',
   'handoff',
