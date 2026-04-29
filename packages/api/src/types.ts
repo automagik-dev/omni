@@ -47,6 +47,13 @@ export interface AppVariables {
   services: Services;
   apiKey?: ApiKeyData;
   requestId: string;
+  /**
+   * Genie host id when the request carried a verified `X-Genie-Signature`.
+   * Set by the genieSignatureMiddleware (omni-host-fingerprint-trust wish,
+   * Group 4) and consumed by audit/observability downstream. Absent when
+   * the request was bearer-only or unsigned.
+   */
+  signedBy?: string;
 }
 
 /**

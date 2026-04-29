@@ -43,6 +43,7 @@ function getAllowedOrigins(): string[] | '*' {
 
 import { authMiddleware, requireInstanceAccess } from './middleware/auth';
 import { defaultBodyLimitMiddleware } from './middleware/body-limit';
+import { genieSignatureMiddleware } from './middleware/genie-signature';
 import { outputRedactorMiddleware } from './middleware/output-redactor';
 import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
 
@@ -251,6 +252,14 @@ export function createApp(
   const protectedApp = new Hono<{ Variables: AppVariables }>();
   protectedApp.use('*', authMiddleware);
   protectedApp.use('*', scopeEnforcerMiddleware);
+  // Genie host signature verification — additive in this rollout. When the
+  // request carries the `X-Genie-Signature` header set, the middleware
+  // verifies it (replay-window + ed25519) and sets `signedBy` on context
+  // for downstream audit. Missing headers fall through unchanged. The
+  // per-instance enforcement opt-in (`--require-genie-signature`, Group 6
+  // of the omni-host-fingerprint-trust wish) flips this from "verify when
+  // present" to "require always".
+  protectedApp.use('*', genieSignatureMiddleware);
   protectedApp.use('*', outputRedactorMiddleware);
   protectedApp.use('*', rateLimitMiddleware);
 
