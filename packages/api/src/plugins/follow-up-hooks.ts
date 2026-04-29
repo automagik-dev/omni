@@ -19,6 +19,7 @@
 
 import type {
   ChatArchivedPayload,
+  ChatClosedPayload,
   ChatHandoffActivatedPayload,
   EventBus,
   MessageReceivedPayload,
@@ -164,7 +165,28 @@ export async function setupFollowUpHooks(eventBus: EventBus, services: Services)
       },
     );
 
-    log.info('Follow-up hooks active (message.sent/received, chat.handoff_activated, chat.archived)');
+    // ── Close-contact (#559) → disarm(contact_closed) ────────────────────
+    await eventBus.subscribe(
+      'chat.closed',
+      async (event) => {
+        const payload = event.payload as ChatClosedPayload;
+        await services.followUpLifecycle.disarm({
+          chatId: payload.chatId,
+          instanceId: payload.instanceId,
+          agentId: payload.agentId ?? null,
+          reason: 'contact_closed',
+        });
+      },
+      {
+        durable: 'follow-up-hooks-closed',
+        queue: 'follow-up-hooks',
+        maxRetries: 2,
+        retryDelayMs: 500,
+        startFrom: 'new',
+      },
+    );
+
+    log.info('Follow-up hooks active (message.sent/received, chat.handoff_activated, chat.archived, chat.closed)');
   } catch (error) {
     log.error('Failed to set up follow-up hooks', { error: String(error) });
   }

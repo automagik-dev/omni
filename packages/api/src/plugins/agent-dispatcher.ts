@@ -2625,6 +2625,84 @@ async function dispatchToAgent(
   );
 }
 
+/** Settings shape consumed by the close-contact + handoff gates below. */
+interface ChatSettingsForGate {
+  agentPaused?: boolean;
+  agentResumedAt?: string;
+  closed?: boolean;
+  closeUntil?: string | null;
+  closeOutcome?: string | null;
+}
+
+/**
+ * Close-contact gate (#559). Returns:
+ *   - `skip`        → caller must `ackHandle.remove()` and return.
+ *   - `reopened`    → cooldown expired; state flipped back to active. Fall
+ *                     through to dispatch normally; the handoff gate after
+ *                     this should NOT also block on a stale `agentPaused`.
+ *   - `pass`        → no close-contact state; defer to subsequent gates.
+ *
+ * Single-writer principle: the dispatcher is the only path that mutates
+ * state on cooldown expiry, and it's also the only consumer that needs to
+ * read it — see design.md §6.3.
+ */
+async function applyCloseContactGate(
+  services: Services,
+  chatRecordId: string | null,
+  instanceId: string,
+  chatId: string,
+  chatSettings: ChatSettingsForGate | null,
+): Promise<'skip' | 'reopened' | 'pass'> {
+  if (chatSettings?.closed === true) {
+    log.debug('Chat closed (terminal), skipping dispatch', {
+      instanceId,
+      chatId,
+      outcome: chatSettings.closeOutcome ?? null,
+    });
+    return 'skip';
+  }
+  if (!chatSettings?.closeUntil) return 'pass';
+
+  const closeUntilMs = new Date(chatSettings.closeUntil).getTime();
+  if (!Number.isFinite(closeUntilMs)) return 'pass';
+  if (Date.now() < closeUntilMs) {
+    log.debug('Chat in close cooldown, skipping dispatch', {
+      instanceId,
+      chatId,
+      closeUntil: chatSettings.closeUntil,
+      outcome: chatSettings.closeOutcome ?? null,
+    });
+    return 'skip';
+  }
+  if (!chatRecordId) return 'pass';
+
+  // Cooldown expired — flip state back to active and report 'reopened' so
+  // the caller knows to bypass the handoff/agentPaused gate that follows.
+  try {
+    await services.chats.update(chatRecordId, {
+      settings: {
+        ...(chatSettings as Record<string, unknown>),
+        agentPaused: false,
+        closeUntil: null,
+        agentResumedAt: new Date().toISOString(),
+      } as Record<string, unknown>,
+    });
+    log.info('Close cooldown expired, agent reopened', {
+      instanceId,
+      chatId,
+      closeOutcome: chatSettings.closeOutcome ?? null,
+    });
+    return 'reopened';
+  } catch (err) {
+    log.warn('Failed to flip close cooldown state, deferring dispatch', {
+      instanceId,
+      chatId,
+      error: String(err),
+    });
+    return 'skip';
+  }
+}
+
 async function processAgentResponse(
   services: Services,
   instance: DispatchInstance,
@@ -2663,12 +2741,23 @@ async function processAgentResponse(
     return;
   }
 
+  // ── Close-contact gate (#559) — runs BEFORE the handoff/agentPaused gate ──
+  // See applyCloseContactGate() for the full semantics.
+  const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const chatSettings = chatRecord?.settings as ChatSettingsForGate | null;
+
+  const gateResult = await applyCloseContactGate(services, chatRecord?.id ?? null, instance.id, chatId, chatSettings);
+  if (gateResult === 'skip') {
+    ackHandle.remove();
+    return;
+  }
+
   // ── Handoff gate — skip dispatch if agent is paused (human takeover active) ──
   // Also drop messages received before the agent was last resumed (NATS redelivery
   // of pre-handoff messages that queue up while agentPaused=true).
-  const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
-  const chatSettings = chatRecord?.settings as { agentPaused?: boolean; agentResumedAt?: string } | null;
-  const isAgentPaused = chatSettings?.agentPaused === true;
+  // After the close-contact gate above, a residual `agentPaused: true` here is a
+  // genuine handoff pause (not a close-contact terminal/cooldown).
+  const isAgentPaused = chatSettings?.agentPaused === true && gateResult !== 'reopened';
   if (isAgentPaused) {
     log.debug('Agent paused (handoff active), skipping dispatch', { instanceId: instance.id, chatId });
     ackHandle.remove();

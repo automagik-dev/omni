@@ -81,6 +81,14 @@ export interface Services {
   followUpLifecycle: FollowUpLifecycleService;
   followUpSweeper: FollowUpSweeperService;
   genieHosts: GenieHostsService;
+  /**
+   * Direct access to the event bus for routes that need to publish
+   * domain events alongside service calls (e.g. /messages/send/close-contact
+   * emits `chat.closed` after the chat-settings patch). Most code should
+   * prefer service-mediated emission; reach for this only when the event
+   * payload is built from route-level state the service doesn't see.
+   */
+  eventBus: EventBus | null;
 }
 
 /**
@@ -140,6 +148,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     followUpLifecycle: new FollowUpLifecycleService(db, eventBus),
     followUpSweeper: new FollowUpSweeperService(db, eventBus),
     genieHosts: new GenieHostsService(db),
+    eventBus,
   };
 }
 

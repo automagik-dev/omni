@@ -918,4 +918,52 @@ chatsRoutes.post('/clear-session', async (c) => {
   return c.json({ success: true, sessionId, sessionStrategy });
 });
 
+/**
+ * POST /chats/:id/reopen-contact - Manual ops escape hatch (#559).
+ *
+ * Reverses a close-contact terminal state. Clears `closed`, `closeUntil`,
+ * `closeOutcome`, `agentPaused`, and stamps `agentResumedAt` atomically.
+ * The dispatcher's close-contact gate then yields and the next inbound
+ * message resumes normal agent dispatch.
+ *
+ * Use case: ops realises the LLM picked the wrong outcome (e.g. flagged
+ * a winning sale as `lost`) and needs to bring the agent back. Should be
+ * rare — repeated use is a signal that the LLM prompt or outcome
+ * taxonomy needs work.
+ *
+ * Auth: instance-access check (same model as every other write here). When
+ * the broader admin-vs-operator scope work lands (#558 D5), this endpoint
+ * should be tightened to admin-only.
+ */
+chatsRoutes.post('/:id/reopen-contact', async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+
+  const chat = await services.chats.getById(id);
+  if (!chat) return c.json({ error: 'Chat not found' }, 404);
+  if (chat.instanceId) checkInstanceAccess(c.get('apiKey'), chat.instanceId);
+
+  const priorSettings = (chat.settings ?? {}) as Record<string, unknown>;
+  const wasClosed = priorSettings.closed === true || priorSettings.closeUntil != null;
+
+  await services.chats.update(id, {
+    settings: {
+      ...priorSettings,
+      agentPaused: false,
+      closed: false,
+      closeUntil: null,
+      closeOutcome: null,
+      agentResumedAt: new Date().toISOString(),
+    } as Record<string, unknown>,
+  });
+
+  return c.json({
+    data: {
+      chatId: id,
+      reopened: true,
+      wasClosed,
+    },
+  });
+});
+
 export { chatsRoutes };
