@@ -2722,6 +2722,7 @@ export const followUpDisarmReasons = [
   'agent_error',
   'send_failed',
   'session_cleared',
+  'contact_closed',
 ] as const;
 export type FollowUpDisarmReasonDb = (typeof followUpDisarmReasons)[number];
 
