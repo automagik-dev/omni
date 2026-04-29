@@ -33,6 +33,7 @@ import { EventOpsService } from './event-ops';
 import { EventService } from './events';
 import { FollowUpLifecycleService } from './follow-up-lifecycle';
 import { FollowUpSweeperService } from './follow-up-sweeper';
+import { GenieHostsService } from './genie-hosts';
 import { InstanceService } from './instances';
 import { MessageService } from './messages';
 import { PayloadStoreService } from './payload-store';
@@ -79,6 +80,7 @@ export interface Services {
   consumerOffsets: ConsumerOffsetService;
   followUpLifecycle: FollowUpLifecycleService;
   followUpSweeper: FollowUpSweeperService;
+  genieHosts: GenieHostsService;
 }
 
 /**
@@ -137,6 +139,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     consumerOffsets: new ConsumerOffsetService(db),
     followUpLifecycle: new FollowUpLifecycleService(db, eventBus),
     followUpSweeper: new FollowUpSweeperService(db, eventBus),
+    genieHosts: new GenieHostsService(db),
   };
 }
 
