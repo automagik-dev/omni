@@ -176,7 +176,15 @@ export function createConnectCommand(): Command {
       output.keyValue('Inbound', `omni.message.${instanceId}.*`);
       output.keyValue('Outbound', `omni.reply.${instanceId}.*`);
 
+      // The omni-bridge is hosted inside `genie serve` — there is no
+      // standalone `genie omni start` command. Operators on a fresh
+      // host should verify the bridge is running with `genie serve
+      // status`; if it isn't, start it with `genie serve start
+      // --headless`. The legacy "genie omni start" wording was a stale
+      // reference left over from before the bridge was folded into
+      // `genie serve`.
       output.header('Next Step');
-      output.info('Start the genie bridge:  genie omni start');
+      output.info('Verify the bridge is running:  genie serve status');
+      output.info('If not running, start it with: genie serve start --headless');
     });
 }
