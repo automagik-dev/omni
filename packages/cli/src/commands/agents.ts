@@ -14,6 +14,7 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveAgentId } from '../resolve.js';
+import { maybeNudgeForGenieBackedAgent } from '../utils/genie-wiring-nudge.js';
 
 const VALID_PROVIDERS = ['claude', 'agno', 'openai', 'gemini', 'custom', 'omni-internal'] as const;
 type AgentProvider = (typeof VALID_PROVIDERS)[number];
@@ -245,9 +246,20 @@ export function createAgentsCommand(): Command {
       const body = buildCreateAgentBody(options);
 
       try {
-        const agent = await getClient().agents.create(body);
+        const client = getClient();
+        const agent = await client.agents.create(body);
         output.success(`Agent created: ${agent.id}`);
         output.data(agent);
+
+        // Deprecation nudge — when the agent is bound to a nats-genie
+        // provider, the operator is recreating step 2 of the legacy
+        // 5-command wiring chain. `omni connect <instance> <agent>` does
+        // the same thing in one step, plus binds the instance. Stderr-only
+        // so CI stdout grep stays stable. The fetch is best-effort: if the
+        // provider lookup fails, we silently skip the nudge.
+        if (options.agentProvider) {
+          await maybeNudgeForGenieBackedAgent(client, options.agentProvider, agent.name);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to create agent: ${message}`);

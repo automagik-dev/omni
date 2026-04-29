@@ -24,6 +24,7 @@ import qrcode from 'qrcode-terminal';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId } from '../resolve.js';
+import { maybeNudgeForGenieBackedAgent } from '../utils/genie-wiring-nudge.js';
 
 const VALID_CHANNELS: Channel[] = [
   'whatsapp-baileys',
@@ -921,6 +922,17 @@ export function createInstancesCommand(): Command {
         if (Object.keys(body).length > 0) {
           await client.instances.update(id, body);
           output.success(`Instance updated: ${id}`, body);
+
+          // Deprecation nudge — when an operator binds an instance to a
+          // genie-backed agent via `--agent-provider <id>`, they're
+          // recreating step 3 of the legacy 5-command wiring chain.
+          // `omni connect <instance> <agent>` does the same thing in one
+          // step (and creates the provider if it doesn't exist yet).
+          // Best-effort lookup; nudge is stderr-only.
+          const agentProviderId = options.agentProvider as string | undefined;
+          if (agentProviderId && agentProviderId !== 'null') {
+            await maybeNudgeForGenieBackedAgent(client, agentProviderId);
+          }
         } else if (!options.profileName) {
           output.error('No update options provided. Use --help to see all available options.');
         }
