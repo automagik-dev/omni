@@ -2834,3 +2834,74 @@ export const processedEvents = pgTable(
 
 export type ProcessedEvent = typeof processedEvents.$inferSelect;
 export type NewProcessedEvent = typeof processedEvents.$inferInsert;
+
+// ============================================================================
+// GENIE HOSTS — per-host fingerprint trust (omni-host-fingerprint-trust wish, D5)
+// ============================================================================
+
+/**
+ * Per-host trust record for genie installations that talk to this omni server.
+ *
+ * A genie host registers its ed25519 public key once via
+ * `POST /api/v2/trust/handshake` (typically driven by `genie omni handshake`).
+ * Subsequent genie→omni writes can be signed; the verification middleware
+ * (omni-host-fingerprint-trust wish, Group 4) looks the pubkey up here,
+ * verifies the request signature, and attaches the resolved host_id to the
+ * request context for audit.
+ *
+ * This table is the FOUNDATION (Group 1 of the wish). The signing,
+ * verification, and per-host scope enforcement land in subsequent groups.
+ * Today the table just stores data; nothing reads `scopes` for enforcement
+ * yet — that's Group 5.
+ *
+ * `pubkey` is the canonical record key for idempotent registration: handshakes
+ * are deduplicated by pubkey, so re-running `genie omni handshake` returns
+ * the same `host_id` instead of creating duplicates.
+ */
+export const genieHosts = pgTable(
+  'genie_hosts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    /**
+     * ed25519 public key in base64url encoding (~44 chars including padding).
+     * Unique — re-registering the same pubkey returns the existing host_id
+     * (idempotent handshake). Rotation flow will revoke + re-register with a
+     * new pubkey rather than mutating in place.
+     */
+    pubkey: varchar('pubkey', { length: 64 }).notNull().unique(),
+
+    /** Hostname reported by the genie host at handshake time. Display only. */
+    hostname: varchar('hostname', { length: 255 }).notNull(),
+
+    /**
+     * Free-form metadata reported at handshake — `genieVersion`, `os`,
+     * `binaryPath`, etc. Not enforced; useful for audits and operator UIs.
+     */
+    capabilities: jsonb('capabilities').notNull().default(sql`'{}'::jsonb`),
+
+    /**
+     * Per-host scopes consumed by the verification middleware (Group 5).
+     * Default on first handshake = full write access (`['*']`) so the
+     * existing bearer-token model stays backward-compatible during
+     * rollout. Operators narrow via `omni trust update <id> --scope`.
+     */
+    scopes: text('scopes').array().notNull().default(sql`ARRAY['*']::text[]`),
+
+    /** Set by the verification middleware on every successful signed request. */
+    lastSeenAt: timestamp('last_seen_at'),
+
+    /** Set by `omni trust revoke <id>`. Revoked hosts cannot pass verification. */
+    revokedAt: timestamp('revoked_at'),
+
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    pubkeyUq: index('genie_hosts_pubkey_idx').on(table.pubkey),
+    activeIdx: index('genie_hosts_active_idx').on(table.revokedAt),
+  }),
+);
+
+export type GenieHost = typeof genieHosts.$inferSelect;
+export type NewGenieHost = typeof genieHosts.$inferInsert;
