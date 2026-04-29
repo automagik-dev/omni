@@ -165,7 +165,7 @@ export async function setupFollowUpHooks(eventBus: EventBus, services: Services)
       },
     );
 
-    // ── Close-contact (#559) → disarm(contact_closed) ────────────────────
+    // ── Close-contact → disarm(contact_closed) ───────────────────────────
     await eventBus.subscribe(
       'chat.closed',
       async (event) => {

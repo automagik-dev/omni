@@ -1425,7 +1425,7 @@ export const handoffLogs = pgTable(
 // ============================================================================
 
 /**
- * Outcome literals for the close-contact endpoint (#559). Mirrors the
+ * Outcome literals for the close-contact endpoint. Mirrors the
  * `CloseContactOutcome` union in `@omni/core/events` — kept as a const here
  * so the column type is statically checked and BI tooling can introspect.
  *
@@ -1439,7 +1439,7 @@ export const closeContactOutcomes = ['won', 'lost', 'redirected_sac', 'unqualifi
 export type CloseContactOutcomeDb = (typeof closeContactOutcomes)[number];
 
 /**
- * Records every agent→close-contact event with full payload (#559).
+ * Records every agent→close-contact event with full payload.
  *
  * Written synchronously in the /send/close-contact route. The route also
  * **reads** this table at close-time to count recent rows for the same

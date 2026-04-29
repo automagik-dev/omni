@@ -1,5 +1,5 @@
 /**
- * Gupshup CLOSE_CONTACT message sender (issue #559).
+ * Gupshup CLOSE_CONTACT message sender.
  *
  * Counterpart to `sendHandoff`: handoff pauses for a human attendant; close
  * terminates the conversation. The Gupshup-side Journey routes on the literal

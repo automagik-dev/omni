@@ -1,5 +1,5 @@
 /**
- * Tests for the close-contact config helper (#559).
+ * Tests for the close-contact config helper.
  *
  * Pure-function helpers — no DB, no event bus, no plugin. Asserts the
  * default table per outcome, the per-outcome override merge, and the

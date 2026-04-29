@@ -1,5 +1,5 @@
 /**
- * Tests for sendCloseContact (#559) — payload-shape correctness.
+ * Tests for sendCloseContact — payload-shape correctness.
  *
  * The sender is a thin adapter: takes the route's logical args and posts
  * them to the Gupshup client as the literal `msg_type: 'CLOSE_CONTACT'`.

@@ -468,7 +468,7 @@ const sendHandoffSchema = z.object({
     .describe('Structured fields for Gupshup flow variables (e.g. nome, cidade, temperatura_lead)'),
 });
 
-// Close-contact schema (#559) — terminal close primitive parallel to handoff.
+// Close-contact schema — terminal close primitive parallel to handoff.
 // Hard outcomes (won/lost) flip `chats.settings.closed=true` permanently.
 // Soft outcomes set `closeUntil` and reopen passively in the dispatcher.
 // Auto-escalation via close_contact_logs history bounds the loop.
@@ -1589,7 +1589,7 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
 });
 
 /**
- * Compute the terminal state for a close-contact event (#559).
+ * Compute the terminal state for a close-contact event.
  *
  * v1 uses hardcoded defaults from `_close-contact-config.ts`. The
  * `resolveCloseContactConfig` helper already accepts an overrides bag, so
@@ -1643,7 +1643,7 @@ async function computeCloseContactTerminalState(
 }
 
 /**
- * POST /messages/send/close-contact - Terminal close (#559)
+ * POST /messages/send/close-contact - Terminal close
  *
  * Counterpart to /send/handoff: handoff pauses for a human; close terminates
  * the conversation cleanly. The route:

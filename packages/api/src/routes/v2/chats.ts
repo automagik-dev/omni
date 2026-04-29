@@ -919,7 +919,7 @@ chatsRoutes.post('/clear-session', async (c) => {
 });
 
 /**
- * POST /chats/:id/reopen-contact - Manual ops escape hatch (#559).
+ * POST /chats/:id/reopen-contact - Manual ops escape hatch.
  *
  * Reverses a close-contact terminal state. Clears `closed`, `closeUntil`,
  * `closeOutcome`, `agentPaused`, and stamps `agentResumedAt` atomically.

@@ -1,4 +1,4 @@
--- Close-contact endpoint audit table (#559).
+-- Close-contact endpoint audit table.
 --
 -- Records every agent→close-contact event with full payload. Written
 -- synchronously in the /messages/send/close-contact route so no data is

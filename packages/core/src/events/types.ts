@@ -736,7 +736,7 @@ export interface ChatArchivedPayload {
 }
 
 /**
- * Fired when a chat is closed via `/messages/send/close-contact` (issue #559).
+ * Fired when a chat is closed via `/messages/send/close-contact`.
  * Any armed follow-up sequence on the chat disarms with reason `contact_closed`.
  *
  * The flag layout is outcome-conditional:

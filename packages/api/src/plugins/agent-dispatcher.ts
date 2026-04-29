@@ -2635,7 +2635,7 @@ interface ChatSettingsForGate {
 }
 
 /**
- * Close-contact gate (#559). Returns:
+ * Close-contact gate. Returns:
  *   - `skip`        → caller must `ackHandle.remove()` and return.
  *   - `reopened`    → cooldown expired; state flipped back to active. Fall
  *                     through to dispatch normally; the handoff gate after
@@ -2741,7 +2741,7 @@ async function processAgentResponse(
     return;
   }
 
-  // ── Close-contact gate (#559) — runs BEFORE the handoff/agentPaused gate ──
+  // ── Close-contact gate — runs BEFORE the handoff/agentPaused gate ──
   // See applyCloseContactGate() for the full semantics.
   const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
   const chatSettings = chatRecord?.settings as ChatSettingsForGate | null;

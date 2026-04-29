@@ -1,5 +1,5 @@
 /**
- * Default cooldown / escalation config for the close-contact endpoint (#559).
+ * Default cooldown / escalation config for the close-contact endpoint.
  *
  * The route reads these defaults to compute (a) the `closeUntil` timestamp
  * for soft outcomes and (b) the escalation count threshold + window when

@@ -122,7 +122,7 @@ export interface ChannelCapabilities {
    * channel-specific payload from `POST /messages/send/close-contact`; for
    * every other channel the route still runs the channel-agnostic side
    * effects (`agentPaused=true`, optional `closed=true`, follow-up disarm,
-   * audit log). See issue #559.
+   * audit log).
    */
   canCloseContact?: boolean;
 
