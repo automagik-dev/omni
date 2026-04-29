@@ -1648,7 +1648,7 @@ async function computeCloseContactTerminalState(
  * Counterpart to /send/handoff: handoff pauses for a human; close terminates
  * the conversation cleanly. The route:
  *
- *   1. Sends a native CLOSE_CONTACT payload on channels that declare
+ *   1. Sends a native CLOSING payload on channels that declare
  *      `canCloseContact: true` (Gupshup in v1). Other channels still run
  *      the channel-agnostic side effects below — agents can self-close on
  *      any channel.
@@ -1701,7 +1701,7 @@ messagesRoutes.post('/send/close-contact', zValidator('json', sendCloseContactSc
   const hasNativeClose = plugin.capabilities?.canCloseContact === true;
   const outcome = data.outcome as CloseContactOutcome;
 
-  // ── 1. Native channel send (Gupshup CLOSE_CONTACT msg_type) ──────────────
+  // ── 1. Native channel send (Gupshup CLOSING msg_type) ────────────────────
   let channelSendResult: Awaited<ReturnType<typeof plugin.sendMessage>> | null = null;
   if (hasNativeClose) {
     const outgoingMessage: OutgoingMessage = {

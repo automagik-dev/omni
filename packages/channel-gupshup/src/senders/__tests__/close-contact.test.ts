@@ -2,15 +2,15 @@
  * Tests for sendCloseContact — payload-shape correctness.
  *
  * The sender is a thin adapter: takes the route's logical args and posts
- * them to the Gupshup client as the literal `msg_type: 'CLOSE_CONTACT'`.
- * These tests assert that the payload is built correctly with all
- * combinations of optional fields, and that the literal type string is
- * stable (Gupshup's Journey routes on it).
+ * them to the Gupshup client as the literal `msg_type: 'CLOSING'`. These
+ * tests assert that the payload is built correctly with all combinations
+ * of optional fields, and that the literal type string is stable
+ * (Gupshup's Journey routes on it).
  */
 import { describe, expect, test } from 'bun:test';
 import type { GupshupClient } from '../../client';
 import type { GupshupOutboundMessage, GupshupSendResponse } from '../../types';
-import { sendCloseContact } from '../close-contact';
+import { GUPSHUP_CLOSE_MSG_TYPE, sendCloseContact } from '../close-contact';
 
 interface CapturedSend {
   to: string;
@@ -29,13 +29,17 @@ function makeFakeClient(): { client: GupshupClient; captured: CapturedSend[] } {
 }
 
 describe('sendCloseContact', () => {
-  test('emits CLOSE_CONTACT type literal and the farewell text', async () => {
+  test('GUPSHUP_CLOSE_MSG_TYPE is "CLOSING" — partner contract', () => {
+    expect(GUPSHUP_CLOSE_MSG_TYPE).toBe('CLOSING');
+  });
+
+  test('emits CLOSING type literal and the farewell text', async () => {
     const { client, captured } = makeFakeClient();
     const result = await sendCloseContact(client, '5511987654321', 'Tudo certo!');
     expect(result.messageId).toBe('fake-msg-id');
     expect(captured).toHaveLength(1);
     expect(captured[0]?.to).toBe('5511987654321');
-    expect(captured[0]?.message.type).toBe('CLOSE_CONTACT');
+    expect(captured[0]?.message.type).toBe('CLOSING');
     expect(captured[0]?.message.text).toBe('Tudo certo!');
   });
 
