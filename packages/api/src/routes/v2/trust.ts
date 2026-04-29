@@ -70,4 +70,69 @@ trustRoutes.get('/hosts', async (c) => {
   return c.json({ items });
 });
 
+const idParamSchema = z.object({ id: z.string().uuid() });
+
+/**
+ * GET /trust/hosts/:id — fetch one host by id (active or revoked).
+ *
+ * Returns 404 when the id doesn't resolve. `omni trust get` consumes this.
+ */
+trustRoutes.get('/hosts/:id', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
+  const services = c.get('services');
+  const host = await services.genieHosts.findById(id);
+  if (!host) {
+    return c.json({ error: { code: 'NOT_FOUND', message: `genie host ${id} not found` } }, 404);
+  }
+  return c.json({ data: host });
+});
+
+const updateScopesSchema = z.object({
+  scopes: z.array(z.string().min(1)).max(64),
+});
+
+/**
+ * PATCH /trust/hosts/:id — wholesale replace a host's scopes.
+ *
+ * Wholesale replace (not merge) is intentional: scopes are the authoritative
+ * permission grant for a host; operators specify the full new set explicitly.
+ * To narrow, pass fewer scopes; to widen, pass more; empty array = nothing
+ * allowed (effectively a soft-revoke without the audit tombstone).
+ *
+ * Returns 404 if the host is revoked or doesn't exist.
+ */
+trustRoutes.patch(
+  '/hosts/:id',
+  zValidator('param', idParamSchema),
+  zValidator('json', updateScopesSchema),
+  async (c) => {
+    const { id } = c.req.valid('param');
+    const { scopes } = c.req.valid('json');
+    const services = c.get('services');
+    const host = await services.genieHosts.updateScopes(id, scopes);
+    if (!host) {
+      return c.json({ error: { code: 'NOT_FOUND', message: `genie host ${id} not found or revoked` } }, 404);
+    }
+    return c.json({ data: host });
+  },
+);
+
+/**
+ * DELETE /trust/hosts/:id — soft-delete (stamp revokedAt).
+ *
+ * Irreversible by design — to "un-revoke" a host, register a fresh keypair.
+ * The revoked record stays in the table as the audit tombstone. Idempotent
+ * on already-revoked rows (returns 404 to indicate the operation didn't
+ * change anything; the record itself still exists).
+ */
+trustRoutes.delete('/hosts/:id', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
+  const services = c.get('services');
+  const host = await services.genieHosts.revoke(id);
+  if (!host) {
+    return c.json({ error: { code: 'NOT_FOUND', message: `genie host ${id} not found or already revoked` } }, 404);
+  }
+  return c.json({ data: host });
+});
+
 export { trustRoutes };

@@ -55,6 +55,7 @@ import { createSpeakCommand } from './commands/speak.js';
 import { createStartCommand } from './commands/start.js';
 import { createStatusCommand } from './commands/status.js';
 import { createStopCommand } from './commands/stop.js';
+import { createTrustCommand } from './commands/trust.js';
 import { createTtsCommand } from './commands/tts.js';
 import { createTurnsCommand } from './commands/turns.js';
 import { createUpdateCommand } from './commands/update.js';
@@ -264,6 +265,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Management',
     helpDescription: 'API key management',
+  },
+  {
+    create: createTrustCommand,
+    category: 'advanced',
+    helpGroup: 'Management',
+    helpDescription: 'Genie host fingerprint trust (omni-host-fingerprint-trust wish)',
   },
   {
     create: createAccessCommand,

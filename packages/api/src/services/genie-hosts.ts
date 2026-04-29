@@ -103,4 +103,46 @@ export class GenieHostsService {
       .set({ lastSeenAt: new Date(), updatedAt: new Date() })
       .where(and(eq(genieHosts.id, id), isNull(genieHosts.revokedAt)));
   }
+
+  /**
+   * Replace a host's scopes wholesale (operator-driven). Returns the
+   * updated host or null if the host doesn't exist / is revoked.
+   *
+   * Wholesale replace (not merge) is intentional: scopes are the
+   * authoritative permission grant for a host; operators specify the
+   * full new set explicitly. To narrow a host's permissions, pass
+   * fewer scopes; to widen, pass more. Empty array = nothing allowed.
+   */
+  async updateScopes(id: string, scopes: string[]): Promise<GenieHost | null> {
+    const [updated] = await this.db
+      .update(genieHosts)
+      .set({ scopes, updatedAt: new Date() })
+      .where(and(eq(genieHosts.id, id), isNull(genieHosts.revokedAt)))
+      .returning();
+    if (updated) {
+      log.info('genie host scopes updated', { hostId: updated.id, scopes });
+    }
+    return updated ?? null;
+  }
+
+  /**
+   * Soft-delete: stamp `revoked_at`. Irreversible by design — to
+   * "un-revoke" a host, register a fresh keypair (the previous record
+   * stays around for the audit trail).
+   *
+   * Returns the revoked host or null if it didn't exist / was already
+   * revoked. Idempotent on already-revoked records.
+   */
+  async revoke(id: string): Promise<GenieHost | null> {
+    const now = new Date();
+    const [revoked] = await this.db
+      .update(genieHosts)
+      .set({ revokedAt: now, updatedAt: now })
+      .where(and(eq(genieHosts.id, id), isNull(genieHosts.revokedAt)))
+      .returning();
+    if (revoked) {
+      log.info('genie host revoked', { hostId: revoked.id, hostname: revoked.hostname });
+    }
+    return revoked ?? null;
+  }
 }
