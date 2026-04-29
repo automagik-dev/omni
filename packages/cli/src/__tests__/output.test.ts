@@ -35,6 +35,7 @@ describe('Output Module Exports', () => {
     expect(typeof output.header).toBe('function');
     expect(typeof output.dim).toBe('function');
     expect(typeof output.raw).toBe('function');
+    expect(typeof output.tip).toBe('function');
   });
 
   test('exports flushStdout', () => {
@@ -76,6 +77,61 @@ describe('flushStdout', () => {
 
   test('resolves after pending writes', async () => {
     await expect(output.flushStdout()).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * `tip` is the deprecation-nudge channel for the canonical-genie-omni-wiring
+ * wish (Group 5). Unlike `info` / `warn`, it MUST go to stderr in every
+ * format so CI scripts that grep stdout for command output remain stable.
+ * These tests pin the contract: stderr-only, both human and JSON formats.
+ */
+describe('tip — always writes to stderr', () => {
+  function spawnEmitter(format: 'human' | 'json'): Promise<{ stdout: string; stderr: string }> {
+    const tempDir = mkdtempSync(join(tmpdir(), 'omni-tip-'));
+    const scriptPath = join(tempDir, 'emit.ts');
+    const outputModulePath = join(import.meta.dir, '..', 'output.ts');
+    const importPath = outputModulePath.replace(/\\/g, '/').replace(/'/g, "\\'");
+    const script = `
+import { tip, flushStdout } from '${importPath}';
+tip('canonical command is omni connect');
+await flushStdout();
+`;
+    writeFileSync(scriptPath, script);
+
+    return new Promise((resolve, reject) => {
+      const child = spawn('bun', [scriptPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, OMNI_FORMAT: format },
+      });
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+      child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+      child.on('close', () => {
+        rmSync(tempDir, { recursive: true, force: true });
+        resolve({
+          stdout: Buffer.concat(stdoutChunks).toString('utf-8'),
+          stderr: Buffer.concat(stderrChunks).toString('utf-8'),
+        });
+      });
+      child.on('error', reject);
+    });
+  }
+
+  test('human format: tip lands on stderr, stdout stays empty', async () => {
+    const { stdout, stderr } = await spawnEmitter('human');
+    expect(stdout).toBe('');
+    expect(stderr).toContain('canonical command is omni connect');
+  });
+
+  test('json format: tip lands on stderr as JSON, stdout stays empty', async () => {
+    const { stdout, stderr } = await spawnEmitter('json');
+    expect(stdout).toBe('');
+    // stderr must be valid JSON with a `tip` field — CI scripts that pipe
+    // stdout into jq must remain unaffected by the nudge.
+    const parsed = JSON.parse(stderr.trim());
+    expect(parsed).toHaveProperty('tip', 'canonical command is omni connect');
   });
 });
 

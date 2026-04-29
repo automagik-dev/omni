@@ -325,6 +325,18 @@ async function handleCreate(options: {
     output.info(
       `  2. Assign to instance: omni instances update <instance-id> --agent-provider ${provider.id}${options.defaultAgentId ? ` --agent ${options.defaultAgentId}` : ''}`,
     );
+
+    // Deprecation nudge — for genie-backed providers, the operator usually
+    // wants the full wire (provider + agent + instance binding) which
+    // `omni connect <instance> <agent>` does in one step (or the
+    // `/genie:omni` skill from a Claude session). Power users keep using
+    // `providers create` directly; everyone else gets steered toward the
+    // canonical command. Stderr-only so CI grep on stdout stays stable.
+    if (options.schema === 'nats-genie' && options.agentName) {
+      output.tip(
+        `For genie-backed agents, prefer 'omni connect <instance-id> ${options.agentName}' (or '/genie:omni' from a Claude session) — it creates the provider, the agent record, and binds the instance in one step. This command stays for power users.`,
+      );
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     output.error(`Failed to create provider: ${message}`);
