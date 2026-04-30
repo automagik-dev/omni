@@ -320,10 +320,19 @@ export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariable
   const method = c.req.method.toUpperCase();
   const path = c.req.path;
 
+  const signedBy = c.get('signedBy');
+  const signedByScopes = c.get('signedByScopes');
+
   const wildcard = ApiKeyService.scopeAllows(apiKey.scopes, '*');
 
+  // Resolve the required scope ONCE so we can apply both bearer and host
+  // checks against the same policy entry. Locked behind !wildcard for the
+  // bearer dimension to preserve fast-path behavior; the host dimension
+  // (Group 5) re-uses it when needed.
+  let requiredScope: string | undefined;
+
   if (!wildcard) {
-    const requiredScope = findRequiredScope(method, path);
+    requiredScope = findRequiredScope(method, path);
 
     // Deny-by-default: no mapping means forbidden
     if (!requiredScope) {
@@ -351,6 +360,60 @@ export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariable
         },
         403,
       );
+    }
+  }
+
+  // Per-host scope check (Group 5: omni-host-fingerprint-trust).
+  //
+  // When a request is signed by a registered genie host, the EFFECTIVE
+  // permissions are the intersection of the bearer's scopes AND the host's
+  // scopes. This lets operators narrow a single shared bearer key on a
+  // per-machine basis without minting a new key per host.
+  //
+  // Backward compat: hosts default to `['*']` on first handshake, so this
+  // check is a no-op until an operator explicitly narrows via
+  // `omni trust update <id> --scopes <...>`.
+  //
+  // The bearer's wildcard does NOT bypass this — wildcard means "the bearer
+  // is unrestricted", but the signing host may still be locked down.
+  if (signedBy && signedByScopes) {
+    const hostWildcard = ApiKeyService.scopeAllows(signedByScopes, '*');
+    if (!hostWildcard) {
+      // Resolve the route's required scope if we haven't already (wildcard
+      // bearer skipped that step above).
+      const needed = requiredScope ?? findRequiredScope(method, path);
+
+      // Same deny-by-default semantics as the bearer path: if the route is
+      // unmapped, even a host with explicit non-wildcard scopes can't reach
+      // it. (Wildcard host scopes are already handled by the early return.)
+      if (!needed) {
+        log.warn(`DENIED: signedBy=${signedBy} route=${method} ${path} required=UNMAPPED`);
+        return c.json(
+          {
+            error: {
+              code: 'FORBIDDEN',
+              message: 'Insufficient permissions. Route not mapped in scope policy.',
+            },
+          },
+          403,
+        );
+      }
+
+      if (!ApiKeyService.scopeAllows(signedByScopes, needed)) {
+        log.warn(
+          `DENIED: signedBy=${signedBy} route=${method} ${path} required=${needed} host-scopes=${signedByScopes.join(',')}`,
+        );
+        return c.json(
+          {
+            error: {
+              code: 'FORBIDDEN',
+              message: `Insufficient permissions for signing host. Required scope: ${needed}`,
+              host: signedBy,
+            },
+          },
+          403,
+        );
+      }
     }
   }
 

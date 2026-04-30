@@ -104,6 +104,13 @@ function loadPubkey(pubkeyB64Url: string): KeyObject {
 interface VerificationOutcome {
   status: 'verified' | 'no-signature' | 'invalid';
   hostId?: string;
+  /**
+   * Per-host scopes from `genie_hosts.scopes`. Defaults to `['*']` on first
+   * handshake (backward compat with the bearer-only model). The scope-enforcer
+   * intersects this with the bearer key's scopes — both must allow the route.
+   * Empty array = "no permissions" → every scoped route denied.
+   */
+  hostScopes?: string[];
   reason?: string;
 }
 
@@ -116,7 +123,7 @@ export async function verifySignature(opts: {
   path: string;
   body: string;
   now: number;
-  findHost: (id: string) => Promise<{ id: string; pubkey: string; revokedAt: Date | null } | null>;
+  findHost: (id: string) => Promise<{ id: string; pubkey: string; revokedAt: Date | null; scopes: string[] } | null>;
 }): Promise<VerificationOutcome> {
   const { hostIdHeader, timestampHeader, signatureHeader, method, path, body, now, findHost } = opts;
 
@@ -142,7 +149,7 @@ export async function verifySignature(opts: {
   }
 
   // Host lookup. Unknown id → invalid (not silent fall-through).
-  let host: { id: string; pubkey: string; revokedAt: Date | null } | null;
+  let host: { id: string; pubkey: string; revokedAt: Date | null; scopes: string[] } | null;
   try {
     host = await findHost(hostIdHeader);
   } catch (err) {
@@ -179,7 +186,7 @@ export async function verifySignature(opts: {
     return { status: 'invalid', reason: 'signature does not verify under registered pubkey' };
   }
 
-  return { status: 'verified', hostId: host.id };
+  return { status: 'verified', hostId: host.id, hostScopes: host.scopes };
 }
 
 /**
@@ -231,7 +238,9 @@ export const genieSignatureMiddleware = createMiddleware<{ Variables: AppVariabl
     now: Date.now(),
     findHost: async (id: string) => {
       const host = await services.genieHosts.findById(id);
-      return host ? { id: host.id, pubkey: host.pubkey, revokedAt: host.revokedAt } : null;
+      return host
+        ? { id: host.id, pubkey: host.pubkey, revokedAt: host.revokedAt, scopes: host.scopes ?? ['*'] }
+        : null;
     },
   });
 
@@ -255,6 +264,14 @@ export const genieSignatureMiddleware = createMiddleware<{ Variables: AppVariabl
 
   if (outcome.status === 'verified' && outcome.hostId) {
     c.set('signedBy', outcome.hostId);
+    // Per-host scopes consumed by scope-enforcer (Group 5). Always set so the
+    // enforcer can distinguish "signed and unrestricted" (['*']) from "signed
+    // and unscoped" — the former is the back-compat default; the latter
+    // doesn't happen today but the enforcer needs the source of truth either
+    // way.
+    if (outcome.hostScopes) {
+      c.set('signedByScopes', outcome.hostScopes);
+    }
     // Best-effort last-seen update; never blocks the request.
     services.genieHosts.touchLastSeen(outcome.hostId).catch((err: unknown) => {
       log.warn('touchLastSeen failed (non-fatal)', { hostId: outcome.hostId, err: String(err) });

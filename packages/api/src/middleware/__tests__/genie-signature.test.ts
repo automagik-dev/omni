@@ -36,6 +36,7 @@ interface TestHost {
   id: string;
   pubkey: string;
   revokedAt: Date | null;
+  scopes: string[];
 }
 
 /**
@@ -102,11 +103,39 @@ describe('verifySignature — happy path', () => {
       path: '/api/v2/agents',
       body: '{"name":"foo"}',
       now: NOW,
-      findHost: makeHostFinder({ id: 'host-1', pubkey: pubkeyB64Url, revokedAt: null }),
+      findHost: makeHostFinder({ id: 'host-1', pubkey: pubkeyB64Url, revokedAt: null, scopes: ['*'] }),
     });
 
     expect(outcome.status).toBe('verified');
     expect(outcome.hostId).toBe('host-1');
+    // Group 5: per-host scopes are surfaced on the outcome so the
+    // scope-enforcer can intersect them with the bearer's scopes.
+    expect(outcome.hostScopes).toEqual(['*']);
+  });
+
+  test('verified outcome propagates narrowed host scopes (Group 5)', async () => {
+    const { pubkeyB64Url, signCanonical } = freshKeypair();
+    const ts = new Date(NOW).toISOString();
+    const canonical = canonicalSigningInput(ts, 'POST', '/x', '');
+    const signature = signCanonical(canonical);
+
+    const outcome = await verifySignature({
+      hostIdHeader: 'narrow',
+      timestampHeader: ts,
+      signatureHeader: signature,
+      method: 'POST',
+      path: '/x',
+      body: '',
+      now: NOW,
+      findHost: makeHostFinder({
+        id: 'narrow',
+        pubkey: pubkeyB64Url,
+        revokedAt: null,
+        scopes: ['agents:read'],
+      }),
+    });
+    expect(outcome.status).toBe('verified');
+    expect(outcome.hostScopes).toEqual(['agents:read']);
   });
 
   test('GET request with empty body verifies', async () => {
@@ -123,7 +152,7 @@ describe('verifySignature — happy path', () => {
       path: '/api/v2/agents?name=foo',
       body: '',
       now: NOW,
-      findHost: makeHostFinder({ id: 'host-2', pubkey: pubkeyB64Url, revokedAt: null }),
+      findHost: makeHostFinder({ id: 'host-2', pubkey: pubkeyB64Url, revokedAt: null, scopes: ['*'] }),
     });
 
     expect(outcome.status).toBe('verified');
@@ -146,7 +175,7 @@ describe('verifySignature — happy path', () => {
       path: '/x',
       body: '',
       now: NOW,
-      findHost: makeHostFinder({ id: 'host-3', pubkey: pubkeyB64Url, revokedAt: null }),
+      findHost: makeHostFinder({ id: 'host-3', pubkey: pubkeyB64Url, revokedAt: null, scopes: ['*'] }),
     });
     expect(outcome.status).toBe('verified');
   });
@@ -226,7 +255,7 @@ describe('verifySignature — replay window (±60s)', () => {
       path: '/x',
       body: '',
       now: NOW,
-      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null }),
+      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null, scopes: ['*'] }),
     });
     expect(outcome.status).toBe('verified');
   });
@@ -243,7 +272,7 @@ describe('verifySignature — replay window (±60s)', () => {
       path: '/x',
       body: '',
       now: NOW,
-      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null }),
+      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null, scopes: ['*'] }),
     });
     expect(outcome.status).toBe('invalid');
     expect(outcome.reason).toContain('drift');
@@ -261,7 +290,7 @@ describe('verifySignature — replay window (±60s)', () => {
       path: '/x',
       body: '',
       now: NOW,
-      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null }),
+      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null, scopes: ['*'] }),
     });
     expect(outcome.status).toBe('invalid');
     expect(outcome.reason).toContain('drift');
@@ -299,7 +328,7 @@ describe('verifySignature — tampered inputs', () => {
       path: '/x',
       body: '{"name":"bar"}', // attacker swapped the body
       now: NOW,
-      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null }),
+      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null, scopes: ['*'] }),
     });
     expect(outcome.status).toBe('invalid');
     expect(outcome.reason).toContain('does not verify');
@@ -319,7 +348,7 @@ describe('verifySignature — tampered inputs', () => {
       path: '/admin',
       body: '',
       now: NOW,
-      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null }),
+      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null, scopes: ['*'] }),
     });
     expect(outcome.status).toBe('invalid');
   });
@@ -338,7 +367,7 @@ describe('verifySignature — tampered inputs', () => {
       path: '/x',
       body: '',
       now: NOW,
-      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null }),
+      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null, scopes: ['*'] }),
     });
     expect(outcome.status).toBe('invalid');
   });
@@ -358,7 +387,7 @@ describe('verifySignature — tampered inputs', () => {
       path: '/x',
       body: 'body',
       now: NOW,
-      findHost: makeHostFinder({ id: 'h', pubkey: honestHost.pubkeyB64Url, revokedAt: null }),
+      findHost: makeHostFinder({ id: 'h', pubkey: honestHost.pubkeyB64Url, revokedAt: null, scopes: ['*'] }),
     });
     expect(outcome.status).toBe('invalid');
     expect(outcome.reason).toContain('does not verify');
@@ -396,7 +425,7 @@ describe('verifySignature — host lookup', () => {
       path: '/x',
       body: '',
       now: NOW,
-      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: new Date(NOW - 1000) }),
+      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: new Date(NOW - 1000), scopes: ['*'] }),
     });
     expect(outcome.status).toBe('invalid');
     expect(outcome.reason).toContain('revoked');
@@ -440,6 +469,7 @@ describe('verifySignature — malformed crypto material', () => {
         id: 'h',
         pubkey: Buffer.alloc(16, 1).toString('base64url'), // 16 bytes, wrong length
         revokedAt: null,
+        scopes: ['*'],
       }),
     });
     expect(outcome.status).toBe('invalid');
@@ -459,7 +489,7 @@ describe('verifySignature — malformed crypto material', () => {
       path: '/x',
       body: '',
       now: NOW,
-      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null }),
+      findHost: makeHostFinder({ id: 'h', pubkey: pubkeyB64Url, revokedAt: null, scopes: ['*'] }),
     });
     expect(outcome.status).toBe('invalid');
   });
