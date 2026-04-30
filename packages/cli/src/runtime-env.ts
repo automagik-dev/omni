@@ -94,19 +94,56 @@ export function resolveDatabaseUrl(serverConfig: ServerConfig): string {
 }
 
 /**
+ * Optional flags consumed by `buildRuntimeEnv`. Today's only opt-in:
+ * `useCanonicalPgserve` flips PGSERVE_EMBEDDED off and points DATABASE_URL
+ * at an externally-managed pgserve (typically the one registered by
+ * `pgserve install` per the canonical-pgserve-pm2-supervision wish).
+ */
+export interface BuildRuntimeEnvOptions {
+  /**
+   * When true, omni-api will SKIP starting its own embedded pgserve and
+   * connect to the URL stored in `serverConfig.databaseUrl`. The caller
+   * (typically `omni install --canonical-pgserve`) is responsible for
+   * making sure that URL points at a reachable pgserve and that
+   * `serverConfig.databaseUrl` was populated from `pgserve url`.
+   *
+   * When false / undefined, behavior is the historical default: omni-api
+   * spawns its own pgserve under `~/.omni/data/pgserve/`.
+   */
+  useCanonicalPgserve?: boolean;
+}
+
+/**
  * Build the complete runtime env for the omni-api process.
  *
  * All values come from `serverConfig` / `cliConfig`. No shell env reads.
  */
-export function buildRuntimeEnv(serverConfig: ServerConfig, cliConfig: Config): RuntimeEnv {
+export function buildRuntimeEnv(
+  serverConfig: ServerConfig,
+  cliConfig: Config,
+  options: BuildRuntimeEnvOptions = {},
+): RuntimeEnv {
   const pgservePort = resolvePgservePort(serverConfig);
+  // Persisted choice on serverConfig wins; the explicit option is for
+  // first-install (when the persisted value hasn't been written yet).
+  // Either flag flips PGSERVE_EMBEDDED off and points at the canonical pgserve.
+  const useCanonical = serverConfig.useCanonicalPgserve === true || options.useCanonicalPgserve === true;
   return {
     API_PORT: String(serverConfig.port),
+    // When canonical pgserve is on, the stored databaseUrl IS the
+    // canonical url (omni install set it from `pgserve url`). The
+    // existing resolver still applies — this lets operators override
+    // both the canonical default AND the embedded default with a
+    // future external Postgres if they want.
     DATABASE_URL: resolveDatabaseUrl(serverConfig),
     OMNI_API_KEY: cliConfig.apiKey ?? '',
     MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
     OMNI_PACKAGES_DIR: join(serverConfig.dataDir, 'packages'),
-    PGSERVE_EMBEDDED: 'true',
+    // PGSERVE_EMBEDDED='false' tells the api in
+    // packages/api/src/pgserve.ts:resolvePgserveConfig to skip spawning
+    // its own pgserve. The api then reads DATABASE_URL and connects to
+    // whatever's there. Canonical pgserve under pm2 fills that role.
+    PGSERVE_EMBEDDED: useCanonical ? 'false' : 'true',
     PGSERVE_DATA: join(serverConfig.dataDir, 'pgserve'),
     PGSERVE_PORT: String(pgservePort),
     NATS_URL: 'nats://localhost:4222',

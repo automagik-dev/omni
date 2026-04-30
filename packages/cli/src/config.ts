@@ -18,6 +18,18 @@ export interface ServerConfig {
   dataDir: string;
   logLevel: string;
   nodeEnv: string;
+  /**
+   * When true, omni-api connects to an externally-managed pgserve (the
+   * canonical pgserve registered by `pgserve install` per the
+   * canonical-pgserve-pm2-supervision wish) and SKIPS spawning its own
+   * embedded pgserve. Persisted by `omni install --canonical-pgserve`
+   * so subsequent `omni restart` / `omni doctor --fix` commands honor
+   * the choice across reinstalls and reboots.
+   *
+   * Default false: existing operators keep the embedded-pgserve behavior
+   * they already have. Opt-in only.
+   */
+  useCanonicalPgserve?: boolean;
 }
 
 /** Valid config keys (top-level and dot-notation server.* keys) */

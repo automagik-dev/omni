@@ -32,6 +32,7 @@ import {
 } from '../config.js';
 import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
 import { detectReinstall, installPm2Logrotate, writeSystemdUnit } from '../install-helpers.js';
+import { maybeSwitchToCanonicalPgserve } from '../lib/canonical-pgserve.js';
 import { NATS_BINARY_PATH, ensureNats } from '../nats-install.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, buildPm2StartArgs, getPm2LogDir, isPm2Available, runPm2 } from '../pm2.js';
@@ -66,6 +67,8 @@ interface InstallOptions {
   databaseUrl?: string;
   apiKey?: string;
   forceCleanup?: boolean;
+  /** Wave 3 of canonical-pgserve-pm2 (pgserve#55) — see lib/canonical-pgserve.ts. */
+  canonicalPgserve?: boolean;
 }
 
 interface ResolvedConfig {
@@ -158,14 +161,20 @@ function resolveReinstallConfig(options: InstallOptions): ResolvedConfig {
   };
 }
 
-function buildInstallRuntimeEnv(cfg: ResolvedConfig, forceCleanup: boolean): Record<string, string> {
+function buildInstallRuntimeEnv(
+  cfg: ResolvedConfig,
+  forceCleanup: boolean,
+  useCanonicalPgserve = false,
+): Record<string, string> {
   const serverConfig: ServerConfig = {
     ...DEFAULT_SERVER_CONFIG,
     port: cfg.port,
     databaseUrl: cfg.databaseUrl,
     dataDir: cfg.dataDir,
   };
-  const env = buildRuntimeEnv(serverConfig, { apiKey: cfg.apiKey } as Config) as Record<string, string>;
+  const env = buildRuntimeEnv(serverConfig, { apiKey: cfg.apiKey } as Config, {
+    useCanonicalPgserve,
+  }) as Record<string, string>;
   if (forceCleanup) env.OMNI_PGSERVE_FORCE_CLEANUP = 'true';
   return env;
 }
@@ -174,7 +183,12 @@ function buildInstallRuntimeEnv(cfg: ResolvedConfig, forceCleanup: boolean): Rec
 // Service start
 // ----------------------------------------------------------------------------
 
-async function startServices(cfg: ResolvedConfig, forceCleanup: boolean, forceSystemd: boolean): Promise<boolean> {
+async function startServices(
+  cfg: ResolvedConfig,
+  forceCleanup: boolean,
+  forceSystemd: boolean,
+  useCanonicalPgserve = false,
+): Promise<boolean> {
   if (forceSystemd) {
     writeSystemdUnit(cfg.dataDir);
     return false;
@@ -196,7 +210,7 @@ async function startServices(cfg: ResolvedConfig, forceCleanup: boolean, forceSy
   mkdirSync(getPm2LogDir(), { recursive: true });
   await installPm2Logrotate();
 
-  const runtimeEnv = buildInstallRuntimeEnv(cfg, forceCleanup);
+  const runtimeEnv = buildInstallRuntimeEnv(cfg, forceCleanup, useCanonicalPgserve);
 
   // Delete existing processes so the new hardened flags take effect (reinstall path).
   await runPm2(['delete', PM2_PROCESSES.api]);
@@ -239,7 +253,7 @@ async function startServices(cfg: ResolvedConfig, forceCleanup: boolean, forceSy
 // Persistence, health, handoff
 // ----------------------------------------------------------------------------
 
-function writeConfigFile(cfg: ResolvedConfig): void {
+function writeConfigFile(cfg: ResolvedConfig, useCanonicalPgserve = false): void {
   const existing = loadConfig();
   saveConfig({
     ...existing,
@@ -247,7 +261,14 @@ function writeConfigFile(cfg: ResolvedConfig): void {
     apiKey: cfg.apiKey,
     format: existing.format ?? 'human',
   });
-  saveServerConfig({ port: cfg.port, databaseUrl: cfg.databaseUrl, dataDir: cfg.dataDir });
+  saveServerConfig({
+    port: cfg.port,
+    databaseUrl: cfg.databaseUrl,
+    dataDir: cfg.dataDir,
+    // Persist canonical-pgserve choice so subsequent omni restart / doctor
+    // commands honor it without operator passing the flag again.
+    useCanonicalPgserve,
+  });
 }
 
 async function checkHealth(port: number): Promise<boolean> {
@@ -345,10 +366,13 @@ async function runInstall(options: InstallOptions): Promise<void> {
   }
 
   await runSystemChecks(cfg.port);
+  // Wave 3 (pgserve#55): opt-in canonical pgserve. Best-effort — falls
+  // back to embedded with a warn when pgserve isn't installed globally.
+  const useCanonicalPgserve = await maybeSwitchToCanonicalPgserve(options, cfg);
   await ensureNats();
-  const servicesStarted = await startServices(cfg, forceCleanup, forceSystemd);
+  const servicesStarted = await startServices(cfg, forceCleanup, forceSystemd, useCanonicalPgserve);
 
-  writeConfigFile(cfg);
+  writeConfigFile(cfg, useCanonicalPgserve);
   output.success(`Config written to ${getConfigPath()}`);
 
   if (servicesStarted) await checkHealth(cfg.port);
@@ -365,6 +389,10 @@ export function createInstallCommand(): Command {
     .option('--api-key <key>', 'Explicit API key (default: generate a new one)')
     .option('--systemd', 'Write systemd units instead of using pm2 (requires sudo)')
     .option('--force-cleanup', 'Allow pgserve startup to kill orphan postgres processes on the internal port')
+    .option(
+      '--canonical-pgserve',
+      'Register pgserve under pm2 separately (canonical-pgserve-pm2 wave 3) and connect omni-api to it instead of spawning an embedded pgserve. Idempotent.',
+    )
     .option('--non-interactive', '[deprecated] silent no-op — install is always non-interactive')
     .action(runInstall);
 }
