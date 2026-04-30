@@ -51,7 +51,7 @@ export interface SigningContext {
 }
 
 /** Path to the directory holding the operator's keypair + host metadata. */
-export function getKeysDir(): string {
+function getKeysDir(): string {
   return join(getConfigDir(), 'keys');
 }
 
