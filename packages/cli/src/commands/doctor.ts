@@ -680,17 +680,32 @@ async function fixCliKeyValid(deps: DoctorDeps): Promise<string> {
  */
 async function fixPgserveCanonical(deps: DoctorDeps): Promise<string> {
   const { serverConfig, cliConfig } = deps.loadState();
+
+  // Step 1: stop omni-api FIRST so the embedded pgserve releases port 8432.
+  // pgserve@2.1.0's `pgserve install` will then bind that port for the
+  // canonical instance. If we did this in the opposite order, `pgserve
+  // install` would fail with EADDRINUSE and the migration would abort with
+  // omni-api still on embedded but no canonical registered.
+  await deps.runPm2(['stop', PM2_PROCESSES.api]);
+
+  // Step 2: provision canonical pgserve and read its port.
   const url = await deps.setupCanonicalPgserve();
   if (!url) {
+    // Bring omni-api back up on embedded so the operator isn't left with a
+    // dead API. They can retry the migration later.
+    await deps.runPm2(['start', PM2_PROCESSES.api]);
     throw new Error(
       'canonical pgserve setup failed (pgserve binary unavailable or install failed) — install manually: bun add -g pgserve@^2.1.0',
     );
   }
-  // Persist config first so a relaunch failure leaves the operator on
-  // canonical (which is the new recommended state) rather than half-migrated.
+
+  // Step 3: persist config first so a relaunch failure leaves the operator
+  // on canonical (the new recommended state) rather than half-migrated.
   deps.saveServerConfig({ databaseUrl: url, useCanonicalPgserve: true });
 
-  // Relaunch omni-api with the new env so PGSERVE_EMBEDDED=false takes effect.
+  // Step 4: relaunch omni-api with the new env so PGSERVE_EMBEDDED=false
+  // takes effect. delete + start (instead of restart) so the new env is
+  // picked up — pm2's restart preserves stored env in some configurations.
   const env = buildRuntimeEnv({ ...serverConfig, databaseUrl: url, useCanonicalPgserve: true }, cliConfig);
   await deps.runPm2(['delete', PM2_PROCESSES.api], env);
   const startArgs = buildPm2StartArgs({
@@ -854,14 +869,31 @@ export async function runDoctor(options: DoctorOptions, depsOverride?: DoctorDep
   const fixesApplied: string[] = [];
 
   if (options.fix) {
+    // Phase 1: migration fixes that change state for everyone else.
+    // pgserve-canonical stops omni-api, registers canonical pgserve, restarts
+    // omni-api on the new URL. After it runs, cli-key-valid / pgserve-reachable
+    // / omni-db-exists / version-match must be re-evaluated against the
+    // migrated state — running them in the same pass would cascade false
+    // failures (api temporarily unreachable) and trigger destructive fixes
+    // (key rotation while DB is unmigrated).
+    const canonicalCheck = checks.find((c) => c.id === 'pgserve-canonical');
+    if (canonicalCheck && canonicalCheck.level !== 'OK') {
+      const result = await applyFix(deps, canonicalCheck);
+      if (result !== null) fixesApplied.push(result);
+      // Re-run all checks against the post-migration state before any other
+      // fix gets to see them.
+      checks = await runAllChecks(deps);
+    }
+
+    // Phase 2: every other fix runs against the (possibly post-migration) state.
     for (const check of checks) {
       if (check.level === 'OK') continue;
+      if (check.id === 'pgserve-canonical') continue; // already handled above
       const result = await applyFix(deps, check);
-      if (result !== null) {
-        fixesApplied.push(result);
-      }
+      if (result !== null) fixesApplied.push(result);
     }
-    // Re-run checks after fixes so the final report reflects post-repair state.
+
+    // Final re-check so the report reflects post-fix state.
     checks = await runAllChecks(deps);
   }
 

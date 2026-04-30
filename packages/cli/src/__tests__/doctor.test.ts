@@ -768,13 +768,60 @@ describe('runDoctor — pgserve-canonical check', () => {
       databaseUrl: 'postgresql://postgres:postgres@localhost:8432/omni',
       useCanonicalPgserve: true,
     });
-    // pm2 was relaunched (delete + start) so PGSERVE_EMBEDDED=false takes effect
+    // pm2 was relaunched (stop, then delete + start) so PGSERVE_EMBEDDED=false takes effect
     const pm2Cmds = state.pm2Calls.map((c) => c.args[0]);
+    expect(pm2Cmds).toContain('stop');
     expect(pm2Cmds).toContain('delete');
     expect(pm2Cmds).toContain('start');
+    // The `stop` MUST happen before `setupCanonicalPgserve` is invoked — otherwise
+    // the embedded pgserve still holds port 8432 and `pgserve install` fails with
+    // EADDRINUSE. We assert ordering by checking that stop is the first pm2 call.
+    expect(pm2Cmds[0]).toBe('stop');
     // Fix was recorded with a useful detail line
     const migrationFix = report.fixesApplied.find((f) => f.includes('canonical pgserve'));
     expect(migrationFix).toBeDefined();
+  });
+
+  test('--fix runs pgserve-canonical FIRST so cli-key-valid does not cascade', async () => {
+    // Reproduces the live bug found 2026-04-30: when omni-api is stopped
+    // for the migration, cli-key-valid FAILed, and its fix rotated keys
+    // while the api was unreachable, leaving env+DB out of sync.
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION });
+    state.serverConfig = { ...state.serverConfig, useCanonicalPgserve: false };
+    // Simulate the cascade trigger: cli-key-valid FAILs initially, but
+    // becomes OK after migration (because re-eval picks up the restored API).
+    state.keyValid = false;
+    state.keyValidAfterFix = true;
+    state.canonicalPgserveSetupResult = 'postgresql://postgres:postgres@localhost:8432/omni';
+
+    const report = await runDoctor({ fix: true }, mkDeps(state));
+
+    // cli-key-valid fix MUST NOT have been invoked — pgserve-canonical fix ran
+    // first, then re-evaluation picked up the recovered key state.
+    const keyRotationFix = report.fixesApplied.find((f) => typeof f === 'string' && f.includes('rotated CLI key'));
+    expect(keyRotationFix).toBeUndefined();
+    // pgserve-canonical fix DID run.
+    expect(state.canonicalPgserveSetupCalled).toBe(true);
+  });
+
+  test('--fix brings omni-api back up when canonical setup fails (no half-migrated state)', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION });
+    state.serverConfig = { ...state.serverConfig, useCanonicalPgserve: false };
+    state.canonicalPgserveSetupResult = null;
+
+    await runDoctor({ fix: true }, mkDeps(state));
+
+    // Migration aborted — but fixPgserveCanonical must have started omni-api
+    // back up so the operator isn't left with a stopped API.
+    const pm2Cmds = state.pm2Calls.map((c) => c.args[0]);
+    expect(pm2Cmds).toContain('stop');
+    expect(pm2Cmds).toContain('start');
+    // Stop happened before start (recovery ordering).
+    const stopIdx = pm2Cmds.indexOf('stop');
+    const startIdx = pm2Cmds.indexOf('start');
+    expect(stopIdx).toBeLessThan(startIdx);
   });
 
   test('--fix records FAILED when setupCanonicalPgserve returns null', async () => {

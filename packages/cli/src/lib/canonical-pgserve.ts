@@ -35,14 +35,21 @@ import * as output from '../output.js';
 const PGSERVE_REQUIRED_VERSION = '^2.1.0';
 
 /**
- * Probe `pgserve --version`. Returns true when the binary is callable.
- * Doesn't enforce the minimum version — `setupCanonicalPgserve` will
- * surface a clear error from `pgserve install` itself if the binary is
- * too old (it'll exit non-zero with "unknown command: install").
+ * Probe the `pgserve` binary by running a real subcommand. Returns true
+ * when the binary is callable and accepts canonical-mode subcommands.
+ *
+ * History
+ * -------
+ * The first attempt used `pgserve --version`. That flag does not exist
+ * in pgserve@2.1.0 — the wrapper exits non-zero with "Unknown option:
+ * --version" and dumps the help. `omni doctor --fix` then false-negatived,
+ * triggered a redundant `bun add -g pgserve` call, and the migration
+ * failed. We now probe `pgserve port`, which exists in 2.1.0+ and exits
+ * 0 with the canonical port number on stdout.
  */
 async function isPgserveInstalled(): Promise<boolean> {
   try {
-    const code = await Bun.spawn({ cmd: ['pgserve', '--version'], stdout: 'pipe', stderr: 'pipe' }).exited;
+    const code = await Bun.spawn({ cmd: ['pgserve', 'port'], stdout: 'pipe', stderr: 'pipe' }).exited;
     return code === 0;
   } catch {
     return false;
@@ -88,23 +95,50 @@ async function runPgserveInstall(): Promise<boolean> {
 }
 
 /**
- * Read the canonical connection string via `pgserve url`. Returns null
- * when the call fails or the output isn't a postgres URL.
+ * Database name omni-api expects on the canonical pgserve. pgserve@2.1.0
+ * auto-provisions databases on first connection, so this can be anything;
+ * we keep `omni` to match the historical embedded-mode default.
  */
-async function readPgserveUrl(): Promise<string | null> {
-  const proc = Bun.spawn({ cmd: ['pgserve', 'url'], stdout: 'pipe', stderr: 'inherit' });
+const OMNI_DATABASE_NAME = 'omni';
+
+/**
+ * Read the canonical pgserve port via `pgserve port`. Returns null when
+ * the call fails or the output isn't a number.
+ *
+ * History
+ * -------
+ * The first attempt called `pgserve url` and used its output verbatim.
+ * pgserve@2.1.0's `url` returns `postgres://localhost:<port>/postgres`
+ * — no credentials, generic `postgres` database — which is fine for a
+ * generic discovery API but NOT what omni-api expects. omni-api connects
+ * with `postgres:postgres` credentials to the `omni` database (auto-
+ * provisioned by pgserve on first connect). We now read just the port
+ * and compose the URL ourselves so the connection string matches what
+ * the embedded path used.
+ */
+async function readPgservePort(): Promise<number | null> {
+  const proc = Bun.spawn({ cmd: ['pgserve', 'port'], stdout: 'pipe', stderr: 'inherit' });
   const stdout = await new Response(proc.stdout).text();
   const code = await proc.exited;
   if (code !== 0) {
-    output.warn(`pgserve url exited with code ${code}`);
+    output.warn(`pgserve port exited with code ${code}`);
     return null;
   }
-  const url = stdout.trim();
-  if (!url.startsWith('postgres://') && !url.startsWith('postgresql://')) {
-    output.warn(`pgserve url returned unexpected output ("${url}")`);
+  const port = Number.parseInt(stdout.trim(), 10);
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+    output.warn(`pgserve port returned unexpected output ("${stdout.trim()}")`);
     return null;
   }
-  return url;
+  return port;
+}
+
+/**
+ * Compose the omni-api connection string from a canonical port. Mirrors
+ * the embedded-mode default so omni-api / drizzle migrations don't see
+ * a connection-shape change across the migration.
+ */
+function buildOmniDatabaseUrl(port: number): string {
+  return `postgresql://postgres:postgres@localhost:${port}/${OMNI_DATABASE_NAME}`;
 }
 
 /**
@@ -120,7 +154,9 @@ export async function setupCanonicalPgserve(): Promise<string | null> {
     return null;
   }
   if (!(await runPgserveInstall())) return null;
-  return readPgserveUrl();
+  const port = await readPgservePort();
+  if (port === null) return null;
+  return buildOmniDatabaseUrl(port);
 }
 
 /**
