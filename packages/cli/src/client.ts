@@ -7,6 +7,7 @@
 import { type OmniClient, createOmniClient } from '@omni/sdk';
 import { hasAuth, loadConfig } from './config.js';
 import * as output from './output.js';
+import { type SigningContext, loadSigningContext } from './signing.js';
 import { VERSION } from './version.js';
 
 /** Cached client instance */
@@ -36,6 +37,7 @@ export function getClient(): OmniClient {
     baseUrl: config.apiUrl ?? 'http://localhost:8882',
     apiKey: config.apiKey,
     cliVersion: VERSION,
+    signRequest: signRequestIfHandshook(),
   });
 
   return cachedClient;
@@ -65,7 +67,26 @@ export function getOptionalClient(): OmniClient | null {
     baseUrl: config.apiUrl ?? 'http://localhost:8882',
     apiKey: config.apiKey,
     cliVersion: VERSION,
+    signRequest: signRequestIfHandshook(),
   });
 
   return cachedClient;
+}
+
+/**
+ * Build the SDK's `signRequest` callback when the operator has run
+ * `omni trust handshake`. Returns undefined otherwise — the SDK falls
+ * back to bearer-only, identical to behavior before P0b.
+ *
+ * Cached at module level: re-loading the keypair from disk on every
+ * client creation is wasted I/O.
+ */
+let _cachedSigningCtx: SigningContext | null | undefined;
+function signRequestIfHandshook() {
+  if (_cachedSigningCtx === undefined) {
+    _cachedSigningCtx = loadSigningContext();
+  }
+  if (!_cachedSigningCtx) return undefined;
+  const ctx = _cachedSigningCtx;
+  return (method: string, path: string, body: string) => ctx.signRequest(method, path, body);
 }
