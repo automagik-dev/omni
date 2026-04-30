@@ -15,7 +15,7 @@ import { eq } from 'drizzle-orm';
 import { withIdempotency } from '../lib/idempotency';
 import type { Services } from '../services';
 import { computeSessionId } from '../services/agent-runner';
-import { resolveProvider } from './agent-dispatcher';
+import { applyAgentFkOverrides, resolveProvider } from './agent-dispatcher';
 import { getPlugin } from './loader';
 
 const log = createLogger('session-cleaner');
@@ -92,7 +92,11 @@ export async function clearAgentSession(
   // can reconstruct the correct session key instead of using the generic sessionId.
   // Pass instanceId for providers that persist session state scoped by instance.
   // Extend instance with transient dispatch fields required by resolveProvider.
+  // applyAgentFkOverrides stamps agentInternalId / agentType / agentProviderId from the
+  // Agent entity — without it, providers that require a non-empty agentId (post 2.260430)
+  // throw "cannot resolve agentId" and the user sees "Erro ao limpar sessão".
   const dispatchInstance = { ...instance, agentProviderId: agentRow.agentProviderId };
+  await applyAgentFkOverrides(db, instance.agentId, dispatchInstance);
   const agentProvider = resolveProvider(providerRecord, dispatchInstance, db);
   if (agentProvider?.resetSession) {
     await agentProvider.resetSession(sessionId, chatId, instanceId);

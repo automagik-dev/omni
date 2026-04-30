@@ -3264,7 +3264,7 @@ async function getAgentProvider(
  * Mutates effectiveInstance in-place with values from the Agent entity row.
  * Stamps transient dispatch fields (agentProviderId, agentType, agentInternalId) onto the copy.
  */
-async function applyAgentFkOverrides(
+export async function applyAgentFkOverrides(
   db: Database,
   agentFkId: string,
   effectiveInstance: DispatchInstance,
