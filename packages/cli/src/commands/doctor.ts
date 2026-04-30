@@ -42,9 +42,17 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
-import { type Config, type ServerConfig, loadConfig, loadServerConfig, saveConfig } from '../config.js';
+import {
+  type Config,
+  type ServerConfig,
+  loadConfig,
+  loadServerConfig,
+  saveConfig,
+  saveServerConfig,
+} from '../config.js';
 import { getHealthCheckUrl } from '../health.js';
 import { PM2_LOGROTATE_SETTINGS } from '../install-helpers.js';
+import { setupCanonicalPgserve } from '../lib/canonical-pgserve.js';
 import * as output from '../output.js';
 import { PM2_HARDENED_DEFAULTS, PM2_PROCESSES, buildPm2StartArgs, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv, resolvePgservePort } from '../runtime-env.js';
@@ -71,7 +79,8 @@ export type CheckId =
   | 'pm2-status'
   | 'pm2-max-restarts'
   | 'pm2-logrotate-installed'
-  | 'cli-signing-key-for-locked-instances';
+  | 'cli-signing-key-for-locked-instances'
+  | 'pgserve-canonical';
 
 export interface CheckResult {
   id: CheckId;
@@ -194,6 +203,18 @@ export interface DoctorDeps {
    * that as a WARN so it's caught before the operator hits the wall.
    */
   cliHasSigningKey: () => boolean;
+  /**
+   * Run canonical pgserve setup (probe binary → `pgserve install` →
+   * `pgserve url`). Returns the canonical URL on success or null on
+   * failure. Stubbed in tests.
+   */
+  setupCanonicalPgserve: () => Promise<string | null>;
+  /**
+   * Persist a partial server config (merges with existing). Stubbed in
+   * tests so the canonical-pgserve fix can be validated without writing
+   * to ~/.omni/config.json.
+   */
+  saveServerConfig: (partial: Partial<ServerConfig>) => void;
 }
 
 /** Default production deps — each is a thin shim around the real call. */
@@ -304,6 +325,8 @@ function productionDeps(): DoctorDeps {
       }
     },
     cliHasSigningKey: () => loadSigningContext() !== null,
+    setupCanonicalPgserve,
+    saveServerConfig,
   };
 }
 
@@ -642,6 +665,47 @@ async function fixCliKeyValid(deps: DoctorDeps): Promise<string> {
   return 'rotated CLI key and re-validated';
 }
 
+/**
+ * Migrate an embedded install onto canonical pgserve. Runs `pgserve install`,
+ * reads the canonical url, persists `useCanonicalPgserve: true` +
+ * `databaseUrl`, then relaunches omni-api so it picks up `PGSERVE_EMBEDDED=false`.
+ *
+ * SAFETY: Never deletes the embedded data dir. Operator can roll back by
+ * editing `~/.omni/config.json` and removing the canonical url. Embedded
+ * postgres data stays intact at `~/.omni/data/pgserve/`.
+ *
+ * On any failure (pgserve binary unavailable, install failed, omni-api
+ * relaunch failed), config is NOT persisted — the operator stays on
+ * embedded and can retry.
+ */
+async function fixPgserveCanonical(deps: DoctorDeps): Promise<string> {
+  const { serverConfig, cliConfig } = deps.loadState();
+  const url = await deps.setupCanonicalPgserve();
+  if (!url) {
+    throw new Error(
+      'canonical pgserve setup failed (pgserve binary unavailable or install failed) — install manually: bun add -g pgserve@^2.1.0',
+    );
+  }
+  // Persist config first so a relaunch failure leaves the operator on
+  // canonical (which is the new recommended state) rather than half-migrated.
+  deps.saveServerConfig({ databaseUrl: url, useCanonicalPgserve: true });
+
+  // Relaunch omni-api with the new env so PGSERVE_EMBEDDED=false takes effect.
+  const env = buildRuntimeEnv({ ...serverConfig, databaseUrl: url, useCanonicalPgserve: true }, cliConfig);
+  await deps.runPm2(['delete', PM2_PROCESSES.api], env);
+  const startArgs = buildPm2StartArgs({
+    kind: 'api',
+    script: getServerLauncherPath(),
+    name: PM2_PROCESSES.api,
+    interpreter: 'bash',
+  });
+  const startCode = await deps.runPm2(startArgs, env);
+  if (startCode !== 0) {
+    throw new Error(`pm2 start ${PM2_PROCESSES.api} exited ${startCode} after canonical migration`);
+  }
+  return `migrated to canonical pgserve@^2.1.0; omni-api now connects to ${url}`;
+}
+
 /** Print `rm -rf` instructions for orphaned dirs — we never auto-delete. */
 function fixOrphanedDataDirs(deps: DoctorDeps): string {
   const found = deps.findOrphanedDataDirs();
@@ -701,6 +765,37 @@ async function checkSigningKeyForLockedInstances(deps: DoctorDeps): Promise<Chec
   };
 }
 
+/**
+ * Check 11: pgserve has grown up — operators on embedded mode get a WARN
+ * pointing them at the canonical-pgserve@^2.1.0 path. `--fix` migrates by
+ * running `pgserve install`, writing the canonical url into config, and
+ * relaunching omni-api with `PGSERVE_EMBEDDED=false`.
+ *
+ * Three states:
+ *   - `useCanonicalPgserve === true`           → OK (already canonical).
+ *   - field absent OR `false`                  → WARN with the migration hint.
+ *
+ * The check NEVER fails — embedded still works; canonical is the
+ * recommended path. We will tighten this to FAIL once canonical is proven
+ * across the fleet.
+ */
+function checkPgserveCanonical(deps: DoctorDeps): CheckResult {
+  const { serverConfig } = deps.loadState();
+  if (serverConfig.useCanonicalPgserve === true) {
+    return {
+      id: 'pgserve-canonical',
+      level: 'OK',
+      detail: 'using canonical pgserve@^2.1.0 (single shared backbone with genie + others)',
+    };
+  }
+  return {
+    id: 'pgserve-canonical',
+    level: 'WARN',
+    detail:
+      'using embedded pgserve — pgserve@^2.1.0 has grown up and is now the recommended shared backbone. Run `omni doctor --fix` to migrate (idempotent; preserves all data).',
+  };
+}
+
 // ============================================================================
 // MAIN
 // ============================================================================
@@ -718,6 +813,7 @@ async function runAllChecks(deps: DoctorDeps): Promise<CheckResult[]> {
     await checkPm2MaxRestarts(deps),
     await checkPm2LogrotateInstalled(deps),
     await checkSigningKeyForLockedInstances(deps),
+    checkPgserveCanonical(deps),
   ];
 }
 
@@ -729,6 +825,7 @@ async function applyFix(deps: DoctorDeps, check: CheckResult): Promise<string | 
     if (check.id === 'orphaned-data-dirs') return fixOrphanedDataDirs(deps);
     if (check.id === 'pm2-max-restarts') return await fixPm2MaxRestarts(deps);
     if (check.id === 'pm2-logrotate-installed') return await fixPm2LogrotateInstalled(deps);
+    if (check.id === 'pgserve-canonical') return await fixPgserveCanonical(deps);
     return null;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -815,6 +912,7 @@ Checks:
   pm2-status               omni-api and omni-nats both online in pm2
   pm2-max-restarts         omni-api max_restarts is in the hardened range
   pm2-logrotate-installed  pm2-logrotate module installed with expected settings
+  pgserve-canonical        using canonical pgserve@^2.1.0 (shared backbone) vs. embedded
 
 Safety:
   --fix NEVER touches ~/.omni/data/pgserve — it only operates on the pm2

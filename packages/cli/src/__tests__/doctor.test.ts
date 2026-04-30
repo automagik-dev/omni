@@ -64,6 +64,16 @@ interface HarnessState {
   lockedInstances: Array<{ id: string; name: string }>;
   /** Whether cliHasSigningKey() returns true. */
   cliHasSigningKey: boolean;
+  /**
+   * Result the stubbed `setupCanonicalPgserve()` returns when fixPgserveCanonical
+   * is invoked. Default: a fake canonical url. Tests can override to null
+   * to exercise the error path.
+   */
+  canonicalPgserveSetupResult: string | null;
+  /** Set to true the first time `setupCanonicalPgserve()` is called. */
+  canonicalPgserveSetupCalled: boolean;
+  /** Recorded saveServerConfig calls — tests assert what migration persists. */
+  savedServerConfigs: Array<Partial<ServerConfig>>;
 }
 
 /** Canonical healthy `pm2 conf` output — matches PM2_LOGROTATE_SETTINGS. */
@@ -93,6 +103,10 @@ function mkHarness(overrides?: Partial<HarnessState>): HarnessState {
       dataDir: join(tmpdir(), 'omni-doctor-test'),
       logLevel: 'info',
       nodeEnv: 'production',
+      // Default healthy harness: canonical pgserve already adopted (matches
+      // the new fresh-install default). Tests that exercise the legacy
+      // embedded path explicitly override `useCanonicalPgserve: false`.
+      useCanonicalPgserve: true,
     },
     cliConfig: { apiKey: 'omni_sk_test-key' },
     fixesInvoked: [],
@@ -107,6 +121,9 @@ function mkHarness(overrides?: Partial<HarnessState>): HarnessState {
     // ("nothing to assert"). Tests opt into the WARN path explicitly.
     lockedInstances: [],
     cliHasSigningKey: false,
+    canonicalPgserveSetupResult: 'postgresql://postgres:postgres@localhost:8432/omni',
+    canonicalPgserveSetupCalled: false,
+    savedServerConfigs: [],
     ...overrides,
   };
 }
@@ -189,6 +206,14 @@ function mkDeps(state: HarnessState): DoctorDeps {
     capturePm2Conf: async () => state.pm2ConfOutput,
     listLockedInstances: async () => [...state.lockedInstances],
     cliHasSigningKey: () => state.cliHasSigningKey,
+    setupCanonicalPgserve: async () => {
+      state.canonicalPgserveSetupCalled = true;
+      return state.canonicalPgserveSetupResult;
+    },
+    saveServerConfig: (partial) => {
+      state.serverConfig = { ...state.serverConfig, ...partial };
+      state.savedServerConfigs.push({ ...partial });
+    },
   };
 }
 
@@ -197,7 +222,7 @@ function mkDeps(state: HarnessState): DoctorDeps {
 // ---------------------------------------------------------------------------
 
 describe('runDoctor — read-only mode', () => {
-  test('reports all 10 checks with OK when state is healthy', async () => {
+  test('reports all 11 checks with OK when state is healthy', async () => {
     // Match the harness version to whatever the CLI currently reports so
     // `version-match` is OK without hard-coding the CLI version here.
     const { VERSION } = await import('../version.js');
@@ -206,7 +231,7 @@ describe('runDoctor — read-only mode', () => {
 
     const report = await runDoctor({ fix: false }, deps);
 
-    expect(report.checks).toHaveLength(10);
+    expect(report.checks).toHaveLength(11);
     const ids = report.checks.map((c) => c.id);
     expect(ids).toEqual([
       'pm2-env-drift',
@@ -219,11 +244,12 @@ describe('runDoctor — read-only mode', () => {
       'pm2-max-restarts',
       'pm2-logrotate-installed',
       'cli-signing-key-for-locked-instances',
+      'pgserve-canonical',
     ]);
     for (const check of report.checks) {
       expect(check.level).toBe('OK');
     }
-    expect(report.summary).toEqual({ ok: 10, warn: 0, fail: 0 });
+    expect(report.summary).toEqual({ ok: 11, warn: 0, fail: 0 });
     expect(report.fixesApplied).toEqual([]);
   });
 
@@ -670,5 +696,102 @@ describe('runDoctor — mutation safety', () => {
     for (const name of ['postgresql.conf', 'pg_hba.conf', 'PG_VERSION', 'base.tar', 'global.tar']) {
       expect(existsSync(join(FIXTURE_DIR, name))).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pgserve-canonical (canonical-pgserve-pm2-supervision wave 3)
+// ---------------------------------------------------------------------------
+
+describe('runDoctor — pgserve-canonical check', () => {
+  test('OK when serverConfig.useCanonicalPgserve === true', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION });
+    // mkHarness defaults useCanonicalPgserve: true; this test asserts the
+    // healthy path explicitly so the contract is captured even if the
+    // default flips later.
+    state.serverConfig = { ...state.serverConfig, useCanonicalPgserve: true };
+
+    const report = await runDoctor({ fix: false }, mkDeps(state));
+    const check = report.checks.find((c) => c.id === 'pgserve-canonical');
+
+    expect(check?.level).toBe('OK');
+    expect(check?.detail).toContain('canonical pgserve');
+  });
+
+  test('WARN when useCanonicalPgserve is undefined (legacy embedded install)', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION });
+    // Strip the canonical flag to simulate a pre-existing embedded install.
+    state.serverConfig = { ...state.serverConfig, useCanonicalPgserve: undefined };
+
+    const report = await runDoctor({ fix: false }, mkDeps(state));
+    const check = report.checks.find((c) => c.id === 'pgserve-canonical');
+
+    expect(check?.level).toBe('WARN');
+    expect(check?.detail).toContain('embedded pgserve');
+    expect(check?.detail).toContain('omni doctor --fix');
+  });
+
+  test('WARN when useCanonicalPgserve is explicitly false', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      serverVersion: VERSION,
+      serverConfig: {
+        port: 8882,
+        databaseUrl: 'postgresql://postgres:postgres@localhost:8432/omni',
+        dataDir: join(tmpdir(), 'omni-doctor-test'),
+        logLevel: 'info',
+        nodeEnv: 'production',
+        useCanonicalPgserve: false,
+      },
+    });
+
+    const report = await runDoctor({ fix: false }, mkDeps(state));
+    const check = report.checks.find((c) => c.id === 'pgserve-canonical');
+    expect(check?.level).toBe('WARN');
+  });
+
+  test('--fix migrates embedded → canonical: setup, persist, relaunch', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION });
+    state.serverConfig = { ...state.serverConfig, useCanonicalPgserve: false };
+    state.canonicalPgserveSetupResult = 'postgresql://postgres:postgres@localhost:8432/omni';
+
+    const report = await runDoctor({ fix: true }, mkDeps(state));
+
+    // setupCanonicalPgserve was invoked
+    expect(state.canonicalPgserveSetupCalled).toBe(true);
+    // ServerConfig persisted with the canonical flag + url
+    expect(state.savedServerConfigs).toHaveLength(1);
+    expect(state.savedServerConfigs[0]).toMatchObject({
+      databaseUrl: 'postgresql://postgres:postgres@localhost:8432/omni',
+      useCanonicalPgserve: true,
+    });
+    // pm2 was relaunched (delete + start) so PGSERVE_EMBEDDED=false takes effect
+    const pm2Cmds = state.pm2Calls.map((c) => c.args[0]);
+    expect(pm2Cmds).toContain('delete');
+    expect(pm2Cmds).toContain('start');
+    // Fix was recorded with a useful detail line
+    const migrationFix = report.fixesApplied.find((f) => f.includes('canonical pgserve'));
+    expect(migrationFix).toBeDefined();
+  });
+
+  test('--fix records FAILED when setupCanonicalPgserve returns null', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION });
+    state.serverConfig = { ...state.serverConfig, useCanonicalPgserve: false };
+    state.canonicalPgserveSetupResult = null;
+
+    const report = await runDoctor({ fix: true }, mkDeps(state));
+
+    // Setup was attempted
+    expect(state.canonicalPgserveSetupCalled).toBe(true);
+    // No config write — operator stays on embedded
+    expect(state.savedServerConfigs).toHaveLength(0);
+    // Fix recorded as failed (so the operator sees the actionable error)
+    const failedFix = report.fixesApplied.find((f) => f.startsWith('FAILED pgserve-canonical'));
+    expect(failedFix).toBeDefined();
+    expect(failedFix).toContain('canonical pgserve setup failed');
   });
 });

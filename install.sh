@@ -148,6 +148,24 @@ ensure_pm2() {
   fi
 }
 
+# Canonical pgserve backbone (pgserve@^2.1.0) — shared by omni + genie + any
+# future automagik service that needs Postgres. `omni install` will register
+# it under pm2 via `pgserve install` (idempotent). We install the binary
+# globally up front so `omni install` can find it without a fallback.
+ensure_pgserve() {
+  if has_cmd pgserve; then
+    ok "pgserve $(pgserve --version 2>/dev/null || echo '?')"
+    return 0
+  fi
+  info "Installing pgserve@^2.1.0 (canonical Postgres backbone)..."
+  bun add -g pgserve@^2.1.0 >/dev/null 2>&1
+  if has_cmd pgserve; then
+    ok "pgserve installed"
+  else
+    warn "Could not install pgserve globally. omni install will fall back to embedded mode. To migrate later: bun add -g pgserve@^2.1.0 && omni doctor --fix"
+  fi
+}
+
 # ============================================================================
 # Install: CLI only
 # ============================================================================
@@ -173,6 +191,7 @@ install_full_server() {
   step "Installing Omni v2 (full server)"
 
   ensure_pm2
+  ensure_pgserve
 
   local channel
   channel="$(omni_channel)"
