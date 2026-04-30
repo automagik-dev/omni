@@ -38,6 +38,32 @@ import { extractLockTargets } from './scope-enforcer';
 const log = createLogger('api:require-signed-instance');
 
 /**
+ * Decide whether a PATCH body is an "unlock-only" request — i.e. the only
+ * change is flipping `requireGenieSignature` to false. Used by the
+ * kill-switch exemption: we let unlocks through even when the lockdown is
+ * active, but we DON'T let bearer-only callers smuggle other field
+ * changes alongside the unlock.
+ *
+ * Cases:
+ *   { requireGenieSignature: false }                → true  (unlock)
+ *   { requireGenieSignature: false, name: 'x' }    → false (mixed write)
+ *   { requireGenieSignature: true }                → false (no recovery scenario)
+ *   { requireGenieSignature: 'false' }             → false (wrong type)
+ *   { name: 'x' }                                  → false (no unlock at all)
+ *   undefined / non-object / array                 → false
+ *
+ * Exported so tests can lock down the matrix without HTTP.
+ */
+export function isUnlockOnlyBody(body: unknown): boolean {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const obj = body as Record<string, unknown>;
+  const keys = Object.keys(obj);
+  if (keys.length !== 1) return false;
+  if (keys[0] !== 'requireGenieSignature') return false;
+  return obj.requireGenieSignature === false;
+}
+
+/**
  * Safely parse a JSON request body. Returns null when there's no body
  * or it isn't JSON — matches scope-enforcer's behavior.
  */
@@ -94,6 +120,31 @@ export const requireSignedInstanceMiddleware = createMiddleware<{ Variables: App
     return next();
   }
 
+  // KILL-SWITCH EXEMPTION (omni-host-fingerprint-trust hotfix).
+  //
+  // Without this, the lockdown is a one-way door: an operator with a
+  // bearer-only client (the `omni` CLI itself today, or any non-genie
+  // caller) flips `requireGenieSignature: true` and then can't flip it
+  // back — the unlock PATCH gets gated by the gate it just enabled. The
+  // only recovery is a direct DB write or scripting raw signed HTTP from
+  // a genie host.
+  //
+  // We exempt PATCH /instances/:id when the body's ONLY effective change
+  // is `requireGenieSignature: false`. Other fields in the same body
+  // (name, agentId, etc.) make the request ineligible for the exemption
+  // so an attacker can't smuggle changes alongside the unlock.
+  //
+  // We deliberately do NOT exempt the inverse (`requireGenieSignature:
+  // true`) — there's no recovery scenario for "I need to enable this but
+  // can't sign," and exempting it would let bearer-only callers escalate.
+  if (method === 'PATCH' && isUnlockOnlyBody(body)) {
+    log.info('allowing unlock-only PATCH on require_genie_signature instance', {
+      instanceId: instance.id,
+      apiKeyId: c.get('apiKey')?.id,
+    });
+    return next();
+  }
+
   const apiKey = c.get('apiKey');
   log.warn('rejecting unsigned request to require_genie_signature instance', {
     instanceId: instance.id,
@@ -105,7 +156,7 @@ export const requireSignedInstanceMiddleware = createMiddleware<{ Variables: App
     {
       error: {
         code: 'GENIE_SIGNATURE_REQUIRED',
-        message: `Instance ${instance.id} requires a verified X-Genie-Signature; bearer-only requests are rejected. Sign with \`genie omni handshake\` + per-request signing, or remove the requirement via \`omni instances update ${instance.id} --no-require-genie-signature\`.`,
+        message: `Instance ${instance.id} requires a verified X-Genie-Signature; bearer-only requests are rejected. Sign with \`genie omni handshake\` + per-request signing, or unlock with PATCH /api/v2/instances/${instance.id} body {"requireGenieSignature": false} (always allowed via bearer to prevent operator lockout).`,
         instance: instance.id,
       },
     },
