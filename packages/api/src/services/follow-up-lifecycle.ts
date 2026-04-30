@@ -39,6 +39,7 @@ import {
   instances,
 } from '@omni/db';
 import { and, eq, isNull, sql } from 'drizzle-orm';
+import { isChatInActiveCloseState } from '../lib/close-contact-state';
 
 const log = createLogger('follow-up-lifecycle');
 
@@ -123,8 +124,8 @@ export class FollowUpLifecycleService {
   async armForOutbound(input: Omit<ArmSequenceInput, 'config'> & { config?: FollowUpSequenceConfig }): Promise<void> {
     if (!this.eventBus) return;
 
-    // Close-contact guard — see `isChatCloseContacted` for the rationale.
-    if (await this.isChatCloseContacted(input.chatId, input.instanceId)) return;
+    // Close-contact guard — see `isInActiveCloseState` for the rationale.
+    if (await this.isInActiveCloseState(input.chatId, input.instanceId)) return;
 
     const config = input.config ?? (await this.resolveConfig(input.chatId, input.instanceId, input.agentId ?? null));
     if (!config || config.enabled === false) return;
@@ -264,18 +265,41 @@ export class FollowUpLifecycleService {
     return true;
   }
 
-  private async isChatCloseContacted(chatId: string, instanceId: string): Promise<boolean> {
+  /**
+   * Returns true when the chat is *currently* in an active close-contact
+   * state (hard terminal `closed: true` OR soft cooldown `closeUntil` still
+   * in window). Mirrors the dispatcher's `applyCloseContactGate` predicate
+   * — see `lib/close-contact-state.ts` for the rationale and why
+   * `closeOutcome` (audit data, preserved across cooldown expiry) is the
+   * wrong signal for this gate.
+   *
+   * Why a guard here: the inline `disarm({reason:'contact_closed'})` in the
+   * close-contact handler only kills the *current* row. Any later
+   * `message.sent` from the reactive agent (a customer comeback the agent
+   * answers within the cooldown, a tail-stream chunk, a NATS redelivery)
+   * re-enters armForOutbound and re-arms a fresh sequence — `TERMINAL_DISARM_REASONS`
+   * does not include `'contact_closed'`, and even when it did the
+   * existing terminal-disarm guard lets re-arms through whenever the
+   * customer's last inbound is newer than the disarm timestamp (which is
+   * exactly the comeback case). Once the cooldown expires the dispatcher
+   * gate clears `closeUntil`, this predicate flips to false, and a future
+   * agent reply legitimately re-arms.
+   */
+  private async isInActiveCloseState(chatId: string, instanceId: string): Promise<boolean> {
     const [chatRow] = await this.db
       .select({ settings: chats.settings })
       .from(chats)
       .where(eq(chats.id, chatId))
       .limit(1);
-    const closeOutcome = (chatRow?.settings as ChatSettings | null | undefined)?.closeOutcome;
-    if (!closeOutcome) return false;
-    this.logger.info('follow-up lifecycle: refusing to arm — chat has close-contact outcome', {
+    const settings = chatRow?.settings as ChatSettings | null | undefined;
+    if (!isChatInActiveCloseState(settings)) return false;
+    const closeOutcome = (settings as { closeOutcome?: unknown } | null | undefined)?.closeOutcome;
+    this.logger.info('follow-up lifecycle: refusing to arm — chat in active close-contact state', {
       chatId,
       instanceId,
-      closeOutcome,
+      closed: (settings as { closed?: unknown } | null | undefined)?.closed === true,
+      closeUntil: (settings as { closeUntil?: unknown } | null | undefined)?.closeUntil ?? null,
+      closeOutcome: closeOutcome ?? null,
     });
     return true;
   }
