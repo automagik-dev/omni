@@ -74,6 +74,7 @@ if (process.argv.includes('--json')) {
   const idx = process.argv.indexOf('--json');
   process.argv.splice(idx, 1);
 }
+import { selfHealManifestPin } from './manifest-pin.js';
 import { getConfigSummary, getInlineStatus } from './status.js';
 import { captureCliError, flushTelemetry } from './telemetry.js';
 import { VERSION, fetchServerVersion, formatCliVersionLine } from './version.js';
@@ -605,6 +606,14 @@ program.configureOutput({
     originalWriteErr(str);
   },
 });
+
+// Self-heal the @automagik/omni semver-drift footgun. Bun writes the
+// global manifest entry AFTER running postinstall, so the in-package
+// postinstall hook can't pin reliably. Doing it here at CLI startup
+// hits naturally on the operator's very first `omni …` invocation
+// after `bun add -g`, which closes the race for good. Best-effort,
+// never throws. See manifest-pin.ts for the full rationale.
+selfHealManifestPin();
 
 // Parse and execute
 const argv = process.argv.slice(2);
