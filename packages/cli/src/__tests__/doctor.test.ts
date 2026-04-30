@@ -60,6 +60,10 @@ interface HarnessState {
   maxRestartsAfterFix: number | undefined;
   /** Whether pm2 conf becomes healthy after a fix attempt. */
   pm2ConfAfterFix: string | null;
+  /** Instances reported by listLockedInstances() (P2a check input). */
+  lockedInstances: Array<{ id: string; name: string }>;
+  /** Whether cliHasSigningKey() returns true. */
+  cliHasSigningKey: boolean;
 }
 
 /** Canonical healthy `pm2 conf` output — matches PM2_LOGROTATE_SETTINGS. */
@@ -99,6 +103,10 @@ function mkHarness(overrides?: Partial<HarnessState>): HarnessState {
     pm2DriftAfterFix: false,
     maxRestartsAfterFix: undefined,
     pm2ConfAfterFix: null,
+    // P2a defaults: no locked instances + no signing key → check is OK
+    // ("nothing to assert"). Tests opt into the WARN path explicitly.
+    lockedInstances: [],
+    cliHasSigningKey: false,
     ...overrides,
   };
 }
@@ -179,6 +187,8 @@ function mkDeps(state: HarnessState): DoctorDeps {
       // No real sleep in tests — we're deterministic.
     },
     capturePm2Conf: async () => state.pm2ConfOutput,
+    listLockedInstances: async () => [...state.lockedInstances],
+    cliHasSigningKey: () => state.cliHasSigningKey,
   };
 }
 
@@ -187,7 +197,7 @@ function mkDeps(state: HarnessState): DoctorDeps {
 // ---------------------------------------------------------------------------
 
 describe('runDoctor — read-only mode', () => {
-  test('reports all 9 checks with OK when state is healthy', async () => {
+  test('reports all 10 checks with OK when state is healthy', async () => {
     // Match the harness version to whatever the CLI currently reports so
     // `version-match` is OK without hard-coding the CLI version here.
     const { VERSION } = await import('../version.js');
@@ -196,7 +206,7 @@ describe('runDoctor — read-only mode', () => {
 
     const report = await runDoctor({ fix: false }, deps);
 
-    expect(report.checks).toHaveLength(9);
+    expect(report.checks).toHaveLength(10);
     const ids = report.checks.map((c) => c.id);
     expect(ids).toEqual([
       'pm2-env-drift',
@@ -208,11 +218,12 @@ describe('runDoctor — read-only mode', () => {
       'pm2-status',
       'pm2-max-restarts',
       'pm2-logrotate-installed',
+      'cli-signing-key-for-locked-instances',
     ]);
     for (const check of report.checks) {
       expect(check.level).toBe('OK');
     }
-    expect(report.summary).toEqual({ ok: 9, warn: 0, fail: 0 });
+    expect(report.summary).toEqual({ ok: 10, warn: 0, fail: 0 });
     expect(report.fixesApplied).toEqual([]);
   });
 
@@ -384,6 +395,83 @@ Module: pm2-logrotate
 
     const check = report.checks.find((c) => c.id === 'pm2-logrotate-installed');
     expect(check?.level).toBe('WARN');
+  });
+
+  test('cli-signing-key-for-locked-instances OK when no instances are locked', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION, lockedInstances: [], cliHasSigningKey: false });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'cli-signing-key-for-locked-instances');
+    expect(check?.level).toBe('OK');
+    expect(check?.detail).toContain('no instances require signed requests');
+  });
+
+  test('cli-signing-key-for-locked-instances OK when locked instances + key present', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      serverVersion: VERSION,
+      lockedInstances: [{ id: 'inst-1', name: 'whatsapp-prod' }],
+      cliHasSigningKey: true,
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'cli-signing-key-for-locked-instances');
+    expect(check?.level).toBe('OK');
+    expect(check?.detail).toContain('CLI has a signing key');
+  });
+
+  test('cli-signing-key-for-locked-instances WARN when locked instances + no key', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      serverVersion: VERSION,
+      lockedInstances: [
+        { id: 'inst-1', name: 'whatsapp-prod' },
+        { id: 'inst-2', name: 'telegram-prod' },
+      ],
+      cliHasSigningKey: false,
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'cli-signing-key-for-locked-instances');
+    expect(check?.level).toBe('WARN');
+    expect(check?.detail).toContain('whatsapp-prod');
+    expect(check?.detail).toContain('telegram-prod');
+    expect(check?.detail).toContain('omni trust handshake');
+    // Operator's escape hatch is mentioned so they know they're not stuck.
+    expect(check?.detail).toContain('unlock-only PATCH');
+  });
+
+  test('cli-signing-key-for-locked-instances WARN truncates list at 3 with "+N more" suffix', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      serverVersion: VERSION,
+      lockedInstances: [
+        { id: 'i1', name: 'a' },
+        { id: 'i2', name: 'b' },
+        { id: 'i3', name: 'c' },
+        { id: 'i4', name: 'd' },
+        { id: 'i5', name: 'e' },
+      ],
+      cliHasSigningKey: false,
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'cli-signing-key-for-locked-instances');
+    expect(check?.level).toBe('WARN');
+    expect(check?.detail).toContain('a, b, c');
+    expect(check?.detail).toContain('+2 more');
+    // Names beyond the first 3 are NOT in the message — keeps the warning
+    // readable when an operator has many instances locked.
+    expect(check?.detail).not.toContain(', d');
   });
 });
 
