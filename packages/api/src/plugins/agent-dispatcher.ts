@@ -2637,10 +2637,25 @@ interface ChatSettingsForGate {
 /**
  * Close-contact gate. Returns:
  *   - `skip`        → caller must `ackHandle.remove()` and return.
- *   - `reopened`    → cooldown expired; state flipped back to active. Fall
- *                     through to dispatch normally; the handoff gate after
- *                     this should NOT also block on a stale `agentPaused`.
- *   - `pass`        → no close-contact state; defer to subsequent gates.
+ *   - `reopened`    → soft cooldown expired; state cleaned up. Fall through
+ *                     to dispatch normally; the handoff gate after this
+ *                     should NOT also block on a stale `agentPaused`.
+ *   - `pass`        → no terminal state and no agent-pause requirement;
+ *                     defer to subsequent gates.
+ *
+ * Two distinct mechanisms — keep them decoupled (matching the write side
+ * in `POST /messages/send/close-contact`):
+ *
+ *   - `closed === true` is a HARD terminal (`won`/`lost` outcomes): skip
+ *     permanently. Only `/chats/:id/reopen-contact` clears it.
+ *   - `closeUntil` set + future timestamp is a SOFT cooldown
+ *     (`redirected_sac`, `unqualified`, `no_response`, `other`). The
+ *     follow-up Haiku is disarmed for that window, but the reactive agent
+ *     stays available for inbound replies — a customer asking "I couldn't
+ *     reach the SAC number" deserves a reply, not silence. Pass through.
+ *   - `closeUntil` set + past timestamp: cooldown expired, clean it up
+ *     and report `reopened` so the handoff gate ignores any residual
+ *     `agentPaused` flag.
  *
  * Single-writer principle: the dispatcher is the only path that mutates
  * state on cooldown expiry, and it's also the only consumer that needs to
@@ -2666,18 +2681,22 @@ async function applyCloseContactGate(
   const closeUntilMs = new Date(chatSettings.closeUntil).getTime();
   if (!Number.isFinite(closeUntilMs)) return 'pass';
   if (Date.now() < closeUntilMs) {
-    log.debug('Chat in close cooldown, skipping dispatch', {
+    // Soft cooldown active: follow-up disarmed, reactive agent stays open.
+    log.debug('Chat in soft close cooldown, follow-up disarmed but agent reactive', {
       instanceId,
       chatId,
       closeUntil: chatSettings.closeUntil,
       outcome: chatSettings.closeOutcome ?? null,
     });
-    return 'skip';
+    return 'pass';
   }
   if (!chatRecordId) return 'pass';
 
-  // Cooldown expired — flip state back to active and report 'reopened' so
-  // the caller knows to bypass the handoff/agentPaused gate that follows.
+  // Cooldown expired — clear closeUntil so the gate stops firing and any
+  // residual `agentPaused` (legacy chats from before the decoupling, or
+  // chats where a real human handoff happened on top of a close) gets
+  // explicitly cleared. Report `reopened` so the handoff gate ignores any
+  // stale flag.
   try {
     await services.chats.update(chatRecordId, {
       settings: {
@@ -2687,7 +2706,7 @@ async function applyCloseContactGate(
         agentResumedAt: new Date().toISOString(),
       } as Record<string, unknown>,
     });
-    log.info('Close cooldown expired, agent reopened', {
+    log.info('Close cooldown expired, state cleaned', {
       instanceId,
       chatId,
       closeOutcome: chatSettings.closeOutcome ?? null,

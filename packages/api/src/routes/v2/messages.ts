@@ -1754,10 +1754,29 @@ messagesRoutes.post('/send/close-contact', zValidator('json', sendCloseContactSc
   );
 
   // ── 4. Update chat settings — emits chat.closed via chats service ────────
+  //
+  // Two distinct mechanisms — keep them decoupled:
+  //
+  //   - Follow-up disarm (always): the proactive Haiku follow-up is killed
+  //     for every close-contact outcome. That's the whole point of this
+  //     endpoint and is handled by the explicit `followUpLifecycle.disarm`
+  //     call right below + the `chat.closed` event subscriber.
+  //
+  //   - Agent pause (only when the customer asked for silence): blocks the
+  //     reactive agent from replying to inbound messages. We only set this
+  //     on `lost` (lead explicitly told us to stop). For soft cooldowns
+  //     (redirected_sac, unqualified, no_response, other) and the won
+  //     terminal, the customer can still come back and reach the agent —
+  //     a customer asking "I couldn't reach the SAC number" deserves a
+  //     reply, not 24h of silence.
+  //
+  // The dispatcher's close-contact gate honours `closed === true` (hard
+  // terminal) for skip and treats a pure soft cooldown as pass.
+  const shouldPauseAgent = outcome === 'lost';
   const closedAt = new Date();
   await services.chats.update(data.chatId, {
     settings: {
-      agentPaused: true,
+      ...(shouldPauseAgent ? { agentPaused: true } : {}),
       closed: terminal,
       closeUntil: closeUntil?.toISOString() ?? null,
       closeOutcome: outcome,
@@ -1771,9 +1790,12 @@ messagesRoutes.post('/send/close-contact', zValidator('json', sendCloseContactSc
     reason: 'contact_closed',
   });
 
-  // Emit chat.closed explicitly — the chats service emits chat.handoff_activated
-  // on agentPaused flip, which is fine for the follow-up lifecycle (both subscribers
-  // disarm the row), but BI/audit consumers want the explicit terminal signal.
+  // Emit chat.closed explicitly. For `lost` (the only outcome that flips
+  // agentPaused: false → true here) the chats service also emits
+  // chat.handoff_activated, which is fine — both subscribers disarm the
+  // row idempotently and the explicit `followUpLifecycle.disarm` call above
+  // already covered it. For all other outcomes only chat.closed fires, which
+  // is what BI/audit consumers want anyway.
   if (services.eventBus) {
     const payload: ChatClosedPayload = {
       chatId: data.chatId,
