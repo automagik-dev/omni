@@ -18,6 +18,17 @@ export interface ServerConfig {
   dataDir: string;
   logLevel: string;
   nodeEnv: string;
+  /**
+   * When true, omni-api connects to an externally-managed canonical pgserve
+   * (the one registered by `pgserve install` from pgserve@^2.1.0) and SKIPS
+   * its embedded pgserve startup path. Persisted by `omni install` (default
+   * true on fresh installs; preserved on reinstalls) and by
+   * `omni doctor --fix` when migrating an embedded install onto canonical.
+   *
+   * Default behavior on legacy configs (field absent): treated as false →
+   * embedded mode continues. Operators migrate via `omni doctor --fix`.
+   */
+  useCanonicalPgserve?: boolean;
 }
 
 /** Valid config keys (top-level and dot-notation server.* keys) */

@@ -97,16 +97,23 @@ export function resolveDatabaseUrl(serverConfig: ServerConfig): string {
  * Build the complete runtime env for the omni-api process.
  *
  * All values come from `serverConfig` / `cliConfig`. No shell env reads.
+ *
+ * `PGSERVE_EMBEDDED` is flipped off when `serverConfig.useCanonicalPgserve`
+ * is true — the omni-api code path in `packages/api/src/pgserve.ts` reads
+ * this and skips its embedded pgserve startup, connecting instead to
+ * whatever `DATABASE_URL` points at (typically the canonical pgserve
+ * registered by `pgserve install` from pgserve@^2.1.0).
  */
 export function buildRuntimeEnv(serverConfig: ServerConfig, cliConfig: Config): RuntimeEnv {
   const pgservePort = resolvePgservePort(serverConfig);
+  const useCanonical = serverConfig.useCanonicalPgserve === true;
   return {
     API_PORT: String(serverConfig.port),
     DATABASE_URL: resolveDatabaseUrl(serverConfig),
     OMNI_API_KEY: cliConfig.apiKey ?? '',
     MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
     OMNI_PACKAGES_DIR: join(serverConfig.dataDir, 'packages'),
-    PGSERVE_EMBEDDED: 'true',
+    PGSERVE_EMBEDDED: useCanonical ? 'false' : 'true',
     PGSERVE_DATA: join(serverConfig.dataDir, 'pgserve'),
     PGSERVE_PORT: String(pgservePort),
     NATS_URL: 'nats://localhost:4222',
