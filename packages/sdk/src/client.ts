@@ -235,6 +235,23 @@ export interface OmniClientConfig {
   apiKey: string;
   /** Optional CLI version for request handshake header */
   cliVersion?: string;
+  /**
+   * Optional ed25519 signer (omni-host-fingerprint-trust P0b). When set,
+   * every request gets the three X-Genie-* headers attached so the omni
+   * server can recognize the calling host (per-host scopes / per-instance
+   * lockdown). The CLI populates this from `~/.omni/keys/` when the
+   * operator has run `omni trust handshake`. Bearer-only callers leave
+   * this undefined and behave as before — fully backward-compatible.
+   */
+  signRequest?: (
+    method: string,
+    path: string,
+    body: string,
+  ) => {
+    'X-Genie-Host-Id': string;
+    'X-Genie-Timestamp': string;
+    'X-Genie-Signature': string;
+  };
 }
 
 /**
@@ -1167,6 +1184,23 @@ export function createOmniClient(config: OmniClientConfig) {
       if (config.cliVersion) {
         request.headers.set('x-omni-cli-version', config.cliVersion);
       }
+      // Per-host signing (P0b). Compute the signature using the same
+      // canonical input the omni verifier reconstructs: timestamp, method,
+      // pathname+search, sha256(body). We clone() the request so reading
+      // the body here doesn't consume it before the actual fetch.
+      if (config.signRequest) {
+        const url = new URL(request.url);
+        const path = `${url.pathname}${url.search}`;
+        const method = request.method;
+        let body = '';
+        if (method !== 'GET' && method !== 'HEAD') {
+          body = await request.clone().text();
+        }
+        const sigHeaders = config.signRequest(method, path, body);
+        for (const [k, v] of Object.entries(sigHeaders)) {
+          request.headers.set(k, v);
+        }
+      }
       return request;
     },
   };
@@ -1178,6 +1212,26 @@ export function createOmniClient(config: OmniClientConfig) {
     headers.set('Accept-Encoding', 'identity');
     if (config.cliVersion) {
       headers.set('x-omni-cli-version', config.cliVersion);
+    }
+    // Per-host signing (P0b) for the apiFetch escape hatch (used by SDK
+    // surfaces that bypass openapi-fetch). Body is best-effort: when init
+    // carries a non-string body we don't attempt to canonicalize it here
+    // — those callers are rare, and adding a clone path for every body
+    // shape would be a bigger refactor than this PR's scope.
+    if (config.signRequest) {
+      const u = new URL(url);
+      const path = `${u.pathname}${u.search}`;
+      const method = (init?.method ?? 'GET').toUpperCase();
+      const bodyStr =
+        method === 'GET' || method === 'HEAD' || init?.body === undefined
+          ? ''
+          : typeof init.body === 'string'
+            ? init.body
+            : '';
+      const sigHeaders = config.signRequest(method, path, bodyStr);
+      for (const [k, v] of Object.entries(sigHeaders)) {
+        headers.set(k, v);
+      }
     }
 
     return fetch(url, {
