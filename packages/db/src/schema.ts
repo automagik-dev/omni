@@ -866,6 +866,22 @@ export const instances = pgTable(
      */
     bridgeTmuxSession: text('bridge_tmux_session'),
 
+    // ---- Per-instance signature enforcement (omni-host-fingerprint-trust, group 6) ----
+    /**
+     * When true, any request that targets this instance MUST carry a verified
+     * `X-Genie-Signature` (see middleware/genie-signature.ts). Bearer-only
+     * requests get 401 with code `GENIE_SIGNATURE_REQUIRED`.
+     *
+     * Default: false (additive rollout — existing bearer flows keep working
+     * until an operator explicitly opts the instance in via
+     * `omni instances update <id> --require-genie-signature`).
+     *
+     * Pairs with `genie_hosts.scopes` (group 5) to give operators a complete
+     * per-host trust story: which hosts can talk to this instance, and what
+     * each host is allowed to do.
+     */
+    requireGenieSignature: boolean('require_genie_signature').notNull().default(false),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
