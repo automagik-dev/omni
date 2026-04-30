@@ -232,6 +232,13 @@
       "when": 1777500000000,
       "tag": "0032_genie_hosts",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1777590000000,
+      "tag": "0033_close_contact_logs",
+      "breakpoints": true
     }
   ]
 }

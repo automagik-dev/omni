@@ -22,6 +22,7 @@ import type { ChannelType } from '@omni/core/types';
 import { GUPSHUP_CAPABILITIES } from './capabilities';
 import { GupshupClient } from './client';
 import { handleGupshupWebhook } from './handlers/webhooks';
+import { sendCloseContact } from './senders/close-contact';
 import { sendHandoff } from './senders/handoff';
 import { sendLocation } from './senders/location';
 import { sendMedia } from './senders/media';
@@ -45,6 +46,13 @@ async function dispatchContent(
     const motivoHandoff = meta.motivoHandoff as string | undefined;
     const handoffFields = meta.handoffFields as Record<string, unknown> | undefined;
     return sendHandoff(client, dest, content.text ?? '', dadosLead, motivoHandoff, handoffFields);
+  }
+
+  if (meta?.isCloseContact === true) {
+    const closeReason = meta.closeReason as string | undefined;
+    const closeOutcome = meta.closeOutcome as string | undefined;
+    const closeFields = meta.closeFields as Record<string, unknown> | undefined;
+    return sendCloseContact(client, dest, content.text ?? '', closeReason, closeOutcome, closeFields);
   }
 
   if (content.type === 'text') {

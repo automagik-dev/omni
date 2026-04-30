@@ -1421,6 +1421,74 @@ export const handoffLogs = pgTable(
 );
 
 // ============================================================================
+// CLOSE CONTACT LOGS
+// ============================================================================
+
+/**
+ * Outcome literals for the close-contact endpoint. Mirrors the
+ * `CloseContactOutcome` union in `@omni/core/events` — kept as a const here
+ * so the column type is statically checked and BI tooling can introspect.
+ *
+ * - `won` / `lost`        → hard terminal close.
+ * - `redirected_sac`      → cliente atual redirected to SAC; soft close.
+ * - `unqualified`         → lead refused N times; soft close.
+ * - `no_response`         → cadence exhausted, no inbound; soft close.
+ * - `other`               → catch-all soft close.
+ */
+export const closeContactOutcomes = ['won', 'lost', 'redirected_sac', 'unqualified', 'no_response', 'other'] as const;
+export type CloseContactOutcomeDb = (typeof closeContactOutcomes)[number];
+
+/**
+ * Records every agent→close-contact event with full payload.
+ *
+ * Written synchronously in the /send/close-contact route. The route also
+ * **reads** this table at close-time to count recent rows for the same
+ * `(chat_uuid, outcome)` within the configured escalation window — that
+ * count drives the auto-promotion of soft outcomes to hard terminal
+ * (recorded back as `escalated: true` on the new row). See `design.md`
+ * §6 + §8.1 for the loop-bound proof.
+ *
+ * Escalation index is `(chat_uuid, outcome, sent_at DESC)` — supports the
+ * recent-count query in O(log n). The instance/sent_at index is for BI.
+ */
+export const closeContactLogs = pgTable(
+  'close_contact_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id').references(() => instances.id, { onDelete: 'set null' }),
+    chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
+    chatId: varchar('chat_id', { length: 255 }).notNull(), // raw JID / phone used as chatId
+    toPhone: varchar('to_phone', { length: 100 }).notNull(), // recipient phone
+    text: text('text').notNull(), // farewell message shown to user
+    outcome: varchar('outcome', { length: 32 }).notNull().$type<CloseContactOutcomeDb>(),
+    reason: text('reason'), // free-text rationale for audit
+    closeFields: jsonb('close_fields').$type<Record<string, unknown>>(), // structured BI/CRM payload
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    externalMessageId: varchar('external_message_id', { length: 255 }), // Gupshup message ID
+    /**
+     * True when this close was auto-promoted to hard terminal because the
+     * same outcome had already fired N times within the escalation window
+     * for the same chat. Driven by the route handler at insert time.
+     */
+    escalated: boolean('escalated').notNull().default(false),
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(), // extensible
+  },
+  (table) => ({
+    /** Hot path: recent-count query for escalation. */
+    chatOutcomeSentAtIdx: index('close_contact_logs_chat_outcome_sent_at_idx').on(
+      table.chatUuid,
+      table.outcome,
+      table.sentAt,
+    ),
+    /** BI: per-instance event timeline. */
+    instanceSentAtIdx: index('close_contact_logs_instance_sent_at_idx').on(table.instanceId, table.sentAt),
+    chatIdIdx: index('close_contact_logs_chat_id_idx').on(table.chatId),
+    agentIdx: index('close_contact_logs_agent_idx').on(table.agentId),
+  }),
+);
+
+// ============================================================================
 // ACCESS RULES
 // ============================================================================
 
@@ -2713,6 +2781,20 @@ export const turnsRelations = relations(turns, ({ one }) => ({
 // CHAT FOLLOW-UP STATE (Idle-chat follow-up sequences)
 // ============================================================================
 
+/**
+ * Disarm reason values persisted in `chat_follow_up_state.disarm_reason`.
+ *
+ * The column type is `varchar(32)` — there is NO CHECK constraint or pg
+ * enum at the DB level. Validation lives in the TypeScript layer via
+ * `$type<FollowUpDisarmReasonDb>()` and the matching zod
+ * `DisarmReasonSchema`. Adding a value here is a pure type change; no
+ * migration is needed unless a future revision wants to harden this with
+ * a CHECK or a pg ENUM.
+ *
+ * Keep in sync with:
+ *   - `packages/core/src/events/types.ts` → `FollowUpDisarmReason`
+ *   - `packages/core/src/schemas/follow-up.ts` → `DisarmReasonSchema`
+ */
 export const followUpDisarmReasons = [
   'customer_replied',
   'handoff',
@@ -2722,6 +2804,7 @@ export const followUpDisarmReasons = [
   'agent_error',
   'send_failed',
   'session_cleared',
+  'contact_closed',
 ] as const;
 export type FollowUpDisarmReasonDb = (typeof followUpDisarmReasons)[number];
 
