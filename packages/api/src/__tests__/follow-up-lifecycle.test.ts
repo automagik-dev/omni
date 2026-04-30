@@ -453,4 +453,83 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
     expect(rows).toHaveLength(0);
   });
+
+  test('close-contact guard: hard terminal (closed=true) refuses to arm', async () => {
+    // won/lost outcomes flip closed=true and the dispatcher gate skip is
+    // permanent. The follow-up arm path must also refuse for these so a
+    // tail-stream chunk or NATS redelivery cannot resurrect a sequence.
+    await db
+      .update(chats)
+      .set({ settings: { followUpConfig: config(), closed: true, closeOutcome: 'lost' } })
+      .where(eq(chats.id, testChatId));
+
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+    });
+
+    const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
+    expect(rows).toHaveLength(0);
+  });
+
+  test('close-contact guard: soft cooldown still in window refuses to arm', async () => {
+    // redirected_sac (and other soft outcomes) set closeUntil=now+24h. The
+    // reactive agent stays open per #575, but proactive follow-up nudges
+    // must stay off until the cooldown expires.
+    const closeUntilFuture = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(); // +6h
+    await db
+      .update(chats)
+      .set({
+        settings: {
+          followUpConfig: config(),
+          closeUntil: closeUntilFuture,
+          closeOutcome: 'redirected_sac',
+        },
+      })
+      .where(eq(chats.id, testChatId));
+
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+    });
+
+    const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
+    expect(rows).toHaveLength(0);
+  });
+
+  test('close-contact guard: expired cooldown allows arm even with leftover closeOutcome', async () => {
+    // Once the dispatcher gate observes closeUntil expired it clears the
+    // field; closeOutcome stays as audit data. A customer return after that
+    // is a legitimate new conversation — Eugenia answering it should arm
+    // follow-up like any other reply. The original (closeOutcome-based) check
+    // would have permanently silenced follow-ups on every Hapvida client who
+    // ever hit redirected_sac, even months later when they came back wanting
+    // to buy a brand-new plan.
+    await db
+      .update(chats)
+      .set({
+        settings: {
+          followUpConfig: config(),
+          closed: false,
+          closeUntil: null,
+          closeOutcome: 'redirected_sac', // audit only — predicate ignores this
+        },
+      })
+      .where(eq(chats.id, testChatId));
+
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+    });
+
+    const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].disarmReason).toBeNull();
+  });
 });

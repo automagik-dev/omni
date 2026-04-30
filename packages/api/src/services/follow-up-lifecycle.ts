@@ -39,6 +39,7 @@ import {
   instances,
 } from '@omni/db';
 import { and, eq, isNull, sql } from 'drizzle-orm';
+import { isChatInActiveCloseState } from '../lib/close-contact-state';
 
 const log = createLogger('follow-up-lifecycle');
 
@@ -123,6 +124,9 @@ export class FollowUpLifecycleService {
   async armForOutbound(input: Omit<ArmSequenceInput, 'config'> & { config?: FollowUpSequenceConfig }): Promise<void> {
     if (!this.eventBus) return;
 
+    // Close-contact guard — see `isInActiveCloseState` for the rationale.
+    if (await this.isInActiveCloseState(input.chatId, input.instanceId)) return;
+
     const config = input.config ?? (await this.resolveConfig(input.chatId, input.instanceId, input.agentId ?? null));
     if (!config || config.enabled === false) return;
 
@@ -147,29 +151,7 @@ export class FollowUpLifecycleService {
       }
     }
 
-    // Terminal-disarm guard (#419): if the chat was disarmed with a terminal
-    // intent (user cleared the session, operator took handoff, chat archived,
-    // or the messaging window expired), refuse to re-arm unless the customer
-    // has actually sent a new message since the disarm. Without this check,
-    // any agent-origin `message.sent` that lands after the disarm (tail stream
-    // chunks, split-message tails, NATS redelivery of in-flight events) will
-    // resurrect a sequence the user explicitly terminated.
-    const existing = await this.readExistingRow(input.chatId, input.instanceId);
-    if (existing?.disarmReason && TERMINAL_DISARM_REASONS.has(existing.disarmReason) && existing.disarmedAt) {
-      const lastInbound = existing.lastInboundCustomerMessageAt?.getTime() ?? 0;
-      const disarmedAt = existing.disarmedAt.getTime();
-      if (lastInbound <= disarmedAt) {
-        this.logger.info('follow-up lifecycle: refusing to arm — terminal disarm awaiting customer return', {
-          chatId: input.chatId,
-          instanceId: input.instanceId,
-          disarmReason: existing.disarmReason,
-          disarmedAt: existing.disarmedAt.toISOString(),
-          lastAgentMessageAt: input.lastAgentMessageAt.toISOString(),
-          lastInboundCustomerMessageAt: existing.lastInboundCustomerMessageAt?.toISOString() ?? null,
-        });
-        return;
-      }
-    }
+    if (await this.shouldRefuseForTerminalDisarm(input)) return;
 
     try {
       await armSequence(
@@ -231,6 +213,95 @@ export class FollowUpLifecycleService {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /**
+   * Returns true when the chat has been deliberately closed via
+   * `POST /messages/send/close-contact` (any outcome — `redirected_sac`,
+   * `unqualified`, `no_response`, `other`, `won`, `lost`). Callers that arm
+   * a proactive follow-up must short-circuit on `true`: nudging a customer
+   * the seller agent already redirected to support is exactly what the
+   * close-contact endpoint exists to prevent.
+   *
+   * Why a dedicated guard instead of relying on `disarm({reason:'contact_closed'})`:
+   * the inline disarm in the close-contact handler only kills the *current*
+   * row. Any later `message.sent` (a customer comeback that the reactive
+   * agent answers, a tail-stream chunk, a NATS redelivery) re-enters
+   * `armForOutbound` and re-arms a fresh sequence — `TERMINAL_DISARM_REASONS`
+   * does not cover `contact_closed`, and even when it did the guard would
+   * let re-arms through whenever the customer's last inbound is more recent
+   * than the disarm timestamp, which is the comeback case.
+   *
+   * The canonical close marker is `chats.settings.closeOutcome`. The
+   * dispatcher's `applyCloseContactGate` already reads it; the follow-up arm
+   * path now does too. `POST /chats/:id/reopen-contact` clears it,
+   * restoring proactive follow-up alongside the reactive agent.
+   */
+  /**
+   * Terminal-disarm guard (#419): if the chat was disarmed with a terminal
+   * intent (user cleared the session, operator took handoff, chat archived,
+   * or the messaging window expired), refuse to re-arm unless the customer
+   * has actually sent a new message since the disarm. Without this check,
+   * any agent-origin `message.sent` that lands after the disarm (tail stream
+   * chunks, split-message tails, NATS redelivery of in-flight events) will
+   * resurrect a sequence the user explicitly terminated.
+   */
+  private async shouldRefuseForTerminalDisarm(
+    input: Pick<ArmSequenceInput, 'chatId' | 'instanceId' | 'lastAgentMessageAt'>,
+  ): Promise<boolean> {
+    const existing = await this.readExistingRow(input.chatId, input.instanceId);
+    if (!existing?.disarmReason || !existing.disarmedAt) return false;
+    if (!TERMINAL_DISARM_REASONS.has(existing.disarmReason)) return false;
+    const lastInbound = existing.lastInboundCustomerMessageAt?.getTime() ?? 0;
+    if (lastInbound > existing.disarmedAt.getTime()) return false;
+    this.logger.info('follow-up lifecycle: refusing to arm — terminal disarm awaiting customer return', {
+      chatId: input.chatId,
+      instanceId: input.instanceId,
+      disarmReason: existing.disarmReason,
+      disarmedAt: existing.disarmedAt.toISOString(),
+      lastAgentMessageAt: input.lastAgentMessageAt.toISOString(),
+      lastInboundCustomerMessageAt: existing.lastInboundCustomerMessageAt?.toISOString() ?? null,
+    });
+    return true;
+  }
+
+  /**
+   * Returns true when the chat is *currently* in an active close-contact
+   * state (hard terminal `closed: true` OR soft cooldown `closeUntil` still
+   * in window). Mirrors the dispatcher's `applyCloseContactGate` predicate
+   * — see `lib/close-contact-state.ts` for the rationale and why
+   * `closeOutcome` (audit data, preserved across cooldown expiry) is the
+   * wrong signal for this gate.
+   *
+   * Why a guard here: the inline `disarm({reason:'contact_closed'})` in the
+   * close-contact handler only kills the *current* row. Any later
+   * `message.sent` from the reactive agent (a customer comeback the agent
+   * answers within the cooldown, a tail-stream chunk, a NATS redelivery)
+   * re-enters armForOutbound and re-arms a fresh sequence — `TERMINAL_DISARM_REASONS`
+   * does not include `'contact_closed'`, and even when it did the
+   * existing terminal-disarm guard lets re-arms through whenever the
+   * customer's last inbound is newer than the disarm timestamp (which is
+   * exactly the comeback case). Once the cooldown expires the dispatcher
+   * gate clears `closeUntil`, this predicate flips to false, and a future
+   * agent reply legitimately re-arms.
+   */
+  private async isInActiveCloseState(chatId: string, instanceId: string): Promise<boolean> {
+    const [chatRow] = await this.db
+      .select({ settings: chats.settings })
+      .from(chats)
+      .where(eq(chats.id, chatId))
+      .limit(1);
+    const settings = chatRow?.settings as ChatSettings | null | undefined;
+    if (!isChatInActiveCloseState(settings)) return false;
+    const closeOutcome = (settings as { closeOutcome?: unknown } | null | undefined)?.closeOutcome;
+    this.logger.info('follow-up lifecycle: refusing to arm — chat in active close-contact state', {
+      chatId,
+      instanceId,
+      closed: (settings as { closed?: unknown } | null | undefined)?.closed === true,
+      closeUntil: (settings as { closeUntil?: unknown } | null | undefined)?.closeUntil ?? null,
+      closeOutcome: closeOutcome ?? null,
+    });
+    return true;
   }
 
   // ──────────────────────────────────────────────────────────────────────────

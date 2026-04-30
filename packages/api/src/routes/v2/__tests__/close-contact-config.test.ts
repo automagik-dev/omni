@@ -29,11 +29,16 @@ describe('DEFAULT_CLOSE_CONTACT_CONFIG', () => {
     });
   });
 
-  test('redirected_sac uses 24h cooldown / threshold 2 / 7d window', () => {
+  test('redirected_sac uses 24h cooldown and never auto-escalates', () => {
+    // Active Hapvida clients legitimately hit `redirected_sac` repeatedly
+    // (every post-sale topic ends here). Auto-promoting the soft close to a
+    // hard terminal would silence the reactive agent for normal client
+    // activity — see the comment on DEFAULT_CLOSE_CONTACT_CONFIG.redirected_sac
+    // for the full rationale.
     expect(DEFAULT_CLOSE_CONTACT_CONFIG.redirected_sac).toEqual({
       cooldownMs: 24 * HOUR,
-      escalationThreshold: 2,
-      escalationWindowMs: 7 * DAY,
+      escalationThreshold: null,
+      escalationWindowMs: null,
     });
   });
 
