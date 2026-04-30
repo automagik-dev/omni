@@ -135,6 +135,11 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'twilioWebhookUrl', opts.twilioWebhookUrl);
   setBool(body, 'twilioValidateSignature', opts.twilioValidateSignature);
   setVal(body, 'bridgeTmuxSession', opts.bridgeTmuxSession);
+  // Per-instance signature requirement (omni-host-fingerprint-trust group 6).
+  // Commander pairs `--require-genie-signature` (true) and
+  // `--no-require-genie-signature` (false) automatically when the option is
+  // declared with `--require-genie-signature` syntax.
+  setBool(body, 'requireGenieSignature', opts.requireGenieSignature);
   if (opts.triggerEvents !== undefined) {
     const raw = opts.triggerEvents as string;
     body.triggerEvents = raw === 'null' ? null : raw.split(',').map((s) => s.trim());
@@ -376,6 +381,12 @@ export function createInstancesCommand(): Command {
       '--bridge-tmux-session <name>',
       'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
     )
+    // Per-instance signature requirement (omni-host-fingerprint-trust group 6)
+    .option(
+      '--require-genie-signature',
+      'Require a verified X-Genie-Signature on requests targeting this instance. Bearer-only requests will be rejected with 401.',
+    )
+    .option('--no-require-genie-signature', 'Allow bearer-only requests targeting this instance (default).')
     // Default
     .option('--is-default', 'Set as default instance for channel')
     .action(async (options: Record<string, unknown>) => {
@@ -901,6 +912,12 @@ export function createInstancesCommand(): Command {
       '--bridge-tmux-session <name>',
       'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
     )
+    // Per-instance signature requirement (omni-host-fingerprint-trust group 6)
+    .option(
+      '--require-genie-signature',
+      'Require a verified X-Genie-Signature on requests targeting this instance. Bearer-only requests will be rejected with 401.',
+    )
+    .option('--no-require-genie-signature', 'Allow bearer-only requests targeting this instance (default).')
     .action(async (rawId: string, options: Record<string, unknown>) => {
       const client = getClient();
 
