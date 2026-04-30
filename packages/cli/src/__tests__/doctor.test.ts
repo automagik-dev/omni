@@ -841,4 +841,44 @@ describe('runDoctor — pgserve-canonical check', () => {
     expect(failedFix).toBeDefined();
     expect(failedFix).toContain('canonical pgserve setup failed');
   });
+
+  test('--fix does NOT rotate cli-key when canonical-pgserve fix returned FAILED (cascade gating)', async () => {
+    // Companion to the success-path cascade test above. When canonical
+    // migration FAILS (setupCanonicalPgserve returns null), Phase 2 must
+    // skip cascade-prone fixes that depend on omni-api being reachable
+    // and DB+env in sync. Without this gating, cli-key-valid rotates the
+    // key while api is still recovering from the failed migration,
+    // leaving pm2 env out of sync with the DB hash — exact reproduction
+    // of the pre-#580 cascade. See omni#583.
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION });
+    state.serverConfig = { ...state.serverConfig, useCanonicalPgserve: false };
+    // Phase 1 will FAIL: setupCanonicalPgserve returns null -> "FAILED pgserve-canonical: ..."
+    state.canonicalPgserveSetupResult = null;
+    // cli-key-valid stays FAIL across Phase 1's recovery restart (the
+    // live bug: api was actually unreachable, keyValid stayed false even
+    // after pm2 start). With keyValidAfterFix=false the harness keeps
+    // returning false from validateStoredKey, so Phase 2 sees the check
+    // still FAIL and would normally invoke fixCliKeyValid — which is
+    // exactly the cascade we are gating against.
+    state.keyValid = false;
+    state.keyValidAfterFix = false;
+
+    const report = await runDoctor({ fix: true }, mkDeps(state));
+
+    // Phase 1 attempted and FAILED.
+    expect(state.canonicalPgserveSetupCalled).toBe(true);
+    const failedFix = report.fixesApplied.find((f) => f.startsWith('FAILED pgserve-canonical'));
+    expect(failedFix).toBeDefined();
+
+    // cli-key-valid fix MUST NOT have run — no rotation message present.
+    const rotatedKey = report.fixesApplied.find((f) => typeof f === 'string' && f.includes('rotated CLI key'));
+    expect(rotatedKey).toBeUndefined();
+
+    // SKIPPED entry recorded for cli-key-valid so the operator sees an
+    // actionable explanation instead of a destructive rotation.
+    const skippedKey = report.fixesApplied.find((f) => f.startsWith('SKIPPED cli-key-valid'));
+    expect(skippedKey).toBeDefined();
+    expect(skippedKey).toContain('failed canonical-pgserve migration');
+  });
 });

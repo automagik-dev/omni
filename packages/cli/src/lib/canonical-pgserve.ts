@@ -35,21 +35,34 @@ import * as output from '../output.js';
 const PGSERVE_REQUIRED_VERSION = '^2.1.0';
 
 /**
- * Probe the `pgserve` binary by running a real subcommand. Returns true
- * when the binary is callable and accepts canonical-mode subcommands.
+ * Probe the `pgserve` binary by running its `--help` subcommand. Returns
+ * true when the binary is callable.
  *
  * History
  * -------
- * The first attempt used `pgserve --version`. That flag does not exist
- * in pgserve@2.1.0 — the wrapper exits non-zero with "Unknown option:
- * --version" and dumps the help. `omni doctor --fix` then false-negatived,
- * triggered a redundant `bun add -g pgserve` call, and the migration
- * failed. We now probe `pgserve port`, which exists in 2.1.0+ and exits
- * 0 with the canonical port number on stdout.
+ * 1. First attempt used `pgserve --version`. That flag does not exist in
+ *    pgserve@2.1.0 — the wrapper exits non-zero with "Unknown option:
+ *    --version" and dumps the help. False-negatived on every install.
+ *    Replaced with `pgserve port` in the followup.
+ *
+ * 2. `pgserve port` exits 0 ONLY when pgserve has been registered under
+ *    pm2 via `pgserve install`. On a clean machine right after
+ *    `bun add -g pgserve@^2.1.0`, the binary IS callable but `pgserve
+ *    port` exits non-zero with "pgserve: not installed (run: pgserve
+ *    install)". `ensurePgserveBinary()` then never reaches
+ *    `runPgserveInstall()`, `setupCanonicalPgserve()` returns null, and
+ *    the migration aborts with the misleading "Canonical pgserve binary
+ *    unavailable" error. See omni#582.
+ *
+ * 3. `pgserve --help` exits 0 whenever the binary is on PATH and runnable,
+ *    regardless of registration state. We probe with that — any further
+ *    capability (registration, port discovery) is asserted by the
+ *    subsequent `pgserve install` and `pgserve port` calls in the setup
+ *    flow.
  */
 async function isPgserveInstalled(): Promise<boolean> {
   try {
-    const code = await Bun.spawn({ cmd: ['pgserve', 'port'], stdout: 'pipe', stderr: 'pipe' }).exited;
+    const code = await Bun.spawn({ cmd: ['pgserve', '--help'], stdout: 'pipe', stderr: 'pipe' }).exited;
     return code === 0;
   } catch {
     return false;

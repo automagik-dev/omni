@@ -860,6 +860,69 @@ function summarizeChecks(checks: CheckResult[]): { ok: number; warn: number; fai
 }
 
 /**
+ * Cascade-prone fix ids: each depends on omni-api being reachable and on
+ * DB+env being in sync. When the canonical-pgserve migration FAILS,
+ * omni-api is still recovering on embedded; running these would rotate
+ * keys / restart with bad env and reproduce the pre-#580 401-cascade.
+ * See omni#583.
+ */
+const CASCADE_PRONE_FIXES: ReadonlySet<CheckId> = new Set<CheckId>([
+  'cli-key-valid',
+  'omni-db-exists',
+  'pgserve-reachable',
+]);
+
+/**
+ * Phase 1 of `runDoctor` --fix: run the canonical-pgserve migration in
+ * isolation, then re-evaluate all checks against the post-migration
+ * state. Returns whether the migration FAILED (so Phase 2 can gate
+ * cascade-prone fixes) plus the refreshed check list.
+ */
+async function runPhase1MigrationFix(
+  deps: DoctorDeps,
+  checks: CheckResult[],
+  fixesApplied: string[],
+): Promise<{ canonicalFailed: boolean; checks: CheckResult[] }> {
+  const canonicalCheck = checks.find((c) => c.id === 'pgserve-canonical');
+  if (!canonicalCheck || canonicalCheck.level === 'OK') {
+    return { canonicalFailed: false, checks };
+  }
+  const result = await applyFix(deps, canonicalCheck);
+  if (result !== null) fixesApplied.push(result);
+  const canonicalFailed = typeof result === 'string' && result.startsWith('FAILED ');
+  // Re-run all checks against the post-migration state before any other
+  // fix gets to see them.
+  const refreshed = await runAllChecks(deps);
+  return { canonicalFailed, checks: refreshed };
+}
+
+/**
+ * Phase 2 of `runDoctor` --fix: iterate the remaining failing checks and
+ * apply each fix. When Phase 1 reported FAILED, cascade-prone fixes are
+ * skipped with an actionable message — without this gating, cli-key-valid
+ * (and friends) rotate destructively while the API is still recovering.
+ */
+async function runPhase2Fixes(
+  deps: DoctorDeps,
+  checks: CheckResult[],
+  canonicalFailed: boolean,
+  fixesApplied: string[],
+): Promise<void> {
+  for (const check of checks) {
+    if (check.level === 'OK') continue;
+    if (check.id === 'pgserve-canonical') continue; // already handled in Phase 1
+    if (canonicalFailed && CASCADE_PRONE_FIXES.has(check.id)) {
+      fixesApplied.push(
+        `SKIPPED ${check.id}: blocked by failed canonical-pgserve migration — fix manually after \`pgserve install\``,
+      );
+      continue;
+    }
+    const result = await applyFix(deps, check);
+    if (result !== null) fixesApplied.push(result);
+  }
+}
+
+/**
  * Run all checks and optionally apply fixes. Returns a structured
  * DoctorReport — the caller decides how to render it (human vs. JSON).
  */
@@ -869,30 +932,9 @@ export async function runDoctor(options: DoctorOptions, depsOverride?: DoctorDep
   const fixesApplied: string[] = [];
 
   if (options.fix) {
-    // Phase 1: migration fixes that change state for everyone else.
-    // pgserve-canonical stops omni-api, registers canonical pgserve, restarts
-    // omni-api on the new URL. After it runs, cli-key-valid / pgserve-reachable
-    // / omni-db-exists / version-match must be re-evaluated against the
-    // migrated state — running them in the same pass would cascade false
-    // failures (api temporarily unreachable) and trigger destructive fixes
-    // (key rotation while DB is unmigrated).
-    const canonicalCheck = checks.find((c) => c.id === 'pgserve-canonical');
-    if (canonicalCheck && canonicalCheck.level !== 'OK') {
-      const result = await applyFix(deps, canonicalCheck);
-      if (result !== null) fixesApplied.push(result);
-      // Re-run all checks against the post-migration state before any other
-      // fix gets to see them.
-      checks = await runAllChecks(deps);
-    }
-
-    // Phase 2: every other fix runs against the (possibly post-migration) state.
-    for (const check of checks) {
-      if (check.level === 'OK') continue;
-      if (check.id === 'pgserve-canonical') continue; // already handled above
-      const result = await applyFix(deps, check);
-      if (result !== null) fixesApplied.push(result);
-    }
-
+    const phase1 = await runPhase1MigrationFix(deps, checks, fixesApplied);
+    checks = phase1.checks;
+    await runPhase2Fixes(deps, checks, phase1.canonicalFailed, fixesApplied);
     // Final re-check so the report reflects post-fix state.
     checks = await runAllChecks(deps);
   }
