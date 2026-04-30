@@ -49,6 +49,7 @@ import * as output from '../output.js';
 import { PM2_HARDENED_DEFAULTS, PM2_PROCESSES, buildPm2StartArgs, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv, resolvePgservePort } from '../runtime-env.js';
 import { getServerLauncherPath } from '../server-bundle.js';
+import { loadSigningContext } from '../signing.js';
 import { generateApiKey } from '../utils/keys.js';
 import { VERSION } from '../version.js';
 
@@ -69,7 +70,8 @@ export type CheckId =
   | 'version-match'
   | 'pm2-status'
   | 'pm2-max-restarts'
-  | 'pm2-logrotate-installed';
+  | 'pm2-logrotate-installed'
+  | 'cli-signing-key-for-locked-instances';
 
 export interface CheckResult {
   id: CheckId;
@@ -177,6 +179,21 @@ export interface DoctorDeps {
   sleepMs: (ms: number) => Promise<void>;
   /** Capture `pm2 conf` stdout (or null on error). Used by pm2-logrotate check. */
   capturePm2Conf: () => Promise<string | null>;
+  /**
+   * List instances that have `requireGenieSignature: true` set. Used by the
+   * signature-key-for-locked-instances check (omni-host-fingerprint-trust
+   * P2). Returns an empty array when the API is unreachable — the check
+   * then becomes a no-op rather than false-positive WARN.
+   */
+  listLockedInstances: () => Promise<{ id: string; name: string }[]>;
+  /**
+   * Return true when the running CLI has a usable ed25519 keypair (i.e.
+   * `omni trust handshake` has been run). Locked instances refuse
+   * bearer-only requests, so an operator without a key can only do the
+   * unlock-only PATCH escape — anything else fails with 401. We surface
+   * that as a WARN so it's caught before the operator hits the wall.
+   */
+  cliHasSigningKey: () => boolean;
 }
 
 /** Default production deps — each is a thin shim around the real call. */
@@ -265,6 +282,28 @@ function productionDeps(): DoctorDeps {
       if (code !== 0) return null;
       return stdout;
     },
+    listLockedInstances: async () => {
+      const cliConfig = loadConfig();
+      // Without a stored CLI key we can't even reach /instances. Fall
+      // back to "no locked instances visible" rather than crash; the
+      // cli-key-valid check already FAILs and surfaces the real problem.
+      if (!cliConfig.apiKey) return [];
+      try {
+        const apiPort = loadServerConfig().port;
+        const baseUrl = cliConfig.apiUrl ?? `http://localhost:${apiPort}`;
+        const client = createOmniClient({ baseUrl, apiKey: cliConfig.apiKey, cliVersion: VERSION });
+        const { items } = await client.instances.list({ limit: 200 });
+        return items
+          .filter((i) => (i as unknown as { requireGenieSignature?: boolean }).requireGenieSignature === true)
+          .map((i) => ({ id: i.id, name: i.name }));
+      } catch {
+        // API unreachable / network blip → no-op the check rather than
+        // false-positive WARN. Other doctor checks already cover the
+        // "API unreachable" failure mode (pgserve-reachable, omni-db-exists).
+        return [];
+      }
+    },
+    cliHasSigningKey: () => loadSigningContext() !== null,
   };
 }
 
@@ -618,11 +657,55 @@ function fixOrphanedDataDirs(deps: DoctorDeps): string {
   return `printed ${found.length} rm-rf suggestion(s)`;
 }
 
+/**
+ * Check 10: when one or more instances are locked
+ * (require_genie_signature = true) but this CLI doesn't have a signing
+ * keypair, warn that bearer-only admin will fail and tell the operator
+ * how to fix it.
+ *
+ * Three cases:
+ *   - No locked instances → OK (signature pipeline may or may not be
+ *     in use; nothing for this check to assert).
+ *   - Locked instances + key present → OK (signed admin works).
+ *   - Locked instances + no key → WARN with the exact recovery command.
+ *
+ * The kill-switch unlock PATCH (omni#568) still works without a key,
+ * so this is genuinely a WARN (operator can recover) rather than FAIL.
+ */
+async function checkSigningKeyForLockedInstances(deps: DoctorDeps): Promise<CheckResult> {
+  const locked = await deps.listLockedInstances();
+  if (locked.length === 0) {
+    return {
+      id: 'cli-signing-key-for-locked-instances',
+      level: 'OK',
+      detail: 'no instances require signed requests (or API unreachable — check pgserve-reachable / omni-db-exists)',
+    };
+  }
+  const hasKey = deps.cliHasSigningKey();
+  if (hasKey) {
+    return {
+      id: 'cli-signing-key-for-locked-instances',
+      level: 'OK',
+      detail: `${locked.length} instance(s) require signing; CLI has a signing key — admin will sign automatically`,
+    };
+  }
+  const names = locked
+    .slice(0, 3)
+    .map((i) => i.name || i.id.slice(0, 8))
+    .join(', ');
+  const more = locked.length > 3 ? ` (+${locked.length - 3} more)` : '';
+  return {
+    id: 'cli-signing-key-for-locked-instances',
+    level: 'WARN',
+    detail: `${locked.length} instance(s) require signing (${names}${more}) but this CLI has no key in ~/.omni/keys/. Bearer-only admin against these instances will fail with 401 GENIE_SIGNATURE_REQUIRED. Run \`omni trust handshake\` to enable signed requests. (The unlock-only PATCH escape from omni#568 still works without a key.)`,
+  };
+}
+
 // ============================================================================
 // MAIN
 // ============================================================================
 
-/** Run the full 9-check battery sequentially. */
+/** Run the full check battery sequentially. */
 async function runAllChecks(deps: DoctorDeps): Promise<CheckResult[]> {
   return [
     await checkPm2EnvDrift(deps),
@@ -634,6 +717,7 @@ async function runAllChecks(deps: DoctorDeps): Promise<CheckResult[]> {
     await checkPm2Status(deps),
     await checkPm2MaxRestarts(deps),
     await checkPm2LogrotateInstalled(deps),
+    await checkSigningKeyForLockedInstances(deps),
   ];
 }
 
