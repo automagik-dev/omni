@@ -32,7 +32,7 @@ import * as output from '../output.js';
  * canonical-pgserve-pm2-supervision wish landed in 2.1.0; anything older
  * lacks the install command.
  */
-export const PGSERVE_REQUIRED_VERSION = '^2.1.0';
+const PGSERVE_REQUIRED_VERSION = '^2.1.0';
 
 /**
  * Probe `pgserve --version`. Returns true when the binary is callable.
@@ -40,7 +40,7 @@ export const PGSERVE_REQUIRED_VERSION = '^2.1.0';
  * surface a clear error from `pgserve install` itself if the binary is
  * too old (it'll exit non-zero with "unknown command: install").
  */
-export async function isPgserveInstalled(): Promise<boolean> {
+async function isPgserveInstalled(): Promise<boolean> {
   try {
     const code = await Bun.spawn({ cmd: ['pgserve', '--version'], stdout: 'pipe', stderr: 'pipe' }).exited;
     return code === 0;
@@ -56,7 +56,7 @@ export async function isPgserveInstalled(): Promise<boolean> {
  * - Returns false on failure (caller decides whether to fall back to
  *   embedded or fail hard).
  */
-export async function ensurePgserveBinary(): Promise<boolean> {
+async function ensurePgserveBinary(): Promise<boolean> {
   if (await isPgserveInstalled()) return true;
   output.raw(`  Installing pgserve@${PGSERVE_REQUIRED_VERSION} globally (bun add -g)...`);
   const installCode = await Bun.spawn({
