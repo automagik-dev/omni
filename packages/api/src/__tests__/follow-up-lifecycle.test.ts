@@ -453,4 +453,59 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
     expect(rows).toHaveLength(0);
   });
+
+  test('close-contact guard: armForOutbound refuses to arm when closeOutcome is set', async () => {
+    // Simulate a chat that was deliberately closed via /messages/send/close-contact
+    // (e.g. encerrar_atendimento with `redirected_sac`). closeOutcome is the
+    // canonical marker; the dispatcher gate already reads it and now the
+    // follow-up arm path must too. Without this guard, a customer return that
+    // the reactive agent answers would re-arm a sequence and the sweeper would
+    // nudge a customer the seller agent already redirected to support.
+    await db
+      .update(chats)
+      .set({ settings: { followUpConfig: config(), closeOutcome: 'redirected_sac' } })
+      .where(eq(chats.id, testChatId));
+
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+    });
+
+    const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
+    expect(rows).toHaveLength(0);
+  });
+
+  test('close-contact guard: clearing closeOutcome (reopen-contact) restores arm', async () => {
+    // First put the chat into close-contact state and confirm no arm.
+    await db
+      .update(chats)
+      .set({ settings: { followUpConfig: config(), closeOutcome: 'redirected_sac' } })
+      .where(eq(chats.id, testChatId));
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+    });
+    expect(await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId))).toHaveLength(0);
+
+    // Simulate /chats/:id/reopen-contact: closeOutcome cleared.
+    await db
+      .update(chats)
+      .set({ settings: { followUpConfig: config(), closeOutcome: null } })
+      .where(eq(chats.id, testChatId));
+
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+    });
+
+    const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].disarmReason).toBeNull();
+  });
 });
