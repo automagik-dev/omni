@@ -39,7 +39,18 @@ const DAY = 24 * HOUR;
 export const DEFAULT_CLOSE_CONTACT_CONFIG: CloseContactConfig = {
   won: { cooldownMs: null, escalationThreshold: null, escalationWindowMs: null },
   lost: { cooldownMs: null, escalationThreshold: null, escalationWindowMs: null },
-  redirected_sac: { cooldownMs: 24 * HOUR, escalationThreshold: 2, escalationWindowMs: 7 * DAY },
+  // `redirected_sac` is the canonical outcome for an active Hapvida client
+  // reaching the seller agent (appointments, billing, doctor lookup,
+  // authorization — anything post-sale). Each new conversation legitimately
+  // ends in a SAC redirect, so the same client returning several times in a
+  // week is expected behaviour, not a signal that the redirect is failing.
+  // Auto-escalating to a hard terminal silences the reactive agent for a
+  // customer whose every interaction is, by design, a SAC redirect. The 24h
+  // cooldown stays so the proactive Haiku follow-up keeps disarmed in the
+  // immediate window, but the soft close never auto-promotes. Operators can
+  // still close manually with `won`/`lost`, and per-instance overrides via
+  // `instance.settings.closeContactConfig` remain available.
+  redirected_sac: { cooldownMs: 24 * HOUR, escalationThreshold: null, escalationWindowMs: null },
   unqualified: { cooldownMs: 7 * DAY, escalationThreshold: 3, escalationWindowMs: 30 * DAY },
   no_response: { cooldownMs: 48 * HOUR, escalationThreshold: 3, escalationWindowMs: 30 * DAY },
   other: { cooldownMs: 24 * HOUR, escalationThreshold: 2, escalationWindowMs: 14 * DAY },
