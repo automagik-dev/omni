@@ -54,6 +54,13 @@ export interface AppVariables {
    * the request was bearer-only or unsigned.
    */
   signedBy?: string;
+  /**
+   * Per-host scopes from `genie_hosts.scopes` for the verified host
+   * (Group 5). The scope-enforcer intersects this with the bearer key's
+   * scopes — both must allow the route. Absent when the request was
+   * bearer-only or unsigned (in which case only the bearer's scopes apply).
+   */
+  signedByScopes?: string[];
 }
 
 /**
