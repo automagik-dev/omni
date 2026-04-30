@@ -18,7 +18,7 @@
       "import": "./dist/sdk/index.js"
     }
   },
-  "files": ["dist", "bin", "db"],
+  "files": ["dist", "bin", "db", "scripts/postinstall-pin-version.cjs"],
   "publishConfig": {
     "access": "public"
   },
@@ -29,6 +29,7 @@
     "dev": "echo 'CLI package - no dev server (use: bun run ./src/index.ts <command>)'",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "postinstall": "node scripts/postinstall-pin-version.cjs",
     "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
     "clean": "rm -rf dist db",
     "build:server": "bun build src/bundled-server-entry.ts --outdir dist/server --entry-naming 'index.[ext]' --asset-naming '[name].[ext]' --target bun --external @anthropic-ai/claude-agent-sdk --external @snazzah/davey --external libsodium-wrappers --external opusscript --external pdf-parse --external mammoth --external exceljs",
