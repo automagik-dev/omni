@@ -38,7 +38,7 @@ import {
   chats,
   instances,
 } from '@omni/db';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, notInArray, or, sql } from 'drizzle-orm';
 import { isChatInActiveCloseState } from '../lib/close-contact-state';
 
 const log = createLogger('follow-up-lifecycle');
@@ -62,6 +62,25 @@ const TERMINAL_DISARM_REASONS: ReadonlySet<FollowUpDisarmReason> = new Set<Follo
   'archived',
   'window_expired',
 ]);
+
+/**
+ * Reasons strong enough to refuse a terminal override (#542 + gemini review).
+ * Any terminal disarm (`handoff`, `session_cleared`, `archived`,
+ * `window_expired`) must advance a row whose prior reason is non-terminal
+ * (e.g., `customer_replied`, `sequence_complete`, `agent_error`,
+ * `send_failed`) — those don't block re-arms via the terminal-disarm guard,
+ * so a later tail-stream chunk would resurrect the sequence (the "Mario leak"
+ * pattern).
+ *
+ * It must NOT downgrade a row that is already terminal-or-stronger:
+ * `TERMINAL_DISARM_REASONS` plus `contact_closed` (close-contact set the
+ * row deliberately; preserving the audit trail matters more than swapping
+ * the bookkeeping label).
+ *
+ * Held as an array (not a Set) so the `notInArray` query operator can use
+ * it directly without spreading on every disarm call.
+ */
+const TERMINAL_OVERRIDE_PROTECTED: FollowUpDisarmReason[] = [...TERMINAL_DISARM_REASONS, 'contact_closed'];
 
 /**
  * Typed reads across the three storage locations — the resolver is DB-agnostic,
@@ -407,16 +426,28 @@ export class FollowUpLifecycleService {
       set.lastInboundCustomerMessageAt = lastInboundCustomerMessageAt;
     }
 
+    // Default disarm semantics are idempotent: only update when the row has
+    // no prior disarm reason. Terminal reasons are the exception (#542 +
+    // gemini review on PR #588): any reason in `TERMINAL_DISARM_REASONS`
+    // (`handoff`, `session_cleared`, `archived`, `window_expired`) must
+    // override a row that's already disarmed with a non-terminal reason
+    // (`customer_replied`, `sequence_complete`, `agent_error`, `send_failed`),
+    // so the terminal-disarm guard in `armForOutbound` blocks a later tail
+    // chunk or NATS redelivery from re-arming the sequence. Strong reasons
+    // (`TERMINAL_OVERRIDE_PROTECTED`) still win — a terminal disarm never
+    // downgrades another terminal row or a `contact_closed` row, and
+    // re-applying the same reason stays a no-op.
+    const reasonGuard = TERMINAL_DISARM_REASONS.has(reason)
+      ? or(
+          isNull(chatFollowUpState.disarmReason),
+          notInArray(chatFollowUpState.disarmReason, TERMINAL_OVERRIDE_PROTECTED),
+        )
+      : isNull(chatFollowUpState.disarmReason);
+
     const result = await this.db
       .update(chatFollowUpState)
       .set(set)
-      .where(
-        and(
-          eq(chatFollowUpState.chatId, chatId),
-          eq(chatFollowUpState.instanceId, instanceId),
-          isNull(chatFollowUpState.disarmReason),
-        ),
-      )
+      .where(and(eq(chatFollowUpState.chatId, chatId), eq(chatFollowUpState.instanceId, instanceId), reasonGuard))
       .returning({ id: chatFollowUpState.id });
 
     return { disarmed: result.length > 0 };
