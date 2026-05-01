@@ -890,7 +890,7 @@ function checkPgserveCanonical(deps: DoctorDeps): CheckResult {
     id: 'pgserve-canonical',
     level: 'WARN',
     detail:
-      'using embedded pgserve — pgserve@^2.1.0 has grown up and is now the recommended shared backbone. Run `omni doctor --fix` to migrate (idempotent; preserves all data).',
+      'using embedded pgserve — DEPRECATED. Canonical pgserve@^2.1.0 is the supported path; embedded mode will be removed in a future release. Run `omni doctor --fix` to migrate (idempotent; pg_dump → pgserve install → restore → relaunch).',
   };
 }
 
