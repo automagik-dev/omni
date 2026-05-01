@@ -45,7 +45,9 @@ describe('GET /chats/:id/messages — date parameter validation (#462)', () => {
     const calls: CallArgs[] = [];
     const app = mountChatsRoutes(calls);
 
-    const res = await app.request('/chats/chat-123/messages?after=550e8400-e29b-41d4-a716-446655440000');
+    const res = await app.request(
+      '/chats/11111111-1111-1111-8111-111111111111/messages?after=550e8400-e29b-41d4-a716-446655440000',
+    );
 
     expect(res.status).toBe(400);
     expect(calls).toHaveLength(0); // service must not be called with Invalid Date
@@ -55,7 +57,7 @@ describe('GET /chats/:id/messages — date parameter validation (#462)', () => {
     const calls: CallArgs[] = [];
     const app = mountChatsRoutes(calls);
 
-    const res = await app.request('/chats/chat-123/messages?after=not-a-date-at-all');
+    const res = await app.request('/chats/11111111-1111-1111-8111-111111111111/messages?after=not-a-date-at-all');
 
     expect(res.status).toBe(400);
     expect(calls).toHaveLength(0);
@@ -65,7 +67,9 @@ describe('GET /chats/:id/messages — date parameter validation (#462)', () => {
     const calls: CallArgs[] = [];
     const app = mountChatsRoutes(calls);
 
-    const res = await app.request('/chats/chat-123/messages?before=550e8400-e29b-41d4-a716-446655440000');
+    const res = await app.request(
+      '/chats/11111111-1111-1111-8111-111111111111/messages?before=550e8400-e29b-41d4-a716-446655440000',
+    );
 
     expect(res.status).toBe(400);
     expect(calls).toHaveLength(0);
@@ -75,13 +79,15 @@ describe('GET /chats/:id/messages — date parameter validation (#462)', () => {
     const calls: CallArgs[] = [];
     const app = mountChatsRoutes(calls);
 
-    const res = await app.request('/chats/chat-123/messages?after=2024-01-01T00:00:00.000Z');
+    const res = await app.request(
+      '/chats/11111111-1111-1111-8111-111111111111/messages?after=2024-01-01T00:00:00.000Z',
+    );
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as { items: unknown[] };
     expect(Array.isArray(body.items)).toBe(true);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.chatId).toBe('chat-123');
+    expect(calls[0]?.chatId).toBe('11111111-1111-1111-8111-111111111111');
     const after = calls[0]?.options.after;
     expect(after).toBeInstanceOf(Date);
     expect((after as Date).toISOString()).toBe('2024-01-01T00:00:00.000Z');
@@ -91,7 +97,7 @@ describe('GET /chats/:id/messages — date parameter validation (#462)', () => {
     const calls: CallArgs[] = [];
     const app = mountChatsRoutes(calls);
 
-    const res = await app.request('/chats/chat-123/messages');
+    const res = await app.request('/chats/11111111-1111-1111-8111-111111111111/messages');
 
     expect(res.status).toBe(200);
     expect(calls).toHaveLength(1);
@@ -103,7 +109,7 @@ describe('GET /chats/:id/messages — date parameter validation (#462)', () => {
     const calls: CallArgs[] = [];
     const app = mountChatsRoutes(calls);
 
-    const res = await app.request('/chats/chat-123/messages?mediaOnly=true');
+    const res = await app.request('/chats/11111111-1111-1111-8111-111111111111/messages?mediaOnly=true');
 
     expect(res.status).toBe(200);
     expect(calls[0]?.options.mediaOnly).toBe(true);
