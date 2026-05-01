@@ -52,7 +52,13 @@ import {
 } from '../config.js';
 import { getHealthCheckUrl } from '../health.js';
 import { PM2_LOGROTATE_SETTINGS } from '../install-helpers.js';
-import { setupCanonicalPgserve } from '../lib/canonical-pgserve.js';
+import {
+  type EmbeddedDumpResult,
+  dumpEmbeddedDb,
+  getCanonicalPgserveDataDir,
+  restoreSnapshotToCanonical,
+  setupCanonicalPgserve,
+} from '../lib/canonical-pgserve.js';
 import * as output from '../output.js';
 import { PM2_HARDENED_DEFAULTS, PM2_PROCESSES, buildPm2StartArgs, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv, resolvePgservePort } from '../runtime-env.js';
@@ -210,6 +216,24 @@ export interface DoctorDeps {
    */
   setupCanonicalPgserve: () => Promise<string | null>;
   /**
+   * `pg_dump` the embedded omni DB → gzip → snapshot file. Called BEFORE
+   * the caller stops omni-api so the embedded pgserve is still live for
+   * pg_dump to connect. Returns a status so the caller can decide whether
+   * to attempt a restore later. Stubbed in tests.
+   */
+  dumpEmbeddedDb: (currentDatabaseUrl: string) => Promise<EmbeddedDumpResult>;
+  /**
+   * Pipe a dumped snapshot into the canonical pgserve via `psql`. Called
+   * AFTER `pgserve install` has brought canonical online. No-op when the
+   * dump status was anything but `dumped`. Stubbed in tests.
+   */
+  restoreSnapshotToCanonical: (
+    dump: EmbeddedDumpResult,
+    canonicalDatabaseUrl: string,
+  ) => Promise<{ status: 'restored' | 'skipped'; snapshotPath?: string }>;
+  /** Resolve canonical pgserve's on-disk data dir for operator-facing logs. */
+  getCanonicalPgserveDataDir: () => string;
+  /**
    * Persist a partial server config (merges with existing). Stubbed in
    * tests so the canonical-pgserve fix can be validated without writing
    * to ~/.omni/config.json.
@@ -326,6 +350,9 @@ function productionDeps(): DoctorDeps {
     },
     cliHasSigningKey: () => loadSigningContext() !== null,
     setupCanonicalPgserve,
+    dumpEmbeddedDb,
+    restoreSnapshotToCanonical,
+    getCanonicalPgserveDataDir,
     saveServerConfig,
   };
 }
@@ -666,44 +693,87 @@ async function fixCliKeyValid(deps: DoctorDeps): Promise<string> {
 }
 
 /**
- * Migrate an embedded install onto canonical pgserve. Runs `pgserve install`,
- * reads the canonical url, persists `useCanonicalPgserve: true` +
- * `databaseUrl`, then relaunches omni-api so it picks up `PGSERVE_EMBEDDED=false`.
+ * Migrate an embedded install onto canonical pgserve via `pg_dump` + `psql`,
+ * mirroring genie's `db backup` / `db restore` pattern.
  *
- * SAFETY: Never deletes the embedded data dir. Operator can roll back by
- * editing `~/.omni/config.json` and removing the canonical url. Embedded
- * postgres data stays intact at `~/.omni/data/pgserve/`.
+ * Sequence:
+ *   1. Pre-flight: dump the embedded `omni` DB to a gzipped snapshot at
+ *      `~/.omni/backups/embedded-migration-<ISO>.sql.gz`. omni-api MUST be
+ *      running here so pg_dump can connect — that's why dump is step 1, not
+ *      step 3.
+ *   2. Stop omni-api → frees :8432 + releases the embedded data dir's locks.
+ *   3. `pgserve install` → canonical pgserve at canonical data dir
+ *      (`~/.pgserve/data` by default; surfaced explicitly to the operator).
+ *   4. Restore the snapshot into canonical via `psql ON_ERROR_STOP=1`.
+ *   5. Persist `useCanonicalPgserve: true` + canonical `databaseUrl`.
+ *   6. Relaunch omni-api with the new env so `PGSERVE_EMBEDDED=false` takes
+ *      effect.
  *
- * On any failure (pgserve binary unavailable, install failed, omni-api
- * relaunch failed), config is NOT persisted — the operator stays on
- * embedded and can retry.
+ * SAFETY:
+ *   - Embedded data dir at `~/.omni/data/pgserve` is never modified. On
+ *     any failure the operator can roll back by removing
+ *     `useCanonicalPgserve` from `~/.omni/config.json` and restarting
+ *     omni-api — embedded mode picks the data right back up.
+ *   - The snapshot is preserved at the path printed at step 1. If restore
+ *     fails, operators can replay it manually with
+ *     `gunzip -c <snapshot> | psql <canonical-url>` once they've fixed
+ *     whatever blocked psql.
+ *
+ * On any failure (dump error, pgserve install failed, restore failed,
+ * omni-api relaunch failed) we restart omni-api on embedded so operators
+ * are not left with a dead API. Config is only persisted after the
+ * complete dump → install → restore → relaunch chain succeeds.
  */
 async function fixPgserveCanonical(deps: DoctorDeps): Promise<string> {
   const { serverConfig, cliConfig } = deps.loadState();
 
-  // Step 1: stop omni-api FIRST so the embedded pgserve releases port 8432.
-  // pgserve@2.1.0's `pgserve install` will then bind that port for the
-  // canonical instance. If we did this in the opposite order, `pgserve
-  // install` would fail with EADDRINUSE and the migration would abort with
-  // omni-api still on embedded but no canonical registered.
+  // Step 1: dump embedded DB FIRST while omni-api (and its embedded pgserve)
+  // is still running. pg_dump needs a live target. The snapshot is written
+  // outside any pgserve data dir so it survives the migration regardless of
+  // outcome.
+  let dumpResult: EmbeddedDumpResult;
+  try {
+    dumpResult = await deps.dumpEmbeddedDb(serverConfig.databaseUrl);
+  } catch (err) {
+    throw new Error(
+      `pg_dump of embedded omni DB failed (${err instanceof Error ? err.message : String(err)}); omni-api still running on embedded — install postgresql-client (apt install postgresql-client) if pg_dump is missing, then retry`,
+    );
+  }
+
+  // Step 2: stop omni-api so the embedded pgserve releases port 8432 AND
+  // the data dir's postmaster lock. After this point the embedded DB is no
+  // longer reachable; we rely on the snapshot from step 1.
   await deps.runPm2(['stop', PM2_PROCESSES.api]);
 
-  // Step 2: provision canonical pgserve and read its port.
+  // Step 3: provision canonical pgserve.
   const url = await deps.setupCanonicalPgserve();
   if (!url) {
-    // Bring omni-api back up on embedded so the operator isn't left with a
-    // dead API. They can retry the migration later.
+    // Bring omni-api back up on embedded — operator isn't left dead.
     await deps.runPm2(['start', PM2_PROCESSES.api]);
     throw new Error(
       'canonical pgserve setup failed (pgserve binary unavailable or install failed) — install manually: bun add -g pgserve@^2.1.0',
     );
   }
 
-  // Step 3: persist config first so a relaunch failure leaves the operator
+  // Step 4: restore the snapshot. No-op when nothing was dumped (fresh
+  // install). On failure: rollback omni-api to embedded, preserve the
+  // snapshot path so operators can investigate / replay manually.
+  let restoreOutcome: { status: 'restored' | 'skipped'; snapshotPath?: string };
+  try {
+    restoreOutcome = await deps.restoreSnapshotToCanonical(dumpResult, url);
+  } catch (err) {
+    await deps.runPm2(['start', PM2_PROCESSES.api]);
+    const snapshotHint = dumpResult.status === 'dumped' ? ` snapshot preserved at ${dumpResult.snapshotPath}` : '';
+    throw new Error(
+      `psql restore into canonical pgserve failed (${err instanceof Error ? err.message : String(err)}); omni-api restarted on embedded —${snapshotHint} retry by replaying the dump manually or re-running \`omni doctor --fix\``,
+    );
+  }
+
+  // Step 5: persist config first so a relaunch failure leaves the operator
   // on canonical (the new recommended state) rather than half-migrated.
   deps.saveServerConfig({ databaseUrl: url, useCanonicalPgserve: true });
 
-  // Step 4: relaunch omni-api with the new env so PGSERVE_EMBEDDED=false
+  // Step 6: relaunch omni-api with the new env so PGSERVE_EMBEDDED=false
   // takes effect. delete + start (instead of restart) so the new env is
   // picked up — pm2's restart preserves stored env in some configurations.
   const env = buildRuntimeEnv({ ...serverConfig, databaseUrl: url, useCanonicalPgserve: true }, cliConfig);
@@ -718,7 +788,20 @@ async function fixPgserveCanonical(deps: DoctorDeps): Promise<string> {
   if (startCode !== 0) {
     throw new Error(`pm2 start ${PM2_PROCESSES.api} exited ${startCode} after canonical migration`);
   }
-  return `migrated to canonical pgserve@^2.1.0; omni-api now connects to ${url}`;
+
+  // Compose a result message that surfaces every concrete path so the
+  // operator can verify the migration without grepping logs:
+  //   - canonical data dir (where the cluster lives on disk)
+  //   - canonical URL (where omni-api connects)
+  //   - snapshot path (rollback artifact)
+  const canonicalDir = deps.getCanonicalPgserveDataDir();
+  const dataNote =
+    dumpResult.status === 'dumped' && restoreOutcome.status === 'restored'
+      ? `restored ${dumpResult.snapshotPath} into ${canonicalDir} (omni-api → ${url})`
+      : dumpResult.status === 'no-embedded-data'
+        ? `no embedded data to migrate; canonical started empty at ${canonicalDir} (omni-api → ${url})`
+        : `embedded data dir invalid; canonical started empty at ${canonicalDir} (omni-api → ${url})`;
+  return `migrated to canonical pgserve@^2.1.0; ${dataNote}`;
 }
 
 /** Print `rm -rf` instructions for orphaned dirs — we never auto-delete. */
