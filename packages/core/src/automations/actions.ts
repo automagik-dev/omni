@@ -67,6 +67,19 @@ export interface ActionDependencies {
    * The response is stored in variables for use in subsequent actions.
    */
   callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
+  /**
+   * Optional consumer-side stale-event gate. Invoked by the engine for
+   * `chat.idle_timeout` events before matching automations execute.
+   * Returns `{ skip: true, reason }` when the event is no longer relevant
+   * (chat in active close-contact state, follow-up row already disarmed,
+   * etc.). Defense-in-depth against NATS replay of historical idle-timeout
+   * events that the sweeper had already processed before a restart drained
+   * the durable consumer's ack state.
+   *
+   * Returning `{ skip: false }` (or omitting the gate entirely) lets the
+   * engine proceed with normal matching+execution.
+   */
+  staleIdleTimeoutGate?: (chatId: string, instanceId: string) => Promise<{ skip: boolean; reason?: string }>;
 }
 
 /**

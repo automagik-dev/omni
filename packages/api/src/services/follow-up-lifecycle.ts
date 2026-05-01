@@ -374,6 +374,39 @@ export class FollowUpLifecycleService {
   }
 
   /**
+   * Consumer-side freshness check for `chat.idle_timeout` events. Mirrors
+   * the publish-time guards in the sweeper but runs at delivery time so the
+   * automation engine can drop events whose chat state has changed since
+   * the sweeper enqueued them — the case that bit us when the durable
+   * consumer's ack state was reset by a deploy and the SYSTEM stream
+   * replayed historical idle-timeout events from days ago (2026-05-01).
+   *
+   * Returns `{ skip: true, reason }` when the engine MUST drop the event:
+   *  - chat is in active close-contact state (`closed: true` or
+   *    `closeUntil` still in window) — agent should not nudge a closed chat
+   *  - follow-up row's `disarmReason` is set — sequence is in a terminal
+   *    state and any further fire would re-spam a chat the system already
+   *    finished/handed-off/archived
+   *
+   * Returns `{ skip: false }` when the event should proceed normally.
+   *
+   * Fail-open: callers should swallow exceptions from this method and let
+   * the event flow through. The engine logs the failure but doesn't drop —
+   * a flaky DB at consumer time is less harmful than silently dropping
+   * legitimate idle-timeout events.
+   */
+  async evaluateIdleTimeoutFreshness(chatId: string, instanceId: string): Promise<{ skip: boolean; reason?: string }> {
+    if (await this.isInActiveCloseState(chatId, instanceId)) {
+      return { skip: true, reason: 'chat_closed' };
+    }
+    const row = await this.readExistingRow(chatId, instanceId);
+    if (row?.disarmReason) {
+      return { skip: true, reason: `disarmed_${row.disarmReason}` };
+    }
+    return { skip: false };
+  }
+
+  /**
    * Read the minimum fields required by the terminal-disarm guard in
    * `armForOutbound`. Returns `null` when no row exists yet.
    */
