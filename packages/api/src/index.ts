@@ -60,8 +60,9 @@ import {
 } from './plugins';
 import { getPlugin } from './plugins/loader';
 import { setupScheduler, stopScheduler } from './scheduler';
+import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
 import { ApiKeyService } from './services/api-keys';
-import { closeTurnEvents, initTurnEvents } from './services/turn-events';
+import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
 import { printStartupBanner } from './utils/startup-banner';
 
@@ -348,6 +349,9 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
         globalTurnMonitor.stop();
       }
 
+      shutdownLog.info('Stopping agent heartbeat consumer');
+      await closeAgentHeartbeat();
+
       shutdownLog.info('Closing turn events NATS');
       await closeTurnEvents();
 
@@ -593,6 +597,21 @@ async function setupEventBusServices(
     await initTurnEvents(NATS_URL);
   } catch (error) {
     log.error('Failed to initialize turn events', { error: String(error) });
+  }
+
+  // Agent heartbeat consumer — resets turns.lastActivityAt on inbound
+  // `omni.agent.heartbeat.*` events so the 120s nudge stays suppressed
+  // for actively-working Claude Code sessions. See wish
+  // automagik-dev/genie:omni-activity-heartbeat.
+  try {
+    const turnEventsConn = getTurnEventsConnection();
+    if (turnEventsConn) {
+      initAgentHeartbeat({ natsConnection: turnEventsConn, turnService: services.turns });
+    } else {
+      log.warn('Skipping agent heartbeat consumer: no NATS connection');
+    }
+  } catch (error) {
+    log.error('Failed to initialize agent heartbeat consumer', { error: String(error) });
   }
 
   // Turn monitor (polls for stale turns, emits nudge/timeout events)
