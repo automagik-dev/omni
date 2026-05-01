@@ -183,4 +183,52 @@ describe('AutomationEngine — reconcile + toggle (#546)', () => {
     await engine.reload([auto]);
     expect(harness.subscribeCalls).toHaveLength(0);
   });
+
+  test('concurrent reconcile() calls fold into a single in-flight pass', async () => {
+    // Gemini review on PR #587: without single-flight, two reconcilers could
+    // see the same dead subscription, both unsubscribe + re-subscribe, and
+    // leak one of the two new handles. The second caller must await the
+    // ongoing pass instead of mutating the Map in parallel.
+    const auto = makeAutomation('chat.idle_timeout', 'a1', true);
+    await engine.start(harness.bus, [auto]);
+    expect(harness.subscribeCalls).toHaveLength(1);
+
+    // Kill the iterator so reconcile has actual work to do (otherwise the
+    // healthy path short-circuits and the race is moot).
+    const sub = harness.liveSubs[0];
+    if (!sub) throw new Error('expected a live sub');
+    sub.alive = false;
+
+    // Five concurrent reconcile calls: only one re-subscribe should happen.
+    await Promise.all([
+      engine.reconcile(),
+      engine.reconcile(),
+      engine.reconcile(),
+      engine.reconcile(),
+      engine.reconcile(),
+    ]);
+
+    expect(harness.subscribeCalls).toHaveLength(2);
+    expect(harness.liveSubs[1]?.alive).toBe(true);
+  });
+
+  test('reconcile() racing reload() does not leak duplicate subscriptions', async () => {
+    // Gemini review on PR #587: timer tick + reload from a PATCH must not
+    // both mutate the subscriptions Map in parallel.
+    const auto = makeAutomation('chat.idle_timeout', 'a1', true);
+    await engine.start(harness.bus, [auto]);
+    expect(harness.subscribeCalls).toHaveLength(1);
+
+    const sub = harness.liveSubs[0];
+    if (!sub) throw new Error('expected a live sub');
+    sub.alive = false;
+
+    // Start a reconcile and a reload in parallel against the dead sub.
+    await Promise.all([engine.reconcile(), engine.reload([auto])]);
+
+    // Exactly one new subscription — not two.
+    expect(harness.subscribeCalls).toHaveLength(2);
+    const aliveCount = harness.liveSubs.filter((s) => s.alive).length;
+    expect(aliveCount).toBe(1);
+  });
 });

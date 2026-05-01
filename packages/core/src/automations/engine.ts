@@ -99,7 +99,9 @@ export class AutomationEngine {
   private eventBus: EventBus | null = null;
   private deps: ActionDependencies;
   private logger: ExecutionLogger | null = null;
-  private reconcileTimer: ReturnType<typeof setInterval> | null = null;
+  private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconcileEnabled = false;
+  private reconcilePromise: Promise<void> | null = null;
 
   constructor(private config: EngineConfig) {
     this.deps = {
@@ -191,8 +193,23 @@ export class AutomationEngine {
    * Diff expected (from current automations) vs active subscriptions and
    * subscribe / unsubscribe to converge. Also re-subscribes any subscription
    * whose underlying iterator has died (e.g., NATS server reset).
+   *
+   * Single-flight: concurrent callers (periodic timer, manual reconcile(),
+   * reload()) await the same in-flight pass instead of mutating the
+   * subscriptions Map in parallel — without this guard a timer tick that
+   * overlaps a reload could double-subscribe a trigger and leak the second
+   * handle. See gemini review on PR #587.
    */
   private async reconcileSubscriptions(): Promise<void> {
+    if (!this.eventBus) return;
+    if (this.reconcilePromise) return this.reconcilePromise;
+    this.reconcilePromise = this.doReconcileSubscriptions().finally(() => {
+      this.reconcilePromise = null;
+    });
+    return this.reconcilePromise;
+  }
+
+  private async doReconcileSubscriptions(): Promise<void> {
     if (!this.eventBus) return;
 
     const expectedTriggers = new Set(this.automations.map((a) => a.triggerEventType));
@@ -274,24 +291,46 @@ export class AutomationEngine {
     }
   }
 
+  /**
+   * Start the periodic reconciler.
+   *
+   * Recursive setTimeout pattern (not setInterval) so a slow reconcile cannot
+   * stack ticks — the next tick is only scheduled after the current pass
+   * resolves. Combined with the single-flight guard in reconcileSubscriptions,
+   * this gives at-most-one in-flight reconcile across all callers. See gemini
+   * review on PR #587.
+   */
   private startReconcileTimer(): void {
     this.stopReconcileTimer();
     const intervalMs = this.config.reconcileIntervalMs ?? 30_000;
     if (intervalMs <= 0) return;
-    this.reconcileTimer = setInterval(() => {
-      this.reconcileSubscriptions().catch((err) => {
-        logger.error('Reconciler tick failed', { error: String(err) });
-      });
+    this.reconcileEnabled = true;
+    this.scheduleNextReconcile(intervalMs);
+  }
+
+  private scheduleNextReconcile(intervalMs: number): void {
+    if (!this.reconcileEnabled) return;
+    this.reconcileTimer = setTimeout(() => {
+      // Run the reconcile then schedule the next tick. We chain in finally so
+      // a thrown error doesn't stop the loop — only stopReconcileTimer does.
+      this.reconcileSubscriptions()
+        .catch((err) => {
+          logger.error('Reconciler tick failed', { error: String(err) });
+        })
+        .finally(() => {
+          this.scheduleNextReconcile(intervalMs);
+        });
     }, intervalMs);
     // Don't keep the process alive just for the reconciler.
-    if (typeof this.reconcileTimer === 'object' && 'unref' in this.reconcileTimer) {
+    if (typeof this.reconcileTimer === 'object' && this.reconcileTimer && 'unref' in this.reconcileTimer) {
       (this.reconcileTimer as { unref: () => void }).unref();
     }
   }
 
   private stopReconcileTimer(): void {
+    this.reconcileEnabled = false;
     if (this.reconcileTimer) {
-      clearInterval(this.reconcileTimer);
+      clearTimeout(this.reconcileTimer);
       this.reconcileTimer = null;
     }
   }
