@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni",
-  "version": "2.260501.5",
+  "version": "2.260501.6",
   "description": "LLM-optimized CLI for Omni",
   "type": "module",
   "bin": {
