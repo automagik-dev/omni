@@ -254,3 +254,107 @@ describe('GET /chats/:id/participants — JID/external-id resolution (sister bug
     expect(calls.getParticipants).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Sweep coverage — POST/DELETE :id routes (PR follow-up)
+//
+// The first PR (omni#591) covered the GET handlers that were 500ing in
+// production. This sweep applies the same resolution to the remaining
+// POST/DELETE/PATCH `:id*` routes — they share the latent bug but are less
+// frequently called. Tests here pin the unresolvable-id → 404 path on a
+// representative subset; full happy-path coverage isn't worth the harness
+// expansion (each POST needs additional service stubs + channelRegistry).
+// ---------------------------------------------------------------------------
+
+describe('POST /chats/:id/* — JID/external-id resolution sweep', () => {
+  test('POST /:id/read with JID + no active instance returns 404 (not 500)', async () => {
+    const { app } = mountHarness({ apiKeyRow: null });
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/read`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: ACTIVE_INSTANCE_ID }),
+    });
+
+    // Pre-fix this hit `services.chats.getById(jid)` and bombed with the
+    // postgres uuid syntax error → 500. After the sweep, the explicit
+    // body.instanceId is fed to the resolver and a 404 is returned when
+    // `findByExternalIdSmart` finds nothing (resolvedChat is null by default).
+    expect(res.status).toBe(404);
+  });
+
+  test('POST /:id/archive uses body.instanceId for resolution (no active-context lookup needed)', async () => {
+    // No apiKeyRow → getActiveInstanceId would return null. The route MUST
+    // still succeed in resolving when body.instanceId is provided, because
+    // resolveChatIdParam takes the explicit instanceId path. Mock returns
+    // null so we observe the 404 path; the key assertion is that
+    // findByExternalIdSmart was called WITH the body's instanceId.
+    const { app, calls } = mountHarness({ apiKeyRow: null });
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/archive`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: ACTIVE_INSTANCE_ID }),
+    });
+
+    expect(res.status).toBe(404);
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: ACTIVE_INSTANCE_ID, externalId: WHATSAPP_GROUP_JID }]);
+  });
+
+  test('POST /:id/pin with required instanceId in body resolves via that instance', async () => {
+    const { app, calls } = mountHarness({ apiKeyRow: null });
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/pin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: ACTIVE_INSTANCE_ID }),
+    });
+
+    expect(res.status).toBe(404);
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: ACTIVE_INSTANCE_ID, externalId: WHATSAPP_GROUP_JID }]);
+  });
+
+  test('POST /:id/hide (no body) falls back to active-instance context', async () => {
+    const { app, calls } = mountHarness({
+      apiKeyRow: { activeInstanceId: ACTIVE_INSTANCE_ID, contextInstanceId: null },
+    });
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/hide`, {
+      method: 'POST',
+    });
+
+    expect(res.status).toBe(404);
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: ACTIVE_INSTANCE_ID, externalId: WHATSAPP_GROUP_JID }]);
+  });
+
+  test('DELETE /:id/participants/:platformUserId resolves the chat id from active instance', async () => {
+    const { app, calls } = mountHarness({
+      apiKeyRow: { activeInstanceId: ACTIVE_INSTANCE_ID, contextInstanceId: null },
+    });
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/participants/some-platform-user`, {
+      method: 'DELETE',
+    });
+
+    expect(res.status).toBe(404);
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: ACTIVE_INSTANCE_ID, externalId: WHATSAPP_GROUP_JID }]);
+  });
+
+  test('PATCH /:id/participants/:platformUserId/role resolves before the role update', async () => {
+    const { app, calls } = mountHarness({
+      apiKeyRow: { activeInstanceId: ACTIVE_INSTANCE_ID, contextInstanceId: null },
+    });
+
+    const res = await app.request(
+      `/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/participants/some-platform-user/role`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: 'admin' }),
+      },
+    );
+
+    expect(res.status).toBe(404);
+    expect(calls.findByExternalIdSmart).toHaveLength(1);
+  });
+});
