@@ -64,7 +64,7 @@ describe('resolveDatabaseUrl', () => {
 });
 
 describe('buildRuntimeEnv', () => {
-  test('produces the full hermetic env for embedded mode', () => {
+  test('produces the full hermetic env (canonical default — useCanonicalPgserve undefined)', () => {
     const serverConfig = {
       ...DEFAULT_SERVER_CONFIG,
       port: 8882,
@@ -82,12 +82,34 @@ describe('buildRuntimeEnv', () => {
     expect(env.OMNI_API_KEY).toBe('omni_sk_test-key');
     expect(env.MEDIA_STORAGE_PATH).toBe('/tmp/omni-test/media');
     expect(env.OMNI_PACKAGES_DIR).toBe('/tmp/omni-test/packages');
-    expect(env.PGSERVE_EMBEDDED).toBe('true');
+    // Phase 2 (2026-05-01): default flipped. Undefined useCanonicalPgserve
+    // now means CANONICAL, not embedded. Operators on legacy who want
+    // embedded must explicitly set `useCanonicalPgserve: false`.
+    expect(env.PGSERVE_EMBEDDED).toBe('false');
     expect(env.PGSERVE_DATA).toBe('/tmp/omni-test/pgserve');
     expect(env.PGSERVE_PORT).toBe(String(DEFAULT_PGSERVE_PORT));
     expect(env.NATS_URL).toBe('nats://localhost:4222');
     expect(env.NODE_ENV).toBe('production');
     expect(env.LOG_LEVEL).toBe('info');
+  });
+
+  test('PGSERVE_EMBEDDED=true only when useCanonicalPgserve is explicitly false (legacy opt-out)', () => {
+    const serverConfig = { ...DEFAULT_SERVER_CONFIG, useCanonicalPgserve: false };
+    const env = buildRuntimeEnv(serverConfig, { apiKey: 'k' });
+    expect(env.PGSERVE_EMBEDDED).toBe('true');
+  });
+
+  test('PGSERVE_EMBEDDED=false when useCanonicalPgserve is explicitly true', () => {
+    const serverConfig = { ...DEFAULT_SERVER_CONFIG, useCanonicalPgserve: true };
+    const env = buildRuntimeEnv(serverConfig, { apiKey: 'k' });
+    expect(env.PGSERVE_EMBEDDED).toBe('false');
+  });
+
+  test('PGSERVE_EMBEDDED=false when useCanonicalPgserve is undefined (default flipped in phase 2)', () => {
+    const serverConfig = { ...DEFAULT_SERVER_CONFIG };
+    expect(serverConfig.useCanonicalPgserve).toBeUndefined();
+    const env = buildRuntimeEnv(serverConfig, { apiKey: 'k' });
+    expect(env.PGSERVE_EMBEDDED).toBe('false');
   });
 
   test('respects an explicit external-DB URL from config', () => {

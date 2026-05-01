@@ -421,7 +421,7 @@ describe('killOrphanedPostgres — postmaster.pid path (preserved legacy behavio
 
 describe('resolvePgserveConfig — #412 env surface', () => {
   const saved: Record<string, string | undefined> = {};
-  const keys = ['PGSERVE_DATA', 'PGSERVE_REQUIRE_EXISTING', 'PGSERVE_ALLOW_RELATIVE_DATA'];
+  const keys = ['PGSERVE_EMBEDDED', 'PGSERVE_DATA', 'PGSERVE_REQUIRE_EXISTING', 'PGSERVE_ALLOW_RELATIVE_DATA'];
 
   beforeEach(() => {
     for (const k of keys) {
@@ -451,6 +451,25 @@ describe('resolvePgserveConfig — #412 env surface', () => {
   test('reads PGSERVE_ALLOW_RELATIVE_DATA=true', () => {
     process.env.PGSERVE_ALLOW_RELATIVE_DATA = 'true';
     expect(resolvePgserveConfig().allowRelativeData).toBe(true);
+  });
+
+  // Phase 2 (2026-05-01): embedded mode is now an explicit opt-in.
+  // The default flipped from `(PGSERVE_EMBEDDED ?? 'true') === 'true'`
+  // (default ON) to `PGSERVE_EMBEDDED === 'true'` (default OFF).
+  test('embedded mode defaults to OFF when PGSERVE_EMBEDDED is unset (phase 2)', () => {
+    expect(resolvePgserveConfig().enabled).toBe(false);
+  });
+
+  test('embedded mode is OFF when PGSERVE_EMBEDDED is anything other than the literal "true"', () => {
+    for (const value of ['false', '0', '', 'TRUE', 'yes', 'no']) {
+      process.env.PGSERVE_EMBEDDED = value;
+      expect(resolvePgserveConfig().enabled).toBe(false);
+    }
+  });
+
+  test('embedded mode is ON only when PGSERVE_EMBEDDED is exactly "true"', () => {
+    process.env.PGSERVE_EMBEDDED = 'true';
+    expect(resolvePgserveConfig().enabled).toBe(true);
   });
 });
 

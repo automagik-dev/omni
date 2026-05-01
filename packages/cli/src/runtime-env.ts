@@ -98,22 +98,36 @@ export function resolveDatabaseUrl(serverConfig: ServerConfig): string {
  *
  * All values come from `serverConfig` / `cliConfig`. No shell env reads.
  *
- * `PGSERVE_EMBEDDED` is flipped off when `serverConfig.useCanonicalPgserve`
- * is true — the omni-api code path in `packages/api/src/pgserve.ts` reads
- * this and skips its embedded pgserve startup, connecting instead to
- * whatever `DATABASE_URL` points at (typically the canonical pgserve
- * registered by `pgserve install` from pgserve@^2.1.0).
+ * `PGSERVE_EMBEDDED` semantics (Phase 2 of canonical-pgserve removal):
+ *   - serverConfig.useCanonicalPgserve === false  → 'true'  (embedded — explicit opt-in)
+ *   - serverConfig.useCanonicalPgserve === true   → 'false' (canonical — explicit opt-in)
+ *   - undefined / missing                          → 'false' (canonical — NEW DEFAULT)
+ *
+ * Phase 1 (omni#595, 2026-05-01) added the deprecation warning to
+ * `startEmbeddedPgserve`. Phase 2 (this file) flips the default for
+ * undefined values: legacy installs that never set the flag now get
+ * canonical instead of embedded. Operators on legacy embedded who
+ * haven't migrated must explicitly set `useCanonicalPgserve: false` in
+ * `~/.omni/config.json` (or run `omni doctor --fix` to migrate to
+ * canonical, the supported path).
+ *
+ * Phase 3 (future) deletes the embedded code entirely + drops the
+ * pgserve runtime dep from `packages/api`.
  */
 export function buildRuntimeEnv(serverConfig: ServerConfig, cliConfig: Config): RuntimeEnv {
   const pgservePort = resolvePgservePort(serverConfig);
-  const useCanonical = serverConfig.useCanonicalPgserve === true;
+  // Embedded mode is now an explicit opt-OUT, not the default. Only when
+  // `useCanonicalPgserve` is explicitly false do we ask the API to spawn
+  // its embedded pgserve. Anything else (true OR undefined) flips embedded
+  // off and connects to the URL stored in serverConfig.databaseUrl.
+  const optOutOfCanonical = serverConfig.useCanonicalPgserve === false;
   return {
     API_PORT: String(serverConfig.port),
     DATABASE_URL: resolveDatabaseUrl(serverConfig),
     OMNI_API_KEY: cliConfig.apiKey ?? '',
     MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
     OMNI_PACKAGES_DIR: join(serverConfig.dataDir, 'packages'),
-    PGSERVE_EMBEDDED: useCanonical ? 'false' : 'true',
+    PGSERVE_EMBEDDED: optOutOfCanonical ? 'true' : 'false',
     PGSERVE_DATA: join(serverConfig.dataDir, 'pgserve'),
     PGSERVE_PORT: String(pgservePort),
     NATS_URL: 'nats://localhost:4222',
