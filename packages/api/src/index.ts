@@ -553,6 +553,14 @@ async function setupEventBusServices(
           },
         };
       },
+      // Consumer-side stale-event gate — see engine.handleEvent comment.
+      // Skips chat.idle_timeout events whose row has been disarmed since the
+      // sweeper published the event, or whose chat is in active close-contact
+      // state. Fail-open on errors so a flaky DB doesn't drop legitimate
+      // events.
+      staleIdleTimeoutGate: async (chatId, instanceId) => {
+        return services.followUpLifecycle.evaluateIdleTimeoutFreshness(chatId, instanceId);
+      },
     });
   } catch (error) {
     log.error('Failed to start automation engine', { error: String(error) });

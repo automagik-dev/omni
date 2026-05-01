@@ -120,6 +120,7 @@ export class AutomationEngine {
       eventBus,
       sendMessage: deps.sendMessage,
       callAgent: deps.callAgent,
+      staleIdleTimeoutGate: deps.staleIdleTimeoutGate,
     };
     this.automations = automations.filter((a) => a.enabled);
 
@@ -336,6 +337,51 @@ export class AutomationEngine {
   }
 
   /**
+   * Consumer-side stale-event gate for `chat.idle_timeout` — defense in depth
+   * against NATS replay of historical idle-timeout events whose chat state
+   * has since changed (sequence completed, customer replied, handoff,
+   * close-contact). The sweeper already filters these at publish time, but a
+   * durable-consumer reset (e.g. config-incompat delete+recreate on toggle
+   * or restart — see #546 follow-on) replays anything still in the SYSTEM
+   * stream's retention window. Without this gate the engine fires
+   * call_agent + send_message for every replayed event regardless of the
+   * chat's current state — the spam pattern reported on 2026-05-01.
+   *
+   * Returns `true` when the event should be dropped (gate said skip).
+   * Returns `false` when the event should proceed (no gate, missing payload
+   * fields, gate said proceed, or gate threw — fail-open by design).
+   */
+  private async shouldSkipStaleIdleTimeout(event: OmniEvent): Promise<boolean> {
+    if (event.type !== 'chat.idle_timeout' || !this.deps.staleIdleTimeoutGate) return false;
+    const payload = event.payload as { chatId?: string; instanceId?: string };
+    const chatId = payload?.chatId;
+    const payloadInstanceId = payload?.instanceId ?? event.metadata.instanceId;
+    if (!chatId || !payloadInstanceId) return false;
+
+    try {
+      const verdict = await this.deps.staleIdleTimeoutGate(chatId, payloadInstanceId);
+      if (verdict.skip) {
+        logger.info('Skipping stale chat.idle_timeout event', {
+          eventId: event.id,
+          chatId,
+          instanceId: payloadInstanceId,
+          reason: verdict.reason ?? 'unknown',
+        });
+        return true;
+      }
+    } catch (err) {
+      // Fail-open — better to fire a redundant follow-up than to silently
+      // drop legitimate events when the DB is flaky.
+      logger.warn('staleIdleTimeoutGate threw, proceeding without skip', {
+        eventId: event.id,
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return false;
+  }
+
+  /**
    * Handle an incoming event
    */
   private async handleEvent(event: OmniEvent): Promise<void> {
@@ -346,6 +392,10 @@ export class AutomationEngine {
     const matchingAutomations = this.automations.filter((a) => a.triggerEventType === eventType);
 
     if (matchingAutomations.length === 0) {
+      return;
+    }
+
+    if (await this.shouldSkipStaleIdleTimeout(event)) {
       return;
     }
 
