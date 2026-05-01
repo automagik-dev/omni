@@ -38,7 +38,7 @@ import {
   chats,
   instances,
 } from '@omni/db';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, notInArray, or, sql } from 'drizzle-orm';
 import { isChatInActiveCloseState } from '../lib/close-contact-state';
 
 const log = createLogger('follow-up-lifecycle');
@@ -61,6 +61,22 @@ const TERMINAL_DISARM_REASONS: ReadonlySet<FollowUpDisarmReason> = new Set<Follo
   'handoff',
   'archived',
   'window_expired',
+]);
+
+/**
+ * Reasons strong enough to refuse a handoff override (#542). The handoff
+ * disarm — fired synchronously by `POST /messages/send/handoff` — must
+ * advance a row whose prior reason is `customer_replied` or
+ * `sequence_complete` (those don't block re-arms via the terminal-disarm
+ * guard, so a later tail-stream chunk would resurrect the sequence).
+ * It must NOT downgrade a row that is already terminal-or-stronger:
+ * `TERMINAL_DISARM_REASONS` plus `contact_closed` (close-contact set the
+ * row deliberately; preserving the audit trail matters more than swapping
+ * the bookkeeping label to "handoff").
+ */
+const HANDOFF_OVERRIDE_PROTECTED: ReadonlySet<FollowUpDisarmReason> = new Set<FollowUpDisarmReason>([
+  ...TERMINAL_DISARM_REASONS,
+  'contact_closed',
 ]);
 
 /**
@@ -407,16 +423,28 @@ export class FollowUpLifecycleService {
       set.lastInboundCustomerMessageAt = lastInboundCustomerMessageAt;
     }
 
+    // Default disarm semantics are idempotent: only update when the row has
+    // no prior disarm reason. `handoff` is the exception (#542) — the
+    // synchronous disarm in `POST /messages/send/handoff` must override a
+    // row that's already disarmed with a non-terminal reason
+    // (`customer_replied`, `sequence_complete`, `agent_error`, `send_failed`),
+    // so the terminal-disarm guard in `armForOutbound` blocks a later tail
+    // chunk or NATS redelivery from re-arming the sequence. Strong reasons
+    // (`HANDOFF_OVERRIDE_PROTECTED`) still win — handoff never downgrades a
+    // session_cleared / archived / window_expired / contact_closed row, and
+    // re-applying handoff to an already-handoff row stays a no-op.
+    const reasonGuard =
+      reason === 'handoff'
+        ? or(
+            isNull(chatFollowUpState.disarmReason),
+            notInArray(chatFollowUpState.disarmReason, [...HANDOFF_OVERRIDE_PROTECTED]),
+          )
+        : isNull(chatFollowUpState.disarmReason);
+
     const result = await this.db
       .update(chatFollowUpState)
       .set(set)
-      .where(
-        and(
-          eq(chatFollowUpState.chatId, chatId),
-          eq(chatFollowUpState.instanceId, instanceId),
-          isNull(chatFollowUpState.disarmReason),
-        ),
-      )
+      .where(and(eq(chatFollowUpState.chatId, chatId), eq(chatFollowUpState.instanceId, instanceId), reasonGuard))
       .returning({ id: chatFollowUpState.id });
 
     return { disarmed: result.length > 0 };
