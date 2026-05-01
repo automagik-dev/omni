@@ -46,6 +46,12 @@ interface HarnessOptions {
   apiKeyRow?: { activeInstanceId: string | null; contextInstanceId: string | null } | null;
   /** When set, `findByExternalIdSmart` returns this chat (id-only). null = not found. */
   resolvedChat?: { id: string } | null;
+  /**
+   * When set, the API key is restricted to these `instanceIds` (mirroring the
+   * `apiKeys.instanceIds` column). Default `null` = unrestricted. Used by the
+   * cross-instance oracle tests to flip the api key into a scoped state.
+   */
+  apiKeyInstanceIds?: string[] | null;
 }
 
 interface HarnessCalls {
@@ -102,7 +108,13 @@ function mountHarness(options: HarnessOptions = {}): {
         }),
       },
     } as never);
-    c.set('apiKey', { id: 'test-key', name: 'test', scopes: ['*'], instanceIds: null, expiresAt: null } as never);
+    c.set('apiKey', {
+      id: 'test-key',
+      name: 'test',
+      scopes: ['*'],
+      instanceIds: options.apiKeyInstanceIds ?? null,
+      expiresAt: null,
+    } as never);
     await next();
   });
   app.route('/chats', chatsRoutes);
@@ -356,5 +368,140 @@ describe('POST /chats/:id/* — JID/external-id resolution sweep', () => {
 
     expect(res.status).toBe(404);
     expect(calls.findByExternalIdSmart).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-instance existence oracle (codex P2 review on omni#592)
+//
+// `resolveChatIdParam` originally called `findByExternalIdSmart(instanceId,
+// raw)` BEFORE any instance-access check. That made unauthorized callers
+// observe two distinct response shapes for the same forbidden instance:
+//
+//   - chat exists in instance + caller can't access  → 403 VALIDATION
+//     (after `checkInstanceAccess` later in the handler)
+//   - chat absent in instance + caller can't access  → 404 NOT_FOUND
+//     (resolver returns null, route returns 404)
+//
+// → cross-instance existence oracle. The fix moves `checkInstanceAccess`
+// inside the resolver so both cases return the same 403 BEFORE any DB
+// lookup. These tests pin that contract: scoped API keys must see 403
+// regardless of whether the chat exists in the requested instance.
+// ---------------------------------------------------------------------------
+
+const FORBIDDEN_INSTANCE_ID = 'cccccccc-cccc-cccc-8ccc-cccccccccccc';
+const ALLOWED_INSTANCE_ID = 'dddddddd-dddd-dddd-8ddd-dddddddddddd';
+
+describe('cross-instance existence oracle — checkInstanceAccess runs BEFORE findByExternalIdSmart', () => {
+  test('explicit body.instanceId outside the API key scope → 403, no DB lookup', async () => {
+    // API key is scoped to ALLOWED_INSTANCE_ID only. Caller passes a JID
+    // with body.instanceId=FORBIDDEN_INSTANCE_ID. Resolver must throw
+    // 403 BEFORE looking up the chat — otherwise the response code leaks
+    // whether the chat exists in the forbidden instance.
+    const { app, calls } = mountHarness({
+      apiKeyInstanceIds: [ALLOWED_INSTANCE_ID],
+      // Even if findByExternalIdSmart WOULD have returned a chat, we must
+      // not get there. resolvedChat: { id: ... } proves it: if the resolver
+      // ran the lookup, the route would 200; we expect 403/4xx instead.
+      resolvedChat: { id: RESOLVED_UUID },
+    });
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/pin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: FORBIDDEN_INSTANCE_ID }),
+    });
+
+    // checkInstanceAccess throws OmniError with VALIDATION code.
+    // The omni global error handler maps that to a non-2xx response — the
+    // exact shape depends on the OmniError middleware, but it's guaranteed
+    // not to be a 200 (no chat data returned) and not a 404 (no existence
+    // signal). The critical assertion: findByExternalIdSmart MUST NOT have
+    // been called.
+    expect(res.status).not.toBe(200);
+    expect(res.status).not.toBe(404);
+    expect(calls.findByExternalIdSmart).toHaveLength(0);
+  });
+
+  test('UUID input outside the API key scope is NOT pre-checked here (handler-level checks remain)', async () => {
+    // UUID input bypasses the resolver entirely (no DB lookup needed). For
+    // UUID-shaped IDs the existing handler-level `checkInstanceAccess` and
+    // service-layer guards remain authoritative. The resolver's job is
+    // narrowly: prevent the JID-shaped existence oracle. Document that
+    // here so future refactors don't accidentally start enforcing access
+    // on UUIDs in a way that breaks legitimate operator workflows.
+    const { app, calls } = mountHarness({
+      apiKeyInstanceIds: [ALLOWED_INSTANCE_ID],
+    });
+
+    const res = await app.request(`/chats/${VALID_UUID}/pin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: FORBIDDEN_INSTANCE_ID }),
+    });
+
+    // Either way, no findByExternalIdSmart was called (UUID path bypasses
+    // the resolver). The handler-level checkInstanceAccess kicks in and
+    // returns the standard VALIDATION error.
+    expect(res.status).not.toBe(200);
+    expect(calls.findByExternalIdSmart).toHaveLength(0);
+  });
+
+  test('unrestricted API key (instanceIds === null) still resolves normally', async () => {
+    // The access check must be a no-op for unrestricted keys — otherwise
+    // we'd break existing single-instance deployments that don't scope keys.
+    const { app, calls } = mountHarness({
+      apiKeyInstanceIds: null, // unrestricted — same as default
+      apiKeyRow: { activeInstanceId: ACTIVE_INSTANCE_ID, contextInstanceId: null },
+      resolvedChat: { id: RESOLVED_UUID },
+    });
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/messages`);
+
+    expect(res.status).toBe(200);
+    expect(calls.findByExternalIdSmart).toHaveLength(1);
+    expect(calls.getChatMessages[0]?.chatId).toBe(RESOLVED_UUID);
+  });
+
+  test('scoped API key resolving WITHIN its allowed instance still works', async () => {
+    // Sanity: the access check authorises legitimate within-scope traffic.
+    const { app, calls } = mountHarness({
+      apiKeyInstanceIds: [ALLOWED_INSTANCE_ID],
+      resolvedChat: { id: RESOLVED_UUID },
+    });
+
+    await app.request(`/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/pin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: ALLOWED_INSTANCE_ID }),
+    });
+
+    // Route handlers may still 4xx for downstream reasons (channel not
+    // wired, plugin missing) but the resolver and access check both
+    // succeeded — findByExternalIdSmart was called with the allowed
+    // instance, returned the resolved chat. Response status is irrelevant
+    // here; the only invariant we pin is the resolver's call shape.
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: ALLOWED_INSTANCE_ID, externalId: WHATSAPP_GROUP_JID }]);
+  });
+
+  test('active-instance fallback ALSO honours the access check', async () => {
+    // The active-instance was set via POST /context/use which itself
+    // checks `instanceIds` at write time. But if the API key's instanceIds
+    // CHANGED after context was set (rotation, scope tightening), the
+    // stale active context would still be used by the resolver. The
+    // checkInstanceAccess inside resolveChatIdParam catches that drift
+    // too — defense in depth.
+    const { app, calls } = mountHarness({
+      apiKeyInstanceIds: [ALLOWED_INSTANCE_ID],
+      // active context points at a now-forbidden instance (drift case).
+      apiKeyRow: { activeInstanceId: FORBIDDEN_INSTANCE_ID, contextInstanceId: null },
+      resolvedChat: { id: RESOLVED_UUID },
+    });
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/messages`);
+
+    // Resolver must throw VALIDATION before findByExternalIdSmart runs.
+    expect(res.status).not.toBe(200);
+    expect(calls.findByExternalIdSmart).toHaveLength(0);
   });
 });

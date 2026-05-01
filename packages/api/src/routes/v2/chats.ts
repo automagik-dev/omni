@@ -97,6 +97,19 @@ async function resolveChatIdParam(
   if (UUID_REGEX.test(raw)) return raw;
   const instanceId = explicitInstanceId ?? (await getActiveInstanceId(c));
   if (!instanceId) return null;
+
+  // Authorize BEFORE looking up the chat. Without this gate, a caller who
+  // can't access `instanceId` would observe two distinct responses:
+  //   - chat exists  → checkInstanceAccess later in the handler throws 403
+  //   - chat absent  → resolver returns null, route returns 404
+  // That's a cross-instance existence oracle. Throwing here makes both
+  // states return the same 403 (VALIDATION) before any DB lookup happens.
+  // The check is a no-op for API keys with no `instanceIds` restriction,
+  // and idempotent — handlers that ALSO call `checkInstanceAccess`
+  // afterward still work; the second call simply matches the same allow
+  // list and returns.
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+
   const services = c.get('services');
   const chat = await services.chats.findByExternalIdSmart(instanceId, raw);
   return chat?.id ?? null;
