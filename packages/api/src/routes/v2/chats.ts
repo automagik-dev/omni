@@ -8,6 +8,9 @@ import { zValidator } from '@hono/zod-validator';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { ChannelTypeSchema, ERROR_CODES, OmniError } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
+import { apiKeys } from '@omni/db/schema';
+import { eq } from 'drizzle-orm';
+import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { clearAgentSession } from '../../plugins/session-cleaner';
@@ -17,6 +20,13 @@ import { ApiKeyService } from '../../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../../types';
 
 const chatsRoutes = new Hono<{ Variables: AppVariables }>();
+
+/**
+ * Standard UUID v1-v5 pattern. Mirrors the regex used in app.ts:148 and the
+ * service-layer test suites — kept as a private const here so the route file
+ * doesn't need a new shared util.
+ */
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * Verify API key has access to the given instance.
@@ -30,6 +40,83 @@ function checkInstanceAccess(apiKey: ApiKeyData | undefined, instanceId: string)
       recoverable: false,
     });
   }
+}
+
+/**
+ * Resolve the active instance for an API key. Reads `contextInstanceId` first
+ * (set via POST /context) then falls back to `activeInstanceId` (set via
+ * POST /context/use). Returns null when neither is set — callers MUST 400
+ * the request rather than guess across the API key's authorized instances.
+ */
+async function getActiveInstanceId(c: Context<{ Variables: AppVariables }>): Promise<string | null> {
+  const keyData = c.get('apiKey');
+  if (!keyData) return null;
+  const db = c.get('db');
+  const [row] = await db
+    .select({
+      activeInstanceId: apiKeys.activeInstanceId,
+      contextInstanceId: apiKeys.contextInstanceId,
+    })
+    .from(apiKeys)
+    .where(eq(apiKeys.id, keyData.id))
+    .limit(1);
+  return row?.contextInstanceId ?? row?.activeInstanceId ?? null;
+}
+
+/**
+ * Resolve a `:id` URL param to a chat's internal UUID.
+ *
+ * - If the param already looks like a UUID, return it unchanged. The caller's
+ *   service layer will 404 if no chat exists with that UUID.
+ * - Otherwise treat it as a platform-native id (WhatsApp JID like
+ *   `120363...@g.us`, Telegram numeric id, Discord channel id, ...) and look
+ *   it up via `findByExternalIdSmart`. Requires the API key to have an
+ *   active instance set (via POST /context or POST /context/use), or an
+ *   explicit `instanceId` to use for the lookup.
+ *
+ * Returns null when:
+ *   - The param is not a UUID and no instance context is available.
+ *   - The param is not a UUID and no chat with that external id exists in
+ *     the resolved instance.
+ *
+ * History
+ * -------
+ * Before this helper, every `chatsRoutes.<verb>('/:id*')` passed the raw URL
+ * param straight to a service method that called `eq(<uuid_col>, raw)`. When
+ * a client (omni CLI's `omni history`, omni-mcp tools, custom integrations)
+ * called with the platform-native id, postgres-js rejected with
+ *   PostgresError: invalid input syntax for type uuid: "120363...@g.us"
+ * → 500 Server error. Same shape as the LID fix in b5929040 — we just missed
+ * the routes that didn't go through `getByExternalId`.
+ */
+async function resolveChatIdParam(
+  c: Context<{ Variables: AppVariables }>,
+  raw: string,
+  explicitInstanceId?: string,
+): Promise<string | null> {
+  if (UUID_REGEX.test(raw)) return raw;
+  const instanceId = explicitInstanceId ?? (await getActiveInstanceId(c));
+  if (!instanceId) return null;
+  const services = c.get('services');
+  const chat = await services.chats.findByExternalIdSmart(instanceId, raw);
+  return chat?.id ?? null;
+}
+
+/**
+ * Common 404 response for routes that couldn't resolve a `:id` to a chat —
+ * either a non-UUID param without instance context, or a UUID that doesn't
+ * map to any chat we know about.
+ */
+function chatNotFoundResponse(c: Context<{ Variables: AppVariables }>, raw: string) {
+  return c.json(
+    {
+      error: {
+        code: ERROR_CODES.NOT_FOUND,
+        message: `Chat not found: ${raw}. Pass either a chat UUID or set the API key's active instance via POST /api/v2/context/use first.`,
+      },
+    },
+    404,
+  );
 }
 
 /**
@@ -190,9 +277,15 @@ chatsRoutes.post('/', zValidator('json', createChatSchema), async (c) => {
 
 /**
  * GET /chats/:id - Get chat by ID
+ *
+ * Accepts either a chat UUID or a platform-native id (WhatsApp JID, Telegram
+ * numeric id, etc.) — the latter is resolved to the internal UUID via the
+ * API key's active-instance context. See `resolveChatIdParam`.
  */
 chatsRoutes.get('/:id', async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
 
   const chat = await services.chats.getById(id);
@@ -204,7 +297,9 @@ chatsRoutes.get('/:id', async (c) => {
  * PATCH /chats/:id - Update a chat
  */
 chatsRoutes.patch('/:id', zValidator('json', updateChatSchema), async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const body = c.req.valid('json');
   const services = c.get('services');
 
@@ -217,7 +312,9 @@ chatsRoutes.patch('/:id', zValidator('json', updateChatSchema), async (c) => {
  * DELETE /chats/:id - Delete a chat (soft delete)
  */
 chatsRoutes.delete('/:id', async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
 
   await services.chats.delete(id);
@@ -498,7 +595,9 @@ chatsRoutes.post('/:id/unmute', zValidator('json', z.object({ instanceId: z.stri
  * GET /chats/:id/participants - Get chat participants
  */
 chatsRoutes.get('/:id/participants', async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
 
   const participants = await services.chats.getParticipants(id);
@@ -567,7 +666,9 @@ const listMessagesQuerySchema = z.object({
  * GET /chats/:id/messages - Get messages for a chat
  */
 chatsRoutes.get('/:id/messages', zValidator('query', listMessagesQuerySchema), async (c) => {
-  const chatId = c.req.param('id');
+  const raw = c.req.param('id');
+  const chatId = await resolveChatIdParam(c, raw);
+  if (chatId === null) return chatNotFoundResponse(c, raw);
   const { limit, before, after, mediaOnly } = c.req.valid('query');
   const services = c.get('services');
 
