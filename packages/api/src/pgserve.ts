@@ -707,12 +707,39 @@ async function tryStartOnPort(startFn: StartServerFn, port: number, config: Pgse
  *
  * Returns the DATABASE_URL to use for connections.
  * If PGSERVE_EMBEDDED is false, returns the existing DATABASE_URL / default.
+ *
+ * DEPRECATION (2026-05-01)
+ * ------------------------
+ * Embedded mode is on the deprecation path. The canonical replacement is a
+ * pm2-supervised pgserve registered via `pgserve install` (Wave 1 of the
+ * canonical-pgserve-pm2-supervision wish, pgserve@^2.1.0). Operators still
+ * on embedded should migrate via `omni doctor --fix`, which runs the full
+ * pg_dump → install → pg_restore → relaunch chain. Embedded code will be
+ * removed once canonical is proven across the fleet — see the LOUD warning
+ * surfaced below on every embedded boot.
  */
 export async function startEmbeddedPgserve(config: PgserveConfig): Promise<string> {
   if (!config.enabled) {
     const url = process.env.DATABASE_URL ?? getDefaultDatabaseUrl();
     log.info('Embedded pgserve disabled, using external database', { url: url.replace(/\/\/.*@/, '//***@') });
     return url;
+  }
+
+  // Loud deprecation banner — surfaces in pm2's log feed every time omni-api
+  // boots on embedded so operators see it without having to read this file.
+  // Suppressible via OMNI_SUPPRESS_EMBEDDED_DEPRECATION_WARNING=true for
+  // operators who can't migrate immediately and want a quieter log.
+  if (process.env.OMNI_SUPPRESS_EMBEDDED_DEPRECATION_WARNING !== 'true') {
+    log.warn(
+      'Embedded pgserve is DEPRECATED. Migrate to canonical pgserve via `omni doctor --fix` ' +
+        '(automated: pg_dump → pgserve install → restore → relaunch). Set ' +
+        'OMNI_SUPPRESS_EMBEDDED_DEPRECATION_WARNING=true to silence.',
+      {
+        deprecation: 'embedded-pgserve',
+        recommendedAction: 'omni doctor --fix',
+        scheduledRemovalAfter: 'fleet-canonical-adoption',
+      },
+    );
   }
 
   // Validate PGSERVE_DATA before doing anything else. Throws PgserveRelativeDataPathError
