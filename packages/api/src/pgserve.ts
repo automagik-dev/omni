@@ -6,7 +6,11 @@
  * separate PM2 service.
  *
  * Controlled by env vars:
- *   PGSERVE_EMBEDDED            — 'true' (default) to start in-process, 'false' to skip
+ *   PGSERVE_EMBEDDED            — 'true' to start in-process. ⚠️ DEPRECATED — phase
+ *                                 2 (2026-05-01) flipped the default to OFF.
+ *                                 Embedded mode is now an explicit opt-in;
+ *                                 unset / 'false' / any-other-value = canonical
+ *                                 (omni-api connects to DATABASE_URL).
  *   PGSERVE_PORT                — port for the embedded PostgreSQL proxy (default 8432)
  *   PGSERVE_DATA                — data directory path; defaults to ~/.omni/data/pgserve (set to empty string for memory mode)
  *   PGSERVE_ALLOW_RELATIVE_DATA — when 'true', allows PGSERVE_DATA to be a relative path (DANGEROUS — PM2 cwd drift can swap data dirs). Default: reject.
@@ -129,9 +133,16 @@ let serverInstance: PgserveInstance | null = null;
  * resolving so tests can exercise parsing independently from filesystem
  * checks. Falls back to the canonical `~/.omni/data/pgserve` when
  * `PGSERVE_DATA` is unset (the default is always absolute).
+ *
+ * Phase 2 default flip (2026-05-01): `PGSERVE_EMBEDDED` defaults to OFF
+ * when unset. Embedded mode is now an explicit opt-in (`PGSERVE_EMBEDDED=
+ * true`). The CLI's `buildRuntimeEnv` flips this var explicitly based on
+ * `serverConfig.useCanonicalPgserve`, so this default only matters when
+ * omni-api is launched directly (e.g., bare `bun packages/api/src/index.ts`)
+ * without the CLI's env wiring.
  */
 export function resolvePgserveConfig(): PgserveConfig {
-  const enabled = (process.env.PGSERVE_EMBEDDED ?? 'true') === 'true';
+  const enabled = process.env.PGSERVE_EMBEDDED === 'true';
   const port = Number.parseInt(process.env.PGSERVE_PORT ?? '8432', 10);
   const raw = process.env.PGSERVE_DATA;
   // Default to persistent storage inside ~/.omni/data/pgserve — never memory mode unless explicitly empty
