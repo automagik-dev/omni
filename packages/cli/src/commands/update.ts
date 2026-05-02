@@ -47,6 +47,13 @@ interface UpdateOptions {
   sidecarCleanup?: boolean;
   next?: boolean;
   stable?: boolean;
+  /**
+   * Bypass the canonical-pgserve phase-2 pre-flight check. Use only when
+   * the operator knows what they're doing — e.g., they've manually
+   * pre-installed pgserve via a different path the auto-detector misses.
+   * Defaults to false (the check runs).
+   */
+  skipCanonicalPreflight?: boolean;
 }
 
 export type UpdateChannel = 'latest' | 'next';
@@ -424,6 +431,87 @@ async function promptConfirm(question: string): Promise<boolean> {
   });
 }
 
+/**
+ * Phase-2 canonical-pgserve cutoff (omni#596, 2026-05-02). Versions at or
+ * after this date flipped the embedded-mode default OFF. Operators who
+ * never migrated to canonical pgserve (useCanonicalPgserve undefined) AND
+ * don't have the `pgserve` binary installed would have omni-api fail at
+ * boot post-upgrade because PGSERVE_EMBEDDED=false but no canonical
+ * backbone exists.
+ *
+ * Compared as YYYYMMDD (the minor of the omni semver). 260502 = 2026-05-02.
+ */
+const PHASE_2_CUTOFF_MINOR = 260502;
+
+function isAtOrPastPhase2(version: string): boolean {
+  const [_major, minorStr] = version.split('.');
+  const minor = Number.parseInt(minorStr ?? '', 10);
+  if (!Number.isFinite(minor)) return false;
+  return minor >= PHASE_2_CUTOFF_MINOR;
+}
+
+function isPgserveOnPath(): boolean {
+  try {
+    const result = Bun.spawnSync({
+      cmd: ['pgserve', 'port'],
+      stdout: 'pipe',
+      stderr: 'pipe',
+      timeout: 3000,
+    });
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Halt updates that would cross the phase-2 default-flip cutoff on hosts
+ * still running legacy embedded pgserve without the canonical binary
+ * available.
+ *
+ * Returns null when safe to proceed; otherwise an actionable error message.
+ */
+export function checkCanonicalPgservePreflight(args: {
+  currentVersion: string;
+  targetVersion: string;
+  useCanonicalPgserve: boolean | undefined;
+  pgserveOnPath: boolean;
+}): string | null {
+  // Already past the cutoff or not yet at it — no upgrade-time hazard.
+  if (isAtOrPastPhase2(args.currentVersion)) return null;
+  if (!isAtOrPastPhase2(args.targetVersion)) return null;
+  // Operator has migrated → omni-api will use canonical successfully.
+  if (args.useCanonicalPgserve === true) return null;
+  // Operator has explicitly opted INTO embedded → they keep working as-is.
+  if (args.useCanonicalPgserve === false) return null;
+  // Canonical binary is reachable → omni-api will discover and use it.
+  if (args.pgserveOnPath) return null;
+
+  // Danger: undefined flag (legacy never migrated) + no canonical binary →
+  // omni-api would boot with PGSERVE_EMBEDDED=false and no DB to connect to.
+  return [
+    'Refusing to upgrade — this would break omni-api on next restart.',
+    '',
+    `  Target version v${args.targetVersion} ships the phase-2 canonical-pgserve default flip`,
+    '  (omni#596). Your current install has `useCanonicalPgserve` unset and no `pgserve`',
+    '  binary on PATH, so omni-api would boot with PGSERVE_EMBEDDED=false and fail to',
+    '  connect to a non-existent canonical pgserve.',
+    '',
+    '  Pick one of:',
+    '',
+    '    (recommended) Migrate to canonical pgserve:',
+    '      bun add -g pgserve@^2.1.0',
+    '      omni doctor --fix      # automated pg_dump → install → restore',
+    '      omni update            # then re-run',
+    '',
+    '    (transitional) Pin embedded explicitly:',
+    "      omni config set server.useCanonicalPgserve 'false'",
+    '      omni update            # then re-run',
+    '',
+    '  Bypass this check (NOT recommended) with: omni update --skip-canonical-preflight',
+  ].join('\n');
+}
+
 async function runUpdate(options: UpdateOptions): Promise<void> {
   const channel = resolveChannel(options);
 
@@ -451,6 +539,24 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
   if (currentClean === latest) {
     output.success(`Already up to date (v${latest}, channel: ${channel})`);
     process.exit(0);
+  }
+
+  // Pre-flight: refuse to cross the phase-2 cutoff on legacy embedded hosts
+  // without canonical pgserve installed. Operators get a clear remediation
+  // path BEFORE the install completes (vs discovering the boot failure
+  // hours later when omni-api restarts).
+  if (!options.skipCanonicalPreflight) {
+    const serverConfig = loadServerConfig();
+    const preflightError = checkCanonicalPgservePreflight({
+      currentVersion: currentClean,
+      targetVersion: latest,
+      useCanonicalPgserve: serverConfig.useCanonicalPgserve,
+      pgserveOnPath: isPgserveOnPath(),
+    });
+    if (preflightError !== null) {
+      output.warn(preflightError);
+      process.exit(1);
+    }
   }
 
   output.info(`Update available: v${currentClean} → v${latest} (${channel})`);
@@ -499,6 +605,10 @@ export function createUpdateCommand(): Command {
     .option('--no-sidecar-cleanup', 'Skip the legacy nats-reply-sidecar.mjs cleanup step')
     .option('--next', 'Switch to dev builds (npm @next tag) and persist as default')
     .option('--stable', 'Switch to stable releases (npm @latest tag) and persist as default')
+    .option(
+      '--skip-canonical-preflight',
+      'Bypass the canonical-pgserve phase-2 pre-flight (NOT recommended; for operators who pre-installed pgserve via a path the auto-detector misses)',
+    )
     .addHelpText(
       'after',
       `
