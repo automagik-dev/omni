@@ -558,8 +558,8 @@ async function setupEventBusServices(
       // sweeper published the event, or whose chat is in active close-contact
       // state. Fail-open on errors so a flaky DB doesn't drop legitimate
       // events.
-      staleIdleTimeoutGate: async (chatId, instanceId) => {
-        return services.followUpLifecycle.evaluateIdleTimeoutFreshness(chatId, instanceId);
+      staleIdleTimeoutGate: async (chatId, instanceId, eventSequenceIndex) => {
+        return services.followUpLifecycle.evaluateIdleTimeoutFreshness(chatId, instanceId, eventSequenceIndex);
       },
     });
   } catch (error) {

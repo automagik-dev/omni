@@ -353,18 +353,20 @@ export class AutomationEngine {
    */
   private async shouldSkipStaleIdleTimeout(event: OmniEvent): Promise<boolean> {
     if (event.type !== 'chat.idle_timeout' || !this.deps.staleIdleTimeoutGate) return false;
-    const payload = event.payload as { chatId?: string; instanceId?: string };
+    const payload = event.payload as { chatId?: string; instanceId?: string; sequenceIndex?: number };
     const chatId = payload?.chatId;
     const payloadInstanceId = payload?.instanceId ?? event.metadata.instanceId;
     if (!chatId || !payloadInstanceId) return false;
+    const eventSequenceIndex = typeof payload?.sequenceIndex === 'number' ? payload.sequenceIndex : null;
 
     try {
-      const verdict = await this.deps.staleIdleTimeoutGate(chatId, payloadInstanceId);
+      const verdict = await this.deps.staleIdleTimeoutGate(chatId, payloadInstanceId, eventSequenceIndex);
       if (verdict.skip) {
         logger.info('Skipping stale chat.idle_timeout event', {
           eventId: event.id,
           chatId,
           instanceId: payloadInstanceId,
+          eventSequenceIndex,
           reason: verdict.reason ?? 'unknown',
         });
         return true;
