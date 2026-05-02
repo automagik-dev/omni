@@ -387,6 +387,12 @@ export class FollowUpLifecycleService {
    *  - follow-up row's `disarmReason` is set — sequence is in a terminal
    *    state and any further fire would re-spam a chat the system already
    *    finished/handed-off/archived
+   *  - row's `sequenceIndex` is strictly greater than the event's
+   *    `eventSequenceIndex` — the row already advanced via a more recent
+   *    sweeper tick. Catches the regression class where a row stays
+   *    nominally active (no `disarmReason`) but a replayed event
+   *    references an older sequence position. Without this check, replays
+   *    of events 0..N-1 keep firing while the row is at sequenceIndex N.
    *
    * Returns `{ skip: false }` when the event should proceed normally.
    *
@@ -395,13 +401,28 @@ export class FollowUpLifecycleService {
    * a flaky DB at consumer time is less harmful than silently dropping
    * legitimate idle-timeout events.
    */
-  async evaluateIdleTimeoutFreshness(chatId: string, instanceId: string): Promise<{ skip: boolean; reason?: string }> {
+  async evaluateIdleTimeoutFreshness(
+    chatId: string,
+    instanceId: string,
+    eventSequenceIndex: number | null,
+  ): Promise<{ skip: boolean; reason?: string }> {
     if (await this.isInActiveCloseState(chatId, instanceId)) {
       return { skip: true, reason: 'chat_closed' };
     }
     const row = await this.readExistingRow(chatId, instanceId);
     if (row?.disarmReason) {
       return { skip: true, reason: `disarmed_${row.disarmReason}` };
+    }
+    if (
+      row !== null &&
+      typeof eventSequenceIndex === 'number' &&
+      typeof row.sequenceIndex === 'number' &&
+      row.sequenceIndex > eventSequenceIndex
+    ) {
+      return {
+        skip: true,
+        reason: `sequence_advanced_row_at_${row.sequenceIndex}_event_${eventSequenceIndex}`,
+      };
     }
     return { skip: false };
   }
@@ -417,12 +438,14 @@ export class FollowUpLifecycleService {
     disarmReason: FollowUpDisarmReason | null;
     disarmedAt: Date | null;
     lastInboundCustomerMessageAt: Date | null;
+    sequenceIndex: number;
   } | null> {
     const [row] = await this.db
       .select({
         disarmReason: chatFollowUpState.disarmReason,
         disarmedAt: chatFollowUpState.disarmedAt,
         lastInboundCustomerMessageAt: chatFollowUpState.lastInboundCustomerMessageAt,
+        sequenceIndex: chatFollowUpState.sequenceIndex,
       })
       .from(chatFollowUpState)
       .where(and(eq(chatFollowUpState.chatId, chatId), eq(chatFollowUpState.instanceId, instanceId)))
@@ -433,6 +456,7 @@ export class FollowUpLifecycleService {
       disarmReason: (row.disarmReason ?? null) as FollowUpDisarmReason | null,
       disarmedAt: row.disarmedAt ?? null,
       lastInboundCustomerMessageAt: row.lastInboundCustomerMessageAt ?? null,
+      sequenceIndex: row.sequenceIndex,
     };
   }
 
