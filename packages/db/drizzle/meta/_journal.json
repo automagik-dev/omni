@@ -253,6 +253,13 @@
       "when": 1777770000000,
       "tag": "0035_unstick_redirected_sac_terminals",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1777860000000,
+      "tag": "0036_timestamptz_migration",
+      "breakpoints": true
     }
   ]
 }
