@@ -166,6 +166,32 @@ ensure_pgserve() {
   fi
 }
 
+# Offer the Omni Claude Code plugin install when `claude` is available.
+# Mirrors genie's `offer_claude_plugin()` (genie/install.sh:563-591) so a
+# fresh `curl … | bash` end-to-end install gives the operator both the CLI
+# AND the `/omni:*` slash commands without a separate manual step.
+#
+# Marketplace: automagik-dev/omni → plugin name `omni@automagik-dev`
+# (matches packages/.claude-plugin/marketplace.json `name: "automagik-dev"`).
+#
+# Idempotent: claude plugin marketplace add + install both no-op when the
+# plugin is already registered. We never fail the install on a plugin error
+# — the CLI is functional without the plugin; the plugin is a DX upgrade.
+offer_omni_plugin() {
+  if ! has_cmd claude; then
+    info "Claude Code not found — skipping plugin install (you can install it later with: claude plugin install omni@automagik-dev)"
+    return 0
+  fi
+
+  info "Installing Omni plugin for Claude Code..."
+  claude plugin marketplace add automagik-dev/omni >/dev/null 2>&1 || true
+  if claude plugin install omni@automagik-dev >/dev/null 2>&1; then
+    ok "Omni Claude Code plugin installed (try /omni:omni-setup in a Claude session)"
+  else
+    warn "Plugin install failed — try manually: claude plugin install omni@automagik-dev"
+  fi
+}
+
 # ============================================================================
 # Install: CLI only
 # ============================================================================
@@ -178,6 +204,7 @@ install_cli_only() {
   info "Installing @automagik/omni@${channel} from npm..."
   if bun add -g "@automagik/omni@${channel}" 2>/dev/null && has_cmd omni; then
     ok "omni $(omni --version) installed from npm (channel: ${channel})"
+    offer_omni_plugin
     return 0
   fi
   fail "npm install failed. Check your network and try again: bun add -g @automagik/omni@${channel}"
@@ -203,6 +230,8 @@ install_full_server() {
 
   info "Running omni install (this will download NATS, configure PM2, etc.)..."
   omni install --non-interactive
+
+  offer_omni_plugin
 }
 
 # ============================================================================
