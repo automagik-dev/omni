@@ -38,6 +38,14 @@ describe('Output Module Exports', () => {
     expect(typeof output.tip).toBe('function');
   });
 
+  test('exports new primitives: step / spinner / banner / progress / divider', () => {
+    expect(typeof output.step).toBe('function');
+    expect(typeof output.spinner).toBe('function');
+    expect(typeof output.banner).toBe('function');
+    expect(typeof output.progress).toBe('function');
+    expect(typeof output.divider).toBe('function');
+  });
+
   test('exports flushStdout', () => {
     expect(typeof output.flushStdout).toBe('function');
   });
@@ -132,6 +140,224 @@ await flushStdout();
     // stdout into jq must remain unaffected by the nudge.
     const parsed = JSON.parse(stderr.trim());
     expect(parsed).toHaveProperty('tip', 'canonical command is omni connect');
+  });
+});
+
+/**
+ * Behavioral coverage for the 5 new primitives: step / spinner / banner /
+ * progress / divider. Spawned-child tests use OMNI_FORMAT to switch modes
+ * because the child has no TTY (which exercises the non-TTY degradation
+ * paths exactly as a piped consumer would see them).
+ */
+describe('output primitives — step / spinner / banner / progress / divider', () => {
+  function runEmitter(
+    body: string,
+    env: Record<string, string> = {},
+  ): Promise<{ stdout: string; stderr: string; code: number | null }> {
+    const tempDir = mkdtempSync(join(tmpdir(), 'omni-prim-'));
+    const scriptPath = join(tempDir, 'emit.ts');
+    const outputModulePath = join(import.meta.dir, '..', 'output.ts');
+    const importPath = outputModulePath.replace(/\\/g, '/').replace(/'/g, "\\'");
+    const script = `
+import { step, spinner, banner, progress, divider, flushStdout } from '${importPath}';
+${body}
+await flushStdout();
+`;
+    writeFileSync(scriptPath, script);
+
+    return new Promise((resolve, reject) => {
+      const child = spawn('bun', [scriptPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, ...env },
+      });
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+      child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+      child.on('close', (code) => {
+        rmSync(tempDir, { recursive: true, force: true });
+        resolve({
+          stdout: Buffer.concat(stdoutChunks).toString('utf-8'),
+          stderr: Buffer.concat(stderrChunks).toString('utf-8'),
+          code,
+        });
+      });
+      child.on('error', reject);
+    });
+  }
+
+  describe('step', () => {
+    test('human format: emits ▸ glyph + message on stdout', async () => {
+      const { stdout, stderr } = await runEmitter(`step('Installing pgserve...');`, {
+        OMNI_FORMAT: 'human',
+        NO_COLOR: '1',
+      });
+      expect(stdout).toContain('▸');
+      expect(stdout).toContain('Installing pgserve...');
+      expect(stderr).toBe('');
+    });
+
+    test('json format: emits {step} JSON breadcrumb on stderr, stdout empty', async () => {
+      const { stdout, stderr } = await runEmitter(`step('Installing pgserve...');`, {
+        OMNI_FORMAT: 'json',
+      });
+      expect(stdout).toBe('');
+      const parsed = JSON.parse(stderr.trim());
+      expect(parsed).toEqual({ step: 'Installing pgserve...' });
+    });
+  });
+
+  describe('spinner', () => {
+    test('non-TTY human format: start emits info, succeed emits success on stdout', async () => {
+      const { stdout, stderr } = await runEmitter(
+        `const s = spinner('Checking version...').start(); s.succeed('v1.2.3');`,
+        { OMNI_FORMAT: 'human', NO_COLOR: '1' },
+      );
+      // Degraded path: info(text) on start, success(text) on succeed.
+      expect(stdout).toContain('Checking version...');
+      expect(stdout).toContain('v1.2.3');
+      expect(stdout).toContain('ℹ');
+      expect(stdout).toContain('✓');
+      // No \r animation residue.
+      expect(stdout).not.toContain('\r');
+      expect(stderr).toBe('');
+    });
+
+    test('json format: emits start + succeed breadcrumbs on stderr, stdout stays empty', async () => {
+      const { stdout, stderr } = await runEmitter(
+        `const s = spinner('Checking version...').start(); s.succeed('v1.2.3');`,
+        { OMNI_FORMAT: 'json' },
+      );
+      expect(stdout).toBe('');
+      const lines = stderr
+        .trim()
+        .split('\n')
+        .filter((l) => l.length > 0);
+      expect(lines).toHaveLength(2);
+      expect(JSON.parse(lines[0])).toEqual({ spinner: 'start', text: 'Checking version...' });
+      expect(JSON.parse(lines[1])).toEqual({ spinner: 'succeed', text: 'v1.2.3' });
+    });
+
+    test('json format: fail / warn / info / stop all produce stderr breadcrumbs', async () => {
+      const { stdout, stderr } = await runEmitter(
+        `const s = spinner('initial').start(); s.fail('boom'); s.warn('soft'); s.info('hint'); s.stop();`,
+        { OMNI_FORMAT: 'json' },
+      );
+      expect(stdout).toBe('');
+      const lines = stderr
+        .trim()
+        .split('\n')
+        .filter((l) => l.length > 0)
+        .map((l) => JSON.parse(l));
+      expect(lines).toHaveLength(5);
+      expect(lines[0]).toEqual({ spinner: 'start', text: 'initial' });
+      expect(lines[1]).toEqual({ spinner: 'fail', text: 'boom' });
+      expect(lines[2]).toEqual({ spinner: 'warn', text: 'soft' });
+      expect(lines[3]).toEqual({ spinner: 'info', text: 'hint' });
+      expect(lines[4]).toEqual({ spinner: 'stop', text: 'initial' });
+    });
+
+    test('text setter mutates JSON-mode breadcrumb payload', async () => {
+      const { stderr } = await runEmitter(`const s = spinner('first'); s.text = 'second'; s.start(); s.succeed();`, {
+        OMNI_FORMAT: 'json',
+      });
+      const lines = stderr
+        .trim()
+        .split('\n')
+        .filter((l) => l.length > 0)
+        .map((l) => JSON.parse(l));
+      expect(lines[0]).toEqual({ spinner: 'start', text: 'second' });
+      expect(lines[1]).toEqual({ spinner: 'succeed', text: 'second' });
+    });
+  });
+
+  describe('banner', () => {
+    test('human format: prints a multi-line boxed banner to stdout', async () => {
+      const { stdout, stderr } = await runEmitter(
+        `banner(['Updated to v1.2.3', 'Run omni doctor'], { borderStyle: 'round', borderColor: 'green' });`,
+        { OMNI_FORMAT: 'human', NO_COLOR: '1' },
+      );
+      // boxen renders both lines plus border characters.
+      expect(stdout).toContain('Updated to v1.2.3');
+      expect(stdout).toContain('Run omni doctor');
+      // Round border has corner glyphs (degrades to single ASCII when NO_COLOR
+      // forces colors off in our impl). We assert at least one box-drawing
+      // character is present so the banner actually rendered as a box.
+      expect(stdout).toMatch(/[─│╭╮╯╰┌┐└┘]/);
+      expect(stderr).toBe('');
+    });
+
+    test('human format: single-line input is centered (not multi-line)', async () => {
+      const { stdout } = await runEmitter(`banner('Updated to v1.2.3');`, {
+        OMNI_FORMAT: 'human',
+        NO_COLOR: '1',
+      });
+      expect(stdout).toContain('Updated to v1.2.3');
+      expect(stdout).toMatch(/[─│┌┐└┘╭╮╯╰]/);
+    });
+
+    test('json format: emits {banner} stderr breadcrumb, stdout empty', async () => {
+      const { stdout, stderr } = await runEmitter(`banner(['line1', 'line2']);`, { OMNI_FORMAT: 'json' });
+      expect(stdout).toBe('');
+      const parsed = JSON.parse(stderr.trim());
+      expect(parsed).toEqual({ banner: 'line1\nline2' });
+    });
+  });
+
+  describe('progress', () => {
+    test('json format: emits rate-limited {progress} stderr breadcrumbs', async () => {
+      const { stdout, stderr } = await runEmitter(
+        `const p = progress('Downloading'); p.start(100, 0); p.update(50); p.update(75); p.stop();`,
+        { OMNI_FORMAT: 'json' },
+      );
+      expect(stdout).toBe('');
+      const lines = stderr
+        .trim()
+        .split('\n')
+        .filter((l) => l.length > 0)
+        .map((l) => JSON.parse(l));
+      // start() forces emit; the two updates within the same second are
+      // rate-limited away; stop() forces a final emit. Net: 2 lines.
+      expect(lines.length).toBeGreaterThanOrEqual(2);
+      expect(lines.length).toBeLessThanOrEqual(4);
+      expect(lines[0]).toMatchObject({ progress: 0, total: 100, downloaded: 0, label: 'Downloading' });
+      const last = lines[lines.length - 1];
+      expect(last.label).toBe('Downloading');
+      expect(last.total).toBe(100);
+    });
+
+    test('non-TTY human format: rate-limited stderr (no animation on stdout)', async () => {
+      const { stdout, stderr } = await runEmitter(
+        `const p = progress('Downloading'); p.start(100, 0); p.update(50); p.stop();`,
+        { OMNI_FORMAT: 'human', NO_COLOR: '1' },
+      );
+      // Non-TTY child → progress degrades to JSON-style stderr breadcrumbs.
+      expect(stdout).toBe('');
+      expect(stderr).toContain('"progress"');
+      expect(stderr).toContain('"label":"Downloading"');
+    });
+  });
+
+  describe('divider', () => {
+    test('human format: prints ─ characters spanning at least 1 char on stdout', async () => {
+      const { stdout, stderr } = await runEmitter('divider();', {
+        OMNI_FORMAT: 'human',
+        NO_COLOR: '1',
+      });
+      expect(stdout).toContain('─');
+      // Default non-TTY width is 80; allow more if process.stdout.columns leaks.
+      const dashCount = (stdout.match(/─/g) ?? []).length;
+      expect(dashCount).toBeGreaterThanOrEqual(80);
+      expect(stderr).toBe('');
+    });
+
+    test('json format: divider is a no-op (both streams empty)', async () => {
+      const { stdout, stderr } = await runEmitter('divider();', {
+        OMNI_FORMAT: 'json',
+      });
+      expect(stdout).toBe('');
+      expect(stderr).toBe('');
+    });
   });
 });
 

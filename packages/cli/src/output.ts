@@ -4,7 +4,10 @@
  * Human-friendly and JSON output modes with color support.
  */
 
+import boxen from 'boxen';
 import chalk from 'chalk';
+import cliProgress from 'cli-progress';
+import ora from 'ora';
 import { getOutputFormat } from './config.js';
 
 /**
@@ -294,6 +297,285 @@ export function dim(text: string): void {
 /** Raw stdout line (for custom formatting) */
 export function raw(text: string): void {
   writeStdoutLine(text);
+}
+
+/**
+ * Print a stage divider — bold cyan ▸ + bold message, with a leading newline.
+ *
+ * Used as a section header in install/update/setup pipelines. In JSON mode,
+ * emits `{ step: "<msg>" }` to stderr so observability isn't lost while stdout
+ * stays clean for `--json | jq` consumers.
+ */
+export function step(message: string): void {
+  const format = getCurrentFormat();
+
+  if (format === 'json') {
+    // biome-ignore lint/suspicious/noConsole: CLI output
+    console.error(JSON.stringify({ step: message }));
+  } else {
+    writeStdoutLine(`\n${c().bold.cyan('▸')} ${c().bold(message)}`);
+  }
+}
+
+/**
+ * Format-aware spinner. Locked subset of ora's API so the implementation can
+ * be swapped later without breaking callers.
+ *
+ * - Human TTY: real ora animation.
+ * - Human non-TTY (piped, CI, NO_COLOR): degrades to plain `info(text)` on
+ *   start and `success(text)` on succeed; no `\r` animation.
+ * - JSON mode: emits `{ spinner: "start" | "succeed" | "fail" | ..., text }`
+ *   breadcrumbs to stderr; never writes to stdout.
+ */
+export interface OutputSpinner {
+  start(): OutputSpinner;
+  succeed(text?: string): void;
+  fail(text?: string): void;
+  warn(text?: string): void;
+  info(text?: string): void;
+  stop(): void;
+  set text(value: string);
+}
+
+/** Create a format-aware spinner. See {@link OutputSpinner}. */
+export function spinner(text: string): OutputSpinner {
+  const format = getCurrentFormat();
+
+  if (format === 'json') {
+    let currentText = text;
+    const obj: OutputSpinner = {
+      start() {
+        // biome-ignore lint/suspicious/noConsole: CLI output
+        console.error(JSON.stringify({ spinner: 'start', text: currentText }));
+        return obj;
+      },
+      succeed(t?: string) {
+        // biome-ignore lint/suspicious/noConsole: CLI output
+        console.error(JSON.stringify({ spinner: 'succeed', text: t ?? currentText }));
+      },
+      fail(t?: string) {
+        // biome-ignore lint/suspicious/noConsole: CLI output
+        console.error(JSON.stringify({ spinner: 'fail', text: t ?? currentText }));
+      },
+      warn(t?: string) {
+        // biome-ignore lint/suspicious/noConsole: CLI output
+        console.error(JSON.stringify({ spinner: 'warn', text: t ?? currentText }));
+      },
+      info(t?: string) {
+        // biome-ignore lint/suspicious/noConsole: CLI output
+        console.error(JSON.stringify({ spinner: 'info', text: t ?? currentText }));
+      },
+      stop() {
+        // biome-ignore lint/suspicious/noConsole: CLI output
+        console.error(JSON.stringify({ spinner: 'stop', text: currentText }));
+      },
+      set text(value: string) {
+        currentText = value;
+      },
+    };
+    return obj;
+  }
+
+  if (!process.stdout.isTTY) {
+    let currentText = text;
+    const obj: OutputSpinner = {
+      start() {
+        info(currentText);
+        return obj;
+      },
+      succeed(t?: string) {
+        success(t ?? currentText);
+      },
+      fail(t?: string) {
+        // biome-ignore lint/suspicious/noConsole: CLI output
+        console.error(`${c().red('✗')} ${t ?? currentText}`);
+      },
+      warn(t?: string) {
+        warn(t ?? currentText);
+      },
+      info(t?: string) {
+        info(t ?? currentText);
+      },
+      stop() {
+        // No-op: nothing to clear when there was never an animation.
+      },
+      set text(value: string) {
+        currentText = value;
+      },
+    };
+    return obj;
+  }
+
+  const oraInstance = ora(text);
+  const obj: OutputSpinner = {
+    start() {
+      oraInstance.start();
+      return obj;
+    },
+    succeed(t?: string) {
+      oraInstance.succeed(t);
+    },
+    fail(t?: string) {
+      oraInstance.fail(t);
+    },
+    warn(t?: string) {
+      oraInstance.warn(t);
+    },
+    info(t?: string) {
+      oraInstance.info(t);
+    },
+    stop() {
+      oraInstance.stop();
+    },
+    set text(value: string) {
+      oraInstance.text = value;
+    },
+  };
+  return obj;
+}
+
+/** Options for {@link banner}. Border styles and colors are locked to a small palette. */
+export interface BannerOptions {
+  title?: string;
+  borderStyle?: 'single' | 'double' | 'round' | 'bold';
+  borderColor?: 'green' | 'red' | 'yellow' | 'blue' | 'cyan';
+  padding?: number;
+}
+
+/**
+ * Print a boxed banner (boxen wrapper). Used for "Updated to vX.Y.Z"
+ * release-style announcements.
+ *
+ * - Single-line input is center-aligned; multi-line input is left-aligned.
+ * - When colors are disabled (NO_COLOR / non-TTY / `--no-color`), the border
+ *   degrades to a single ASCII style with no color escapes.
+ * - In JSON mode, emits `{ banner: "<msg>" }` to stderr; never writes to stdout.
+ */
+export function banner(message: string | string[], options?: BannerOptions): void {
+  const format = getCurrentFormat();
+  const messageStr = Array.isArray(message) ? message.join('\n') : message;
+
+  if (format === 'json') {
+    // biome-ignore lint/suspicious/noConsole: CLI output
+    console.error(JSON.stringify({ banner: messageStr }));
+    return;
+  }
+
+  const isMultiLine = Array.isArray(message) || messageStr.includes('\n');
+  const borderStyle = options?.borderStyle ?? 'round';
+  const padding = options?.padding ?? 1;
+  const textAlignment: 'left' | 'center' = isMultiLine ? 'left' : 'center';
+
+  const colorsOn = areColorsEnabled();
+  const boxOptions: Parameters<typeof boxen>[1] = colorsOn
+    ? {
+        borderStyle,
+        borderColor: options?.borderColor ?? 'cyan',
+        padding,
+        textAlignment,
+        title: options?.title,
+      }
+    : {
+        borderStyle: 'single',
+        padding,
+        textAlignment,
+        title: options?.title,
+      };
+
+  writeStdoutLine(boxen(messageStr, boxOptions));
+}
+
+/**
+ * Format-aware progress bar.
+ *
+ * - Human TTY: real `cli-progress.SingleBar`.
+ * - Human non-TTY / JSON mode: rate-limited stub that emits at most one
+ *   `{ progress: 0.0..1.0, total, downloaded, label }` line per second to
+ *   stderr; never animates.
+ */
+export interface OutputProgress {
+  start(total: number, startValue?: number): void;
+  update(current: number): void;
+  increment(delta?: number): void;
+  stop(): void;
+}
+
+/** Create a format-aware progress bar. See {@link OutputProgress}. */
+export function progress(label: string): OutputProgress {
+  const format = getCurrentFormat();
+  const isNonTTY = format === 'json' || !process.stdout.isTTY;
+
+  if (isNonTTY) {
+    let total = 0;
+    let current = 0;
+    let lastEmit = 0;
+
+    const emit = (force: boolean): void => {
+      const now = Date.now();
+      if (!force && now - lastEmit < 1000) return;
+      lastEmit = now;
+      const ratio = total > 0 ? current / total : 0;
+      // biome-ignore lint/suspicious/noConsole: CLI output
+      console.error(JSON.stringify({ progress: ratio, total, downloaded: current, label }));
+    };
+
+    return {
+      start(totalValue: number, startValue = 0) {
+        total = totalValue;
+        current = startValue;
+        lastEmit = 0;
+        emit(true);
+      },
+      update(currentValue: number) {
+        current = currentValue;
+        emit(false);
+      },
+      increment(delta = 1) {
+        current += delta;
+        emit(false);
+      },
+      stop() {
+        emit(true);
+      },
+    };
+  }
+
+  const bar = new cliProgress.SingleBar(
+    {
+      format: `${label} |{bar}| {percentage}% | {value}/{total}`,
+      hideCursor: true,
+      clearOnComplete: false,
+    },
+    cliProgress.Presets.shades_classic,
+  );
+
+  return {
+    start(total: number, startValue = 0) {
+      bar.start(total, startValue);
+    },
+    update(current: number) {
+      bar.update(current);
+    },
+    increment(delta = 1) {
+      bar.increment(delta);
+    },
+    stop() {
+      bar.stop();
+    },
+  };
+}
+
+/**
+ * Print a horizontal divider — `─` × terminal width (or 80 if non-TTY).
+ *
+ * In JSON mode this is a no-op; dividers are pure decoration and JSON
+ * consumers don't need them.
+ */
+export function divider(): void {
+  if (getCurrentFormat() === 'json') return;
+
+  const width = process.stdout.columns || 80;
+  writeStdoutLine(c().dim('─'.repeat(width)));
 }
 
 /**
