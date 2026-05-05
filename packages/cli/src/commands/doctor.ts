@@ -104,6 +104,14 @@ export interface DoctorOptions {
   fix?: boolean;
   json?: boolean;
   verbose?: boolean;
+  /**
+   * Force read-only mode. When true, any `fix: true` is suppressed and
+   * `runDoctor` only collects the check report. Used by `omni update`'s
+   * post-update maintenance hook (`runPostUpdateMaintenance`) so the
+   * probe stays read-only — `omni doctor --fix` remains the explicit
+   * operator action for repair.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -1014,7 +1022,10 @@ export async function runDoctor(options: DoctorOptions, depsOverride?: DoctorDep
   let checks = await runAllChecks(deps);
   const fixesApplied: string[] = [];
 
-  if (options.fix) {
+  // dryRun is the explicit "read-only" lever used by `omni update`'s
+  // post-update maintenance hook. It defeats any caller-supplied
+  // `fix: true` so the probe never mutates pm2 / config / DB state.
+  if (options.fix && options.dryRun !== true) {
     const phase1 = await runPhase1MigrationFix(deps, checks, fixesApplied);
     checks = phase1.checks;
     await runPhase2Fixes(deps, checks, phase1.canonicalFailed, fixesApplied);
