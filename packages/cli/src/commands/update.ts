@@ -21,6 +21,8 @@
  * when the stored key no longer validated.
  */
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { createOmniClient } from '@omni/sdk';
 import chalk from 'chalk';
@@ -32,7 +34,14 @@ import { type CleanupReport, cleanupLegacyArtifacts } from '../legacy-cleanup.js
 import * as output from '../output.js';
 import { PM2_PROCESSES } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
+import {
+  type ParallelInstallReport,
+  type UpdateDiagnostics,
+  createDiagnostics,
+  writeDiagnostics,
+} from '../update-diagnostics.js';
 import { VERSION } from '../version.js';
+import { type DoctorReport, runDoctor } from './doctor.js';
 
 const PACKAGE_NAME = '@automagik/omni';
 
@@ -80,6 +89,16 @@ interface UpdateOptions {
    * pipelines that run their own health probe).
    */
   skipMaintenance?: boolean;
+  /**
+   * Restart services but skip the post-restart probe. Useful when a release
+   * has a broken `/api/v2/health` and operators need to roll forward
+   * without the verify gate failing the run. Distinct from `--no-restart`,
+   * which skips the entire post-install path. With `--no-verify`, services
+   * still restart, the legacy-cleanup registry still runs, and the verify
+   * outcome lands in diagnostics as
+   * `{ kind: 'skipped', reason: 'no-verify-flag' }`.
+   */
+  verify?: boolean;
 }
 
 export type UpdateChannel = 'latest' | 'next';
@@ -393,6 +412,73 @@ function printVerifyBanner(latest: string): void {
 }
 
 /**
+ * Variant of `printVerifyBanner` used when the operator passed `--no-verify`.
+ * The CLI line stays a green check (we know our own version), but the server
+ * and auth lines are tagged `(skipped)` in yellow so operators don't misread
+ * the output as a confirmed match. Format matches the wish acceptance
+ * criteria: "emits `Server: v… (skipped)` in the banner".
+ */
+function printVerifySkippedBanner(latest: string): void {
+  // biome-ignore lint/suspicious/noConsole: CLI output — banner is the product
+  console.log(`${chalk.green('✓')} CLI:    v${latest}`);
+  // biome-ignore lint/suspicious/noConsole: CLI output
+  console.log(`${chalk.yellow('-')} Server: v${latest} (skipped)`);
+  // biome-ignore lint/suspicious/noConsole: CLI output
+  console.log(`${chalk.yellow('-')} Auth:   skipped`);
+}
+
+/**
+ * Detect a parallel npm-global install of `@automagik/omni`. Omni doesn't
+ * support npm-global server (we install via `bun add -g`), but a parallel
+ * install hides stale binaries on PATH and confuses `which omni`. When
+ * detected, the operator gets a one-line warning naming the offending path
+ * with the recommended remediation: `npm uninstall -g @automagik/omni`.
+ *
+ * Pure-ish: probes `npm root -g`, then checks if `<root>/@automagik/omni`
+ * exists. Never throws — when `npm` is absent the probe simply reports
+ * `skipped: 'npm-not-on-path'` and the warning never fires.
+ *
+ * Exported for tests so we can exercise both paths without spawning npm.
+ */
+export function detectParallelNpmGlobalInstall(deps?: {
+  npmRoot?: () => string | null;
+  exists?: (p: string) => boolean;
+}): ParallelInstallReport {
+  const npmRootFn = deps?.npmRoot ?? defaultNpmRoot;
+  const existsFn = deps?.exists ?? existsSync;
+  let root: string | null;
+  try {
+    root = npmRootFn();
+  } catch {
+    return { detected: false, skipped: 'npm-root-failed' };
+  }
+  if (root === null || root.length === 0) {
+    return { detected: false, skipped: 'npm-not-on-path' };
+  }
+  const candidate = join(root, '@automagik', 'omni');
+  if (existsFn(candidate)) {
+    return { detected: true, path: candidate };
+  }
+  return { detected: false };
+}
+
+function defaultNpmRoot(): string | null {
+  try {
+    const result = Bun.spawnSync({
+      cmd: ['npm', 'root', '-g'],
+      stdout: 'pipe',
+      stderr: 'pipe',
+      timeout: 5000,
+    });
+    if (result.exitCode !== 0) return null;
+    const text = new TextDecoder().decode(result.stdout).trim();
+    return text.length > 0 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Run every registered legacy-artifact cleanup that isn't in `skipList`.
  * Always returns — never throws.
  *
@@ -424,25 +510,164 @@ async function runLegacyCleanup(skipList: Set<string>): Promise<CleanupReport> {
 }
 
 /**
+ * Reasons the post-update maintenance hook can be skipped.
+ *
+ * - `cli-flag`:      operator passed `--skip-maintenance`.
+ * - `env`:           `OMNI_UPDATE_SKIP_MAINTENANCE` was set in the environment.
+ * - `verify-failed`: upstream `decideVerify` outcome was not `ok`, so probing
+ *                    further is pointless (the operator already has a
+ *                    `Run: omni doctor` pointer from the verify step).
+ */
+export type MaintenanceSkipReason = 'cli-flag' | 'env' | 'verify-failed';
+
+/**
+ * Outcome of a single post-update maintenance run. Public-shape parity with
+ * the genie wish — the same field names land in diagnostics so a shared
+ * consumer can read either CLI's output uniformly.
+ *
+ * - `completed`: `runDoctor` returned a report (regardless of WARN/FAIL counts).
+ * - `failed`:    `runDoctor` threw; the call was non-blocking, exit code stays 0.
+ * - `skipped`:   maintenance was opted out (flag/env) or upstream verify wasn't OK.
+ */
+export type MaintenanceOutcome = 'completed' | 'failed' | 'skipped';
+
+/**
+ * Captured shape of the post-update maintenance hook. Always populated, even
+ * when skipped — diagnostics (Group 4) consumes the same struct on every
+ * code path so the JSON file shape is invariant.
+ */
+export interface MaintenanceReport {
+  outcome: MaintenanceOutcome;
+  /** Wall time spent inside `runDoctor` (or 0 when skipped). */
+  durationMs: number;
+  /** Present only when `outcome === 'completed'`. */
+  doctorReport?: DoctorReport;
+  /** Present only when `outcome === 'skipped'`. */
+  skipReason?: MaintenanceSkipReason;
+  /** Present only when `outcome === 'failed'` — the thrown error message. */
+  error?: string;
+}
+
+/** Env-var name that opts out of the post-update maintenance hook. */
+export const OMNI_UPDATE_SKIP_MAINTENANCE_ENV = 'OMNI_UPDATE_SKIP_MAINTENANCE';
+
+/**
+ * Resolve the effective skip reason for the post-update maintenance hook.
+ * Returns `null` when maintenance should run. Pure — exported for tests so
+ * we can exercise the precedence logic without spinning up `runDoctor`.
+ *
+ * Precedence (first match wins):
+ *   1. `verify-failed` — upstream verify wasn't `ok`; nothing to probe.
+ *   2. `cli-flag`      — operator passed `--skip-maintenance`.
+ *   3. `env`           — `OMNI_UPDATE_SKIP_MAINTENANCE` is set to a truthy value.
+ *
+ * The truthy check for the env var matches the same loose semantics as
+ * `--yes`/CI flags elsewhere: any non-empty value other than `0`/`false`
+ * counts as opt-out.
+ */
+export function resolveMaintenanceSkipReason(args: {
+  verifyOk: boolean;
+  skipMaintenance: boolean | undefined;
+  env: Record<string, string | undefined>;
+}): MaintenanceSkipReason | null {
+  if (!args.verifyOk) return 'verify-failed';
+  if (args.skipMaintenance === true) return 'cli-flag';
+  const raw = args.env[OMNI_UPDATE_SKIP_MAINTENANCE_ENV];
+  if (raw !== undefined && raw !== '' && raw !== '0' && raw.toLowerCase() !== 'false') {
+    return 'env';
+  }
+  return null;
+}
+
+/**
+ * Format the one-line summary printed after a completed maintenance run.
+ * Pure — exported so tests can lock the exact shape and so diagnostics
+ * (Group 4) can reuse it without re-deriving the format.
+ *
+ * Shape: `Maintenance: <ok> ok, <warn> warn, <fail> fail`.
+ */
+export function formatMaintenanceSummary(report: DoctorReport): string {
+  const { ok, warn, fail } = report.summary;
+  return `Maintenance: ${ok} ok, ${warn} warn, ${fail} fail`;
+}
+
+/**
+ * Run the post-update maintenance hook — a read-only `omni doctor` sweep
+ * that captures a `DoctorReport` for diagnostics.
+ *
+ * The call is non-blocking by contract: any thrown error is captured into
+ * the returned `MaintenanceReport` (`outcome: 'failed'`) and the caller
+ * proceeds with exit code 0. This matches the shared exit-code contract
+ * (see `SHARED-DESIGN.md` §4.5: "Maintenance failed (non-blocking) → 0,
+ * with banner warning").
+ *
+ * `runDoctor({ json: true, dryRun: true })` is the canonical call shape:
+ * `dryRun: true` defeats any accidental `fix: true` injection so the probe
+ * never mutates pm2 / config / DB state. `omni doctor --fix` remains the
+ * explicit operator action for repair (decision #4).
+ *
+ * `runDoctorImpl` is injected for tests so we can stub the doctor surface
+ * without monkey-patching the module — module-level mocks leak across
+ * test files in bun and would pollute `doctor.test.ts`.
+ */
+export async function runPostUpdateMaintenance(args: {
+  skipReason: MaintenanceSkipReason | null;
+  runDoctorImpl?: typeof runDoctor;
+}): Promise<MaintenanceReport> {
+  if (args.skipReason !== null) {
+    return { outcome: 'skipped', durationMs: 0, skipReason: args.skipReason };
+  }
+  const impl = args.runDoctorImpl ?? runDoctor;
+  const startedAt = Date.now();
+  try {
+    const doctorReport = await impl({ json: true, dryRun: true });
+    return {
+      outcome: 'completed',
+      durationMs: Date.now() - startedAt,
+      doctorReport,
+    };
+  } catch (err) {
+    return {
+      outcome: 'failed',
+      durationMs: Date.now() - startedAt,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
  * Restart selected services, then run the three-step verification.
  *
  * The orchestration here is impure (spawns pm2, fetches, exits) but the
  * decision logic lives in `decideVerify` so tests can exercise every
- * branch without spinning up the network.
+ * branch without spinning up the network. The provided `diagnostics`
+ * accumulator is mutated in place so the eventual `update-diagnostics-*.json`
+ * file captures restart / cleanup / verify / maintenance outcomes regardless
+ * of which exit branch this function takes.
  */
 async function restartServicesAndVerify(
   servicesToRestart: Pm2ProcessName[],
   latest: string,
-  options: { legacyCleanup: boolean; skipList: Set<string> },
+  options: {
+    legacyCleanup: boolean;
+    skipList: Set<string>;
+    skipMaintenance: boolean;
+    skipVerify: boolean;
+  },
+  diagnostics: UpdateDiagnostics,
+  finalize: (exitCode: number) => never,
 ): Promise<void> {
   const apiPort = loadServerConfig().port;
+  diagnostics.restart.attempted = true;
+  diagnostics.restart.services = [...servicesToRestart];
   const restartSpinner = ora('Restarting services...').start();
   const restartSucceeded = await restartPm2Services(servicesToRestart);
   restartSpinner.stop();
+  diagnostics.restart.succeeded = restartSucceeded;
 
   if (!restartSucceeded) {
     output.warn(`omni CLI updated to v${latest}, but one or more service restarts failed. Run \`omni status\`.`);
-    process.exit(1);
+    finalize(1);
   }
 
   // Run registry-based legacy artifact cleanup AFTER the restart so any
@@ -453,6 +678,30 @@ async function restartServicesAndVerify(
   let cleanupReport: CleanupReport | null = null;
   if (options.legacyCleanup) {
     cleanupReport = await runLegacyCleanup(options.skipList);
+    diagnostics.cleanups = cleanupReport;
+  }
+
+  // --no-verify path: short-circuit to the `skipped` variant. Banner shows
+  // the new CLI version on both lines but tags the server line as skipped
+  // so operators don't mis-read it as a confirmed match.
+  if (options.skipVerify) {
+    const result = decideVerify({ skipReason: 'no-verify-flag' });
+    diagnostics.verify = result;
+    printVerifySkippedBanner(latest);
+    if (cleanupReport !== null && !cleanupReport.succeeded) {
+      output.warn(
+        'One or more legacy artifacts could not be cleaned up automatically. ' +
+          'See messages above and docs/migration/nats-genie-sidecar-decommission.md.',
+      );
+    }
+    // Maintenance also auto-skips when verify is not OK (see
+    // resolveMaintenanceSkipReason — `verify-failed` precedence wins). The
+    // skip reason is `verify-failed` rather than `cli-flag` because the
+    // user-visible explanation is "we never confirmed health, so probing
+    // doctor would be misleading".
+    const maintenance = await runPostUpdateMaintenance({ skipReason: 'verify-failed' });
+    diagnostics.maintenance = maintenance;
+    return;
   }
 
   const verifySpinner = ora('Verifying server version...').start();
@@ -464,9 +713,10 @@ async function restartServicesAndVerify(
   const keyValid = healthBody !== null ? await validateStoredKey(apiPort) : false;
 
   const result = decideVerify({ latest, apiPort, healthBody, keyValid });
+  diagnostics.verify = result;
 
   switch (result.kind) {
-    case 'ok':
+    case 'ok': {
       printVerifyBanner(result.cliVersion);
       // If a legacy-artifact cleanup partially failed we still consider the
       // update healthy (server is up + auth works), but warn loudly so the
@@ -477,22 +727,39 @@ async function restartServicesAndVerify(
             'See messages above and docs/migration/nats-genie-sidecar-decommission.md.',
         );
       }
+      // Post-update maintenance (read-only `omni doctor` sweep). Non-blocking
+      // by contract — the report is consumed by Group 4 (diagnostics) and
+      // surfaced inline as a one-line summary. A failing doctor never
+      // changes the exit code (see SHARED-DESIGN.md §4.5).
+      const skipReason = resolveMaintenanceSkipReason({
+        verifyOk: true,
+        skipMaintenance: options.skipMaintenance,
+        env: process.env,
+      });
+      const maintenance = await runPostUpdateMaintenance({ skipReason });
+      diagnostics.maintenance = maintenance;
+      if (maintenance.outcome === 'completed' && maintenance.doctorReport) {
+        output.info(formatMaintenanceSummary(maintenance.doctorReport));
+      } else if (maintenance.outcome === 'failed') {
+        output.warn(`Maintenance: skipped (runDoctor failed: ${maintenance.error ?? 'unknown error'})`);
+      }
       return;
+    }
     case 'health-unreachable':
       output.warn(
         `omni CLI updated to v${latest}, but health check failed on port ${result.apiPort}. Run \`omni status\`.`,
       );
-      process.exit(1);
+      finalize(1);
       break;
     case 'version-mismatch':
       // biome-ignore lint/suspicious/noConsole: CLI output — user-facing failure marker
       console.error(`${chalk.red('✗')} ${updateErrorVersionMismatch(result.cliVersion, result.serverVersion)}`);
-      process.exit(1);
+      finalize(1);
       break;
     case 'auth-invalid':
       // biome-ignore lint/suspicious/noConsole: CLI output — user-facing failure marker
       console.error(`${chalk.red('✗')} ${UPDATE_ERROR_AUTH_INVALID}`);
-      process.exit(1);
+      finalize(1);
       break;
   }
 }
@@ -603,24 +870,49 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
     persistChannel(channel);
   }
 
+  // Diagnostics accumulator — mutated in place as the run advances. Written
+  // out to ~/.omni/logs/update-diagnostics-*.json on every exit (success,
+  // failure, or operator cancel) via `finalize()`.
+  const currentClean = VERSION.split('+')[0];
+  const diagnostics = createDiagnostics({ runningVersion: currentClean, channel });
+
+  // `finalize` wraps `process.exit` so every termination path persists
+  // diagnostics. Typed `never` to satisfy control-flow on the exit branches.
+  const finalize = (exitCode: number): never => {
+    const path = writeDiagnostics(diagnostics, exitCode);
+    if (path !== null && process.env.OMNI_UPDATE_DIAGNOSTICS_VERBOSE === '1') {
+      output.info(`Diagnostics written: ${path}`);
+    }
+    process.exit(exitCode);
+  };
+
+  // Parallel npm-global install — warn early so the operator can act on the
+  // smoking-gun PATH conflict before the install runs. Recorded in
+  // diagnostics either way.
+  const parallelInstall = detectParallelNpmGlobalInstall();
+  diagnostics.parallelNpmGlobal = parallelInstall;
+  if (parallelInstall.detected && parallelInstall.path) {
+    output.warn(
+      `Parallel npm-global install of ${PACKAGE_NAME} detected at ${parallelInstall.path}. This may shadow the bun-installed binary on PATH. Recommended: npm uninstall -g ${PACKAGE_NAME}`,
+    );
+  }
+
   output.info(`Channel: ${channel}${channel === 'next' ? ' (dev builds)' : ' (stable)'}`);
 
   // Check latest version on the resolved channel
   const versionSpinner = ora(`Checking ${channel} version of ${PACKAGE_NAME}...`).start();
   const latest = await fetchLatestVersion(channel);
   versionSpinner.stop();
+  diagnostics.registry.latestVersion = latest;
 
   if (latest === null) {
     output.warn('Could not reach npm registry. Check your network connection and try again.');
-    process.exit(1);
+    return finalize(1);
   }
-
-  // Strip any git hash suffix (e.g. "2.20260218.18+abc1234" → "2.20260218.18") for comparison
-  const currentClean = VERSION.split('+')[0];
 
   if (currentClean === latest) {
     output.success(`Already up to date (v${latest}, channel: ${channel})`);
-    process.exit(0);
+    return finalize(0);
   }
 
   // Pre-flight: refuse to cross the phase-2 cutoff on legacy embedded hosts
@@ -628,6 +920,7 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
   // path BEFORE the install completes (vs discovering the boot failure
   // hours later when omni-api restarts).
   if (!options.skipCanonicalPreflight) {
+    diagnostics.preflight.ran = true;
     const serverConfig = loadServerConfig();
     const preflightError = checkCanonicalPgservePreflight({
       currentVersion: currentClean,
@@ -636,8 +929,10 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
       pgserveOnPath: isPgserveOnPath(),
     });
     if (preflightError !== null) {
+      diagnostics.preflight.blocked = true;
+      diagnostics.preflight.reason = preflightError.split('\n')[0];
       output.warn(preflightError);
-      process.exit(1);
+      return finalize(1);
     }
   }
 
@@ -647,19 +942,22 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
     const confirmed = await promptConfirm(`Update from v${currentClean} to v${latest}? [Y/n] `);
     if (!confirmed) {
       output.info('Update cancelled.');
-      process.exit(0);
+      return finalize(0);
     }
   }
 
   const servicesToRestart = options.restart !== false ? getRunningPm2Services() : [];
 
   const installSpinner = ora(`Updating ${PACKAGE_NAME}@${channel}...`).start();
+  diagnostics.install.attempted = true;
+  diagnostics.install.targetVersion = latest;
   const installed = await installLatest(channel);
   installSpinner.stop();
+  diagnostics.install.succeeded = installed;
 
   if (!installed) {
     output.warn(`Installation failed. Your current version (v${currentClean}) is still intact.`);
-    process.exit(1);
+    return finalize(1);
   }
 
   // Resolve the legacy-cleanup flag set. `--no-sidecar-cleanup` is the
@@ -674,21 +972,31 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
   const skipList = parseSkipCleanupList(options.skipCleanup);
 
   if (servicesToRestart.length > 0) {
-    // On success, restartServicesAndVerify prints the three-line banner and
-    // returns. On failure it exits non-zero before returning here, so we
-    // deliberately skip the legacy `omni updated` summary in that path.
-    await restartServicesAndVerify(servicesToRestart, latest, {
-      legacyCleanup: legacyCleanupEnabled,
-      skipList,
-    });
-    return;
+    // On success, restartServicesAndVerify prints the success banner (or the
+    // skipped-banner when `--no-verify` is set) and returns. On failure it
+    // calls finalize(1) before returning so diagnostics is persisted.
+    await restartServicesAndVerify(
+      servicesToRestart,
+      latest,
+      {
+        legacyCleanup: legacyCleanupEnabled,
+        skipList,
+        skipMaintenance: options.skipMaintenance === true,
+        skipVerify: options.verify === false,
+      },
+      diagnostics,
+      finalize,
+    );
+    return finalize(0);
   }
 
   // --no-restart path: nothing to verify server-side. We deliberately skip
   // legacy-artifact cleanup here too — `--no-restart` means "don't touch
   // services" and the registry entries are services. Operators using
   // `--no-restart` are expected to manage them themselves.
+  diagnostics.verify = decideVerify({ skipReason: 'no-restart' });
   output.success(`omni updated to v${latest}`);
+  return finalize(0);
 }
 
 /**
@@ -709,6 +1017,10 @@ export function createUpdateCommand(): Command {
     .description(`Update ${PACKAGE_NAME} to the latest version (restart only services already running)`)
     .option('-y, --yes', 'Skip confirmation prompts (non-interactive)')
     .option('--no-restart', 'Update CLI only; skip service restarts and verification')
+    .option(
+      '--no-verify',
+      'Restart services but skip the post-restart probe (use when a release ships a broken /api/v2/health and operators need to roll forward)',
+    )
     .option('--no-legacy-cleanup', 'Skip every registered legacy-artifact cleanup (e.g. nats-reply-sidecar)')
     .option('--no-sidecar-cleanup', 'Deprecated alias for --no-legacy-cleanup')
     .option(
@@ -720,6 +1032,10 @@ export function createUpdateCommand(): Command {
     .option(
       '--skip-canonical-preflight',
       'Bypass the canonical-pgserve phase-2 pre-flight (NOT recommended; for operators who pre-installed pgserve via a path the auto-detector misses)',
+    )
+    .option(
+      '--skip-maintenance',
+      `Skip the post-update maintenance hook (read-only \`omni doctor\` sweep). Also honored via the ${OMNI_UPDATE_SKIP_MAINTENANCE_ENV} env var.`,
     )
     .addHelpText(
       'after',
@@ -760,6 +1076,27 @@ Behavior:
       docs/migration/nats-genie-sidecar-decommission.md
   - Use --no-restart to skip restart + verification entirely. --no-restart
     also skips legacy-artifact cleanup; manage those services manually.
+  - Use --no-verify to restart services but skip the post-restart probe.
+    The banner shows the new CLI version on both lines but tags Server /
+    Auth as "(skipped)"; maintenance is auto-skipped because verify never
+    confirmed health.
+  - Detects parallel npm-global installs of ${PACKAGE_NAME} (omni installs
+    via bun-global; an npm-global install hides stale binaries on PATH and
+    confuses 'which omni'). When found, prints a one-line warning naming
+    the offending path; recommended remediation: npm uninstall -g ${PACKAGE_NAME}.
+  - Every invocation writes a diagnostics record to
+    ~/.omni/logs/update-diagnostics-<iso>.json (schemaVersion: 1). Captures
+    install attempt, registry probe, restart outcome, verify result, cleanup
+    registry result, maintenance hook, and a tail of pm2 log signals. Set
+    OMNI_UPDATE_DIAGNOSTICS_VERBOSE=1 to print the path on completion. A
+    failed write never changes the update exit code.
+  - On a successful restart + verify, runs a post-update maintenance hook:
+    a read-only \`omni doctor\` sweep that prints a one-line summary
+    ("Maintenance: <ok> ok, <warn> warn, <fail> fail"). The probe never
+    mutates pm2 / config / DB state (\`omni doctor --fix\` remains the
+    explicit operator action for repair). A failing maintenance call is
+    non-fatal — exit code stays 0 with a banner warning. Skip with
+    --skip-maintenance or ${OMNI_UPDATE_SKIP_MAINTENANCE_ENV}=1.
   - Verify runtime health after update with: omni status
 `,
     )
