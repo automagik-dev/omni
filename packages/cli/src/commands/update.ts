@@ -28,10 +28,10 @@ import { Command } from 'commander';
 import ora from 'ora';
 import { type Config, loadConfig, loadServerConfig, saveConfig } from '../config.js';
 import { getHealthCheckUrl } from '../health.js';
+import { type CleanupReport, cleanupLegacyArtifacts } from '../legacy-cleanup.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
-import { type CleanupResult, cleanupSidecars, cleanupSucceeded, formatCleanupSummary } from '../sidecar-cleanup.js';
 import { VERSION } from '../version.js';
 
 const PACKAGE_NAME = '@automagik/omni';
@@ -44,7 +44,24 @@ const VERIFY_POLL_INTERVAL_MS = 500;
 interface UpdateOptions {
   yes?: boolean;
   restart?: boolean;
+  /**
+   * Primary name for the post-restart legacy artifact cleanup. Default true.
+   * When false, the registry call is skipped entirely.
+   */
+  legacyCleanup?: boolean;
+  /**
+   * Deprecated alias of `legacyCleanup`. Retained so existing scripts /
+   * runbooks referencing `--no-sidecar-cleanup` keep working. When the
+   * operator passes `--no-sidecar-cleanup`, commander surfaces this as
+   * `sidecarCleanup === false`; we forward the value to `legacyCleanup`
+   * and emit a one-line deprecation note.
+   */
   sidecarCleanup?: boolean;
+  /**
+   * Comma-separated list of registry entry names to skip. Empty / undefined
+   * means "skip nothing". Names are matched against `LegacyArtifact.name`.
+   */
+  skipCleanup?: string;
   next?: boolean;
   stable?: boolean;
   /**
@@ -54,6 +71,15 @@ interface UpdateOptions {
    * Defaults to false (the check runs).
    */
   skipCanonicalPreflight?: boolean;
+  /**
+   * Skip the post-update maintenance hook (read-only `omni doctor` sweep
+   * that runs after a successful restart + verify). Also honored via the
+   * `OMNI_UPDATE_SKIP_MAINTENANCE` env var. The flag is non-fatal in
+   * either direction — a failing maintenance call already exits 0 with a
+   * banner warning; this flag suppresses the call entirely (e.g. CI
+   * pipelines that run their own health probe).
+   */
+  skipMaintenance?: boolean;
 }
 
 export type UpdateChannel = 'latest' | 'next';
@@ -217,27 +243,68 @@ export function normalizeVersion(version: string): string {
 }
 
 /**
+ * Reasons the verify step can be skipped without a server probe. Aligned
+ * byte-for-byte with the genie-side `VerifyResult.skipped.reason` shape so
+ * cross-CLI diagnostics tooling can read either repo's output uniformly
+ * (see `.genie/wishes/update-unify-stages/SHARED-DESIGN.md`).
+ *
+ * - `no-restart`: operator passed `--no-restart`, so no service was touched.
+ * - `no-verify-flag`: operator passed `--no-verify`, restart ran but probe was suppressed.
+ * - `no-running-services`: no tracked PM2 services were online before the install.
+ */
+export type VerifySkipReason = 'no-restart' | 'no-verify-flag' | 'no-running-services';
+
+/**
  * Result of the pure 3-step update verification. Exported so tests can
  * exercise the logic without mocking pm2 / fetch / process.exit.
+ *
+ * Public-shape parity with the genie wish — each variant's keys match
+ * `automagik-dev/genie` exactly so a shared diagnostics consumer can decode
+ * either CLI's output without per-repo branching.
  */
-export type UpdateVerifyResult =
+export type VerifyResult =
   | { kind: 'ok'; cliVersion: string; serverVersion: string }
   | { kind: 'health-unreachable'; apiPort: number }
   | { kind: 'version-mismatch'; cliVersion: string; serverVersion: string | null }
-  | { kind: 'auth-invalid' };
+  | { kind: 'auth-invalid' }
+  | { kind: 'skipped'; reason: VerifySkipReason };
+
+/**
+ * @deprecated Use {@link VerifyResult}. Retained for backward compatibility
+ * with any external consumer that imported the original name.
+ */
+export type UpdateVerifyResult = VerifyResult;
+
+/**
+ * Args accepted by {@link decideVerify}. Either `skipReason` is set (the
+ * verify step short-circuits to `{ kind: 'skipped' }`) or all of `latest` /
+ * `apiPort` / `healthBody` / `keyValid` are provided for the full decision.
+ */
+export type DecideVerifyArgs =
+  | {
+      latest: string;
+      apiPort: number;
+      healthBody: HealthBody | null;
+      keyValid: boolean;
+      skipReason?: undefined;
+    }
+  | { skipReason: VerifySkipReason };
 
 /**
  * Pure decision function for update verification. Given the raw inputs
  * (health body + key-valid flag + CLI version + port), return a tagged
  * union describing the outcome. The caller decides how to render and
  * whether to exit non-zero.
+ *
+ * When `skipReason` is provided, the function short-circuits to
+ * `{ kind: 'skipped', reason }` without inspecting the other fields. This
+ * is the path used by `--no-restart`, `--no-verify`, and the
+ * no-running-services case.
  */
-export function decideUpdateVerify(args: {
-  latest: string;
-  apiPort: number;
-  healthBody: HealthBody | null;
-  keyValid: boolean;
-}): UpdateVerifyResult {
+export function decideVerify(args: DecideVerifyArgs): VerifyResult {
+  if (args.skipReason !== undefined) {
+    return { kind: 'skipped', reason: args.skipReason };
+  }
   const cliVersion = normalizeVersion(args.latest);
   if (args.healthBody === null) {
     return { kind: 'health-unreachable', apiPort: args.apiPort };
@@ -251,6 +318,13 @@ export function decideUpdateVerify(args: {
   }
   return { kind: 'ok', cliVersion, serverVersion };
 }
+
+/**
+ * @deprecated Use {@link decideVerify}. Pointer-equal alias retained for
+ * backward compatibility with any external consumer that imported the
+ * original name.
+ */
+export const decideUpdateVerify = decideVerify;
 
 /** Error message strings — exported for tests and documentation. */
 export function updateErrorVersionMismatch(cli: string, server: string | null): string {
@@ -319,8 +393,13 @@ function printVerifyBanner(latest: string): void {
 }
 
 /**
- * Run the legacy `nats-reply-sidecar.mjs` cleanup. Detects pm2-managed and
- * raw sidecar processes and stops them. Always returns — never throws.
+ * Run every registered legacy-artifact cleanup that isn't in `skipList`.
+ * Always returns — never throws.
+ *
+ * Day-one registry entry is `nats-reply-sidecar`, which detects pm2-managed
+ * and raw sidecar processes and stops them. The output of
+ * `formatCleanupSummary()` is preserved byte-for-byte via
+ * `LegacyArtifact.summary()`.
  *
  * This runs AFTER the restart so the new in-process subscription is already
  * active when the sidecar exits. The brief overlap (typically <2s) produces
@@ -330,30 +409,31 @@ function printVerifyBanner(latest: string): void {
  * See docs/migration/nats-genie-sidecar-decommission.md for the manual
  * runbook operators can fall back to.
  */
-async function runSidecarCleanup(): Promise<CleanupResult> {
-  const cleanupSpinner = ora('Checking for legacy nats-reply-sidecar processes...').start();
-  const result = await cleanupSidecars();
+async function runLegacyCleanup(skipList: Set<string>): Promise<CleanupReport> {
+  const cleanupSpinner = ora('Checking for legacy artifacts to clean up...').start();
+  const report = await cleanupLegacyArtifacts(skipList);
   cleanupSpinner.stop();
 
-  const summary = formatCleanupSummary(result);
-  if (summary.length > 0) {
-    // biome-ignore lint/suspicious/noConsole: CLI output — operator-visible cleanup report
-    console.log(summary);
+  for (const outcome of report.outcomes) {
+    if (outcome.state === 'ran' && outcome.summary.length > 0) {
+      // biome-ignore lint/suspicious/noConsole: CLI output — operator-visible cleanup report
+      console.log(outcome.summary);
+    }
   }
-  return result;
+  return report;
 }
 
 /**
  * Restart selected services, then run the three-step verification.
  *
  * The orchestration here is impure (spawns pm2, fetches, exits) but the
- * decision logic lives in `decideUpdateVerify` so tests can exercise every
+ * decision logic lives in `decideVerify` so tests can exercise every
  * branch without spinning up the network.
  */
 async function restartServicesAndVerify(
   servicesToRestart: Pm2ProcessName[],
   latest: string,
-  options: { sidecarCleanup: boolean },
+  options: { legacyCleanup: boolean; skipList: Set<string> },
 ): Promise<void> {
   const apiPort = loadServerConfig().port;
   const restartSpinner = ora('Restarting services...').start();
@@ -365,12 +445,14 @@ async function restartServicesAndVerify(
     process.exit(1);
   }
 
-  // Stop the legacy sidecar AFTER the restart so the new in-process
-  // subscription is already handling replies — prevents silent loss during
-  // the cleanup window. This block is opt-out via --no-sidecar-cleanup.
-  let sidecarCleanupResult: CleanupResult | null = null;
-  if (options.sidecarCleanup) {
-    sidecarCleanupResult = await runSidecarCleanup();
+  // Run registry-based legacy artifact cleanup AFTER the restart so any
+  // freshly-started in-process subscriptions are already handling traffic
+  // before legacy backstops are stopped — prevents silent loss during
+  // the cleanup window. This block is opt-out via --no-legacy-cleanup
+  // (or its deprecated alias --no-sidecar-cleanup).
+  let cleanupReport: CleanupReport | null = null;
+  if (options.legacyCleanup) {
+    cleanupReport = await runLegacyCleanup(options.skipList);
   }
 
   const verifySpinner = ora('Verifying server version...').start();
@@ -381,17 +463,17 @@ async function restartServicesAndVerify(
   // calling /auth/validate against a server that isn't up.
   const keyValid = healthBody !== null ? await validateStoredKey(apiPort) : false;
 
-  const result = decideUpdateVerify({ latest, apiPort, healthBody, keyValid });
+  const result = decideVerify({ latest, apiPort, healthBody, keyValid });
 
   switch (result.kind) {
     case 'ok':
       printVerifyBanner(result.cliVersion);
-      // If the sidecar cleanup partially failed we still consider the
-      // update healthy (server is up + auth works), but warn loudly so
-      // the operator can finish the manual cleanup.
-      if (sidecarCleanupResult !== null && !cleanupSucceeded(sidecarCleanupResult)) {
+      // If a legacy-artifact cleanup partially failed we still consider the
+      // update healthy (server is up + auth works), but warn loudly so the
+      // operator can finish the manual cleanup.
+      if (cleanupReport !== null && !cleanupReport.succeeded) {
         output.warn(
-          'One or more legacy nats-reply-sidecar processes could not be stopped automatically. ' +
+          'One or more legacy artifacts could not be cleaned up automatically. ' +
             'See messages above and docs/migration/nats-genie-sidecar-decommission.md.',
         );
       }
@@ -580,21 +662,46 @@ async function runUpdate(options: UpdateOptions): Promise<void> {
     process.exit(1);
   }
 
+  // Resolve the legacy-cleanup flag set. `--no-sidecar-cleanup` is the
+  // deprecated alias of `--no-legacy-cleanup`; if the operator passed it
+  // (commander sets `sidecarCleanup === false`) we honor the value and emit
+  // a one-line deprecation note exactly once.
+  const sidecarCleanupExplicit = options.sidecarCleanup === false;
+  if (sidecarCleanupExplicit) {
+    output.info('--no-sidecar-cleanup (deprecated alias for --no-legacy-cleanup)');
+  }
+  const legacyCleanupEnabled = options.legacyCleanup !== false && options.sidecarCleanup !== false;
+  const skipList = parseSkipCleanupList(options.skipCleanup);
+
   if (servicesToRestart.length > 0) {
     // On success, restartServicesAndVerify prints the three-line banner and
     // returns. On failure it exits non-zero before returning here, so we
     // deliberately skip the legacy `omni updated` summary in that path.
     await restartServicesAndVerify(servicesToRestart, latest, {
-      sidecarCleanup: options.sidecarCleanup !== false,
+      legacyCleanup: legacyCleanupEnabled,
+      skipList,
     });
     return;
   }
 
   // --no-restart path: nothing to verify server-side. We deliberately skip
-  // sidecar cleanup here too — `--no-restart` means "don't touch services"
-  // and the sidecar is a service. Operators using `--no-restart` are
-  // expected to manage the sidecar themselves.
+  // legacy-artifact cleanup here too — `--no-restart` means "don't touch
+  // services" and the registry entries are services. Operators using
+  // `--no-restart` are expected to manage them themselves.
   output.success(`omni updated to v${latest}`);
+}
+
+/**
+ * Parse the `--skip-cleanup=name1,name2` value into a Set. Empty / undefined
+ * yields an empty set. Whitespace and empty entries are tolerated.
+ */
+export function parseSkipCleanupList(value: string | undefined): Set<string> {
+  if (!value) return new Set();
+  const names = value
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return new Set(names);
 }
 
 export function createUpdateCommand(): Command {
@@ -602,7 +709,12 @@ export function createUpdateCommand(): Command {
     .description(`Update ${PACKAGE_NAME} to the latest version (restart only services already running)`)
     .option('-y, --yes', 'Skip confirmation prompts (non-interactive)')
     .option('--no-restart', 'Update CLI only; skip service restarts and verification')
-    .option('--no-sidecar-cleanup', 'Skip the legacy nats-reply-sidecar.mjs cleanup step')
+    .option('--no-legacy-cleanup', 'Skip every registered legacy-artifact cleanup (e.g. nats-reply-sidecar)')
+    .option('--no-sidecar-cleanup', 'Deprecated alias for --no-legacy-cleanup')
+    .option(
+      '--skip-cleanup <names>',
+      'Comma-separated list of legacy-cleanup registry entries to skip (e.g. "nats-reply-sidecar")',
+    )
     .option('--next', 'Switch to dev builds (npm @next tag) and persist as default')
     .option('--stable', 'Switch to stable releases (npm @latest tag) and persist as default')
     .option(
@@ -637,14 +749,17 @@ Behavior:
       "Server version mismatch: cli=v<X> server=v<Y>. Run: omni doctor"
   - On auth failure, exits non-zero with:
       "Auth key invalid after restart. Run: omni doctor --fix"
-  - After a successful restart, scans for any legacy nats-reply-sidecar.mjs
-    process (PM2-managed or raw) and stops it. The sidecar was an external
-    workaround for bugs that were fixed in #362; leaving it running causes
-    every agent reply to be delivered twice. Skippable with
-    --no-sidecar-cleanup. Manual runbook:
+  - After a successful restart, runs every registered legacy-artifact cleanup.
+    The day-one entry is nats-reply-sidecar: it scans for any legacy
+    nats-reply-sidecar.mjs process (PM2-managed or raw) and stops it. The
+    sidecar was an external workaround for bugs that were fixed in #362;
+    leaving it running causes every agent reply to be delivered twice.
+    Skip every cleanup with --no-legacy-cleanup, or skip a single registry
+    entry with --skip-cleanup=<name1,name2>. The deprecated alias
+    --no-sidecar-cleanup still works and behaves identically. Manual runbook:
       docs/migration/nats-genie-sidecar-decommission.md
   - Use --no-restart to skip restart + verification entirely. --no-restart
-    also skips sidecar cleanup; manage the sidecar manually.
+    also skips legacy-artifact cleanup; manage those services manually.
   - Verify runtime health after update with: omni status
 `,
     )

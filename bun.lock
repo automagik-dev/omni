@@ -18,7 +18,7 @@
     },
     "apps/ui": {
       "name": "@omni/ui",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@omni/sdk": "workspace:*",
         "@radix-ui/react-dialog": "^1.1.15",
@@ -51,7 +51,7 @@
     },
     "packages/api": {
       "name": "@omni/api",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@google/genai": "^1.0.0",
         "@hono/swagger-ui": "^0.4.1",
@@ -67,7 +67,7 @@
         "hono": "^4.6.17",
         "lru-cache": "^11.2.6",
         "nats": "^2.29.3",
-        "pgserve": "^1.2.0",
+        "pgserve": "^2.1.0",
         "zod": "^3.24.1",
       },
       "devDependencies": {
@@ -86,7 +86,7 @@
     },
     "packages/channel-a2a": {
       "name": "@omni/channel-a2a",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -102,7 +102,7 @@
     },
     "packages/channel-discord": {
       "name": "@omni/channel-discord",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -119,7 +119,7 @@
     },
     "packages/channel-gupshup": {
       "name": "@omni/channel-gupshup",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -135,7 +135,7 @@
     },
     "packages/channel-internal": {
       "name": "@omni/channel-internal",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -150,7 +150,7 @@
     },
     "packages/channel-sdk": {
       "name": "@omni/channel-sdk",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@omni/core": "workspace:*",
       },
@@ -161,7 +161,7 @@
     },
     "packages/channel-slack": {
       "name": "@omni/channel-slack",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -179,7 +179,7 @@
     },
     "packages/channel-telegram": {
       "name": "@omni/channel-telegram",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -195,7 +195,7 @@
     },
     "packages/channel-twilio-whatsapp": {
       "name": "@omni/channel-twilio-whatsapp",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -210,7 +210,7 @@
     },
     "packages/channel-whatsapp": {
       "name": "@omni/channel-whatsapp",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@hapi/boom": "^10.0.1",
         "@omni/channel-sdk": "workspace:*",
@@ -230,7 +230,7 @@
     },
     "packages/cli": {
       "name": "@automagik/omni",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "bin": {
         "omni": "./bin/omni",
       },
@@ -265,7 +265,7 @@
     },
     "packages/core": {
       "name": "@omni/core",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.62",
         "croner": "^9.1.0",
@@ -280,7 +280,7 @@
     },
     "packages/db": {
       "name": "@omni/db",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@omni/core": "workspace:*",
         "drizzle-orm": "^0.38.4",
@@ -294,7 +294,7 @@
     },
     "packages/media-processing": {
       "name": "@omni/media-processing",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@google/generative-ai": "^0.21.0",
         "@omni/core": "workspace:*",
@@ -312,7 +312,7 @@
     },
     "packages/plugin-openclaw": {
       "name": "@omni/plugin-openclaw",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "devDependencies": {
         "@types/bun": "latest",
         "typescript": "^5.7.3",
@@ -320,7 +320,7 @@
     },
     "packages/sdk": {
       "name": "@omni/sdk",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "openapi-fetch": "^0.13.6",
       },
@@ -334,7 +334,7 @@
     },
     "packages/voice-client": {
       "name": "@omni/voice-client",
-      "version": "2.260427.1",
+      "version": "2.260505.1",
       "dependencies": {
         "@snazzah/davey": "^0.1.11",
         "libsodium-wrappers": "^0.7.15",
@@ -466,13 +466,13 @@
 
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.10.2", "", {}, "sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w=="],
 
-    "@embedded-postgres/darwin-arm64": ["@embedded-postgres/darwin-arm64@18.2.0-beta.16", "", { "os": "darwin", "cpu": "arm64" }, "sha512-wnswaF+uDvGeitqajJ8v8xOG4ttFrzixElwKNe2MIxBXSLWPV3xhi6tBY0Sjw8Lmiu6UG9vNLFZSjHPrIeokBg=="],
+    "@embedded-postgres/darwin-arm64": ["@embedded-postgres/darwin-arm64@18.3.0-beta.17", "", { "os": "darwin", "cpu": "arm64" }, "sha512-Pvrej3Xz5flfyVc9mchVfekrKoTJyvPtM3U0vjuXamZkRKmi+inP2zRmnmzYecIVbr7Zhu82xbsCENMXrwMp9Q=="],
 
-    "@embedded-postgres/darwin-x64": ["@embedded-postgres/darwin-x64@18.2.0-beta.16", "", { "os": "darwin", "cpu": "x64" }, "sha512-u9WtTPxRuO0uOny5IniXHSDaLmtOujwzDoExIV/jFT0Fu8SzpX7wdoPbsSPBLgyQWdr/nPA77K9QI4r6P1/fKA=="],
+    "@embedded-postgres/darwin-x64": ["@embedded-postgres/darwin-x64@18.3.0-beta.17", "", { "os": "darwin", "cpu": "x64" }, "sha512-MVWe+C47pPoMD9LlIWGQkvZ5Xsu3IBo54CYqnIps/Z1byMIUBNc7y/dZ3mfqEwiCbVDVqirG0CU462xnrSEfKA=="],
 
-    "@embedded-postgres/linux-x64": ["@embedded-postgres/linux-x64@18.2.0-beta.16", "", { "os": "linux", "cpu": "x64" }, "sha512-BIt485ioL8/AwDgw37IcdraOfRgHNDOtGM6Hh63vnNaUAG4Z0qtJd5zXS5fr2wZTEsYHyC5PC60k7zkCRZXSzg=="],
+    "@embedded-postgres/linux-x64": ["@embedded-postgres/linux-x64@18.3.0-beta.17", "", { "os": "linux", "cpu": "x64" }, "sha512-8orSD6NNopSLtjqir4dWQBrj+g8j1eJjWd9mB60A3xbWMzIBIPQpzT7XzbacW9YFSl/DejOLnRXfff+Wr13Tgw=="],
 
-    "@embedded-postgres/windows-x64": ["@embedded-postgres/windows-x64@18.2.0-beta.16", "", { "os": "win32", "cpu": "x64" }, "sha512-Sj6GhCZrvtMwchATEtWuEmexEBWpRNMHPTUHsqPuyDrHX/XgKfpIxz2/AMHa4sp7SZ0JOHGouH8AFIVsWQrQsQ=="],
+    "@embedded-postgres/windows-x64": ["@embedded-postgres/windows-x64@18.3.0-beta.17", "", { "os": "win32", "cpu": "x64" }, "sha512-kDC5aBsmhWDjeQjj2V4g+Bk+pMeDU27b7l0rBbaKgtt2gsNmCB34ULg/5cqs2kqUKSk/tiGMHKCNE+zQZ+s4rg=="],
 
     "@emnapi/core": ["@emnapi/core@1.8.1", "", { "dependencies": { "@emnapi/wasi-threads": "1.1.0", "tslib": "^2.4.0" } }, "sha512-AvT9QFpxK0Zd8J0jopedNm+w/2fIzvtPKPjqyw9jwvBaReTTqPBk9Hixaz7KbjimP+QNz605/XnjFcDAL2pqBg=="],
 
@@ -1854,7 +1854,7 @@
 
     "pg-types": ["pg-types@2.2.0", "", { "dependencies": { "pg-int8": "1.0.1", "postgres-array": "~2.0.0", "postgres-bytea": "~1.0.0", "postgres-date": "~1.0.4", "postgres-interval": "^1.1.0" } }, "sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA=="],
 
-    "pgserve": ["pgserve@1.2.0", "", { "dependencies": { "bun": "^1.3.4" }, "optionalDependencies": { "@embedded-postgres/darwin-arm64": "18.2.0-beta.16", "@embedded-postgres/darwin-x64": "18.2.0-beta.16", "@embedded-postgres/linux-x64": "18.2.0-beta.16", "@embedded-postgres/windows-x64": "18.2.0-beta.16" }, "bin": { "pgserve": "bin/pgserve-wrapper.cjs" } }, "sha512-xXHcLYGekf2wTlhJk6hK4yJCoFBAIF9FPmKHGqKwrhoEZ0uXrVem/IWtrTEKku8XJWrx7ya/9s/ysbcH4o+DyQ=="],
+    "pgserve": ["pgserve@2.2.3", "", { "dependencies": { "bun": "^1.3.4", "react": "^18.3.1", "react-dom": "^18.3.1" }, "optionalDependencies": { "@embedded-postgres/darwin-arm64": "18.3.0-beta.17", "@embedded-postgres/darwin-x64": "18.3.0-beta.17", "@embedded-postgres/linux-x64": "18.3.0-beta.17", "@embedded-postgres/windows-x64": "18.3.0-beta.17" }, "bin": { "autopg": "bin/autopg-wrapper.cjs", "pgserve": "bin/pgserve-wrapper.cjs" } }, "sha512-j47sOW0dNavQuNJPi5ROK9t2YS/wrmyDpafcok2Emo4sRnbOYfFvupFy4t9X3DJnzD1myp1vxMSxw2LPXeq8lw=="],
 
     "picocolors": ["picocolors@1.1.1", "", {}, "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="],
 
