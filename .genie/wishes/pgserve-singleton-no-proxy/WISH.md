@@ -17,6 +17,8 @@
 
 Wire omni as a clean consumer of pgserve 2.3 singleton (no proxy, native socket + TCP 5432). Drop TCP 8432 dependence everywhere. Add tier integration via `pgserve verify` invocation in `buildRuntimeEnv` / connection setup. Make `omni update` self-healing: pm2 restart `omni-api` + `omni-nats` with `--update-env`, run all migrations, invoke `omni doctor --fix` (tiered) post-restart. Declare `pgserve: ">=2.3"` in compile-time `requirements` manifest. Drop the now-obsolete `checkCanonicalPgservePreflight` (phase-2 transitional guard from `update-unify-stages` — phase-3 makes the canonical socket the default). See `SHARED-DESIGN.md` §1-§9 for full design context, especially §5.3 for omni-specific scope.
 
+> **Operator update order (locked, also in SHARED-DESIGN.md §6 decision #11)**: `pgserve update` → `genie update` → `omni update`. The new `preInstallPeerCheck` (step 4, this wish G4) is a **stricter superset of the deleted `checkCanonicalPgservePreflight`**: it refuses upgrade when peer pgserve is below required version, with explicit remediation pointing at `pgserve update`. Safety story: deleting the phase-2 guard does not weaken protection — the new peer check runs earlier and refuses harder.
+
 ## Scope
 
 ### IN
@@ -29,9 +31,9 @@ Wire omni as a clean consumer of pgserve 2.3 singleton (no proxy, native socket 
 - `application_name` set to `signed:<kind>:<publisher>` for ops visibility.
 
 **Group 2 — Drop TCP 8432 dependence**
-- Audit + replace every `8432` reference in source: `grep -rn '8432' packages/`.
+- Audit + replace every `8432` reference in source: `grep -rnE '\b8432\b' packages/` (word-boundary).
 - pm2 ecosystem files / `install.sh` / docs: replace.
-- New `omni doctor --fix` Cat 1 mutation: detect `~/.omni/config.json` `pgserve.port: 8432` and rewrite to `5432` (with `.bak` backup).
+- New `omni doctor --fix` Cat 1 mutation: detect `~/.omni/config.json` `pgserve.port: 8432` and rewrite to `5432` (with `.bak` backup), **UNLESS operator opted-out via `pgserve.port_pinned: true` sentinel in the config** (operator-intent escape hatch for legacy bridges they deliberately maintain).
 
 **Group 3 — Drop `checkCanonicalPgservePreflight`**
 - Phase-2 transitional guard from `update-unify-stages` is obsolete in phase-3 architecture.
@@ -99,7 +101,7 @@ See `SHARED-DESIGN.md` §6. omni-specific:
 | O1 | Default connection target = Unix socket; TCP 5432 fallback | Performance + symmetry with genie. |
 | O2 | Drop `checkCanonicalPgservePreflight` | Phase-2 transitional guard obsolete in phase-3. |
 | O3 | Migration auto-rewrites `~/.omni/config.json` 8432→5432 (Cat 1) | Single-source-of-truth port; operator drift heals on next update. |
-| O4 | `omni update` step 9 restarts BOTH `omni-api` + `omni-nats` | omni-nats links omni-api via JetStream; both must restart together. |
+| O4 | `omni update` step 9 restarts `omni-api` + (conditionally) `omni-nats` | omni-api always restarts (it owns the postgres connection pool that needs the new DATABASE_URL). omni-nats is restarted ONLY if Group 4 verifies it reads DATABASE_URL or another env that changed; otherwise nats restart is gratuitous churn (NATS doesn't speak postgres). G4 acceptance criterion verifies env-dependency; if no env changed for omni-nats, step 9 leaves it running. |
 | O5 | `--no-pm2-restart` honored | dev environments without pm2; CI fixtures. |
 | O6 | `application_name` carries tier identity | Visible in `pg_stat_activity`. |
 
@@ -418,6 +420,7 @@ packages/cli/src/__tests__/requirements.test.ts
 packages/cli/src/__tests__/doctor-tiered.test.ts
 packages/cli/src/__tests__/doctor-port-rewrite.test.ts
 packages/cli/src/__tests__/update-self-healing.test.ts
+packages/api/src/__tests__/db.test.ts                  # extend if exists, else create — verifies Unix socket default + TCP fallback
 
 # Delete
 packages/cli/src/__tests__/update-canonical-preflight.test.ts
