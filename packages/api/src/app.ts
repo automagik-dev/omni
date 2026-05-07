@@ -151,10 +151,10 @@ export function createApp(
     app.post(
       '/a2a/:instanceId',
       authMiddleware,
-      requireInstanceAccess((c) => c.req.param('instanceId')),
+      requireInstanceAccess((c) => c.req.param('instanceId') ?? ''),
       rateLimitMiddleware,
       async (c) => {
-        const instanceId = c.req.param('instanceId');
+        const instanceId = c.req.param('instanceId') ?? '';
         if (!UUID_REGEX.test(instanceId)) {
           return c.json({ error: 'Invalid instance ID format' }, 400);
         }

@@ -22,7 +22,7 @@ const log = createLogger('api:instances');
 const instancesRoutes = new Hono<{ Variables: AppVariables }>();
 
 // Instance access middleware for :id routes
-const instanceAccess = requireInstanceAccess((c) => c.req.param('id'));
+const instanceAccess = requireInstanceAccess((c) => c.req.param('id') ?? '');
 
 // Query params schema for list
 const listQuerySchema = z.object({

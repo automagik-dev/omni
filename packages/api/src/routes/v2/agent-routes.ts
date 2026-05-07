@@ -11,7 +11,7 @@ import type { AppVariables } from '../../types';
 const routesRoutes = new Hono<{ Variables: AppVariables }>();
 
 // Instance access middleware for nested routes
-const instanceAccess = requireInstanceAccess((c) => c.req.param('instanceId'));
+const instanceAccess = requireInstanceAccess((c) => c.req.param('instanceId') ?? '');
 
 /**
  * GET /instances/:instanceId/routes - List routes for an instance
