@@ -127,15 +127,21 @@ jobs:
       - name: Publish to npm (@${{ steps.context.outputs.npm_tag }})
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
           HUSKY: "0"
         run: |
           if [ -z "$NPM_TOKEN" ]; then
             echo "⚠️ NPM_TOKEN not set — skipping publish"
             exit 0
           fi
+          # Write the canonical .npmrc for the @automagik scope. We rely on
+          # this rather than NPM_CONFIG_TOKEN env var because `bun publish`
+          # started returning `404 Not Found` for scoped packages when given
+          # only env-var auth (works fine through 2026-05-06, broke after —
+          # token + permissions verified independently). `npm publish` uses
+          # the same .npmrc and is the historically-stable path here. The
+          # Release workflow on main retags as @latest if this was first
+          # published as @next, so a promoted dev build never double-publishes.
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "${HOME}/.npmrc"
+          echo "@automagik:registry=https://registry.npmjs.org/" >> "${HOME}/.npmrc"
           cd packages/cli
-          # Publish with the resolved tag. main → @latest; dev → @next.
-          # The Release workflow on main will retag as @latest if this was
-          # first published as @next, so a promoted dev build never double-publishes.
-          bun publish --access public --tag ${{ steps.context.outputs.npm_tag }}
+          npm publish --access public --tag ${{ steps.context.outputs.npm_tag }}
