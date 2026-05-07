@@ -156,8 +156,13 @@ jobs:
       # token exchange) requires npm >= 11.5.1. Without this upgrade,
       # `npm publish` sends the empty placeholder token and the registry
       # returns a misleading 404 instead of the real 401/403 auth failure.
+      #
+      # --force bypasses npm's in-place rebuild check. Without it the
+      # self-upgrade fails with `Cannot find module 'promise-retry'`
+      # because npm loses references to its own arborist modules during
+      # the rebuild step.
       - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@latest --force
 
       - name: Publish to npm via OIDC (@${{ steps.context.outputs.npm_tag }})
         env:
