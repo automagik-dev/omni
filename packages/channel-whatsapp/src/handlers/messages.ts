@@ -866,9 +866,14 @@ async function processMessage(
 }
 
 /**
- * Message status codes
+ * Message status codes (proto.WebMessageInfo.Status — stable in WA protobuf).
+ * ERROR=0 fires on a delivery failure that Baileys can't recover from
+ * silently (e.g. recipient PreKeyError on a retry-receipt). Without
+ * propagating it, the original message.sent persistence row stays
+ * status=completed even though the message never landed.
  */
 const MessageStatus = {
+  ERROR: 0,
   SERVER_ACK: 2,
   DELIVERY_ACK: 3,
   READ: 4,
@@ -887,7 +892,9 @@ async function processStatusUpdate(
   const chatId = key.remoteJid || '';
   const externalId = key.id || '';
 
-  if (status === MessageStatus.DELIVERY_ACK) {
+  if (status === MessageStatus.ERROR && key.fromMe) {
+    await plugin.handleMessageFailed(instanceId, externalId, chatId);
+  } else if (status === MessageStatus.DELIVERY_ACK) {
     await plugin.handleMessageDelivered(instanceId, externalId, chatId);
   } else if (status >= MessageStatus.READ) {
     await plugin.handleMessageRead(instanceId, externalId, chatId);
@@ -976,8 +983,10 @@ export function setupMessageHandlers(
 
   sock.ev.on('messages.update', async (updates) => {
     for (const update of updates) {
-      // Handle delivery/read status updates
-      if (update.update.status) {
+      // Handle delivery/read/error status updates.
+      // status === 0 (WAMessageStatus.ERROR) is the silent-PreKeyError path;
+      // a truthy check would drop it because 0 is falsy.
+      if (update.update.status !== undefined && update.update.status !== null) {
         await processStatusUpdate(plugin, instanceId, update.key, update.update.status);
       }
 

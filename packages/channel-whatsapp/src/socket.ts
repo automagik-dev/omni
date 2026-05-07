@@ -5,7 +5,7 @@
  * Handles socket configuration, lifecycle, and common operations.
  */
 
-import type { AuthenticationState, GroupMetadata, WASocket } from 'baileys';
+import type { AuthenticationState, GroupMetadata, WAMessageKey, WASocket, proto } from 'baileys';
 import { Browsers, fetchLatestBaileysVersion, default as makeWASocket } from 'baileys';
 import NodeCache from 'node-cache';
 import pino from 'pino';
@@ -59,12 +59,24 @@ export interface SocketConfig {
    * helps with broken DM sessions, not broken group participants.
    */
   shouldIgnoreJid?: (jid: string) => boolean;
+
+  /**
+   * Resolve an outgoing message body so Baileys can replay it on a
+   * retry-receipt. Without this, the recipient's "recv retry request"
+   * fan-out hits "message not available" and the resend silently no-ops —
+   * the original send had only a server-ACK so the caller never learns
+   * the message was lost. Return undefined when the body isn't cached.
+   */
+  getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
 }
 
 /**
  * Default socket configuration values
  */
-export const DEFAULT_SOCKET_CONFIG: Omit<Required<SocketConfig>, 'auth' | 'cachedGroupMetadata' | 'shouldIgnoreJid'> = {
+export const DEFAULT_SOCKET_CONFIG: Omit<
+  Required<SocketConfig>,
+  'auth' | 'cachedGroupMetadata' | 'shouldIgnoreJid' | 'getMessage'
+> = {
   logLevel: 'warn',
   browser: Browsers.ubuntu('Chrome'),
   mobile: false,
@@ -174,6 +186,10 @@ export async function createSocket(config: SocketConfig): Promise<WASocket> {
     markOnlineOnConnect: mergedConfig.markOnlineOnConnect,
     // Dynamic JID ignore for broken sessions (#70):
     ...(config.shouldIgnoreJid ? { shouldIgnoreJid: config.shouldIgnoreJid } : {}),
+    // Recovery hook for retry-receipts: lets Baileys replay outgoing
+    // messages when the recipient asks for one. Without it the resend
+    // silently no-ops and the caller is never told the original was lost.
+    ...(config.getMessage ? { getMessage: config.getMessage } : {}),
   });
 }
 

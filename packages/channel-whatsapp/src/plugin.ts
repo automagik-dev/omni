@@ -254,6 +254,16 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private sentMessageIds = new Map<string, Set<string>>();
   private static readonly SENT_ID_TTL_MS = 5 * 60 * 1000;
 
+  /**
+   * Per-instance cache of recently-sent outgoing message bodies, keyed by
+   * platform message ID. Baileys' `getMessage` config callback reads from
+   * this so it can replay the original message when the recipient sends a
+   * retry-receipt (e.g. after a PreKey error). Without it the resend silently
+   * drops and the caller never learns the message was lost. Entries
+   * auto-expire after SENT_ID_TTL_MS.
+   */
+  private recentSentMessages = new Map<string, Map<string, proto.IMessage>>();
+
   /** Rate limit managers per instance — handles Baileys 429 backoff */
   private rateLimitManagers = new Map<string, RateLimitManager>();
 
@@ -350,6 +360,27 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   isBotSentMessage(instanceId: string, messageId: string): boolean {
     return this.sentMessageIds.get(instanceId)?.has(messageId) ?? false;
+  }
+
+  /**
+   * Cache an outgoing message body so Baileys can replay it on a retry-receipt.
+   * Falls under the same TTL as sentMessageIds.
+   */
+  private trackRecentSentMessage(instanceId: string, messageId: string, body: proto.IMessage): void {
+    let bodies = this.recentSentMessages.get(instanceId);
+    if (!bodies) {
+      bodies = new Map();
+      this.recentSentMessages.set(instanceId, bodies);
+    }
+    bodies.set(messageId, body);
+    setTimeout(() => {
+      bodies?.delete(messageId);
+    }, WhatsAppPlugin.SENT_ID_TTL_MS);
+  }
+
+  /** Resolver for Baileys' `getMessage` callback. Returns undefined when no body cached. */
+  private getRecentSentMessage(instanceId: string, messageId: string): proto.IMessage | undefined {
+    return this.recentSentMessages.get(instanceId)?.get(messageId);
   }
 
   /** Cached chat display names per instance (for DMs from chats.upsert) */
@@ -904,6 +935,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // Blocks JIDs with repeated decrypt failures to prevent transaction
       // mutex starvation from retry storms.
       shouldIgnoreJid: decryptTracker.shouldIgnore,
+      // Replay outgoing message bodies on retry-receipts. Without this,
+      // Baileys' resend path no-ops with "message not available" and the
+      // caller silently never learns the message was lost.
+      getMessage: async (key) => {
+        const id = key.id;
+        return id ? this.getRecentSentMessage(instanceId, id) : undefined;
+      },
     });
 
     // Save credentials on update
@@ -988,6 +1026,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.chatNamesCache.delete(instanceId);
     this.chatUnreadCache.delete(instanceId);
     this.sentMessageIds.delete(instanceId);
+    this.recentSentMessages.delete(instanceId);
     this.rateLimitManagers.delete(instanceId);
     this.decryptTrackers.delete(instanceId);
     this.lidFirstEnabledMap.delete(instanceId);
@@ -1282,6 +1321,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // Track this message ID so we can detect the echo when Baileys receives it back
       if (externalId) {
         this.trackSentMessageId(instanceId, externalId);
+        // Cache the proto body so getMessage can replay on retry-receipts.
+        if (result?.message) {
+          this.trackRecentSentMessage(instanceId, externalId, result.message);
+        }
       }
 
       // Emit sent event
@@ -2896,6 +2939,24 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       externalId,
       chatId,
       readAt: Date.now(),
+    });
+  }
+
+  /**
+   * Handle a delivery failure surfaced by Baileys after the original send was
+   * already server-ACKed. Triggered when `messages.update` carries
+   * `status === WAMessageStatus.ERROR (0)` — typically a recipient-side retry
+   * receipt that Baileys couldn't honor (e.g. PreKeyError).
+   * @internal
+   */
+  async handleMessageFailed(instanceId: string, externalId: string, chatId: string): Promise<void> {
+    await this.emitMessageFailed({
+      instanceId,
+      externalId,
+      chatId,
+      error: 'Delivery failed: recipient retry receipt not honored',
+      errorCode: 'WA_DELIVERY_FAILED',
+      retryable: false,
     });
   }
 
