@@ -33,7 +33,13 @@ concurrency:
 jobs:
   auto-version:
     name: Auto Version
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # GitHub-hosted runner (not Blacksmith). The "Upgrade npm for OIDC
+    # trusted publishing" step runs `npm install -g npm@latest` which
+    # writes to /usr/local — omni's Blacksmith pool image rejects this
+    # with EACCES on /usr/local/share/man/man7, blocking the publish
+    # step. GitHub-hosted runners give the runner user write access to
+    # /usr/local. (Trade-off: slower job startup vs. publish reliability.)
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     if: >-
       (github.event_name == 'workflow_dispatch') ||
