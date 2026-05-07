@@ -139,9 +139,19 @@ jobs:
       # Publisher entry on npmjs.com is this file (version.yml). If you
       # rename this file, you MUST update the trusted-publisher record at
       # https://www.npmjs.com/package/@automagik/omni/access — otherwise
-      # publishes silently 404. Pattern adopted from automagik/genie:
-      # .github/workflows/version.yml (proven path; same Blacksmith pool).
+      # publishes silently 404.
       #
+      # The bundled Node on the runner image lives at /usr/local where
+      # the runner user can't write — `npm install -g` fails with EACCES
+      # on /usr/local/share/man/man7. setup-node installs Node into the
+      # runner-user-writable tool_cache so subsequent `npm -g` writes go
+      # to a user-owned path.
+      - name: Setup Node (for npm OIDC publish)
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
       # Node 22 bundles npm 10.x; npm Trusted Publishing (automatic OIDC
       # token exchange) requires npm >= 11.5.1. Without this upgrade,
       # `npm publish` sends the empty placeholder token and the registry
