@@ -141,28 +141,18 @@ jobs:
       # https://www.npmjs.com/package/@automagik/omni/access — otherwise
       # publishes silently 404.
       #
-      # The bundled Node on the runner image lives at /usr/local where
-      # the runner user can't write — `npm install -g` fails with EACCES
-      # on /usr/local/share/man/man7. setup-node installs Node into the
-      # runner-user-writable tool_cache so subsequent `npm -g` writes go
-      # to a user-owned path.
-      - name: Setup Node (for npm OIDC publish)
+      # Node 24 bundles npm 11.x by default — npm Trusted Publishing
+      # requires npm >= 11.5.1. Using Node 24 sidesteps the npm
+      # self-upgrade step entirely, which was failing with broken
+      # bundled npm 10.x (Cannot find module 'promise-retry') even with
+      # --force. The bundled Node on the Blacksmith image lives at
+      # /usr/local where the runner user can't write; setup-node
+      # installs Node 24 into the runner-user-writable tool_cache.
+      - name: Setup Node 24 (for npm OIDC publish)
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-
-      # Node 22 bundles npm 10.x; npm Trusted Publishing (automatic OIDC
-      # token exchange) requires npm >= 11.5.1. Without this upgrade,
-      # `npm publish` sends the empty placeholder token and the registry
-      # returns a misleading 404 instead of the real 401/403 auth failure.
-      #
-      # --force bypasses npm's in-place rebuild check. Without it the
-      # self-upgrade fails with `Cannot find module 'promise-retry'`
-      # because npm loses references to its own arborist modules during
-      # the rebuild step.
-      - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest --force
 
       - name: Publish to npm via OIDC (@${{ steps.context.outputs.npm_tag }})
         env:
