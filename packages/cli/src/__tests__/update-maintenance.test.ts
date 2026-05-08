@@ -264,6 +264,13 @@ describe('runDoctor dryRun contract', () => {
       saveServerConfig: () => {
         throw new Error('saveServerConfig must NOT be called in dry-run');
       },
+      // Read-only stubs for the port-canonical-owner check. processKill
+      // throws so a regression that lets the port fixer escape dry-run
+      // mode fails loudly here.
+      findPortOwner: async () => null,
+      processKill: () => {
+        throw new Error('processKill must NOT be called in dry-run');
+      },
     };
   }
 
