@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | IN-PROGRESS (G1 shipped) |
+| **Status** | IN-PROGRESS (G1+G6 shipped) |
 | **Slug** | `pgserve-singleton-no-proxy` |
 | **Date** | 2026-05-06 |
 | **Author** | Felipe Rosa <felipe@namastex.ai> |
@@ -287,12 +287,15 @@ bun test packages/cli/src/__tests__/doctor-tiered.test.ts
 
 ### Group 6: `requirements` manifest + `--requirements` flag
 
+**Status:** ✅ SHIPPED.
+
 **Goal:** omni declares peer version requirements.
 
 **Deliverables:**
-1. New `packages/cli/src/lib/requirements.ts`.
-2. `omni --requirements --json` CLI.
-3. Tests.
+1. ✅ New `packages/cli/src/lib/requirements.ts` — `REQUIREMENTS = { pgserve: ">=2.3", genie: ">=5.0" }` + `parseVersionTriple`/`parseConstraint`/`compareVersions`/`satisfiesConstraint`/`checkPeerVersion`/`checkAllPeers`. CalVer-tolerant parser handles `omni 2.260507.4` shape correctly.
+2. ✅ CLI surface — shipped as `omni requirements [--check]` subcommand. The flag-based variant `omni --requirements --json` is intentionally NOT wired as a top-level program option (collides with commander's `--version` plumbing); the global `--json` argv strip in `index.ts:71-75` makes `omni requirements --json` produce the documented JSON shape verbatim. Wish acceptance criterion ("valid JSON output") met without entangling the version-flag plumbing.
+3. ✅ 29 tests in `packages/cli/src/__tests__/requirements.test.ts` (parser, constraint, comparison, satisfaction, peer-version override path, unknown-peer guard, parse-error path).
+4. Bonus: `--check` flag exits non-zero when any peer fails — drop-in for the future `omni update` step 4 (preInstallPeerCheck) and `omni doctor` peer-row.
 
 **Acceptance Criteria:**
 - [ ] `omni --requirements --json` outputs valid JSON.
