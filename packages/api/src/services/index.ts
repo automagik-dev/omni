@@ -121,9 +121,9 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   // defer per-row arming to the central lifecycle gates. Built outside
   // the literal to avoid forward-referencing `services.X` inside its own
   // initializer.
-  const followUpLifecycle__624 = new FollowUpLifecycleService(db, eventBus);
-  const followUpSweeper__624 = new FollowUpSweeperService(db, eventBus);
-  followUpSweeper__624.setLifecycle(followUpLifecycle__624);
+  const followUpLifecycle = new FollowUpLifecycleService(db, eventBus);
+  const followUpSweeper = new FollowUpSweeperService(db, eventBus);
+  followUpSweeper.setLifecycle(followUpLifecycle);
 
   return {
     agents: new AgentService(db, eventBus),
@@ -153,8 +153,8 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     tts,
     turns: new TurnService(db),
     consumerOffsets: new ConsumerOffsetService(db),
-    followUpLifecycle: followUpLifecycle__624,
-    followUpSweeper: followUpSweeper__624,
+    followUpLifecycle,
+    followUpSweeper,
     genieHosts: new GenieHostsService(db),
     eventBus,
   };

@@ -160,28 +160,48 @@ export class FollowUpSweeperService {
     const minBoundary = new Date(now.getTime() - STALE_PAUSE_MAX_AGE_MS);
     const maxBoundary = new Date(now.getTime() - STALE_PAUSE_MIN_AGE_MS);
 
-    const candidates = await this.db
-      .select({
-        chatId: chatFollowUpState.chatId,
-        instanceId: chatFollowUpState.instanceId,
-        agentId: chatFollowUpState.agentId,
-        sequenceConfig: chatFollowUpState.sequenceConfig,
-        lastInboundCustomerMessageAt: chatFollowUpState.lastInboundCustomerMessageAt,
-      })
-      .from(chatFollowUpState)
-      .leftJoin(chats, eq(chatFollowUpState.chatId, chats.id))
-      .where(
-        and(
-          eq(chatFollowUpState.disarmReason, 'customer_replied'),
-          gt(chatFollowUpState.lastInboundCustomerMessageAt, minBoundary),
-          lt(chatFollowUpState.lastInboundCustomerMessageAt, maxBoundary),
-          // Same null-safe agentPaused gate as `findAndLockDue` — preserves
-          // the #528 race fix for the re-arm path.
-          sql`(${chats.settings}->>'agentPaused') IS DISTINCT FROM 'true'`,
-        ),
-      )
-      .orderBy(chatFollowUpState.lastInboundCustomerMessageAt)
-      .limit(STALE_PAUSE_MAX_PER_TICK);
+    // Wrap the SELECT in a transaction with `FOR UPDATE SKIP LOCKED` to
+    // mirror `findAndLockDue` (line ~100). Two reasons:
+    //  1. Concurrent workers (multiple API instances OR overlapping ticks
+    //     within a single instance when sweep latency exceeds the 15s
+    //     cadence) would otherwise both read the same `customer_replied`
+    //     rows and both call `armForInbound` on each. The DB write is
+    //     idempotent (`upsertArmed` is `INSERT ... ON CONFLICT DO UPDATE`)
+    //     but `armSequence` publishes `follow_up.armed` once per call —
+    //     two workers ⇒ duplicate observability events.
+    //  2. Architectural parity with `findAndLockDue`: both passes claim
+    //     work units from the same table; both should use the same
+    //     concurrency primitive so a future maintainer doesn't have to
+    //     reason about two different locking models.
+    const candidates = await this.db.transaction(async (tx) => {
+      return (
+        tx
+          .select({
+            chatId: chatFollowUpState.chatId,
+            instanceId: chatFollowUpState.instanceId,
+            agentId: chatFollowUpState.agentId,
+            sequenceConfig: chatFollowUpState.sequenceConfig,
+            lastInboundCustomerMessageAt: chatFollowUpState.lastInboundCustomerMessageAt,
+          })
+          .from(chatFollowUpState)
+          .leftJoin(chats, eq(chatFollowUpState.chatId, chats.id))
+          .where(
+            and(
+              eq(chatFollowUpState.disarmReason, 'customer_replied'),
+              gt(chatFollowUpState.lastInboundCustomerMessageAt, minBoundary),
+              lt(chatFollowUpState.lastInboundCustomerMessageAt, maxBoundary),
+              // Same null-safe agentPaused gate as `findAndLockDue` —
+              // preserves the #528 race fix for the re-arm path.
+              sql`(${chats.settings}->>'agentPaused') IS DISTINCT FROM 'true'`,
+            ),
+          )
+          .orderBy(chatFollowUpState.lastInboundCustomerMessageAt)
+          .limit(STALE_PAUSE_MAX_PER_TICK)
+          // Lock only the state row, not the joined chat row — `FOR UPDATE`
+          // can't be applied to the nullable side of an outer join.
+          .for('update', { of: chatFollowUpState, skipLocked: true })
+      );
+    });
 
     let rearmed = 0;
     for (const row of candidates) {
