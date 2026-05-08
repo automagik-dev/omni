@@ -45,6 +45,7 @@ import { createPromptsCommand } from './commands/prompts.js';
 import { createProvidersCommand } from './commands/providers.js';
 import { createReactCommand } from './commands/react.js';
 import { createReplayCommand } from './commands/replay.js';
+import { createRequirementsCommand } from './commands/requirements.js';
 import { createRestartCommand } from './commands/restart.js';
 import { createResyncCommand } from './commands/resync.js';
 import { createSayCommand } from './commands/say.js';
@@ -344,6 +345,12 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'System',
     helpDescription: 'Diagnose and repair the embedded omni runtime',
+  },
+  {
+    create: createRequirementsCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Show declared peer-version requirements (pgserve, genie)',
   },
   {
     create: createMediaCommand,

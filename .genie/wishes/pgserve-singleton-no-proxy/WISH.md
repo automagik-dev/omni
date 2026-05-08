@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT |
+| **Status** | IN-PROGRESS (G1+G2+G3+G6 shipped — pgserve dep dropped) |
 | **Slug** | `pgserve-singleton-no-proxy` |
 | **Date** | 2026-05-06 |
 | **Author** | Felipe Rosa <felipe@namastex.ai> |
@@ -154,13 +154,15 @@ See `SHARED-DESIGN.md` §6. omni-specific:
 
 ### Group 1: Tier integration in connection setup
 
+**Status:** Phase A SHIPPED (transport-discovery surface). Phase B (cosign verify + HMAC cache-token + `application_name` propagation) deferred until pgserve@2.3 lands the `pgserve verify` CLI verb.
+
 **Goal:** omni connects to canonical pgserve via Unix socket; reads tier identity via `pgserve verify`; HMAC cache-token short-circuits steady-state.
 
 **Deliverables:**
-1. New `packages/cli/src/lib/pgserve-tier.ts` mirroring genie's helper.
-2. Update `buildRuntimeEnv` in `packages/cli/src/commands/update.ts`: DATABASE_URL with Unix socket default + TCP 5432 fallback.
-3. Update `packages/api/src/db.ts` (or wherever connection lives) similarly.
-4. Tests: cache-token roundtrip, fallback path, application_name propagation.
+1. ✅ New `packages/cli/src/lib/pgserve-transport.ts` mirroring genie's `resolvePgserveTransport` (UDS-first, TCP fallback, `OMNI_PG_FORCE_*` overrides). Companion: `buildDatabaseUrlForTransport` URL builder + `probeCanonicalSocketSync` synchronous probe.
+2. ✅ Update `packages/cli/src/runtime-env.ts:resolveDatabaseUrl`: prefers canonical UDS at `$XDG_RUNTIME_DIR/pgserve/.s.PGSQL.5432` when the socket file exists; legacy phase-2 URL (`localhost:8432`) is now treated as a stale default and re-resolved. Operator-supplied URLs pass through verbatim.
+3. ⏸ Phase B: tier-aware `pgserve verify` invocation in `packages/api/` connection bootstrap (depends on pgserve@2.3 CLI).
+4. ✅ Tests: `packages/cli/src/__tests__/pgserve-transport.test.ts` (15 tests covering path resolution, URL builders, sync probe, force-flag overrides). `runtime-env.test.ts` extended with UDS-preference + legacy-phase-2 re-resolution coverage.
 
 **Acceptance Criteria:**
 - [ ] Default DATABASE_URL uses Unix socket on hosts with canonical pgserve.
@@ -178,7 +180,22 @@ bun test packages/api/src/__tests__/db.test.ts
 
 ---
 
-### Group 2: Drop TCP 8432 dependence
+### Group 2: Drop TCP 8432 dependence + drop pgserve runtime dep
+
+**Status:** ✅ pgserve runtime dep DROPPED + embedded boot path DELETED. ⏸ doctor `~/.omni/config.json` 8432→5432 rewrite still pending (lives under G5 tiered doctor).
+
+**Shipped (G2 first half):**
+1. ✅ `packages/api/package.json` — dropped `"pgserve": "^2.1.0"` (the wish's biggest deletion). bun.lock refreshed; 54 transitive packages no longer pulled in by `bun install`.
+2. ✅ `packages/api/src/pgserve.ts` — DELETED (842 lines). The embedded postmaster lifecycle (`startEmbeddedPgserve` / `stopEmbeddedPgserve` / `resolvePgserveConfig` / port-conflict + orphan guards) is now pgserve@>=2.3's responsibility under the singleton model.
+3. ✅ `packages/api/src/__tests__/pgserve.test.ts` — DELETED (675 lines).
+4. ✅ `packages/api/src/vendor.d.ts` — DELETED (the `declare module 'pgserve'` ambient typing is no longer needed).
+5. ✅ `packages/api/src/index.ts` — boot path replaced: `getDefaultDatabaseUrl()` from `@omni/db` instead of `await startEmbeddedPgserve(pgserveConfig)`. All `stopEmbeddedPgserve` calls (shutdown, early-shutdown, migration-failure, drift-failure paths) removed. `PGSERVE_EMBEDDED=true` in env now logs a one-shot deprecation warning and is otherwise a no-op.
+
+**Still pending (G2 second half — moves under G5):**
+- 8432 → 5432 doctor port-rewrite for `~/.omni/config.json`.
+- Audit + replacement of remaining `8432` literals in tests / fixtures / docs.
+
+### Group 2 (legacy): Drop TCP 8432 dependence
 
 **Goal:** Eliminate every `8432` literal in source. Migration auto-rewrites operator config.
 
@@ -204,6 +221,16 @@ bun test packages/cli/src/__tests__/doctor-port-rewrite.test.ts
 ---
 
 ### Group 3: Drop `checkCanonicalPgservePreflight`
+
+**Status:** ✅ SHIPPED.
+
+**Shipped:**
+1. ✅ Deleted `checkCanonicalPgservePreflight` + `isAtOrPastPhase2` + `isPgserveOnPath` + `PHASE_2_CUTOFF_MINOR` from `packages/cli/src/commands/update.ts`.
+2. ✅ Dropped `--skip-canonical-preflight` CLI flag and `skipCanonicalPreflight` UpdateOptions field.
+3. ✅ Deleted `packages/cli/src/__tests__/update-canonical-preflight.test.ts` (139 lines).
+4. The replacement preInstallPeerCheck (G4) will use `lib/requirements.ts` (G6) — already shipped, ready to wire.
+
+### Group 3 (original goal): Drop `checkCanonicalPgservePreflight`
 
 **Goal:** Phase-2 transitional guard removed; phase-3 makes canonical the default.
 
@@ -285,12 +312,15 @@ bun test packages/cli/src/__tests__/doctor-tiered.test.ts
 
 ### Group 6: `requirements` manifest + `--requirements` flag
 
+**Status:** ✅ SHIPPED.
+
 **Goal:** omni declares peer version requirements.
 
 **Deliverables:**
-1. New `packages/cli/src/lib/requirements.ts`.
-2. `omni --requirements --json` CLI.
-3. Tests.
+1. ✅ New `packages/cli/src/lib/requirements.ts` — `REQUIREMENTS = { pgserve: ">=2.3", genie: ">=5.0" }` + `parseVersionTriple`/`parseConstraint`/`compareVersions`/`satisfiesConstraint`/`checkPeerVersion`/`checkAllPeers`. CalVer-tolerant parser handles `omni 2.260507.4` shape correctly.
+2. ✅ CLI surface — shipped as `omni requirements [--check]` subcommand. The flag-based variant `omni --requirements --json` is intentionally NOT wired as a top-level program option (collides with commander's `--version` plumbing); the global `--json` argv strip in `index.ts:71-75` makes `omni requirements --json` produce the documented JSON shape verbatim. Wish acceptance criterion ("valid JSON output") met without entangling the version-flag plumbing.
+3. ✅ 29 tests in `packages/cli/src/__tests__/requirements.test.ts` (parser, constraint, comparison, satisfaction, peer-version override path, unknown-peer guard, parse-error path).
+4. Bonus: `--check` flag exits non-zero when any peer fails — drop-in for the future `omni update` step 4 (preInstallPeerCheck) and `omni doctor` peer-row.
 
 **Acceptance Criteria:**
 - [ ] `omni --requirements --json` outputs valid JSON.
