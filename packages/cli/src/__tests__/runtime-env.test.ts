@@ -126,23 +126,18 @@ describe('buildRuntimeEnv', () => {
     expect(env.LOG_LEVEL).toBe('info');
   });
 
-  test('PGSERVE_EMBEDDED=true only when useCanonicalPgserve is explicitly false (legacy opt-out)', () => {
-    const serverConfig = { ...DEFAULT_SERVER_CONFIG, useCanonicalPgserve: false };
-    const env = buildRuntimeEnv(serverConfig, { apiKey: 'k' });
-    expect(env.PGSERVE_EMBEDDED).toBe('true');
-  });
-
-  test('PGSERVE_EMBEDDED=false when useCanonicalPgserve is explicitly true', () => {
-    const serverConfig = { ...DEFAULT_SERVER_CONFIG, useCanonicalPgserve: true };
-    const env = buildRuntimeEnv(serverConfig, { apiKey: 'k' });
-    expect(env.PGSERVE_EMBEDDED).toBe('false');
-  });
-
-  test('PGSERVE_EMBEDDED=false when useCanonicalPgserve is undefined (default flipped in phase 2)', () => {
-    const serverConfig = { ...DEFAULT_SERVER_CONFIG };
-    expect(serverConfig.useCanonicalPgserve).toBeUndefined();
-    const env = buildRuntimeEnv(serverConfig, { apiKey: 'k' });
-    expect(env.PGSERVE_EMBEDDED).toBe('false');
+  test('PGSERVE_EMBEDDED is pinned to "false" regardless of useCanonicalPgserve (phase-3 consumer-only)', () => {
+    // pgserve-singleton-no-proxy G2 deleted the API-side embedded boot
+    // path entirely. The env key remains in RuntimeEnv for back-compat
+    // with stale pm2 entries, but the value is hard-wired to 'false'.
+    // Operators with legacy `useCanonicalPgserve: false` configs get a
+    // one-shot warning from `omni doctor --fix`; the env is otherwise
+    // a no-op since omni-api no longer reads it.
+    for (const value of [true, false, undefined]) {
+      const serverConfig = { ...DEFAULT_SERVER_CONFIG, useCanonicalPgserve: value };
+      const env = buildRuntimeEnv(serverConfig, { apiKey: 'k' });
+      expect(env.PGSERVE_EMBEDDED).toBe('false');
+    }
   });
 
   test('respects an explicit external-DB URL from config', () => {

@@ -170,36 +170,32 @@ export function resolveDatabaseUrl(serverConfig: ServerConfig): string {
  *
  * All values come from `serverConfig` / `cliConfig`. No shell env reads.
  *
- * `PGSERVE_EMBEDDED` semantics (Phase 2 of canonical-pgserve removal):
- *   - serverConfig.useCanonicalPgserve === false  → 'true'  (embedded — explicit opt-in)
- *   - serverConfig.useCanonicalPgserve === true   → 'false' (canonical — explicit opt-in)
- *   - undefined / missing                          → 'false' (canonical — NEW DEFAULT)
- *
- * Phase 1 (omni#595, 2026-05-01) added the deprecation warning to
- * `startEmbeddedPgserve`. Phase 2 (this file) flips the default for
- * undefined values: legacy installs that never set the flag now get
- * canonical instead of embedded. Operators on legacy embedded who
- * haven't migrated must explicitly set `useCanonicalPgserve: false` in
- * `~/.omni/config.json` (or run `omni doctor --fix` to migrate to
- * canonical, the supported path).
- *
- * Phase 3 (future) deletes the embedded code entirely + drops the
- * pgserve runtime dep from `packages/api`.
+ * Phase 3 (`pgserve-singleton-no-proxy` G2) deleted the embedded
+ * pgserve code path entirely from `packages/api/`. omni-api connects
+ * to a peer-supervised pgserve via `DATABASE_URL` only.
+ * `PGSERVE_EMBEDDED` and `useCanonicalPgserve` are kept here for
+ * back-compat with `~/.omni/config.json` files written by phase-2
+ * installers, but the values no longer change runtime behavior:
+ * `PGSERVE_EMBEDDED` is always `'false'`, and a legacy
+ * `useCanonicalPgserve: false` triggers a one-shot warning surfaced by
+ * `omni doctor --fix` (which rewrites the config). The env keys remain
+ * in {@link RuntimeEnv} until a future major bumps the env contract.
  */
 export function buildRuntimeEnv(serverConfig: ServerConfig, cliConfig: Config): RuntimeEnv {
   const pgservePort = resolvePgservePort(serverConfig);
-  // Embedded mode is now an explicit opt-OUT, not the default. Only when
-  // `useCanonicalPgserve` is explicitly false do we ask the API to spawn
-  // its embedded pgserve. Anything else (true OR undefined) flips embedded
-  // off and connects to the URL stored in serverConfig.databaseUrl.
-  const optOutOfCanonical = serverConfig.useCanonicalPgserve === false;
   return {
     API_PORT: String(serverConfig.port),
     DATABASE_URL: resolveDatabaseUrl(serverConfig),
     OMNI_API_KEY: cliConfig.apiKey ?? '',
     MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
     OMNI_PACKAGES_DIR: join(serverConfig.dataDir, 'packages'),
-    PGSERVE_EMBEDDED: optOutOfCanonical ? 'true' : 'false',
+    // Pinned to 'false' under the consumer-only model (G2 of
+    // pgserve-singleton-no-proxy). Kept in env for back-compat: a stale
+    // pm2 entry from a phase-1 install will now read 'false' and skip
+    // the in-process spawn (which no longer exists anyway since the
+    // API-side code was deleted). Operators upgrading should run
+    // `omni doctor --fix` to clean their config + pm2 entry.
+    PGSERVE_EMBEDDED: 'false',
     PGSERVE_DATA: join(serverConfig.dataDir, 'pgserve'),
     PGSERVE_PORT: String(pgservePort),
     NATS_URL: 'nats://localhost:4222',
