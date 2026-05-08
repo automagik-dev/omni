@@ -41,6 +41,27 @@ export function getPm2LogDir(): string {
   return join(homedir(), '.omni', 'logs');
 }
 
+/**
+ * Stable cwd to anchor pm2-managed processes against. Defaults to `$HOME`,
+ * which is guaranteed to exist for the lifetime of the user account.
+ *
+ * Without this anchor, `pm2 start` inherits the calling shell's `process.cwd()`
+ * and bakes it into the pm2 entry. If that directory is later removed (e.g.
+ * a transient build dir, a deleted submodule, a switched git branch) every
+ * subsequent `pm2 restart` fails with `Error: spawn bash ENOENT` because pm2
+ * tries to `chdir()` into the missing path before exec. The omni-api launcher
+ * (`bin/omni-server`) does its own `cd "$(dirname "$0")/../dist/server"`, so
+ * pm2's cwd does not need to point anywhere meaningful — it just needs to
+ * point somewhere that exists.
+ *
+ * See: 2026-05-07 incident where `omni update --next` poisoned the omni-api
+ * pm2 entry with `repos/pgserve` (a directory that no longer existed),
+ * causing silent crash loops with no log output.
+ */
+export function getPm2AnchorCwd(): string {
+  return homedir();
+}
+
 /** Hardened log path for a given pm2 process name. */
 export function getPm2LogPaths(processName: string): { out: string; error: string } {
   const dir = getPm2LogDir();
@@ -84,6 +105,8 @@ export function buildPm2StartArgs(options: Pm2StartArgsOptions): string[] {
     script,
     '--name',
     name,
+    '--cwd',
+    getPm2AnchorCwd(),
     '--max-restarts',
     String(PM2_HARDENED_DEFAULTS.maxRestarts),
     '--restart-delay',
