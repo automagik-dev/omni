@@ -8,6 +8,14 @@ on:
 
 permissions:
   contents: write
+  # OIDC token issuance for npm Trusted Publishing — pairs with the
+  # "Publish to npm via OIDC" step below. Without this, npm's publish
+  # client gets an empty placeholder token and the registry returns a
+  # misleading 404 instead of the real auth failure (the same trap
+  # version.yml hit before commit 01b55112). The release workflow's
+  # legacy NPM_TOKEN path was the source of the 2026-05-08 regression
+  # where `@automagik/omni@<version>` 404'd during `npm dist-tag add`.
+  id-token: write
 
 jobs:
   release:
@@ -16,7 +24,13 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch') ||
       (github.event.workflow_run.conclusion == 'success')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # GitHub-hosted runner (not Blacksmith). The "Setup Node 24" step below
+    # writes Node into actions/setup-node's tool_cache; on the Blacksmith
+    # pool image that path resolves under /usr/local where the runner user
+    # gets EACCES. GitHub-hosted runners give the runner user write access
+    # to /usr/local. Same trade-off documented on version.yml (slower job
+    # startup vs. publish reliability).
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -108,26 +122,45 @@ jobs:
         if: steps.exists.outputs.skip != 'true'
         run: bunx turbo run build --filter=@automagik/omni
 
-      - name: Publish to npm (@latest, with @next promotion fallback)
+      # Auth: npm OIDC Trusted Publishing — same path as version.yml. Both
+      # version.yml AND release.yml publish on behalf of the same npm
+      # package, so both must be registered as Trusted Publishers at
+      # https://www.npmjs.com/package/@automagik/omni/access. If you rename
+      # this file, update that record or publishes will silently 404.
+      #
+      # Node 24 bundles npm 11.x; npm Trusted Publishing requires
+      # npm >= 11.5.1. Using Node 24 sidesteps the npm self-upgrade dance.
+      - name: Setup Node 24 (for npm OIDC publish)
+        if: steps.exists.outputs.skip != 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish to npm via OIDC (@latest, with @next promotion fallback)
         if: steps.exists.outputs.skip != 'true'
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          HUSKY: "0"
+          # npm auto-enables provenance in any CI env with `id-token: write`,
+          # regardless of the --provenance CLI flag. Self-hosted runners fail
+          # the server-side sigstore check with 422. Disable auto-provenance
+          # explicitly; OIDC token exchange still happens.
+          NPM_CONFIG_PROVENANCE: "false"
         run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "ERROR: NPM_TOKEN secret is not set. Cannot publish to npm." >&2
-            exit 1
-          fi
-
           VERSION="${{ steps.pkg.outputs.version }}"
           cd packages/cli
 
           # Try a fresh publish as @latest. If the version already exists on npm
           # (the Version workflow already published it as @next when this build
-          # came through dev first), promote it by retagging instead of failing.
-          if ! bun publish --access public --tag latest 2>&1; then
+          # came through dev first), promote it via OIDC-authed dist-tag add
+          # instead of failing.
+          #
+          # Both branches use the OIDC token issued by `id-token: write` —
+          # `npm dist-tag add` consumes the same registry-url + tool_cache
+          # auth that `npm publish` writes, so no manual ~/.npmrc plumbing
+          # is required.
+          if ! npm publish --access public --tag latest 2>&1; then
             echo "Publish failed — version may already exist from @next. Retagging as latest..."
-            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
             npm dist-tag add "@automagik/omni@${VERSION}" latest
           fi
 
