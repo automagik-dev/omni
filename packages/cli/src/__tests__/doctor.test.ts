@@ -41,6 +41,20 @@ interface HarnessState {
   natsStatus: 'online' | 'stopped' | 'errored' | 'missing';
   /** omni-api pm2 max_restarts value. `undefined` simulates "no flag set". */
   apiMaxRestarts: number | undefined;
+  /** omni-nats pm2 max_restarts value. `undefined` simulates "no flag set". */
+  natsMaxRestarts: number | undefined;
+  /** omni-api pm2 child PID. Used by port-canonical-owner. */
+  apiPid: number | undefined;
+  /** omni-nats pm2 child PID. Used by port-canonical-owner. */
+  natsPid: number | undefined;
+  /**
+   * Map of port → owning PID (or null when nothing listens). Stubs the
+   * `ss -tlnp` lookup. Healthy default has each canonical port owned by
+   * the corresponding pm2 child PID.
+   */
+  portOwners: Record<number, number | null>;
+  /** Recorded process.kill calls — tests assert which squatter PIDs were signaled. */
+  processKillCalls: Array<{ pid: number; signal: 'SIGTERM' | 'SIGKILL' }>;
   /** Canned `pm2 conf` stdout. `null` simulates pm2 conf unreachable. */
   pm2ConfOutput: string | null;
   serverConfig: ServerConfig;
@@ -123,6 +137,11 @@ function mkHarness(overrides?: Partial<HarnessState>): HarnessState {
     apiStatus: 'online',
     natsStatus: 'online',
     apiMaxRestarts: 10,
+    natsMaxRestarts: 10,
+    apiPid: 1001,
+    natsPid: 1002,
+    portOwners: { 8882: 1001, 4222: 1002 },
+    processKillCalls: [],
     pm2ConfOutput: HEALTHY_PM2_CONF,
     serverConfig: {
       port: 8882,
@@ -169,6 +188,25 @@ function mkHarness(overrides?: Partial<HarnessState>): HarnessState {
  * the stop → migrate → install → delete → start ordering. Extracted from
  * `mkDeps` so the dep closure stays under biome's complexity ceiling.
  */
+/**
+ * Mirror the real-world side-effect of `pm2 restart <name>`: when the
+ * canonical port has no owner (squatter was killed in the previous fix
+ * step) the pm2 child rebinds. Extracted so `recordPm2` stays under
+ * biome's complexity ceiling.
+ */
+function reclaimPortAfterRestart(state: HarnessState, processName: string | undefined): void {
+  if (processName === 'omni-nats' && state.portOwners[4222] === null) {
+    state.portOwners[4222] = state.natsPid ?? null;
+    return;
+  }
+  if (processName === 'omni-api') {
+    const apiPort = state.serverConfig.port;
+    if (state.portOwners[apiPort] === null) {
+      state.portOwners[apiPort] = state.apiPid ?? null;
+    }
+  }
+}
+
 async function recordPm2(state: HarnessState, args: string[], env?: Record<string, string>): Promise<number> {
   state.pm2Calls.push({ args, env });
 
@@ -190,6 +228,8 @@ async function recordPm2(state: HarnessState, args: string[], env?: Record<strin
   if (args[0] === 'set' && args[1]?.startsWith('pm2-logrotate:') && state.pm2ConfAfterFix !== null) {
     state.pm2ConfOutput = state.pm2ConfAfterFix;
   }
+
+  if (args[0] === 'restart') reclaimPortAfterRestart(state, args[1]);
 
   return state.pm2ExitCode;
 }
@@ -213,6 +253,7 @@ function mkDeps(state: HarnessState): DoctorDeps {
       return [
         {
           name: 'omni-api',
+          pid: state.apiPid,
           pm2_env: {
             status: state.apiStatus,
             env: pm2StoredEnv,
@@ -221,9 +262,11 @@ function mkDeps(state: HarnessState): DoctorDeps {
         },
         {
           name: 'omni-nats',
+          pid: state.natsPid,
           pm2_env: {
             status: state.natsStatus,
             env: {},
+            max_restarts: state.natsMaxRestarts,
           },
         },
       ];
@@ -277,6 +320,18 @@ function mkDeps(state: HarnessState): DoctorDeps {
       state.serverConfig = { ...state.serverConfig, ...partial };
       state.savedServerConfigs.push({ ...partial });
     },
+    findPortOwner: async (port: number) => state.portOwners[port] ?? null,
+    processKill: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => {
+      state.processKillCalls.push({ pid, signal });
+      // Simulate the squatter dying: any port owned by this PID becomes
+      // unowned (null). The fixer's polling loop will then exit and the
+      // subsequent `pm2 restart` reclaim handler (in recordPm2) reassigns.
+      for (const portStr of Object.keys(state.portOwners)) {
+        const port = Number(portStr);
+        if (state.portOwners[port] === pid) state.portOwners[port] = null;
+      }
+      return true;
+    },
   };
 }
 
@@ -285,7 +340,7 @@ function mkDeps(state: HarnessState): DoctorDeps {
 // ---------------------------------------------------------------------------
 
 describe('runDoctor — read-only mode', () => {
-  test('reports all 11 checks with OK when state is healthy', async () => {
+  test('reports all 12 checks with OK when state is healthy', async () => {
     // Match the harness version to whatever the CLI currently reports so
     // `version-match` is OK without hard-coding the CLI version here.
     const { VERSION } = await import('../version.js');
@@ -294,7 +349,7 @@ describe('runDoctor — read-only mode', () => {
 
     const report = await runDoctor({ fix: false }, deps);
 
-    expect(report.checks).toHaveLength(11);
+    expect(report.checks).toHaveLength(12);
     const ids = report.checks.map((c) => c.id);
     expect(ids).toEqual([
       'pm2-env-drift',
@@ -308,11 +363,12 @@ describe('runDoctor — read-only mode', () => {
       'pm2-logrotate-installed',
       'cli-signing-key-for-locked-instances',
       'pgserve-canonical',
+      'port-canonical-owner',
     ]);
     for (const check of report.checks) {
       expect(check.level).toBe('OK');
     }
-    expect(report.summary).toEqual({ ok: 11, warn: 0, fail: 0 });
+    expect(report.summary).toEqual({ ok: 12, warn: 0, fail: 0 });
     expect(report.fixesApplied).toEqual([]);
   });
 
@@ -1077,5 +1133,211 @@ describe('runDoctor — pgserve-canonical check', () => {
     expect(failedFix).toContain('psql restore into canonical pgserve failed');
     expect(failedFix).toContain('snapshot preserved at /home/op/.omni/backups/embedded-migration-');
     expect(failedFix).toContain('relation "messages" already exists');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pm2-max-restarts now covers omni-nats too (post-port-canonical-owner wish)
+// ---------------------------------------------------------------------------
+
+describe('runDoctor — pm2-max-restarts covers omni-nats', () => {
+  test('FAIL when omni-nats max_restarts is 0 even though omni-api is healthy', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION, apiMaxRestarts: 10, natsMaxRestarts: 0 });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'pm2-max-restarts');
+    expect(check?.level).toBe('FAIL');
+    expect(check?.detail).toContain('omni-nats');
+    expect(check?.detail).toContain('max_restarts=0');
+    expect(check?.detail).toContain('unbounded');
+  });
+
+  test('FAIL when omni-nats has no max_restarts set', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION, natsMaxRestarts: undefined });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'pm2-max-restarts');
+    expect(check?.level).toBe('FAIL');
+    expect(check?.detail).toContain('omni-nats has no max_restarts set');
+  });
+
+  test('OK when both api and nats are in the hardened range', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION, apiMaxRestarts: 10, natsMaxRestarts: 10 });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'pm2-max-restarts');
+    expect(check?.level).toBe('OK');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// port-canonical-owner — orphan squatter detection + reclaim
+//
+// 2026-05-07 incident reproduction: orphan nats-server from a previous
+// session held 4222, pm2 omni-nats crash-looped 75 times trying to bind.
+// The check identifies the squatter PID and the fixer reclaims the port
+// (SIGTERM → SIGKILL → pm2 restart). A safety guard refuses to kill a
+// PID that is itself pm2-managed under another name.
+// ---------------------------------------------------------------------------
+
+describe('runDoctor — port-canonical-owner check', () => {
+  test('OK when every canonical port is owned by its pm2-managed PID', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({ serverVersion: VERSION });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'port-canonical-owner');
+    expect(check?.level).toBe('OK');
+    expect(check?.detail).toContain('all canonical ports owned by pm2-managed processes');
+  });
+
+  test('FAIL when an orphan PID holds 4222 instead of pm2 omni-nats', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      serverVersion: VERSION,
+      // Orphan PID 9999 squats on 4222; pm2 omni-nats child PID is 1002.
+      portOwners: { 8882: 1001, 4222: 9999 },
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'port-canonical-owner');
+    expect(check?.level).toBe('FAIL');
+    expect(check?.detail).toContain('omni-nats:4222');
+    expect(check?.detail).toContain('pid=9999');
+    expect(check?.detail).toContain('pm2 child pid=1002');
+  });
+
+  test('OK is silent when no listener exists yet (pm2-status flags it instead)', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      serverVersion: VERSION,
+      // Nothing listening on 4222 yet (pm2 still starting).
+      portOwners: { 8882: 1001, 4222: null },
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: false }, deps);
+
+    const check = report.checks.find((c) => c.id === 'port-canonical-owner');
+    // No listener → no squatter to flag. Other checks (pm2-status) cover
+    // the "managed process not running" case so we don't double-report.
+    expect(check?.level).toBe('OK');
+  });
+});
+
+describe('runDoctor — port-canonical-owner --fix', () => {
+  test('SIGTERMs the squatter, polls until it exits, then pm2 restart claims the port', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      serverVersion: VERSION,
+      portOwners: { 8882: 1001, 4222: 9999 },
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: true }, deps);
+
+    // The squatter received SIGTERM (no SIGKILL needed — harness simulates
+    // a graceful exit on first signal).
+    const term = state.processKillCalls.find((c) => c.pid === 9999 && c.signal === 'SIGTERM');
+    expect(term).toBeDefined();
+    // pm2 restart omni-nats was issued so pm2 reclaims 4222.
+    const restart = state.pm2Calls.find((c) => c.args[0] === 'restart' && c.args[1] === 'omni-nats');
+    expect(restart).toBeDefined();
+    // Recheck shows the port is now owned by the pm2 child PID.
+    const check = report.checks.find((c) => c.id === 'port-canonical-owner');
+    expect(check?.level).toBe('OK');
+    // Fix message mentions the reclaim.
+    expect(report.fixesApplied.some((f) => f.includes('reclaimed') && f.includes('pid=9999'))).toBe(true);
+  });
+
+  test('refuses to kill a squatter that is itself pm2-managed under another name', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      serverVersion: VERSION,
+      // Worst-case foot-gun: omni-api's pid is somehow listening on 4222.
+      // The fixer must NOT kill it — that would crash a sibling channel
+      // process. Instead it records SKIPPED with the explanation.
+      portOwners: { 8882: 1001, 4222: 1001 },
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: true }, deps);
+
+    // No kill ever issued for a pm2-managed PID.
+    expect(state.processKillCalls.find((c) => c.pid === 1001)).toBeUndefined();
+    // Skip message recorded so the operator sees why.
+    const skipped = report.fixesApplied.find(
+      (f) => f.includes('SKIPPED') && f.includes('pm2-managed') && f.includes('pid=1001'),
+    );
+    expect(skipped).toBeDefined();
+  });
+
+  test('escalates to SIGKILL when the squatter does not exit after SIGTERM', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      serverVersion: VERSION,
+      portOwners: { 8882: 1001, 4222: 9999 },
+    });
+    // Override processKill to ignore SIGTERM (squatter is unkillable
+    // gracefully) so the fixer must escalate to SIGKILL after polling.
+    const deps: DoctorDeps = {
+      ...mkDeps(state),
+      processKill: (pid, signal) => {
+        state.processKillCalls.push({ pid, signal });
+        if (signal === 'SIGKILL') {
+          // SIGKILL always wins.
+          for (const portStr of Object.keys(state.portOwners)) {
+            const port = Number(portStr);
+            if (state.portOwners[port] === pid) state.portOwners[port] = null;
+          }
+        }
+        return true;
+      },
+    };
+
+    await runDoctor({ fix: true }, deps);
+
+    // Both signals must have been sent in order.
+    const signals = state.processKillCalls.filter((c) => c.pid === 9999).map((c) => c.signal);
+    expect(signals).toContain('SIGTERM');
+    expect(signals).toContain('SIGKILL');
+    expect(signals.indexOf('SIGTERM')).toBeLessThan(signals.indexOf('SIGKILL'));
+  });
+});
+
+describe('runDoctor — pm2-status --fix dispatches port reconciliation', () => {
+  test('FAIL pm2-status with port squatter triggers reclaim + restart', async () => {
+    const { VERSION } = await import('../version.js');
+    const state = mkHarness({
+      serverVersion: VERSION,
+      // pm2 nats is in the crash-loop "waiting restart" state because the
+      // orphan owns 4222. This is the exact 2026-05-07 incident shape.
+      natsStatus: 'errored',
+      portOwners: { 8882: 1001, 4222: 9999 },
+    });
+    const deps = mkDeps(state);
+
+    const report = await runDoctor({ fix: true }, deps);
+
+    // The orphan was killed.
+    expect(state.processKillCalls.find((c) => c.pid === 9999)).toBeDefined();
+    // pm2 restart omni-nats was issued.
+    expect(state.pm2Calls.find((c) => c.args[0] === 'restart' && c.args[1] === 'omni-nats')).toBeDefined();
+    // The pm2-status fix entry mentions the reclaim outcome.
+    const fix = report.fixesApplied.find((f) => f.includes('reclaimed') || f.includes('restarted omni-nats'));
+    expect(fix).toBeDefined();
   });
 });
