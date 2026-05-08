@@ -18,7 +18,7 @@
     },
     "apps/ui": {
       "name": "@omni/ui",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@omni/sdk": "workspace:*",
         "@radix-ui/react-dialog": "^1.1.15",
@@ -51,7 +51,7 @@
     },
     "packages/api": {
       "name": "@omni/api",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@google/genai": "^1.0.0",
         "@hono/swagger-ui": "^0.4.1",
@@ -67,7 +67,6 @@
         "hono": "^4.6.17",
         "lru-cache": "^11.2.6",
         "nats": "^2.29.3",
-        "pgserve": "^2.1.0",
         "zod": "^3.24.1",
       },
       "devDependencies": {
@@ -86,7 +85,7 @@
     },
     "packages/channel-a2a": {
       "name": "@omni/channel-a2a",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -102,7 +101,7 @@
     },
     "packages/channel-discord": {
       "name": "@omni/channel-discord",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -119,7 +118,7 @@
     },
     "packages/channel-gupshup": {
       "name": "@omni/channel-gupshup",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -135,7 +134,7 @@
     },
     "packages/channel-internal": {
       "name": "@omni/channel-internal",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -150,7 +149,7 @@
     },
     "packages/channel-sdk": {
       "name": "@omni/channel-sdk",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@omni/core": "workspace:*",
       },
@@ -161,7 +160,7 @@
     },
     "packages/channel-slack": {
       "name": "@omni/channel-slack",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -179,7 +178,7 @@
     },
     "packages/channel-telegram": {
       "name": "@omni/channel-telegram",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -195,7 +194,7 @@
     },
     "packages/channel-twilio-whatsapp": {
       "name": "@omni/channel-twilio-whatsapp",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -210,7 +209,7 @@
     },
     "packages/channel-whatsapp": {
       "name": "@omni/channel-whatsapp",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@hapi/boom": "^10.0.1",
         "@omni/channel-sdk": "workspace:*",
@@ -230,7 +229,7 @@
     },
     "packages/cli": {
       "name": "@automagik/omni",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "bin": {
         "omni": "./bin/omni",
       },
@@ -265,7 +264,7 @@
     },
     "packages/core": {
       "name": "@omni/core",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.62",
         "croner": "^9.1.0",
@@ -280,7 +279,7 @@
     },
     "packages/db": {
       "name": "@omni/db",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@omni/core": "workspace:*",
         "drizzle-orm": "^0.38.4",
@@ -294,7 +293,7 @@
     },
     "packages/media-processing": {
       "name": "@omni/media-processing",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@google/generative-ai": "^0.21.0",
         "@omni/core": "workspace:*",
@@ -312,7 +311,7 @@
     },
     "packages/plugin-openclaw": {
       "name": "@omni/plugin-openclaw",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "devDependencies": {
         "@types/bun": "latest",
         "typescript": "^5.7.3",
@@ -320,7 +319,7 @@
     },
     "packages/sdk": {
       "name": "@omni/sdk",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "openapi-fetch": "^0.13.6",
       },
@@ -334,7 +333,7 @@
     },
     "packages/voice-client": {
       "name": "@omni/voice-client",
-      "version": "2.260508.2",
+      "version": "2.260508.3",
       "dependencies": {
         "@snazzah/davey": "^0.1.11",
         "libsodium-wrappers": "^0.7.15",
@@ -487,14 +486,6 @@
     "@discordjs/ws": ["@discordjs/ws@1.2.3", "", { "dependencies": { "@discordjs/collection": "^2.1.0", "@discordjs/rest": "^2.5.1", "@discordjs/util": "^1.1.0", "@sapphire/async-queue": "^1.5.2", "@types/ws": "^8.5.10", "@vladfrangu/async_event_emitter": "^2.2.4", "discord-api-types": "^0.38.1", "tslib": "^2.6.2", "ws": "^8.17.0" } }, "sha512-wPlQDxEmlDg5IxhJPuxXr3Vy9AjYq5xCvFWGJyD7w7Np8ZGu+Mc+97LCoEc/+AYCo2IDpKioiH0/c/mj5ZR9Uw=="],
 
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.10.2", "", {}, "sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w=="],
-
-    "@embedded-postgres/darwin-arm64": ["@embedded-postgres/darwin-arm64@18.3.0-beta.17", "", { "os": "darwin", "cpu": "arm64" }, "sha512-Pvrej3Xz5flfyVc9mchVfekrKoTJyvPtM3U0vjuXamZkRKmi+inP2zRmnmzYecIVbr7Zhu82xbsCENMXrwMp9Q=="],
-
-    "@embedded-postgres/darwin-x64": ["@embedded-postgres/darwin-x64@18.3.0-beta.17", "", { "os": "darwin", "cpu": "x64" }, "sha512-MVWe+C47pPoMD9LlIWGQkvZ5Xsu3IBo54CYqnIps/Z1byMIUBNc7y/dZ3mfqEwiCbVDVqirG0CU462xnrSEfKA=="],
-
-    "@embedded-postgres/linux-x64": ["@embedded-postgres/linux-x64@18.3.0-beta.17", "", { "os": "linux", "cpu": "x64" }, "sha512-8orSD6NNopSLtjqir4dWQBrj+g8j1eJjWd9mB60A3xbWMzIBIPQpzT7XzbacW9YFSl/DejOLnRXfff+Wr13Tgw=="],
-
-    "@embedded-postgres/windows-x64": ["@embedded-postgres/windows-x64@18.3.0-beta.17", "", { "os": "win32", "cpu": "x64" }, "sha512-kDC5aBsmhWDjeQjj2V4g+Bk+pMeDU27b7l0rBbaKgtt2gsNmCB34ULg/5cqs2kqUKSk/tiGMHKCNE+zQZ+s4rg=="],
 
     "@emnapi/core": ["@emnapi/core@1.10.0", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.1", "tslib": "^2.4.0" } }, "sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw=="],
 
@@ -767,30 +758,6 @@
     "@opentelemetry/semantic-conventions": ["@opentelemetry/semantic-conventions@1.40.0", "", {}, "sha512-cifvXDhcqMwwTlTK04GBNeIe7yyo28Mfby85QXFe1Yk8nmi36Ab/5UQwptOx84SsoGNRg+EVSjwzfSZMy6pmlw=="],
 
     "@opentelemetry/sql-common": ["@opentelemetry/sql-common@0.41.2", "", { "dependencies": { "@opentelemetry/core": "^2.0.0" }, "peerDependencies": { "@opentelemetry/api": "^1.1.0" } }, "sha512-4mhWm3Z8z+i508zQJ7r6Xi7y4mmoJpdvH0fZPFRkWrdp5fq7hhZ2HhYokEOLkfqSMgPR4Z9EyB3DBkbKGOqZiQ=="],
-
-    "@oven/bun-darwin-aarch64": ["@oven/bun-darwin-aarch64@1.3.13", "", { "os": "darwin", "cpu": "arm64" }, "sha512-qAS6Hg8Q14ckfBuqJ2Zh7gBQSVSUHeibSq4OFqBTv6DzyJuxYlr0sdYQzmYmnbPxbqobekqUDTa/4XEaqRi7vg=="],
-
-    "@oven/bun-darwin-x64": ["@oven/bun-darwin-x64@1.3.13", "", { "os": "darwin", "cpu": "x64" }, "sha512-kGePeDD4IN4imo+H4uLjQGZLmvyYQg+nKr2P0nt4ksXXrWA4HE+mb0/TUPHfRI127DocXQpew+fvrHuHR5mpJQ=="],
-
-    "@oven/bun-darwin-x64-baseline": ["@oven/bun-darwin-x64-baseline@1.3.13", "", { "os": "darwin", "cpu": "x64" }, "sha512-gMEQayUpmCPYaE9zkNBj9TiQqHupnhjOYcuSzxFjzIjHJBUO4VjNnrpbKVeXNs+rKHFothORDd2QKquu5paSPQ=="],
-
-    "@oven/bun-linux-aarch64": ["@oven/bun-linux-aarch64@1.3.13", "", { "os": "linux", "cpu": "arm64" }, "sha512-NbLOJdr+RBFO1vFZ2YUFg4oVJ+2ua6zrwo4ZWRs0jKKcGJWtbY2wY5uz+i0PkwH6b9HYaYDgVTzE4ev06ncYZw=="],
-
-    "@oven/bun-linux-aarch64-musl": ["@oven/bun-linux-aarch64-musl@1.3.13", "", { "os": "linux", "cpu": "arm64" }, "sha512-UV9EE18VE5aRhWtV2L6MTAGGn3slhJJ2OW/m+FJM15maHm0qf1V7TaZY0FovxhdQRvnklSiQ7Ntv0H5TUX4w0g=="],
-
-    "@oven/bun-linux-x64": ["@oven/bun-linux-x64@1.3.13", "", { "os": "linux", "cpu": "x64" }, "sha512-UwttIUXoe9fS+40OcjoaRHgZw+HCPFqBVWEXkXqAJ3W7wA0XPZrWsoMAD9sGh3TaLqrwdiMo5xPogwpXhOtVXA=="],
-
-    "@oven/bun-linux-x64-baseline": ["@oven/bun-linux-x64-baseline@1.3.13", "", { "os": "linux", "cpu": "x64" }, "sha512-fOi4ziKzgJG4UrrNd4AicBs6Fu9GY5xOqg+9tC76nuZNDAdSh6++kzab6TNi1Ck0Yzq6zIBIdGit6/0uSbBn8A=="],
-
-    "@oven/bun-linux-x64-musl": ["@oven/bun-linux-x64-musl@1.3.13", "", { "os": "linux", "cpu": "x64" }, "sha512-+VHhE44kEjCXcTFHyc81zfTxL9+vzh9RqIh7gM1iWNhxpctD9kzntbUkP3UTFTwwNjoou1o8VRyxQafvc4OepA=="],
-
-    "@oven/bun-linux-x64-musl-baseline": ["@oven/bun-linux-x64-musl-baseline@1.3.13", "", { "os": "linux", "cpu": "x64" }, "sha512-fqBKuiiWLEu2dVkowZaXgKS98xfrvBqivdoxRtRP3eINcpI1dcelGbsOz+Xphn7tbGAuBiE1/0AelvvvdqS9rg=="],
-
-    "@oven/bun-windows-aarch64": ["@oven/bun-windows-aarch64@1.3.13", "", { "os": "win32", "cpu": "arm64" }, "sha512-+EvdRWRCRg95Xea4M2lqSJFTjzQBTJDQTMlbG8bmwFkVTN16MdmSH7xhfxVQWUOyZBLEpIwuNFIlBBxVCwSUyQ=="],
-
-    "@oven/bun-windows-x64": ["@oven/bun-windows-x64@1.3.13", "", { "os": "win32", "cpu": "x64" }, "sha512-vqDEFX63ZZQF3YstPSpPD+RxNm5AILPdUuuKpNwsj7ld4NjhdHUYkAmLXDtKNWt9JMRL10bop//W8faY/LV+RQ=="],
-
-    "@oven/bun-windows-x64-baseline": ["@oven/bun-windows-x64-baseline@1.3.13", "", { "os": "win32", "cpu": "x64" }, "sha512-6gy4hhQSjq/T/S9hC9m3NxY0RY+9Ww+XNlB+8koIMTsMSYEjk7Ho+hFHQz1Bn4W61Ub7Vykufg+jgDgPfa2GFA=="],
 
     "@oxc-resolver/binding-android-arm-eabi": ["@oxc-resolver/binding-android-arm-eabi@11.19.1", "", { "os": "android", "cpu": "arm" }, "sha512-aUs47y+xyXHUKlbhqHUjBABjvycq6YSD7bpxSW7vplUmdzAlJ93yXY6ZR0c1o1x5A/QKbENCvs3+NlY8IpIVzg=="],
 
@@ -1257,8 +1224,6 @@
     "buffer-indexof-polyfill": ["buffer-indexof-polyfill@1.0.2", "", {}, "sha512-I7wzHwA3t1/lwXQh+A5PbNvJxgfo5r3xulgpYDB5zckTu/Z9oUK9biouBKQUjEqzaz3HnAT6TYoovmE+GqSf7A=="],
 
     "buffers": ["buffers@0.1.1", "", {}, "sha512-9q/rDEGSb/Qsvv2qvzIzdluL5k7AaJOTrw23z9reQthrbF7is4CtlT0DXyO1oei2DCp4uojjzQ7igaSHp1kAEQ=="],
-
-    "bun": ["bun@1.3.13", "", { "optionalDependencies": { "@oven/bun-darwin-aarch64": "1.3.13", "@oven/bun-darwin-x64": "1.3.13", "@oven/bun-darwin-x64-baseline": "1.3.13", "@oven/bun-linux-aarch64": "1.3.13", "@oven/bun-linux-aarch64-musl": "1.3.13", "@oven/bun-linux-x64": "1.3.13", "@oven/bun-linux-x64-baseline": "1.3.13", "@oven/bun-linux-x64-musl": "1.3.13", "@oven/bun-linux-x64-musl-baseline": "1.3.13", "@oven/bun-windows-aarch64": "1.3.13", "@oven/bun-windows-x64": "1.3.13", "@oven/bun-windows-x64-baseline": "1.3.13" }, "os": [ "linux", "win32", "darwin", ], "cpu": [ "x64", "arm64", ], "bin": { "bun": "bin/bun.exe", "bunx": "bin/bunx.exe" } }, "sha512-b9T4xZ8KqCHs4+TkHJv540LG1B8OD7noKu0Qaizusx3jFtMDHY6osNqgbaOlwW2B8RB2AKzz+sjzlGKIGxIjZw=="],
 
     "bun-types": ["bun-types@1.3.13", "", { "dependencies": { "@types/node": "*" } }, "sha512-QXKeHLlOLqQX9LgYaHJfzdBaV21T63HhFJnvuRCcjZiaUDpbs5ED1MgxbMra71CsryN/1dAoXuJJJwIv/2drVA=="],
 
@@ -1899,8 +1864,6 @@
     "pg-protocol": ["pg-protocol@1.13.0", "", {}, "sha512-zzdvXfS6v89r6v7OcFCHfHlyG/wvry1ALxZo4LqgUoy7W9xhBDMaqOuMiF3qEV45VqsN6rdlcehHrfDtlCPc8w=="],
 
     "pg-types": ["pg-types@2.2.0", "", { "dependencies": { "pg-int8": "1.0.1", "postgres-array": "~2.0.0", "postgres-bytea": "~1.0.0", "postgres-date": "~1.0.4", "postgres-interval": "^1.1.0" } }, "sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA=="],
-
-    "pgserve": ["pgserve@2.3.0", "", { "dependencies": { "bun": "^1.3.4", "react": "^18.3.1", "react-dom": "^18.3.1" }, "optionalDependencies": { "@embedded-postgres/darwin-arm64": "18.3.0-beta.17", "@embedded-postgres/darwin-x64": "18.3.0-beta.17", "@embedded-postgres/linux-x64": "18.3.0-beta.17", "@embedded-postgres/windows-x64": "18.3.0-beta.17" }, "bin": { "autopg": "bin/autopg-wrapper.cjs", "pgserve": "bin/pgserve-wrapper.cjs" } }, "sha512-Ee4ZQVrwuNhRjaQkpUxHM5LKXcBJ3CaP0YjsvHn09fDGca3+gjwDquGsUZcCLOgYiWiD4MSIp9SgLdqcq4TDuw=="],
 
     "picocolors": ["picocolors@1.1.1", "", {}, "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="],
 

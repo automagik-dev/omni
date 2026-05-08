@@ -4,8 +4,15 @@ import './instrument';
 /**
  * @omni/api - HTTP API Server
  *
- * Entry point for the Omni v2 API server.
- * Uses Bun.serve with embedded pgserve (PostgreSQL 17) for zero-dependency PostgreSQL.
+ * Entry point for the Omni v2 API server. Connects to a peer-supervised
+ * pgserve (PostgreSQL 17) running under pm2 / systemd / launchd. The API
+ * never spawns pgserve in-process — that's what the `pgserve install`
+ * one-shot is for. See the `pgserve-singleton-no-proxy` wish for the
+ * consumer-only model (matches genie's pattern).
+ *
+ * Connection target is read from `DATABASE_URL`, set by the omni CLI
+ * (`packages/cli/src/runtime-env.ts:buildRuntimeEnv`). UDS-first / TCP
+ * fallback is resolved at env-build time.
  */
 
 import { type ChannelRegistry, isVoiceCapable } from '@omni/channel-sdk';
@@ -18,12 +25,12 @@ import {
   closeDb,
   createDb,
   formatDriftReport,
+  getDefaultDatabaseUrl,
   instances,
   verifyCriticalColumns,
 } from '@omni/db';
 import * as Sentry from '@sentry/bun';
 import { eq, sql } from 'drizzle-orm';
-import { resolvePgserveConfig, startEmbeddedPgserve, stopEmbeddedPgserve } from './pgserve';
 
 // Configure logging at startup
 configureLogging({
@@ -370,12 +377,11 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
         await globalEventBus.close();
       }
 
-      // Drain DB connection pool before stopping embedded pgserve
+      // Drain DB connection pool. pgserve is peer-supervised — omni-api
+      // does not own its lifecycle and must not stop it on shutdown
+      // (other consumers — genie, dev tools — share the same socket).
       shutdownLog.info('Closing database connections');
       await closeDb();
-
-      // Stop embedded pgserve last (after all DB consumers are done)
-      await stopEmbeddedPgserve();
 
       // Flush pending Sentry events before exit
       await Sentry.close(5000);
@@ -665,9 +671,19 @@ async function main() {
   // Enable default Node.js metrics (CPU, memory, event loop)
   enableDefaultMetrics();
 
-  // Start embedded pgserve (before DB connection)
-  const pgserveConfig = resolvePgserveConfig();
-  const databaseUrl = await startEmbeddedPgserve(pgserveConfig);
+  // Resolve DATABASE_URL — set by the omni CLI's `buildRuntimeEnv`
+  // (UDS-first / TCP fallback per pgserve-singleton-no-proxy G1). The
+  // legacy embedded-pgserve boot path was removed in this wish; pgserve
+  // is supervised by pm2 / systemd / launchd via `pgserve install` and
+  // omni-api connects as a peer, never spawning the postmaster itself.
+  if (process.env.PGSERVE_EMBEDDED === 'true') {
+    log.warn(
+      'PGSERVE_EMBEDDED=true is set but embedded mode was removed in pgserve-singleton-no-proxy. ' +
+        'Run `omni doctor --fix` (or `pgserve install` directly) to migrate to consumer-only pgserve. ' +
+        'omni-api will continue using DATABASE_URL.',
+    );
+  }
+  const databaseUrl = getDefaultDatabaseUrl();
 
   // Create database connection
   log.info('Connecting to database');
@@ -679,7 +695,6 @@ async function main() {
     log.info('Shutdown during startup — cleaning up');
     try {
       await closeDb();
-      await stopEmbeddedPgserve();
     } catch (err) {
       log.error('Cleanup failed during early shutdown', { error: String(err) });
     } finally {
@@ -694,7 +709,6 @@ async function main() {
     await waitForDatabaseReady(db);
   } catch (error) {
     await closeDb();
-    await stopEmbeddedPgserve();
     throw error;
   }
 
@@ -712,7 +726,6 @@ async function main() {
     ]);
   } catch (error) {
     await closeDb();
-    await stopEmbeddedPgserve();
     throw error;
   }
   log.info('Database migrations complete', { durationMs: Date.now() - migrationStart });
@@ -727,28 +740,24 @@ async function main() {
     if (!driftReport.ok) {
       log.error(formatDriftReport(driftReport), { drift: driftReport.drift });
       await closeDb();
-      await stopEmbeddedPgserve();
       process.exit(1);
     }
   } catch (error) {
     log.error('Schema drift check failed', { error: String(error) });
     await closeDb();
-    await stopEmbeddedPgserve();
     process.exit(1);
   }
 
   // Content-aware boot banner — surfaces the #412 "fresh empty data dir" symptom
   // immediately after migrations. A zero count on a deploy that used to have
   // instances is a red flag: the API is talking to the wrong pgserve data dir.
+  // Pre-singleton, this also gated on the embedded `requireExisting` flag; with
+  // pgserve consumer-only (this wish), the canonical postmaster owns its data
+  // dir and PGSERVE_REQUIRE_EXISTING is no longer read by omni-api.
   try {
     const [countRow] = await db.select({ count: sql<number>`count(*)::int` }).from(instances);
     const rowCount = countRow?.count ?? 0;
     log.info('Post-migration content snapshot', { DB_ROW_COUNT_INSTANCES: rowCount });
-    if (rowCount === 0 && pgserveConfig.requireExisting) {
-      log.error(
-        'PGSERVE_REQUIRE_EXISTING=true but instances table is empty after boot — verify PGSERVE_DATA points at the correct cluster (see #412).',
-      );
-    }
   } catch (error) {
     log.warn('Failed to read instances row count (non-fatal)', { error: String(error) });
   }
