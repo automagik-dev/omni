@@ -174,14 +174,25 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     expect(row.disarmedAt).not.toBeNull();
   });
 
-  test('terminal-disarmed rows (handoff) are not swept by either pass', async () => {
+  test('disarm guard skips terminal-disarmed rows even when nextFireAt is stale (race-condition defense)', async () => {
     // The original "already disarmed rows are not swept" test asserted this
     // for `customer_replied` too — that assumption was the buggy behavior
     // documented in #624. After the fix, terminal disarms (`handoff`,
-    // `session_cleared`, `archived`, `window_expired`) still skip both the
-    // fire-due pass AND the stale-pause re-arm pass; non-terminal
-    // `customer_replied` is now eligible for re-arm (covered by the new
-    // tests below).
+    // `session_cleared`, `archived`, `window_expired`) still skip both
+    // passes; non-terminal `customer_replied` is now eligible for re-arm
+    // (covered by the #624 tests below).
+    //
+    // Why the artificial-looking fixture (nextFireAt: past + disarmReason
+    // set): production `disarmActive()` always nulls `nextFireAt` when it
+    // disarms, so this combination only arises during the narrow race
+    // where the sweeper has SELECTed a row, and a disarm event commits
+    // before the sweeper actually fires. The `isNull(disarmReason)` clause
+    // in `findAndLockDue` is what protects against a stale fire in that
+    // window — without it, a row could be fired AFTER it was disarmed.
+    // This test exercises that guard specifically; without an artificial
+    // stale `nextFireAt`, the date filter would short-circuit before the
+    // disarm guard ran and the test would not catch a regression in the
+    // guard.
     const past = new Date(Date.now() - 60_000);
 
     await db.insert(chatFollowUpState).values({
