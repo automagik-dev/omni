@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | IN-PROGRESS (G1+G6 shipped) |
+| **Status** | IN-PROGRESS (G1+G2+G3+G6 shipped — pgserve dep dropped) |
 | **Slug** | `pgserve-singleton-no-proxy` |
 | **Date** | 2026-05-06 |
 | **Author** | Felipe Rosa <felipe@namastex.ai> |
@@ -180,7 +180,22 @@ bun test packages/api/src/__tests__/db.test.ts
 
 ---
 
-### Group 2: Drop TCP 8432 dependence
+### Group 2: Drop TCP 8432 dependence + drop pgserve runtime dep
+
+**Status:** ✅ pgserve runtime dep DROPPED + embedded boot path DELETED. ⏸ doctor `~/.omni/config.json` 8432→5432 rewrite still pending (lives under G5 tiered doctor).
+
+**Shipped (G2 first half):**
+1. ✅ `packages/api/package.json` — dropped `"pgserve": "^2.1.0"` (the wish's biggest deletion). bun.lock refreshed; 54 transitive packages no longer pulled in by `bun install`.
+2. ✅ `packages/api/src/pgserve.ts` — DELETED (842 lines). The embedded postmaster lifecycle (`startEmbeddedPgserve` / `stopEmbeddedPgserve` / `resolvePgserveConfig` / port-conflict + orphan guards) is now pgserve@>=2.3's responsibility under the singleton model.
+3. ✅ `packages/api/src/__tests__/pgserve.test.ts` — DELETED (675 lines).
+4. ✅ `packages/api/src/vendor.d.ts` — DELETED (the `declare module 'pgserve'` ambient typing is no longer needed).
+5. ✅ `packages/api/src/index.ts` — boot path replaced: `getDefaultDatabaseUrl()` from `@omni/db` instead of `await startEmbeddedPgserve(pgserveConfig)`. All `stopEmbeddedPgserve` calls (shutdown, early-shutdown, migration-failure, drift-failure paths) removed. `PGSERVE_EMBEDDED=true` in env now logs a one-shot deprecation warning and is otherwise a no-op.
+
+**Still pending (G2 second half — moves under G5):**
+- 8432 → 5432 doctor port-rewrite for `~/.omni/config.json`.
+- Audit + replacement of remaining `8432` literals in tests / fixtures / docs.
+
+### Group 2 (legacy): Drop TCP 8432 dependence
 
 **Goal:** Eliminate every `8432` literal in source. Migration auto-rewrites operator config.
 
@@ -206,6 +221,16 @@ bun test packages/cli/src/__tests__/doctor-port-rewrite.test.ts
 ---
 
 ### Group 3: Drop `checkCanonicalPgservePreflight`
+
+**Status:** ✅ SHIPPED.
+
+**Shipped:**
+1. ✅ Deleted `checkCanonicalPgservePreflight` + `isAtOrPastPhase2` + `isPgserveOnPath` + `PHASE_2_CUTOFF_MINOR` from `packages/cli/src/commands/update.ts`.
+2. ✅ Dropped `--skip-canonical-preflight` CLI flag and `skipCanonicalPreflight` UpdateOptions field.
+3. ✅ Deleted `packages/cli/src/__tests__/update-canonical-preflight.test.ts` (139 lines).
+4. The replacement preInstallPeerCheck (G4) will use `lib/requirements.ts` (G6) — already shipped, ready to wire.
+
+### Group 3 (original goal): Drop `checkCanonicalPgservePreflight`
 
 **Goal:** Phase-2 transitional guard removed; phase-3 makes canonical the default.
 
