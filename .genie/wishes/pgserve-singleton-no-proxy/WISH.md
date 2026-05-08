@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT |
+| **Status** | IN-PROGRESS (G1 shipped) |
 | **Slug** | `pgserve-singleton-no-proxy` |
 | **Date** | 2026-05-06 |
 | **Author** | Felipe Rosa <felipe@namastex.ai> |
@@ -154,13 +154,15 @@ See `SHARED-DESIGN.md` §6. omni-specific:
 
 ### Group 1: Tier integration in connection setup
 
+**Status:** Phase A SHIPPED (transport-discovery surface). Phase B (cosign verify + HMAC cache-token + `application_name` propagation) deferred until pgserve@2.3 lands the `pgserve verify` CLI verb.
+
 **Goal:** omni connects to canonical pgserve via Unix socket; reads tier identity via `pgserve verify`; HMAC cache-token short-circuits steady-state.
 
 **Deliverables:**
-1. New `packages/cli/src/lib/pgserve-tier.ts` mirroring genie's helper.
-2. Update `buildRuntimeEnv` in `packages/cli/src/commands/update.ts`: DATABASE_URL with Unix socket default + TCP 5432 fallback.
-3. Update `packages/api/src/db.ts` (or wherever connection lives) similarly.
-4. Tests: cache-token roundtrip, fallback path, application_name propagation.
+1. ✅ New `packages/cli/src/lib/pgserve-transport.ts` mirroring genie's `resolvePgserveTransport` (UDS-first, TCP fallback, `OMNI_PG_FORCE_*` overrides). Companion: `buildDatabaseUrlForTransport` URL builder + `probeCanonicalSocketSync` synchronous probe.
+2. ✅ Update `packages/cli/src/runtime-env.ts:resolveDatabaseUrl`: prefers canonical UDS at `$XDG_RUNTIME_DIR/pgserve/.s.PGSQL.5432` when the socket file exists; legacy phase-2 URL (`localhost:8432`) is now treated as a stale default and re-resolved. Operator-supplied URLs pass through verbatim.
+3. ⏸ Phase B: tier-aware `pgserve verify` invocation in `packages/api/` connection bootstrap (depends on pgserve@2.3 CLI).
+4. ✅ Tests: `packages/cli/src/__tests__/pgserve-transport.test.ts` (15 tests covering path resolution, URL builders, sync probe, force-flag overrides). `runtime-env.test.ts` extended with UDS-preference + legacy-phase-2 re-resolution coverage.
 
 **Acceptance Criteria:**
 - [ ] Default DATABASE_URL uses Unix socket on hosts with canonical pgserve.
