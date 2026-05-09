@@ -71,7 +71,10 @@ jobs:
         run: ./scripts/ensure-nats.sh
 
       - name: Start pgserve
-        run: bunx pgserve --port 8432 --data .pgserve-data --no-cluster &
+        # Pin to ~2.4 (the singleton supervisor entry); pgserve 2.4 dropped
+        # the bare `pgserve --port ... --no-cluster` legacy form (which now
+        # only prints a help banner) in favour of `pgserve serve`.
+        run: bunx pgserve@~2.4.0 serve --port 8432 --data .pgserve-data &
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
@@ -146,7 +149,10 @@ jobs:
         run: ./scripts/ensure-nats.sh
 
       - name: Start pgserve
-        run: bunx pgserve --port 8432 --data .pgserve-data --no-cluster &
+        # Pin to ~2.4 (the singleton supervisor entry); pgserve 2.4 dropped
+        # the bare `pgserve --port ... --no-cluster` legacy form (which now
+        # only prints a help banner) in favour of `pgserve serve`.
+        run: bunx pgserve@~2.4.0 serve --port 8432 --data .pgserve-data &
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
