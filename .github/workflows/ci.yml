@@ -165,6 +165,17 @@ jobs:
           done
           echo "Database failed to start" && exit 1
 
+      - name: Create omni database
+        # pgserve@~2.4 `serve` is the consumer-only singleton supervisor: it
+        # boots the postmaster with the default postgres/template DBs only —
+        # it does NOT auto-provision per-app databases the way the legacy 2.3
+        # multi-tenant router did. omni-api connects to `…/omni`, so create
+        # it explicitly here. In production this is owned by `pgserve install`
+        # / `omni doctor --fix` (see pgserve-singleton-no-proxy wish G2/G5).
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -p 8432 -U postgres -c "CREATE DATABASE omni"
+
       - name: Build all packages
         run: bun run build
 
