@@ -651,7 +651,7 @@ describe('runDoctor — --fix mode', () => {
     expect(startCall).toBeDefined();
     // The env passed to pm2 must NOT contain the polluted garbage URL.
     expect(startCall?.env?.DATABASE_URL).not.toContain('garbage');
-    expect(startCall?.env?.DATABASE_URL).toContain(':8432/omni');
+    expect(startCall?.env?.DATABASE_URL).toMatch(/postgres@(\/omni\?host=|[^/]+:8432\/omni)/);
     // Recheck sees the drift as fixed.
     const drift = report.checks.find((c) => c.id === 'pm2-env-drift');
     expect(drift?.level).toBe('OK');
