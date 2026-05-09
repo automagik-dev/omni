@@ -256,7 +256,9 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     expect(rows).toHaveLength(0);
   });
 
-  test('second disarm on an already-disarmed row is idempotent (no new event)', async () => {
+  test('second non-terminal disarm on an already-disarmed row is idempotent (no new event)', async () => {
+    // Non-terminal disarms remain strictly idempotent. Terminal overrides
+    // (#542) are exercised by the dedicated tests below.
     await service.armForOutbound({
       chatId: testChatId,
       instanceId: testInstanceId,
@@ -271,12 +273,283 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     });
     publishedEvents.length = 0;
 
-    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
+    // sequence_complete is non-terminal → respects the existing
+    // customer_replied row.
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'sequence_complete' });
     expect(publishedEvents).toHaveLength(0);
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
-    // Original reason preserved — the second disarm must not overwrite.
+    // Original reason preserved — non-terminal second disarm must not overwrite.
     expect(row.disarmReason).toBe('customer_replied');
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // #542 — every terminal disarm reason must override non-terminal prior
+  // reasons so the terminal-disarm guard in armForOutbound blocks re-arming
+  // on tail streams. The "Mario leak" pattern is not specific to handoff —
+  // archived / session_cleared / window_expired share the same race.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  test('#542 disarm(handoff) overrides existing customer_replied row', async () => {
+    const armAt = new Date();
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: armAt,
+      config: config(),
+    });
+    const replyAt = new Date(armAt.getTime() + 30_000);
+    await service.disarm({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      reason: 'customer_replied',
+      lastInboundCustomerMessageAt: replyAt,
+    });
+    publishedEvents.length = 0;
+
+    // Operator initiates handoff while row is sitting in customer_replied.
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('handoff');
+    expect(row.nextFireAt).toBeNull();
+    expect(row.disarmedAt).not.toBeNull();
+    expect(publishedEvents.map((e) => e.type)).toContain('follow_up.disarmed');
+    const evt = publishedEvents.find((e) => e.type === 'follow_up.disarmed');
+    expect(evt?.payload.reason).toBe('handoff');
+  });
+
+  test('#542 disarm(handoff) overrides existing sequence_complete row', async () => {
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+      config: config(),
+    });
+    await service.disarm({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      reason: 'sequence_complete',
+    });
+    publishedEvents.length = 0;
+
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('handoff');
+    expect(row.nextFireAt).toBeNull();
+  });
+
+  test('#542 disarm(handoff) does NOT downgrade an already-terminal session_cleared row', async () => {
+    // Strong reasons in TERMINAL_OVERRIDE_PROTECTED win — preserving the
+    // semantically-stronger label and the original disarmedAt timestamp.
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+      config: config(),
+    });
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'session_cleared' });
+    const [before] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    publishedEvents.length = 0;
+
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('session_cleared');
+    expect(row.disarmedAt?.getTime()).toBe(before.disarmedAt?.getTime());
+    expect(publishedEvents.map((e) => e.type)).not.toContain('follow_up.disarmed');
+  });
+
+  test('#542 disarm(handoff) does NOT downgrade a contact_closed row', async () => {
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+      config: config(),
+    });
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'contact_closed' });
+    publishedEvents.length = 0;
+
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('contact_closed');
+    expect(publishedEvents.map((e) => e.type)).not.toContain('follow_up.disarmed');
+  });
+
+  test('#542 disarm(handoff) on a fresh armed row arms-down to handoff (NULL → handoff)', async () => {
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+      config: config(),
+    });
+    publishedEvents.length = 0;
+
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('handoff');
+    expect(row.nextFireAt).toBeNull();
+    expect(publishedEvents.map((e) => e.type)).toContain('follow_up.disarmed');
+  });
+
+  test('#542 re-applying handoff to a handoff row stays idempotent (no duplicate event)', async () => {
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+      config: config(),
+    });
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
+    const [before] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    publishedEvents.length = 0;
+
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('handoff');
+    expect(row.disarmedAt?.getTime()).toBe(before.disarmedAt?.getTime());
+    expect(publishedEvents).toHaveLength(0);
+  });
+
+  test('#542 disarm(archived) overrides existing customer_replied row', async () => {
+    // gemini review: the Mario leak applies to every terminal reason, not
+    // just handoff. Archive on a customer_replied row must advance the
+    // disarm to `archived` so the terminal-disarm guard in armForOutbound
+    // refuses a tail message.sent.
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+      config: config(),
+    });
+    await service.disarm({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      reason: 'customer_replied',
+    });
+    publishedEvents.length = 0;
+
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'archived' });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('archived');
+    expect(row.nextFireAt).toBeNull();
+    expect(publishedEvents.map((e) => e.type)).toContain('follow_up.disarmed');
+  });
+
+  test('#542 disarm(session_cleared) overrides existing customer_replied row', async () => {
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+      config: config(),
+    });
+    await service.disarm({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      reason: 'customer_replied',
+    });
+    publishedEvents.length = 0;
+
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'session_cleared' });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('session_cleared');
+  });
+
+  test('#542 disarm(window_expired) overrides existing sequence_complete row', async () => {
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+      config: config(),
+    });
+    await service.disarm({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      reason: 'sequence_complete',
+    });
+    publishedEvents.length = 0;
+
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'window_expired' });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('window_expired');
+  });
+
+  test('#542 disarm(archived) does NOT downgrade a contact_closed row', async () => {
+    // contact_closed is in TERMINAL_OVERRIDE_PROTECTED — even another
+    // terminal reason cannot rewrite the audit label.
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+      config: config(),
+    });
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'contact_closed' });
+    publishedEvents.length = 0;
+
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'archived' });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('contact_closed');
+  });
+
+  test('#542 production scenario: customer_replied → handoff disarm → tail message.sent does NOT re-arm', async () => {
+    // Reproduces production case 5594992438493 from 2026-04-26: lead replied,
+    // operator handed off, but the row was sitting in customer_replied so the
+    // synchronous disarm was a no-op and a tail message.sent re-armed the
+    // sequence — a follow-up fired ~16 min later. Post-fix the row advances
+    // to handoff and the terminal-disarm guard refuses the re-arm.
+    //
+    // Real-world ordering: customer reply lands first (replyAt ≤ wall-clock),
+    // then handoff fires later. lastInboundCustomerMessageAt must therefore
+    // sit BEFORE both disarmedAt timestamps so the terminal-disarm guard
+    // ("customer hasn't returned since the disarm") fires correctly.
+    const replyAt = new Date(Date.now() - 30_000);
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(replyAt.getTime() - 60_000),
+      config: config(),
+    });
+    await service.disarm({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      reason: 'customer_replied',
+      lastInboundCustomerMessageAt: replyAt,
+    });
+    // Operator handoff fires after the customer reply — wall-clock now.
+    await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
+    publishedEvents.length = 0;
+
+    // Tail-stream chunk lands after the handoff — message.sent fires armForOutbound.
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+      config: config(),
+    });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.disarmReason).toBe('handoff');
+    expect(row.nextFireAt).toBeNull();
+    expect(publishedEvents.map((e) => e.type)).not.toContain('follow_up.armed');
   });
 
   test('resolveConfig returns null when no scope defines a config (G6 columns absent)', async () => {
@@ -452,5 +725,84 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     });
     const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
     expect(rows).toHaveLength(0);
+  });
+
+  test('close-contact guard: hard terminal (closed=true) refuses to arm', async () => {
+    // won/lost outcomes flip closed=true and the dispatcher gate skip is
+    // permanent. The follow-up arm path must also refuse for these so a
+    // tail-stream chunk or NATS redelivery cannot resurrect a sequence.
+    await db
+      .update(chats)
+      .set({ settings: { followUpConfig: config(), closed: true, closeOutcome: 'lost' } })
+      .where(eq(chats.id, testChatId));
+
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+    });
+
+    const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
+    expect(rows).toHaveLength(0);
+  });
+
+  test('close-contact guard: soft cooldown still in window refuses to arm', async () => {
+    // redirected_sac (and other soft outcomes) set closeUntil=now+24h. The
+    // reactive agent stays open per #575, but proactive follow-up nudges
+    // must stay off until the cooldown expires.
+    const closeUntilFuture = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(); // +6h
+    await db
+      .update(chats)
+      .set({
+        settings: {
+          followUpConfig: config(),
+          closeUntil: closeUntilFuture,
+          closeOutcome: 'redirected_sac',
+        },
+      })
+      .where(eq(chats.id, testChatId));
+
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+    });
+
+    const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
+    expect(rows).toHaveLength(0);
+  });
+
+  test('close-contact guard: expired cooldown allows arm even with leftover closeOutcome', async () => {
+    // Once the dispatcher gate observes closeUntil expired it clears the
+    // field; closeOutcome stays as audit data. A customer return after that
+    // is a legitimate new conversation — Eugenia answering it should arm
+    // follow-up like any other reply. The original (closeOutcome-based) check
+    // would have permanently silenced follow-ups on every Hapvida client who
+    // ever hit redirected_sac, even months later when they came back wanting
+    // to buy a brand-new plan.
+    await db
+      .update(chats)
+      .set({
+        settings: {
+          followUpConfig: config(),
+          closed: false,
+          closeUntil: null,
+          closeOutcome: 'redirected_sac', // audit only — predicate ignores this
+        },
+      })
+      .where(eq(chats.id, testChatId));
+
+    await service.armForOutbound({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      lastAgentMessageAt: new Date(),
+    });
+
+    const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].disarmReason).toBeNull();
   });
 });

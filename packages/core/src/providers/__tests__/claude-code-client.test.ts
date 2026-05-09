@@ -153,12 +153,22 @@ describe('ClaudeCodeClient', () => {
     });
 
     it('always sets CLAUDECODE=0 in env even without apiKey', () => {
-      const client = new ClaudeCodeClient({ projectPath: '/test' });
-      const options = getBuildOptions(client)(baseRequest);
+      // buildOptions intentionally inherits process.env, so an ANTHROPIC_API_KEY
+      // present on the host (e.g. when running these tests from inside Claude Code)
+      // would leak into options.env and break the assertion below. Scrub it just
+      // for this case so we're really testing "no config.apiKey ⇒ no key injected".
+      const originalKey = process.env.ANTHROPIC_API_KEY;
+      Reflect.deleteProperty(process.env, 'ANTHROPIC_API_KEY');
+      try {
+        const client = new ClaudeCodeClient({ projectPath: '/test' });
+        const options = getBuildOptions(client)(baseRequest);
 
-      expect(options.env).toBeDefined();
-      expect(options.env.CLAUDECODE).toBe('0');
-      expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
+        expect(options.env).toBeDefined();
+        expect(options.env.CLAUDECODE).toBe('0');
+        expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
+      } finally {
+        if (originalKey !== undefined) process.env.ANTHROPIC_API_KEY = originalKey;
+      }
     });
 
     it('passes request env into Claude Code SDK options', () => {

@@ -2625,6 +2625,103 @@ async function dispatchToAgent(
   );
 }
 
+/** Settings shape consumed by the close-contact + handoff gates below. */
+interface ChatSettingsForGate {
+  agentPaused?: boolean;
+  agentResumedAt?: string;
+  closed?: boolean;
+  closeUntil?: string | null;
+  closeOutcome?: string | null;
+}
+
+/**
+ * Close-contact gate. Returns:
+ *   - `skip`        → caller must `ackHandle.remove()` and return.
+ *   - `reopened`    → soft cooldown expired; state cleaned up. Fall through
+ *                     to dispatch normally; the handoff gate after this
+ *                     should NOT also block on a stale `agentPaused`.
+ *   - `pass`        → no terminal state and no agent-pause requirement;
+ *                     defer to subsequent gates.
+ *
+ * Two distinct mechanisms — keep them decoupled (matching the write side
+ * in `POST /messages/send/close-contact`):
+ *
+ *   - `closed === true` is a HARD terminal (`won`/`lost` outcomes): skip
+ *     permanently. Only `/chats/:id/reopen-contact` clears it.
+ *   - `closeUntil` set + future timestamp is a SOFT cooldown
+ *     (`redirected_sac`, `unqualified`, `no_response`, `other`). The
+ *     follow-up Haiku is disarmed for that window, but the reactive agent
+ *     stays available for inbound replies — a customer asking "I couldn't
+ *     reach the SAC number" deserves a reply, not silence. Pass through.
+ *   - `closeUntil` set + past timestamp: cooldown expired, clean it up
+ *     and report `reopened` so the handoff gate ignores any residual
+ *     `agentPaused` flag.
+ *
+ * Single-writer principle: the dispatcher is the only path that mutates
+ * state on cooldown expiry, and it's also the only consumer that needs to
+ * read it — see design.md §6.3.
+ */
+async function applyCloseContactGate(
+  services: Services,
+  chatRecordId: string | null,
+  instanceId: string,
+  chatId: string,
+  chatSettings: ChatSettingsForGate | null,
+): Promise<'skip' | 'reopened' | 'pass'> {
+  if (chatSettings?.closed === true) {
+    log.debug('Chat closed (terminal), skipping dispatch', {
+      instanceId,
+      chatId,
+      outcome: chatSettings.closeOutcome ?? null,
+    });
+    return 'skip';
+  }
+  if (!chatSettings?.closeUntil) return 'pass';
+
+  const closeUntilMs = new Date(chatSettings.closeUntil).getTime();
+  if (!Number.isFinite(closeUntilMs)) return 'pass';
+  if (Date.now() < closeUntilMs) {
+    // Soft cooldown active: follow-up disarmed, reactive agent stays open.
+    log.debug('Chat in soft close cooldown, follow-up disarmed but agent reactive', {
+      instanceId,
+      chatId,
+      closeUntil: chatSettings.closeUntil,
+      outcome: chatSettings.closeOutcome ?? null,
+    });
+    return 'pass';
+  }
+  if (!chatRecordId) return 'pass';
+
+  // Cooldown expired — clear closeUntil so the gate stops firing and any
+  // residual `agentPaused` (legacy chats from before the decoupling, or
+  // chats where a real human handoff happened on top of a close) gets
+  // explicitly cleared. Report `reopened` so the handoff gate ignores any
+  // stale flag.
+  try {
+    await services.chats.update(chatRecordId, {
+      settings: {
+        ...(chatSettings as Record<string, unknown>),
+        agentPaused: false,
+        closeUntil: null,
+        agentResumedAt: new Date().toISOString(),
+      } as Record<string, unknown>,
+    });
+    log.info('Close cooldown expired, state cleaned', {
+      instanceId,
+      chatId,
+      closeOutcome: chatSettings.closeOutcome ?? null,
+    });
+    return 'reopened';
+  } catch (err) {
+    log.warn('Failed to flip close cooldown state, deferring dispatch', {
+      instanceId,
+      chatId,
+      error: String(err),
+    });
+    return 'skip';
+  }
+}
+
 async function processAgentResponse(
   services: Services,
   instance: DispatchInstance,
@@ -2663,12 +2760,23 @@ async function processAgentResponse(
     return;
   }
 
+  // ── Close-contact gate — runs BEFORE the handoff/agentPaused gate ──
+  // See applyCloseContactGate() for the full semantics.
+  const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const chatSettings = chatRecord?.settings as ChatSettingsForGate | null;
+
+  const gateResult = await applyCloseContactGate(services, chatRecord?.id ?? null, instance.id, chatId, chatSettings);
+  if (gateResult === 'skip') {
+    ackHandle.remove();
+    return;
+  }
+
   // ── Handoff gate — skip dispatch if agent is paused (human takeover active) ──
   // Also drop messages received before the agent was last resumed (NATS redelivery
   // of pre-handoff messages that queue up while agentPaused=true).
-  const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
-  const chatSettings = chatRecord?.settings as { agentPaused?: boolean; agentResumedAt?: string } | null;
-  const isAgentPaused = chatSettings?.agentPaused === true;
+  // After the close-contact gate above, a residual `agentPaused: true` here is a
+  // genuine handoff pause (not a close-contact terminal/cooldown).
+  const isAgentPaused = chatSettings?.agentPaused === true && gateResult !== 'reopened';
   if (isAgentPaused) {
     log.debug('Agent paused (handoff active), skipping dispatch', { instanceId: instance.id, chatId });
     ackHandle.remove();
@@ -3175,7 +3283,7 @@ async function getAgentProvider(
  * Mutates effectiveInstance in-place with values from the Agent entity row.
  * Stamps transient dispatch fields (agentProviderId, agentType, agentInternalId) onto the copy.
  */
-async function applyAgentFkOverrides(
+export async function applyAgentFkOverrides(
   db: Database,
   agentFkId: string,
   effectiveInstance: DispatchInstance,

@@ -32,6 +32,7 @@ import {
 } from '../config.js';
 import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
 import { detectReinstall, installPm2Logrotate, writeSystemdUnit } from '../install-helpers.js';
+import { resolveCanonicalPgservePreference } from '../lib/canonical-pgserve.js';
 import { NATS_BINARY_PATH, ensureNats } from '../nats-install.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, buildPm2StartArgs, getPm2LogDir, isPm2Available, runPm2 } from '../pm2.js';
@@ -158,12 +159,17 @@ function resolveReinstallConfig(options: InstallOptions): ResolvedConfig {
   };
 }
 
-function buildInstallRuntimeEnv(cfg: ResolvedConfig, forceCleanup: boolean): Record<string, string> {
+function buildInstallRuntimeEnv(
+  cfg: ResolvedConfig,
+  forceCleanup: boolean,
+  useCanonicalPgserve: boolean,
+): Record<string, string> {
   const serverConfig: ServerConfig = {
     ...DEFAULT_SERVER_CONFIG,
     port: cfg.port,
     databaseUrl: cfg.databaseUrl,
     dataDir: cfg.dataDir,
+    useCanonicalPgserve,
   };
   const env = buildRuntimeEnv(serverConfig, { apiKey: cfg.apiKey } as Config) as Record<string, string>;
   if (forceCleanup) env.OMNI_PGSERVE_FORCE_CLEANUP = 'true';
@@ -174,7 +180,12 @@ function buildInstallRuntimeEnv(cfg: ResolvedConfig, forceCleanup: boolean): Rec
 // Service start
 // ----------------------------------------------------------------------------
 
-async function startServices(cfg: ResolvedConfig, forceCleanup: boolean, forceSystemd: boolean): Promise<boolean> {
+async function startServices(
+  cfg: ResolvedConfig,
+  forceCleanup: boolean,
+  forceSystemd: boolean,
+  useCanonicalPgserve: boolean,
+): Promise<boolean> {
   if (forceSystemd) {
     writeSystemdUnit(cfg.dataDir);
     return false;
@@ -196,7 +207,7 @@ async function startServices(cfg: ResolvedConfig, forceCleanup: boolean, forceSy
   mkdirSync(getPm2LogDir(), { recursive: true });
   await installPm2Logrotate();
 
-  const runtimeEnv = buildInstallRuntimeEnv(cfg, forceCleanup);
+  const runtimeEnv = buildInstallRuntimeEnv(cfg, forceCleanup, useCanonicalPgserve);
 
   // Delete existing processes so the new hardened flags take effect (reinstall path).
   await runPm2(['delete', PM2_PROCESSES.api]);
@@ -239,7 +250,7 @@ async function startServices(cfg: ResolvedConfig, forceCleanup: boolean, forceSy
 // Persistence, health, handoff
 // ----------------------------------------------------------------------------
 
-function writeConfigFile(cfg: ResolvedConfig): void {
+function writeConfigFile(cfg: ResolvedConfig, useCanonicalPgserve: boolean): void {
   const existing = loadConfig();
   saveConfig({
     ...existing,
@@ -247,7 +258,14 @@ function writeConfigFile(cfg: ResolvedConfig): void {
     apiKey: cfg.apiKey,
     format: existing.format ?? 'human',
   });
-  saveServerConfig({ port: cfg.port, databaseUrl: cfg.databaseUrl, dataDir: cfg.dataDir });
+  saveServerConfig({
+    port: cfg.port,
+    databaseUrl: cfg.databaseUrl,
+    dataDir: cfg.dataDir,
+    // Persist canonical-pgserve choice so subsequent omni restart / doctor
+    // commands honor it without operator passing flags or env vars.
+    useCanonicalPgserve,
+  });
 }
 
 async function checkHealth(port: number): Promise<boolean> {
@@ -345,10 +363,16 @@ async function runInstall(options: InstallOptions): Promise<void> {
   }
 
   await runSystemChecks(cfg.port);
-  await ensureNats();
-  const servicesStarted = await startServices(cfg, forceCleanup, forceSystemd);
 
-  writeConfigFile(cfg);
+  // Canonical pgserve (pgserve@^2.1.0): fresh installs default to canonical;
+  // reinstalls preserve the operator's existing choice. Doctor `--fix` is the
+  // way to migrate an embedded install onto canonical later.
+  const useCanonicalPgserve = await resolveCanonicalPgservePreference(signals.isReinstall, cfg);
+
+  await ensureNats();
+  const servicesStarted = await startServices(cfg, forceCleanup, forceSystemd, useCanonicalPgserve);
+
+  writeConfigFile(cfg, useCanonicalPgserve);
   output.success(`Config written to ${getConfigPath()}`);
 
   if (servicesStarted) await checkHealth(cfg.port);

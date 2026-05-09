@@ -225,6 +225,41 @@
       "when": 1777400000000,
       "tag": "0031_reconcile_gupshup_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1777500000000,
+      "tag": "0032_genie_hosts",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1777590000000,
+      "tag": "0033_close_contact_logs",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1777680000000,
+      "tag": "0034_instances_require_genie_signature",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1777770000000,
+      "tag": "0035_unstick_redirected_sac_terminals",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1777860000000,
+      "tag": "0036_timestamptz_migration",
+      "breakpoints": true
     }
   ]
 }

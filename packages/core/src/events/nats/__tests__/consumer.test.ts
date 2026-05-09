@@ -136,6 +136,25 @@ describe('consumer', () => {
       expect(delay).toBeGreaterThan(0);
       expect(delay).toBeLessThanOrEqual(DEFAULT_CONSUMER_CONFIG.retryDelayMs * 1.1);
     });
+
+    test('always returns an integer', () => {
+      // nats.js multiplies the returned ms by 1e6 to encode nanos; NATS server
+      // unmarshals into Go int64, so fractional values get rejected with
+      // `bad NAK delay value`. Guard the contract at the source.
+      for (let retry = 0; retry <= 5; retry++) {
+        for (let i = 0; i < 50; i++) {
+          const delay = calculateBackoffDelay(retry, 1000);
+          expect(Number.isInteger(delay)).toBe(true);
+        }
+      }
+
+      // Also cover the maxDelay clamp branch.
+      for (let i = 0; i < 50; i++) {
+        const clamped = calculateBackoffDelay(20, 1000, 5000);
+        expect(Number.isInteger(clamped)).toBe(true);
+        expect(clamped).toBeLessThanOrEqual(5000);
+      }
+    });
   });
 
   describe('DEFAULT_CONSUMER_CONFIG', () => {

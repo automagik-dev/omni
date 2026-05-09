@@ -24,6 +24,7 @@ import qrcode from 'qrcode-terminal';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId } from '../resolve.js';
+import { maybeNudgeForGenieBackedAgent } from '../utils/genie-wiring-nudge.js';
 
 const VALID_CHANNELS: Channel[] = [
   'whatsapp-baileys',
@@ -134,6 +135,11 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'twilioWebhookUrl', opts.twilioWebhookUrl);
   setBool(body, 'twilioValidateSignature', opts.twilioValidateSignature);
   setVal(body, 'bridgeTmuxSession', opts.bridgeTmuxSession);
+  // Per-instance signature requirement (omni-host-fingerprint-trust group 6).
+  // Commander pairs `--require-genie-signature` (true) and
+  // `--no-require-genie-signature` (false) automatically when the option is
+  // declared with `--require-genie-signature` syntax.
+  setBool(body, 'requireGenieSignature', opts.requireGenieSignature);
   if (opts.triggerEvents !== undefined) {
     const raw = opts.triggerEvents as string;
     body.triggerEvents = raw === 'null' ? null : raw.split(',').map((s) => s.trim());
@@ -375,6 +381,12 @@ export function createInstancesCommand(): Command {
       '--bridge-tmux-session <name>',
       'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
     )
+    // Per-instance signature requirement (omni-host-fingerprint-trust group 6)
+    .option(
+      '--require-genie-signature',
+      'Require a verified X-Genie-Signature on requests targeting this instance. Bearer-only requests will be rejected with 401.',
+    )
+    .option('--no-require-genie-signature', 'Allow bearer-only requests targeting this instance (default).')
     // Default
     .option('--is-default', 'Set as default instance for channel')
     .action(async (options: Record<string, unknown>) => {
@@ -900,6 +912,12 @@ export function createInstancesCommand(): Command {
       '--bridge-tmux-session <name>',
       'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
     )
+    // Per-instance signature requirement (omni-host-fingerprint-trust group 6)
+    .option(
+      '--require-genie-signature',
+      'Require a verified X-Genie-Signature on requests targeting this instance. Bearer-only requests will be rejected with 401.',
+    )
+    .option('--no-require-genie-signature', 'Allow bearer-only requests targeting this instance (default).')
     .action(async (rawId: string, options: Record<string, unknown>) => {
       const client = getClient();
 
@@ -921,6 +939,17 @@ export function createInstancesCommand(): Command {
         if (Object.keys(body).length > 0) {
           await client.instances.update(id, body);
           output.success(`Instance updated: ${id}`, body);
+
+          // Deprecation nudge — when an operator binds an instance to a
+          // genie-backed agent via `--agent-provider <id>`, they're
+          // recreating step 3 of the legacy 5-command wiring chain.
+          // `omni connect <instance> <agent>` does the same thing in one
+          // step (and creates the provider if it doesn't exist yet).
+          // Best-effort lookup; nudge is stderr-only.
+          const agentProviderId = options.agentProvider as string | undefined;
+          if (agentProviderId && agentProviderId !== 'null') {
+            await maybeNudgeForGenieBackedAgent(client, agentProviderId);
+          }
         } else if (!options.profileName) {
           output.error('No update options provided. Use --help to see all available options.');
         }

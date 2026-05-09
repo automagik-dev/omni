@@ -302,12 +302,12 @@ export const agentProviders = pgTable(
 
     // Health tracking
     isActive: boolean('is_active').notNull().default(true),
-    lastHealthCheck: timestamp('last_health_check'),
+    lastHealthCheck: timestamp('last_health_check', { withTimezone: true }),
     lastHealthStatus: varchar('last_health_status', { length: 20 }), // 'healthy' | 'unhealthy' | 'error'
     lastHealthError: text('last_health_error'),
 
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     nameIdx: index('agent_providers_name_idx').on(table.name),
@@ -344,8 +344,8 @@ export const agents = pgTable(
     agentCard: jsonb('agent_card').$type<Record<string, unknown>>(),
     /** Idle-chat follow-up config at the agent scope (broadest). @see issue #404 */
     followUpConfig: jsonb('follow_up_config').$type<FollowUpSequenceConfig>(),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     nameIdx: index('agents_name_idx').on(table.name),
@@ -424,8 +424,8 @@ export const agentRoutes = pgTable(
     isActive: boolean('is_active').notNull().default(true),
 
     // ---- Timestamps ----
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     // Constraints
@@ -479,11 +479,11 @@ export const agentSessions = pgTable(
     providerSessionData: jsonb('provider_session_data').notNull().$type<Record<string, unknown>>(),
 
     // TTL management
-    lastUsedAt: timestamp('last_used_at').notNull().defaultNow(),
-    expiresAt: timestamp('expires_at'), // null = never expires
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }), // null = never expires
 
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     // Unique constraint: one session per instance+key
@@ -548,15 +548,15 @@ export const apiKeys = pgTable(
     rateLimit: integer('rate_limit'),
 
     // Expiration (null = never expires)
-    expiresAt: timestamp('expires_at'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
 
     // Audit
-    lastUsedAt: timestamp('last_used_at'),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
     lastUsedIp: varchar('last_used_ip', { length: 45 }), // IPv6 max length
     usageCount: integer('usage_count').notNull().default(0),
 
     // Revocation
-    revokedAt: timestamp('revoked_at'),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
     revokedBy: varchar('revoked_by', { length: 255 }),
     revokeReason: text('revoke_reason'),
 
@@ -565,12 +565,12 @@ export const apiKeys = pgTable(
     contextInstanceId: uuid('context_instance_id'),
     contextChatId: uuid('context_chat_id'),
     contextMessageId: uuid('context_message_id'),
-    contextUpdatedAt: timestamp('context_updated_at'),
+    contextUpdatedAt: timestamp('context_updated_at', { withTimezone: true }),
 
     // Timestamps
-    createdAt: timestamp('created_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     createdBy: varchar('created_by', { length: 255 }),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     keyPrefixIdx: index('api_keys_key_prefix_idx').on(table.keyPrefix),
@@ -604,7 +604,7 @@ export const apiKeyAuditLogs = pgTable(
     ipAddress: varchar('ip_address', { length: 45 }),
     userAgent: text('user_agent'),
     responseTimeMs: integer('response_time_ms'),
-    timestamp: timestamp('timestamp').notNull().defaultNow(),
+    timestamp: timestamp('timestamp', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     apiKeyIdx: index('api_key_audit_logs_api_key_idx').on(table.apiKeyId),
@@ -724,7 +724,7 @@ export const instances = pgTable(
     profilePicUrl: text('profile_pic_url'),
     profileBio: text('profile_bio'),
     profileMetadata: jsonb('profile_metadata').$type<Record<string, unknown>>(), // Platform-specific: phone, isBusiness, etc.
-    profileSyncedAt: timestamp('profile_synced_at'),
+    profileSyncedAt: timestamp('profile_synced_at', { withTimezone: true }),
     ownerIdentifier: varchar('owner_identifier', { length: 255 }), // JID for WhatsApp, user ID for Discord, etc.
 
     // ---- Sync Settings ----
@@ -825,13 +825,13 @@ export const instances = pgTable(
 
     // ---- Message Tracking ----
     /** Timestamp of last processed message (for reconnect gap detection) */
-    lastMessageAt: timestamp('last_message_at'),
+    lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
 
     // ---- Agent Replay ----
     /** When true (default), automatically replay missed messages on reconnect */
     replayEnabled: boolean('replay_enabled').notNull().default(true),
     /** Timestamp of when the instance was last seen connected (used as replay window start) */
-    lastSeenAt: timestamp('last_seen_at'),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
 
     // ---- Agent Stalled-Turn Detection (internal event only — no channel message) ----
     /** Idle threshold in ms before a stalled turn emits the internal turn.stalled event */
@@ -866,9 +866,25 @@ export const instances = pgTable(
      */
     bridgeTmuxSession: text('bridge_tmux_session'),
 
+    // ---- Per-instance signature enforcement (omni-host-fingerprint-trust, group 6) ----
+    /**
+     * When true, any request that targets this instance MUST carry a verified
+     * `X-Genie-Signature` (see middleware/genie-signature.ts). Bearer-only
+     * requests get 401 with code `GENIE_SIGNATURE_REQUIRED`.
+     *
+     * Default: false (additive rollout — existing bearer flows keep working
+     * until an operator explicitly opts the instance in via
+     * `omni instances update <id> --require-genie-signature`).
+     *
+     * Pairs with `genie_hosts.scopes` (group 5) to give operators a complete
+     * per-host trust story: which hosts can talk to this instance, and what
+     * each host is allowed to do.
+     */
+    requireGenieSignature: boolean('require_genie_signature').notNull().default(false),
+
     // ---- Timestamps ----
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     nameIdx: uniqueIndex('instances_name_idx').on(table.name),
@@ -899,8 +915,8 @@ export const persons = pgTable(
     primaryEmail: varchar('primary_email', { length: 255 }),
     avatarUrl: text('avatar_url'),
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     phoneIdx: uniqueIndex('persons_phone_idx').on(table.primaryPhone),
@@ -934,8 +950,8 @@ export const platformIdentities = pgTable(
 
     // ---- Activity Tracking ----
     messageCount: integer('message_count').notNull().default(0),
-    lastSeenAt: timestamp('last_seen_at'),
-    firstSeenAt: timestamp('first_seen_at').notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
 
     // ---- Linking Metadata ----
     linkedBy: varchar('linked_by', { length: 50 }), // 'auto' | 'manual' | 'phone_match' | 'initial'
@@ -943,8 +959,8 @@ export const platformIdentities = pgTable(
     linkReason: text('link_reason'),
 
     // ---- Timestamps ----
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     personIdx: index('platform_identities_person_idx').on(table.personId),
@@ -977,8 +993,8 @@ export const conversations = pgTable(
     title: varchar('title', { length: 500 }),
     summary: text('summary'),
     state: jsonb('state').$type<Record<string, unknown>>(),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     createdAtIdx: index('conversations_created_at_idx').on(table.createdAt),
@@ -1028,7 +1044,7 @@ export const chats = pgTable(
     unreadCount: integer('unread_count').notNull().default(0),
 
     // ---- Activity ----
-    lastMessageAt: timestamp('last_message_at'),
+    lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
     lastMessagePreview: text('last_message_preview'),
     lastMessageFromMe: boolean('last_message_from_me'),
     visibility: varchar('visibility', { length: 20 }).notNull().default('visible'),
@@ -1044,10 +1060,10 @@ export const chats = pgTable(
     conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
 
     // ---- Timestamps ----
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
-    archivedAt: timestamp('archived_at'),
-    deletedAt: timestamp('deleted_at'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (table) => ({
     instanceExternalIdx: uniqueIndex('chats_instance_external_idx').on(table.instanceId, table.externalId),
@@ -1094,19 +1110,19 @@ export const chatParticipants = pgTable(
 
     // ---- Status ----
     isActive: boolean('is_active').notNull().default(true),
-    joinedAt: timestamp('joined_at').notNull().defaultNow(),
-    leftAt: timestamp('left_at'),
+    joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
+    leftAt: timestamp('left_at', { withTimezone: true }),
 
     // ---- Activity ----
-    lastSeenAt: timestamp('last_seen_at'),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     messageCount: integer('message_count').notNull().default(0),
 
     // ---- Platform metadata ----
     platformMetadata: jsonb('platform_metadata').$type<Record<string, unknown>>(),
 
     // ---- Timestamps ----
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     chatUserIdx: uniqueIndex('chat_participants_chat_user_idx').on(table.chatId, table.platformUserId),
@@ -1157,9 +1173,9 @@ export const omniGroups = pgTable(
     platformMetadata: jsonb('platform_metadata').$type<Record<string, unknown>>(),
 
     // ---- Sync tracking ----
-    syncedAt: timestamp('synced_at').notNull().defaultNow(),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    syncedAt: timestamp('synced_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     instanceExternalIdx: uniqueIndex('omni_groups_instance_external_idx').on(table.instanceId, table.externalId),
@@ -1254,8 +1270,8 @@ export const messages = pgTable(
     originalText: text('original_text'), // First version (for quick access)
     editHistory: jsonb('edit_history').$type<EditHistoryEntry[]>(),
     // [{ text: "Hello!", at: "2024-01-01T12:00:00Z" }, ...]
-    editedAt: timestamp('edited_at'),
-    deletedAt: timestamp('deleted_at'),
+    editedAt: timestamp('edited_at', { withTimezone: true }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
 
     // === REACTIONS (JSONB - no separate table) ===
     reactions: jsonb('reactions').$type<ReactionInfo[]>(),
@@ -1273,10 +1289,10 @@ export const messages = pgTable(
     // NULL for synced messages - they have no events!
 
     // === TIMESTAMPS ===
-    platformTimestamp: timestamp('platform_timestamp').notNull(), // When platform says sent
-    receivedAt: timestamp('received_at').notNull().defaultNow(), // When we got it
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    platformTimestamp: timestamp('platform_timestamp', { withTimezone: true }).notNull(), // When platform says sent
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(), // When we got it
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     chatExternalIdx: uniqueIndex('messages_chat_external_idx').on(table.chatId, table.externalId),
@@ -1352,10 +1368,10 @@ export const omniEvents = pgTable(
     errorStage: varchar('error_stage', { length: 50 }),
 
     // ---- Timing ----
-    receivedAt: timestamp('received_at').notNull().defaultNow(),
-    processedAt: timestamp('processed_at'),
-    deliveredAt: timestamp('delivered_at'),
-    readAt: timestamp('read_at'),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp('processed_at', { withTimezone: true }),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+    readAt: timestamp('read_at', { withTimezone: true }),
 
     // ---- Processing Metrics ----
     processingTimeMs: integer('processing_time_ms'),
@@ -1369,7 +1385,7 @@ export const omniEvents = pgTable(
 
     // ---- Metadata ----
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     externalIdIdx: index('omni_events_external_id_idx').on(table.externalId),
@@ -1408,7 +1424,7 @@ export const handoffLogs = pgTable(
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
     externalMessageId: varchar('external_message_id', { length: 255 }), // Gupshup message ID
     handoffFields: jsonb('handoff_fields').$type<Record<string, unknown>>(), // structured fields for Gupshup flow variables
-    sentAt: timestamp('sent_at').notNull().defaultNow(),
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
     metadata: jsonb('metadata').$type<Record<string, unknown>>(), // extensible
   },
   (table) => ({
@@ -1417,6 +1433,74 @@ export const handoffLogs = pgTable(
     chatIdIdx: index('handoff_logs_chat_id_idx').on(table.chatId),
     sentAtIdx: index('handoff_logs_sent_at_idx').on(table.sentAt),
     agentIdx: index('handoff_logs_agent_idx').on(table.agentId),
+  }),
+);
+
+// ============================================================================
+// CLOSE CONTACT LOGS
+// ============================================================================
+
+/**
+ * Outcome literals for the close-contact endpoint. Mirrors the
+ * `CloseContactOutcome` union in `@omni/core/events` — kept as a const here
+ * so the column type is statically checked and BI tooling can introspect.
+ *
+ * - `won` / `lost`        → hard terminal close.
+ * - `redirected_sac`      → cliente atual redirected to SAC; soft close.
+ * - `unqualified`         → lead refused N times; soft close.
+ * - `no_response`         → cadence exhausted, no inbound; soft close.
+ * - `other`               → catch-all soft close.
+ */
+export const closeContactOutcomes = ['won', 'lost', 'redirected_sac', 'unqualified', 'no_response', 'other'] as const;
+export type CloseContactOutcomeDb = (typeof closeContactOutcomes)[number];
+
+/**
+ * Records every agent→close-contact event with full payload.
+ *
+ * Written synchronously in the /send/close-contact route. The route also
+ * **reads** this table at close-time to count recent rows for the same
+ * `(chat_uuid, outcome)` within the configured escalation window — that
+ * count drives the auto-promotion of soft outcomes to hard terminal
+ * (recorded back as `escalated: true` on the new row). See `design.md`
+ * §6 + §8.1 for the loop-bound proof.
+ *
+ * Escalation index is `(chat_uuid, outcome, sent_at DESC)` — supports the
+ * recent-count query in O(log n). The instance/sent_at index is for BI.
+ */
+export const closeContactLogs = pgTable(
+  'close_contact_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id').references(() => instances.id, { onDelete: 'set null' }),
+    chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
+    chatId: varchar('chat_id', { length: 255 }).notNull(), // raw JID / phone used as chatId
+    toPhone: varchar('to_phone', { length: 100 }).notNull(), // recipient phone
+    text: text('text').notNull(), // farewell message shown to user
+    outcome: varchar('outcome', { length: 32 }).notNull().$type<CloseContactOutcomeDb>(),
+    reason: text('reason'), // free-text rationale for audit
+    closeFields: jsonb('close_fields').$type<Record<string, unknown>>(), // structured BI/CRM payload
+    agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    externalMessageId: varchar('external_message_id', { length: 255 }), // Gupshup message ID
+    /**
+     * True when this close was auto-promoted to hard terminal because the
+     * same outcome had already fired N times within the escalation window
+     * for the same chat. Driven by the route handler at insert time.
+     */
+    escalated: boolean('escalated').notNull().default(false),
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(), // extensible
+  },
+  (table) => ({
+    /** Hot path: recent-count query for escalation. */
+    chatOutcomeSentAtIdx: index('close_contact_logs_chat_outcome_sent_at_idx').on(
+      table.chatUuid,
+      table.outcome,
+      table.sentAt,
+    ),
+    /** BI: per-instance event timeline. */
+    instanceSentAtIdx: index('close_contact_logs_instance_sent_at_idx').on(table.instanceId, table.sentAt),
+    chatIdIdx: index('close_contact_logs_chat_id_idx').on(table.chatId),
+    agentIdx: index('close_contact_logs_agent_idx').on(table.agentId),
   }),
 );
 
@@ -1445,7 +1529,7 @@ export const accessRules = pgTable(
     priority: integer('priority').notNull().default(0),
     enabled: boolean('enabled').notNull().default(true),
     reason: text('reason'),
-    expiresAt: timestamp('expires_at'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
 
     // ---- Action ----
     action: varchar('action', { length: 20 }).notNull().default('block'), // 'block' | 'allow' | 'silent_block'
@@ -1455,8 +1539,8 @@ export const accessRules = pgTable(
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
 
     // ---- Timestamps ----
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     instanceIdx: index('access_rules_instance_idx').on(table.instanceId),
@@ -1489,8 +1573,8 @@ export const globalSettings = pgTable(
     isRequired: boolean('is_required').notNull().default(false),
     defaultValue: text('default_value'),
     validationRules: jsonb('validation_rules').$type<Record<string, unknown>>(),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     createdBy: varchar('created_by', { length: 255 }),
     updatedBy: varchar('updated_by', { length: 255 }),
   },
@@ -1515,7 +1599,7 @@ export const settingChangeHistory = pgTable(
     oldValue: text('old_value'),
     newValue: text('new_value'),
     changedBy: varchar('changed_by', { length: 255 }),
-    changedAt: timestamp('changed_at').notNull().defaultNow(),
+    changedAt: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
     changeReason: text('change_reason'),
   },
   (table) => ({
@@ -1560,9 +1644,9 @@ export const batchJobs = pgTable(
     errors: jsonb('errors').$type<Array<{ itemId: string; error: string }>>(),
 
     // ---- Timing ----
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    startedAt: timestamp('started_at'),
-    completedAt: timestamp('completed_at'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
   },
   (table) => ({
     statusIdx: index('batch_jobs_status_idx').on(table.status),
@@ -1631,9 +1715,9 @@ export const syncJobs = pgTable(
     errorMessage: text('error_message'),
 
     // ---- Timing ----
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    startedAt: timestamp('started_at'),
-    completedAt: timestamp('completed_at'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
   },
   (table) => ({
     instanceIdx: index('sync_jobs_instance_idx').on(table.instanceId),
@@ -1676,7 +1760,7 @@ export const mediaContent = pgTable(
     batchJobId: uuid('batch_job_id').references(() => batchJobs.id, { onDelete: 'set null' }),
     processingTimeMs: integer('processing_time_ms'),
 
-    createdAt: timestamp('created_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     eventIdx: index('media_content_event_idx').on(table.eventId),
@@ -1702,7 +1786,7 @@ export const chatIdMappings = pgTable(
       .references(() => instances.id, { onDelete: 'cascade' }),
     lidId: varchar('lid_id', { length: 255 }).notNull(), // @lid format
     phoneId: varchar('phone_id', { length: 255 }).notNull(), // @s.whatsapp.net format
-    discoveredAt: timestamp('discovered_at').notNull().defaultNow(),
+    discoveredAt: timestamp('discovered_at', { withTimezone: true }).notNull().defaultNow(),
     discoveredFrom: varchar('discovered_from', { length: 50 }), // 'message_key' | 'sender_match' | 'manual'
   },
   (table) => ({
@@ -1726,9 +1810,9 @@ export const pluginStorage = pgTable(
     pluginId: varchar('plugin_id', { length: 100 }).notNull(),
     key: varchar('key', { length: 500 }).notNull(),
     value: text('value').notNull(), // JSON serialized
-    expiresAt: timestamp('expires_at'),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     pluginKeyIdx: uniqueIndex('plugin_storage_plugin_key_idx').on(table.pluginId, table.key),
@@ -2042,15 +2126,15 @@ export const deadLetterEvents = pgTable(
     // Retry tracking
     autoRetryCount: integer('auto_retry_count').notNull().default(0),
     manualRetryCount: integer('manual_retry_count').notNull().default(0),
-    nextAutoRetryAt: timestamp('next_auto_retry_at'), // null = no more auto-retries
+    nextAutoRetryAt: timestamp('next_auto_retry_at', { withTimezone: true }), // null = no more auto-retries
 
     // Status tracking
     status: varchar('status', { length: 20 }).notNull().default('pending').$type<DeadLetterStatus>(),
 
     // Timestamps
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    lastRetryAt: timestamp('last_retry_at'),
-    resolvedAt: timestamp('resolved_at'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastRetryAt: timestamp('last_retry_at', { withTimezone: true }),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
     resolvedBy: varchar('resolved_by', { length: 100 }), // manual resolution note
   },
   (table) => ({
@@ -2089,8 +2173,8 @@ export const payloadStorageConfig = pgTable(
     storeError: boolean('store_error').notNull().default(true),
 
     retentionDays: integer('retention_days').notNull().default(14),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     eventTypeIdx: uniqueIndex('payload_storage_config_event_type_idx').on(table.eventType),
@@ -2122,12 +2206,12 @@ export const eventPayloads = pgTable(
     payloadSizeCompressed: integer('payload_size_compressed'),
 
     // Metadata
-    timestamp: timestamp('timestamp').notNull().defaultNow(),
+    timestamp: timestamp('timestamp', { withTimezone: true }).notNull().defaultNow(),
     containsMedia: boolean('contains_media').notNull().default(false),
     containsBase64: boolean('contains_base64').notNull().default(false),
 
     // Soft-delete for audit trail
-    deletedAt: timestamp('deleted_at'),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
     deletedBy: varchar('deleted_by', { length: 100 }),
     deleteReason: varchar('delete_reason', { length: 255 }),
   },
@@ -2168,12 +2252,12 @@ export const webhookSources = pgTable(
     enabled: boolean('enabled').notNull().default(true),
 
     // Stats
-    lastReceivedAt: timestamp('last_received_at'),
+    lastReceivedAt: timestamp('last_received_at', { withTimezone: true }),
     totalReceived: integer('total_received').notNull().default(0),
 
     // Timestamps
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     nameIdx: uniqueIndex('webhook_sources_name_idx').on(table.name),
@@ -2334,8 +2418,8 @@ export const automations = pgTable(
     priority: integer('priority').notNull().default(0), // Higher = runs first
 
     // Timestamps
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     nameIdx: index('automations_name_idx').on(table.name),
@@ -2392,7 +2476,7 @@ export const automationLogs = pgTable(
     executionTimeMs: integer('execution_time_ms'),
 
     // Timestamps
-    createdAt: timestamp('created_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     automationIdx: index('automation_logs_automation_idx').on(table.automationId),
@@ -2418,7 +2502,7 @@ export const consumerOffsets = pgTable('consumer_offsets', {
   streamName: varchar('stream_name', { length: 50 }).notNull(),
   lastSequence: integer('last_sequence').notNull().default(0),
   lastEventId: uuid('last_event_id'),
-  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export type ConsumerOffset = typeof consumerOffsets.$inferSelect;
@@ -2583,9 +2667,9 @@ export const agentTasks = pgTable(
     completedSubtaskCount: integer('completed_subtask_count').notNull().default(0),
 
     // ---- Timestamps ----
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-    startedAt: timestamp('started_at'),
-    completedAt: timestamp('completed_at'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
   },
   (table) => ({
     agentIdIdx: index('agent_tasks_agent_id_idx').on(table.agentId),
@@ -2671,9 +2755,9 @@ export const turns = pgTable(
     messagesSent: integer('messages_sent').notNull().default(0),
 
     // ---- Timestamps ----
-    startedAt: timestamp('started_at').notNull().defaultNow(),
-    lastActivityAt: timestamp('last_activity_at').notNull().defaultNow(),
-    closedAt: timestamp('closed_at'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    lastActivityAt: timestamp('last_activity_at', { withTimezone: true }).notNull().defaultNow(),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
 
     // ---- Close info ----
     closedReason: text('closed_reason'),
@@ -2713,6 +2797,20 @@ export const turnsRelations = relations(turns, ({ one }) => ({
 // CHAT FOLLOW-UP STATE (Idle-chat follow-up sequences)
 // ============================================================================
 
+/**
+ * Disarm reason values persisted in `chat_follow_up_state.disarm_reason`.
+ *
+ * The column type is `varchar(32)` — there is NO CHECK constraint or pg
+ * enum at the DB level. Validation lives in the TypeScript layer via
+ * `$type<FollowUpDisarmReasonDb>()` and the matching zod
+ * `DisarmReasonSchema`. Adding a value here is a pure type change; no
+ * migration is needed unless a future revision wants to harden this with
+ * a CHECK or a pg ENUM.
+ *
+ * Keep in sync with:
+ *   - `packages/core/src/events/types.ts` → `FollowUpDisarmReason`
+ *   - `packages/core/src/schemas/follow-up.ts` → `DisarmReasonSchema`
+ */
 export const followUpDisarmReasons = [
   'customer_replied',
   'handoff',
@@ -2722,6 +2820,7 @@ export const followUpDisarmReasons = [
   'agent_error',
   'send_failed',
   'session_cleared',
+  'contact_closed',
 ] as const;
 export type FollowUpDisarmReasonDb = (typeof followUpDisarmReasons)[number];
 
@@ -2824,7 +2923,7 @@ export const processedEvents = pgTable(
   {
     eventId: varchar('event_id', { length: 255 }).notNull(),
     handler: varchar('handler', { length: 100 }).notNull(),
-    processedAt: timestamp('processed_at').notNull().defaultNow(),
+    processedAt: timestamp('processed_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.eventId, table.handler], name: 'processed_events_pk' }),
@@ -2834,3 +2933,74 @@ export const processedEvents = pgTable(
 
 export type ProcessedEvent = typeof processedEvents.$inferSelect;
 export type NewProcessedEvent = typeof processedEvents.$inferInsert;
+
+// ============================================================================
+// GENIE HOSTS — per-host fingerprint trust (omni-host-fingerprint-trust wish, D5)
+// ============================================================================
+
+/**
+ * Per-host trust record for genie installations that talk to this omni server.
+ *
+ * A genie host registers its ed25519 public key once via
+ * `POST /api/v2/trust/handshake` (typically driven by `genie omni handshake`).
+ * Subsequent genie→omni writes can be signed; the verification middleware
+ * (omni-host-fingerprint-trust wish, Group 4) looks the pubkey up here,
+ * verifies the request signature, and attaches the resolved host_id to the
+ * request context for audit.
+ *
+ * This table is the FOUNDATION (Group 1 of the wish). The signing,
+ * verification, and per-host scope enforcement land in subsequent groups.
+ * Today the table just stores data; nothing reads `scopes` for enforcement
+ * yet — that's Group 5.
+ *
+ * `pubkey` is the canonical record key for idempotent registration: handshakes
+ * are deduplicated by pubkey, so re-running `genie omni handshake` returns
+ * the same `host_id` instead of creating duplicates.
+ */
+export const genieHosts = pgTable(
+  'genie_hosts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    /**
+     * ed25519 public key in base64url encoding (~44 chars including padding).
+     * Unique — re-registering the same pubkey returns the existing host_id
+     * (idempotent handshake). Rotation flow will revoke + re-register with a
+     * new pubkey rather than mutating in place.
+     */
+    pubkey: varchar('pubkey', { length: 64 }).notNull().unique(),
+
+    /** Hostname reported by the genie host at handshake time. Display only. */
+    hostname: varchar('hostname', { length: 255 }).notNull(),
+
+    /**
+     * Free-form metadata reported at handshake — `genieVersion`, `os`,
+     * `binaryPath`, etc. Not enforced; useful for audits and operator UIs.
+     */
+    capabilities: jsonb('capabilities').notNull().default(sql`'{}'::jsonb`),
+
+    /**
+     * Per-host scopes consumed by the verification middleware (Group 5).
+     * Default on first handshake = full write access (`['*']`) so the
+     * existing bearer-token model stays backward-compatible during
+     * rollout. Operators narrow via `omni trust update <id> --scope`.
+     */
+    scopes: text('scopes').array().notNull().default(sql`ARRAY['*']::text[]`),
+
+    /** Set by the verification middleware on every successful signed request. */
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+
+    /** Set by `omni trust revoke <id>`. Revoked hosts cannot pass verification. */
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    pubkeyUq: index('genie_hosts_pubkey_idx').on(table.pubkey),
+    activeIdx: index('genie_hosts_active_idx').on(table.revokedAt),
+  }),
+);
+
+export type GenieHost = typeof genieHosts.$inferSelect;
+export type NewGenieHost = typeof genieHosts.$inferInsert;

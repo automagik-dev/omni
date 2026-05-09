@@ -47,6 +47,20 @@ export interface AppVariables {
   services: Services;
   apiKey?: ApiKeyData;
   requestId: string;
+  /**
+   * Genie host id when the request carried a verified `X-Genie-Signature`.
+   * Set by the genieSignatureMiddleware (omni-host-fingerprint-trust wish,
+   * Group 4) and consumed by audit/observability downstream. Absent when
+   * the request was bearer-only or unsigned.
+   */
+  signedBy?: string;
+  /**
+   * Per-host scopes from `genie_hosts.scopes` for the verified host
+   * (Group 5). The scope-enforcer intersects this with the bearer key's
+   * scopes — both must allow the route. Absent when the request was
+   * bearer-only or unsigned (in which case only the bearer's scopes apply).
+   */
+  signedByScopes?: string[];
 }
 
 /**

@@ -33,6 +33,7 @@ import { EventOpsService } from './event-ops';
 import { EventService } from './events';
 import { FollowUpLifecycleService } from './follow-up-lifecycle';
 import { FollowUpSweeperService } from './follow-up-sweeper';
+import { GenieHostsService } from './genie-hosts';
 import { InstanceService } from './instances';
 import { MessageService } from './messages';
 import { PayloadStoreService } from './payload-store';
@@ -79,6 +80,15 @@ export interface Services {
   consumerOffsets: ConsumerOffsetService;
   followUpLifecycle: FollowUpLifecycleService;
   followUpSweeper: FollowUpSweeperService;
+  genieHosts: GenieHostsService;
+  /**
+   * Direct access to the event bus for routes that need to publish
+   * domain events alongside service calls (e.g. /messages/send/close-contact
+   * emits `chat.closed` after the chat-settings patch). Most code should
+   * prefer service-mediated emission; reach for this only when the event
+   * payload is built from route-level state the service doesn't see.
+   */
+  eventBus: EventBus | null;
 }
 
 /**
@@ -106,6 +116,14 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   providerRegistry.register('imagegen', 'gemini', new GeminiImageGenProvider(settings));
   providerRegistry.register('videogen', 'gemini', new GeminiVideoGenProvider(settings));
   providerRegistry.register('vision', 'gemini', new GeminiVisionProvider(settings));
+
+  // #624 — wire sweeper to lifecycle so the stale-pause re-arm pass can
+  // defer per-row arming to the central lifecycle gates. Built outside
+  // the literal to avoid forward-referencing `services.X` inside its own
+  // initializer.
+  const followUpLifecycle = new FollowUpLifecycleService(db, eventBus);
+  const followUpSweeper = new FollowUpSweeperService(db, eventBus);
+  followUpSweeper.setLifecycle(followUpLifecycle);
 
   return {
     agents: new AgentService(db, eventBus),
@@ -135,8 +153,10 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     tts,
     turns: new TurnService(db),
     consumerOffsets: new ConsumerOffsetService(db),
-    followUpLifecycle: new FollowUpLifecycleService(db, eventBus),
-    followUpSweeper: new FollowUpSweeperService(db, eventBus),
+    followUpLifecycle,
+    followUpSweeper,
+    genieHosts: new GenieHostsService(db),
+    eventBus,
   };
 }
 

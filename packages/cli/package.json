@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni",
-  "version": "2.260424.3",
+  "version": "2.260508.4",
   "description": "LLM-optimized CLI for Omni",
   "type": "module",
   "bin": {
@@ -8,16 +8,28 @@
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist", "bin", "db"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    }
+  },
+  "files": ["dist", "bin", "db", "scripts/postinstall-pin-version.cjs"],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun run build:types",
+    "build": "bun run build:sdk-subpath && bun build ./src/index.ts --outdir ./dist --target bun && bun run build:types",
+    "build:sdk-subpath": "cd ../sdk && bun run build && cd ../cli && mkdir -p ./dist/sdk && cp -r ../sdk/dist/. ./dist/sdk/",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "dev": "echo 'CLI package - no dev server (use: bun run ./src/index.ts <command>)'",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "postinstall": "node scripts/postinstall-pin-version.cjs",
     "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
     "clean": "rm -rf dist db",
     "build:server": "bun build src/bundled-server-entry.ts --outdir dist/server --entry-naming 'index.[ext]' --asset-naming '[name].[ext]' --target bun --external @anthropic-ai/claude-agent-sdk --external @snazzah/davey --external libsodium-wrappers --external opusscript --external pdf-parse --external mammoth --external exceljs",

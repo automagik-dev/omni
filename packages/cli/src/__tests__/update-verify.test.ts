@@ -1,9 +1,10 @@
 /**
  * update-verify tests
  *
- * Covers the pure `decideUpdateVerify` decision function that drives the
- * 3-step post-update verification. We do NOT spin up pm2 or a real server
- * here — the caller (runUpdate) is what ties this into the outside world.
+ * Covers the pure `decideVerify` decision function (and its deprecated
+ * alias `decideUpdateVerify`) that drives the 3-step post-update
+ * verification. We do NOT spin up pm2 or a real server here — the caller
+ * (runUpdate) is what ties this into the outside world.
  *
  * Error message strings are also asserted so the exact user-facing text
  * in the wish ("Server version mismatch: ... Run: omni doctor" and
@@ -14,6 +15,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   UPDATE_ERROR_AUTH_INVALID,
   decideUpdateVerify,
+  decideVerify,
   normalizeVersion,
   resolveChannel,
   updateErrorVersionMismatch,
@@ -96,6 +98,37 @@ describe('decideUpdateVerify', () => {
       keyValid: false,
     });
     expect(result).toEqual({ kind: 'auth-invalid' });
+  });
+});
+
+describe('decideVerify (canonical name) — public-shape parity', () => {
+  test('decideUpdateVerify is a pointer-equal alias of decideVerify', () => {
+    expect(decideUpdateVerify).toBe(decideVerify);
+  });
+
+  test('returns skipped { reason: "no-restart" } when skipReason is set', () => {
+    const result = decideVerify({ skipReason: 'no-restart' });
+    expect(result).toEqual({ kind: 'skipped', reason: 'no-restart' });
+  });
+
+  test('returns skipped { reason: "no-verify-flag" } when --no-verify is wired in', () => {
+    const result = decideVerify({ skipReason: 'no-verify-flag' });
+    expect(result).toEqual({ kind: 'skipped', reason: 'no-verify-flag' });
+  });
+
+  test('returns skipped { reason: "no-running-services" } when no pm2 services were online', () => {
+    const result = decideVerify({ skipReason: 'no-running-services' });
+    expect(result).toEqual({ kind: 'skipped', reason: 'no-running-services' });
+  });
+
+  test('full-args path produces same result as decideUpdateVerify (byte-identical)', () => {
+    const args = {
+      latest: '2.20260218.18',
+      apiPort: 8882,
+      healthBody: { status: 'healthy', version: '2.20260218.18' },
+      keyValid: true,
+    } as const;
+    expect(decideVerify(args)).toEqual(decideUpdateVerify(args));
   });
 });
 

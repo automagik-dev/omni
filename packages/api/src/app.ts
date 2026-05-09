@@ -43,7 +43,9 @@ function getAllowedOrigins(): string[] | '*' {
 
 import { authMiddleware, requireInstanceAccess } from './middleware/auth';
 import { defaultBodyLimitMiddleware } from './middleware/body-limit';
+import { genieSignatureMiddleware } from './middleware/genie-signature';
 import { outputRedactorMiddleware } from './middleware/output-redactor';
+import { requireSignedInstanceMiddleware } from './middleware/require-signed-instance';
 import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
 
 import { createContextMiddleware } from './middleware/context';
@@ -149,10 +151,10 @@ export function createApp(
     app.post(
       '/a2a/:instanceId',
       authMiddleware,
-      requireInstanceAccess((c) => c.req.param('instanceId')),
+      requireInstanceAccess((c) => c.req.param('instanceId') ?? ''),
       rateLimitMiddleware,
       async (c) => {
-        const instanceId = c.req.param('instanceId');
+        const instanceId = c.req.param('instanceId') ?? '';
         if (!UUID_REGEX.test(instanceId)) {
           return c.json({ error: 'Invalid instance ID format' }, 400);
         }
@@ -250,6 +252,16 @@ export function createApp(
   // Protected routes
   const protectedApp = new Hono<{ Variables: AppVariables }>();
   protectedApp.use('*', authMiddleware);
+  // Genie host signature verification (omni-host-fingerprint-trust group 4).
+  // Runs BEFORE scope-enforcer so `signedBy`/`signedByScopes` are populated
+  // on the context when scope-enforcer reads them for the per-host scope
+  // intersection added in group 5. Bearer-only requests fall through unchanged.
+  protectedApp.use('*', genieSignatureMiddleware);
+  // Per-instance signature requirement (omni-host-fingerprint-trust group 6).
+  // When `instance.requireGenieSignature = true` is set on the targeted
+  // instance, requests without a verified `signedBy` are rejected with 401.
+  // Default: false (additive rollout).
+  protectedApp.use('*', requireSignedInstanceMiddleware);
   protectedApp.use('*', scopeEnforcerMiddleware);
   protectedApp.use('*', outputRedactorMiddleware);
   protectedApp.use('*', rateLimitMiddleware);

@@ -77,5 +77,6 @@
   },
   "ignoreWorkspaces": ["packages/sdk", "packages/sdk-go", "packages/sdk-python", "packages/audio-decode-shim"],
   "exclude": ["classMembers", "unresolved", "duplicates", "enumMembers"],
+  "ignoreBinaries": ["make"],
   "ignoreExportsUsedInFile": { "interface": true, "type": true }
 }

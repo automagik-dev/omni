@@ -87,6 +87,7 @@ export const CORE_EVENT_TYPES = [
   'chat.idle_timeout',
   'chat.handoff_activated',
   'chat.archived',
+  'chat.closed',
   'follow_up.armed',
   'follow_up.fired',
   'follow_up.skipped',
@@ -670,7 +671,13 @@ export interface AgentTaskCancelledPayload {
  * @see issue #404 — Configurable Idle-Chat Follow-Up Sequences
  */
 
-/** Reasons a follow-up sequence was disarmed. Kept in sync with DisarmReasonSchema in schemas/follow-up.ts. */
+/**
+ * Reasons a follow-up sequence was disarmed.
+ *
+ * Keep in sync with:
+ *   - `packages/core/src/schemas/follow-up.ts` → `DisarmReasonSchema` (zod runtime)
+ *   - `packages/db/src/schema.ts` → `followUpDisarmReasons` const tuple
+ */
 export type FollowUpDisarmReason =
   | 'customer_replied'
   | 'handoff'
@@ -679,7 +686,26 @@ export type FollowUpDisarmReason =
   | 'sequence_complete'
   | 'agent_error'
   | 'send_failed'
-  | 'session_cleared';
+  | 'session_cleared'
+  | 'contact_closed';
+
+/**
+ * Outcome taxonomy for `/messages/send/close-contact`. Drives the
+ * Omni-side terminal/cooldown/escalation logic and the BI/audit trail.
+ *
+ * - `won` / `lost`        → hard terminal, never reopens automatically.
+ * - `redirected_sac`      → soft close (existing customer redirected to SAC).
+ * - `unqualified`         → soft close (lead refused N times).
+ * - `no_response`         → soft close (cadence exhausted, no inbound).
+ * - `other`               → soft close, conservative defaults.
+ *
+ * Hard terminals set `chats.settings.closed = true`. Soft outcomes set
+ * `closeUntil` instead and reopen passively in the dispatcher when a
+ * subsequent inbound arrives after the cooldown. Auto-escalation in the
+ * route handler promotes a soft close to terminal when the chat hits the
+ * configured threshold within the configured window.
+ */
+export type CloseContactOutcome = 'won' | 'lost' | 'redirected_sac' | 'unqualified' | 'no_response' | 'other';
 
 /**
  * Fired when a chat is flagged for human takeover. Any armed follow-up
@@ -707,6 +733,38 @@ export interface ChatArchivedPayload {
   instanceId: string;
   /** Discriminates archive vs. mute at the source — consumers can treat both the same. */
   source: 'archive' | 'mute';
+}
+
+/**
+ * Fired when a chat is closed via `/messages/send/close-contact`.
+ * Any armed follow-up sequence on the chat disarms with reason `contact_closed`.
+ *
+ * The flag layout is outcome-conditional:
+ *   - hard outcomes (`won`/`lost`) and escalated soft outcomes set
+ *     `chats.settings.closed = true` (terminal — only manual reopen reverts);
+ *   - soft outcomes set `chats.settings.closeUntil` (ISO ts) instead, and
+ *     `closed` stays `false` so the dispatcher can passively reopen on
+ *     inbound after the cooldown.
+ *
+ * `escalated: true` indicates this close was auto-promoted to terminal
+ * because the same outcome had already fired N times within the window
+ * for the same chat (audit trail — see `close_contact_logs`).
+ */
+export interface ChatClosedPayload {
+  chatId: string;
+  instanceId: string;
+  /** Agent that was routing the chat at the moment of close, if known. */
+  agentId?: string | null;
+  /** Outcome that drove the terminal/cooldown decision. */
+  outcome: CloseContactOutcome;
+  /** Free-form rationale for audit. */
+  reason?: string | null;
+  /** True when this close was auto-promoted to terminal via escalation. */
+  escalated: boolean;
+  /** Structured BI/CRM payload, when provided. */
+  closedFields?: Record<string, unknown> | null;
+  /** ISO timestamp at which the close was processed by Omni. */
+  closedAt: string;
 }
 
 /** Fired by the sweeper when a due follow-up row is ready for the user-space automation. */
@@ -856,6 +914,7 @@ export interface EventPayloadMap {
   'chat.idle_timeout': ChatIdleTimeoutPayload;
   'chat.handoff_activated': ChatHandoffActivatedPayload;
   'chat.archived': ChatArchivedPayload;
+  'chat.closed': ChatClosedPayload;
   'follow_up.armed': FollowUpArmedPayload;
   'follow_up.fired': FollowUpFiredPayload;
   'follow_up.skipped': FollowUpSkippedPayload;

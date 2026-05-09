@@ -22,7 +22,7 @@ const log = createLogger('api:instances');
 const instancesRoutes = new Hono<{ Variables: AppVariables }>();
 
 // Instance access middleware for :id routes
-const instanceAccess = requireInstanceAccess((c) => c.req.param('id'));
+const instanceAccess = requireInstanceAccess((c) => c.req.param('id') ?? '');
 
 // Query params schema for list
 const listQuerySchema = z.object({
@@ -214,6 +214,15 @@ const createInstanceSchema = z.object({
     .describe(
       'Tmux session name the genie bridge will spawn into for this instance. Propagated via NATS env as GENIE_TMUX_SESSION. Null clears the override (genie falls back to its agent-level or name-based default). Max 64 chars, `[A-Za-z0-9_.-]` only.',
     ),
+  // Per-instance signature enforcement (omni-host-fingerprint-trust group 6).
+  // Optional + default(false) — additive rollout: existing bearer flows keep
+  // working until an operator explicitly opts in.
+  requireGenieSignature: z
+    .boolean()
+    .default(false)
+    .describe(
+      'When true, requests targeting this instance MUST carry a verified X-Genie-Signature. Bearer-only requests get 401. Default: false (additive rollout).',
+    ),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
@@ -259,6 +268,9 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   messageSplitDelayMinMs: z.number().int().min(0).optional(),
   messageSplitDelayMaxMs: z.number().int().min(0).optional(),
   twilioValidateSignature: z.boolean().optional(),
+  // Strip the .default(false) from the create-time schema so a PATCH that
+  // omits this key doesn't silently flip the stored value back to false.
+  requireGenieSignature: z.boolean().optional(),
 });
 
 /**

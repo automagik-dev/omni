@@ -42,6 +42,18 @@ step()  { printf "\n${BOLD}${CYAN}▸ %s${NC}\n" "$*"; }
 
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+# Read persisted update channel from ~/.omni/config.json. If the user previously
+# ran `omni update --next`, we honor that on reinstall rather than silently
+# downgrading them to @latest. Defaults to `latest` when no config exists.
+omni_channel() {
+  local cfg="$HOME/.omni/config.json"
+  if [[ -f "$cfg" ]] && grep -q '"updateChannel"[[:space:]]*:[[:space:]]*"next"' "$cfg" 2>/dev/null; then
+    printf 'next'
+  else
+    printf 'latest'
+  fi
+}
+
 # ============================================================================
 # Parse args
 # ============================================================================
@@ -123,10 +135,11 @@ fi
 # ============================================================================
 
 step "Installing @automagik/omni"
-info "Trying npm package (fast path)..."
-if [[ "${SKIP_NPM:-}" != "1" ]] && bun add -g @automagik/omni 2>/dev/null && has_cmd omni; then
+CHANNEL="$(omni_channel)"
+info "Trying npm package (fast path, channel: ${CHANNEL})..."
+if [[ "${SKIP_NPM:-}" != "1" ]] && bun add -g "@automagik/omni@${CHANNEL}" 2>/dev/null && has_cmd omni; then
   INSTALLED_VERSION=$(omni --version 2>/dev/null || echo "unknown")
-  ok "@automagik/omni ${INSTALLED_VERSION} installed"
+  ok "@automagik/omni ${INSTALLED_VERSION} installed (channel: ${CHANNEL})"
 
   # PATH check (reuse existing logic)
   if ! echo "$PATH" | grep -q "$(bun pm bin -g 2>/dev/null || echo '__none__')"; then

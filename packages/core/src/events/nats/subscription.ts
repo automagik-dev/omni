@@ -224,6 +224,9 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
   return {
     id: subscriptionId,
     pattern,
+    isAlive(): boolean {
+      return isActive;
+    },
     async unsubscribe(): Promise<void> {
       isActive = false;
       abortController.abort();

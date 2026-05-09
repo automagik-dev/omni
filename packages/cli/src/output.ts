@@ -106,6 +106,27 @@ export function warn(message: string): void {
   }
 }
 
+/**
+ * Output a deprecation tip / nudge — ALWAYS to stderr regardless of format.
+ *
+ * Unlike `info` / `warn`, this never goes to stdout so CI scripts that grep
+ * stdout for command output remain unaffected. Use for "prefer X over Y"
+ * hints on legacy command paths that still work but are being deprioritized
+ * (e.g., the manual nats-genie wiring chain — operators should use
+ * `omni connect` or `/genie:omni` instead).
+ */
+export function tip(message: string): void {
+  const format = getCurrentFormat();
+
+  if (format === 'json') {
+    // biome-ignore lint/suspicious/noConsole: CLI output
+    console.error(JSON.stringify({ tip: message }));
+  } else {
+    // biome-ignore lint/suspicious/noConsole: CLI output (stderr by design)
+    console.error(`${c().cyan('💡')} ${message}`);
+  }
+}
+
 /** Output info message. In JSON mode, writes to stderr to keep stdout as valid JSON. */
 export function info(message: string): void {
   const format = getCurrentFormat();

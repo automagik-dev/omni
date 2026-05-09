@@ -511,5 +511,117 @@ export function createMessagesCommand(): Command {
       }
     });
 
+  // omni messages close-contact — terminal close for a chat (parallel to handoff).
+  // Wraps POST /api/v2/messages/send/close-contact. Use cases: cliente atual SAC,
+  // sale closed by agent, lead refused N times, lead asked to be removed.
+  messages
+    .command('close-contact')
+    .description(
+      'Close a chat terminally (won/lost) or with a soft cooldown (redirected_sac/unqualified/no_response/other)',
+    )
+    .requiredOption('--instance <id>', 'Instance ID')
+    .requiredOption('--chat <chatId>', 'Chat DB UUID to close')
+    .requiredOption('--to <recipient>', 'Recipient phone or platform ID')
+    .requiredOption('--text <text>', 'Farewell message shown to the lead')
+    .requiredOption('--outcome <outcome>', 'Outcome: won | lost | redirected_sac | unqualified | no_response | other')
+    .option('--reason <reason>', 'Free-text rationale persisted in close_contact_logs')
+    .option('--close-fields <jsonOrPath>', 'Structured BI/CRM payload — inline JSON or path to a JSON file')
+    .action(handleCloseContact);
+
   return messages;
+}
+
+const VALID_CLOSE_OUTCOMES = ['won', 'lost', 'redirected_sac', 'unqualified', 'no_response', 'other'] as const;
+
+interface CloseContactOptions {
+  instance: string;
+  chat: string;
+  to: string;
+  text: string;
+  outcome: string;
+  reason?: string;
+  closeFields?: string;
+}
+
+async function parseCloseFields(raw: string): Promise<Record<string, unknown>> {
+  // Try parsing as inline JSON first; fall back to reading a file.
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{')) {
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  }
+  const fs = await import('node:fs/promises');
+  const text = await fs.readFile(trimmed, 'utf-8');
+  return JSON.parse(text) as Record<string, unknown>;
+}
+
+interface CloseContactResult {
+  messageId?: string;
+  terminal?: boolean;
+  closeUntil?: string | null;
+  escalated?: boolean;
+}
+
+async function postCloseContact(body: Record<string, unknown>): Promise<CloseContactResult> {
+  const _cfg = (await import('../config.js')).loadConfig();
+  const baseUrl = _cfg.apiUrl ?? 'http://localhost:8882';
+  const apiKey = _cfg.apiKey ?? '';
+
+  const resp = await fetch(`${baseUrl}/api/v2/messages/send/close-contact`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const err = (await resp.json().catch(() => ({}))) as { error?: { message?: string } | string };
+    const errMsg = typeof err.error === 'string' ? err.error : (err.error?.message ?? `API error: ${resp.status}`);
+    throw new Error(errMsg);
+  }
+  const data = (await resp.json()) as { data?: CloseContactResult };
+  return data.data ?? {};
+}
+
+async function buildCloseContactBody(options: CloseContactOptions): Promise<Record<string, unknown> | null> {
+  let closeFields: Record<string, unknown> | undefined;
+  if (options.closeFields) {
+    try {
+      closeFields = await parseCloseFields(options.closeFields);
+    } catch (err) {
+      output.error(`Failed to parse --close-fields: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      return null;
+    }
+  }
+
+  const instanceId = await resolveInstanceId(options.instance);
+  const resolvedChatId = await resolveChatId(options.chat);
+
+  const body: Record<string, unknown> = {
+    instanceId,
+    chatId: resolvedChatId,
+    to: options.to,
+    text: options.text,
+    outcome: options.outcome,
+  };
+  if (options.reason) body.reason = options.reason;
+  if (closeFields) body.closeFields = closeFields;
+  return body;
+}
+
+async function handleCloseContact(options: CloseContactOptions): Promise<void> {
+  if (!(VALID_CLOSE_OUTCOMES as readonly string[]).includes(options.outcome)) {
+    output.error(`Invalid --outcome '${options.outcome}'. Must be one of: ${VALID_CLOSE_OUTCOMES.join(', ')}`);
+    return;
+  }
+
+  try {
+    const body = await buildCloseContactBody(options);
+    if (!body) return; // already errored out
+
+    const result = await postCloseContact(body);
+    const cooldownPart = result.closeUntil ? `, closeUntil=${result.closeUntil}` : '';
+    output.success(
+      `Chat closed (${options.outcome}): terminal=${result.terminal ?? false}, escalated=${result.escalated ?? false}${cooldownPart}`,
+    );
+  } catch (err) {
+    output.error(`Failed to close contact: ${err instanceof Error ? err.message : 'Unknown error'}`);
+  }
 }

@@ -956,12 +956,17 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
           // Only update counters we actually have from Baileys. Never reset
           // stored/duplicates/mediaDownloaded to 0 — ingestion updates them
           // separately and they must not be clobbered by a progress event.
-          const update: Partial<SyncJobProgress> = {
-            fetched: payload.fetched ?? 0,
-          };
-          if (typeof payload.progress === 'number' && payload.progress > 0) {
-            update.totalEstimated = Math.round((payload.fetched ?? 0) / (payload.progress / 100));
+          // `fetched` is also preserved when absent: a progress event missing
+          // the counter must not reset the stored value to 0.
+          const update: Partial<SyncJobProgress> = {};
+          if (typeof payload.fetched === 'number') {
+            update.fetched = payload.fetched;
           }
+          if (typeof payload.progress === 'number' && payload.progress > 0 && typeof payload.fetched === 'number') {
+            update.totalEstimated = Math.round(payload.fetched / (payload.progress / 100));
+          }
+
+          if (Object.keys(update).length === 0) return;
 
           await services.syncJobs.updateProgress(historyPushJob.id, update);
 
