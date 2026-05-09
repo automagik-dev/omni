@@ -193,6 +193,86 @@ export class FollowUpLifecycleService {
   }
 
   /**
+   * Re-arm a `customer_replied` row anchored on the customer's last inbound
+   * timestamp. Used by the sweeper's stale-pause pass (#624): when the
+   * customer replied, the row was disarmed with `reason='customer_replied'`,
+   * but if the agent never produced a follow-up `message.sent` (any
+   * combination of `senderAgentId` plumbing skip, dispatcher error, content
+   * filter reject, manual pause without `chat.handoff_activated`, chatId
+   * mismatch from #536, or condition-engine silent skip from #566), the row
+   * stays disarmed indefinitely and the lead is silently abandoned.
+   *
+   * Mirrors `armForOutbound`'s gates: close-state, config resolution,
+   * terminal-disarm guard. Differs in two ways:
+   *  - The schedule anchor is the customer's inbound timestamp, not an
+   *    outbound — there is no fresh `message.sent` event driving this path.
+   *    `lastAgentMessageAt` on the persisted row is set to the inbound
+   *    timestamp; the next genuine outbound (if any) overwrites it.
+   *  - There is no per-message staleness check — the sweeper applies a
+   *    `<max_pause>` upper bound at the SQL level so this method only sees
+   *    rows fresh enough to re-arm.
+   *
+   * The terminal-disarm guard already short-circuits when the row's
+   * `disarmReason` is in `TERMINAL_DISARM_REASONS` (handoff / archived /
+   * session_cleared / window_expired). `customer_replied` is intentionally
+   * NOT terminal — see lifecycle.ts:54-58 — so the guard returns false and
+   * we proceed to re-arm.
+   */
+  async armForInbound(input: {
+    chatId: string;
+    instanceId: string;
+    agentId: string | null;
+    config?: FollowUpSequenceConfig;
+    lastInboundCustomerMessageAt: Date;
+  }): Promise<void> {
+    if (!this.eventBus) return;
+
+    if (await this.isInActiveCloseState(input.chatId, input.instanceId)) return;
+
+    const config = input.config ?? (await this.resolveConfig(input.chatId, input.instanceId, input.agentId));
+    if (!config || config.enabled === false) return;
+
+    if (
+      await this.shouldRefuseForTerminalDisarm({
+        chatId: input.chatId,
+        instanceId: input.instanceId,
+        lastAgentMessageAt: input.lastInboundCustomerMessageAt,
+      })
+    ) {
+      return;
+    }
+
+    try {
+      await armSequence(
+        { repo: this.repo, eventBus: this.eventBus, logger: this.logger },
+        {
+          chatId: input.chatId,
+          instanceId: input.instanceId,
+          agentId: input.agentId,
+          config,
+          // Anchor the schedule on the inbound timestamp. The persisted
+          // `lastAgentMessageAt` will reflect this; that's intentional —
+          // `nextFireAt = inbound + intervalsMinutes[0]` is what matters
+          // for the sweeper, and the field's name lies for at most one
+          // outbound, which then overwrites it via `armForOutbound`.
+          lastAgentMessageAt: input.lastInboundCustomerMessageAt,
+        },
+      );
+      this.logger.info('follow-up lifecycle: re-armed from inbound', {
+        chatId: input.chatId,
+        instanceId: input.instanceId,
+        lastInboundCustomerMessageAt: input.lastInboundCustomerMessageAt.toISOString(),
+      });
+    } catch (err) {
+      this.logger.error('follow-up lifecycle: armForInbound failed', {
+        chatId: input.chatId,
+        instanceId: input.instanceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
    * Record an inbound customer message timestamp on an existing row
    * regardless of its disarm state. Used by the inbound hook so a
    * terminally-disarmed row can be "reactivated" for arming when the

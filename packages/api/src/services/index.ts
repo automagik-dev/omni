@@ -117,6 +117,14 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   providerRegistry.register('videogen', 'gemini', new GeminiVideoGenProvider(settings));
   providerRegistry.register('vision', 'gemini', new GeminiVisionProvider(settings));
 
+  // #624 — wire sweeper to lifecycle so the stale-pause re-arm pass can
+  // defer per-row arming to the central lifecycle gates. Built outside
+  // the literal to avoid forward-referencing `services.X` inside its own
+  // initializer.
+  const followUpLifecycle = new FollowUpLifecycleService(db, eventBus);
+  const followUpSweeper = new FollowUpSweeperService(db, eventBus);
+  followUpSweeper.setLifecycle(followUpLifecycle);
+
   return {
     agents: new AgentService(db, eventBus),
     agentState: new AgentStateService(eventBus),
@@ -145,8 +153,8 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     tts,
     turns: new TurnService(db),
     consumerOffsets: new ConsumerOffsetService(db),
-    followUpLifecycle: new FollowUpLifecycleService(db, eventBus),
-    followUpSweeper: new FollowUpSweeperService(db, eventBus),
+    followUpLifecycle,
+    followUpSweeper,
     genieHosts: new GenieHostsService(db),
     eventBus,
   };
