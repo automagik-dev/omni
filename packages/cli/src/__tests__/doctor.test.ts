@@ -26,6 +26,14 @@ import { type DoctorDeps, runDoctor } from '../commands/doctor.js';
 import type { Config, ServerConfig } from '../config.js';
 import { DEFAULT_PGSERVE_PORT, buildRuntimeEnv } from '../runtime-env.js';
 
+// Neutralize host XDG_RUNTIME_DIR so the synchronous canonical-pgserve socket
+// probe in runtime-env.ts (`probeCanonicalSocketSync`) returns false. Without
+// this pin, the suite emits the UDS-form DATABASE_URL on dev hosts that have
+// `pgserve install`-ed locally, and the legacy-fallback (TCP `:8432/omni`)
+// assertions below fail. CI runners have no canonical socket so they were
+// always green; this just makes dev hosts match.
+process.env.XDG_RUNTIME_DIR = join(tmpdir(), 'omni-doctor-test-no-xdg');
+
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
