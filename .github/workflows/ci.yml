@@ -71,7 +71,10 @@ jobs:
         run: ./scripts/ensure-nats.sh
 
       - name: Start pgserve
-        run: bunx pgserve --port 8432 --data .pgserve-data --no-cluster &
+        # Pin to ~2.4 (the singleton supervisor entry); pgserve 2.4 dropped
+        # the bare `pgserve --port ... --no-cluster` legacy form (which now
+        # only prints a help banner) in favour of `pgserve serve`.
+        run: bunx pgserve@~2.4.0 serve --port 8432 --data .pgserve-data &
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
@@ -146,7 +149,10 @@ jobs:
         run: ./scripts/ensure-nats.sh
 
       - name: Start pgserve
-        run: bunx pgserve --port 8432 --data .pgserve-data --no-cluster &
+        # Pin to ~2.4 (the singleton supervisor entry); pgserve 2.4 dropped
+        # the bare `pgserve --port ... --no-cluster` legacy form (which now
+        # only prints a help banner) in favour of `pgserve serve`.
+        run: bunx pgserve@~2.4.0 serve --port 8432 --data .pgserve-data &
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
@@ -158,6 +164,17 @@ jobs:
               echo "Database ready" && exit 0 || sleep 1
           done
           echo "Database failed to start" && exit 1
+
+      - name: Create omni database
+        # pgserve@~2.4 `serve` is the consumer-only singleton supervisor: it
+        # boots the postmaster with the default postgres/template DBs only —
+        # it does NOT auto-provision per-app databases the way the legacy 2.3
+        # multi-tenant router did. omni-api connects to `…/omni`, so create
+        # it explicitly here. In production this is owned by `pgserve install`
+        # / `omni doctor --fix` (see pgserve-singleton-no-proxy wish G2/G5).
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -p 8432 -U postgres -c "CREATE DATABASE omni"
 
       - name: Build all packages
         run: bun run build
