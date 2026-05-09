@@ -42,19 +42,29 @@ Add OpenTelemetry tracing to Omni so a single customer message produces a distri
 Add an **optional** `observability` field to the provider interface at `packages/core/src/providers/types.ts`:
 
 ```ts
+export interface TraceContext {
+  /** W3C trace-id — 32 hex chars (16 bytes). */
+  traceId: string;
+  /** W3C span-id of the current span — 16 hex chars (8 bytes). */
+  spanId: string;
+  /** Optional parent span-id for nested propagation. */
+  parentSpanId?: string;
+  /** W3C trace flags (1 = sampled, 0 = not). Default 1 when unset. */
+  traceFlags?: number;
+}
+
 export interface IAgentProvider {
   // ... existing fields ...
 
   /**
    * Optional observability hooks. Providers that don't implement this fall
-   * back to no-op behavior. Backend-agnostic — accepts any OTel exporter.
+   * back to no-op behavior. Backend-neutral — emitted spans flow through
+   * whatever OTel SDK the host configured via `OTEL_*` env vars; no vendor
+   * SDK is coupled in the producer source.
    */
   observability?: {
     /** Called when an inbound trace context is available; the provider should propagate it to its outbound calls. */
-    propagateTrace(ctx: { traceId: string; spanId: string; parentSpanId?: string }): void;
-
-    /** Optional OTLP exporter the provider can use for spans it generates internally. */
-    readonly exporter: OTLPSpanExporter | null;
+    propagateTrace(ctx: TraceContext): void;
 
     /** Health probe — returns whether the provider is processing inbound work. */
     heartbeat(): Promise<{ healthy: boolean; lastProcessedAt?: Date; backlog?: number }>;
@@ -165,7 +175,7 @@ Whichever HTTP client the agent dispatcher uses to call providers (Agno, etc.). 
 
 ## Success Criteria
 
-- [ ] **2.1.a** `IAgentProvider` interface in `packages/core/src/providers/types.ts` has optional `observability` field with the 3 methods (`propagateTrace`, `exporter`, `heartbeat`)
+- [ ] **2.1.a** `IAgentProvider` interface in `packages/core/src/providers/types.ts` has optional `observability` field with 2 methods (`propagateTrace`, `heartbeat`) and a `TraceContext` interface that includes `traceFlags`
 - [ ] **2.1.b** Type definition compiles; existing providers (NatsGenieProvider, AgnoHttpProvider, etc.) unchanged and still pass typecheck
 - [ ] **2.1.c** Unit test: provider without `observability` field → consuming code calls fallback noop without throwing
 - [ ] **2.2.a** `@opentelemetry/sdk-node` is a direct dep in the right package.json

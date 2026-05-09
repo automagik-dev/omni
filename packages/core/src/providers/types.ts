@@ -327,8 +327,9 @@ export interface ProviderObservability {
    *
    * The provider SHOULD propagate it on any outbound calls it makes:
    * - HTTP requests: inject `traceparent` header
-   * - NATS publishes: inject `traceparent` AND custom `x-trace-id`/`x-span-id`
-   *   headers (forward-compat with khal-os o11y consumer)
+   * - NATS publishes: inject `traceparent` AND custom
+   *   `x-trace-id`/`x-span-id`/`x-parent-span-id` headers (forward-compat
+   *   with khal-os o11y consumer)
    * - Subprocess spawns: pass through env vars if the child reads them
    */
   propagateTrace(ctx: TraceContext): void;
