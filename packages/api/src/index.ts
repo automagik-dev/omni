@@ -1,6 +1,12 @@
 // Sentry must be initialised before all other imports for auto-instrumentation
 import './instrument';
 
+// OpenTelemetry SDK — backend-neutral tracing. No-op when
+// OTEL_EXPORTER_OTLP_ENDPOINT is unset. Imported here (right after Sentry)
+// so HTTP auto-instrumentation can monkey-patch http/https globals before
+// any application code uses them. See ./tracing.ts.
+import './tracing';
+
 /**
  * @omni/api - HTTP API Server
  *
