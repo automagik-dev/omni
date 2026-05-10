@@ -75,5 +75,3 @@ if (endpoint) {
   process.once('SIGTERM', shutdown);
   process.once('SIGINT', shutdown);
 }
-
-export { sdk as otelSdk };
