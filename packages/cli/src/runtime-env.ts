@@ -28,12 +28,7 @@
 
 import { join } from 'node:path';
 import type { Config, ServerConfig } from './config.js';
-import {
-  CANONICAL_PG_PORT,
-  buildDatabaseUrlForTransport,
-  probeCanonicalSocketSync,
-  resolvePgserveSocketDir,
-} from './lib/pgserve-transport.js';
+import { CANONICAL_PG_PORT, probeCanonicalSocketSync } from './lib/pgserve-transport.js';
 
 /**
  * Environment object suitable for passing to `runPm2` as `envOverrides`
@@ -88,16 +83,33 @@ export function buildEmbeddedDatabaseUrl(pgservePort: number = DEFAULT_PGSERVE_P
 }
 
 /**
- * Build the canonical UDS-mode `DATABASE_URL`. postgres.js / libpq accept
- * the `host=<dir>&port=<n>` query-param form to dial a Unix socket at
- * `<dir>/.s.PGSQL.<n>`. Used by {@link resolveDatabaseUrl} when the
- * canonical socket file is present at boot.
+ * Build the TCP-form `DATABASE_URL` that points at the canonical singleton
+ * postmaster's loopback listener (`127.0.0.1:5432`). Emitted by
+ * {@link resolveDatabaseUrl} when {@link probeCanonicalSocketSync} confirms
+ * a live pgserve postmaster.
+ *
+ * Why TCP instead of the libpq UDS shape (`postgresql://...@/db?host=...`):
+ *   1. The empty-host UDS form is **not** accepted by the WHATWG `new URL()`
+ *      parser — bun (and node) throw `TypeError [ERR_INVALID_URL]`. Several
+ *      api-startup paths run the URL through `new URL()` for redaction /
+ *      logging before postgres.js ever sees it, so the api crash-loops on
+ *      startup and the operator sees `<redacted> cannot be parsed as a URL`.
+ *   2. `postgres@^3` (the api's driver) does not honor `?host=<dir>` in the
+ *      URL query string — its parser only reads `url.hostname`, falls back
+ *      to `env.PGHOST`, and treats values containing `/` as Unix-socket
+ *      directories. A URL with the libpq query shape silently routes back
+ *      to TCP `localhost:<port>` anyway. Emitting TCP up-front keeps
+ *      behavior predictable and parseable.
+ *
+ * Singleton-mode pgserve binds BOTH the libpq UDS (used by `psql` /
+ * `pg`-style clients) and a TCP listener on the canonical port — see
+ * `.genie/wishes/pgserve-singleton-no-proxy/SHARED-DESIGN.md` §5.3 — so
+ * dialing TCP loopback when the UDS file is present is contractually
+ * equivalent. UDS-only consumers can still use {@link buildDatabaseUrlForTransport}
+ * directly when they're known to drive a libpq-aware client.
  */
 export function buildCanonicalSocketDatabaseUrl(): string {
-  return buildDatabaseUrlForTransport(
-    { kind: 'unix', socketDir: resolvePgserveSocketDir(), port: CANONICAL_PG_PORT },
-    'omni',
-  );
+  return `postgresql://postgres:postgres@127.0.0.1:${CANONICAL_PG_PORT}/omni`;
 }
 
 /**

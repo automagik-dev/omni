@@ -29,7 +29,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { join } from 'node:path';
 
@@ -89,8 +89,46 @@ export function resolvePgserveControlSocketPath(): string {
   return join(resolvePgserveSocketDir(), 'control.sock');
 }
 
+/** Pid file pgserve@>=2.3 drops next to the libpq socket — used by the sync liveness probe. */
+const PGSERVE_PID_FILENAME = 'pgserve.pid';
+
 /**
- * Synchronous probe: does the canonical libpq socket file exist?
+ * Synchronous liveness probe for the canonical pgserve postmaster.
+ *
+ * Returns true only when ALL of the following hold:
+ *   1. `.s.PGSQL.<port>` exists in the canonical socket directory, AND
+ *   2. it is **not a symbolic link** (singleton-mode pgserve creates the
+ *      socket inode directly; a symlink is the pgserve@1.x daemon-mode
+ *      shim that points at `control.sock`, which speaks the admin
+ *      protocol — not the postgres wire protocol), AND
+ *   3. the path resolves to a real Unix domain socket (rules out a stale
+ *      regular file left behind by a partial cleanup), AND
+ *   4. `<socketDir>/pgserve.pid` references a process still alive on
+ *      this host (verified via `process.kill(pid, 0)`).
+ *
+ * Why each gate matters:
+ *   - File-existence alone is the original bug — a previous pgserve
+ *     daemon that died uncleanly leaves the inode behind, every
+ *     consumer downstream is handed a `DATABASE_URL` pointing at a
+ *     dead UDS, and the libpq-style URL shape
+ *     (`postgresql://...@/db?host=...`) is rejected by the WHATWG
+ *     `new URL()` parser used inside the api startup wrapper, so the
+ *     api crash-loops on `TypeError [ERR_INVALID_URL]` before any
+ *     connect attempt.
+ *   - The symlink gate catches the wild case observed on hosts that
+ *     ran pgserve@1.x at some point: the daemon publishes the admin
+ *     socket as `control.sock` and aliases `.s.PGSQL.5432` to it via
+ *     symlink. The pid file points at a live `bun` process (the
+ *     daemon supervisor), but speaking postgres protocol to that
+ *     socket gets you EPROTOTYPE / nothing. Stat-with-symlink-follow
+ *     would happily report `isSocket() === true` and miss the trap.
+ *   - The S_IFSOCK gate rules out the rare case of a regular file at
+ *     the canonical path (test fixtures, broken cleanup scripts,
+ *     filesystem-level corruption).
+ *   - The pid-liveness gate catches the inverse: a real socket file
+ *     left over from a postmaster that crashed without unlinking. The
+ *     pid file is the strongest cross-process liveness signal we have
+ *     without paying the cost of an async greet.
  *
  * Used by the synchronous {@link buildRuntimeEnv} path in `runtime-env.ts`
  * to pick UDS vs TCP without paying the cost of an async greet. The greet
@@ -98,7 +136,41 @@ export function resolvePgserveControlSocketPath(): string {
  * doctor flows that can afford the round trip.
  */
 export function probeCanonicalSocketSync(): boolean {
-  return existsSync(resolvePgserveLibpqSocketPath());
+  const socketPath = resolvePgserveLibpqSocketPath();
+  let lstat: ReturnType<typeof lstatSync>;
+  try {
+    lstat = lstatSync(socketPath);
+  } catch {
+    return false;
+  }
+  // Symlink → almost certainly the pgserve@1.x admin-socket alias. Reject.
+  if (lstat.isSymbolicLink()) return false;
+  // Real path must be a Unix domain socket. statSync follows symlinks
+  // (already excluded above) so this just guards against regular files.
+  try {
+    if (!statSync(socketPath).isSocket()) return false;
+  } catch {
+    return false;
+  }
+  return isCanonicalPostmasterAliveSync();
+}
+
+/**
+ * Read `<socketDir>/pgserve.pid` and confirm the recorded pid is still a
+ * live process on this host. Returns false on any I/O error, parse error,
+ * or `process.kill(pid, 0)` rejection (ESRCH/EPERM).
+ */
+function isCanonicalPostmasterAliveSync(): boolean {
+  const pidPath = join(resolvePgserveSocketDir(), PGSERVE_PID_FILENAME);
+  if (!existsSync(pidPath)) return false;
+  try {
+    const pid = Number.parseInt(readFileSync(pidPath, 'utf-8').trim(), 10);
+    if (!Number.isFinite(pid) || pid <= 0) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

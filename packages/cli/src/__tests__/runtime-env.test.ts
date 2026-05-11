@@ -12,6 +12,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DEFAULT_SERVER_CONFIG } from '../config.js';
 import {
   CANONICAL_PG_PORT,
@@ -182,19 +186,64 @@ describe('UDS-preference (pgserve-singleton-no-proxy G1)', () => {
     }
   });
 
-  test('buildCanonicalSocketDatabaseUrl produces a libpq-compat UDS shape', () => {
-    process.env.XDG_RUNTIME_DIR = '/run/user/1000';
+  test('buildCanonicalSocketDatabaseUrl emits a TCP-form URL on the canonical postmaster port', () => {
+    // The libpq UDS form (`postgresql://...@/db?host=...`) is rejected by
+    // the WHATWG `new URL()` parser used in api startup AND ignored by
+    // postgres@^3 (which only honors `url.hostname`, not `?host=` query).
+    // The canonical-pgserve postmaster also publishes a TCP loopback
+    // listener on the same port, so emitting the TCP shape is the
+    // contractually-equivalent and parseable choice.
     const url = buildCanonicalSocketDatabaseUrl();
-    expect(url.startsWith('postgresql://postgres:postgres@/omni?')).toBe(true);
-    const params = new URLSearchParams(url.split('?')[1]);
-    expect(params.get('host')).toBe('/run/user/1000/pgserve');
-    expect(params.get('port')).toBe('5432');
+    expect(url).toBe(`postgresql://postgres:postgres@127.0.0.1:${CANONICAL_PG_PORT}/omni`);
+    // Sanity: the URL must be acceptable to `new URL()` — guards against
+    // a future refactor reintroducing the empty-host UDS shape.
+    expect(() => new URL(url)).not.toThrow();
   });
 
   test('resolveDatabaseUrl falls back to TCP embedded URL when UDS is absent', () => {
     process.env.XDG_RUNTIME_DIR = '/var/empty';
     const cfg = { ...DEFAULT_SERVER_CONFIG, databaseUrl: '' };
     expect(resolveDatabaseUrl(cfg)).toBe(buildEmbeddedDatabaseUrl());
+  });
+
+  test('resolveDatabaseUrl emits the canonical TCP URL when UDS is live (real socket + alive pid)', () => {
+    const xdg = mkdtempSync(join(tmpdir(), 'omni-runtime-uds-live-'));
+    const server = createServer();
+    try {
+      process.env.XDG_RUNTIME_DIR = xdg;
+      const dir = join(xdg, 'pgserve');
+      mkdirSync(dir, { recursive: true });
+      // Bind a real S_IFSOCK at the canonical libpq path — the probe
+      // refuses regular files, symlinks, and dead pids, so a working
+      // postmaster fixture has to satisfy all of those gates.
+      server.listen(join(dir, `.s.PGSQL.${CANONICAL_PG_PORT}`));
+      writeFileSync(join(dir, 'pgserve.pid'), `${process.pid}\n`);
+      const cfg = { ...DEFAULT_SERVER_CONFIG, databaseUrl: '' };
+      // Must be the canonical TCP URL — never the libpq UDS shape that
+      // crashes api startup on `new URL()`.
+      expect(resolveDatabaseUrl(cfg)).toBe(buildCanonicalSocketDatabaseUrl());
+    } finally {
+      server.close();
+      rmSync(xdg, { recursive: true, force: true });
+    }
+  });
+
+  test('resolveDatabaseUrl falls back to embedded TCP when the canonical path is a stale regular file (no pid file)', () => {
+    // Reproduces the regression: a previous pgserve daemon left
+    // .s.PGSQL.5432 behind without a pid file. Without the liveness
+    // check the resolver would emit the canonical URL pointing at
+    // nothing and the api would crash-loop.
+    const xdg = mkdtempSync(join(tmpdir(), 'omni-runtime-uds-stale-'));
+    try {
+      process.env.XDG_RUNTIME_DIR = xdg;
+      const dir = join(xdg, 'pgserve');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `.s.PGSQL.${CANONICAL_PG_PORT}`), '');
+      const cfg = { ...DEFAULT_SERVER_CONFIG, databaseUrl: '' };
+      expect(resolveDatabaseUrl(cfg)).toBe(buildEmbeddedDatabaseUrl());
+    } finally {
+      rmSync(xdg, { recursive: true, force: true });
+    }
   });
 
   test('non-default operator URL is preserved verbatim regardless of UDS state', () => {

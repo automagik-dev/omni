@@ -16,7 +16,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   CANONICAL_PG_PORT,
@@ -123,15 +125,120 @@ describe('buildDatabaseUrlForTransport', () => {
 });
 
 describe('probeCanonicalSocketSync', () => {
-  test('returns false when the socket directory does not exist', () => {
+  /**
+   * Bind a real Unix domain socket at the canonical libpq path inside
+   * a fresh XDG dir. Returns the close handle so each test can tear
+   * down deterministically. Real S_IFSOCK is required because the
+   * probe rejects regular files outright.
+   */
+  function bindFreshSocket(prefix: string): { xdg: string; close: () => void } {
+    const xdg = mkdtempSync(join(tmpdir(), prefix));
+    process.env.XDG_RUNTIME_DIR = xdg;
+    const dir = join(xdg, 'pgserve');
+    mkdirSync(dir, { recursive: true });
+    const server = createServer();
+    server.listen(join(dir, `.s.PGSQL.${CANONICAL_PG_PORT}`));
+    return {
+      xdg,
+      close: () => {
+        server.close();
+        rmSync(xdg, { recursive: true, force: true });
+      },
+    };
+  }
+
+  test('returns false when the canonical socket file is missing', () => {
     process.env.XDG_RUNTIME_DIR = '/var/empty';
     expect(probeCanonicalSocketSync()).toBe(false);
   });
 
-  test('mirrors existsSync(resolvePgserveLibpqSocketPath())', () => {
-    process.env.XDG_RUNTIME_DIR = '/var/empty';
-    const expected = existsSync(join('/var/empty', 'pgserve', `.s.PGSQL.${CANONICAL_PG_PORT}`));
-    expect(probeCanonicalSocketSync()).toBe(expected);
+  test('returns false when a regular file sits at the canonical socket path', () => {
+    // A regular file (e.g. left by a buggy cleanup script or test fixture)
+    // must NOT pass the probe. statSync would say isSocket()=false; lstat
+    // catches this without following any symlinks.
+    const xdg = mkdtempSync(join(tmpdir(), 'omni-pgserve-regular-'));
+    try {
+      process.env.XDG_RUNTIME_DIR = xdg;
+      const dir = join(xdg, 'pgserve');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `.s.PGSQL.${CANONICAL_PG_PORT}`), '');
+      writeFileSync(join(dir, 'pgserve.pid'), `${process.pid}\n`);
+      expect(probeCanonicalSocketSync()).toBe(false);
+    } finally {
+      rmSync(xdg, { recursive: true, force: true });
+    }
+  });
+
+  test('returns false when the canonical path is a symlink (pgserve@1.x admin alias)', () => {
+    // Reproduces the wild-state observed on a host that ran pgserve@1.x:
+    //   .s.PGSQL.5432 -> control.sock     (symlink)
+    //   control.sock                       (real socket — admin protocol)
+    //   pgserve.pid                        (live bun supervisor PID)
+    // A naive existsSync + statSync(follow=true) probe would call this
+    // alive (control.sock IS a socket, the bun pid IS alive), then hand
+    // out a DATABASE_URL pointing at a daemon that doesn't speak the
+    // postgres wire protocol. The lstat-based symlink rejection catches
+    // it.
+    const xdg = mkdtempSync(join(tmpdir(), 'omni-pgserve-symlink-'));
+    try {
+      process.env.XDG_RUNTIME_DIR = xdg;
+      const dir = join(xdg, 'pgserve');
+      mkdirSync(dir, { recursive: true });
+      const adminSock = join(dir, 'control.sock');
+      const server = createServer();
+      try {
+        server.listen(adminSock);
+        symlinkSync('control.sock', join(dir, `.s.PGSQL.${CANONICAL_PG_PORT}`));
+        writeFileSync(join(dir, 'pgserve.pid'), `${process.pid}\n`);
+        expect(probeCanonicalSocketSync()).toBe(false);
+      } finally {
+        server.close();
+      }
+    } finally {
+      rmSync(xdg, { recursive: true, force: true });
+    }
+  });
+
+  test('returns false when a real socket is present but pgserve.pid is missing (postmaster crashed)', () => {
+    const handle = bindFreshSocket('omni-pgserve-no-pid-');
+    try {
+      expect(probeCanonicalSocketSync()).toBe(false);
+    } finally {
+      handle.close();
+    }
+  });
+
+  test('returns false when pgserve.pid references a dead process', () => {
+    const handle = bindFreshSocket('omni-pgserve-deadpid-');
+    try {
+      // PID 2^31-2 is overwhelmingly unlikely to be live on Linux/macOS
+      // (kernel pid_max defaults to 2^15 or 2^22; even tuned hosts cap
+      // far below 2^31). `process.kill(pid, 0)` will throw ESRCH.
+      writeFileSync(join(handle.xdg, 'pgserve', 'pgserve.pid'), `${2 ** 31 - 2}\n`);
+      expect(probeCanonicalSocketSync()).toBe(false);
+    } finally {
+      handle.close();
+    }
+  });
+
+  test('returns true when a real socket + a live pid file are both present', () => {
+    const handle = bindFreshSocket('omni-pgserve-live-');
+    try {
+      writeFileSync(join(handle.xdg, 'pgserve', 'pgserve.pid'), `${process.pid}\n`);
+      expect(probeCanonicalSocketSync()).toBe(true);
+    } finally {
+      handle.close();
+    }
+  });
+
+  test('returns false when pgserve.pid is malformed', () => {
+    const handle = bindFreshSocket('omni-pgserve-bad-pid-');
+    try {
+      writeFileSync(join(handle.xdg, 'pgserve', 'pgserve.pid'), 'not-a-number\n');
+      expect(probeCanonicalSocketSync()).toBe(false);
+    } finally {
+      handle.close();
+    }
   });
 });
 
