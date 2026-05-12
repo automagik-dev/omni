@@ -27,7 +27,7 @@ import type {
 import type { MetaTemplateStatusUpdate } from '@omni/core/schemas';
 import { and, eq, inArray } from 'drizzle-orm';
 
-import { MetaWhatsAppClient } from './client';
+import type { MetaWhatsAppClient } from './client';
 import { MetaApiError, MetaErrorCode, mapHttpStatusToMetaError } from './utils/errors';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -465,6 +465,11 @@ function mapMetaEventToStatus(event: MetaTemplateStatusUpdate['event']): MetaTem
       return 'PAUSED';
     case 'DISABLED':
       return 'DELETED';
+    default: {
+      // Exhaustive guard: forces a compile error if Meta adds a new event arm.
+      const _exhaustive: never = event;
+      return _exhaustive;
+    }
   }
 }
 
