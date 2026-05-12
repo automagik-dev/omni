@@ -8,13 +8,17 @@ on:
   pull_request:
     types: [closed]
     branches: [dev]
-  # main-side promotion still arrives via CI-on-push (main IS in CI's push
+  # main-side promotion arrives via CI-on-push (main IS in CI's push
   # branches). Keep this path so release-to-@latest continues to trigger
-  # automatically when the rolling PR dev→main merges.
+  # automatically when the rolling PR dev→main merges. homolog branch
+  # added 2026-05-12 (Felipe directive) so promotions to homolog also
+  # auto-fire the version + release pipeline → .well-known/homolog.json
+  # advances. CI's push branches list must include `homolog` for this
+  # workflow_run trigger to fire from there.
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches: [main]
+    branches: [main, homolog]
   workflow_dispatch:
 
 permissions:
@@ -151,12 +155,23 @@ jobs:
           # semantics here mirror the npm_tag step above:
           #   workflow_run on main → main → stable
           #   pull_request close on dev / workflow_dispatch → dev
-          if [ "${{ github.event_name }}" = "workflow_run" ] && \
-             [ "${{ github.event.workflow_run.head_branch }}" = "main" ]; then
-            CHANNEL="stable"
-          else
-            CHANNEL="dev"
+          # Canonical channel taxonomy (Felipe directive 2026-05-12,
+          # unified across pgserve/omni/genie):
+          #   main branch    → stable
+          #   homolog branch → homolog
+          #   dev branch     → dev (default fallback)
+          # The triggering branch comes from workflow_run.head_branch
+          # (for the workflow_run trigger path) or stays at the dev
+          # default for pull_request close + workflow_dispatch paths.
+          TRIGGER_BRANCH=""
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            TRIGGER_BRANCH="${{ github.event.workflow_run.head_branch }}"
           fi
+          case "${TRIGGER_BRANCH}" in
+            main)    CHANNEL="stable" ;;
+            homolog) CHANNEL="homolog" ;;
+            *)       CHANNEL="dev" ;;
+          esac
           echo "Dispatching release pipeline against ${TAG} (channel=${CHANNEL})..."
           if ! gh workflow run release.yml --repo "${GITHUB_REPOSITORY}" --ref "${TAG}" --field version="${VERSION}" --field channel="${CHANNEL}"; then
             echo "::error ::release-trigger.dispatch_failed release.yml dispatch failed for ${TAG} — investigate gh CLI auth or workflow availability before re-running manually"
