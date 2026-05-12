@@ -1,6 +1,6 @@
 {
   "name": "@omni/plugin-openclaw",
-  "version": "2.260512.1",
+  "version": "2.260512.2",
   "description": "Expose Omni as a native messaging channel in OpenClaw",
   "type": "module",
   "main": "src/index.ts",
