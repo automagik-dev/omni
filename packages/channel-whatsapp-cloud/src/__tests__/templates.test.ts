@@ -16,7 +16,6 @@
 
 import { describe, expect, it, mock, spyOn } from 'bun:test';
 import type { Database, WhatsappTemplate } from '@omni/db';
-import type { EventBus } from '@omni/core';
 import type { MetaTemplateStatusUpdate } from '@omni/core/schemas';
 
 import { MetaWhatsAppClient } from '../client';
@@ -324,7 +323,16 @@ describe('syncTemplatesToDb', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('handleTemplateStatusUpdate', () => {
-  it('updates the local row and emits with correct previous/new status', async () => {
+  /** Minimal plugin stub — only exposes the method handleTemplateStatusUpdate calls. */
+  function stubPlugin() {
+    const handleTemplateStatusChanged = mock(async () => undefined);
+    const plugin = { handleTemplateStatusChanged } as unknown as Parameters<
+      typeof handleTemplateStatusUpdate
+    >[2];
+    return { plugin, handleTemplateStatusChanged };
+  }
+
+  it('updates the local row and notifies plugin with correct previous/new status', async () => {
     const existing = mkLocalRow({
       id: 'row-42',
       metaId: 'meta-tpl-1',
@@ -333,9 +341,7 @@ describe('handleTemplateStatusUpdate', () => {
       status: 'PENDING',
     });
     const { db, calls } = fakeDb([existing]);
-
-    const publish = mock(async () => ({ id: 'evt', sequence: 1, stream: 'OMNI_EVENTS' }));
-    const eventBus = { publish } as unknown as EventBus;
+    const { plugin, handleTemplateStatusChanged } = stubPlugin();
 
     const update: MetaTemplateStatusUpdate = {
       message_template_id: 'meta-tpl-1',
@@ -344,29 +350,23 @@ describe('handleTemplateStatusUpdate', () => {
       event: 'APPROVED',
     };
 
-    await handleTemplateStatusUpdate(db, INSTANCE_ID, eventBus, update);
+    await handleTemplateStatusUpdate(db, update, plugin);
 
-    // DB update fired with new status:
     expect(calls.updates.length).toBeGreaterThanOrEqual(1);
     expect(calls.updates[0]!.setPatch.status).toBe('APPROVED');
 
-    // Event was published once with the expected shape:
-    expect(publish).toHaveBeenCalledTimes(1);
-    const [type, payload] = publish.mock.calls[0]! as [string, Record<string, unknown>];
-    expect(type).toBe('template.status_changed');
-    expect(payload).toMatchObject({
-      instanceId: INSTANCE_ID,
-      templateId: 'row-42',
-      metaTemplateId: 'meta-tpl-1',
-      templateName: 'order_update',
-      language: 'pt_BR',
-      previousStatus: 'PENDING',
-      newStatus: 'APPROVED',
-    });
-    expect(payload.rejectionReason).toBeUndefined();
+    expect(handleTemplateStatusChanged).toHaveBeenCalledTimes(1);
+    const [instanceId, sentUpdate, extras] = handleTemplateStatusChanged.mock.calls[0]! as [
+      string,
+      MetaTemplateStatusUpdate,
+      { templateId?: string; previousStatus?: string },
+    ];
+    expect(instanceId).toBe(INSTANCE_ID);
+    expect(sentUpdate.message_template_id).toBe('meta-tpl-1');
+    expect(extras).toMatchObject({ templateId: 'row-42', previousStatus: 'PENDING' });
   });
 
-  it('includes rejectionReason when event is REJECTED', async () => {
+  it('passes rejectionReason via the update payload when event is REJECTED', async () => {
     const existing = mkLocalRow({
       id: 'row-99',
       metaId: 'meta-tpl-9',
@@ -375,38 +375,47 @@ describe('handleTemplateStatusUpdate', () => {
       status: 'PENDING',
     });
     const { db } = fakeDb([existing]);
+    const { plugin, handleTemplateStatusChanged } = stubPlugin();
 
-    const publish = mock(async () => ({ id: 'evt', sequence: 1, stream: 'OMNI_EVENTS' }));
-    const eventBus = { publish } as unknown as EventBus;
+    await handleTemplateStatusUpdate(
+      db,
+      {
+        message_template_id: 'meta-tpl-9',
+        message_template_name: 'broken',
+        message_template_language: 'en_US',
+        event: 'REJECTED',
+        reason: 'Promotional content not allowed in UTILITY category',
+      },
+      plugin,
+    );
 
-    await handleTemplateStatusUpdate(db, INSTANCE_ID, eventBus, {
-      message_template_id: 'meta-tpl-9',
-      message_template_name: 'broken',
-      message_template_language: 'en_US',
-      event: 'REJECTED',
-      reason: 'Promotional content not allowed in UTILITY category',
-    });
-
-    expect(publish).toHaveBeenCalledTimes(1);
-    const [, payload] = publish.mock.calls[0]! as [string, Record<string, unknown>];
-    expect(payload.newStatus).toBe('REJECTED');
-    expect(payload.previousStatus).toBe('PENDING');
-    expect(payload.rejectionReason).toBe('Promotional content not allowed in UTILITY category');
+    expect(handleTemplateStatusChanged).toHaveBeenCalledTimes(1);
+    const [, sentUpdate, extras] = handleTemplateStatusChanged.mock.calls[0]! as [
+      string,
+      MetaTemplateStatusUpdate,
+      { previousStatus?: string },
+    ];
+    expect(sentUpdate.event).toBe('REJECTED');
+    expect(sentUpdate.reason).toBe('Promotional content not allowed in UTILITY category');
+    expect(extras.previousStatus).toBe('PENDING');
   });
 
-  it('skips event emission when no local row exists', async () => {
+  it('skips plugin notification when no local row exists', async () => {
     const { db } = fakeDb([]);
-    const publish = mock(async () => ({ id: 'evt', sequence: 1, stream: 'OMNI_EVENTS' }));
-    const eventBus = { publish } as unknown as EventBus;
+    const { plugin, handleTemplateStatusChanged } = stubPlugin();
 
-    await handleTemplateStatusUpdate(db, INSTANCE_ID, eventBus, {
-      message_template_id: 'meta-tpl-unknown',
-      message_template_name: 'unknown',
-      message_template_language: 'pt_BR',
-      event: 'APPROVED',
-    });
+    await handleTemplateStatusUpdate(
+      db,
+      {
+        message_template_id: 'meta-tpl-unknown',
+        message_template_name: 'unknown',
+        message_template_language: 'pt_BR',
+        event: 'APPROVED',
+      },
+      plugin,
+    );
 
-    expect(publish).not.toHaveBeenCalled();
+    expect(handleTemplateStatusChanged).not.toHaveBeenCalled();
   });
 });
 

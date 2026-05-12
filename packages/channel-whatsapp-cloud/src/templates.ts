@@ -18,16 +18,16 @@
 
 import type { Database, NewWhatsappTemplate, WhatsappTemplate } from '@omni/db';
 import { whatsappTemplates } from '@omni/db';
-import type { EventBus } from '@omni/core';
 import type {
   MetaTemplateCategory,
   MetaTemplateStatus,
   WhatsAppTemplateComponent,
 } from '@omni/core/types';
 import type { MetaTemplateStatusUpdate } from '@omni/core/schemas';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 
 import type { MetaWhatsAppClient } from './client';
+import type { WhatsAppCloudPlugin } from './plugin';
 import { MetaApiError, MetaErrorCode, mapHttpStatusToMetaError } from './utils/errors';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -383,56 +383,57 @@ export async function syncTemplatesToDb(
  */
 export async function handleTemplateStatusUpdate(
   db: Database,
-  instanceId: string,
-  eventBus: EventBus | null,
   update: MetaTemplateStatusUpdate,
+  plugin: WhatsAppCloudPlugin,
 ): Promise<void> {
   const newStatus = mapMetaEventToStatus(update.event);
 
-  // Find the local row by (instanceId, name, language). If it doesn't exist
-  // yet (template created out-of-band on Meta UI), we skip emit but still
-  // log — the next sync will create it.
-  const [row] = await db
+  // Match rows by either:
+  //   (a) `meta_id` (most precise — set on row after first Meta sync)
+  //   (b) (name, language) (fallback for rows that haven't been reconciled
+  //       to a metaId yet — e.g. created on the Meta UI before the local
+  //       sync ran).
+  //
+  // Multiple rows can match (same template name+language used by N instances
+  // that share a WABA — though we have a unique constraint on
+  // (instance_id, name, language) so a single instance only ever has one).
+  // We emit + update per row so each instance's event scope is correct.
+  const rows = await db
     .select()
     .from(whatsappTemplates)
     .where(
-      and(
-        eq(whatsappTemplates.instanceId, instanceId),
-        eq(whatsappTemplates.name, update.message_template_name),
-        eq(whatsappTemplates.language, update.message_template_language),
+      or(
+        eq(whatsappTemplates.metaId, update.message_template_id),
+        and(
+          eq(whatsappTemplates.name, update.message_template_name),
+          eq(whatsappTemplates.language, update.message_template_language),
+        ),
       ),
-    )
-    .limit(1);
+    );
 
-  if (!row) {
+  if (rows.length === 0) {
     // No local row to update — caller can re-sync. Skip event emission so we
     // don't fan out a status_changed for a template the system doesn't
     // know about yet.
     return;
   }
 
-  const previousStatus = (row.status as MetaTemplateStatus) ?? null;
+  for (const row of rows) {
+    const previousStatus = (row.status as MetaTemplateStatus) ?? null;
 
-  await db
-    .update(whatsappTemplates)
-    .set({
-      metaId: update.message_template_id,
-      status: newStatus,
-      rejectionReason: update.event === 'REJECTED' ? update.reason ?? null : null,
-      updatedAt: new Date(),
-    })
-    .where(eq(whatsappTemplates.id, row.id));
+    await db
+      .update(whatsappTemplates)
+      .set({
+        metaId: update.message_template_id,
+        status: newStatus,
+        rejectionReason: update.event === 'REJECTED' ? update.reason ?? null : null,
+        updatedAt: new Date(),
+      })
+      .where(eq(whatsappTemplates.id, row.id));
 
-  if (eventBus) {
-    await eventBus.publish('template.status_changed', {
-      instanceId,
+    await plugin.handleTemplateStatusChanged(row.instanceId, update, {
       templateId: row.id,
-      metaTemplateId: update.message_template_id,
-      templateName: update.message_template_name,
-      language: update.message_template_language,
-      previousStatus: previousStatus ?? null,
-      newStatus,
-      ...(update.event === 'REJECTED' && update.reason ? { rejectionReason: update.reason } : {}),
+      previousStatus: previousStatus ?? undefined,
     });
   }
 }

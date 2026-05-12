@@ -37,11 +37,6 @@ import {
 } from '@omni/core/schemas';
 
 import type { WhatsAppCloudPlugin } from '../plugin';
-import {
-  emitMessageReceivedFromMeta,
-  emitStatusEvent,
-  emitTemplateStatusChanged,
-} from '../plugin-inbound-helpers';
 import { verifyMetaSignature } from '../utils/signature';
 
 // Meta caps webhook bodies at 1 MB. We accept up to 2 MB to be safe.
@@ -166,26 +161,23 @@ async function processChange(
       return;
     }
     // Template status updates don't carry phone_number_id — they're scoped
-    // to a WABA, not a phone. We emit per-instance for all instances that
-    // own this template's WABA. Without a templateId lookup we fan out to
-    // every connected instance and let consumers filter by metaTemplateId.
-    const instanceIds = plugin.getConnectedInstanceIds();
-    if (instanceIds.length === 0) {
-      logger.debug('[whatsapp-cloud] template status update arrived with no connected instances', {
+    // to a WABA. The templates service (`templates.ts::handleTemplateStatusUpdate`)
+    // resolves the correct local row + instance scope by `(metaTemplateId, wabaId)`
+    // and updates the DB before emitting. The webhook handler here delegates
+    // to the templates service rather than fanning out to all instances.
+    //
+    // Lazy import keeps the webhook handler free of a hard dep on the db layer
+    // (which the @omni/db workspace dep already provides at runtime).
+    const { handleTemplateStatusUpdate } = await import('../templates');
+    const { db } = await import('@omni/db');
+    try {
+      await handleTemplateStatusUpdate(db, parsed.data, plugin);
+    } catch (err) {
+      logger.warn('[whatsapp-cloud] failed to handle template status update', {
         metaTemplateId: parsed.data.message_template_id,
+        err: String(err),
       });
-      return;
     }
-    await Promise.all(
-      instanceIds.map((instanceId) =>
-        emitTemplateStatusChanged(plugin, instanceId, parsed.data).catch((err) => {
-          logger.warn('[whatsapp-cloud] failed to emit template.status_changed', {
-            instanceId,
-            err: String(err),
-          });
-        }),
-      ),
-    );
     return;
   }
 
@@ -230,8 +222,7 @@ async function processChange(
       // runtime check for the discriminator before casting.
       const m = msg as { id?: string; type?: string };
       if (!m.id || !m.type) continue;
-      await emitMessageReceivedFromMeta(
-        plugin,
+      await plugin.handleInboundMessage(
         instanceId,
         msg as MetaInboundMessage,
         contacts,
@@ -250,7 +241,7 @@ async function processChange(
     try {
       const s = status as { id?: string; status?: string };
       if (!s.id || !s.status) continue;
-      await emitStatusEvent(plugin, instanceId, status as MetaWebhookStatusEntry);
+      await plugin.handleStatusUpdate(instanceId, status as MetaWebhookStatusEntry);
     } catch (err) {
       logger.warn('[whatsapp-cloud] failed to emit status event', {
         instanceId,

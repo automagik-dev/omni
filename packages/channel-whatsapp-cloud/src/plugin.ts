@@ -17,13 +17,20 @@ import type {
   FetchHistoryOptions,
   FetchHistoryResult,
   HealthCheck,
+  HealthStatus,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
   SendResult,
 } from '@omni/channel-sdk';
 import type { Logger } from '@omni/core';
-import type { ChannelType } from '@omni/core/types';
+import type { EventPayloadMap } from '@omni/core/events';
+import type {
+  MetaInboundMessage,
+  MetaTemplateStatusUpdate,
+  MetaWebhookStatusEntry,
+} from '@omni/core/schemas';
+import type { ChannelType, ContentType } from '@omni/core/types';
 
 import { WHATSAPP_CLOUD_CAPABILITIES } from './capabilities';
 import { MetaWhatsAppClient } from './client';
@@ -399,7 +406,327 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   getLogger(): Logger {
     return this.logger;
   }
+
+  // ─────────────────────────────────────────────────────────────
+  // Inbound handlers (called by handlers/webhook.ts)
+  //
+  // These are public wrappers around the protected emit* helpers exposed
+  // by BaseChannelPlugin. The pattern mirrors GupshupPlugin: keep all the
+  // event-emission and PII-normalization logic inside the plugin class so
+  // the webhook handler stays a pure dispatcher.
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Emit `message.received` (or `reaction.received`/`reaction.removed`) from a
+   * parsed Meta inbound message, after dedupe.
+   *
+   * Returns `true` when an event was published, `false` when the message was
+   * a duplicate (`dedupeCache.isDuplicate`) or had no extractable content.
+   */
+  async handleInboundMessage(
+    instanceId: string,
+    msg: MetaInboundMessage,
+    contacts: Array<{ profile?: { name?: string }; wa_id?: string }> | undefined,
+    dedupeCache: DedupeCache,
+  ): Promise<boolean> {
+    const wamid = msg.id;
+
+    if (dedupeCache.isDuplicate(instanceId, wamid, 'whatsapp-cloud', this.logger)) {
+      this.logger.debug('[whatsapp-cloud] duplicate inbound dropped', { instanceId, wamid });
+      return false;
+    }
+
+    // Reactions go through emitReactionReceived (or emitReactionRemoved when
+    // emoji is empty — Meta uses empty emoji as "reaction removed").
+    //
+    // Phone numbers stay in Meta wire format (digits-only) — each channel
+    // uses its native `platform_user_id` shape; cross-channel identity
+    // unification happens in the identity-graph layer, not here.
+    if (msg.type === 'reaction') {
+      const targetMessageId = msg.reaction.message_id;
+      const emoji = msg.reaction.emoji;
+      if (!emoji) {
+        await this.emitReactionRemoved({
+          instanceId,
+          messageId: targetMessageId,
+          chatId: msg.from,
+          from: msg.from,
+          emoji: '',
+        });
+      } else {
+        await this.emitReactionReceived({
+          instanceId,
+          messageId: targetMessageId,
+          chatId: msg.from,
+          from: msg.from,
+          emoji,
+          rawPayload: msg as unknown as Record<string, unknown>,
+        });
+      }
+      return true;
+    }
+
+    const content = extractInboundContent(msg);
+    if (!content) {
+      this.logger.warn('[whatsapp-cloud] inbound message has no extractable content', {
+        instanceId,
+        wamid,
+        type: msg.type,
+      });
+      return false;
+    }
+
+    const senderName = contacts?.find((c) => c.wa_id === msg.from)?.profile?.name;
+    const tsSeconds = Number.parseInt(msg.timestamp, 10);
+    const platformTimestampMs = Number.isFinite(tsSeconds) ? tsSeconds * 1000 : Date.now();
+    const replyToId = 'context' in msg ? msg.context?.id : undefined;
+
+    await this.emitMessageReceived({
+      instanceId,
+      externalId: wamid,
+      chatId: msg.from,
+      from: msg.from,
+      senderName,
+      content: {
+        type: content.type,
+        text: content.text ?? content.caption,
+        mediaUrl: content.mediaUrl,
+        mimeType: content.mimeType,
+        isVoiceNote: content.isVoiceNote,
+      },
+      replyToId,
+      rawPayload: {
+        meta: msg as unknown as Record<string, unknown>,
+        mediaId: content.mediaId,
+        filename: content.filename,
+        platformTimestampMs,
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Emit the appropriate `message.*` event for a Meta status update.
+   *
+   * Maps:
+   *   sent      → no-op (already emitted by `sendMessage`)
+   *   delivered → message.delivered
+   *   read      → message.read
+   *   failed    → message.failed
+   */
+  async handleStatusUpdate(instanceId: string, status: MetaWebhookStatusEntry): Promise<void> {
+    const tsSeconds = Number.parseInt(status.timestamp, 10);
+    const timestampMs = Number.isFinite(tsSeconds) ? tsSeconds * 1000 : Date.now();
+    // recipient_id stays in Meta wire format (digits-only) — see note in
+    // handleInboundMessage.
+    const recipientId = status.recipient_id;
+
+    switch (status.status) {
+      case 'sent':
+        // Intentionally no-op — `sendMessage` already emitted `message.sent`
+        // immediately after Graph API returned 200. Emitting again here would
+        // duplicate the event downstream (DB rows, observability, agents).
+        return;
+
+      case 'delivered':
+        await this.emitMessageDelivered({
+          instanceId,
+          externalId: status.id,
+          chatId: recipientId,
+          deliveredAt: timestampMs,
+        });
+        return;
+
+      case 'read':
+        await this.emitMessageRead({
+          instanceId,
+          externalId: status.id,
+          chatId: recipientId,
+          readAt: timestampMs,
+        });
+        return;
+
+      case 'failed': {
+        const firstError = status.errors?.[0];
+        const errorCode = firstError ? String(firstError.code) : undefined;
+        const errorMessage =
+          firstError?.message ?? firstError?.title ?? 'Meta reported delivery failure';
+        await this.emitMessageFailed({
+          instanceId,
+          externalId: status.id,
+          chatId: recipientId,
+          error: errorMessage,
+          errorCode,
+          retryable: false,
+        });
+        return;
+      }
+    }
+  }
+
+  /**
+   * Emit `template.status_changed` from a Meta template lifecycle event.
+   *
+   * Caller (the templates service in `templates.ts::handleTemplateStatusUpdate`)
+   * resolves the local template UUID and previous status from the
+   * `whatsapp_templates` table before invoking this method — that resolution
+   * also picks the correct instance scope (by `wabaId`), avoiding the fan-out
+   * to all connected instances that an instance-blind dispatch would cause.
+   */
+  async handleTemplateStatusChanged(
+    instanceId: string,
+    update: MetaTemplateStatusUpdate,
+    extras?: {
+      templateId?: string;
+      previousStatus?: 'APPROVED' | 'PENDING' | 'REJECTED' | 'PAUSED' | 'DELETED';
+    },
+  ): Promise<void> {
+    const newStatus = mapTemplateEventToStatus(update.event);
+    if (!newStatus) {
+      this.logger.debug('[whatsapp-cloud] unmapped template lifecycle event', {
+        instanceId,
+        event: update.event,
+        metaTemplateId: update.message_template_id,
+      });
+      return;
+    }
+
+    const payload: EventPayloadMap['template.status_changed'] = {
+      instanceId,
+      templateId: extras?.templateId ?? update.message_template_id,
+      metaTemplateId: update.message_template_id,
+      templateName: update.message_template_name,
+      language: update.message_template_language,
+      previousStatus: extras?.previousStatus ?? null,
+      newStatus,
+      rejectionReason: update.reason,
+    };
+
+    await this.eventBus.publish('template.status_changed', payload, {
+      instanceId,
+      channelType: this.id,
+      source: `channel:${this.id}`,
+    });
+  }
 }
 
-/** Re-export so tests / public health typing don't need to dig into channel-sdk. */
-type HealthStatus = import('@omni/channel-sdk').HealthStatus;
+// ─────────────────────────────────────────────────────────────────────────
+// Module-level helpers — pure, no plugin state, kept outside the class
+// for clarity. They're used only by `handleInboundMessage`.
+// ─────────────────────────────────────────────────────────────────────────
+
+interface ExtractedInboundContent {
+  type: ContentType;
+  text?: string;
+  mediaUrl?: string;
+  mediaId?: string;
+  mimeType?: string;
+  caption?: string;
+  filename?: string;
+  isVoiceNote?: boolean;
+}
+
+const MEDIA_TYPE_MAP: Partial<Record<MetaInboundMessage['type'], ContentType>> = {
+  image: 'image',
+  audio: 'audio',
+  video: 'video',
+  document: 'document',
+  sticker: 'sticker',
+};
+
+/**
+ * Extract a normalized content envelope from a Meta inbound message.
+ *
+ * Media-bearing messages return only the `mediaId` — a downstream worker
+ * (or a future inline download step) is responsible for swapping that for
+ * a downloadable URL via `GET /{media_id}`. Returning `mediaId` here keeps
+ * the webhook handler synchronous so we don't owe Meta a 2xx while waiting
+ * on a Graph API roundtrip.
+ */
+function extractInboundContent(msg: MetaInboundMessage): ExtractedInboundContent | null {
+  if (msg.type === 'text') {
+    return { type: 'text', text: msg.text.body };
+  }
+
+  if (msg.type === 'location') {
+    const { latitude, longitude, name, address } = msg.location;
+    const label = [name, address].filter(Boolean).join(', ');
+    return {
+      type: 'location',
+      text: label || `${latitude},${longitude}`,
+    };
+  }
+
+  if (msg.type === 'contacts') {
+    const first = msg.contacts[0];
+    const formattedName = first?.name?.formatted_name as string | undefined;
+    const firstName = first?.name?.first_name as string | undefined;
+    const phone = (first?.phones?.[0]?.phone as string | undefined) ?? '';
+    const name = formattedName ?? firstName ?? 'Contact';
+    return {
+      type: 'text',
+      text: `Contact: ${name}${phone ? `: ${phone}` : ''}`,
+    };
+  }
+
+  if (msg.type === 'interactive') {
+    const i = msg.interactive;
+    if (i.type === 'button_reply' && i.button_reply) {
+      return { type: 'text', text: i.button_reply.title };
+    }
+    if (i.type === 'list_reply' && i.list_reply) {
+      return { type: 'text', text: i.list_reply.title };
+    }
+    return { type: 'text', text: '[interactive]' };
+  }
+
+  if (msg.type === 'button') {
+    return { type: 'text', text: msg.button.text };
+  }
+
+  // Media types — image | audio | video | document | sticker
+  const omniType = MEDIA_TYPE_MAP[msg.type];
+  if (omniType) {
+    const mediaField =
+      msg.type === 'image'
+        ? msg.image
+        : msg.type === 'audio'
+          ? msg.audio
+          : msg.type === 'video'
+            ? msg.video
+            : msg.type === 'document'
+              ? msg.document
+              : msg.sticker;
+    if (!mediaField) return null;
+    return {
+      type: omniType,
+      mediaId: mediaField.id,
+      mimeType: mediaField.mime_type,
+      caption: mediaField.caption,
+      filename: mediaField.filename,
+      isVoiceNote: msg.type === 'audio' ? mediaField.voice === true : undefined,
+    };
+  }
+
+  return null;
+}
+
+function mapTemplateEventToStatus(
+  event: MetaTemplateStatusUpdate['event'],
+): 'APPROVED' | 'PENDING' | 'REJECTED' | 'PAUSED' | 'DELETED' | null {
+  switch (event) {
+    case 'APPROVED':
+      return 'APPROVED';
+    case 'REJECTED':
+      return 'REJECTED';
+    case 'PAUSED':
+      return 'PAUSED';
+    case 'DISABLED':
+      return 'DELETED';
+    case 'FLAGGED':
+      // FLAGGED is informational — templates remain APPROVED but with warning.
+      // We surface as PAUSED to signal "do not use" without inventing a new
+      // status value.
+      return 'PAUSED';
+  }
+}

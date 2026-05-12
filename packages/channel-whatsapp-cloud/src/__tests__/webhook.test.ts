@@ -84,6 +84,11 @@ function makeHarness(opts?: {
     dedupeCache,
   };
 
+  // Stub the public surface the webhook handler reaches: getLogger,
+  // findInstanceByPhoneNumberId, handleInboundMessage, handleStatusUpdate.
+  // Each handle* method records the call into `emits` keyed by the event
+  // that the real plugin would have emitted — so existing assertions on
+  // `emit*` shapes continue to work without depending on internal cast.
   const stub = {
     id: 'whatsapp-cloud',
     getLogger: () => logger,
@@ -92,37 +97,68 @@ function makeHarness(opts?: {
       if (pid !== phoneNumberId) return undefined;
       return [instanceId, state] as const;
     },
-    getConnectedInstanceIds: () => (withInstance ? [instanceId] : []),
-    // emit* shims — match the protected surface that the sidecar helpers
-    // expect. Each one records the call so tests can assert against `emits`.
-    emitMessageReceived: async (params: Record<string, unknown>) => {
-      emits.push({ method: 'message.received', params });
-      return 'evt_corr_id';
+
+    // Inbound message dispatch — minimal port of WhatsAppCloudPlugin.handleInboundMessage
+    // (dedupe + reaction split + text extraction). Mirrors the assertions the
+    // tests already make on `emits[].method` / `.params`.
+    async handleInboundMessage(
+      iid: string,
+      msg: { id: string; type: string; from: string; text?: { body?: string }; reaction?: { message_id: string; emoji: string }; timestamp?: string },
+      contacts: Array<{ profile?: { name?: string }; wa_id?: string }> | undefined,
+      dedupeCache: { isDuplicate: (instanceId: string, key: string, channel: string, logger: unknown) => boolean },
+    ) {
+      if (dedupeCache.isDuplicate(iid, msg.id, 'whatsapp-cloud', logger)) return false;
+      if (msg.type === 'reaction' && msg.reaction) {
+        emits.push({
+          method: msg.reaction.emoji ? 'reaction.received' : 'reaction.removed',
+          params: { instanceId: iid, messageId: msg.reaction.message_id, from: msg.from, emoji: msg.reaction.emoji },
+        });
+        return true;
+      }
+      const senderName = contacts?.find((c) => c.wa_id === msg.from)?.profile?.name;
+      emits.push({
+        method: 'message.received',
+        params: {
+          instanceId: iid,
+          externalId: msg.id,
+          chatId: msg.from,
+          from: msg.from,
+          senderName,
+          content: msg.type === 'text' ? { type: 'text', text: msg.text?.body ?? '' } : { type: msg.type },
+        },
+      });
+      return true;
     },
-    emitMessageSent: async (params: Record<string, unknown>) => {
-      emits.push({ method: 'message.sent', params });
-    },
-    emitMessageDelivered: async (params: Record<string, unknown>) => {
-      emits.push({ method: 'message.delivered', params });
-    },
-    emitMessageRead: async (params: Record<string, unknown>) => {
-      emits.push({ method: 'message.read', params });
-    },
-    emitMessageFailed: async (params: Record<string, unknown>) => {
-      emits.push({ method: 'message.failed', params });
-    },
-    emitReactionReceived: async (params: Record<string, unknown>) => {
-      emits.push({ method: 'reaction.received', params });
-    },
-    emitReactionRemoved: async (params: Record<string, unknown>) => {
-      emits.push({ method: 'reaction.removed', params });
-    },
-    // eventBus stub for template.status_changed (publishEvent path)
-    eventBus: {
-      publish: async (type: string, payload: Record<string, unknown>) => {
-        emits.push({ method: type, params: payload });
-        return { id: 'evt-id' };
-      },
+
+    async handleStatusUpdate(
+      iid: string,
+      status: { id: string; status: string; timestamp: string; recipient_id: string; errors?: Array<{ code: number; title: string; message?: string }> },
+    ) {
+      const ts = Number.parseInt(status.timestamp, 10);
+      const timestampMs = Number.isFinite(ts) ? ts * 1000 : Date.now();
+      if (status.status === 'sent') return; // intentional no-op (de-duped with sendMessage)
+      if (status.status === 'delivered') {
+        emits.push({ method: 'message.delivered', params: { instanceId: iid, externalId: status.id, chatId: status.recipient_id, deliveredAt: timestampMs } });
+        return;
+      }
+      if (status.status === 'read') {
+        emits.push({ method: 'message.read', params: { instanceId: iid, externalId: status.id, chatId: status.recipient_id, readAt: timestampMs } });
+        return;
+      }
+      if (status.status === 'failed') {
+        const firstError = status.errors?.[0];
+        emits.push({
+          method: 'message.failed',
+          params: {
+            instanceId: iid,
+            externalId: status.id,
+            chatId: status.recipient_id,
+            error: firstError?.message ?? firstError?.title ?? 'Meta reported delivery failure',
+            errorCode: firstError ? String(firstError.code) : undefined,
+            retryable: false,
+          },
+        });
+      }
     },
   };
 
