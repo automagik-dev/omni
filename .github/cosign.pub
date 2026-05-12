@@ -1,0 +1,23 @@
+-----BEGIN COSIGN NO-PINNED-KEY SENTINEL-----
+KEYLESS_ONLY_NO_LONG_LIVED_FALLBACK_KEY
+
+@automagik/omni release signing is cosign KEYLESS ONLY. There is no
+long-lived public key to pin here: no private key in repo secrets, no
+hardware-backed offline key, no two-officer ceremony that ever populates
+this file. Ephemeral Fulcio certificates are minted per-release from the
+GitHub Actions OIDC identity and verification pins the certificate
+identity + OIDC issuer, not a key fingerprint.
+
+Verification contract:
+  - certificate-identity-regexp: ^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@
+  - certificate-oidc-issuer:     https://token.actions.githubusercontent.com
+  - provenance source-uri:       github.com/automagik-dev/omni
+
+Any tool that loads this file expecting a PEM-encoded public key MUST
+fail closed.
+
+Operators verifying a release locally use the cosign CLI directly
+against the bundle artifact (`omni-<version>-<platform>.tar.gz.bundle`),
+which relies exclusively on the keyless contract and never reads this
+file. See SECURITY.md for the canonical verification recipe.
+-----END COSIGN NO-PINNED-KEY SENTINEL-----

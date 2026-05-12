@@ -1,0 +1,23 @@
+# RFC 9116 security.txt for @automagik/omni
+#
+# Contact + canonical pin for release signing. All values below MUST be
+# byte-identical to the corresponding lines in:
+#   - SECURITY.md (repo root)
+#   - .github/ISSUE_TEMPLATE/signing-key-fingerprint.md
+#   - .github/cosign.pub (NO-KEY sentinel)
+# Drift in any single channel is treated as a compromise.
+
+Contact: mailto:security@namastex.ai
+Expires: 2027-01-01T00:00:00Z
+Preferred-Languages: en, pt-BR
+Canonical: https://raw.githubusercontent.com/automagik-dev/omni/main/.well-known/security.txt
+
+# Release Signing — Pinned Identity (cosign keyless)
+# certificate-identity-regexp: ^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@
+# certificate-oidc-issuer:     https://token.actions.githubusercontent.com
+# provenance source-uri:       github.com/automagik-dev/omni
+#
+# Signing mechanism: cosign keyless (Sigstore + Fulcio) — NO long-lived key.
+# Workflow file:     .github/workflows/sign-attest.yml
+# Rotation:          requires two-officer PR updating all four witnesses
+#                    plus a new SIGNING_CERT_IDENTITY_YYYYMMDD issue.
