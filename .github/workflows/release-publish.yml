@@ -60,10 +60,11 @@ on:
         required: true
         type: choice
         default: stable
+        # Canonical channel taxonomy (Felipe directive 2026-05-12,
+        # unified across pgserve/omni/genie). beta + canary retired.
         options:
           - stable
-          - beta
-          - canary
+          - homolog
           - dev
       draft:
         description: 'Create as draft (require manual promotion)?'
@@ -219,14 +220,32 @@ jobs:
           # same convention. A stable release advances BOTH latest.json and
           # dev.json (single-pipeline reality). channel=dev only advances
           # dev.json — latest.json stays at the prior stable.
+          # Canonical taxonomy: stable / homolog / dev.
+          # - stable advances latest.json + homolog.json + dev.json
+          #   (a stable release IS also the latest of every channel; the
+          #   reverse-flow promotion dev→homolog→main means stable
+          #   subsumes both downstream channels)
+          # - homolog advances homolog.json + dev.json (it's downstream
+          #   of stable but upstream of dev; promoting to homolog also
+          #   refreshes dev)
+          # - dev advances only dev.json
           declare -A MANIFEST_FILES=()
           case "$CHANNEL" in
             stable)
               MANIFEST_FILES[stable]="latest.json"
+              MANIFEST_FILES[homolog]="homolog.json"
+              MANIFEST_FILES[dev]="dev.json"
+              ;;
+            homolog)
+              MANIFEST_FILES[homolog]="homolog.json"
+              MANIFEST_FILES[dev]="dev.json"
+              ;;
+            dev)
               MANIFEST_FILES[dev]="dev.json"
               ;;
             *)
-              MANIFEST_FILES[$CHANNEL]="${CHANNEL}.json"
+              echo "::error::unknown channel: $CHANNEL (valid: stable, homolog, dev)"
+              exit 1
               ;;
           esac
 
