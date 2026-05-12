@@ -34,10 +34,12 @@ import { personsRoutes } from './persons';
 import { processedEventsRoutes } from './processed-events';
 import { providersRoutes } from './providers';
 import { settingsRoutes } from './settings';
+import { templatesRoutes } from './templates';
 import { trustRoutes } from './trust';
 import { turnsRoutes } from './turns';
 import { voiceRoutes } from './voice';
 import { webhooksRoutes } from './webhooks';
+import { whatsappCloudRoutes } from './whatsapp-cloud';
 
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
 
@@ -75,3 +77,5 @@ v2Routes.route('/', routesRoutes); // Agent routing routes at /api/v2/instances/
 v2Routes.route('/voice', voiceRoutes); // Voice session management
 v2Routes.route('/follow-up', followUpRoutes); // Idle-chat follow-up config at /api/v2/follow-up/{agents|instances|chats}/:id (issue #404)
 v2Routes.route('/handoffs', handoffsRoutes); // Handoff audit log at /api/v2/handoffs
+v2Routes.route('/instances', whatsappCloudRoutes); // WhatsApp Cloud (Meta) per-instance routes at /api/v2/instances/:id/whatsapp-cloud/*
+v2Routes.route('/', templatesRoutes); // WhatsApp Cloud HSM templates at /api/v2/instances/:id/whatsapp-templates/*

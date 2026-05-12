@@ -306,6 +306,15 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /turns/close-all': 'turns:admin',
   'POST /turns/close': 'turns:close',
 
+  // --- whatsapp-templates (mounted at root: /instances/:id/whatsapp-templates/...) ---
+  'GET /instances/:id/whatsapp-templates': 'instances:read',
+  'GET /instances/:id/whatsapp-templates/:templateId': 'instances:read',
+  'POST /instances/:id/whatsapp-templates': 'instances:write',
+  'DELETE /instances/:id/whatsapp-templates/:templateId': 'instances:write',
+  'POST /instances/:id/whatsapp-templates/upload-header-media': 'instances:write',
+  'POST /instances/:id/whatsapp-templates/:templateId/send-test': 'instances:write',
+  'POST /instances/:id/whatsapp-templates/:templateName/send': 'instances:write',
+
   // --- webhooks (mounted at root: /webhook-sources/..., /webhooks/:source, /events/trigger) ---
   'GET /webhook-sources': 'webhooks:read',
   'GET /webhook-sources/:id': 'webhooks:read',

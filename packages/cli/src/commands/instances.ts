@@ -620,6 +620,14 @@ export function createInstancesCommand(): Command {
     .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation')
     .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
     .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
+    // WhatsApp Cloud (Meta) — manual paste flow. Pair these three to bypass
+    // Embedded Signup (useful for dev/test or tenants that already provisioned
+    // their WABA outside Embedded Signup). Mirrors discord/telegram --token UX.
+    .option('--access-token <token>', 'WhatsApp Cloud (Meta) access token — pair with --phone-number-id + --waba-id')
+    .option('--phone-number-id <id>', 'WhatsApp Cloud phone_number_id (Graph API id, not E.164)')
+    .option('--waba-id <id>', 'WhatsApp Business Account id (WABA id)')
+    .option('--meta-app-id <id>', 'Optional override for META_APP_ID (when the tenant owns its own Meta App)')
+    .option('--meta-business-id <id>', 'Optional Meta Business Manager id')
     .action(
       async (
         rawId: string,
@@ -633,12 +641,68 @@ export function createInstancesCommand(): Command {
           twilioStatusCallbackUrl?: string;
           twilioWebhookUrl?: string;
           twilioValidateSignature?: boolean;
+          accessToken?: string;
+          phoneNumberId?: string;
+          wabaId?: string;
+          metaAppId?: string;
+          metaBusinessId?: string;
         },
       ) => {
         const client = getClient();
 
         try {
           const id = await resolveInstanceId(rawId);
+
+          // WhatsApp Cloud manual connect — hits /whatsapp-cloud/connect when
+          // the operator supplies the three required Meta identifiers.
+          const wantsWhatsAppCloud =
+            options.accessToken && options.phoneNumberId && options.wabaId;
+
+          if (wantsWhatsAppCloud) {
+            // Verify the instance channel matches before hitting the endpoint.
+            const instance = await client.instances.get(id);
+            if ((instance as { channel?: string }).channel !== 'whatsapp-cloud') {
+              output.error(
+                `Instance ${id} is not a whatsapp-cloud instance (channel=${(instance as { channel?: string }).channel}). ` +
+                  '--access-token/--phone-number-id/--waba-id only apply to whatsapp-cloud.',
+              );
+              return;
+            }
+
+            const { loadConfig } = await import('../config.js');
+            const cfg = loadConfig();
+            const baseUrl = cfg.apiUrl ?? 'http://localhost:8882';
+            const apiKey = cfg.apiKey ?? '';
+
+            const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/whatsapp-cloud/connect`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+              body: JSON.stringify({
+                accessToken: options.accessToken,
+                phoneNumberId: options.phoneNumberId,
+                wabaId: options.wabaId,
+                appId: options.metaAppId,
+                businessId: options.metaBusinessId,
+              }),
+            });
+
+            if (!resp.ok) {
+              const err = (await resp.json().catch(() => ({}))) as { error?: { message?: string } };
+              output.error(`Failed to connect: ${err?.error?.message ?? `HTTP ${resp.status}`}`);
+              return;
+            }
+
+            const result = (await resp.json()) as {
+              data?: { status?: string; displayPhoneNumber?: string | null; qualityRating?: string | null };
+            };
+            output.success('Instance connected via WhatsApp Cloud (manual)', {
+              status: result.data?.status ?? 'connected',
+              displayPhoneNumber: result.data?.displayPhoneNumber ?? null,
+              qualityRating: result.data?.qualityRating ?? null,
+            });
+            return;
+          }
+
           const result = await client.instances.connect(id, {
             forceNewQr: options.forceNewQr,
             token: options.token,

@@ -27,8 +27,21 @@ import type { ChannelType } from '@omni/core/types';
 
 import { WHATSAPP_CLOUD_CAPABILITIES } from './capabilities';
 import { MetaWhatsAppClient } from './client';
-import type { WhatsAppCloudConfig } from './types';
+import { handleMetaWebhook } from './handlers/webhook';
+import {
+  sendContact,
+  sendLocation,
+  sendMedia,
+  sendReaction,
+  sendTemplate,
+  sendText,
+  type SendTemplateButton,
+  type SendTemplateHeaderMedia,
+} from './senders';
+import type { MetaSendResponse, WhatsAppCloudConfig } from './types';
 import { MetaApiError, MetaErrorCode } from './utils/errors';
+
+const META_MEDIA_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'video', 'document', 'sticker']);
 
 interface WhatsAppCloudInstanceState {
   client: MetaWhatsAppClient;
@@ -190,19 +203,110 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
       };
     }
 
-    // NOTE: Group 3 wires up the sender dispatcher (text/media/location/contact/
-    // reaction/template). Until then, this is a stub that errors loudly so the
-    // bundled-server-entry doesn't silently mis-route messages.
-    this.logger.warn('WhatsApp Cloud sendMessage stub — Group 3 senders not yet wired', {
-      instanceId,
-      contentType: message.content.type,
-    });
-    return {
-      success: false,
-      error: `WhatsApp Cloud senders not implemented (Group 3 pending) — content.type=${message.content.type}`,
-      retryable: false,
-      timestamp: Date.now(),
-    };
+    const { client } = state;
+    const { content, to, replyTo, metadata } = message;
+
+    try {
+      let response: MetaSendResponse;
+      if (content.type === 'text') {
+        response = await sendText(client, to, content.text ?? '', replyTo);
+      } else if (META_MEDIA_TYPES.has(content.type)) {
+        response = await sendMedia(
+          client,
+          to,
+          content.mediaUrl ?? '',
+          content.mimeType,
+          content.caption ?? content.text,
+          content.filename,
+          replyTo,
+        );
+      } else if (content.type === 'location' && content.location) {
+        const { latitude, longitude, name, address } = content.location;
+        response = await sendLocation(client, to, latitude, longitude, name, address, replyTo);
+      } else if (content.type === 'contact' && content.contact) {
+        response = await sendContact(
+          client,
+          to,
+          [
+            {
+              name: content.contact.name,
+              phones: content.contact.phone ? [content.contact.phone] : undefined,
+              emails: content.contact.email ? [content.contact.email] : undefined,
+            },
+          ],
+          replyTo,
+        );
+      } else if (content.type === 'reaction') {
+        response = await sendReaction(client, to, content.targetMessageId ?? '', content.emoji ?? '');
+      } else if (content.type === 'template') {
+        // Template descriptor is carried via `metadata.template`. Senders/templates wire
+        // this via the routes/v2/templates.ts handler when the user hits send-template;
+        // for direct sendMessage calls, callers populate metadata.template themselves.
+        const tpl = (metadata?.template ?? {}) as {
+          name?: string;
+          language?: string;
+          bodyParameters?: string[];
+          headerMedia?: SendTemplateHeaderMedia;
+          buttonParameters?: SendTemplateButton[];
+        };
+        if (!tpl.name) {
+          return {
+            success: false,
+            error: 'template send requires metadata.template.name',
+            retryable: false,
+            timestamp: Date.now(),
+          };
+        }
+        response = await sendTemplate(
+          client,
+          to,
+          tpl.name,
+          tpl.language ?? 'pt_BR',
+          tpl.bodyParameters,
+          tpl.headerMedia,
+          tpl.buttonParameters,
+          replyTo,
+        );
+      } else {
+        return {
+          success: false,
+          error: `Unsupported content.type=${content.type} for whatsapp-cloud`,
+          retryable: false,
+          timestamp: Date.now(),
+        };
+      }
+
+      const messageId = response.messages?.[0]?.id;
+      await this.emitMessageSent({
+        instanceId,
+        externalId: messageId ?? crypto.randomUUID(),
+        chatId: to,
+        to,
+        content: {
+          type: content.type,
+          text: content.text,
+          mediaUrl: content.mediaUrl,
+        },
+        replyToId: replyTo,
+        senderAgentId: metadata?.senderAgentId as string | undefined,
+      });
+
+      return { success: true, messageId, timestamp: Date.now() };
+    } catch (err) {
+      const isMeta = err instanceof MetaApiError;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const retryable = isMeta ? err.retryable : false;
+
+      await this.emitMessageFailed({ instanceId, chatId: to, error: errorMessage, retryable });
+
+      return {
+        success: false,
+        error: errorMessage,
+        errorCode: isMeta ? err.code : undefined,
+        retryable,
+        timestamp: Date.now(),
+      };
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -210,14 +314,18 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   // ─────────────────────────────────────────────────────────────
 
   async handleWebhook(request: Request): Promise<Response> {
-    // NOTE: Group 4 implements the full webhook handler with HMAC-SHA256
-    // verification, payload parsing, idempotency, and event emission. For now
-    // we 503 explicitly so Meta retries land in observability.
-    this.logger.warn('WhatsApp Cloud webhook stub hit — Group 4 handler not yet wired', {
-      method: request.method,
-      url: request.url,
-    });
-    return new Response('whatsapp-cloud webhook handler not yet implemented', { status: 503 });
+    const appSecret = process.env.META_APP_SECRET ?? '';
+    const verifyToken = process.env.META_VERIFY_TOKEN ?? '';
+
+    if (!appSecret || !verifyToken) {
+      this.logger.error('META_APP_SECRET or META_VERIFY_TOKEN missing — refusing to handle webhook', {
+        method: request.method,
+      });
+      // 200 to avoid Meta disabling the app; the env misconfiguration is on us.
+      return new Response('Webhook misconfigured server-side', { status: 200 });
+    }
+
+    return handleMetaWebhook(request, this, appSecret, verifyToken);
   }
 
   // ─────────────────────────────────────────────────────────────
