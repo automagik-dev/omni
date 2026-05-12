@@ -17,11 +17,13 @@ name: Release
 #   1. build           — workflow_call into build-tarballs.yml (matrix × 4 platforms)
 #   2. sign-attest     — workflow_call into sign-attest.yml (cosign keyless + SLSA L3)
 #   3. publish         — workflow_call into release-publish.yml (GH release + assets)
-#   4. publish-npm     — preserved legacy path (npm OIDC Trusted Publishing).
-#                        Skipped on -rc.* / -beta.* tags so prereleases don't
-#                        pollute @latest. (BRIEF directive: preserve omni's
-#                        npm publish path — no explicit decision to drop.)
-#   5. release-notes   — git-cliff changelog appended to the GH release body.
+#   4. release-notes   — git-cliff changelog appended to the GH release body.
+#
+# npm publishing happens in version.yml inline (branch-derived dist-tag:
+# main → @latest, dev → @next). Single source of truth — no duplicate
+# publish step here. Codex P1 on PR #633 caught the gap when a previous
+# revision of this file ran an unconditional `npm publish --tag latest`
+# alongside version.yml's @next publish, promoting dev cuts to @latest.
 
 on:
   push:
@@ -87,68 +89,17 @@ jobs:
       draft: false
 
   # ---------------------------------------------------------------------------
-  # Legacy npm OIDC Trusted Publishing path (preserved).
-  # Skipped on -rc.* / -beta.* tags so prereleases don't pollute @latest.
-  # ---------------------------------------------------------------------------
-  publish-npm:
-    needs: sign-attest
-    if: ${{ !contains(github.ref_name, '-rc.') && !contains(github.ref_name, '-beta.') }}
-    name: Publish to npm via OIDC
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      id-token: write       # npm OIDC Trusted Publishing
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          fetch-depth: 0
-
-      - name: Checkout release tag
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          git fetch --tags --force
-          git checkout "${TAG}"
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
-        with:
-          bun-version: "latest"
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build CLI
-        run: bunx turbo run build --filter=@automagik/omni
-
-      # Auth: npm OIDC Trusted Publishing.
-      # Node 24 bundles npm 11.x; npm Trusted Publishing requires
-      # npm >= 11.5.1. Using Node 24 sidesteps the npm self-upgrade dance.
-      - name: Setup Node 24 (for npm OIDC publish)
-        uses: actions/setup-node@v5
-        with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Publish to npm via OIDC (@latest, with @next promotion fallback)
-        env:
-          HUSKY: "0"
-          # npm auto-enables provenance in any CI env with `id-token: write`.
-          # Self-hosted runners fail the server-side sigstore check with 422.
-          # Disable auto-provenance explicitly; OIDC token exchange still happens.
-          NPM_CONFIG_PROVENANCE: "false"
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cd packages/cli
-          if ! npm publish --access public --tag latest 2>&1; then
-            echo "Publish failed — version may already exist from @next. Retagging as latest..."
-            npm dist-tag add "@automagik/omni@${VERSION}" latest
-          fi
-
-  # ---------------------------------------------------------------------------
   # Release notes (git-cliff) — runs after publish so the GH release exists.
   # Updates the release body with the generated changelog.
+  #
+  # NOTE: npm publish is NOT performed by this workflow. version.yml runs
+  # `npm publish --tag <next|latest>` inline using a branch-derived dist-tag
+  # (main → @latest, dev → @next). A duplicate publish step here would race
+  # version.yml's inline path AND, before this drop, the missing channel
+  # gate meant dev dispatches were attempting `npm publish --tag latest`
+  # against a version version.yml had already pushed as @next — promoting
+  # dev cuts to the @latest dist-tag. Codex P1 on PR #633 surfaced this;
+  # the publish-npm job has been removed to keep a single source of truth.
   # ---------------------------------------------------------------------------
   release-notes:
     needs: publish
