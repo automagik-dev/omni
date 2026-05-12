@@ -4,8 +4,10 @@
  * Used inside CreateInstanceModal when channel === 'whatsapp-cloud'. Provides
  * two tabs:
  *   1. Embedded Signup — Facebook JS SDK → FB.login(config_id) → backend
- *      exchanges the code for an access token, discovers WABAs + phone
- *      numbers, then the user picks a phone number and we POST /connect.
+ *      exchanges the code for an access token (kept server-side), discovers
+ *      WABAs + phone numbers, and returns an opaque `exchangeHandle`. The
+ *      user picks a phone, then we POST /connect with the handle (NOT the
+ *      raw token, which never crosses the wire after the Meta exchange).
  *   2. Manual — paste accessToken + phoneNumberId + wabaId and POST /connect.
  *
  * Backend routes called (Groups 5+6 of the wish — implemented in parallel):
@@ -42,7 +44,12 @@ interface DiscoveredPhoneNumber {
 }
 
 interface ExchangeResponse {
-  accessToken: string;
+  /**
+   * Opaque single-use handle (format `eshandle_<uuid>`) that resolves
+   * server-side to the long-lived Meta token. The raw token never crosses
+   * the wire — pass this handle to `/connect`. TTL ~5 min.
+   */
+  exchangeHandle: string;
   wabaIds: string[];
   phoneNumbers: DiscoveredPhoneNumber[];
 }
@@ -109,7 +116,10 @@ function EmbeddedSignupPanel({
   const [step, setStep] = useState<EmbeddedStep>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [phones, setPhones] = useState<DiscoveredPhoneNumber[]>([]);
-  const [accessToken, setAccessToken] = useState<string>('');
+  // Opaque single-use handle from /oauth/exchange — server-side resolves it
+  // to the long-lived Meta token on /connect. Raw token never lives in the
+  // browser. TTL ~5 min (see packages/api/src/lib/oauth-token-cache.ts).
+  const [exchangeHandle, setExchangeHandle] = useState<string>('');
   const [selectedPhoneId, setSelectedPhoneId] = useState<string>('');
 
   // Capture session info posted by the Facebook popup
@@ -176,7 +186,7 @@ function EmbeddedSignupPanel({
         return;
       }
 
-      setAccessToken(data.accessToken);
+      setExchangeHandle(data.exchangeHandle);
       setPhones(data.phoneNumbers);
       setSelectedPhoneId(data.phoneNumbers[0]?.phone_number_id ?? '');
       setStep('choose_number');
@@ -200,7 +210,7 @@ function EmbeddedSignupPanel({
       const res = await apiFetch(`/instances/${instanceId}/whatsapp-cloud/connect`, {
         method: 'POST',
         body: JSON.stringify({
-          accessToken,
+          exchangeHandle,
           phoneNumberId: phone.phone_number_id,
           wabaId: phone.wabaId,
         }),
@@ -216,7 +226,7 @@ function EmbeddedSignupPanel({
       setStep('choose_number');
       setErrorMessage(err instanceof Error ? err.message : 'Failed to connect WhatsApp Cloud.');
     }
-  }, [accessToken, instanceId, onConnected, phones, selectedPhoneId]);
+  }, [exchangeHandle, instanceId, onConnected, phones, selectedPhoneId]);
 
   // --- Render -------------------------------------------------------------
 

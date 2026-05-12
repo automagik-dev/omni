@@ -25,7 +25,9 @@ import { scrubBreadcrumb, scrubEvent } from '../sentry-scrub';
 
 /** Synthesized event reflecting what we'd capture if a Meta send failed. */
 function buildRealisticMetaEvent() {
-  const accessToken = `EAA${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0'.repeat(2)}`; // 80+ chars after EAA
+  // Synthetic low-entropy fixture (repeated single char) so secret-scanners
+  // don't flag this audit harness as a real Meta token leak.
+  const accessToken = `EAA${'a'.repeat(80)}`;
   return {
     event_id: 'evt_test_meta',
     message: `Failed to send message to +5511999998888 (wamid.HBgL... ) — token ${accessToken}`,

@@ -25,11 +25,14 @@
 
 import { zValidator } from '@hono/zod-validator';
 import {
+  MetaApiError,
+  MetaErrorCode,
   MetaWhatsAppClient,
   exchangeCodeForToken,
   getWabaDetails,
   registerPhoneNumber as registerPhoneNumberOAuth,
   subscribeApp,
+  uploadHeaderMedia,
 } from '@omni/channel-whatsapp-cloud';
 import { createLogger } from '@omni/core';
 import {
@@ -39,6 +42,7 @@ import {
 } from '@omni/core/schemas';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import * as oauthTokenCache from '../../lib/oauth-token-cache';
 import { requireInstanceAccess } from '../../middleware/auth';
 import type { AppVariables } from '../../types';
 
@@ -123,12 +127,14 @@ whatsappCloudRoutes.post(
       const token = await exchangeCodeForToken(code, appId, appSecret, undefined, apiVersion);
       const details = await getWabaDetails(token.accessToken, apiVersion);
 
-      // NOTE: returning the access token is gated to authenticated callers
-      // with instance access. The client (UI) immediately POSTs to /connect
-      // and never persists this elsewhere. Sentry scrubbing (Group 8) masks
-      // `accessToken` in event payloads.
+      // Stash the token server-side under an opaque single-use handle.
+      // The browser never sees the raw token — it passes the handle to
+      // /connect and the route resolves it internally. Closes the XSS /
+      // network-log exposure window flagged by code-review.
+      const exchangeHandle = oauthTokenCache.put(token.accessToken);
+
       return c.json({
-        accessToken: token.accessToken,
+        exchangeHandle,
         wabaIds: details.wabaIds,
         phoneNumbers: details.phoneNumbers,
       });
@@ -158,13 +164,37 @@ whatsappCloudRoutes.post(
     const guard = ensureWhatsAppCloud(instance);
     if (!guard.ok) return c.json(guard.payload, 400);
 
-    // Decide provenance: if appId was provided we assume manual paste; OAuth
-    // flow doesn't populate appId per-instance (it comes from the env App).
-    const connectionMethod = body.appId ? 'manual' : 'embedded_signup';
+    // Resolve the access token: either consume the single-use handle from
+    // the Embedded Signup exchange, or accept a raw token from the manual
+    // paste flow. The Zod refinement guarantees exactly one is present.
+    let accessToken: string;
+    let connectionMethod: 'manual' | 'embedded_signup';
+    if (body.exchangeHandle) {
+      const resolved = oauthTokenCache.take(body.exchangeHandle);
+      if (!resolved) {
+        return c.json(
+          {
+            error: {
+              code: 'EXCHANGE_HANDLE_INVALID',
+              message: 'Exchange handle unknown or expired. Restart the Embedded Signup flow.',
+            },
+          },
+          400,
+        );
+      }
+      accessToken = resolved;
+      connectionMethod = 'embedded_signup';
+    } else if (body.accessToken) {
+      accessToken = body.accessToken;
+      connectionMethod = 'manual';
+    } else {
+      // Defensive — the schema refine should make this unreachable.
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'accessToken or exchangeHandle is required' } }, 400);
+    }
 
     // Persist Meta config on the instance row first.
     const updated = await services.instances.update(id, {
-      metaAccessToken: body.accessToken,
+      metaAccessToken: accessToken,
       metaPhoneNumberId: body.phoneNumberId,
       metaWabaId: body.wabaId,
       metaAppId: body.appId ?? undefined,
@@ -183,7 +213,7 @@ whatsappCloudRoutes.post(
       const probe = new MetaWhatsAppClient(
         {
           phoneNumberId: body.phoneNumberId,
-          accessToken: body.accessToken,
+          accessToken,
           apiVersion,
         },
         body.wabaId,
@@ -216,7 +246,7 @@ whatsappCloudRoutes.post(
       await plugin.connect(id, {
         instanceId: id,
         credentials: {
-          metaAccessToken: body.accessToken,
+          metaAccessToken: accessToken,
           metaPhoneNumberId: body.phoneNumberId,
           metaWabaId: body.wabaId,
           metaAppId: body.appId,
@@ -587,62 +617,31 @@ whatsappCloudRoutes.post('/:id/whatsapp-cloud/profile/photo', async (c) => {
   const bytes = await blob.arrayBuffer();
 
   try {
-    // Step 1: open an upload session.
-    // Token goes in the Authorization header (NOT the URL query) so it stays
-    // out of proxy access logs, request loggers, and Sentry breadcrumbs that
-    // capture URLs but scrub bodies/headers.
-    const sessionRes = await fetch(
-      `https://graph.facebook.com/${apiVersion}/${appIdForUpload}/uploads?` +
-        new URLSearchParams({
-          file_length: String(bytes.byteLength),
-          file_type: fileType,
-          file_name: fileName,
-        }).toString(),
-      {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${instance.metaAccessToken}` },
-      },
+    // Resumable upload (create session → upload bytes → handle).
+    // Reuses the same flow as `uploadHeaderMedia` in @omni/channel-whatsapp-cloud
+    // — token in Authorization header, no query string, MetaApiError throws.
+    const { handle } = await uploadHeaderMedia(
+      appIdForUpload,
+      instance.metaAccessToken,
+      { bytes, mimeType: fileType, filename: fileName },
+      apiVersion,
     );
-    if (!sessionRes.ok) {
-      const text = await sessionRes.text();
-      return c.json(
-        { error: { code: 'UPLOAD_SESSION_FAILED', message: `HTTP ${sessionRes.status}${text ? `: ${text.slice(0, 160)}` : ''}` } },
-        500,
-      );
-    }
-    const sessionData = (await sessionRes.json()) as { id?: string };
-    if (!sessionData.id) {
-      return c.json({ error: { code: 'UPLOAD_SESSION_FAILED', message: 'Meta did not return an upload session id' } }, 500);
-    }
-
-    // Step 2: upload bytes — Authorization header is `OAuth <token>` per Meta docs.
-    const uploadRes = await fetch(`https://graph.facebook.com/${apiVersion}/${sessionData.id}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `OAuth ${instance.metaAccessToken}`,
-        file_offset: '0',
-      },
-      body: bytes,
-    });
-    if (!uploadRes.ok) {
-      const text = await uploadRes.text();
-      return c.json(
-        { error: { code: 'UPLOAD_FAILED', message: `HTTP ${uploadRes.status}${text ? `: ${text.slice(0, 160)}` : ''}` } },
-        500,
-      );
-    }
-    const uploadData = (await uploadRes.json()) as { h?: string };
-    if (!uploadData.h) {
-      return c.json({ error: { code: 'UPLOAD_FAILED', message: 'Meta did not return a media handle' } }, 500);
-    }
 
     // Step 3: attach the handle to the business profile.
     const client = buildClientFromInstance(instance);
     if (!client) return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance has no Meta credentials' } }, 409);
-    await client.updateBusinessProfile({ profile_picture_handle: uploadData.h });
+    await client.updateBusinessProfile({ profile_picture_handle: handle });
 
-    return c.json({ ok: true, handle: uploadData.h });
+    return c.json({ ok: true, handle });
   } catch (err) {
+    // MetaApiError carries a normalized code already; surface it directly.
+    if (err instanceof MetaApiError) {
+      return c.json(
+        { error: { code: err.code, message: err.message } },
+        // 400-ish if Meta rejected the file; 500 for transport/auth issues.
+        err.code === MetaErrorCode.INVALID_REQUEST ? 400 : 500,
+      );
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     return c.json({ error: { code: 'PROFILE_PHOTO_FAILED', message } }, 500);
   }

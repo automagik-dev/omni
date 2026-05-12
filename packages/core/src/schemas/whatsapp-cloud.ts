@@ -294,7 +294,15 @@ export const EmbeddedSignupExchangeRequestSchema = z.object({
 });
 
 export const EmbeddedSignupExchangeResponseSchema = z.object({
-  accessToken: z.string(),
+  /**
+   * Opaque single-use handle that maps server-side to the long-lived Meta
+   * access token. The browser passes this back to `/connect` instead of the
+   * raw token to keep the secret out of network logs / browser memory.
+   *
+   * Format: `eshandle_<uuid>`. TTL ~5 minutes. See
+   * `packages/api/src/lib/oauth-token-cache.ts`.
+   */
+  exchangeHandle: z.string(),
   wabaIds: z.array(z.string()),
   phoneNumbers: z.array(
     z.object({
@@ -307,13 +315,29 @@ export const EmbeddedSignupExchangeResponseSchema = z.object({
   ),
 });
 
-export const WhatsAppCloudConnectRequestSchema = z.object({
-  accessToken: z.string().min(1),
-  phoneNumberId: z.string().min(1),
-  wabaId: z.string().min(1),
-  appId: z.string().optional(),
-  businessId: z.string().optional(),
-});
+/**
+ * `/connect` request — caller supplies either:
+ *   - `exchangeHandle` from the Embedded Signup flow (server resolves the
+ *     token internally), OR
+ *   - `accessToken` directly (manual paste flow for dev / tenants with a
+ *     pre-existing WABA token).
+ *
+ * One of the two MUST be present; the route enforces this via a Zod
+ * refinement so the schema rejects requests with neither / both.
+ */
+export const WhatsAppCloudConnectRequestSchema = z
+  .object({
+    accessToken: z.string().min(1).optional(),
+    exchangeHandle: z.string().min(1).optional(),
+    phoneNumberId: z.string().min(1),
+    wabaId: z.string().min(1),
+    appId: z.string().optional(),
+    businessId: z.string().optional(),
+  })
+  .refine((v) => Boolean(v.accessToken) !== Boolean(v.exchangeHandle), {
+    message: 'Provide exactly one of `accessToken` (manual flow) or `exchangeHandle` (Embedded Signup flow)',
+    path: ['accessToken'],
+  });
 
 export const WhatsAppCloudRegisterRequestSchema = z.object({
   /** 6-digit PIN required by Meta for new number registration. */

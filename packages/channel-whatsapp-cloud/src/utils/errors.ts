@@ -90,12 +90,21 @@ export function mapHttpStatusToMetaError(codeOrStatus: number): MetaErrorCodeTyp
   if (codeOrStatus >= 500 && codeOrStatus < 600) return MetaErrorCode.UPSTREAM_ERROR;
 
   // Meta error codes.
+  // 1, 2 — API service / unknown — Meta-side transient errors, retryable upstream.
+  if (codeOrStatus === 1 || codeOrStatus === 2) return MetaErrorCode.UPSTREAM_ERROR;
+  // 100 — invalid parameter; 131009 — parameter value invalid.
   if (codeOrStatus === 100 || codeOrStatus === 131009) return MetaErrorCode.INVALID_REQUEST;
+  // 131053 — media too large (still a client-side problem, just a richer 400).
+  if (codeOrStatus === 131053) return MetaErrorCode.INVALID_REQUEST;
+  // 4, 80007 — app/account rate limit; 130429 — per-app; 131056 — per phone.
   if (codeOrStatus === 4 || codeOrStatus === 80007 || codeOrStatus === 130429 || codeOrStatus === 131056) {
     return MetaErrorCode.RATE_LIMITED;
   }
   if (codeOrStatus === 131026) return MetaErrorCode.RECIPIENT_NOT_FOUND;
   if (codeOrStatus === 131047 || codeOrStatus === 131051) return MetaErrorCode.OUTSIDE_24H_WINDOW;
+  // 200 — permission error; 270 — invalid OAuth permission; 272 — app not allowed
+  // to access user data. All map to auth failure — the caller needs new perms.
+  if (codeOrStatus === 200 || codeOrStatus === 270 || codeOrStatus === 272) return MetaErrorCode.AUTH_FAILED;
   if (codeOrStatus >= 132000 && codeOrStatus < 132100) return MetaErrorCode.TEMPLATE_NOT_APPROVED;
   if (codeOrStatus >= 133000 && codeOrStatus < 133100) return MetaErrorCode.PHONE_NOT_FOUND;
 

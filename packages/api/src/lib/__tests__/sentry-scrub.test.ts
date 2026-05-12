@@ -388,13 +388,17 @@ describe('scrubPii — Meta access tokens', () => {
   });
 
   test('replaces Bearer header tokens while preserving the keyword', () => {
-    const input = 'Authorization: Bearer abc123XYZ.def-456_ghi.jkl-mno_pqr789';
+    // Synthetic low-entropy token (40+ chars to satisfy the regex) so
+    // secret-scanners like GitGuardian don't flag this fixture as a leak.
+    const fakeToken = 'a'.repeat(40);
+    const input = `Authorization: Bearer ${fakeToken}`;
     expect(scrubPii(input)).toBe('Authorization: Bearer [token]');
   });
 
   test('handles multiple tokens in one string', () => {
     const tok = `EAA${'A'.repeat(50)}`;
-    const input = `before ${tok} middle Bearer xyz789ABC-123_def.gh-jklmn middle2 ${tok} end`;
+    const fakeBearer = 'b'.repeat(30);
+    const input = `before ${tok} middle Bearer ${fakeBearer} middle2 ${tok} end`;
     const result = scrubPii(input);
     expect(result).toContain('[meta_token]');
     expect(result).toContain('Bearer [token]');

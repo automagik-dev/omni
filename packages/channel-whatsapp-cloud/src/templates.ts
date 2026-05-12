@@ -291,79 +291,84 @@ export async function syncTemplatesToDb(
   wabaId: string,
   metaTemplates: MetaTemplateRecord[],
 ): Promise<SyncResult> {
-  // 1) Snapshot local rows.
-  const localRows = await db
-    .select()
-    .from(whatsappTemplates)
-    .where(eq(whatsappTemplates.instanceId, instanceId));
+  // Wrap the entire reconciliation in a transaction so concurrent ?sync=true
+  // calls don't trample each other and a partial failure rolls back cleanly.
+  return db.transaction(async (tx) => {
+    // 1) Snapshot local rows.
+    const localRows = await tx
+      .select()
+      .from(whatsappTemplates)
+      .where(eq(whatsappTemplates.instanceId, instanceId));
 
-  // Lookup map keyed on (name, language).
-  const localByKey = new Map<string, WhatsappTemplate>();
-  for (const row of localRows) {
-    localByKey.set(localKey(row.name, row.language), row);
-  }
+    // Lookup map keyed on (name, language).
+    const localByKey = new Map<string, WhatsappTemplate>();
+    for (const row of localRows) {
+      localByKey.set(localKey(row.name, row.language), row);
+    }
 
-  let inserted = 0;
-  let updated = 0;
-  const seenKeys = new Set<string>();
+    let inserted = 0;
+    let updated = 0;
+    const seenKeys = new Set<string>();
+    const now = new Date();
 
-  for (const tmpl of metaTemplates) {
-    const key = localKey(tmpl.name, tmpl.language);
-    seenKeys.add(key);
+    for (const tmpl of metaTemplates) {
+      const key = localKey(tmpl.name, tmpl.language);
+      seenKeys.add(key);
 
-    const existing = localByKey.get(key);
-    if (existing) {
-      await db
-        .update(whatsappTemplates)
-        .set({
+      const existing = localByKey.get(key);
+      if (existing) {
+        await tx
+          .update(whatsappTemplates)
+          .set({
+            metaId: tmpl.id,
+            wabaId,
+            category: tmpl.category,
+            status: tmpl.status,
+            components: (tmpl.components ?? null) as WhatsAppTemplateComponent[] | null,
+            rejectionReason: tmpl.rejected_reason ?? null,
+            qualityScore: tmpl.quality_score?.score ?? null,
+            updatedAt: now,
+          })
+          .where(eq(whatsappTemplates.id, existing.id));
+        updated++;
+      } else {
+        const insertRow: NewWhatsappTemplate = {
+          instanceId,
           metaId: tmpl.id,
           wabaId,
+          name: tmpl.name,
+          language: tmpl.language,
           category: tmpl.category,
           status: tmpl.status,
           components: (tmpl.components ?? null) as WhatsAppTemplateComponent[] | null,
           rejectionReason: tmpl.rejected_reason ?? null,
           qualityScore: tmpl.quality_score?.score ?? null,
-          updatedAt: new Date(),
-        })
-        .where(eq(whatsappTemplates.id, existing.id));
-      updated++;
-    } else {
-      const insertRow: NewWhatsappTemplate = {
-        instanceId,
-        metaId: tmpl.id,
-        wabaId,
-        name: tmpl.name,
-        language: tmpl.language,
-        category: tmpl.category,
-        status: tmpl.status,
-        components: (tmpl.components ?? null) as WhatsAppTemplateComponent[] | null,
-        rejectionReason: tmpl.rejected_reason ?? null,
-        qualityScore: tmpl.quality_score?.score ?? null,
-      };
-      await db.insert(whatsappTemplates).values(insertRow);
-      inserted++;
+        };
+        await tx.insert(whatsappTemplates).values(insertRow);
+        inserted++;
+      }
     }
-  }
 
-  // 3) Mark stale rows (present locally, missing from Meta) as DELETED.
-  const staleIds: string[] = [];
-  for (const row of localRows) {
-    const key = localKey(row.name, row.language);
-    if (!seenKeys.has(key) && row.status !== 'DELETED') {
-      staleIds.push(row.id);
+    // 3) Mark stale rows (present locally, missing from Meta) as DELETED.
+    const staleIds: string[] = [];
+    for (const row of localRows) {
+      const key = localKey(row.name, row.language);
+      if (!seenKeys.has(key) && row.status !== 'DELETED') {
+        staleIds.push(row.id);
+      }
     }
-  }
 
-  let markedDeleted = 0;
-  if (staleIds.length > 0) {
-    await db
-      .update(whatsappTemplates)
-      .set({ status: 'DELETED', updatedAt: new Date() })
-      .where(and(eq(whatsappTemplates.instanceId, instanceId), inArray(whatsappTemplates.id, staleIds)));
-    markedDeleted = staleIds.length;
-  }
+    let markedDeleted = 0;
+    if (staleIds.length > 0) {
+      await tx
+        .update(whatsappTemplates)
+        .set({ status: 'DELETED', updatedAt: now })
+        .where(and(eq(whatsappTemplates.instanceId, instanceId), inArray(whatsappTemplates.id, staleIds)));
+      markedDeleted = staleIds.length;
+    }
 
-  return { inserted, updated, markedDeleted };
+    return { inserted, updated, markedDeleted };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -398,39 +403,54 @@ export async function handleTemplateStatusUpdate(
   // that share a WABA — though we have a unique constraint on
   // (instance_id, name, language) so a single instance only ever has one).
   // We emit + update per row so each instance's event scope is correct.
-  const rows = await db
-    .select()
-    .from(whatsappTemplates)
-    .where(
-      or(
-        eq(whatsappTemplates.metaId, update.message_template_id),
-        and(
-          eq(whatsappTemplates.name, update.message_template_name),
-          eq(whatsappTemplates.language, update.message_template_language),
+  // Two phases:
+  //   1. Inside a transaction, fetch + update every matched row atomically.
+  //      No event emission here — the transaction holds DB locks and we
+  //      don't want event-bus calls (which can be async/IO-heavy) sitting
+  //      inside the lock window.
+  //   2. After commit, emit one `template.status_changed` per row.
+  const updatedRows = await db.transaction(async (tx) => {
+    const matched = await tx
+      .select()
+      .from(whatsappTemplates)
+      .where(
+        or(
+          eq(whatsappTemplates.metaId, update.message_template_id),
+          and(
+            eq(whatsappTemplates.name, update.message_template_name),
+            eq(whatsappTemplates.language, update.message_template_language),
+          ),
         ),
-      ),
-    );
+      );
 
-  if (rows.length === 0) {
+    if (matched.length === 0) return [];
+
+    const now = new Date();
+    const ids = matched.map((r) => r.id);
+    await tx
+      .update(whatsappTemplates)
+      .set({
+        metaId: update.message_template_id,
+        status: newStatus,
+        rejectionReason: update.event === 'REJECTED' ? update.reason ?? null : null,
+        updatedAt: now,
+      })
+      .where(inArray(whatsappTemplates.id, ids));
+
+    // Return the pre-update snapshot so the event payload carries the correct
+    // previousStatus — we'd have lost it after the bulk update otherwise.
+    return matched;
+  });
+
+  if (updatedRows.length === 0) {
     // No local row to update — caller can re-sync. Skip event emission so we
     // don't fan out a status_changed for a template the system doesn't
     // know about yet.
     return;
   }
 
-  for (const row of rows) {
+  for (const row of updatedRows) {
     const previousStatus = (row.status as MetaTemplateStatus) ?? null;
-
-    await db
-      .update(whatsappTemplates)
-      .set({
-        metaId: update.message_template_id,
-        status: newStatus,
-        rejectionReason: update.event === 'REJECTED' ? update.reason ?? null : null,
-        updatedAt: new Date(),
-      })
-      .where(eq(whatsappTemplates.id, row.id));
-
     await plugin.handleTemplateStatusChanged(row.instanceId, update, {
       templateId: row.id,
       previousStatus: previousStatus ?? undefined,

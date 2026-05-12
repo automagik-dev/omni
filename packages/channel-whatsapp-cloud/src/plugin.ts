@@ -65,6 +65,12 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   /** instanceId → live state */
   private waCloudInstances = new Map<string, WhatsAppCloudInstanceState>();
 
+  /** phone_number_id → instanceId (reverse index — O(1) webhook resolution). */
+  private byPhoneNumberId = new Map<string, string>();
+
+  /** waba_id → Set<instanceId> (multiple instances can share a WABA). */
+  private byWabaId = new Map<string, Set<string>>();
+
   // ─────────────────────────────────────────────────────────────
   // Lifecycle
   // ─────────────────────────────────────────────────────────────
@@ -78,6 +84,8 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
       state.dedupeCache.dispose();
     }
     this.waCloudInstances.clear();
+    this.byPhoneNumberId.clear();
+    this.byWabaId.clear();
     this.logger.info('WhatsApp Cloud plugin destroyed');
   }
 
@@ -162,6 +170,13 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     const dedupeCache = createInboundDedupeCache();
 
     this.waCloudInstances.set(instanceId, { client, config: cloudConfig, dedupeCache });
+    this.byPhoneNumberId.set(phoneNumberId, instanceId);
+    let wabaSet = this.byWabaId.get(wabaId);
+    if (!wabaSet) {
+      wabaSet = new Set<string>();
+      this.byWabaId.set(wabaId, wabaSet);
+    }
+    wabaSet.add(instanceId);
 
     await this.updateInstanceStatus(instanceId, config, {
       state: 'connected',
@@ -184,6 +199,12 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     if (state) {
       state.dedupeCache.dispose();
       this.waCloudInstances.delete(instanceId);
+      this.byPhoneNumberId.delete(state.config.phoneNumberId);
+      const wabaSet = this.byWabaId.get(state.config.wabaId);
+      if (wabaSet) {
+        wabaSet.delete(instanceId);
+        if (wabaSet.size === 0) this.byWabaId.delete(state.config.wabaId);
+      }
     }
 
     this.instances.setInstance(instanceId, {} as InstanceConfig, {
@@ -405,13 +426,13 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
    *
    * The Meta webhook is global — there's no path-based instance id — so this
    * is the resolution mechanism used by `handleWebhook` after signature
-   * verification.
+   * verification. O(1) via the `byPhoneNumberId` reverse index.
    */
   findInstanceByPhoneNumberId(phoneNumberId: string): readonly [string, WhatsAppCloudInstanceState] | undefined {
-    for (const [id, state] of this.waCloudInstances) {
-      if (state.config.phoneNumberId === phoneNumberId) return [id, state] as const;
-    }
-    return undefined;
+    const id = this.byPhoneNumberId.get(phoneNumberId);
+    if (!id) return undefined;
+    const state = this.waCloudInstances.get(id);
+    return state ? ([id, state] as const) : undefined;
   }
 
   /**
@@ -420,11 +441,16 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
    * `phone_number_quality_update`, `phone_number_name_update`) carry only the
    * WABA id, and multiple Omni instances can be provisioned under the same
    * WABA (different phone numbers). Each instance gets its own alert event.
+   *
+   * O(K) where K is the number of instances sharing the WABA — typically 1.
    */
   findInstancesByWabaId(wabaId: string): Array<readonly [string, WhatsAppCloudInstanceState]> {
+    const ids = this.byWabaId.get(wabaId);
+    if (!ids || ids.size === 0) return [];
     const matches: Array<readonly [string, WhatsAppCloudInstanceState]> = [];
-    for (const [id, state] of this.waCloudInstances) {
-      if (state.config.wabaId === wabaId) matches.push([id, state] as const);
+    for (const id of ids) {
+      const state = this.waCloudInstances.get(id);
+      if (state) matches.push([id, state] as const);
     }
     return matches;
   }
