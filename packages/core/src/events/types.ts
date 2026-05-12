@@ -102,6 +102,9 @@ export const CORE_EVENT_TYPES = [
   // WhatsApp Cloud (Meta) — template lifecycle
   // Single event; consumers filter on payload.newStatus to react to APPROVED/REJECTED/etc.
   'template.status_changed',
+  // Channel-side operator alerts (Meta WABA quality drops, account flags, etc.)
+  // Single event; consumers filter on payload.alertType.
+  'channel.alert',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -857,6 +860,47 @@ export interface VoiceUserChannelPayload {
   displayName?: string;
 }
 
+// ─── Channel-side operator alerts ─────────────────────────────────────────
+
+/**
+ * Provider-pushed alerts about an instance's channel-side health.
+ *
+ * Currently driven by Meta WhatsApp Cloud webhook fields:
+ *   - `account_alerts` — WABA-level alerts (compliance, suspension warnings)
+ *   - `account_update` — account-level state changes (e.g. banned, verified)
+ *   - `phone_number_quality_update` — quality_rating dropped (GREEN→YELLOW→RED)
+ *   - `phone_number_name_update` — verified_name approved / rejected / changed
+ *
+ * Consumers filter on `alertType` + `severity`. Persistence (e.g. dashboard
+ * badge, operator notification) is consumer-side — the channel plugin just
+ * surfaces the signal.
+ *
+ * NOTE: a single Meta webhook event can fan out to N events when N Omni
+ * instances share the same WABA. The webhook handler emits per matched
+ * instance so each event scope is correct.
+ */
+export interface ChannelAlertPayload {
+  instanceId: string;
+  channelType: ChannelType;
+  /** Provider-side category — for whatsapp-cloud one of the four Meta fields above. */
+  alertType:
+    | 'account_alerts'
+    | 'account_update'
+    | 'phone_number_quality_update'
+    | 'phone_number_name_update'
+    /** Generic — for non-Meta providers or unmapped Meta variants. */
+    | 'other';
+  /** 'info' | 'warning' | 'critical' — best-effort, defaults to 'info' when unknown. */
+  severity: 'info' | 'warning' | 'critical';
+  /** Short human-readable summary suitable for a dashboard banner / push notification. */
+  message: string;
+  /** Entity targeted by the alert (WABA, phone number, app, etc.) — Meta payload's `entity_type` + `entity_id`. */
+  entityType?: string;
+  entityId?: string;
+  /** Raw provider payload (for debugging and richer consumer rendering). */
+  data?: Record<string, unknown>;
+}
+
 // ─── WhatsApp Cloud (Meta) template lifecycle ─────────────────────────────
 
 /**
@@ -952,6 +996,7 @@ export interface EventPayloadMap {
   'voice.user_joined_channel': VoiceUserChannelPayload;
   'voice.user_left_channel': VoiceUserChannelPayload;
   'template.status_changed': TemplateStatusChangedPayload;
+  'channel.alert': ChannelAlertPayload;
 }
 
 /**

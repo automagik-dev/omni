@@ -414,6 +414,21 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     return undefined;
   }
 
+  /**
+   * Reverse lookup by `waba_id`. Returns ALL instances that share the WABA —
+   * Meta's WABA-scoped webhook fields (`account_alerts`, `account_update`,
+   * `phone_number_quality_update`, `phone_number_name_update`) carry only the
+   * WABA id, and multiple Omni instances can be provisioned under the same
+   * WABA (different phone numbers). Each instance gets its own alert event.
+   */
+  findInstancesByWabaId(wabaId: string): Array<readonly [string, WhatsAppCloudInstanceState]> {
+    const matches: Array<readonly [string, WhatsAppCloudInstanceState]> = [];
+    for (const [id, state] of this.waCloudInstances) {
+      if (state.config.wabaId === wabaId) matches.push([id, state] as const);
+    }
+    return matches;
+  }
+
   getLogger(): Logger {
     return this.logger;
   }
@@ -584,6 +599,47 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
    * also picks the correct instance scope (by `wabaId`), avoiding the fan-out
    * to all connected instances that an instance-blind dispatch would cause.
    */
+  /**
+   * Emit `channel.alert` for a Meta WABA-scoped webhook event.
+   *
+   * Maps Meta's freeform alert payload into a canonical Omni shape. The
+   * webhook handler resolves all instances sharing the WABA and calls this
+   * method once per instance — alerts are operator-facing and need
+   * per-instance scope so dashboards/notifications fire correctly even when
+   * the same WABA spans several Omni instances.
+   */
+  async handleChannelAlert(
+    instanceId: string,
+    alertType: EventPayloadMap['channel.alert']['alertType'],
+    value: Record<string, unknown>,
+  ): Promise<void> {
+    const alertInfo = (value.alert_info ?? {}) as Record<string, unknown>;
+    const entityType = typeof value.entity_type === 'string' ? value.entity_type : undefined;
+    const entityId = typeof value.entity_id === 'string' ? value.entity_id : undefined;
+
+    // Best-effort severity inference. Meta uses different fields across
+    // webhook types so we look at the most common ones first.
+    const severity = inferAlertSeverity(alertType, alertInfo, value);
+    const message = inferAlertMessage(alertType, alertInfo, value);
+
+    const payload: EventPayloadMap['channel.alert'] = {
+      instanceId,
+      channelType: this.id,
+      alertType,
+      severity,
+      message,
+      entityType,
+      entityId,
+      data: value,
+    };
+
+    await this.eventBus.publish('channel.alert', payload, {
+      instanceId,
+      channelType: this.id,
+      source: `channel:${this.id}`,
+    });
+  }
+
   async handleTemplateStatusChanged(
     instanceId: string,
     update: MetaTemplateStatusUpdate,
@@ -720,6 +776,73 @@ function extractInboundContent(msg: MetaInboundMessage): ExtractedInboundContent
   }
 
   return null;
+}
+
+/**
+ * Best-effort severity inference for Meta WABA-scoped webhook fields.
+ *
+ * Meta does not include a uniform severity field across its alert webhooks;
+ * we infer from the event semantics:
+ *   - quality_rating dropping to `RED` → critical
+ *   - quality_rating dropping to `YELLOW` → warning
+ *   - account_update with `event === 'BANNED'` / `'DISABLED'` → critical
+ *   - account_alerts with `alert_info.alert_type === 'compliance_issue'` etc. → warning
+ *   - phone_number_name_update → info (name approvals/rejections are operational)
+ * Anything else falls back to 'info'.
+ */
+function inferAlertSeverity(
+  alertType: EventPayloadMap['channel.alert']['alertType'],
+  alertInfo: Record<string, unknown>,
+  value: Record<string, unknown>,
+): 'info' | 'warning' | 'critical' {
+  if (alertType === 'phone_number_quality_update') {
+    const rating = (value.current_quality ?? value.event ?? '').toString().toUpperCase();
+    if (rating === 'RED') return 'critical';
+    if (rating === 'YELLOW') return 'warning';
+    return 'info';
+  }
+  if (alertType === 'account_update') {
+    const evt = (value.event ?? '').toString().toUpperCase();
+    if (evt.includes('BAN') || evt.includes('DISABLE') || evt.includes('SUSPEND')) return 'critical';
+    if (evt.includes('WARN') || evt.includes('RESTRICT')) return 'warning';
+    return 'info';
+  }
+  if (alertType === 'account_alerts') {
+    const sev = (alertInfo.severity ?? alertInfo.alert_severity ?? '').toString().toLowerCase();
+    if (sev === 'critical' || sev === 'high') return 'critical';
+    if (sev === 'warning' || sev === 'medium') return 'warning';
+    return 'warning'; // alerts default to warning — they're meant to be acted on
+  }
+  return 'info';
+}
+
+function inferAlertMessage(
+  alertType: EventPayloadMap['channel.alert']['alertType'],
+  alertInfo: Record<string, unknown>,
+  value: Record<string, unknown>,
+): string {
+  // Prefer a provider-supplied human-readable message when present.
+  const explicit =
+    (alertInfo.message as string | undefined) ??
+    (alertInfo.description as string | undefined) ??
+    (value.message as string | undefined);
+  if (typeof explicit === 'string' && explicit.length > 0) return explicit;
+
+  switch (alertType) {
+    case 'phone_number_quality_update': {
+      const prev = value.previous_quality ?? value.event ?? '?';
+      const next = value.current_quality ?? '?';
+      return `Phone number quality changed from ${prev} to ${next}`;
+    }
+    case 'account_update':
+      return `WABA account status update: ${value.event ?? 'unknown'}`;
+    case 'phone_number_name_update':
+      return `Verified name update: ${value.decision ?? value.event ?? 'changed'}`;
+    case 'account_alerts':
+      return `WABA alert: ${alertInfo.alert_type ?? 'see data'}`;
+    default:
+      return 'Channel alert received';
+  }
 }
 
 function mapTemplateEventToStatus(

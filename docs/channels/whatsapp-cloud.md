@@ -51,7 +51,13 @@ In Meta App Dashboard → **WhatsApp** → **Configuration**:
 
 1. **Callback URL**: `${META_WEBHOOK_BASE_URL}/api/v2/channels/whatsapp-cloud/webhook`
 2. **Verify Token**: same value as `META_VERIFY_TOKEN` in your env.
-3. **Webhook Fields** to subscribe to: `messages`, `message_template_status_update`, `account_alerts`, `phone_number_quality_update`.
+3. **Webhook Fields** to subscribe to (all of these — Omni emits a `channel.alert` core event for the WABA-scoped ones):
+   - `messages` — inbound messages + outbound status updates (REQUIRED)
+   - `message_template_status_update` — HSM template approvals/rejections
+   - `account_alerts` — WABA compliance / suspension warnings
+   - `account_update` — account-level state changes (banned, verified, etc.)
+   - `phone_number_quality_update` — quality_rating drops (GREEN → YELLOW → RED)
+   - `phone_number_name_update` — verified_name approvals / rejections
 
 Meta will GET your webhook URL with `hub.mode=subscribe&hub.verify_token=<token>&hub.challenge=<n>`. Omni's handler responds with the challenge if the token matches.
 
@@ -130,6 +136,25 @@ The template must be **approved** by Meta beforehand (status: `APPROVED` in `/wh
 ### Other content types
 
 `image`, `audio`, `video`, `document`, `sticker`, `location`, `contact`, `reaction`. See `packages/channel-whatsapp-cloud/src/senders/` for each builder.
+
+## Channel alerts (WABA-scoped webhooks)
+
+Beyond message + template lifecycle, Meta pushes operator-facing alerts on the WABA itself: quality drops, account flags, verified-name decisions. Omni normalizes all four Meta webhook fields (`account_alerts`, `account_update`, `phone_number_quality_update`, `phone_number_name_update`) into a single `channel.alert` core event with shape:
+
+```ts
+{
+  instanceId: string;
+  channelType: 'whatsapp-cloud';
+  alertType: 'account_alerts' | 'account_update' | 'phone_number_quality_update' | 'phone_number_name_update' | 'other';
+  severity: 'info' | 'warning' | 'critical';   // inferred — see source
+  message: string;                              // best-effort human summary
+  entityType?: string;                          // from Meta's entity_type
+  entityId?: string;                            // from Meta's entity_id
+  data?: Record<string, unknown>;               // raw Meta payload
+}
+```
+
+A single Meta webhook fans out to N events when N Omni instances share the WABA. Subscribe via `eventBus.subscribe('channel.alert', …)` from any consumer (notification worker, dashboard badge, etc.).
 
 ## Templates HSM lifecycle
 

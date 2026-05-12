@@ -84,11 +84,19 @@ export interface ExchangeCodeResult {
 /**
  * Exchange a Facebook OAuth `code` for an access token.
  *
- * POST https://graph.facebook.com/{version}/oauth/access_token
- *   ?client_id=...&client_secret=...&code=...&redirect_uri=...
+ * Two-step flow (mirrors TalkFlow `meta_oauth_service.py:55-112`):
  *
- * Meta accepts both GET (with query params) and POST (form-encoded body).
- * We use POST so the secret never appears in URL/access logs.
+ *   1. POST /{version}/oauth/access_token with `code` → short-lived token
+ *      (lifetime ~1 hour).
+ *   2. GET  /{version}/oauth/access_token?grant_type=fb_exchange_token&
+ *      fb_exchange_token=<short> → long-lived token (lifetime ~60 days).
+ *
+ * The long-lived token is what we persist. Without step 2, every Embedded
+ * Signup'd instance silently disconnects after ~1 hour when the token
+ * expires server-side — `pingPhoneNumberInfo` would return 401 and `connect`
+ * would fail to re-init. If the long-lived exchange fails for any reason
+ * (rate limit, app not in `oauth` state) we fall back to the short-lived
+ * token + log a warning so operators see it.
  *
  * NOTE: caller must NOT log the returned access token. The Sentry scrubber
  * (Group 8) masks `access_token` keys in event payloads.
@@ -108,43 +116,76 @@ export async function exchangeCodeForToken(
     );
   }
 
-  const params = new URLSearchParams();
-  params.set('client_id', appId);
-  params.set('client_secret', appSecret);
-  params.set('code', code);
-  if (redirectUri) params.set('redirect_uri', redirectUri);
+  // ─── Step 1: short-lived token from the OAuth code ───
+  const shortParams = new URLSearchParams();
+  shortParams.set('client_id', appId);
+  shortParams.set('client_secret', appSecret);
+  shortParams.set('code', code);
+  if (redirectUri) shortParams.set('redirect_uri', redirectUri);
 
   const url = `${graphBase(apiVersion)}/oauth/access_token`;
-  const res = await fetchWithTimeout(url, {
+  const shortRes = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString(),
+    body: shortParams.toString(),
   });
 
-  if (!res.ok) throw await errorFromResponse(res, 'oauth/access_token');
+  if (!shortRes.ok) throw await errorFromResponse(shortRes, 'oauth/access_token (code → short)');
 
-  const text = await res.text();
-  let data: { access_token?: unknown; expires_in?: unknown; token_type?: unknown };
+  const shortText = await shortRes.text();
+  let shortData: { access_token?: unknown; expires_in?: unknown; token_type?: unknown };
   try {
-    data = text ? JSON.parse(text) : {};
+    shortData = shortText ? JSON.parse(shortText) : {};
   } catch {
     throw new MetaApiError(MetaErrorCode.UNKNOWN, 'OAuth response was not valid JSON', {
       operation: 'oauth/access_token',
-      httpStatus: res.status,
+      httpStatus: shortRes.status,
     });
   }
 
-  if (typeof data.access_token !== 'string' || !data.access_token) {
+  if (typeof shortData.access_token !== 'string' || !shortData.access_token) {
     throw new MetaApiError(MetaErrorCode.AUTH_FAILED, 'OAuth response missing access_token', {
       operation: 'oauth/access_token',
-      httpStatus: res.status,
+      httpStatus: shortRes.status,
     });
+  }
+
+  const shortToken = shortData.access_token;
+  const shortTokenType = typeof shortData.token_type === 'string' ? shortData.token_type : 'bearer';
+
+  // ─── Step 2: swap for long-lived (~60 day) token ───
+  // We deliberately do NOT throw on failure — falling back to the short-lived
+  // token keeps the integration alive for ~1h and the operator can refresh
+  // manually. We surface the failure mode via the return shape so the route
+  // layer can log a warning.
+  const longParams = new URLSearchParams();
+  longParams.set('grant_type', 'fb_exchange_token');
+  longParams.set('client_id', appId);
+  longParams.set('client_secret', appSecret);
+  longParams.set('fb_exchange_token', shortToken);
+
+  try {
+    const longRes = await fetchWithTimeout(`${url}?${longParams.toString()}`, { method: 'GET' });
+    if (longRes.ok) {
+      const longText = await longRes.text();
+      const longData = longText ? (JSON.parse(longText) as Record<string, unknown>) : {};
+      const longToken = longData.access_token;
+      if (typeof longToken === 'string' && longToken) {
+        return {
+          accessToken: longToken,
+          expiresIn: typeof longData.expires_in === 'number' ? longData.expires_in : undefined,
+          tokenType: typeof longData.token_type === 'string' ? longData.token_type : shortTokenType,
+        };
+      }
+    }
+  } catch {
+    /* swallow — fall through to short-lived fallback */
   }
 
   return {
-    accessToken: data.access_token,
-    expiresIn: typeof data.expires_in === 'number' ? data.expires_in : undefined,
-    tokenType: typeof data.token_type === 'string' ? data.token_type : 'bearer',
+    accessToken: shortToken,
+    expiresIn: typeof shortData.expires_in === 'number' ? shortData.expires_in : undefined,
+    tokenType: shortTokenType,
   };
 }
 

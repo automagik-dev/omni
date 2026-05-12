@@ -141,17 +141,59 @@ async function processValidatedPayload(
   const logger = plugin.getLogger();
 
   for (const entry of payload.entry) {
+    // `entry.id` is the WABA id for WABA-scoped fields (alerts, account_update,
+    // phone_number_quality_update, phone_number_name_update). Some fields use
+    // it for the App id instead — we only consume it as a WABA hint and the
+    // alert resolver tolerates a no-match by short-circuiting.
     for (const change of entry.changes) {
-      await processChange(plugin, change, logger);
+      await processChange(plugin, change, entry.id, logger);
     }
   }
 }
 
+/** Meta webhook fields that are scoped to a WABA (no phone_number_id). */
+const CHANNEL_ALERT_FIELDS = new Set([
+  'account_alerts',
+  'account_update',
+  'phone_number_quality_update',
+  'phone_number_name_update',
+]);
+
 async function processChange(
   plugin: WhatsAppCloudPlugin,
   change: MetaWebhookPayload['entry'][number]['changes'][number],
+  entryId: string,
   logger: ReturnType<WhatsAppCloudPlugin['getLogger']>,
 ): Promise<void> {
+  // ─── WABA-scoped alerts (no phone_number_id) ───
+  if (CHANNEL_ALERT_FIELDS.has(change.field)) {
+    const value = (change.value ?? {}) as Record<string, unknown>;
+    // entry.id IS the WABA id for these fields. Resolve all instances under
+    // that WABA — multi-instance customers get one event per instance so
+    // dashboards scoped per-instance still fire.
+    const matches = plugin.findInstancesByWabaId(entryId);
+    if (matches.length === 0) {
+      logger.debug('[whatsapp-cloud] channel alert arrived with no matching WABA', {
+        field: change.field,
+        wabaId: entryId,
+      });
+      return;
+    }
+    const alertType = change.field as Parameters<typeof plugin.handleChannelAlert>[1];
+    await Promise.all(
+      matches.map(([instanceId]) =>
+        plugin.handleChannelAlert(instanceId, alertType, value).catch((err) => {
+          logger.warn('[whatsapp-cloud] failed to emit channel.alert', {
+            instanceId,
+            field: change.field,
+            err: String(err),
+          });
+        }),
+      ),
+    );
+    return;
+  }
+
   if (change.field === 'message_template_status_update') {
     const parsed = MetaTemplateStatusUpdateSchema.safeParse(change.value);
     if (!parsed.success) {
