@@ -99,6 +99,9 @@ export const CORE_EVENT_TYPES = [
   'voice.session_ended',
   'voice.user_joined_channel',
   'voice.user_left_channel',
+  // WhatsApp Cloud (Meta) — template lifecycle
+  // Single event; consumers filter on payload.newStatus to react to APPROVED/REJECTED/etc.
+  'template.status_changed',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -854,6 +857,29 @@ export interface VoiceUserChannelPayload {
   displayName?: string;
 }
 
+// ─── WhatsApp Cloud (Meta) template lifecycle ─────────────────────────────
+
+/**
+ * Fired when a Meta HSM template transitions between lifecycle states
+ * (PENDING → APPROVED | REJECTED | PAUSED, etc.).
+ *
+ * Single canonical event — consumers filter on `newStatus`. Driven by Meta's
+ * webhook `field: 'message_template_status_update'`.
+ */
+export interface TemplateStatusChangedPayload {
+  instanceId: string;
+  /** Local UUID of the whatsapp_templates row. */
+  templateId: string;
+  /** Meta-side template ID (graph API id). */
+  metaTemplateId: string;
+  templateName: string;
+  language: string;
+  previousStatus: 'APPROVED' | 'PENDING' | 'REJECTED' | 'PAUSED' | 'DELETED' | null;
+  newStatus: 'APPROVED' | 'PENDING' | 'REJECTED' | 'PAUSED' | 'DELETED';
+  /** Meta-supplied rejection rationale, present when newStatus === 'REJECTED'. */
+  rejectionReason?: string;
+}
+
 /**
  * Event type map for type-safe event handling (core events only)
  */
@@ -925,6 +951,7 @@ export interface EventPayloadMap {
   'voice.session_ended': VoiceSessionEndedPayload;
   'voice.user_joined_channel': VoiceUserChannelPayload;
   'voice.user_left_channel': VoiceUserChannelPayload;
+  'template.status_changed': TemplateStatusChangedPayload;
 }
 
 /**
