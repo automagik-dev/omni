@@ -60,10 +60,15 @@ const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<Channel
  * Channels that can produce a "typing…" or analogous presence indicator
  * before a message. `internal` is a synthetic transport with no user to
  * signal; `a2a` is agent-to-agent and skips presence.
+ *
+ * NOTE: `whatsapp-cloud` (Meta Cloud API) is intentionally NOT in this set —
+ * Meta's Cloud API has no typing-indicator endpoint, so `sendTyping()` on the
+ * plugin is a no-op (`canSendTyping: false` in `WHATSAPP_CLOUD_CAPABILITIES`).
+ * Including it here would cause the follow-up runtime to wait the typing-burst
+ * duration before sending while no indicator was actually shown to the user.
  */
 const CHANNELS_WITH_TYPING_INDICATOR: ReadonlySet<ChannelType> = new Set<ChannelType>([
   'whatsapp-baileys',
-  'whatsapp-cloud',
   'twilio-whatsapp',
   'discord',
   'slack',

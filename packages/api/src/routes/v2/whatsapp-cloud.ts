@@ -588,15 +588,20 @@ whatsappCloudRoutes.post('/:id/whatsapp-cloud/profile/photo', async (c) => {
 
   try {
     // Step 1: open an upload session.
+    // Token goes in the Authorization header (NOT the URL query) so it stays
+    // out of proxy access logs, request loggers, and Sentry breadcrumbs that
+    // capture URLs but scrub bodies/headers.
     const sessionRes = await fetch(
       `https://graph.facebook.com/${apiVersion}/${appIdForUpload}/uploads?` +
         new URLSearchParams({
           file_length: String(bytes.byteLength),
           file_type: fileType,
           file_name: fileName,
-          access_token: instance.metaAccessToken,
         }).toString(),
-      { method: 'POST' },
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${instance.metaAccessToken}` },
+      },
     );
     if (!sessionRes.ok) {
       const text = await sessionRes.text();

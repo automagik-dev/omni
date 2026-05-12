@@ -305,7 +305,9 @@ export async function emitMessageReceivedFromMeta(
  * Emit the appropriate `message.*` event for a Meta status update.
  *
  * Maps:
- *   sent      → message.sent
+ *   sent      → (no-op — `message.sent` is already emitted by `plugin.sendMessage`
+ *                immediately after the Graph API POST returns 200; emitting again
+ *                here on the webhook callback would duplicate the event)
  *   delivered → message.delivered
  *   read      → message.read
  *   failed    → message.failed (carrying the first error code, if any)
@@ -323,16 +325,7 @@ export async function emitStatusEvent(
 
   switch (status.status) {
     case 'sent': {
-      // BaseChannelPlugin.emitMessageSent expects a `content` field — Meta's
-      // status webhook doesn't include the original content, so we emit a
-      // minimal text envelope. Downstream consumers key off externalId.
-      await surface.emitMessageSent({
-        instanceId,
-        externalId: status.id,
-        chatId: status.recipient_id,
-        to: status.recipient_id,
-        content: { type: 'text' as ContentType, text: '' },
-      });
+      // Intentionally no-op — see docstring above.
       return;
     }
     case 'delivered': {

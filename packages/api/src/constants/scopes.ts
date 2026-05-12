@@ -306,6 +306,19 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /turns/close-all': 'turns:admin',
   'POST /turns/close': 'turns:close',
 
+  // --- whatsapp-cloud (Meta Cloud API): mounted at /instances/:id/whatsapp-cloud/* ---
+  'POST /instances/:id/whatsapp-cloud/oauth/exchange': 'instances:write',
+  'POST /instances/:id/whatsapp-cloud/connect': 'instances:write',
+  'POST /instances/:id/whatsapp-cloud/register': 'instances:write',
+  'POST /instances/:id/whatsapp-cloud/subscribe-app': 'instances:write',
+  'GET /instances/:id/whatsapp-cloud/connection': 'instances:read',
+  'DELETE /instances/:id/whatsapp-cloud/connection': 'instances:write',
+  'GET /instances/:id/whatsapp-cloud/quality': 'instances:read',
+  'GET /instances/:id/whatsapp-cloud/analytics': 'instances:read',
+  'GET /instances/:id/whatsapp-cloud/profile': 'instances:read',
+  'PUT /instances/:id/whatsapp-cloud/profile': 'instances:write',
+  'POST /instances/:id/whatsapp-cloud/profile/photo': 'instances:write',
+
   // --- whatsapp-templates (mounted at root: /instances/:id/whatsapp-templates/...) ---
   'GET /instances/:id/whatsapp-templates': 'instances:read',
   'GET /instances/:id/whatsapp-templates/:templateId': 'instances:read',
