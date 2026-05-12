@@ -32,6 +32,16 @@ on:
         description: 'Version (e.g. 2.260512.1 — no v prefix)'
         required: true
         type: string
+      channel:
+        description: 'Release channel — stable publishes to @latest, dev/beta/canary are prereleases with their own .well-known/<channel>.json pointer'
+        required: false
+        type: choice
+        default: stable
+        options:
+          - stable
+          - beta
+          - canary
+          - dev
 
 permissions:
   contents: read
@@ -69,9 +79,11 @@ jobs:
     secrets: inherit
     with:
       version: ${{ needs.sign-attest.outputs.version }}
-      # Default to stable for tag pushes; rc/beta cuts use workflow_dispatch
-      # on release-publish.yml directly with channel=beta.
-      channel: stable
+      # workflow_dispatch supplies the channel (version.yml passes 'dev' for
+      # dev-branch dispatches, 'stable' for main-branch dispatches). Bare
+      # tag pushes fall through to stable. Mirrors genie wish
+      # release-channel-dev (PR #2419).
+      channel: ${{ inputs.channel || 'stable' }}
       draft: false
 
   # ---------------------------------------------------------------------------

@@ -64,6 +64,7 @@ on:
           - stable
           - beta
           - canary
+          - dev
       draft:
         description: 'Create as draft (require manual promotion)?'
         required: true
@@ -185,16 +186,27 @@ jobs:
           fi
 
       # ---------------------------------------------------------------------
-      # latest.json channel pointer — committed to main so install-client.sh
-      # can resolve current version per channel via:
-      #   curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/.well-known/latest.json
-      # Only runs for stable, non-draft publishes.
+      # Per-channel manifest pointers — committed to main so install.sh +
+      # CLI update path can resolve the current version for each channel via:
+      #   curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/.well-known/<channel>.json
+      #
+      # Filename map (mirrors genie wish release-channel-dev, PR #2419):
+      #   stable → latest.json     (kept for back-compat with v1 manifest layout)
+      #   dev    → dev.json        (development channel — prerelease)
+      #   beta   → beta.json
+      #   canary → canary.json
+      #
+      # A stable release ALSO advances dev (single-pipeline reality: today
+      # every release is the latest of both channels). When a dev-only
+      # pipeline lands later, channel=dev writes ONLY dev.json and
+      # latest.json stays at the prior stable.
       # ---------------------------------------------------------------------
-      - name: Update .well-known/latest.json (stable, non-draft only)
-        if: ${{ steps.meta.outputs.channel == 'stable' && !inputs.draft }}
+      - name: Update channel manifests (.well-known/*.json — non-draft only)
+        if: ${{ !inputs.draft }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.meta.outputs.version }}
+          CHANNEL: ${{ steps.meta.outputs.channel }}
         shell: bash
         run: |
           set -euo pipefail
@@ -202,28 +214,57 @@ jobs:
           git checkout main
           git pull --ff-only origin main
 
+          # stable keeps the historical filename `latest.json`; every other
+          # channel uses its own name. install.sh + CLI update consume the
+          # same convention. A stable release advances BOTH latest.json and
+          # dev.json (single-pipeline reality). channel=dev only advances
+          # dev.json — latest.json stays at the prior stable.
+          declare -A MANIFEST_FILES=()
+          case "$CHANNEL" in
+            stable)
+              MANIFEST_FILES[stable]="latest.json"
+              MANIFEST_FILES[dev]="dev.json"
+              ;;
+            *)
+              MANIFEST_FILES[$CHANNEL]="${CHANNEL}.json"
+              ;;
+          esac
+
           mkdir -p .well-known
-          cat > .well-known/latest.json <<EOF
+          for manifest_channel in "${!MANIFEST_FILES[@]}"; do
+            FILE="${MANIFEST_FILES[$manifest_channel]}"
+            cat > ".well-known/${FILE}" <<EOF
           {
             "schema_version": 1,
-            "channel": "stable",
+            "channel": "${manifest_channel}",
             "version": "${VERSION}",
             "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "tarball_base": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}",
             "platforms": ["linux-x64-glibc", "linux-x64-musl", "linux-arm64", "darwin-arm64"]
           }
           EOF
-
-          if git diff --quiet .well-known/latest.json; then
-            echo "latest.json unchanged — nothing to commit"
-            exit 0
-          fi
+          done
 
           git config user.name "release-bot"
           git config user.email "release-bot@namastex.com"
-          git add .well-known/latest.json
-          git commit -m "chore(release): update latest.json → v${VERSION}"
+          # Stage first, then compare against HEAD. `git diff --quiet <path>`
+          # returns 0 (no diff) for *untracked* files because they aren't in
+          # the index — staging registers the path; then
+          # `git diff --cached --quiet HEAD --` correctly reports "differs
+          # from HEAD" for both new and modified files. Mirrors the bootstrap
+          # fix genie PR #2419 incorporates.
+          MANIFEST_PATHS=()
+          for f in "${MANIFEST_FILES[@]}"; do
+            MANIFEST_PATHS+=(".well-known/${f}")
+          done
+          git add "${MANIFEST_PATHS[@]}"
+          if git diff --cached --quiet HEAD -- "${MANIFEST_PATHS[@]}"; then
+            echo "manifests unchanged — nothing to commit"
+            exit 0
+          fi
+          MANIFEST_LIST=$(IFS=','; echo "${!MANIFEST_FILES[*]}")
+          git commit -m "chore(release): update manifests (${MANIFEST_LIST}) → v${VERSION}"
           git push origin main || {
-            echo "::warning::push to main failed (likely branch protection); update .well-known/latest.json manually"
+            echo "::warning::push to main failed (likely branch protection); update ${MANIFEST_PATHS[*]} manually"
             exit 0
           }
