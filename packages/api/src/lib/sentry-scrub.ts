@@ -67,6 +67,62 @@ const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 /** UUID v4 (and similar hex-dash patterns) */
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
+/**
+ * Meta WhatsApp Cloud / Facebook Graph API access tokens.
+ *
+ * Long-lived user / system-user tokens start with `EAA` and are followed by
+ * a base64-style payload (alnum + `_` + `-`). Length is usually 100-500
+ * chars. Match prefix + ≥40 chars to keep false-positive risk near zero.
+ */
+const META_ACCESS_TOKEN_RE = /\bEAA[A-Za-z0-9_-]{40,}\b/g;
+
+/**
+ * Generic `Bearer <opaque-secret>` patterns in headers or error messages.
+ * Captures the token chars after `Bearer ` and replaces the whole match.
+ * Keeps the literal "Bearer " prefix so callers can still see auth type.
+ */
+const BEARER_TOKEN_RE = /\bBearer\s+[A-Za-z0-9_\-.+/=]{20,}/gi;
+
+/**
+ * Object keys whose values must be redacted regardless of content shape.
+ *
+ * Used for fields that frequently carry PII or secrets where the value
+ * format is freeform (a person's name, a chat message body, a token) and
+ * pattern matching alone is insufficient.
+ *
+ * Match is case-insensitive. The exact list trades a tiny risk of
+ * over-redaction (e.g. legitimate non-sensitive `description` in some span
+ * data) for guaranteed coverage of the wish's whatsapp-cloud audit list:
+ * `text`, `body`, `caption`, `profile_name`, `verified_name`, `access_token`.
+ */
+const SENSITIVE_KEYS = new Set<string>([
+  'text',
+  'body',
+  'caption',
+  'description', // template/profile descriptions can contain PII
+  'profile_name',
+  'verified_name',
+  'display_name',
+  'displayname',
+  'access_token',
+  'accesstoken',
+  'meta_access_token',
+  'metaaccesstoken',
+  'authorization',
+  'auth_token',
+  'authtoken',
+  'api_key',
+  'apikey',
+  'app_secret',
+  'appsecret',
+  'verify_token',
+  'verifytoken',
+]);
+
+function isSensitiveKey(key: string): boolean {
+  return SENSITIVE_KEYS.has(key.toLowerCase());
+}
+
 // ---------------------------------------------------------------------------
 // Core scrubber
 // ---------------------------------------------------------------------------
@@ -88,7 +144,14 @@ export function scrubPii(text: string): string {
     return `<<UUID${uuids.length - 1}>>`;
   });
 
-  result = result.replace(JID_RE, '[jid]').replace(EMAIL_RE, '[email]').replace(PHONE_RE, '[phone]');
+  // Token-shaped secrets first — these are higher-entropy than phones and
+  // must not be confused with embedded digit runs.
+  result = result
+    .replace(META_ACCESS_TOKEN_RE, '[meta_token]')
+    .replace(BEARER_TOKEN_RE, 'Bearer [token]')
+    .replace(JID_RE, '[jid]')
+    .replace(EMAIL_RE, '[email]')
+    .replace(PHONE_RE, '[phone]');
 
   // Restore UUIDs
   return result.replace(/<<UUID(\d+)>>/g, (_, idx) => uuids[Number(idx)] ?? '');
@@ -98,14 +161,32 @@ export function scrubPii(text: string): string {
 // Deep object scrubber
 // ---------------------------------------------------------------------------
 
-/** Recursively walk an object and scrub all string values. */
-function scrubValue(value: unknown): unknown {
-  if (typeof value === 'string') return scrubPii(value);
-  if (Array.isArray(value)) return value.map(scrubValue);
+/**
+ * Recursively walk an object and scrub all string values.
+ *
+ * Behavior:
+ *   - For SENSITIVE_KEYS (e.g. `text`, `body`, `access_token`, `profile_name`):
+ *     the entire string value is replaced with `[redacted]` (field-level mask,
+ *     stronger than pattern-based scrubbing because the value shape is
+ *     unpredictable).
+ *   - For all other keys: pattern-based `scrubPii` is applied so phones,
+ *     emails, JIDs, and tokens get masked while non-PII text passes through.
+ *
+ * `currentKey` carries the parent key during recursion so leaf-level
+ * replacement decisions can use it. Arrays inherit their parent's `currentKey`
+ * (the array contents represent multiple instances of "this field"; e.g. a
+ * `phones[]` array under a contact card).
+ */
+function scrubValue(value: unknown, currentKey?: string): unknown {
+  if (typeof value === 'string') {
+    if (currentKey && isSensitiveKey(currentKey)) return '[redacted]';
+    return scrubPii(value);
+  }
+  if (Array.isArray(value)) return value.map((item) => scrubValue(item, currentKey));
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = scrubValue(v);
+      out[k] = scrubValue(v, k);
     }
     return out;
   }

@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License" /></a>
   <img src="https://img.shields.io/badge/runtime-Bun-f9f1e1?style=flat-square&logo=bun" alt="Bun" />
   <img src="https://img.shields.io/badge/version-2.0.0-8b5cf6?style=flat-square" alt="v2.0.0" />
-  <img src="https://img.shields.io/badge/channels-3-25D366?style=flat-square" alt="Channels" />
+  <img src="https://img.shields.io/badge/channels-4-25D366?style=flat-square" alt="Channels" />
   <img src="https://img.shields.io/badge/event%20bus-NATS%20JetStream-27AAE1?style=flat-square" alt="NATS" />
 </p>
 
@@ -47,7 +47,7 @@ Think of Omni as a deep-sea octopus. Each **channel** is a tentacle — WhatsApp
 | **WhatsApp** (Baileys) | ✅ Stable | QR/phone pairing, media, reactions, groups, contacts, presence |
 | **Discord** | ✅ Stable | Bots, embeds, polls, buttons, threads, slash commands |
 | **Telegram** | ✅ New | Bot API, inline keyboards, groups, channels, threads, polls |
-| WhatsApp Cloud API | 🔮 Planned | — |
+| **WhatsApp Cloud API** (Meta) | ✅ New | Embedded Signup OAuth, templates HSM, webhook (HMAC-SHA256), media, location, reactions, buttons |
 | Slack | 🔮 Planned | — |
 
 ## Install
