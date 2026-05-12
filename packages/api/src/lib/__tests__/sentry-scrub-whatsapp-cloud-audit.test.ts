@@ -21,7 +21,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { scrubBreadcrumb, scrubEvent } from '../../../api/src/lib/sentry-scrub';
+import { scrubBreadcrumb, scrubEvent } from '../sentry-scrub';
 
 /** Synthesized event reflecting what we'd capture if a Meta send failed. */
 function buildRealisticMetaEvent() {

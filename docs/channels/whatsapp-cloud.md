@@ -186,7 +186,7 @@ Sentry scrubbing in `packages/api/src/lib/sentry-scrub.ts` masks the following f
 - `profile_name` / `verified_name` / `display_name` field values → `[redacted]`.
 - Free-text patterns: phone numbers → `[phone]`, JIDs → `[jid]`, emails → `[email]`, Meta tokens (EAA prefix, 40+ chars) → `[meta_token]`, Bearer headers → `Bearer [token]`.
 
-Audited via `packages/channel-whatsapp-cloud/src/__tests__/sentry-scrubbing.test.ts` — every release runs this against a synthetic Meta event fixture.
+Audited via `packages/api/src/lib/__tests__/sentry-scrub-whatsapp-cloud-audit.test.ts` — every release runs this against a synthetic Meta event fixture.
 
 ## References
 

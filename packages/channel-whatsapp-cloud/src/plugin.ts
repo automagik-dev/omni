@@ -283,10 +283,21 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
         };
       }
 
+      // Meta returns `messages[0].id` (wamid) on every successful send — if it's
+      // missing, the response is malformed. Bail with a clear error rather than
+      // fabricating a UUID, which would break dedupe + idempotency on the
+      // webhook side (the inbound `sent`/`delivered` status callbacks key off
+      // the real wamid).
       const messageId = response.messages?.[0]?.id;
+      if (!messageId) {
+        const err = 'Meta did not return a message id on successful send (malformed response)';
+        await this.emitMessageFailed({ instanceId, chatId: to, error: err, retryable: false });
+        return { success: false, error: err, retryable: false, timestamp: Date.now() };
+      }
+
       await this.emitMessageSent({
         instanceId,
-        externalId: messageId ?? crypto.randomUUID(),
+        externalId: messageId,
         chatId: to,
         to,
         content: {

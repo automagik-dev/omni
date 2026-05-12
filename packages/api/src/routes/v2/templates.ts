@@ -27,6 +27,7 @@ import {
   MetaTemplateStatusSchema,
   WhatsAppTemplateComponentSchema,
 } from '@omni/core/schemas';
+import type { WhatsAppTemplateComponent } from '@omni/core/types';
 import { whatsappTemplates } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -244,7 +245,9 @@ templatesRoutes.post(
 
     const client = makeClient(cfg);
 
-    // 1) Submit to Meta.
+    // 1) Submit to Meta first — Meta is the system of record for templates
+    // (their review pipeline owns the lifecycle), so if the Meta call fails
+    // we never write a local row.
     const result = await metaCreateTemplate(client, cfg.wabaId, {
       name: body.name,
       language: body.language,
@@ -252,57 +255,88 @@ templatesRoutes.post(
       components: body.components,
     });
 
-    // 2) Upsert local mirror (status starts PENDING; webhook will promote it).
+    // 2) Upsert local mirror inside a transaction so a partial write (insert
+    // succeeds, update fails — or vice versa under concurrent reqs) can't
+    // leave the row in an inconsistent state with `metaId` already taken by
+    // Meta. If the local upsert fails after Meta accepted the template, the
+    // next `?sync=true` GET reconciles by `metaId`.
     const now = new Date();
-    const [existing] = await db
-      .select()
-      .from(whatsappTemplates)
-      .where(
-        and(
-          eq(whatsappTemplates.instanceId, instanceId),
-          eq(whatsappTemplates.name, body.name),
-          eq(whatsappTemplates.language, body.language),
-        ),
-      )
-      .limit(1);
+    const components = body.components as WhatsAppTemplateComponent[];
 
-    if (existing) {
-      await db
-        .update(whatsappTemplates)
-        .set({
-          metaId: result.id,
-          wabaId: cfg.wabaId,
-          category: body.category,
-          status: result.status,
-          components: body.components as unknown[],
-          variableMapping: body.variableMapping ?? null,
-          rejectionReason: null,
-          updatedAt: now,
-        })
-        .where(eq(whatsappTemplates.id, existing.id));
-      const [updated] = await db
-        .select()
-        .from(whatsappTemplates)
-        .where(eq(whatsappTemplates.id, existing.id))
-        .limit(1);
-      return c.json({ data: updated }, 200);
-    }
+    try {
+      const persisted = await db.transaction(async (tx) => {
+        const [existing] = await tx
+          .select()
+          .from(whatsappTemplates)
+          .where(
+            and(
+              eq(whatsappTemplates.instanceId, instanceId),
+              eq(whatsappTemplates.name, body.name),
+              eq(whatsappTemplates.language, body.language),
+            ),
+          )
+          .limit(1);
 
-    const [inserted] = await db
-      .insert(whatsappTemplates)
-      .values({
+        if (existing) {
+          await tx
+            .update(whatsappTemplates)
+            .set({
+              metaId: result.id,
+              wabaId: cfg.wabaId,
+              category: body.category,
+              status: result.status,
+              components,
+              variableMapping: body.variableMapping ?? null,
+              rejectionReason: null,
+              updatedAt: now,
+            })
+            .where(eq(whatsappTemplates.id, existing.id));
+          const [updated] = await tx
+            .select()
+            .from(whatsappTemplates)
+            .where(eq(whatsappTemplates.id, existing.id))
+            .limit(1);
+          return { row: updated, created: false };
+        }
+
+        const [inserted] = await tx
+          .insert(whatsappTemplates)
+          .values({
+            instanceId,
+            metaId: result.id,
+            wabaId: cfg.wabaId,
+            name: body.name,
+            language: body.language,
+            category: body.category,
+            status: result.status,
+            components,
+            variableMapping: body.variableMapping ?? null,
+          })
+          .returning();
+        return { row: inserted, created: true };
+      });
+
+      return c.json({ data: persisted.row }, persisted.created ? 201 : 200);
+    } catch (dbErr) {
+      // Meta accepted the template (metaTemplateId = result.id) but the local
+      // mirror failed. Log the orphan so it can be reconciled by a sync run.
+      // We surface a 500 to the caller because the local state is now lagging
+      // Meta; the next ?sync=true list call will resolve it.
+      c.get('logger')?.error?.('[whatsapp-cloud] local template mirror failed after Meta create', {
         instanceId,
-        metaId: result.id,
-        wabaId: cfg.wabaId,
+        metaTemplateId: result.id,
         name: body.name,
         language: body.language,
-        category: body.category,
-        status: result.status,
-        components: body.components as unknown[],
-        variableMapping: body.variableMapping ?? null,
-      })
-      .returning();
-    return c.json({ data: inserted }, 201);
+        err: String(dbErr),
+      });
+      return c.json(
+        jsonError(
+          'Template was created on Meta but the local mirror failed. Run a sync to reconcile.',
+          'TEMPLATE_MIRROR_FAILED',
+        ),
+        500,
+      );
+    }
   },
 );
 

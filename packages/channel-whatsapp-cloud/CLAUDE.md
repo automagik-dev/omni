@@ -50,8 +50,13 @@ src/
     ├── senders.test.ts
     ├── webhook.test.ts
     ├── templates.test.ts
-    ├── oauth.test.ts
-    └── sentry-scrubbing.test.ts # Audits the api/lib/sentry-scrub.ts coverage
+    └── oauth.test.ts
+
+Cross-package audit (lives in @omni/api because it imports the scrub module):
+  packages/api/src/lib/__tests__/sentry-scrub-whatsapp-cloud-audit.test.ts
+                                  # Fixture-based audit of beforeSend coverage
+                                  # for Meta-shaped events (tokens, phones,
+                                  # profile_name, message body).
 ```
 
 ## Conventions

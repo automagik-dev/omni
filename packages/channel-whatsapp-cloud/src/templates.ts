@@ -320,7 +320,7 @@ export async function syncTemplatesToDb(
           wabaId,
           category: tmpl.category,
           status: tmpl.status,
-          components: (tmpl.components ?? null) as unknown[] | null,
+          components: (tmpl.components ?? null) as WhatsAppTemplateComponent[] | null,
           rejectionReason: tmpl.rejected_reason ?? null,
           qualityScore: tmpl.quality_score?.score ?? null,
           updatedAt: new Date(),
@@ -336,7 +336,7 @@ export async function syncTemplatesToDb(
         language: tmpl.language,
         category: tmpl.category,
         status: tmpl.status,
-        components: (tmpl.components ?? null) as unknown[] | null,
+        components: (tmpl.components ?? null) as WhatsAppTemplateComponent[] | null,
         rejectionReason: tmpl.rejected_reason ?? null,
         qualityScore: tmpl.quality_score?.score ?? null,
       };
