@@ -34,6 +34,7 @@ import {
   probeCanonicalSocketSync,
   resolvePgserveSocketDir,
 } from './lib/pgserve-transport.js';
+import { resolveOmniScopedCredentials } from './lib/role-cutover.js';
 
 /**
  * Environment object suitable for passing to `runPm2` as `envOverrides`
@@ -175,6 +176,24 @@ export function resolveDatabaseUrl(serverConfig: ServerConfig): string {
 }
 
 /**
+ * Replace the userinfo in a postgresql:// URL with the scoped-role
+ * credentials. Returns the URL unchanged when `creds` is null. Pure;
+ * URL-safe via WHATWG URL.
+ */
+export function applyScopedCredentials(url: string, creds: { username: string; password: string } | null): string {
+  if (!creds) return url;
+  try {
+    const parsed = new URL(url);
+    parsed.username = encodeURIComponent(creds.username);
+    parsed.password = encodeURIComponent(creds.password);
+    return parsed.toString();
+  } catch {
+    // Malformed URL — return as-is rather than risk a startup-time throw.
+    return url;
+  }
+}
+
+/**
  * Build the complete runtime env for the omni-api process.
  *
  * All values come from `serverConfig` / `cliConfig`. No shell env reads.
@@ -200,9 +219,15 @@ export function buildRuntimeEnv(serverConfig: ServerConfig, cliConfig: Config): 
   const udsActive = probeCanonicalSocketSync();
   const pgHost = udsActive ? resolvePgserveSocketDir() : '';
   const pgPort = udsActive ? String(CANONICAL_PG_PORT) : '';
+  // Dedicated-role cutover (mirror of genie's role-cutover): when the
+  // scoped role has been provisioned and the sentinel is present, swap
+  // `postgres:postgres` for `<scoped_role>:<scoped_password>` in
+  // DATABASE_URL. Falls back to the legacy superuser path when the
+  // sentinel is absent or OMNI_ROLE_CUTOVER=0.
+  const scopedCreds = resolveOmniScopedCredentials();
   return {
     API_PORT: String(serverConfig.port),
-    DATABASE_URL: resolveDatabaseUrl(serverConfig),
+    DATABASE_URL: applyScopedCredentials(resolveDatabaseUrl(serverConfig), scopedCreds),
     PGHOST: pgHost,
     PGPORT: pgPort,
     OMNI_API_KEY: cliConfig.apiKey ?? '',
