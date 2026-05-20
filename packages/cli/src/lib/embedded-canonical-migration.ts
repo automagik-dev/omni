@@ -216,13 +216,28 @@ async function copyTable(
 ): Promise<void> {
   // Use child_process.spawnSync with stdio piping — chained shells are
   // fragile across psql versions, so we plumb the pipe ourselves.
-  const src = spawn('psql', [...srcArgs, '-c', `\\copy public.${table} TO STDOUT`], {
+  //
+  // BINARY format: the previous default text format choked on rows with
+  // embedded special characters (e.g. messages.raw_payload with WhatsApp
+  // Buffer-serialized JSON containing literal newlines/tabs) — observed
+  // mid-dogfood at row 60822 of public.messages, error
+  // "invalid input syntax for type json — ended unexpectedly". BINARY
+  // serializes byte-exact and sidesteps every text-format escaping bug.
+  // Postgres BINARY format is forward-compatible across the 18 ↔ 18 hop
+  // we're doing here (both ends are autopg's bundled postgres).
+  const src = spawn('psql', [...srcArgs, '-c', `\\copy public.${table} TO STDOUT WITH (FORMAT binary)`], {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PGPASSWORD: 'postgres' },
   });
   const dst = spawn(
     'psql',
-    [...dstArgs, '-c', `SET session_replication_role='replica';`, '-c', `\\copy public.${table} FROM STDIN`],
+    [
+      ...dstArgs,
+      '-c',
+      `SET session_replication_role='replica';`,
+      '-c',
+      `\\copy public.${table} FROM STDIN WITH (FORMAT binary)`,
+    ],
     {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, PGPASSWORD: 'postgres' },
