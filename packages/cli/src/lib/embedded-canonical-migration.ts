@@ -204,9 +204,26 @@ function psqlCapture(args: string[]): string {
 }
 
 /**
- * COPY one table from source psql to dest psql via pipe. Returns row count
- * reported by the destination. FK / trigger gating handled by the caller
- * via `session_replication_role=replica` in the destination session.
+ * COPY one table source → file → dest. Two phases:
+ *   1. psql `\copy table TO file WITH BINARY` (src) — writes to disk
+ *   2. psql `\copy table FROM file WITH BINARY` (dst) — reads from disk
+ *
+ * Why not stream the pipe directly: Node's child_process pipe between two
+ * spawned processes hits EPIPE / "unexpected EOF in COPY data" on rows
+ * whose serialized binary payload exceeds the OS pipe buffer (observed
+ * on Felipe's host with media_content blobs and messages.raw_payload
+ * Buffer-serialized JSON at rows 60822 + 53288). The OS-level pipe has
+ * no flow control beyond its 64KB buffer; once full, the writer EAGAINs
+ * and Node's stream.pipe() either silently drops or aborts depending on
+ * how the libuv handle was wired. File buffering is bulletproof: each
+ * stage is sequential, disk has no buffer-size cliff, and on failure the
+ * file is preserved at `/tmp/omni-migrate-<table>.copy` for inspection.
+ *
+ * BINARY format reasoning unchanged: byte-exact, no text-escaping bugs,
+ * postgres 18 ↔ 18 same wire format.
+ *
+ * The temp file gets cleaned up in `finally`. Caller is expected to have
+ * stopped omni-api so the table isn't being written to mid-COPY.
  */
 async function copyTable(
   table: string,
@@ -214,48 +231,57 @@ async function copyTable(
   dstArgs: string[],
   log: (line: string) => void,
 ): Promise<void> {
-  // Use child_process.spawnSync with stdio piping — chained shells are
-  // fragile across psql versions, so we plumb the pipe ourselves.
-  //
-  // BINARY format: the previous default text format choked on rows with
-  // embedded special characters (e.g. messages.raw_payload with WhatsApp
-  // Buffer-serialized JSON containing literal newlines/tabs) — observed
-  // mid-dogfood at row 60822 of public.messages, error
-  // "invalid input syntax for type json — ended unexpectedly". BINARY
-  // serializes byte-exact and sidesteps every text-format escaping bug.
-  // Postgres BINARY format is forward-compatible across the 18 ↔ 18 hop
-  // we're doing here (both ends are autopg's bundled postgres).
-  const src = spawn('psql', [...srcArgs, '-c', `\\copy public.${table} TO STDOUT WITH (FORMAT binary)`], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PGPASSWORD: 'postgres' },
-  });
-  const dst = spawn(
-    'psql',
-    [
-      ...dstArgs,
-      '-c',
-      `SET session_replication_role='replica';`,
-      '-c',
-      `\\copy public.${table} FROM STDIN WITH (FORMAT binary)`,
-    ],
-    {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, PGPASSWORD: 'postgres' },
-    },
-  );
-  if (!src.stdout || !dst.stdin) throw new Error(`copy stream not available for ${table}`);
-  src.stdout.pipe(dst.stdin);
-  let dstErr = '';
-  dst.stderr?.on('data', (b: Buffer) => {
-    dstErr += b.toString('utf-8');
-  });
-  const srcExited = new Promise<number>((resolve) => src.once('exit', (code) => resolve(code ?? -1)));
-  const dstExited = new Promise<number>((resolve) => dst.once('exit', (code) => resolve(code ?? -1)));
-  const [sc, dc] = await Promise.all([srcExited, dstExited]);
-  if (sc !== 0 || dc !== 0) {
-    throw new Error(`copy ${table} failed (src=${sc} dst=${dc}): ${dstErr.trim()}`);
+  const tmpFile = join(tmpdir(), `omni-migrate-${table}-${process.pid}.copy`);
+  try {
+    // Phase 1: source → file. `\copy ... TO '<file>'` is psql's
+    // client-side variant (vs server-side `COPY TO '<file>'` which would
+    // require the postgres process to have FS write perms on that path).
+    const srcResult = spawnSync(
+      'psql',
+      [...srcArgs, '-c', `\\copy public.${table} TO '${tmpFile}' WITH (FORMAT binary)`],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, PGPASSWORD: 'postgres' },
+        timeout: 600_000,
+        maxBuffer: 16 * 1024 * 1024, // 16 MB — only the COPY summary line lands in stdout
+      },
+    );
+    if (srcResult.status !== 0) {
+      throw new Error(
+        `dump ${table} failed (psql exit ${srcResult.status}): ${srcResult.stderr?.toString().trim() ?? ''}`,
+      );
+    }
+    // Phase 2: file → dest. Same client-side `\copy ... FROM '<file>'`.
+    const dstResult = spawnSync(
+      'psql',
+      [
+        ...dstArgs,
+        '-c',
+        `SET session_replication_role='replica';`,
+        '-c',
+        `\\copy public.${table} FROM '${tmpFile}' WITH (FORMAT binary)`,
+      ],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, PGPASSWORD: 'postgres' },
+        timeout: 600_000,
+        maxBuffer: 16 * 1024 * 1024,
+      },
+    );
+    if (dstResult.status !== 0) {
+      throw new Error(
+        `restore ${table} failed (psql exit ${dstResult.status}): ${dstResult.stderr?.toString().trim() ?? ''}`,
+      );
+    }
+    log(`  copied ${table}`);
+  } finally {
+    try {
+      const { unlinkSync } = await import('node:fs');
+      unlinkSync(tmpFile);
+    } catch {
+      // Best-effort cleanup; leave the file for inspection if unlink fails.
+    }
   }
-  log(`  copied ${table}`);
 }
 
 /**
