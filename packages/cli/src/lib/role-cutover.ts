@@ -60,9 +60,10 @@ function sanitizeSlug(input: string): string {
 
 /**
  * Compute the scoped role name for an omni install. Deterministic — same
- * install always produces the same role name across reruns.
+ * install always produces the same role name across reruns. Internal
+ * helper; consumers route through ensureOmniScopedRole + sentinel reads.
  */
-export function deriveOmniScopedRoleName(): string {
+function deriveOmniScopedRoleName(): string {
   // Stable fingerprint: sha256 of the @automagik/omni package name. omni is
   // single-publisher (unlike genie which can be installed in multiple
   // workspace contexts), so we don't need to walk to find a package dir.
@@ -112,7 +113,7 @@ function sentinelPath(): string {
   return join(sentinelDir(), 'scoped-role.json');
 }
 
-export function readOmniCutoverSentinel(): OmniRoleCutoverSentinel | null {
+function readOmniCutoverSentinel(): OmniRoleCutoverSentinel | null {
   const path = sentinelPath();
   if (!existsSync(path)) return null;
   try {
@@ -139,7 +140,8 @@ function writeOmniCutoverSentinel(data: OmniRoleCutoverSentinel): void {
   writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
 }
 
-export function clearOmniCutoverSentinel(): void {
+// biome-ignore lint/correctness/noUnusedVariables: reserved for `omni doctor --reset-cutover` (follow-up wish)
+function clearOmniCutoverSentinel(): void {
   try {
     unlinkSync(sentinelPath());
   } catch {
@@ -151,7 +153,7 @@ export function clearOmniCutoverSentinel(): void {
 // Kill-switch
 // ============================================================================
 
-export function isOmniRoleCutoverEnabled(): boolean {
+function isOmniRoleCutoverEnabled(): boolean {
   return process.env.OMNI_ROLE_CUTOVER !== '0';
 }
 

@@ -180,7 +180,7 @@ export function resolveDatabaseUrl(serverConfig: ServerConfig): string {
  * credentials. Returns the URL unchanged when `creds` is null. Pure;
  * URL-safe via WHATWG URL.
  */
-export function applyScopedCredentials(url: string, creds: { username: string; password: string } | null): string {
+function applyScopedCredentials(url: string, creds: { username: string; password: string } | null): string {
   if (!creds) return url;
   try {
     const parsed = new URL(url);
