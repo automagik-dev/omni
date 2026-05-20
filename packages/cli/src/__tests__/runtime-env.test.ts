@@ -182,13 +182,18 @@ describe('UDS-preference (pgserve-singleton-no-proxy G1)', () => {
     }
   });
 
-  test('buildCanonicalSocketDatabaseUrl produces a libpq-compat UDS shape', () => {
+  test('buildCanonicalSocketDatabaseUrl produces a libpq-compat UDS shape (whatwg-url valid)', () => {
     process.env.XDG_RUNTIME_DIR = '/run/user/1000';
     const url = buildCanonicalSocketDatabaseUrl();
-    expect(url.startsWith('postgresql://postgres:postgres@/omni?')).toBe(true);
-    const params = new URLSearchParams(url.split('?')[1]);
-    expect(params.get('host')).toBe('/run/user/1000/pgserve');
-    expect(params.get('port')).toBe('5432');
+    // Post WHATWG-URL-compat fix: placeholder `localhost` host required
+    // so Node's URL parser accepts the string. The previous form
+    // (`@/omni?...`) was libpq-valid but rejected by WHATWG, which
+    // crashlooped omni-api at startup. libpq still routes to the socket
+    // via the host= query param.
+    expect(url.startsWith('postgresql://postgres:postgres@localhost/omni?')).toBe(true);
+    const parsed = new URL(url);
+    expect(parsed.searchParams.get('host')).toBe('/run/user/1000/pgserve');
+    expect(parsed.searchParams.get('port')).toBe('5432');
   });
 
   test('resolveDatabaseUrl falls back to TCP embedded URL when UDS is absent', () => {
