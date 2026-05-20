@@ -104,21 +104,25 @@ export function probeCanonicalSocketSync(): boolean {
 
 /**
  * Build a `postgresql://` URL pointing at the given transport, using the
- * supplied database name. Mirrors the URL shapes documented in
- * SHARED-DESIGN.md §5.3 (omni-side scope).
+ * supplied database name.
  *
- * UDS shape: `postgresql://postgres:postgres@localhost/omni?host=/run/user/1000/pgserve&port=5432`
+ * UDS shape: `postgresql://postgres:postgres@localhost/omni` (plain — no
+ *   libpq `?host=` query param). Socket routing happens via the
+ *   PGHOST/PGPORT env vars `buildRuntimeEnv` publishes alongside this URL.
  * TCP shape: `postgresql://postgres:postgres@127.0.0.1:5432/omni`
  *
- * UDS placeholder host (`localhost`) is intentional. The previous form
- * `postgresql://user:pass@/db?host=…` is libpq-valid but rejects when
- * parsed by Node's WHATWG `URL()` constructor with "Invalid URL"
- * (empty authority between `@` and `/`). omni-api's startup pipeline
- * runs `new URL(DATABASE_URL)` for validation/redaction, which
- * crashloops `omni-api` with `TypeError [ERR_INVALID_URL]` whenever
- * the canonical UDS is reachable. libpq still routes to the socket
- * because the `host=` query parameter overrides the URL host —
- * placeholder is never dialed.
+ * Why no `?host=` for UDS: postgres.js (omni-api's client) rejects URLs
+ * carrying the libpq `?host=` query parameter with the error
+ * `unrecognized configuration parameter "host"`. That parameter is a
+ * libpq-only convention; postgres.js parses URL query params strictly as
+ * connection options and bails. Earlier iterations of this helper tried
+ * three shapes that all failed for postgres.js:
+ *   - `postgresql://user:pass@/db?host=/sock` → Node WHATWG URL: Invalid URL
+ *   - `postgresql://user:pass@localhost/db?host=/sock` → postgres.js:
+ *     "unrecognized configuration parameter host"
+ * The working shape is the plain `@localhost/db` form, with the actual
+ * socket path supplied to postgres.js via PGHOST/PGPORT env vars (which
+ * postgres.js inherits as connection defaults).
  *
  * The username/password pair is preserved (not derived from the transport)
  * because omni's pgserve consumer keeps libpq peer-auth via password —
@@ -136,13 +140,10 @@ export function buildDatabaseUrlForTransport(
   const password = options.password ?? 'postgres';
   const auth = `${encodeURIComponent(username)}:${encodeURIComponent(password)}`;
   if (transport.kind === 'unix') {
-    const params = new URLSearchParams({
-      host: transport.socketDir,
-      port: String(transport.port),
-    });
-    // `localhost` is a WHATWG-URL-valid placeholder; libpq picks up the
-    // socket from the `host=` query param. See doc comment above.
-    return `postgresql://${auth}@localhost/${encodeURIComponent(database)}?${params.toString()}`;
+    // Plain `@localhost/db` form — postgres.js parses cleanly; PGHOST/PGPORT
+    // env vars (set by buildRuntimeEnv) route the actual connection to the
+    // canonical Unix socket. See doc comment above.
+    return `postgresql://${auth}@localhost/${encodeURIComponent(database)}`;
   }
   return `postgresql://${auth}@${transport.host}:${transport.port}/${encodeURIComponent(database)}`;
 }
