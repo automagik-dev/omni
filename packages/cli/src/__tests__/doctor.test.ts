@@ -629,6 +629,13 @@ Module: pm2-logrotate
 });
 
 describe('runDoctor — --fix mode', () => {
+  beforeEach(() => {
+    // Force legacy `postgres:postgres` URL — the scoped-role sentinel
+    // on Felipe's dogfood host would otherwise rewrite DATABASE_URL
+    // and break the legacy-shape assertion below.
+    process.env.OMNI_ROLE_CUTOVER = '0';
+  });
+
   test('healthy state is a no-op under --fix (no fixes recorded)', async () => {
     const { VERSION } = await import('../version.js');
     const state = mkHarness({ serverVersion: VERSION });
@@ -659,7 +666,11 @@ describe('runDoctor — --fix mode', () => {
     expect(startCall).toBeDefined();
     // The env passed to pm2 must NOT contain the polluted garbage URL.
     expect(startCall?.env?.DATABASE_URL).not.toContain('garbage');
-    expect(startCall?.env?.DATABASE_URL).toMatch(/postgres@(\/omni\?host=|[^/]+:8432\/omni)/);
+    // Accept three valid shapes:
+    //   - Plain UDS form: postgres@localhost/omni  (PR #645+ post-postgres.js fix)
+    //   - Legacy UDS w/ libpq: postgres@localhost/omni?host=… (pre-#645)
+    //   - TCP fallback: postgres@<host>:8432/omni
+    expect(startCall?.env?.DATABASE_URL).toMatch(/postgres@(localhost\/omni|[^/]+:8432\/omni)/);
     // Recheck sees the drift as fixed.
     const drift = report.checks.find((c) => c.id === 'pm2-env-drift');
     expect(drift?.level).toBe('OK');
@@ -779,6 +790,10 @@ describe('runDoctor — mutation safety', () => {
   }
 
   beforeEach(() => {
+    // Disable role-cutover sentinel reads so buildRuntimeEnv assertions
+    // see the legacy postgres:postgres URL on hosts where the sentinel
+    // file exists (Felipe's dogfood host).
+    process.env.OMNI_ROLE_CUTOVER = '0';
     // Populate a fake pgserve data directory with known files.
     rmSync(FIXTURE_DIR, { recursive: true, force: true });
     mkdirSync(FIXTURE_DIR, { recursive: true });

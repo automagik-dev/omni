@@ -233,8 +233,14 @@ BEGIN
   END IF;
 END
 $$;`,
-    // Database-level grants.
-    `GRANT CONNECT, TEMPORARY ON DATABASE "${database}" TO "${roleName}";`,
+    // Database-level grants. CREATE on the database is required so Drizzle
+    // migrations can `CREATE SCHEMA "drizzle"` (the migration-tracker schema)
+    // and `CREATE EXTENSION IF NOT EXISTS pgcrypto` from non-superuser. Without
+    // this, omni-api boots, passes waitForDatabaseReady (SELECT 1 succeeds),
+    // and then crashes with `PostgresError: permission denied for database
+    // omni` on the first Drizzle migrate call. Mirror of genie's
+    // `ensurePrivilegedBootstrapObjects` pattern.
+    `GRANT CONNECT, TEMPORARY, CREATE ON DATABASE "${database}" TO "${roleName}";`,
   ];
   // Run the role + database-grants script on the postgres database.
   const dbCreateOk = await runPsql(sqlScript.join('\n'), { socketDir: opts.socketDir, port, database: 'postgres' });
@@ -242,7 +248,14 @@ $$;`,
     return { status: 'skipped', reason: 'psql role provisioning failed' };
   }
   // Schema/object grants must be applied inside the target database.
+  // ALTER SCHEMA public OWNER mirrors genie's pattern: the scoped role
+  // owns the public schema so it can do schema DDL (ALTER TABLE, CREATE
+  // INDEX, etc.) in Drizzle migrations. pgcrypto pre-create lets a
+  // non-superuser migration that calls CREATE EXTENSION IF NOT EXISTS
+  // pgcrypto succeed as a no-op (untrusted extensions = superuser-only).
   const grantsScript = [
+    'CREATE EXTENSION IF NOT EXISTS pgcrypto;',
+    `ALTER SCHEMA public OWNER TO "${roleName}";`,
     `GRANT USAGE, CREATE ON SCHEMA public TO "${roleName}";`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${roleName}";`,
     `GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO "${roleName}";`,
