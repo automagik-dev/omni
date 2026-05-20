@@ -156,7 +156,39 @@ jobs:
       # Channel selector: main-branch builds publish to stable (the rolling
       # PR dev→main promotion path), everything else publishes to dev.
       # Mirrors genie wish release-channel-dev (PR #2419).
+      - name: Build CLI
+        run: bunx turbo run build --filter=@automagik/omni
+
+      - name: Setup Node 24 (for npm OIDC publish)
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish to npm via OIDC (@${{ steps.context.outputs.npm_tag }})
+        env:
+          HUSKY: "0"
+          NPM_CONFIG_PROVENANCE: "false"
+        run: |
+          cd packages/cli
+          npm publish --access public --tag ${{ steps.context.outputs.npm_tag }}
+
+      # Dispatch the signed-tarball release pipeline (build → sign-attest →
+      # publish) via release.yml's workflow_dispatch entry. GITHUB_TOKEN-
+      # pushed tags don't fire push:tags workflows (GitHub anti-recursion
+      # guard); workflow_dispatch and repository_dispatch are the documented
+      # exceptions, so this step kicks the orchestrator from version.yml.
+      #
+      # NOTE: this step runs LAST so a failed dispatch (e.g. GITHUB_TOKEN
+      # lacking the workflow-write permission and getting HTTP 403) does
+      # not short-circuit the npm publish step. `continue-on-error: true`
+      # turns the failure into a workflow annotation; the operator can
+      # manually re-dispatch via `gh workflow run release.yml ...`.
+      # Pre-fix history: when dispatch ran BEFORE npm publish + Build CLI,
+      # the 403 cascaded and skipped npm publish entirely (v2.260520.1 / .2
+      # / .3 never made it to @next).
       - name: Dispatch release pipeline for the new tag
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -189,40 +221,3 @@ jobs:
             exit 1
           fi
 
-      - name: Build CLI
-        run: bunx turbo run build --filter=@automagik/omni
-
-      # Auth: npm OIDC Trusted Publishing. The package's only Trusted
-      # Publisher entry on npmjs.com is this file (version.yml). If you
-      # rename this file, you MUST update the trusted-publisher record at
-      # https://www.npmjs.com/package/@automagik/omni/access — otherwise
-      # publishes silently 404.
-      #
-      # Node 24 bundles npm 11.x by default — npm Trusted Publishing
-      # requires npm >= 11.5.1. Using Node 24 sidesteps the npm
-      # self-upgrade step entirely, which was failing with broken
-      # bundled npm 10.x (Cannot find module 'promise-retry') even with
-      # --force. The bundled Node on the Blacksmith image lives at
-      # /usr/local where the runner user can't write; setup-node
-      # installs Node 24 into the runner-user-writable tool_cache.
-      - name: Setup Node 24 (for npm OIDC publish)
-        uses: actions/setup-node@v5
-        with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Publish to npm via OIDC (@${{ steps.context.outputs.npm_tag }})
-        env:
-          HUSKY: "0"
-          # npm auto-enables provenance in any CI env with `id-token: write`,
-          # regardless of the --provenance CLI flag. Self-hosted Blacksmith
-          # runners fail the server-side sigstore check with 422. Disable
-          # auto-provenance explicitly; OIDC token exchange still happens.
-          NPM_CONFIG_PROVENANCE: "false"
-        # On main context: publish package.json's current version as @latest.
-        # On dev context: publish the version we just bumped to as @next.
-        # The Release workflow on main retags as @latest if this was first
-        # published as @next, so a promoted dev build never double-publishes.
-        run: |
-          cd packages/cli
-          npm publish --access public --tag ${{ steps.context.outputs.npm_tag }}
