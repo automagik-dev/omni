@@ -91,14 +91,19 @@ describe('socket path helpers', () => {
 });
 
 describe('buildDatabaseUrlForTransport', () => {
-  test('produces UDS shape with host+port query params', () => {
+  test('produces UDS shape with host+port query params (whatwg-url valid)', () => {
     const url = buildDatabaseUrlForTransport({ kind: 'unix', socketDir: '/run/user/1000/pgserve', port: 5432 }, 'omni');
     // postgres.js / libpq accepts host=<dir> in query params to dial a Unix
     // socket at <dir>/.s.PGSQL.<port>. URLSearchParams encodes the slashes.
-    expect(url).toContain('postgresql://postgres:postgres@/omni?');
-    const params = new URLSearchParams(url.split('?')[1]);
-    expect(params.get('host')).toBe('/run/user/1000/pgserve');
-    expect(params.get('port')).toBe('5432');
+    // The `localhost` placeholder host is required so Node's WHATWG URL
+    // constructor accepts the string (the previous `@/db` form rejected
+    // with "Invalid URL", crashlooping omni-api at startup).
+    expect(url).toBe('postgresql://postgres:postgres@localhost/omni?host=%2Frun%2Fuser%2F1000%2Fpgserve&port=5432');
+    // Smoke-test the whatwg parser explicitly so a future regression
+    // (e.g. dropping the placeholder host) is caught.
+    const parsed = new URL(url);
+    expect(parsed.searchParams.get('host')).toBe('/run/user/1000/pgserve');
+    expect(parsed.searchParams.get('port')).toBe('5432');
   });
 
   test('produces TCP shape with explicit host:port', () => {

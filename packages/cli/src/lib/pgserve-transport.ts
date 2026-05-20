@@ -107,8 +107,18 @@ export function probeCanonicalSocketSync(): boolean {
  * supplied database name. Mirrors the URL shapes documented in
  * SHARED-DESIGN.md §5.3 (omni-side scope).
  *
- * UDS shape: `postgresql://postgres:postgres@/omni?host=/run/user/1000/pgserve&port=5432`
+ * UDS shape: `postgresql://postgres:postgres@localhost/omni?host=/run/user/1000/pgserve&port=5432`
  * TCP shape: `postgresql://postgres:postgres@127.0.0.1:5432/omni`
+ *
+ * UDS placeholder host (`localhost`) is intentional. The previous form
+ * `postgresql://user:pass@/db?host=…` is libpq-valid but rejects when
+ * parsed by Node's WHATWG `URL()` constructor with "Invalid URL"
+ * (empty authority between `@` and `/`). omni-api's startup pipeline
+ * runs `new URL(DATABASE_URL)` for validation/redaction, which
+ * crashloops `omni-api` with `TypeError [ERR_INVALID_URL]` whenever
+ * the canonical UDS is reachable. libpq still routes to the socket
+ * because the `host=` query parameter overrides the URL host —
+ * placeholder is never dialed.
  *
  * The username/password pair is preserved (not derived from the transport)
  * because omni's pgserve consumer keeps libpq peer-auth via password —
@@ -130,7 +140,9 @@ export function buildDatabaseUrlForTransport(
       host: transport.socketDir,
       port: String(transport.port),
     });
-    return `postgresql://${auth}@/${encodeURIComponent(database)}?${params.toString()}`;
+    // `localhost` is a WHATWG-URL-valid placeholder; libpq picks up the
+    // socket from the `host=` query param. See doc comment above.
+    return `postgresql://${auth}@localhost/${encodeURIComponent(database)}?${params.toString()}`;
   }
   return `postgresql://${auth}@${transport.host}:${transport.port}/${encodeURIComponent(database)}`;
 }
