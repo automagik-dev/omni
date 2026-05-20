@@ -367,9 +367,18 @@ export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions =
   }
   log(`  using postgres binary: ${binary}`);
 
+  // Stop omni-api during the copy. Otherwise omni-api's bootstrap (default
+  // global_settings, Baileys instance reattach, etc.) races our COPYs and
+  // causes `duplicate key value violates unique constraint` errors after
+  // the TRUNCATE — observed on Felipe's host with the global_settings row
+  // for elevenlabs.api_key. Restart on success OR failure (finally).
+  log('  stopping omni-api during data copy');
+  spawnSync('pm2', ['stop', 'omni-api'], { stdio: 'inherit' });
+
   const tempPort = await findFreePort();
   const t0 = Date.now();
   const temp = await spawnTempPostmaster(binary, EMBEDDED_DIR, tempPort, log);
+  let apiRestarted = false;
   try {
     // Verify the temp instance has the `omni` database.
     const srcBaseArgs = ['-h', '127.0.0.1', '-p', String(tempPort), '-U', 'postgres', '-d', 'omni'];
@@ -412,6 +421,11 @@ export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions =
     return { status: 'migrated', tables: tables.length, durationMs: Date.now() - t0 };
   } finally {
     await temp.stop();
+    // Restart omni-api on the now-populated canonical DB.
+    log('  restarting omni-api');
+    spawnSync('pm2', ['start', 'omni-api'], { stdio: 'inherit' });
+    apiRestarted = true;
+    void apiRestarted; // satisfy ts no-unused while keeping the variable for future logging
   }
 }
 
