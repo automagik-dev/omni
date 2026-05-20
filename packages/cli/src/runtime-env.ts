@@ -42,6 +42,15 @@ import {
 export type RuntimeEnv = {
   API_PORT: string;
   DATABASE_URL: string;
+  // PGHOST / PGPORT: libpq-standard env vars consumed by postgres.js when
+  // present. omni-api uses these to dial the canonical Unix socket because
+  // postgres.js's URL parser does NOT honor the libpq `?host=` query-param
+  // form (rejects with "unrecognized configuration parameter host"). With
+  // PGHOST=<socket_dir> set, postgres.js routes through the socket even
+  // though DATABASE_URL contains a `localhost` placeholder host. PGPORT
+  // matches the canonical port. Empty string when UDS is not preferred.
+  PGHOST: string;
+  PGPORT: string;
   OMNI_API_KEY: string;
   MEDIA_STORAGE_PATH: string;
   OMNI_PACKAGES_DIR: string;
@@ -183,9 +192,19 @@ export function resolveDatabaseUrl(serverConfig: ServerConfig): string {
  */
 export function buildRuntimeEnv(serverConfig: ServerConfig, cliConfig: Config): RuntimeEnv {
   const pgservePort = resolvePgservePort(serverConfig);
+  // When the canonical Unix socket is live, also publish PGHOST/PGPORT so
+  // postgres.js routes through the socket. See PGHOST doc on RuntimeEnv
+  // for why DATABASE_URL alone isn't enough (postgres.js rejects libpq's
+  // `?host=` query-param form). Empty strings when not in UDS mode so
+  // omni-api falls back to TCP via DATABASE_URL host:port.
+  const udsActive = probeCanonicalSocketSync();
+  const pgHost = udsActive ? resolvePgserveSocketDir() : '';
+  const pgPort = udsActive ? String(CANONICAL_PG_PORT) : '';
   return {
     API_PORT: String(serverConfig.port),
     DATABASE_URL: resolveDatabaseUrl(serverConfig),
+    PGHOST: pgHost,
+    PGPORT: pgPort,
     OMNI_API_KEY: cliConfig.apiKey ?? '',
     MEDIA_STORAGE_PATH: join(serverConfig.dataDir, 'media'),
     OMNI_PACKAGES_DIR: join(serverConfig.dataDir, 'packages'),
