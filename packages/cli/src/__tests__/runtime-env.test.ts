@@ -40,9 +40,15 @@ function clearShellDbUrl(): void {
  * the assertions that target the embedded URL would flake on those hosts.
  */
 let prevXdg: string | undefined;
+let prevCutover: string | undefined;
 beforeEach(() => {
   prevXdg = process.env.XDG_RUNTIME_DIR;
   process.env.XDG_RUNTIME_DIR = '/var/empty';
+  // Disable role-cutover sentinel reads for the legacy hermetic-env
+  // assertions. Tests that need to verify the cutover credential
+  // override can opt back in by setting OMNI_ROLE_CUTOVER unset.
+  prevCutover = process.env.OMNI_ROLE_CUTOVER;
+  process.env.OMNI_ROLE_CUTOVER = '0';
 });
 afterEach(() => {
   if (prevXdg === undefined) {
@@ -54,6 +60,12 @@ afterEach(() => {
     delete process.env[key];
   } else {
     process.env.XDG_RUNTIME_DIR = prevXdg;
+  }
+  if (prevCutover === undefined) {
+    const key = 'OMNI_ROLE_CUTOVER';
+    delete process.env[key];
+  } else {
+    process.env.OMNI_ROLE_CUTOVER = prevCutover;
   }
 });
 

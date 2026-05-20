@@ -779,6 +779,10 @@ describe('runDoctor — mutation safety', () => {
   }
 
   beforeEach(() => {
+    // Disable role-cutover sentinel reads so buildRuntimeEnv assertions
+    // see the legacy postgres:postgres URL on hosts where the sentinel
+    // file exists (Felipe's dogfood host).
+    process.env.OMNI_ROLE_CUTOVER = '0';
     // Populate a fake pgserve data directory with known files.
     rmSync(FIXTURE_DIR, { recursive: true, force: true });
     mkdirSync(FIXTURE_DIR, { recursive: true });
