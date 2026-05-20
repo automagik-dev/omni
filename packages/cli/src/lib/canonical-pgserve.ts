@@ -95,14 +95,60 @@ async function ensurePgserveBinary(): Promise<boolean> {
 }
 
 /**
- * Run `pgserve install` (idempotent — exits 0 with "already installed"
- * on subsequent invocations). Returns true on success.
+ * pm2 process names the canonical pgserve postmaster might be registered
+ * under. v3 (autopg) registers as `autopg-server`; v2 (pgserve) registered
+ * as `pgserve`. Both must be probed because cutover hosts run a mix.
+ */
+const CANONICAL_PM2_PROCESS_NAMES = ['autopg-server', 'pgserve'] as const;
+
+/**
+ * Detect whether the canonical postmaster is already pm2-managed and
+ * online. When true, `autopg install` / `pgserve install` is a redundant
+ * no-op that ALSO fails on a known EADDRINUSE bind-check bug — the
+ * install routine probes the canonical port before noticing the listener
+ * is its own pm2-supervised instance, and exits non-zero. Skip the
+ * shell-out entirely when the pm2 path tells us the same answer.
+ *
+ * Mirrors the genie-side fix in `src/genie-commands/install.ts:isPgserveOnlinePm2`.
+ */
+async function isCanonicalPgservePm2Online(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn({ cmd: ['pm2', 'jlist'], stdout: 'pipe', stderr: 'pipe' });
+    const text = await new Response(proc.stdout).text();
+    const code = await proc.exited;
+    if (code !== 0) return false;
+    const list = JSON.parse(text) as Array<{ name?: string; pm2_env?: { status?: string } }>;
+    return list.some(
+      (p) =>
+        typeof p.name === 'string' &&
+        (CANONICAL_PM2_PROCESS_NAMES as readonly string[]).includes(p.name) &&
+        p.pm2_env?.status === 'online',
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Run `<bin> install` (idempotent — exits 0 with "already installed" on
+ * subsequent invocations). Returns true on success.
+ *
+ * Fast path: when the canonical postmaster is already pm2-online, skip
+ * the shell-out. This dodges the well-known EADDRINUSE bind-check bug in
+ * `<bin> install` (port 5432 is already bound by the pm2-supervised
+ * postmaster → install errors before recognizing its own listener).
+ * Detected on Felipe's box on 2026-05-20 mid-dogfood; same class of bug
+ * the genie side worked around on 2026-05-11.
  */
 async function runPgserveInstall(): Promise<boolean> {
   const bin = resolvePgserveBinary();
   if (!bin) {
     output.warn('Canonical pgserve binary unavailable for install step.');
     return false;
+  }
+  if (await isCanonicalPgservePm2Online()) {
+    output.raw(`  Canonical pgserve already pm2-managed and online — skipping ${bin} install.`);
+    return true;
   }
   output.raw(`  Registering canonical pgserve under pm2 via \`${bin} install\` (idempotent)...`);
   const installCode = await Bun.spawn({ cmd: [bin, 'install'], stdout: 'inherit', stderr: 'inherit' }).exited;
@@ -163,11 +209,70 @@ function buildOmniDatabaseUrl(port: number): string {
 }
 
 /**
+ * Ensure the `omni` database exists on the canonical postmaster. autopg v3
+ * (post-router-removal) does NOT auto-provision databases on first
+ * connection — pgserve v2's SO_PEERCRED-routed fingerprint scheme is gone.
+ * Operators upgrading from v2 → v3 hit `Database not ready after 30
+ * attempts` because omni-api can connect to the postmaster but the
+ * `omni` DB simply doesn't exist there yet. This helper closes the gap.
+ *
+ * Idempotent via Postgres's "IF NOT EXISTS"-equivalent: catch the
+ * `42P04` (duplicate_database) error code and treat as success. Uses
+ * `psql` because the CLI already has it on PATH whenever autopg / pgserve
+ * is installed (it's bundled with the postmaster).
+ *
+ * Best-effort: any non-fatal failure (binary missing, transient timeout)
+ * returns false so the caller can warn without aborting the install.
+ */
+async function ensureOmniDatabaseExists(port: number): Promise<boolean> {
+  const psqlArgs = [
+    '-h',
+    '127.0.0.1',
+    '-p',
+    String(port),
+    '-U',
+    'postgres',
+    '-d',
+    'postgres',
+    '-tAc',
+    `CREATE DATABASE ${OMNI_DATABASE_NAME}`,
+  ];
+  const proc = Bun.spawn({
+    cmd: ['psql', ...psqlArgs],
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { ...process.env, PGPASSWORD: 'postgres' },
+  });
+  const stderr = await new Response(proc.stderr).text();
+  const code = await proc.exited;
+  if (code === 0) {
+    output.raw(`  Created \`${OMNI_DATABASE_NAME}\` database on canonical postmaster.`);
+    return true;
+  }
+  // Already-exists is success. Postgres surfaces 42P04 in the error text.
+  if (stderr.includes('42P04') || stderr.includes('already exists')) {
+    return true;
+  }
+  output.warn(`Could not ensure \`${OMNI_DATABASE_NAME}\` database exists (psql exit ${code}): ${stderr.trim()}`);
+  return false;
+}
+
+/**
  * Full canonical pgserve setup: ensure binary → `pgserve install` → read
- * the canonical url. Returns the URL on success, null on any failure.
+ * the canonical url → ensure `omni` DB exists. Returns the URL on success,
+ * null on any failure.
  *
  * The caller (omni install) writes this URL into serverConfig.databaseUrl
  * so omni-api connects there with `PGSERVE_EMBEDDED=false`.
+ *
+ * Self-healing contract (post 2026-05-20 dogfood findings):
+ *   1. If autopg-server is already pm2-online, skip the EADDRINUSE-prone
+ *      shell-out (see {@link isCanonicalPgservePm2Online}).
+ *   2. ALWAYS refresh the URL from the actual canonical port, never trust
+ *      the operator's prior databaseUrl after canonical detection.
+ *   3. Auto-create the `omni` database (idempotent CREATE DATABASE).
+ *      autopg v3 doesn't auto-provision DBs like pgserve v2 did, so this
+ *      step is critical for any operator upgrading from v2 → v3.
  */
 export async function setupCanonicalPgserve(): Promise<string | null> {
   if (!(await ensurePgserveBinary())) {
@@ -179,6 +284,10 @@ export async function setupCanonicalPgserve(): Promise<string | null> {
   if (!(await runPgserveInstall())) return null;
   const port = await readPgservePort();
   if (port === null) return null;
+  // Best-effort: db-create failure does not abort the install; operator
+  // can rerun `omni doctor --fix` later. The URL is still returned so
+  // the caller persists the correct port even when DB creation lags.
+  await ensureOmniDatabaseExists(port);
   return buildOmniDatabaseUrl(port);
 }
 
