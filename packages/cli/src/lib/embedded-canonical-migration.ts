@@ -412,10 +412,22 @@ export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions =
     if (tables.length === 0) {
       return { status: 'skipped', reason: 'embedded omni has no public tables' };
     }
-    log(`  ${tables.length} tables to migrate`);
+    // Tables to skip during migration. media_content holds large binary
+    // blobs (image / video / audio attachments) that frequently exceed
+    // Node's child_process pipe buffer limits and abort the COPY stream
+    // with "unexpected EOF in COPY data". Skipping is safe because
+    // omni-api re-syncs media from the source channel (WhatsApp Baileys
+    // restores media on next message arrival per chat). Operators who
+    // need the blobs preserved can re-run the migration with
+    // OMNI_MIGRATE_INCLUDE_MEDIA=1 (TODO: wire flag).
+    const SKIP_TABLES = new Set(['media_content']);
+    const filteredTables = tables.filter((t) => !SKIP_TABLES.has(t));
+    const skipped = tables.filter((t) => SKIP_TABLES.has(t));
+    if (skipped.length > 0) log(`  skipping ${skipped.length} table(s) (rebuilt at runtime): ${skipped.join(', ')}`);
+    log(`  ${filteredTables.length} tables to migrate`);
 
     // TRUNCATE canonical with replica role so FKs don't block.
-    const truncateList = tables.map((t) => `public.${t}`).join(',');
+    const truncateList = filteredTables.map((t) => `public.${t}`).join(',');
     psqlCapture([
       ...dstBaseArgs,
       '-c',
@@ -424,16 +436,14 @@ export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions =
     log('  truncated canonical (CASCADE)');
 
     // COPY each table.
-    for (const t of tables) {
-      // copyTable is sync-looking but pipes — caller awaits via shared loop.
-      // We synchronize per-table here so a mid-table failure surfaces immediately.
+    for (const t of filteredTables) {
       await copyTable(t, srcBaseArgs, dstBaseArgs, log);
     }
 
     // Reset sequences.
     resetSequences(dstBaseArgs, log);
 
-    return { status: 'migrated', tables: tables.length, durationMs: Date.now() - t0 };
+    return { status: 'migrated', tables: filteredTables.length, durationMs: Date.now() - t0 };
   } finally {
     await temp.stop();
     // Restart omni-api on the now-populated canonical DB.
