@@ -32,6 +32,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { join } from 'node:path';
+import { resolvePgserveBinary } from './canonical-pgserve-binary.js';
 
 /** Canonical postgres port the postmaster binds when pgserve@>=2.3 runs in singleton mode. */
 export const CANONICAL_PG_PORT = 5432;
@@ -192,10 +193,12 @@ function parseExplicitTcpPort(raw: string | undefined): number | null {
 }
 
 async function discoverTcpPgservePort(): Promise<number | null> {
+  const bin = resolvePgserveBinary();
+  if (!bin) return null;
   return new Promise((resolve) => {
     let settled = false;
     let stdout = '';
-    const proc = spawn('pgserve', ['port'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const proc = spawn(bin, ['port'], { stdio: ['ignore', 'pipe', 'ignore'] });
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;

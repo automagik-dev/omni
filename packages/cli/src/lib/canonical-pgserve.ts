@@ -31,18 +31,11 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { loadServerConfig } from '../config.js';
 import * as output from '../output.js';
+import { canonicalPgserveInstallHint, resolvePgserveBinary } from './canonical-pgserve-binary.js';
 
 /**
- * Minimum pgserve binary version required for the canonical install
- * subcommands (`install`, `url`, `port`, `status`). Wave 1 of the
- * canonical-pgserve-pm2-supervision wish landed in 2.1.0; anything older
- * lacks the install command.
- */
-const PGSERVE_REQUIRED_VERSION = '^2.1.0';
-
-/**
- * Probe the `pgserve` binary by running its `--help` subcommand. Returns
- * true when the binary is callable.
+ * Probe the canonical pgserve binary (autopg v3 or pgserve v2 fallback)
+ * by running its `--help` subcommand. Returns true when callable.
  *
  * History
  * -------
@@ -67,8 +60,10 @@ const PGSERVE_REQUIRED_VERSION = '^2.1.0';
  *    flow.
  */
 async function isPgserveInstalled(): Promise<boolean> {
+  const bin = resolvePgserveBinary();
+  if (!bin) return false;
   try {
-    const code = await Bun.spawn({ cmd: ['pgserve', '--help'], stdout: 'pipe', stderr: 'pipe' }).exited;
+    const code = await Bun.spawn({ cmd: [bin, '--help'], stdout: 'pipe', stderr: 'pipe' }).exited;
     return code === 0;
   } catch {
     return false;
@@ -76,27 +71,27 @@ async function isPgserveInstalled(): Promise<boolean> {
 }
 
 /**
- * Ensure the global `pgserve` binary is installed and on PATH. Best-effort:
- * - If already installed, return true immediately.
- * - Otherwise try `bun add -g pgserve@<PGSERVE_REQUIRED_VERSION>`.
- * - Returns false on failure (caller decides whether to fall back to
- *   embedded or fail hard).
+ * Ensure the canonical pgserve binary (autopg v3 — or pgserve v2 on
+ * legacy hosts) is installed and on PATH.
+ *
+ * Post v2 → v3 cutover, the recovery path is the autopg install.sh
+ * one-liner. The previous behavior shelled out to
+ * `bun add -g pgserve@^2.1.0` — that pulled the obsolete v2 npm
+ * package onto v3 hosts, which is exactly the kind of "fix made it
+ * worse" UX we don't want. So we no longer auto-install; instead the
+ * caller (omni install) falls back to embedded mode while surfacing
+ * an actionable hint that points at the canonical installer.
+ *
+ * Returns false on missing binary so the embedded-fallback path stays
+ * unchanged — operator data is preserved either way.
  */
 async function ensurePgserveBinary(): Promise<boolean> {
   if (await isPgserveInstalled()) return true;
-  output.raw(`  Installing pgserve@${PGSERVE_REQUIRED_VERSION} globally (bun add -g)...`);
-  const installCode = await Bun.spawn({
-    cmd: ['bun', 'add', '-g', `pgserve@${PGSERVE_REQUIRED_VERSION}`],
-    stdout: 'inherit',
-    stderr: 'inherit',
-  }).exited;
-  if (installCode !== 0) {
-    output.warn(`bun add -g pgserve@${PGSERVE_REQUIRED_VERSION} exited with code ${installCode}`);
-    return false;
+  output.warn('Canonical pgserve (autopg v3 / pgserve v2) not found on PATH. To enable canonical mode:');
+  for (const cmd of canonicalPgserveInstallHint()) {
+    output.warn(cmd);
   }
-  // Re-probe — bun's global bin may not be on PATH yet for the running shell
-  // but `pgserve --version` should still resolve via the absolute global path.
-  return isPgserveInstalled();
+  return false;
 }
 
 /**
@@ -104,10 +99,15 @@ async function ensurePgserveBinary(): Promise<boolean> {
  * on subsequent invocations). Returns true on success.
  */
 async function runPgserveInstall(): Promise<boolean> {
-  output.raw('  Registering canonical pgserve under pm2 (idempotent)...');
-  const installCode = await Bun.spawn({ cmd: ['pgserve', 'install'], stdout: 'inherit', stderr: 'inherit' }).exited;
+  const bin = resolvePgserveBinary();
+  if (!bin) {
+    output.warn('Canonical pgserve binary unavailable for install step.');
+    return false;
+  }
+  output.raw(`  Registering canonical pgserve under pm2 via \`${bin} install\` (idempotent)...`);
+  const installCode = await Bun.spawn({ cmd: [bin, 'install'], stdout: 'inherit', stderr: 'inherit' }).exited;
   if (installCode !== 0) {
-    output.warn(`pgserve install exited with code ${installCode}`);
+    output.warn(`${bin} install exited with code ${installCode}`);
     return false;
   }
   return true;
@@ -136,16 +136,18 @@ const OMNI_DATABASE_NAME = 'omni';
  * the embedded path used.
  */
 async function readPgservePort(): Promise<number | null> {
-  const proc = Bun.spawn({ cmd: ['pgserve', 'port'], stdout: 'pipe', stderr: 'inherit' });
+  const bin = resolvePgserveBinary();
+  if (!bin) return null;
+  const proc = Bun.spawn({ cmd: [bin, 'port'], stdout: 'pipe', stderr: 'inherit' });
   const stdout = await new Response(proc.stdout).text();
   const code = await proc.exited;
   if (code !== 0) {
-    output.warn(`pgserve port exited with code ${code}`);
+    output.warn(`${bin} port exited with code ${code}`);
     return null;
   }
   const port = Number.parseInt(stdout.trim(), 10);
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-    output.warn(`pgserve port returned unexpected output ("${stdout.trim()}")`);
+    output.warn(`${bin} port returned unexpected output ("${stdout.trim()}")`);
     return null;
   }
   return port;
@@ -169,7 +171,9 @@ function buildOmniDatabaseUrl(port: number): string {
  */
 export async function setupCanonicalPgserve(): Promise<string | null> {
   if (!(await ensurePgserveBinary())) {
-    output.warn('Canonical pgserve binary unavailable — install manually: bun add -g pgserve@^2.1.0');
+    // ensurePgserveBinary already emitted the actionable autopg
+    // install.sh hint. Bare warn here just labels the abort surface.
+    output.warn('Canonical pgserve setup skipped — staying on embedded mode.');
     return null;
   }
   if (!(await runPgserveInstall())) return null;
