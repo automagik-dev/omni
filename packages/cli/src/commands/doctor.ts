@@ -66,6 +66,7 @@ import {
   restoreSnapshotToCanonical,
   setupCanonicalPgserve,
 } from '../lib/canonical-pgserve.js';
+import { EMBEDDED_PGSERVE_DATA_DIR, migrateUnmountedEmbeddedToCanonical } from '../lib/embedded-canonical-migration.js';
 import * as output from '../output.js';
 import { PM2_HARDENED_DEFAULTS, PM2_PROCESSES, buildPm2StartArgs, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv, resolvePgservePort } from '../runtime-env.js';
@@ -94,7 +95,8 @@ export type CheckId =
   | 'pm2-logrotate-installed'
   | 'cli-signing-key-for-locked-instances'
   | 'pgserve-canonical'
-  | 'port-canonical-owner';
+  | 'port-canonical-owner'
+  | 'embedded-data-orphaned';
 
 export interface CheckResult {
   id: CheckId;
@@ -508,6 +510,77 @@ async function checkOmniDbExists(deps: DoctorDeps): Promise<CheckResult> {
     return { id: 'omni-db-exists', level: 'OK', detail: 'omni database is reachable' };
   }
   return { id: 'omni-db-exists', level: 'FAIL', detail: 'omni database is not reachable' };
+}
+
+/**
+ * Check 13: embedded pgserve data dir holds data the canonical DB doesn't.
+ *
+ * Failure signal: `useCanonicalPgserve: true` (operator is committed to
+ * canonical), canonical `omni` DB exists but is EMPTY (no instances rows),
+ * AND `~/.omni/data/pgserve/` looks like a valid Postgres data dir. This is
+ * the regression state every operator hits when they upgraded past
+ * pgserve-singleton-no-proxy G2 without an in-flight embedded-API to feed
+ * the legacy fixPgserveCanonical migration.
+ *
+ * --fix runs migrateUnmountedEmbeddedToCanonical (spawns a temp postmaster
+ * against the embedded dir, copies tables to canonical, shuts down).
+ */
+async function checkEmbeddedDataOrphaned(deps: DoctorDeps): Promise<CheckResult> {
+  const { serverConfig } = deps.loadState();
+  if (serverConfig.useCanonicalPgserve !== true) {
+    return { id: 'embedded-data-orphaned', level: 'OK', detail: 'embedded mode — no orphan check needed' };
+  }
+  if (!existsSync(join(EMBEDDED_PGSERVE_DATA_DIR, 'PG_VERSION'))) {
+    return { id: 'embedded-data-orphaned', level: 'OK', detail: 'no embedded data dir present' };
+  }
+  // If canonical isn't reachable we can't say either way — defer to
+  // omni-db-exists FAIL and let the operator fix that first.
+  if (!(await deps.omniDbExists())) {
+    return {
+      id: 'embedded-data-orphaned',
+      level: 'OK',
+      detail: 'canonical not reachable yet — embedded check deferred',
+    };
+  }
+  // Read instance count via the API health endpoint already deployed at
+  // omni-api. If canonical has zero instances and embedded dir exists →
+  // FAIL with the actionable migration hint.
+  try {
+    const resp = await fetch(`http://127.0.0.1:${serverConfig.port}/api/v2/health`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    const body = (await resp.json()) as { instances?: { total?: number } };
+    const total = body?.instances?.total ?? 0;
+    if (total === 0) {
+      return {
+        id: 'embedded-data-orphaned',
+        level: 'FAIL',
+        detail: `embedded dir at ${EMBEDDED_PGSERVE_DATA_DIR} holds data but canonical omni is empty — run \`omni doctor --fix\` to migrate`,
+      };
+    }
+    return {
+      id: 'embedded-data-orphaned',
+      level: 'OK',
+      detail: `canonical omni already has ${total} instance(s)`,
+    };
+  } catch {
+    // Health unreachable — be silent rather than red-cross.
+    return { id: 'embedded-data-orphaned', level: 'OK', detail: 'health endpoint unreachable — defer' };
+  }
+}
+
+/** Fix handler for the embedded-data-orphaned check. */
+async function fixEmbeddedDataOrphaned(_deps: DoctorDeps): Promise<string> {
+  output.raw('  Migrating unmounted embedded pgserve → canonical autopg...');
+  const result = await migrateUnmountedEmbeddedToCanonical({
+    log: (line) => output.raw(line),
+  });
+  if (result.status === 'skipped') {
+    throw new Error(`migration skipped: ${result.reason}`);
+  }
+  output.raw(`  ✓ migrated ${result.tables} tables in ${result.durationMs}ms`);
+  output.raw('    Re-run `omni install --non-interactive` to re-apply scoped-role grants on the restored data.');
+  return `migrated ${result.tables} tables from embedded to canonical (${result.durationMs}ms)`;
 }
 
 /** Check 5: look for orphaned `.pgserve-data` directories. */
@@ -1169,6 +1242,7 @@ async function runAllChecks(deps: DoctorDeps): Promise<CheckResult[]> {
     await checkSigningKeyForLockedInstances(deps),
     checkPgserveCanonical(deps),
     await checkPortCanonicalOwner(deps),
+    await checkEmbeddedDataOrphaned(deps),
   ];
 }
 
@@ -1183,6 +1257,7 @@ async function applyFix(deps: DoctorDeps, check: CheckResult): Promise<string | 
     if (check.id === 'pgserve-canonical') return await fixPgserveCanonical(deps);
     if (check.id === 'port-canonical-owner') return await fixPortCanonicalOwner(deps);
     if (check.id === 'pm2-status') return await fixPm2Status(deps);
+    if (check.id === 'embedded-data-orphaned') return await fixEmbeddedDataOrphaned(deps);
     return null;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
