@@ -120,13 +120,24 @@ jobs:
           # Auto-version modifies JSON; enforce Biome formatting before lint runs in other workflows.
           bunx biome format --write package.json packages/*/package.json apps/*/package.json
 
+      - name: Refresh bun.lock (workspace version sync)
+        run: |
+          # Version bumps touch workspace package.json files; bun.lock pins
+          # every workspace package's version explicitly, so leaving it stale
+          # makes `bun install --frozen-lockfile` fail in build-tarballs.yml
+          # ("lockfile had changes, but lockfile is frozen"). Refresh the
+          # lockfile in-place so the bump commit carries a consistent
+          # package.json + bun.lock pair. Pure rewrite of workspace deps —
+          # no external resolution changes, no network impact.
+          bun install
+
       - name: Commit and tag
         run: |
           VERSION="${{ steps.version.outputs.version }}"
 
-          git add -A '*.json'
+          git add -A '*.json' bun.lock
           if git diff --cached --quiet; then
-            echo "No package.json changes to commit"
+            echo "No package.json or bun.lock changes to commit"
           else
             git commit -m "chore(version): bump to ${VERSION} [skip ci]"
           fi
