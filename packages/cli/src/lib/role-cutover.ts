@@ -255,6 +255,15 @@ $$;`,
   // INDEX, etc.) in Drizzle migrations. pgcrypto pre-create lets a
   // non-superuser migration that calls CREATE EXTENSION IF NOT EXISTS
   // pgcrypto succeed as a no-op (untrusted extensions = superuser-only).
+  //
+  // Drizzle's migrator creates its OWN schema (`drizzle`) the first time
+  // it runs, with `__drizzle_migrations` tracking inside. If that schema
+  // pre-exists from a superuser-owned earlier run, the scoped role hits
+  // `permission denied for schema drizzle`. The grants below:
+  //   1. CREATE the schema if missing (AUTHORIZATION to scoped role)
+  //   2. ALTER ownership when it pre-exists from postgres superuser
+  //   3. Refresh GRANTs on the existing table inside
+  // Idempotent — re-runs converge.
   const grantsScript = [
     'CREATE EXTENSION IF NOT EXISTS pgcrypto;',
     `ALTER SCHEMA public OWNER TO "${roleName}";`,
@@ -265,6 +274,17 @@ $$;`,
     `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "${roleName}";`,
     `ALTER DEFAULT PRIVILEGES FOR ROLE "${roleName}" IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${roleName}";`,
     `ALTER DEFAULT PRIVILEGES FOR ROLE "${roleName}" IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "${roleName}";`,
+    // Drizzle migrator schema. CREATE-IF-NOT-EXISTS handles fresh installs;
+    // ALTER OWNER + REASSIGN cover hosts where postgres superuser created
+    // it on a prior migrator run. GRANT ALL covers any tables already
+    // inside the schema (e.g. __drizzle_migrations).
+    `CREATE SCHEMA IF NOT EXISTS drizzle AUTHORIZATION "${roleName}";`,
+    `ALTER SCHEMA drizzle OWNER TO "${roleName}";`,
+    `GRANT ALL ON SCHEMA drizzle TO "${roleName}";`,
+    `GRANT ALL ON ALL TABLES IN SCHEMA drizzle TO "${roleName}";`,
+    `GRANT ALL ON ALL SEQUENCES IN SCHEMA drizzle TO "${roleName}";`,
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle GRANT ALL ON TABLES TO "${roleName}";`,
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle GRANT ALL ON SEQUENCES TO "${roleName}";`,
   ].join('\n');
   const grantsOk = await runPsql(grantsScript, { socketDir: opts.socketDir, port, database });
   if (!grantsOk) {
