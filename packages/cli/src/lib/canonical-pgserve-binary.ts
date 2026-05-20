@@ -22,13 +22,12 @@
  * Lifecycle
  * ---------
  *   - Memoized; cached value persists for the process lifetime.
- *   - {@link _resetPgserveBinaryCache} invalidates for tests.
  */
 
 import { execFileSync } from 'node:child_process';
 
-export const CANONICAL_PGSERVE_BINARY = 'autopg';
-export const LEGACY_PGSERVE_BINARY = 'pgserve';
+const CANONICAL_PGSERVE_BINARY = 'autopg';
+const LEGACY_PGSERVE_BINARY = 'pgserve';
 
 let cached: string | null | undefined;
 
@@ -72,9 +71,4 @@ export function canonicalPgserveInstallHint(): string[] {
     '  curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash',
     '  omni install     # OR: omni doctor --fix',
   ];
-}
-
-/** Reset memoization. Test-only. */
-export function _resetPgserveBinaryCache(): void {
-  cached = undefined;
 }
