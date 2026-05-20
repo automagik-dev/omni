@@ -32,6 +32,8 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import { loadServerConfig } from '../config.js';
 import * as output from '../output.js';
 import { canonicalPgserveInstallHint, resolvePgserveBinary } from './canonical-pgserve-binary.js';
+import { resolvePgserveSocketDir } from './pgserve-transport.js';
+import { ensureOmniScopedRole } from './role-cutover.js';
 
 /**
  * Probe the canonical pgserve binary (autopg v3 or pgserve v2 fallback)
@@ -288,6 +290,20 @@ export async function setupCanonicalPgserve(): Promise<string | null> {
   // can rerun `omni doctor --fix` later. The URL is still returned so
   // the caller persists the correct port even when DB creation lags.
   await ensureOmniDatabaseExists(port);
+  // Provision the dedicated non-superuser role scoped to the omni DB.
+  // Best-effort: failure logs a warning and falls back to legacy
+  // postgres:postgres at omni-api startup via the sentinel-missing path
+  // in buildRuntimeEnv. Kill switch: OMNI_ROLE_CUTOVER=0.
+  const cutover = await ensureOmniScopedRole({
+    socketDir: resolvePgserveSocketDir(),
+    port,
+    database: OMNI_DATABASE_NAME,
+  });
+  if (cutover.status === 'provisioned' || cutover.status === 'refreshed') {
+    output.raw(`  Scoped role \`${cutover.roleName}\` ${cutover.status} — omni-api will connect as non-superuser.`);
+  } else if (cutover.status === 'skipped' && cutover.reason !== 'disabled') {
+    output.warn(`Scoped-role cutover skipped: ${cutover.reason} — omni-api falls back to postgres superuser.`);
+  }
   return buildOmniDatabaseUrl(port);
 }
 
