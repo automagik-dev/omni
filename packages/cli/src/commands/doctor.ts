@@ -889,7 +889,7 @@ async function fixPgserveCanonical(deps: DoctorDeps): Promise<string> {
     // Bring omni-api back up on embedded — operator isn't left dead.
     await deps.runPm2(['start', PM2_PROCESSES.api]);
     throw new Error(
-      'canonical pgserve setup failed (pgserve binary unavailable or install failed) — install manually: bun add -g pgserve@^2.1.0',
+      'canonical pgserve setup failed (autopg v3 / pgserve v2 binary unavailable or install failed) — install autopg:\n  curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash\nthen re-run: omni doctor --fix',
     );
   }
 
