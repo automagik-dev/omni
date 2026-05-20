@@ -348,7 +348,7 @@ function mkDeps(state: HarnessState): DoctorDeps {
 // ---------------------------------------------------------------------------
 
 describe('runDoctor — read-only mode', () => {
-  test('reports all 12 checks with OK when state is healthy', async () => {
+  test('reports all 13 checks with OK when state is healthy', async () => {
     // Match the harness version to whatever the CLI currently reports so
     // `version-match` is OK without hard-coding the CLI version here.
     const { VERSION } = await import('../version.js');
@@ -357,7 +357,7 @@ describe('runDoctor — read-only mode', () => {
 
     const report = await runDoctor({ fix: false }, deps);
 
-    expect(report.checks).toHaveLength(12);
+    expect(report.checks).toHaveLength(13);
     const ids = report.checks.map((c) => c.id);
     expect(ids).toEqual([
       'pm2-env-drift',
@@ -372,11 +372,12 @@ describe('runDoctor — read-only mode', () => {
       'cli-signing-key-for-locked-instances',
       'pgserve-canonical',
       'port-canonical-owner',
+      'embedded-data-orphaned',
     ]);
     for (const check of report.checks) {
       expect(check.level).toBe('OK');
     }
-    expect(report.summary).toEqual({ ok: 12, warn: 0, fail: 0 });
+    expect(report.summary).toEqual({ ok: 13, warn: 0, fail: 0 });
     expect(report.fixesApplied).toEqual([]);
   });
 
