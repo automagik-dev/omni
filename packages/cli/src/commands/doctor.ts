@@ -542,30 +542,43 @@ async function checkEmbeddedDataOrphaned(deps: DoctorDeps): Promise<CheckResult>
       detail: 'canonical not reachable yet — embedded check deferred',
     };
   }
-  // Read instance count via the API health endpoint already deployed at
-  // omni-api. If canonical has zero instances and embedded dir exists →
-  // FAIL with the actionable migration hint.
+  // Detect partial migration: instances may be reconciled by Baileys session
+  // re-attach (auto-recreates instance rows on startup) but the bulk
+  // historical tables (`omni_events`, `messages`, `chats`, etc.) stay empty
+  // until the migration ETL runs. So we compare event-row counts between
+  // embedded and canonical — if embedded has materially more rows than
+  // canonical for ANY of these history tables, the migration is needed.
+  //
+  // Comparison uses a temp spawn against the embedded dir (same primitive
+  // the fix uses), but bounded to ~5s — boot the postmaster, run two count
+  // queries, shut it down. The cost only fires on hosts where the embedded
+  // dir still exists alongside canonical mode, i.e. mid-migration users.
   try {
-    const resp = await fetch(`http://127.0.0.1:${serverConfig.port}/api/v2/health`, {
-      signal: AbortSignal.timeout(2000),
-    });
-    const body = (await resp.json()) as { instances?: { total?: number } };
-    const total = body?.instances?.total ?? 0;
-    if (total === 0) {
+    const { existsSync: fsExists } = await import('node:fs');
+    if (!fsExists(EMBEDDED_PGSERVE_DATA_DIR)) {
+      return { id: 'embedded-data-orphaned', level: 'OK', detail: 'no embedded data to compare' };
+    }
+    const { compareEmbeddedVsCanonicalCounts } = await import('../lib/embedded-canonical-migration.js');
+    const cmp = await compareEmbeddedVsCanonicalCounts({ canonicalPort: 5432 });
+    if (cmp.kind === 'embedded-has-more') {
       return {
         id: 'embedded-data-orphaned',
         level: 'FAIL',
-        detail: `embedded dir at ${EMBEDDED_PGSERVE_DATA_DIR} holds data but canonical omni is empty — run \`omni doctor --fix\` to migrate`,
+        detail: `embedded has ${cmp.embeddedRows} rows in ${cmp.divergentTables.length} tables canonical lacks (${cmp.divergentTables.slice(0, 3).join(', ')}${cmp.divergentTables.length > 3 ? '…' : ''}) — run \`omni doctor --fix\` to migrate`,
       };
     }
     return {
       id: 'embedded-data-orphaned',
       level: 'OK',
-      detail: `canonical omni already has ${total} instance(s)`,
+      detail: cmp.kind === 'in-sync' ? 'embedded ↔ canonical row counts match' : `compare unavailable: ${cmp.reason}`,
     };
-  } catch {
-    // Health unreachable — be silent rather than red-cross.
-    return { id: 'embedded-data-orphaned', level: 'OK', detail: 'health endpoint unreachable — defer' };
+  } catch (err) {
+    // Comparison itself failed — be silent rather than red-cross.
+    return {
+      id: 'embedded-data-orphaned',
+      level: 'OK',
+      detail: `compare unavailable: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 }
 

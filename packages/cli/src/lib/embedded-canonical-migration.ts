@@ -277,6 +277,79 @@ WHERE pg_get_serial_sequence(c.table_schema || '.' || c.table_name, c.column_nam
  * so callers can present an actionable diagnostic without aborting the
  * larger --fix run.
  */
+/**
+ * Result of comparing embedded vs canonical row counts. Used by the
+ * doctor `embedded-data-orphaned` check to detect partial migrations
+ * (e.g. Baileys re-attach copies instance rows but the bulk historical
+ * tables stay empty until the ETL runs).
+ */
+export type CompareResult =
+  | { kind: 'in-sync' }
+  | { kind: 'embedded-has-more'; divergentTables: string[]; embeddedRows: number }
+  | { kind: 'skipped'; reason: string };
+
+export interface CompareOptions {
+  canonicalPort?: number;
+}
+
+/**
+ * Count rows in every public table on both the embedded data dir and the
+ * canonical postmaster, return which tables have MORE rows on embedded.
+ * Boots a temp postmaster against the embedded dir (5s ready window),
+ * runs two count queries, shuts it down. Best-effort: any spawn / query
+ * failure returns `{ kind: 'skipped' }`.
+ */
+export async function compareEmbeddedVsCanonicalCounts(opts: CompareOptions = {}): Promise<CompareResult> {
+  const canonicalPort = opts.canonicalPort ?? 5432;
+  if (!existsSync(EMBEDDED_DIR) || !existsSync(join(EMBEDDED_DIR, 'PG_VERSION'))) {
+    return { kind: 'skipped', reason: 'embedded dir absent' };
+  }
+  const binary = findAutopgPostgresBinary();
+  if (!binary) return { kind: 'skipped', reason: 'autopg postgres binary not found' };
+  const tempPort = await findFreePort();
+  let temp: { stop: () => Promise<void> } | null = null;
+  try {
+    temp = await spawnTempPostmaster(binary, EMBEDDED_DIR, tempPort, () => {});
+    const srcArgs = ['-h', '127.0.0.1', '-p', String(tempPort), '-U', 'postgres', '-d', 'omni'];
+    const dstArgs = ['-h', '127.0.0.1', '-p', String(canonicalPort), '-U', 'postgres', '-d', 'omni'];
+    // Enumerate then count per-table in a loop (simpler + portable across
+    // schema variations than a one-shot aggregate).
+    const tablesRaw = psqlCapture([
+      ...srcArgs,
+      '-tAc',
+      `SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename`,
+    ]);
+    const tables = tablesRaw
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (tables.length === 0) return { kind: 'skipped', reason: 'embedded has no public tables' };
+    const divergent: string[] = [];
+    let totalExtra = 0;
+    for (const t of tables) {
+      try {
+        const em = Number.parseInt(psqlCapture([...srcArgs, '-tAc', `SELECT count(*) FROM public.${t}`]).trim(), 10);
+        const ca = Number.parseInt(psqlCapture([...dstArgs, '-tAc', `SELECT count(*) FROM public.${t}`]).trim(), 10);
+        if (Number.isFinite(em) && Number.isFinite(ca) && em > ca) {
+          divergent.push(t);
+          totalExtra += em - ca;
+        }
+      } catch {
+        // Schema mismatch — table on embedded missing on canonical or vice
+        // versa. Treat as "needs migration" by adding to divergent if it
+        // came from embedded enumeration.
+        divergent.push(t);
+      }
+    }
+    if (divergent.length === 0) return { kind: 'in-sync' };
+    return { kind: 'embedded-has-more', divergentTables: divergent, embeddedRows: totalExtra };
+  } catch (err) {
+    return { kind: 'skipped', reason: err instanceof Error ? err.message : String(err) };
+  } finally {
+    if (temp) await temp.stop();
+  }
+}
+
 export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions = {}): Promise<MigrationResult> {
   const log = opts.log ?? defaultLog;
   const canonicalPort = opts.canonicalPort ?? 5432;
