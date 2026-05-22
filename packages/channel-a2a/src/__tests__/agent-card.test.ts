@@ -15,14 +15,16 @@ const BASE = {
 
 describe('buildAgentCard', () => {
   describe('url', () => {
-    it('sets url to {baseUrl}/a2a/{instanceId}', () => {
+    it('sets supportedInterfaces[0].url to {baseUrl}/a2a/{instanceId}', () => {
       const card = buildAgentCard(BASE);
-      expect(card.url).toBe('https://omni.example.com/a2a/inst-123');
+      expect(card.supportedInterfaces[0]?.url).toBe('https://omni.example.com/a2a/inst-123');
+      expect(card.supportedInterfaces[0]?.protocolBinding).toBe('JSONRPC');
+      expect(card.supportedInterfaces[0]?.protocolVersion).toBe('1.0');
     });
 
     it('strips trailing slash from baseUrl', () => {
       const card = buildAgentCard({ ...BASE, baseUrl: 'https://omni.example.com/' });
-      expect(card.url).toBe('https://omni.example.com/a2a/inst-123');
+      expect(card.supportedInterfaces[0]?.url).toBe('https://omni.example.com/a2a/inst-123');
     });
   });
 
@@ -66,12 +68,12 @@ describe('buildAgentCard', () => {
   });
 
   describe('capabilities', () => {
-    it('sets streaming=true, pushNotifications=false, stateTransitionHistory=false by default', () => {
+    it('sets v1 capabilities by default', () => {
       const card = buildAgentCard(BASE);
       expect(card.capabilities).toEqual({
         streaming: true,
         pushNotifications: false,
-        stateTransitionHistory: false,
+        extendedAgentCard: false,
       });
     });
 
@@ -82,6 +84,18 @@ describe('buildAgentCard', () => {
       });
       expect(card.capabilities.pushNotifications).toBe(true);
       expect(card.capabilities.streaming).toBe(true);
+    });
+
+    it('uses A2A v1 security scheme wrappers', () => {
+      const card = buildAgentCard(BASE);
+      expect(card.securitySchemes?.bearerAuth).toEqual({
+        httpAuthSecurityScheme: {
+          scheme: 'Bearer',
+          bearerFormat: 'Omni API key',
+          description: 'Use an Omni API key as a bearer token.',
+        },
+      });
+      expect(card.securityRequirements?.[0]).toEqual({ schemes: { bearerAuth: { list: [] } } });
     });
   });
 
@@ -162,8 +176,8 @@ describe('buildAgentCard', () => {
   describe('defaultInputModes / defaultOutputModes', () => {
     it('defaults to text input and text output', () => {
       const card = buildAgentCard(BASE);
-      expect(card.defaultInputModes).toEqual(['text']);
-      expect(card.defaultOutputModes).toEqual(['text']);
+      expect(card.defaultInputModes).toEqual(['text/plain']);
+      expect(card.defaultOutputModes).toEqual(['text/plain']);
     });
   });
 });

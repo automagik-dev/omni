@@ -31,6 +31,13 @@ const CLI_COMMANDS: Record<string, string> = {
   'auth.validate': 'auth status',
 
   // ============================================================================
+  // A2A
+  // ============================================================================
+  'a2a.listAgents': 'a2a list',
+  'a2a.getAgentCard': 'a2a card <agent-id>',
+  'a2a.sendMessage': 'a2a send <instance-id> --text <message>',
+
+  // ============================================================================
   // INSTANCES
   // ============================================================================
   'instances.list': 'instances list',

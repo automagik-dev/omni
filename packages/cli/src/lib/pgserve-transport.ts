@@ -47,7 +47,7 @@ const PG_SSL_REQUEST_CODE = 80877103;
 const PGSERVE_GREET_TIMEOUT_MS = 1000;
 
 /** `pgserve port` discovery timeout (ms). */
-const TCP_DISCOVERY_TIMEOUT_MS = 5_000;
+const TCP_DISCOVERY_TIMEOUT_MS = 1_000;
 
 /**
  * Discriminated union returned by {@link resolvePgserveTransport}.

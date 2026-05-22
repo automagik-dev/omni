@@ -53,7 +53,7 @@ describe('A2AStreamStore', () => {
     ];
     for (const [instanceId, taskId] of allKnownKeys) {
       if (store.hasStream(instanceId, taskId)) {
-        store.closeStream(instanceId, taskId, 'completed');
+        store.closeStream(instanceId, taskId, 'TASK_STATE_COMPLETED');
       }
     }
     mock.restore();
@@ -77,7 +77,7 @@ describe('A2AStreamStore', () => {
 
     it('returns false after stream is closed', () => {
       store.createPendingStream('inst-1', 'task-2');
-      store.closeStream('inst-1', 'task-2', 'completed');
+      store.closeStream('inst-1', 'task-2', 'TASK_STATE_COMPLETED');
       expect(store.hasStream('inst-1', 'task-2')).toBe(false);
     });
   });
@@ -101,15 +101,19 @@ describe('A2AStreamStore', () => {
       const stream = store.createPendingStream('inst-1', 'task-1');
 
       store.writePart('inst-1', 'task-1', 'hello world');
-      store.closeStream('inst-1', 'task-1', 'completed');
+      store.closeStream('inst-1', 'task-1', 'TASK_STATE_COMPLETED');
 
       const events = await readSSE(stream);
       expect(events.length).toBeGreaterThanOrEqual(1);
 
-      const artifact = JSON.parse(events[0] ?? '');
-      expect(artifact.type).toBe('taskArtifactUpdateEvent');
-      expect(artifact.taskId).toBe('task-1');
-      expect(artifact.artifact.parts[0].text).toBe('hello world');
+      const frame = JSON.parse(events[0] ?? '');
+      expect(frame.jsonrpc).toBe('2.0');
+      expect(frame.result.taskArtifactUpdate.taskId).toBe('task-1');
+      expect(frame.result.taskArtifactUpdate.contextId).toBe('task-1');
+      expect(frame.result.taskArtifactUpdate.index).toBe(0);
+      expect(frame.result.taskArtifactUpdate.append).toBeUndefined();
+      expect(frame.result.taskArtifactUpdate.lastChunk).toBeUndefined();
+      expect(frame.result.taskArtifactUpdate.artifact.parts[0].text).toBe('hello world');
     });
 
     it('increments partIndex for each part', async () => {
@@ -117,14 +121,16 @@ describe('A2AStreamStore', () => {
 
       store.writePart('inst-1', 'task-2', 'first');
       store.writePart('inst-1', 'task-2', 'second');
-      store.closeStream('inst-1', 'task-2', 'completed');
+      store.closeStream('inst-1', 'task-2', 'TASK_STATE_COMPLETED');
 
       const events = await readSSE(stream, 20);
-      const artifact1 = JSON.parse(events[0] ?? '');
-      const artifact2 = JSON.parse(events[1] ?? '');
+      const artifact1 = JSON.parse(events[0] ?? '').result.taskArtifactUpdate;
+      const artifact2 = JSON.parse(events[1] ?? '').result.taskArtifactUpdate;
 
-      expect(artifact1.artifact.index).toBe(0);
-      expect(artifact2.artifact.index).toBe(1);
+      expect(artifact1.artifact.artifactId).toBe('artifact-1');
+      expect(artifact2.artifact.artifactId).toBe('artifact-2');
+      expect(artifact1.index).toBe(0);
+      expect(artifact2.index).toBe(1);
     });
 
     it('is a no-op when no stream exists for the key', () => {
@@ -136,34 +142,34 @@ describe('A2AStreamStore', () => {
   describe('closeStream', () => {
     it('writes a final taskStatusUpdateEvent before closing', async () => {
       const stream = store.createPendingStream('inst-1', 'task-3');
-      store.closeStream('inst-1', 'task-3', 'completed');
+      store.closeStream('inst-1', 'task-3', 'TASK_STATE_COMPLETED');
 
       const events = await readSSE(stream);
       expect(events.length).toBe(1);
 
-      const status = JSON.parse(events[0] ?? '');
-      expect(status.type).toBe('taskStatusUpdateEvent');
+      const status = JSON.parse(events[0] ?? '').result.taskStatusUpdate;
       expect(status.taskId).toBe('task-3');
-      expect(status.status.state).toBe('completed');
-      expect(status.final).toBe(true);
+      expect(status.contextId).toBe('task-3');
+      expect(status.status.state).toBe('TASK_STATE_COMPLETED');
+      expect(status.final).toBeUndefined();
     });
 
     it('supports failed state in status event', async () => {
       const stream = store.createPendingStream('inst-1', 'task-4');
-      store.closeStream('inst-1', 'task-4', 'failed');
+      store.closeStream('inst-1', 'task-4', 'TASK_STATE_FAILED');
 
       const events = await readSSE(stream);
-      const status = JSON.parse(events[0] ?? '');
-      expect(status.status.state).toBe('failed');
+      const status = JSON.parse(events[0] ?? '').result.taskStatusUpdate;
+      expect(status.status.state).toBe('TASK_STATE_FAILED');
     });
 
     it('is a no-op when called on nonexistent stream', () => {
-      expect(() => store.closeStream('inst-1', 'ghost', 'completed')).not.toThrow();
+      expect(() => store.closeStream('inst-1', 'ghost', 'TASK_STATE_COMPLETED')).not.toThrow();
     });
 
     it('removes the stream from the store', () => {
       store.createPendingStream('inst-1', 'task-5');
-      store.closeStream('inst-1', 'task-5', 'completed');
+      store.closeStream('inst-1', 'task-5', 'TASK_STATE_COMPLETED');
       expect(store.hasStream('inst-1', 'task-5')).toBe(false);
     });
   });

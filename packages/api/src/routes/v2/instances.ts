@@ -659,6 +659,12 @@ instancesRoutes.get('/supported-channels', async (c) => {
     { id: 'discord' as const, name: 'Discord', description: 'Discord bot integration', loaded: false as const },
     { id: 'slack' as const, name: 'Slack', description: 'Slack bot integration', loaded: false as const },
     { id: 'telegram' as const, name: 'Telegram', description: 'Telegram bot integration', loaded: false as const },
+    {
+      id: 'a2a' as const,
+      name: 'A2A Protocol Server',
+      description: 'Agent-to-Agent protocol endpoint',
+      loaded: false as const,
+    },
   ];
 
   const unloadedChannels = staticChannels.filter((ch) => !loadedIds.has(ch.id));

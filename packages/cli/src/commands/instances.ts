@@ -32,6 +32,7 @@ const VALID_CHANNELS: Channel[] = [
   'discord',
   'slack',
   'telegram',
+  'a2a',
   'gupshup',
   'twilio-whatsapp',
 ];

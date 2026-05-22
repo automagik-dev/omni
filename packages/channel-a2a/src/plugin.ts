@@ -2,8 +2,8 @@
  * A2A Channel Plugin
  *
  * Exposes Omni instances as A2A-compatible agents:
- * - GET  /.well-known/agent.json?instanceId={id}  → Agent Card
- * - POST /a2a/{instanceId}                        → JSON-RPC (message/send, message/stream)
+ * - GET  /.well-known/agent-card.json?instanceId={id} → Agent Card
+ * - POST /a2a/{instanceId}                           → JSON-RPC A2A v1
  *
  * sendMessage() is called by the dispatcher's sendResponseParts() when
  * channel === 'a2a'. It writes the response part to the pending SSE stream
@@ -12,12 +12,13 @@
 
 import { BaseChannelPlugin, DEFAULT_CAPABILITIES } from '@omni/channel-sdk';
 import type { ChannelCapabilities } from '@omni/channel-sdk';
-import type { InstanceConfig } from '@omni/channel-sdk';
+import type { InstanceConfig, PluginContext } from '@omni/channel-sdk';
 import type { OutgoingMessage, SendResult } from '@omni/channel-sdk';
 
 import { handleA2ARequest } from './a2a-handler';
 import { buildAgentCard } from './agent-card';
 import { A2AStreamStore } from './stream-store';
+import { A2ATaskStore } from './task-store';
 
 const A2A_CAPABILITIES: ChannelCapabilities = {
   ...DEFAULT_CAPABILITIES,
@@ -30,9 +31,16 @@ export class A2AChannelPlugin extends BaseChannelPlugin {
   readonly version = '0.1.0';
   readonly capabilities = A2A_CAPABILITIES;
 
-  private readonly streamStore = new A2AStreamStore();
+  private readonly taskStore = new A2ATaskStore();
+  private readonly streamStore = new A2AStreamStore((instanceId, taskId, state) => {
+    void this.taskStore.updateStatus(instanceId, taskId, state).catch(() => {});
+  });
 
   // ─── Lifecycle ────────────────────────────────────────────────
+
+  protected override async onInitialize(context: PluginContext): Promise<void> {
+    this.taskStore.setStorage(context.storage);
+  }
 
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
     await this.updateInstanceStatus(instanceId, config, {
@@ -65,8 +73,11 @@ export class A2AChannelPlugin extends BaseChannelPlugin {
     const taskId = message.to;
     const text = message.content.text ?? '';
 
-    if (text && this.streamStore.hasStream(instanceId, taskId)) {
-      this.streamStore.writePart(instanceId, taskId, text);
+    if (text) {
+      await this.taskStore.appendArtifact(instanceId, taskId, text);
+      if (this.streamStore.hasStream(instanceId, taskId)) {
+        this.streamStore.writePart(instanceId, taskId, text);
+      }
     }
 
     return { success: true, timestamp: Date.now() };
@@ -74,12 +85,15 @@ export class A2AChannelPlugin extends BaseChannelPlugin {
 
   /**
    * Called by dispatcher after sendResponseParts completes (duration=0 → 'paused').
-   * Closes the A2A stream with 'completed' so the client gets a terminal event
+   * Closes the A2A stream with TASK_STATE_COMPLETED so the client gets a terminal event
    * instead of waiting for the 30s idle timeout.
    */
   async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
-    if (duration === 0 && this.streamStore.hasStream(instanceId, chatId)) {
-      this.streamStore.closeStream(instanceId, chatId, 'completed');
+    if (duration === 0) {
+      await this.taskStore.updateStatus(instanceId, chatId, 'TASK_STATE_COMPLETED');
+      if (this.streamStore.hasStream(instanceId, chatId)) {
+        this.streamStore.closeStream(instanceId, chatId, 'TASK_STATE_COMPLETED');
+      }
     }
   }
 
@@ -101,8 +115,13 @@ export class A2AChannelPlugin extends BaseChannelPlugin {
     const url = new URL(request.url);
     const pathname = url.pathname;
 
-    // Agent Card: GET /.well-known/agent.json?instanceId={id}
-    if (pathname.endsWith('/.well-known/agent.json') || pathname === '/.well-known/agent.json') {
+    // Agent Card: GET /.well-known/agent-card.json?instanceId={id}
+    if (
+      pathname.endsWith('/.well-known/agent-card.json') ||
+      pathname === '/.well-known/agent-card.json' ||
+      pathname.endsWith('/.well-known/agent.json') ||
+      pathname === '/.well-known/agent.json'
+    ) {
       return this.handleAgentCardRequest(url);
     }
 
@@ -114,6 +133,7 @@ export class A2AChannelPlugin extends BaseChannelPlugin {
         instanceId,
         eventBus: this.eventBus,
         streamStore: this.streamStore,
+        taskStore: this.taskStore,
         channelType: 'a2a',
         plugin: this,
       });
@@ -141,6 +161,7 @@ export class A2AChannelPlugin extends BaseChannelPlugin {
       capabilities: [],
       agentCardOverride: null,
       baseUrl,
+      extended: false,
     });
 
     return new Response(JSON.stringify(card), {

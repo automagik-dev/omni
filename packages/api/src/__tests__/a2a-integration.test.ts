@@ -57,7 +57,12 @@ function createTestApp(eventBus: EventBus & { calls: Array<{ type: string; paylo
   const a2aPlugin = new A2AChannelPlugin();
   (a2aPlugin as unknown as { eventBus: EventBus }).eventBus = eventBus;
 
-  // Agent Card: GET /.well-known/agent.json — no auth required
+  // Agent Card: GET /.well-known/agent-card.json — no auth required
+  app.get('/.well-known/agent-card.json', async (c) => {
+    return a2aPlugin.handleWebhook(c.req.raw);
+  });
+
+  // Legacy alias.
   app.get('/.well-known/agent.json', async (c) => {
     return a2aPlugin.handleWebhook(c.req.raw);
   });
@@ -85,24 +90,25 @@ function createTestApp(eventBus: EventBus & { calls: Array<{ type: string; paylo
 const VALID_SEND_BODY = {
   jsonrpc: '2.0',
   id: 'req-1',
-  method: 'message/send',
+  method: 'SendMessage',
   params: {
     message: {
-      role: 'user',
-      parts: [{ type: 'text', text: 'Hello from A2A client' }],
+      role: 'ROLE_USER',
+      parts: [{ text: 'Hello from A2A client', mediaType: 'text/plain' }],
       messageId: 'msg-1',
     },
+    configuration: { returnImmediately: true },
   },
 };
 
 const VALID_STREAM_BODY = {
   jsonrpc: '2.0',
   id: 'req-2',
-  method: 'message/stream',
+  method: 'SendStreamingMessage',
   params: {
     message: {
-      role: 'user',
-      parts: [{ type: 'text', text: 'Stream this response' }],
+      role: 'ROLE_USER',
+      parts: [{ text: 'Stream this response', mediaType: 'text/plain' }],
       messageId: 'msg-2',
     },
   },
@@ -119,7 +125,7 @@ describe('A2A Integration (Hono app)', () => {
   // ── message/send (fire-and-forget) ──────────────────────────
 
   describe('message/send', () => {
-    test('returns 200 with completed task for valid JSON-RPC', async () => {
+    test('returns 200 with working task for valid JSON-RPC', async () => {
       const eventBus = createMockEventBus();
       const { app } = createTestApp(eventBus);
 
@@ -133,7 +139,7 @@ describe('A2A Integration (Hono app)', () => {
       expect(res.status).toBe(200);
       expect(body.jsonrpc).toBe('2.0');
       expect(body.id).toBe('req-1');
-      expect(body.result?.task?.status?.state).toBe('completed');
+      expect(body.result?.task?.status?.state).toBe('TASK_STATE_WORKING');
       expect(body.result?.task?.id).toBeDefined();
       expect(body.result?.task?.contextId).toBeDefined();
     });
@@ -148,7 +154,7 @@ describe('A2A Integration (Hono app)', () => {
         body: JSON.stringify({
           jsonrpc: '2.0',
           id: 'req-bad',
-          method: 'message/send',
+          method: 'SendMessage',
           params: {},
         }),
       });
@@ -179,9 +185,9 @@ describe('A2A Integration (Hono app)', () => {
     });
   });
 
-  // ── message/stream (SSE) ────────────────────────────────────
+  // ── SendStreamingMessage (SSE) ───────────────────────────────
 
-  describe('message/stream', () => {
+  describe('SendStreamingMessage', () => {
     test('returns SSE stream with correct headers', async () => {
       const eventBus = createMockEventBus();
       const { app } = createTestApp(eventBus);
@@ -225,7 +231,7 @@ describe('A2A Integration (Hono app)', () => {
       const res = await app.request('/a2a/inst-1', {
         method: 'POST',
         headers: AUTH_HEADERS,
-        body: JSON.stringify({ method: 'message/send', id: 1 }),
+        body: JSON.stringify({ method: 'SendMessage', id: 1 }),
       });
       const body = (await res.json()) as JsonRpcBody;
 
@@ -252,28 +258,29 @@ describe('A2A Integration (Hono app)', () => {
   // ── Agent Card ──────────────────────────────────────────────
 
   describe('agent card', () => {
-    test('GET /.well-known/agent.json?instanceId=inst-1 returns valid agent card', async () => {
+    test('GET /.well-known/agent-card.json?instanceId=inst-1 returns valid agent card', async () => {
       const eventBus = createMockEventBus();
       const { app } = createTestApp(eventBus);
 
-      const res = await app.request('/.well-known/agent.json?instanceId=inst-1');
+      const res = await app.request('/.well-known/agent-card.json?instanceId=inst-1');
       const body = (await res.json()) as Record<string, unknown>;
 
       expect(res.status).toBe(200);
       expect(res.headers.get('Content-Type')).toContain('application/json');
       expect(body.name).toBeDefined();
-      expect(body.url).toBeDefined();
+      expect(body.supportedInterfaces).toBeDefined();
+      expect(Array.isArray(body.supportedInterfaces)).toBe(true);
       expect(body.version).toBeDefined();
       expect(body.capabilities).toBeDefined();
       expect(body.skills).toBeDefined();
       expect(Array.isArray(body.skills)).toBe(true);
     });
 
-    test('GET /.well-known/agent.json without instanceId returns 400', async () => {
+    test('GET /.well-known/agent-card.json without instanceId returns 400', async () => {
       const eventBus = createMockEventBus();
       const { app } = createTestApp(eventBus);
 
-      const res = await app.request('/.well-known/agent.json');
+      const res = await app.request('/.well-known/agent-card.json');
 
       expect(res.status).toBe(400);
       const body = (await res.json()) as Record<string, unknown>;
@@ -328,36 +335,36 @@ describe('A2A Integration (Hono app)', () => {
 
   // ── Stub methods ────────────────────────────────────────────
 
-  describe('stub methods', () => {
-    test('tasks/get returns 501', async () => {
+  describe('task methods', () => {
+    test('tasks/get returns not-found for unknown task', async () => {
       const eventBus = createMockEventBus();
       const { app } = createTestApp(eventBus);
 
       const res = await app.request('/a2a/inst-1', {
         method: 'POST',
         headers: AUTH_HEADERS,
-        body: JSON.stringify({ jsonrpc: '2.0', id: 'req-stub', method: 'tasks/get', params: { id: 'task-1' } }),
+        body: JSON.stringify({ jsonrpc: '2.0', id: 'req-stub', method: 'GetTask', params: { id: 'task-1' } }),
       });
       const body = (await res.json()) as JsonRpcBody;
 
-      expect(res.status).toBe(501);
-      expect(body.error?.code).toBe(-32601);
-      expect(body.error?.message).toContain('not yet implemented');
+      expect(res.status).toBe(404);
+      expect(body.error?.code).toBe(-32001);
+      expect(body.error?.message).toContain('Task not found');
     });
 
-    test('tasks/cancel returns 501', async () => {
+    test('tasks/cancel returns not-found for unknown task', async () => {
       const eventBus = createMockEventBus();
       const { app } = createTestApp(eventBus);
 
       const res = await app.request('/a2a/inst-1', {
         method: 'POST',
         headers: AUTH_HEADERS,
-        body: JSON.stringify({ jsonrpc: '2.0', id: 'req-cancel', method: 'tasks/cancel', params: { id: 'task-1' } }),
+        body: JSON.stringify({ jsonrpc: '2.0', id: 'req-cancel', method: 'CancelTask', params: { id: 'task-1' } }),
       });
       const body = (await res.json()) as JsonRpcBody;
 
-      expect(res.status).toBe(501);
-      expect(body.error?.code).toBe(-32601);
+      expect(res.status).toBe(404);
+      expect(body.error?.code).toBe(-32001);
     });
   });
 });

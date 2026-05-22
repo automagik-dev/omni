@@ -5,10 +5,12 @@
  * Each stream captures a specific category of events.
  */
 
-import { type JetStreamManager, RetentionPolicy, StorageType, type StreamConfig } from 'nats';
+import type { JetStreamManager, StreamConfig } from 'nats';
 import { createLogger } from '../../logger';
 
 const log = createLogger('nats:streams');
+const NATS_STORAGE_FILE = 'file' as StreamConfig['storage'];
+const NATS_RETENTION_LIMITS = 'limits' as StreamConfig['retention'];
 
 /**
  * Stream names (uppercase by convention)
@@ -41,80 +43,80 @@ export const STREAM_CONFIGS: Record<StreamName, Partial<StreamConfig>> = {
     name: STREAM_NAMES.MESSAGE,
     subjects: ['message.>'],
     max_age: daysToNs(30),
-    storage: StorageType.File,
-    retention: RetentionPolicy.Limits,
+    storage: NATS_STORAGE_FILE,
+    retention: NATS_RETENTION_LIMITS,
     description: 'All message lifecycle events (received, sent, delivered, read, failed)',
   },
   [STREAM_NAMES.REACTION]: {
     name: STREAM_NAMES.REACTION,
     subjects: ['reaction.>'],
     max_age: daysToNs(7),
-    storage: StorageType.File,
-    retention: RetentionPolicy.Limits,
+    storage: NATS_STORAGE_FILE,
+    retention: NATS_RETENTION_LIMITS,
     description: 'Reaction events (received, removed)',
   },
   [STREAM_NAMES.INSTANCE]: {
     name: STREAM_NAMES.INSTANCE,
     subjects: ['instance.>'],
     max_age: daysToNs(7),
-    storage: StorageType.File,
-    retention: RetentionPolicy.Limits,
+    storage: NATS_STORAGE_FILE,
+    retention: NATS_RETENTION_LIMITS,
     description: 'Instance lifecycle events (connected, disconnected, qr_code)',
   },
   [STREAM_NAMES.IDENTITY]: {
     name: STREAM_NAMES.IDENTITY,
     subjects: ['identity.>'],
     max_age: daysToNs(90),
-    storage: StorageType.File,
-    retention: RetentionPolicy.Limits,
+    storage: NATS_STORAGE_FILE,
+    retention: NATS_RETENTION_LIMITS,
     description: 'Identity management events (created, linked, merged, unlinked)',
   },
   [STREAM_NAMES.MEDIA]: {
     name: STREAM_NAMES.MEDIA,
     subjects: ['media.>'],
     max_age: daysToNs(7),
-    storage: StorageType.File,
-    retention: RetentionPolicy.Limits,
+    storage: NATS_STORAGE_FILE,
+    retention: NATS_RETENTION_LIMITS,
     description: 'Media processing events (received, processed)',
   },
   [STREAM_NAMES.ACCESS]: {
     name: STREAM_NAMES.ACCESS,
     subjects: ['access.>'],
     max_age: daysToNs(30),
-    storage: StorageType.File,
-    retention: RetentionPolicy.Limits,
+    storage: NATS_STORAGE_FILE,
+    retention: NATS_RETENTION_LIMITS,
     description: 'Access control events (allowed, denied)',
   },
   [STREAM_NAMES.SESSION]: {
     name: STREAM_NAMES.SESSION,
     subjects: ['session.>'],
     max_age: daysToNs(7),
-    storage: StorageType.File,
-    retention: RetentionPolicy.Limits,
+    storage: NATS_STORAGE_FILE,
+    retention: NATS_RETENTION_LIMITS,
     description: 'Session lifecycle events (reset)',
   },
   [STREAM_NAMES.CUSTOM]: {
     name: STREAM_NAMES.CUSTOM,
     subjects: ['custom.>'],
     max_age: daysToNs(7),
-    storage: StorageType.File,
-    retention: RetentionPolicy.Limits,
+    storage: NATS_STORAGE_FILE,
+    retention: NATS_RETENTION_LIMITS,
     description: 'User-defined custom events (webhooks, triggers, etc.)',
   },
   [STREAM_NAMES.SYSTEM]: {
     name: STREAM_NAMES.SYSTEM,
     subjects: ['system.>', 'sync.>', 'batch-job.>', 'presence.>', 'chat.>', 'follow_up.>'],
     max_age: daysToNs(7),
-    storage: StorageType.File,
-    retention: RetentionPolicy.Limits,
+    storage: NATS_STORAGE_FILE,
+    retention: NATS_RETENTION_LIMITS,
     description: 'Internal system events (dead_letter, replay, health, sync, batch-job, presence, chat, follow_up)',
   },
   [STREAM_NAMES.AGENT]: {
     name: STREAM_NAMES.AGENT,
     subjects: ['agent.>'],
     max_age: daysToNs(30),
-    storage: StorageType.File,
-    retention: RetentionPolicy.Limits,
+    storage: NATS_STORAGE_FILE,
+    retention: NATS_RETENTION_LIMITS,
     description: 'Agent lifecycle events (state, tasks, A2A, internal routing)',
   },
 };

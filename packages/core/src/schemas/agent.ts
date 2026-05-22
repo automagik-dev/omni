@@ -13,6 +13,7 @@ export const AgentCardSchema = z
   .object({
     name: z.string(),
     url: z.string().optional(),
+    supportedInterfaces: z.array(z.unknown()).optional(),
     version: z.string().optional(),
     skills: z.array(z.unknown()).optional(),
   })
@@ -64,6 +65,7 @@ export const CreateAgentSchema = z.object({
   isInternal: z.boolean().default(false),
   isActive: z.boolean().default(true),
   metadata: MetadataSchema.optional(),
+  agentCard: AgentCardSchema.optional(),
 });
 
 export type CreateAgentInput = z.infer<typeof CreateAgentSchema>;

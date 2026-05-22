@@ -15,6 +15,7 @@ export default plugin;
 
 export { A2AChannelPlugin } from './plugin';
 export { A2AStreamStore } from './stream-store';
+export { A2ATaskStore } from './task-store';
 export { buildAgentCard } from './agent-card';
 export { handleA2ARequest } from './a2a-handler';
 export type * from './types';

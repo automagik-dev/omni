@@ -134,7 +134,7 @@ describe('A2AClient', () => {
       );
     });
 
-    it('sends message/send JSON-RPC method', async () => {
+    it('sends SendMessage JSON-RPC method', async () => {
       const rpcResponse = {
         jsonrpc: '2.0',
         id: 'omni-1',
@@ -153,8 +153,10 @@ describe('A2AClient', () => {
       await client.run({ message: 'Hello', userId: 'u-1', agentId: 'test-agent' });
 
       const body = JSON.parse((mockImpl.mock.calls[0]?.[1] as RequestInit).body as string);
-      expect(body.method).toBe('message/send');
+      expect(body.method).toBe('SendMessage');
       expect(body.jsonrpc).toBe('2.0');
+      expect(body.params.message.role).toBe('ROLE_USER');
+      expect(body.params.message.parts[0].text).toBe('Hello');
     });
 
     it('includes sessionId as contextId in the request', async () => {
@@ -199,21 +201,28 @@ describe('A2AClient', () => {
   // ─── stream() ─────────────────────────────────────────────────
 
   describe('stream', () => {
-    it('yields artifact chunk for taskArtifactUpdateEvent', async () => {
+    it('yields artifact chunk for v1 taskArtifactUpdate event', async () => {
       const event = {
-        type: 'taskArtifactUpdateEvent',
-        taskId: 'task-1',
-        artifact: {
-          artifactId: 'a1',
-          parts: [{ type: 'text', text: 'streaming part' }],
-          lastChunk: false,
+        result: {
+          taskArtifactUpdate: {
+            taskId: 'task-1',
+            contextId: 'ctx-1',
+            artifact: {
+              artifactId: 'a1',
+              parts: [{ text: 'streaming part', mediaType: 'text/plain' }],
+            },
+            index: 0,
+          },
         },
       };
       const statusEvent = {
-        type: 'taskStatusUpdateEvent',
-        taskId: 'task-1',
-        status: { state: 'completed' },
-        final: true,
+        result: {
+          taskStatusUpdate: {
+            taskId: 'task-1',
+            contextId: 'ctx-1',
+            status: { state: 'TASK_STATE_COMPLETED' },
+          },
+        },
       };
 
       const stream = sseStream([`data: ${JSON.stringify(event)}\n\n`, `data: ${JSON.stringify(statusEvent)}\n\n`]);
@@ -232,12 +241,15 @@ describe('A2AClient', () => {
       expect(chunks[0]).toMatchObject({ event: 'artifact', content: 'streaming part', isComplete: false });
     });
 
-    it('yields final chunk and stops on taskStatusUpdateEvent with final=true', async () => {
+    it('yields final chunk on v1 taskStatusUpdate terminal state', async () => {
       const statusEvent = {
-        type: 'taskStatusUpdateEvent',
-        taskId: 'task-1',
-        status: { state: 'completed' },
-        final: true,
+        result: {
+          taskStatusUpdate: {
+            taskId: 'task-1',
+            contextId: 'ctx-1',
+            status: { state: 'TASK_STATE_COMPLETED' },
+          },
+        },
       };
 
       const stream = sseStream([`data: ${JSON.stringify(statusEvent)}\n\n`]);
@@ -317,7 +329,7 @@ describe('A2AClient', () => {
       }).toThrow(ProviderError);
     });
 
-    it('sends message/stream JSON-RPC method', async () => {
+    it('sends SendStreamingMessage JSON-RPC method', async () => {
       const statusEvent = {
         type: 'taskStatusUpdateEvent',
         taskId: 'task-1',
@@ -333,14 +345,14 @@ describe('A2AClient', () => {
       }
 
       const body = JSON.parse((mockImpl.mock.calls[0]?.[1] as RequestInit).body as string);
-      expect(body.method).toBe('message/stream');
+      expect(body.method).toBe('SendStreamingMessage');
     });
   });
 
   // ─── checkHealth() ────────────────────────────────────────────
 
   describe('checkHealth', () => {
-    it('returns healthy=true on any non-zero status response', async () => {
+    it('returns healthy=true on successful response', async () => {
       mockImpl.mockResolvedValueOnce(new Response('OK', { status: 200 }));
 
       const client = new A2AClient(CONFIG);
@@ -348,6 +360,15 @@ describe('A2AClient', () => {
 
       expect(result.healthy).toBe(true);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('treats task-not-found health response as reachable', async () => {
+      mockImpl.mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: -32001 } }), { status: 404 }));
+
+      const client = new A2AClient(CONFIG);
+      const result = await client.checkHealth();
+
+      expect(result.healthy).toBe(true);
     });
 
     it('returns healthy=false on network error', async () => {

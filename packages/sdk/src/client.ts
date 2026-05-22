@@ -138,6 +138,28 @@ export interface TurnStats {
   timeoutRate: number;
 }
 
+export interface A2ADiscoverableAgent {
+  agentId: string;
+  name: string;
+  description?: string | null;
+  provider?: string | null;
+  providerSchema?: string | null;
+  model?: string | null;
+  capabilities?: string[];
+  configured: boolean;
+  instanceId?: string | null;
+  endpointUrl?: string | null;
+  parameters?: Record<string, unknown>;
+  card?: Record<string, unknown> | null;
+}
+
+export interface A2AJsonRpcResponse<T = unknown> {
+  jsonrpc: '2.0';
+  id: string | number | null;
+  result?: T;
+  error?: { code: number | string; message: string; data?: unknown };
+}
+
 // ============================================================================
 // BATCH JOB TYPES
 // ============================================================================
@@ -231,8 +253,10 @@ export interface CostEstimate {
 export interface OmniClientConfig {
   /** Base URL of the API (e.g., 'http://localhost:8882') */
   baseUrl: string;
-  /** API key for authentication */
+  /** API key or bearer token for authentication */
   apiKey: string;
+  /** Header style for auth. Defaults to x-api-key for backward compatibility. */
+  authHeader?: 'x-api-key' | 'bearer';
   /** Optional CLI version for request handshake header */
   cliVersion?: string;
   /**
@@ -1174,16 +1198,27 @@ export function createOmniClient(config: OmniClientConfig) {
 
   // Normalize base URL
   const baseUrl = config.baseUrl.replace(/\/$/, '');
+  const authHeader = config.authHeader ?? 'x-api-key';
+
+  const applyAuthHeaders = (headers: Headers) => {
+    if (authHeader === 'bearer') {
+      headers.set('Authorization', `Bearer ${config.apiKey}`);
+      headers.delete('x-api-key');
+    } else {
+      headers.set('x-api-key', config.apiKey);
+      headers.delete('Authorization');
+    }
+    headers.set('Accept-Encoding', 'identity');
+    if (config.cliVersion) {
+      headers.set('x-omni-cli-version', config.cliVersion);
+    }
+  };
 
   // Auth middleware
   // Note: Accept-Encoding: identity disables compression to avoid Bun/Hono gzip compatibility issues
   const authMiddleware: Middleware = {
     async onRequest({ request }) {
-      request.headers.set('x-api-key', config.apiKey);
-      request.headers.set('Accept-Encoding', 'identity');
-      if (config.cliVersion) {
-        request.headers.set('x-omni-cli-version', config.cliVersion);
-      }
+      applyAuthHeaders(request.headers);
       // Per-host signing (P0b). Compute the signature using the same
       // canonical input the omni verifier reconstructs: timestamp, method,
       // pathname+search, sha256(body). We clone() the request so reading
@@ -1208,11 +1243,7 @@ export function createOmniClient(config: OmniClientConfig) {
   // Helper for direct fetch calls with consistent headers
   const apiFetch = (url: string, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    headers.set('x-api-key', config.apiKey);
-    headers.set('Accept-Encoding', 'identity');
-    if (config.cliVersion) {
-      headers.set('x-omni-cli-version', config.cliVersion);
-    }
+    applyAuthHeaders(headers);
     // Per-host signing (P0b) for the apiFetch escape hatch (used by SDK
     // surfaces that bypass openapi-fetch). Body is best-effort: when init
     // carries a non-string body we don't attempt to canonicalize it here
@@ -3650,6 +3681,84 @@ export function createOmniClient(config: OmniClientConfig) {
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Stats unavailable', 'INTERNAL_ERROR', undefined, 500);
         return json.data;
+      },
+    },
+
+    // ========================================================================
+    // A2A
+    // ========================================================================
+
+    /**
+     * Agent-to-Agent registry and JSON-RPC helpers.
+     */
+    a2a: {
+      /**
+       * List agents discoverable through Omni's A2A registry.
+       */
+      async listAgents(params?: { includeUnconfigured?: boolean }): Promise<A2ADiscoverableAgent[]> {
+        const search = new URLSearchParams();
+        if (params?.includeUnconfigured !== undefined) {
+          search.set('includeUnconfigured', String(params.includeUnconfigured));
+        }
+
+        const suffix = search.toString() ? `?${search.toString()}` : '';
+        const resp = await apiFetch(`${baseUrl}/api/v2/a2a/agents${suffix}`);
+        const json = (await resp.json()) as { items?: A2ADiscoverableAgent[] };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json.items ?? [];
+      },
+
+      /**
+       * Return the extended A2A Agent Card for one Omni agent.
+       */
+      async getAgentCard(agentId: string): Promise<Record<string, unknown>> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/a2a/agents/${agentId}/card`);
+        const json = (await resp.json()) as { data?: Record<string, unknown> };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json.data) throw new OmniApiError('Agent Card not found', 'NOT_FOUND', undefined, resp.status);
+        return json.data;
+      },
+
+      /**
+       * Send a text message to an A2A instance using the v1 JSON-RPC method.
+       */
+      async sendMessage(
+        instanceId: string,
+        text: string,
+        options?: { contextId?: string; taskId?: string; returnImmediately?: boolean },
+      ): Promise<unknown> {
+        const body = {
+          jsonrpc: '2.0',
+          id: `sdk-${Date.now()}`,
+          method: 'SendMessage',
+          params: {
+            ...(options?.taskId ? { taskId: options.taskId } : {}),
+            ...(options?.contextId ? { contextId: options.contextId } : {}),
+            message: {
+              role: 'ROLE_USER',
+              parts: [{ text, mediaType: 'text/plain' }],
+            },
+            configuration: {
+              returnImmediately: options?.returnImmediately ?? true,
+            },
+          },
+        };
+
+        const resp = await apiFetch(`${baseUrl}/a2a/${instanceId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'A2A-Version': '1.0' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as A2AJsonRpcResponse;
+        if (!resp.ok || json.error) {
+          throw new OmniApiError(
+            json.error?.message ?? 'A2A request failed',
+            String(json.error?.code ?? 'A2A_ERROR'),
+            { data: json.error?.data },
+            resp.status,
+          );
+        }
+        return json.result;
       },
     },
 

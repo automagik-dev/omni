@@ -10,6 +10,7 @@
 
 import chalk, { Chalk, type ChalkInstance } from 'chalk';
 import { Command, Option } from 'commander';
+import { createA2ACommand } from './commands/a2a.js';
 import { createAccessCommand } from './commands/access.js';
 import { createRoutesCommand } from './commands/agent-routes.js';
 import { createAgentsCommand } from './commands/agents.js';
@@ -210,6 +211,12 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'Core',
     helpDescription: 'Voice channel operations (join, stream, sessions)',
+  },
+  {
+    create: createA2ACommand,
+    category: 'standard',
+    helpGroup: 'Core',
+    helpDescription: 'A2A agent registry and JSON-RPC helpers',
   },
 
   // Management group - Configuration and setup

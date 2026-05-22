@@ -22,6 +22,7 @@ export const AgentSchema = z.object({
   isInternal: z.boolean().openapi({ description: 'Whether this is an internal system agent' }),
   isActive: z.boolean().openapi({ description: 'Whether agent is active' }),
   metadata: z.record(z.string(), z.unknown()).nullable().openapi({ description: 'Arbitrary metadata' }),
+  agentCard: z.record(z.string(), z.unknown()).nullable().openapi({ description: 'A2A Agent Card overrides' }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
 });
@@ -44,6 +45,7 @@ export const CreateAgentSchema = z.object({
   isInternal: z.boolean().default(false).openapi({ description: 'Whether this is an internal system agent' }),
   isActive: z.boolean().default(true).openapi({ description: 'Whether agent is active' }),
   metadata: z.record(z.string(), z.unknown()).optional().openapi({ description: 'Arbitrary metadata' }),
+  agentCard: z.record(z.string(), z.unknown()).optional().openapi({ description: 'A2A Agent Card overrides' }),
 });
 
 export function registerAgentSchemas(registry: OpenAPIRegistry): void {
