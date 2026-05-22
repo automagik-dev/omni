@@ -56,7 +56,7 @@ function buildDefaultSkills(capabilities: string[]): Array<Record<string, unknow
   return skills;
 }
 
-export function buildA2AAgentCard(params: {
+function buildA2AAgentCard(params: {
   baseUrl: string;
   agent: Agent;
   instance: Instance;
