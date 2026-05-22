@@ -91,11 +91,14 @@ export class A2ATaskStore {
     const pageSize = Math.min(Math.max(options.pageSize ?? 50, 1), 100);
     const keys = await this.keys(instanceId);
     const tasks: A2ATask[] = [];
+    const allTasks = await Promise.all(
+      keys.map((key) => {
+        const taskId = key.split('/').pop();
+        return taskId ? this.get(instanceId, taskId) : Promise.resolve(null);
+      }),
+    );
 
-    for (const key of keys) {
-      const taskId = key.split('/').pop();
-      if (!taskId) continue;
-      const task = await this.get(instanceId, taskId);
+    for (const task of allTasks) {
       if (!task) continue;
       if (!taskMatchesListOptions(task, options)) continue;
       tasks.push(task);

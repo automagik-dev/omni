@@ -187,7 +187,7 @@ export async function resolveA2AAgentCard(params: {
 
   if (instanceId) {
     instance = await services.instances.getById(instanceId);
-    if (instance.channel !== 'a2a' || !instance.agentId) return null;
+    if (!instance || instance.channel !== 'a2a' || !instance.agentId) return null;
     agent = await services.agents.getById(instance.agentId);
   } else if (agentId) {
     agent = await services.agents.getById(agentId);

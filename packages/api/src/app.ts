@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, createLogger } from '@omni/core';
-import type { Database } from '@omni/db';
+import type { Database, Instance } from '@omni/db';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { serveStatic } from 'hono/bun';
@@ -40,6 +40,27 @@ function getAllowedOrigins(): string[] | '*' {
 
   // Parse comma-separated origins
   return envOrigins.split(',').map((origin) => origin.trim());
+}
+
+type A2AInstanceValidationError = {
+  body: { error: string };
+  status: 400 | 403 | 404 | 409;
+};
+
+function validateA2AInstance(instance: Instance | null): A2AInstanceValidationError | null {
+  if (!instance) {
+    return { body: { error: 'Instance not found' }, status: 404 };
+  }
+  if (instance.channel !== 'a2a') {
+    return { body: { error: 'Instance is not an A2A channel instance' }, status: 400 };
+  }
+  if (!instance.isActive) {
+    return { body: { error: 'A2A instance is inactive' }, status: 403 };
+  }
+  if (!instance.agentId) {
+    return { body: { error: 'A2A instance has no linked agent' }, status: 409 };
+  }
+  return null;
 }
 
 import { authMiddleware, requireAnyScope, requireInstanceAccess } from './middleware/auth';
@@ -184,14 +205,9 @@ export function createApp(
         }
         const services = c.get('services');
         const instance = await services.instances.getById(instanceId);
-        if (instance.channel !== 'a2a') {
-          return c.json({ error: 'Instance is not an A2A channel instance' }, 400);
-        }
-        if (!instance.isActive) {
-          return c.json({ error: 'A2A instance is inactive' }, 403);
-        }
-        if (!instance.agentId) {
-          return c.json({ error: 'A2A instance has no linked agent' }, 409);
+        const validationError = validateA2AInstance(instance);
+        if (validationError) {
+          return c.json(validationError.body, validationError.status);
         }
         const channelRegistry = c.get('channelRegistry');
         const plugin = channelRegistry?.get('a2a');
