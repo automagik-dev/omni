@@ -108,6 +108,11 @@ if (apiManaged) {
       OMNI_PACKAGES_DIR: path.join(__dirname, 'packages'),
       // Absolute path — see PGSERVE_DATA_DEFAULT block above for rationale.
       PGSERVE_DATA: pgserveData,
+      // OpenTelemetry — configured via .env (OTEL_EXPORTER_OTLP_ENDPOINT,
+      // OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES). The `set -a && . ./.env`
+      // step in `make dev-services` overwrites any conflicting OTEL_* the
+      // launching shell may have inherited (e.g. outer Genie/Claude-Code
+      // agent context), so no hardcoded defaults are needed here.
     },
     max_memory_restart: '2G',
     // Dependency: wait 1s to let nats bind its port first
