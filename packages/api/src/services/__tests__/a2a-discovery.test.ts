@@ -6,7 +6,7 @@ import type { Services } from '../index';
 function createAgent(overrides: Partial<Agent> = {}): Agent {
   return {
     id: 'agent-1',
-    name: 'Eugenia',
+    name: 'Public Agent',
     provider: 'agno',
     model: null,
     agentType: 'assistant',
@@ -27,7 +27,7 @@ function createAgent(overrides: Partial<Agent> = {}): Agent {
 function createInstance(overrides: Partial<Instance> = {}): Instance {
   return {
     id: 'instance-1',
-    name: 'Eugenia',
+    name: 'Public Agent',
     channel: 'a2a',
     agentId: 'agent-1',
     isActive: true,
@@ -55,14 +55,14 @@ describe('resolveA2AAgentCard', () => {
   test('publishes explicit agent card metadata', async () => {
     const agent = createAgent({
       agentCard: {
-        name: 'Eugenia',
+        name: 'Public Agent',
         metadata: {
-          domain: 'sales',
-          brand: 'Hapvida',
+          domain: 'support',
+          brand: 'ExampleCo',
         },
       },
       metadata: {
-        providerAgentId: 'eugenia-seller',
+        providerAgentId: 'internal-provider-agent',
       },
     });
     const instance = createInstance();
@@ -74,15 +74,15 @@ describe('resolveA2AAgentCard', () => {
     });
 
     expect(resolved?.card.metadata).toEqual({
-      domain: 'sales',
-      brand: 'Hapvida',
+      domain: 'support',
+      brand: 'ExampleCo',
     });
   });
 
   test('does not expose internal agent metadata by default', async () => {
     const agent = createAgent({
       metadata: {
-        providerAgentId: 'eugenia-seller',
+        providerAgentId: 'internal-provider-agent',
       },
     });
     const instance = createInstance();
