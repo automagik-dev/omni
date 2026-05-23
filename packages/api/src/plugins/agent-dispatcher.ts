@@ -3010,6 +3010,7 @@ function createClaudeCodeProviderInstance(
         | Record<string, { command: string; args?: string[]; env?: Record<string, string> }>
         | undefined,
       maxTurns: schemaConfig.maxTurns as number | undefined,
+      pathToClaudeCodeExecutable: schemaConfig.pathToClaudeCodeExecutable as string | undefined,
     },
     createSessionStorage(db, provider.id),
     {
