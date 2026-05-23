@@ -168,7 +168,6 @@ export function createApp(
         baseUrl,
         instanceId: url.searchParams.get('instanceId'),
         agentId: url.searchParams.get('agentId'),
-        extended: false,
       });
 
       if (!resolved) {

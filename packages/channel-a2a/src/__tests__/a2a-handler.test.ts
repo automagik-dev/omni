@@ -30,7 +30,13 @@ interface JsonRpcBody {
       id?: string;
       contextId?: string;
       status?: { state: string };
+      history?: Array<{ messageId?: string; parts?: Array<{ text?: string }> }>;
     };
+    tasks?: Array<{
+      id?: string;
+      contextId?: string;
+      status?: { state: string };
+    }>;
   };
 }
 
@@ -71,7 +77,15 @@ function createMockPlugin() {
 function makeRequest(body: unknown, method = 'POST', headers: Record<string, string> = {}): Request {
   return new Request('http://localhost/a2a/inst-1', {
     method,
-    headers: { 'Content-Type': 'application/json', ...headers },
+    headers: { 'Content-Type': 'application/json', 'x-omni-api-key-id': 'key-a', ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+function makeUnauthenticatedRequest(body: unknown): Request {
+  return new Request('http://localhost/a2a/inst-1', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
 }
@@ -85,6 +99,20 @@ function makeCtx(eventBus = createMockEventBus(), streamStore = new A2AStreamSto
     plugin: createMockPlugin() as unknown as import('../plugin').A2AChannelPlugin,
   };
 }
+
+const validSend = {
+  jsonrpc: '2.0',
+  id: 'req-1',
+  method: 'SendMessage',
+  params: {
+    message: {
+      role: 'ROLE_USER',
+      parts: [{ text: 'hello', mediaType: 'text/plain' }],
+      messageId: 'msg-1',
+    },
+    configuration: { returnImmediately: true },
+  },
+};
 
 // ─── Tests ────────────────────────────────────────────────────
 
@@ -120,20 +148,6 @@ describe('handleA2ARequest', () => {
   });
 
   describe('SendMessage', () => {
-    const validSend = {
-      jsonrpc: '2.0',
-      id: 'req-1',
-      method: 'SendMessage',
-      params: {
-        message: {
-          role: 'ROLE_USER',
-          parts: [{ text: 'hello', mediaType: 'text/plain' }],
-          messageId: 'msg-1',
-        },
-        configuration: { returnImmediately: true },
-      },
-    };
-
     it('returns 200 with task in working state', async () => {
       const res = await handleA2ARequest(makeRequest(validSend), makeCtx());
       const body = (await res.json()) as JsonRpcBody;
@@ -205,6 +219,15 @@ describe('handleA2ARequest', () => {
       expect(body.result?.task?.contextId).toBe('ctx-abc');
     });
 
+    it('rejects scoped operations when caller key is missing', async () => {
+      const res = await handleA2ARequest(makeUnauthenticatedRequest(validSend), makeCtx());
+      const body = (await res.json()) as JsonRpcBody;
+
+      expect(res.status).toBe(401);
+      expect(body.error?.code).toBe(-32010);
+      expect(firstErrorInfo(body)?.reason).toBe('UNAUTHORIZED');
+    });
+
     it('scopes task reads to the API key that created the task', async () => {
       const ctx = makeCtx();
       const created = await handleA2ARequest(makeRequest(validSend, 'POST', { 'x-omni-api-key-id': 'key-a' }), ctx);
@@ -223,6 +246,80 @@ describe('handleA2ARequest', () => {
       expect(deniedBody.error?.code).toBe(-32001);
       expect(firstErrorInfo(deniedBody)?.reason).toBe('TASK_NOT_FOUND');
       expect(firstErrorInfo(deniedBody)?.metadata).toMatchObject({ taskId });
+    });
+
+    it('prevents a different caller from reusing an existing taskId', async () => {
+      const ctx = makeCtx();
+      const first = await handleA2ARequest(
+        makeRequest({
+          ...validSend,
+          params: { ...validSend.params, taskId: 'shared-task' },
+        }),
+        ctx,
+      );
+      expect(first.status).toBe(200);
+
+      const hijack = await handleA2ARequest(
+        makeRequest(
+          {
+            ...validSend,
+            id: 'hijack',
+            params: {
+              ...validSend.params,
+              taskId: 'shared-task',
+              message: { ...validSend.params.message, messageId: 'msg-hijack' },
+            },
+          },
+          'POST',
+          { 'x-omni-api-key-id': 'key-b' },
+        ),
+        ctx,
+      );
+      const hijackBody = (await hijack.json()) as JsonRpcBody;
+
+      expect(hijack.status).toBe(404);
+      expect(hijackBody.error?.code).toBe(-32001);
+      expect(firstErrorInfo(hijackBody)?.metadata).toMatchObject({ taskId: 'shared-task' });
+
+      const original = await handleA2ARequest(
+        makeRequest({ jsonrpc: '2.0', id: 'read', method: 'GetTask', params: { id: 'shared-task' } }),
+        ctx,
+      );
+      const originalBody = (await original.json()) as JsonRpcBody;
+      expect(originalBody.result?.task?.history?.map((message) => message.messageId)).toEqual(['msg-1']);
+    });
+
+    it('appends message history for same-caller taskId reuse', async () => {
+      const ctx = makeCtx();
+      await handleA2ARequest(
+        makeRequest({
+          ...validSend,
+          params: { ...validSend.params, taskId: 'thread-task' },
+        }),
+        ctx,
+      );
+
+      const followUp = await handleA2ARequest(
+        makeRequest({
+          ...validSend,
+          id: 'follow-up',
+          params: {
+            ...validSend.params,
+            taskId: 'thread-task',
+            message: {
+              ...validSend.params.message,
+              messageId: 'msg-2',
+              parts: [{ text: 'second turn', mediaType: 'text/plain' }],
+            },
+          },
+        }),
+        ctx,
+      );
+      const followUpBody = (await followUp.json()) as JsonRpcBody;
+
+      expect(followUp.status).toBe(200);
+      expect(followUpBody.result?.task?.id).toBe('thread-task');
+      expect(followUpBody.result?.task?.history?.map((message) => message.messageId)).toEqual(['msg-1', 'msg-2']);
     });
 
     it('rejects push notification config when push notifications are disabled', async () => {
@@ -340,6 +437,115 @@ describe('handleA2ARequest', () => {
         expect(firstErrorInfo(body)?.metadata).toMatchObject({ taskId: 'missing-task' });
       },
     );
+
+    it.each(['GetTask', 'CancelTask', 'SubscribeToTask'])(
+      'returns unauthorized for %s without a caller key',
+      async (method) => {
+        const res = await handleA2ARequest(
+          makeUnauthenticatedRequest({ jsonrpc: '2.0', id: 1, method, params: { id: 'missing-task' } }),
+          makeCtx(),
+        );
+        const body = (await res.json()) as JsonRpcBody;
+
+        expect(res.status).toBe(401);
+        expect(body.error?.code).toBe(-32010);
+        expect(firstErrorInfo(body)?.reason).toBe('UNAUTHORIZED');
+      },
+    );
+
+    it('returns unauthorized for ListTasks without a caller key', async () => {
+      const res = await handleA2ARequest(
+        makeUnauthenticatedRequest({ jsonrpc: '2.0', id: 1, method: 'ListTasks', params: {} }),
+        makeCtx(),
+      );
+      const body = (await res.json()) as JsonRpcBody;
+
+      expect(res.status).toBe(401);
+      expect(body.error?.code).toBe(-32010);
+      expect(firstErrorInfo(body)?.reason).toBe('UNAUTHORIZED');
+    });
+
+    it('scopes CancelTask to the caller that created the task', async () => {
+      const ctx = makeCtx();
+      await handleA2ARequest(
+        makeRequest({
+          ...validSend,
+          params: {
+            ...validSend.params,
+            taskId: 'cancel-task',
+            configuration: { returnImmediately: true },
+          },
+        }),
+        ctx,
+      );
+
+      const denied = await handleA2ARequest(
+        makeRequest({ jsonrpc: '2.0', id: 'cancel', method: 'CancelTask', params: { id: 'cancel-task' } }, 'POST', {
+          'x-omni-api-key-id': 'key-b',
+        }),
+        ctx,
+      );
+      const body = (await denied.json()) as JsonRpcBody;
+
+      expect(denied.status).toBe(404);
+      expect(body.error?.code).toBe(-32001);
+    });
+
+    it('filters ListTasks by caller key', async () => {
+      const ctx = makeCtx();
+      await handleA2ARequest(
+        makeRequest({
+          ...validSend,
+          params: { ...validSend.params, taskId: 'key-a-task' },
+        }),
+        ctx,
+      );
+      await handleA2ARequest(
+        makeRequest(
+          {
+            ...validSend,
+            id: 'create-b',
+            params: { ...validSend.params, taskId: 'key-b-task' },
+          },
+          'POST',
+          { 'x-omni-api-key-id': 'key-b' },
+        ),
+        ctx,
+      );
+
+      const listed = await handleA2ARequest(
+        makeRequest({ jsonrpc: '2.0', id: 'list', method: 'ListTasks', params: {} }),
+        ctx,
+      );
+      const body = (await listed.json()) as JsonRpcBody;
+
+      expect(listed.status).toBe(200);
+      expect(body.result?.tasks?.map((task) => task.id)).toEqual(['key-a-task']);
+    });
+
+    it('scopes SubscribeToTask to the caller that created the task', async () => {
+      const ctx = makeCtx();
+      await handleA2ARequest(
+        makeRequest({
+          ...validSend,
+          params: { ...validSend.params, taskId: 'subscribe-task' },
+        }),
+        ctx,
+      );
+
+      const denied = await handleA2ARequest(
+        makeRequest(
+          { jsonrpc: '2.0', id: 'subscribe', method: 'SubscribeToTask', params: { id: 'subscribe-task' } },
+          'POST',
+          { 'x-omni-api-key-id': 'key-b' },
+        ),
+        ctx,
+      );
+      const body = (await denied.json()) as JsonRpcBody;
+
+      expect(denied.status).toBe(404);
+      expect(body.error?.code).toBe(-32001);
+    });
   });
 
   describe('unknown method', () => {

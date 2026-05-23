@@ -60,8 +60,6 @@ function buildA2AAgentCard(params: {
   baseUrl: string;
   agent: Agent;
   instance: Instance;
-  provider?: AgentProvider | null;
-  extended?: boolean;
 }): AgentCard {
   const { baseUrl, agent, instance } = params;
   const override = isRecord(agent.agentCard) ? agent.agentCard : {};
@@ -167,7 +165,7 @@ export async function listA2ADiscoverableAgents(params: {
         metadata: agent.metadata ?? {},
         agentCard: agent.agentCard ?? {},
       },
-      card: instance ? buildA2AAgentCard({ baseUrl, agent, instance, provider, extended: true }) : null,
+      card: instance ? buildA2AAgentCard({ baseUrl, agent, instance }) : null,
     });
   }
 
@@ -179,9 +177,8 @@ export async function resolveA2AAgentCard(params: {
   baseUrl: string;
   agentId?: string | null;
   instanceId?: string | null;
-  extended?: boolean;
 }): Promise<{ card: AgentCard; agent: Agent; instance: Instance; provider?: AgentProvider | null } | null> {
-  const { services, baseUrl, agentId, instanceId, extended = false } = params;
+  const { services, baseUrl, agentId, instanceId } = params;
   let instance: Instance | null = null;
   let agent: Agent | null = null;
 
@@ -208,7 +205,7 @@ export async function resolveA2AAgentCard(params: {
     ? await services.providers.getById(agent.agentProviderId).catch(() => null)
     : null;
   return {
-    card: buildA2AAgentCard({ baseUrl, agent, instance, provider, extended }),
+    card: buildA2AAgentCard({ baseUrl, agent, instance }),
     agent,
     instance,
     provider,

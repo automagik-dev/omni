@@ -78,7 +78,9 @@ function createTestApp(eventBus: EventBus & { calls: Array<{ type: string; paylo
       await next();
     },
     async (c) => {
-      return a2aPlugin.handleWebhook(c.req.raw);
+      const headers = new Headers(c.req.raw.headers);
+      headers.set('x-omni-api-key-id', 'test-key-id');
+      return a2aPlugin.handleWebhook(new Request(c.req.raw, { headers }));
     },
   );
 

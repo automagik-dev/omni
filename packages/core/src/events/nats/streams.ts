@@ -5,12 +5,13 @@
  * Each stream captures a specific category of events.
  */
 
+import * as nats from 'nats';
 import type { JetStreamManager, StreamConfig } from 'nats';
 import { createLogger } from '../../logger';
 
 const log = createLogger('nats:streams');
-const NATS_STORAGE_FILE = 'file' as StreamConfig['storage'];
-const NATS_RETENTION_LIMITS = 'limits' as StreamConfig['retention'];
+const NATS_STORAGE_FILE = nats.StorageType.File;
+const NATS_RETENTION_LIMITS = nats.RetentionPolicy.Limits;
 
 /**
  * Stream names (uppercase by convention)

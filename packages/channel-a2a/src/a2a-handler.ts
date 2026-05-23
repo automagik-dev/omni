@@ -106,9 +106,11 @@ const A2A_PUSH_NOTIFICATION_NOT_SUPPORTED = -32003;
 const A2A_UNSUPPORTED_OPERATION = -32004;
 const A2A_CONTENT_TYPE_NOT_SUPPORTED = -32005;
 const A2A_VERSION_NOT_SUPPORTED = -32009;
+const A2A_UNAUTHORIZED = -32010;
 const A2A_ERROR_DOMAIN = 'a2a-protocol.org';
 const DEFAULT_SEND_WAIT_MS = 30_000;
-const SEND_WAIT_POLL_MS = 100;
+const SEND_WAIT_POLL_BACKOFF_MS = [100, 250, 500, 1000] as const;
+const SEND_WAIT_MS = parseSendWaitMs();
 
 const LEGACY_METHODS = new Set([
   'message/send',
@@ -194,6 +196,8 @@ function a2aErrorReason(code: number): string | undefined {
       return 'CONTENT_TYPE_NOT_SUPPORTED';
     case A2A_VERSION_NOT_SUPPORTED:
       return 'VERSION_NOT_SUPPORTED';
+    case A2A_UNAUTHORIZED:
+      return 'UNAUTHORIZED';
     default:
       return undefined;
   }
@@ -264,11 +268,23 @@ function getTaskStore(ctx: A2AHandlerContext): A2ATaskStore {
 }
 
 function getCallerKey(ctx: A2AHandlerContext): string {
-  return ctx.callerKey ?? 'anonymous';
+  return typeof ctx.callerKey === 'string' ? ctx.callerKey.trim() : '';
+}
+
+function taskOwnedByCaller(task: A2ATask, callerKey: string): boolean {
+  return typeof task.metadata?.callerKey === 'string' && task.metadata.callerKey === callerKey;
 }
 
 function canAccessTask(ctx: A2AHandlerContext, task: A2ATask): boolean {
-  return (task.metadata?.callerKey ?? 'anonymous') === getCallerKey(ctx);
+  const callerKey = getCallerKey(ctx);
+  return callerKey.length > 0 && taskOwnedByCaller(task, callerKey);
+}
+
+function requireCallerKey(id: string | number | null, ctx: A2AHandlerContext): string | Response {
+  const callerKey = getCallerKey(ctx);
+  if (callerKey.length > 0) return callerKey;
+
+  return jsonResponse(jsonRpcA2AError(id, A2A_UNAUTHORIZED, 'Authentication required'), 401);
 }
 
 function shouldReturnImmediately(sendParams: MessageSendParams): boolean {
@@ -277,7 +293,7 @@ function shouldReturnImmediately(sendParams: MessageSendParams): boolean {
   return false;
 }
 
-function syncWaitMs(): number {
+function parseSendWaitMs(): number {
   const configured = Number.parseInt(process.env.A2A_SEND_WAIT_MS ?? '', 10);
   return Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_SEND_WAIT_MS;
 }
@@ -297,14 +313,17 @@ async function waitForSettledTask(
   taskId: string,
   initialTask: A2ATask,
 ): Promise<A2ATask> {
-  const deadline = Date.now() + syncWaitMs();
+  const deadline = Date.now() + SEND_WAIT_MS;
   let current = initialTask;
+  let pollIndex = 0;
 
   while (Date.now() < deadline) {
     const latest = await taskStore.getTask(instanceId, taskId);
     if (latest) current = latest;
     if (taskIsSettled(current)) return current;
-    await sleep(Math.min(SEND_WAIT_POLL_MS, Math.max(0, deadline - Date.now())));
+    const pollMs = SEND_WAIT_POLL_BACKOFF_MS[Math.min(pollIndex, SEND_WAIT_POLL_BACKOFF_MS.length - 1)] ?? 1000;
+    pollIndex++;
+    await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
   }
 
   return (await taskStore.getTask(instanceId, taskId)) ?? current;
@@ -337,7 +356,7 @@ export async function handleA2ARequest(request: Request, ctx: A2AHandlerContext)
   }
 
   const { id, method, params } = rpcReq;
-  ctx.callerKey = request.headers.get('x-omni-api-key-id') ?? 'anonymous';
+  ctx.callerKey = request.headers.get('x-omni-api-key-id') ?? undefined;
   const versionError = validateVersion(request, method);
   if (versionError) {
     return jsonResponse({ ...versionError, id }, 400);
@@ -408,6 +427,9 @@ async function handleMessageSend(
   if (parsed instanceof Response) return parsed;
 
   const { sendParams, message, text } = parsed;
+  const callerKey = requireCallerKey(id, ctx);
+  if (callerKey instanceof Response) return callerKey;
+
   if (sendParams.configuration?.pushNotificationConfig !== undefined) {
     return jsonResponse(
       jsonRpcA2AError(id, A2A_PUSH_NOTIFICATION_NOT_SUPPORTED, 'Push notifications are not supported'),
@@ -415,22 +437,9 @@ async function handleMessageSend(
     );
   }
 
-  const taskId = sendParams.taskId ?? message.taskId ?? generateCorrelationId('a2a');
-  const contextId = sendParams.contextId ?? message.contextId ?? taskId;
-  const normalizedMessage = {
-    ...message,
-    messageId: message.messageId ?? generateCorrelationId('msg'),
-    taskId,
-    contextId,
-  };
-  const taskStore = getTaskStore(ctx);
-  const task = await taskStore.createTask({
-    instanceId: ctx.instanceId,
-    taskId,
-    contextId,
-    message: normalizedMessage,
-    metadata: { ...(sendParams.metadata ?? {}), callerKey: getCallerKey(ctx) },
-  });
+  const prepared = await prepareTaskForSend(id, ctx, sendParams, message, callerKey);
+  if (prepared instanceof Response) return prepared;
+  const { taskStore, task, taskId, contextId, normalizedMessage } = prepared;
 
   const timings = ctx.plugin.inboundTimings(t0);
 
@@ -461,6 +470,9 @@ async function handleMessageStream(
   if (parsed instanceof Response) return parsed;
 
   const { sendParams, message, text } = parsed;
+  const callerKey = requireCallerKey(id, ctx);
+  if (callerKey instanceof Response) return callerKey;
+
   if (sendParams.configuration?.pushNotificationConfig !== undefined) {
     return jsonResponse(
       jsonRpcA2AError(id, A2A_PUSH_NOTIFICATION_NOT_SUPPORTED, 'Push notifications are not supported'),
@@ -468,22 +480,9 @@ async function handleMessageStream(
     );
   }
 
-  const taskId = sendParams.taskId ?? message.taskId ?? generateCorrelationId('a2a');
-  const contextId = sendParams.contextId ?? message.contextId ?? taskId;
-  const normalizedMessage = {
-    ...message,
-    messageId: message.messageId ?? generateCorrelationId('msg'),
-    taskId,
-    contextId,
-  };
-  const taskStore = getTaskStore(ctx);
-  const task = await taskStore.createTask({
-    instanceId: ctx.instanceId,
-    taskId,
-    contextId,
-    message: normalizedMessage,
-    metadata: { ...(sendParams.metadata ?? {}), callerKey: getCallerKey(ctx) },
-  });
+  const prepared = await prepareTaskForSend(id, ctx, sendParams, message, callerKey);
+  if (prepared instanceof Response) return prepared;
+  const { taskStore, task, taskId, contextId, normalizedMessage } = prepared;
 
   const sseStream = ctx.streamStore.createPendingStream(ctx.instanceId, taskId, id, contextId);
   ctx.streamStore.writeTask(ctx.instanceId, taskId, task);
@@ -531,6 +530,66 @@ function parseSendParams(
   return { sendParams: { ...raw, message } as MessageSendParams, message, text };
 }
 
+async function prepareTaskForSend(
+  id: string | number | null,
+  ctx: A2AHandlerContext,
+  sendParams: MessageSendParams,
+  message: A2AMessage,
+  callerKey: string,
+): Promise<
+  | {
+      taskStore: A2ATaskStore;
+      task: A2ATask;
+      taskId: string;
+      contextId: string;
+      normalizedMessage: A2AMessage;
+    }
+  | Response
+> {
+  const taskId = sendParams.taskId ?? message.taskId ?? generateCorrelationId('a2a');
+  const requestedContextId = sendParams.contextId ?? message.contextId ?? taskId;
+  const taskStore = getTaskStore(ctx);
+  const existingTask = await taskStore.getTask(ctx.instanceId, taskId);
+  const contextId = existingTask?.contextId ?? requestedContextId;
+  const normalizedMessage = {
+    ...message,
+    messageId: message.messageId ?? generateCorrelationId('msg'),
+    taskId,
+    contextId,
+  };
+  const metadata = { ...(sendParams.metadata ?? {}), callerKey };
+
+  if (existingTask) {
+    if (!taskOwnedByCaller(existingTask, callerKey)) {
+      return jsonResponse(jsonRpcA2AError(id, A2A_TASK_NOT_FOUND, 'Task not found', { taskId }), 404);
+    }
+
+    const task = await taskStore.appendMessage({
+      instanceId: ctx.instanceId,
+      taskId,
+      contextId,
+      message: normalizedMessage,
+      metadata,
+    });
+
+    if (!task) {
+      return jsonResponse(jsonRpcError(id, RPC_INTERNAL_ERROR, 'Internal error'), 500);
+    }
+
+    return { taskStore, task, taskId, contextId, normalizedMessage };
+  }
+
+  const task = await taskStore.createTask({
+    instanceId: ctx.instanceId,
+    taskId,
+    contextId,
+    message: normalizedMessage,
+    metadata,
+  });
+
+  return { taskStore, task, taskId, contextId, normalizedMessage };
+}
+
 // ─── Task Methods ─────────────────────────────────────────────
 
 async function handleGetTask(
@@ -542,6 +601,8 @@ async function handleGetTask(
   if (!parseResult.success) {
     return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, `Invalid params: ${parseResult.error.message}`), 400);
   }
+  const callerKey = requireCallerKey(id, ctx);
+  if (callerKey instanceof Response) return callerKey;
 
   const task = await getTaskStore(ctx).getTask(ctx.instanceId, parseResult.data.id);
   if (!task || !canAccessTask(ctx, task)) {
@@ -563,10 +624,12 @@ async function handleListTasks(
   if (!parseResult.success) {
     return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, `Invalid params: ${parseResult.error.message}`), 400);
   }
+  const callerKey = requireCallerKey(id, ctx);
+  if (callerKey instanceof Response) return callerKey;
 
   const result = await getTaskStore(ctx).listTasks(ctx.instanceId, {
     ...parseResult.data,
-    callerKey: getCallerKey(ctx),
+    callerKey,
   });
   return jsonResponse(jsonRpc(id, result));
 }
@@ -580,6 +643,8 @@ async function handleCancelTask(
   if (!parseResult.success) {
     return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, `Invalid params: ${parseResult.error.message}`), 400);
   }
+  const callerKey = requireCallerKey(id, ctx);
+  if (callerKey instanceof Response) return callerKey;
 
   const taskStore = getTaskStore(ctx);
   const task = await taskStore.getTask(ctx.instanceId, parseResult.data.id);
@@ -610,6 +675,8 @@ async function handleSubscribeToTask(
   if (!parseResult.success) {
     return jsonResponse(jsonRpcError(id, RPC_INVALID_PARAMS, `Invalid params: ${parseResult.error.message}`), 400);
   }
+  const callerKey = requireCallerKey(id, ctx);
+  if (callerKey instanceof Response) return callerKey;
 
   const task = await getTaskStore(ctx).getTask(ctx.instanceId, parseResult.data.id);
   if (!task || !canAccessTask(ctx, task)) {

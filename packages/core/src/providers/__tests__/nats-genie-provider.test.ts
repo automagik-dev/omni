@@ -66,10 +66,14 @@ function createSubscription(subject: string) {
 }
 
 mock.module('nats', () => ({
+  AckPolicy: { Explicit: 'explicit' },
+  DeliverPolicy: { All: 'all', Last: 'last', New: 'new', StartTime: 'by_start_time' },
+  RetentionPolicy: { Limits: 'limits' },
   StringCodec: () => ({
     encode: (s: string) => new TextEncoder().encode(s),
     decode: (b: Uint8Array) => new TextDecoder().decode(b),
   }),
+  StorageType: { File: 'file' },
   connect: mock(async () => ({
     publish: publishSpy,
     subscribe: (subject: string) => createSubscription(subject),

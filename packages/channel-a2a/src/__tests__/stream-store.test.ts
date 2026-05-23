@@ -94,6 +94,20 @@ describe('A2AStreamStore', () => {
       expect(store.hasStream('inst-1', 'task-a')).toBe(true);
       expect(store.hasStream('inst-1', 'task-b')).toBe(true);
     });
+
+    it('closes idle streams without reporting task failure', async () => {
+      const onClose = mock((_instanceId: string, _taskId: string, _state: string) => {});
+      const idleStore = new A2AStreamStore(onClose, 1);
+      const stream = idleStore.createPendingStream('inst-1', 'idle-task');
+      const reader = stream.getReader();
+
+      const result = await reader.read();
+      reader.releaseLock();
+
+      expect(result.done).toBe(true);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(idleStore.hasStream('inst-1', 'idle-task')).toBe(false);
+    });
   });
 
   describe('writePart', () => {

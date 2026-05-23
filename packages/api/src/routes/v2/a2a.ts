@@ -44,7 +44,6 @@ a2aRoutes.get('/agents/:agentId/card', zValidator('param', agentParamSchema), as
     services: c.get('services'),
     baseUrl: baseUrlFromRequest(url),
     agentId,
-    extended: true,
   });
 
   if (!resolved) {

@@ -7,17 +7,10 @@
  * - Ack policies ensure reliable delivery
  */
 
+import * as nats from 'nats';
 import type { ConsumerConfig } from 'nats';
 import type { SubscribeOptions } from '../bus';
 import { type StreamName, getStreamForEventType } from './streams';
-
-const NATS_ACK_EXPLICIT = 'explicit' as ConsumerConfig['ack_policy'];
-const NATS_DELIVER_POLICY = {
-  All: 'all' as ConsumerConfig['deliver_policy'],
-  Last: 'last' as ConsumerConfig['deliver_policy'],
-  New: 'new' as ConsumerConfig['deliver_policy'],
-  StartTime: 'by_start_time' as ConsumerConfig['deliver_policy'],
-};
 
 /**
  * Default consumer configuration
@@ -50,7 +43,7 @@ export function buildConsumerConfig(pattern: string, options: SubscribeOptions =
     filter_subject: pattern,
 
     // Explicit ack for reliable delivery
-    ack_policy: NATS_ACK_EXPLICIT,
+    ack_policy: nats.AckPolicy.Explicit,
 
     // Wait time before redelivery (in nanoseconds)
     ack_wait: ackWaitMs * 1_000_000,
@@ -87,16 +80,16 @@ export function buildConsumerConfig(pattern: string, options: SubscribeOptions =
  */
 function mapStartFrom(startFrom: SubscribeOptions['startFrom']): ConsumerConfig['deliver_policy'] {
   if (startFrom instanceof Date) {
-    return NATS_DELIVER_POLICY.StartTime;
+    return nats.DeliverPolicy.StartTime;
   }
 
   switch (startFrom) {
     case 'first':
-      return NATS_DELIVER_POLICY.All;
+      return nats.DeliverPolicy.All;
     case 'last':
-      return NATS_DELIVER_POLICY.Last;
+      return nats.DeliverPolicy.Last;
     default:
-      return NATS_DELIVER_POLICY.New;
+      return nats.DeliverPolicy.New;
   }
 }
 

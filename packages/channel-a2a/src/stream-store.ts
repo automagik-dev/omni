@@ -28,7 +28,10 @@ export class A2AStreamStore {
   private readonly streams = new Map<string, StreamEntry>();
   private readonly encoder = new TextEncoder();
 
-  constructor(private readonly onClose?: StreamCloseObserver) {}
+  constructor(
+    private readonly onClose?: StreamCloseObserver,
+    private readonly idleCloseMs = IDLE_CLOSE_MS,
+  ) {}
 
   streamKey(instanceId: string, taskId: string): string {
     return `${instanceId}:${taskId}`;
@@ -100,8 +103,8 @@ export class A2AStreamStore {
 
         // Auto-close on idle (no parts received)
         entry.closeTimer = setTimeout(() => {
-          store.closeStream(instanceId, taskId, 'TASK_STATE_FAILED');
-        }, IDLE_CLOSE_MS);
+          store.closeIdleStream(instanceId, taskId);
+        }, store.idleCloseMs);
       },
       cancel() {
         if (store.streams.get(key) === entryRef) {
@@ -173,6 +176,18 @@ export class A2AStreamStore {
       },
     });
     this.onClose?.(instanceId, taskId, state);
+    entry.close();
+  }
+
+  private closeIdleStream(instanceId: string, taskId: string): void {
+    const key = this.streamKey(instanceId, taskId);
+    const entry = this.streams.get(key);
+    if (!entry) return;
+
+    if (entry.closeTimer !== undefined) {
+      clearTimeout(entry.closeTimer);
+    }
+
     entry.close();
   }
 

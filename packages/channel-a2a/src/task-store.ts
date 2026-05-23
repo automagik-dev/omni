@@ -80,6 +80,39 @@ export class A2ATaskStore {
     return task;
   }
 
+  async appendMessage(params: {
+    instanceId: string;
+    taskId: string;
+    contextId: string;
+    message: A2AMessage;
+    metadata?: Record<string, unknown>;
+  }): Promise<A2ATask | null> {
+    const task = await this.get(params.instanceId, params.taskId);
+    if (!task) return null;
+
+    const now = new Date().toISOString();
+    const updated: A2ATask = {
+      ...task,
+      contextId: task.contextId ?? params.contextId,
+      status: {
+        state: 'TASK_STATE_WORKING',
+        timestamp: now,
+        message: params.message,
+      },
+      history: [...(task.history ?? []), params.message],
+      lastModified: now,
+      metadata: {
+        ...(task.metadata ?? {}),
+        ...(params.metadata ?? {}),
+        instanceId: params.instanceId,
+        updatedAt: now,
+      },
+    };
+
+    await this.set(params.instanceId, params.taskId, updated);
+    return updated;
+  }
+
   async getTask(instanceId: string, taskId: string): Promise<A2ATask | null> {
     return this.get(instanceId, taskId);
   }
