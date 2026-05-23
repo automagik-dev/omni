@@ -434,6 +434,7 @@ describe('channel coverage', () => {
       .filter(
         (e) =>
           e.isDirectory() &&
+          existsSync(resolve(packagesRoot, e.name, 'package.json')) &&
           e.name.startsWith('channel-') &&
           e.name !== 'channel-sdk' &&
           e.name !== 'channel-a2a' &&

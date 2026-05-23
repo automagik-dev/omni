@@ -69,6 +69,9 @@ export type {
   SyncJobStatus,
   // Auth types
   AuthValidateResponse,
+  // A2A types
+  A2ADiscoverableAgent,
+  A2AJsonRpcResponse,
   // Chat types
   Chat,
   ChatSettings,

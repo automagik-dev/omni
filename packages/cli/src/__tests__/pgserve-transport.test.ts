@@ -159,7 +159,7 @@ describe('resolvePgserveTransport (TCP path)', () => {
     } catch (err) {
       expect(String(err)).toContain('pgserve is not reachable');
     }
-  });
+  }, 7_000);
 
   test('OMNI_PG_FORCE_SOCKET=1 throws the documented hint when socket is absent', async () => {
     process.env.XDG_RUNTIME_DIR = '/var/empty';

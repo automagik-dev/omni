@@ -10,13 +10,12 @@ import type { ApiKeyData, AppVariables } from '../types';
 /**
  * Authentication middleware
  *
- * Validates API key from x-api-key header or query parameter.
- * Looks up the key in the database and validates its status, expiration, and scopes.
+ * Validates API keys from x-api-key header, api_key query parameter, or
+ * Authorization: Bearer <omni-api-key>.
  */
 export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
-  // Get API key from header, query, or Bearer token
-  const bearer = c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
-  const apiKey = c.req.header('x-api-key') ?? c.req.query('api_key') ?? bearer;
+  const apiKey =
+    c.req.header('x-api-key') ?? c.req.query('api_key') ?? c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
 
   if (!apiKey) {
     return c.json(
@@ -108,6 +107,30 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     });
   }
 });
+
+export function requireAnyScope(requiredScopes: string[]) {
+  return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
+    const apiKey = c.get('apiKey');
+    if (!apiKey) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+
+    const allowed = requiredScopes.some((scope) => ApiKeyService.scopeAllows(apiKey.scopes, scope));
+    if (!allowed) {
+      return c.json(
+        {
+          error: {
+            code: 'FORBIDDEN',
+            message: `Insufficient permissions. Required one of: ${requiredScopes.join(', ')}`,
+          },
+        },
+        403,
+      );
+    }
+
+    return next();
+  });
+}
 
 /**
  * Check if API key has access to a specific instance.

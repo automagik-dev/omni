@@ -22,6 +22,10 @@ export const DEFAULT_TURN_SCOPES = ['messages:send', 'turns:close', 'tts:synthes
  * The middleware normalizes the actual request path to match these patterns.
  */
 export const SCOPE_MAP: Record<string, string> = {
+  // --- a2a discovery ---
+  'GET /a2a/agents': 'agents:read',
+  'GET /a2a/agents/:agentId/card': 'agents:read',
+
   // --- access ---
   'GET /access/rules': 'access:read',
   'GET /access/rules/:id': 'access:read',

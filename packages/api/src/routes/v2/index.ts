@@ -6,6 +6,7 @@
 
 import { Hono } from 'hono';
 import type { AppVariables } from '../../types';
+import { a2aRoutes } from './a2a';
 import { accessRoutes } from './access';
 import { routesRoutes } from './agent-routes';
 import { agentStateRoutes } from './agent-state';
@@ -42,6 +43,7 @@ import { webhooksRoutes } from './webhooks';
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
 
 // Mount all route modules
+v2Routes.route('/a2a', a2aRoutes);
 v2Routes.route('/agents', agentsRoutes);
 v2Routes.route('/agent-state', agentStateRoutes);
 v2Routes.route('/agent-tasks', agentTasksRoutes); // Agent task history (omni-m7m)

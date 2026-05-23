@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { RetentionPolicy, StorageType } from 'nats';
 import { STREAM_CONFIGS, STREAM_NAMES, getStreamForEventType } from '../streams';
 
 describe('streams', () => {
@@ -32,8 +31,8 @@ describe('streams', () => {
     test('MESSAGE stream has correct config', () => {
       const config = STREAM_CONFIGS.MESSAGE;
       expect(config.subjects).toEqual(['message.>']);
-      expect(config.storage).toBe(StorageType.File);
-      expect(config.retention).toBe(RetentionPolicy.Limits);
+      expect(config.storage as string | undefined).toBe('file');
+      expect(config.retention as string | undefined).toBe('limits');
     });
 
     test('CUSTOM stream captures custom.> subjects', () => {

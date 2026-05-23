@@ -36,6 +36,7 @@ const createAgentSchema = z.object({
   isInternal: z.boolean().default(false),
   isActive: z.boolean().default(true),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  agentCard: z.record(z.string(), z.unknown()).optional(),
 });
 
 const updateAgentSchema = createAgentSchema.partial();

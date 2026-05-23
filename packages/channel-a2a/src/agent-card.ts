@@ -2,7 +2,7 @@
  * A2A Agent Card Builder
  *
  * Constructs the A2A Agent Card JSON from instance/agent metadata.
- * The agent card is served at /.well-known/agent.json?instanceId={id}.
+ * The v1 card is served at /.well-known/agent-card.json?instanceId={id}.
  */
 
 import type { A2AAgentCard, A2ASkill } from './types';
@@ -12,9 +12,13 @@ function strOverride(val: unknown): string | undefined {
   return typeof val === 'string' ? val : undefined;
 }
 
-/** Safely extract object-shaped capabilities override. */
-function capabilitiesOverride(val: unknown): object | undefined {
-  return val !== null && typeof val === 'object' && !Array.isArray(val) ? (val as object) : undefined;
+/** Safely extract object-shaped overrides. */
+function objectOverride(val: unknown): Record<string, unknown> | undefined {
+  return val !== null && typeof val === 'object' && !Array.isArray(val) ? (val as Record<string, unknown>) : undefined;
+}
+
+function stringArrayOverride(val: unknown): string[] | undefined {
+  return Array.isArray(val) && val.every((item) => typeof item === 'string') ? val : undefined;
 }
 
 /** Build default A2ASkill list from capability strings. */
@@ -25,8 +29,8 @@ function buildDefaultSkills(capabilities: string[]): A2ASkill[] {
       name: 'Messaging',
       description: 'Process and respond to text messages',
       tags: ['messaging', 'chat'],
-      inputModes: ['text'],
-      outputModes: ['text'],
+      inputModes: ['text/plain'],
+      outputModes: ['text/plain'],
     },
   ];
 
@@ -36,8 +40,8 @@ function buildDefaultSkills(capabilities: string[]): A2ASkill[] {
       name: 'Vision',
       description: 'Process and describe images',
       tags: ['vision', 'image'],
-      inputModes: ['text', 'image'],
-      outputModes: ['text'],
+      inputModes: ['text/plain', 'image/png', 'image/jpeg', 'image/webp'],
+      outputModes: ['text/plain'],
     });
   }
 
@@ -47,8 +51,8 @@ function buildDefaultSkills(capabilities: string[]): A2ASkill[] {
       name: 'Audio',
       description: 'Transcribe and process audio',
       tags: ['audio', 'transcription'],
-      inputModes: ['audio'],
-      outputModes: ['text'],
+      inputModes: ['audio/mpeg', 'audio/ogg', 'audio/wav'],
+      outputModes: ['text/plain'],
     });
   }
 
@@ -62,10 +66,16 @@ export function buildAgentCard(params: {
   instanceId: string;
   instanceName: string;
   agentName: string;
+  agentId?: string;
+  provider?: string;
+  model?: string | null;
   capabilities: string[];
   /** Stored override fields from agents.agentCard (optional) */
   agentCardOverride?: Record<string, unknown> | null;
+  /** Non-sensitive agent metadata to include in authenticated cards. */
+  metadata?: Record<string, unknown> | null;
   baseUrl: string;
+  extended?: boolean;
 }): A2AAgentCard {
   const { instanceId, instanceName, agentName, capabilities, agentCardOverride, baseUrl } = params;
 
@@ -76,22 +86,56 @@ export function buildAgentCard(params: {
   const overrideSkills = Array.isArray(agentCardOverride?.skills)
     ? (agentCardOverride.skills as A2ASkill[])
     : undefined;
+  const overrideInterfaces = Array.isArray(agentCardOverride?.supportedInterfaces)
+    ? (agentCardOverride.supportedInterfaces as A2AAgentCard['supportedInterfaces'])
+    : undefined;
+  const defaultInputModes = stringArrayOverride(agentCardOverride?.defaultInputModes) ?? ['text/plain'];
+  const defaultOutputModes = stringArrayOverride(agentCardOverride?.defaultOutputModes) ?? ['text/plain'];
 
   const card: A2AAgentCard = {
     name: strOverride(agentCardOverride?.name) ?? agentName ?? instanceName,
     description: strOverride(agentCardOverride?.description) ?? `Omni agent ${agentName} on instance ${instanceName}`,
-    url: agentUrl,
     version: strOverride(agentCardOverride?.version) ?? '1.0.0',
+    supportedInterfaces: overrideInterfaces ?? [
+      {
+        url: agentUrl,
+        protocolBinding: 'JSONRPC',
+        protocolVersion: '1.0',
+      },
+    ],
     capabilities: {
       streaming: true,
       pushNotifications: false,
-      stateTransitionHistory: false,
-      ...(capabilitiesOverride(agentCardOverride?.capabilities) ?? {}),
+      extendedAgentCard: false,
+      ...(objectOverride(agentCardOverride?.capabilities) ?? {}),
     },
-    defaultInputModes: ['text'],
-    defaultOutputModes: ['text'],
+    defaultInputModes,
+    defaultOutputModes,
     skills: overrideSkills ?? skills,
+    securitySchemes: {
+      bearerAuth: {
+        httpAuthSecurityScheme: {
+          scheme: 'Bearer',
+          bearerFormat: 'Omni API key',
+          description: 'Use an Omni API key as a bearer token.',
+        },
+      },
+      apiKeyHeader: {
+        apiKeySecurityScheme: {
+          location: 'header',
+          name: 'x-api-key',
+          description: 'Legacy Omni API key header.',
+        },
+      },
+      ...(objectOverride(agentCardOverride?.securitySchemes) ?? {}),
+    },
+    securityRequirements: [{ schemes: { bearerAuth: { list: [] } } }, { schemes: { apiKeyHeader: { list: [] } } }],
   };
+
+  const providerOverride = objectOverride(agentCardOverride?.provider);
+  if (providerOverride) {
+    card.provider = providerOverride as A2AAgentCard['provider'];
+  }
 
   const iconUrl = strOverride(agentCardOverride?.iconUrl);
   if (iconUrl) card.iconUrl = iconUrl;
