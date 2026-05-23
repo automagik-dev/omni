@@ -111,6 +111,9 @@ function buildA2AAgentCard(params: {
   const providerOverride = isRecord(override.provider) ? override.provider : undefined;
   if (providerOverride) card.provider = providerOverride;
 
+  const metadataOverride = isRecord(override.metadata) ? override.metadata : undefined;
+  if (metadataOverride) card.metadata = metadataOverride;
+
   const iconUrl = stringOverride(override.iconUrl);
   if (iconUrl) card.iconUrl = iconUrl;
 
