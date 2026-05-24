@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { readDataDirMajor } from '../embedded-canonical-migration.js';
+import { compareVersionDesc, readDataDirMajor } from '../embedded-canonical-migration.js';
 
 // readDataDirMajor underpins the matching-major reader selection: the temp
 // postmaster MUST be the same PG major as the data dir's catalog, or it
@@ -43,4 +43,11 @@ test('returns null on a non-numeric PG_VERSION', () => {
     writeFileSync(join(dir, 'PG_VERSION'), 'not-a-version');
     expect(readDataDirMajor(dir)).toBeNull();
   });
+});
+
+test('compareVersionDesc sorts autopg version dirs newest-first, deterministically', () => {
+  const dirs = ['v2.6.1', 'v3.0.7', 'v2.6.10', 'v3.0.6'];
+  expect([...dirs].sort(compareVersionDesc)).toEqual(['v3.0.7', 'v3.0.6', 'v2.6.10', 'v2.6.1']);
+  // numeric (not lexicographic): 2.6.10 must sort above 2.6.1
+  expect(compareVersionDesc('v2.6.10', 'v2.6.1')).toBeLessThan(0);
 });

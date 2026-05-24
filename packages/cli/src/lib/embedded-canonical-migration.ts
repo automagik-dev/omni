@@ -109,23 +109,39 @@ function binaryMajor(binary: string): number | null {
  * can tell the operator to install a PG<major> reader instead of silently
  * failing.
  *
- * `wantMajor === null` (unknown data-dir version) falls back to the previous
- * "last available" behavior.
+ * `wantMajor === null` (unknown data-dir version) falls back to the
+ * newest installed binary.
+ *
+ * Candidates are sorted by their `~/.local/share/autopg/<version>` dir name
+ * (newest first, version-aware) so selection is deterministic regardless of
+ * the OS-dependent `readdirSync` order — picking the highest patch within the
+ * wanted major, and the newest overall when the major is unknown.
  */
 function findAutopgPostgresBinary(wantMajor: number | null): string | null {
   const autopgRoot = join(homedir(), '.local', 'share', 'autopg');
   if (!existsSync(autopgRoot)) return null;
-  const candidates: string[] = [];
-  for (const entry of safeReaddir(autopgRoot)) {
-    const candidate = join(autopgRoot, entry, 'postgres', 'bin', 'postgres');
-    if (existsSync(candidate)) candidates.push(candidate);
-  }
+  const candidates = safeReaddir(autopgRoot)
+    .sort((a, b) => compareVersionDesc(a, b))
+    .map((entry) => join(autopgRoot, entry, 'postgres', 'bin', 'postgres'))
+    .filter((candidate) => existsSync(candidate));
   if (candidates.length === 0) return null;
-  if (wantMajor === null) return candidates[candidates.length - 1];
+  if (wantMajor === null) return candidates[0];
   for (const candidate of candidates) {
     if (binaryMajor(candidate) === wantMajor) return candidate;
   }
   return null;
+}
+
+/** Compare two `vX.Y.Z`-ish dir names numerically, newest first. */
+export function compareVersionDesc(a: string, b: string): number {
+  const parse = (s: string): number[] => (s.match(/\d+/g) ?? []).map(Number);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pb[i] ?? 0) - (pa[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return b.localeCompare(a);
 }
 
 function safeReaddir(path: string): string[] {
