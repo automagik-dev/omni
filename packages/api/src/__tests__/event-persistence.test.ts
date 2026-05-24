@@ -292,6 +292,64 @@ describeWithDb('Event Persistence Handler', () => {
       expect(persisted?.textContent).toBe('Outbound message');
       expect(persisted?.channel).toBe('whatsapp-baileys');
     });
+
+    test('persists outbound media caption, MIME, and sanitized raw payload', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const testEvent = {
+        id: 'test-event-sent-media',
+        type: 'message.sent',
+        timestamp: Date.now(),
+        payload: {
+          externalId: 'ext-sent-media-001',
+          chatId: 'chat-123',
+          to: 'user-789',
+          content: {
+            type: 'image',
+            caption: 'caption test',
+            mimeType: 'image/png',
+            filename: 'test.png',
+            isVoiceNote: true,
+          },
+          rawPayload: {
+            isFromMe: true,
+            mediaSource: 'base64',
+            filename: 'test.png',
+          },
+        },
+        metadata: {
+          correlationId: 'corr-sent-media',
+          instanceId: null,
+          channelType: 'whatsapp-baileys',
+        },
+      };
+
+      await emitEvent('message.sent', testEvent);
+
+      const [persisted] = await db
+        .select()
+        .from(omniEvents)
+        .where(eq(omniEvents.externalId, 'ext-sent-media-001'))
+        .limit(1);
+
+      expect(persisted).toBeDefined();
+      expect(persisted?.eventType).toBe('message.sent');
+      expect(persisted?.direction).toBe('outbound');
+      expect(persisted?.contentType).toBe('image');
+      expect(persisted?.textContent).toBe('caption test');
+      expect(persisted?.mediaMimeType).toBe('image/png');
+      expect(persisted?.rawPayload).toEqual({
+        isFromMe: true,
+        mediaSource: 'base64',
+        filename: 'test.png',
+      });
+      expect(persisted?.metadata).toEqual({
+        correlationId: 'corr-sent-media',
+        to: 'user-789',
+        filename: 'test.png',
+        voiceNote: true,
+      });
+    });
   });
 
   describe('message.delivered handler', () => {

@@ -239,12 +239,16 @@ describe('WhatsAppPlugin', () => {
 
     async function withHumanDelayDisabled(run: () => Promise<void>) {
       const previous = process.env.WHATSAPP_HUMAN_DELAY_ENABLED;
+      const previousTyping = process.env.WHATSAPP_TYPING_SIMULATION_ENABLED;
       process.env.WHATSAPP_HUMAN_DELAY_ENABLED = 'false';
+      process.env.WHATSAPP_TYPING_SIMULATION_ENABLED = 'false';
       try {
         await run();
       } finally {
         if (previous === undefined) Reflect.deleteProperty(process.env, 'WHATSAPP_HUMAN_DELAY_ENABLED');
         else process.env.WHATSAPP_HUMAN_DELAY_ENABLED = previous;
+        if (previousTyping === undefined) Reflect.deleteProperty(process.env, 'WHATSAPP_TYPING_SIMULATION_ENABLED');
+        else process.env.WHATSAPP_TYPING_SIMULATION_ENABLED = previousTyping;
       }
     }
 
@@ -281,6 +285,65 @@ describe('WhatsAppPlugin', () => {
           id: MESSAGE_ID,
           fromMe: false,
           participant: PARTICIPANT,
+        });
+      });
+    });
+
+    it('emits caption and media metadata for sent media messages', async () => {
+      await withHumanDelayDisabled(async () => {
+        const plugin = new WhatsAppPlugin();
+        const sendMessage = mock(() => Promise.resolve({ key: { id: 'MEDIA-MSG-ID' }, message: { imageMessage: {} } }));
+        const publish = mock(async (_type: string, _payload: unknown) => {});
+        const mockSocket = {
+          sendMessage,
+          sendPresenceUpdate: mock(async () => {}),
+          user: { id: '5511999999999@s.whatsapp.net' },
+        };
+        (plugin as any).sockets = new Map([[INSTANCE_ID, mockSocket]]);
+        (plugin as any).eventBus = { publish };
+        (plugin as any).logger = { info: mock(), debug: mock(), warn: mock(), error: mock() };
+
+        const result = await plugin.sendMessage(INSTANCE_ID, {
+          to: '5511888888888@s.whatsapp.net',
+          content: {
+            type: 'image',
+            caption: 'caption test',
+            filename: 'test.png',
+            mimeType: 'image/png',
+          },
+          metadata: {
+            base64: Buffer.from('image-bytes').toString('base64'),
+          },
+        } as any);
+
+        expect(result.success).toBe(true);
+        expect(publish).toHaveBeenCalledTimes(1);
+        expect(publish.mock.calls[0]?.[0]).toBe('message.sent');
+        expect(publish.mock.calls[0]?.[1]).toEqual({
+          externalId: 'MEDIA-MSG-ID',
+          chatId: '5511888888888@s.whatsapp.net',
+          to: '5511888888888@s.whatsapp.net',
+          content: {
+            type: 'image',
+            text: 'caption test',
+            caption: 'caption test',
+            mediaUrl: undefined,
+            localPath: undefined,
+            mimeType: 'image/png',
+            filename: 'test.png',
+            isVoiceNote: false,
+          },
+          replyToId: undefined,
+          rawPayload: {
+            externalId: 'MEDIA-MSG-ID',
+            isFromMe: true,
+            to: '5511888888888@s.whatsapp.net',
+            caption: 'caption test',
+            filename: 'test.png',
+            mimeType: 'image/png',
+            mediaSource: 'base64',
+          },
+          senderAgentId: undefined,
         });
       });
     });

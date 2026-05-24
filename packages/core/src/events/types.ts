@@ -230,9 +230,15 @@ export interface MessageSentPayload {
   content: {
     type: ContentType;
     text?: string;
+    caption?: string;
     mediaUrl?: string;
+    localPath?: string;
+    mimeType?: string;
+    filename?: string;
+    isVoiceNote?: boolean;
   };
   replyToId?: string;
+  rawPayload?: Record<string, unknown>;
   /** agents.id UUID — set by agent-dispatcher when agent sends */
   senderAgentId?: string;
 }

@@ -206,6 +206,58 @@ const MEDIA_BADGES: Record<string, string> = {
   poll: '[Poll]',
 };
 
+const OUTBOUND_MEDIA_TYPES = new Set(['audio', 'image', 'video', 'document', 'sticker']);
+
+function compactRecord(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  const compacted = Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+  return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
+
+function isSentMediaContent(content: MessageSentPayload['content']): boolean {
+  return OUTBOUND_MEDIA_TYPES.has(content.type) || !!content.mediaUrl || !!content.localPath || !!content.mimeType;
+}
+
+function buildSentMediaMetadata(
+  content: MessageSentPayload['content'],
+  rawPayload: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!isSentMediaContent(content)) return undefined;
+  const rawSource = typeof rawPayload?.mediaSource === 'string' ? rawPayload.mediaSource : undefined;
+  return compactRecord({
+    caption: content.caption,
+    filename: content.filename,
+    voiceNote: content.isVoiceNote === true ? true : undefined,
+    source: rawSource ?? (content.mediaUrl ? 'url' : content.localPath ? 'localPath' : 'inline'),
+  });
+}
+
+export function buildSentMessageContentFields(payload: MessageSentPayload): {
+  textContent?: string;
+  hasMedia: boolean;
+  mediaMimeType?: string;
+  mediaUrl?: string;
+  mediaLocalPath?: string;
+  mediaMetadata?: Record<string, unknown>;
+  rawPayload?: Record<string, unknown>;
+} {
+  return {
+    textContent: sanitizeText(payload.content.text ?? payload.content.caption),
+    hasMedia: isSentMediaContent(payload.content),
+    mediaMimeType: truncate(payload.content.mimeType, 100),
+    mediaUrl: payload.content.mediaUrl,
+    mediaLocalPath: payload.content.localPath,
+    mediaMetadata: buildSentMediaMetadata(payload.content, payload.rawPayload),
+    rawPayload: payload.rawPayload ? deepSanitize(payload.rawPayload) : undefined,
+  };
+}
+
+function buildSentChatPreview(payload: MessageSentPayload): string {
+  const text = payload.content.text ?? payload.content.caption ?? '';
+  const badge =
+    payload.content.type !== 'text' ? (MEDIA_BADGES[payload.content.type] ?? `[${payload.content.type}]`) : '';
+  return badge ? (text ? `${badge} ${text}` : badge) : text;
+}
+
 /**
  * Extract and validate phone from sender ID.
  * Returns E.164 phone (+digits) or undefined for non-phone IDs.
@@ -801,11 +853,13 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             channel: (metadata.channelType ?? 'whatsapp') as ChannelType,
           });
 
+          const sentContent = buildSentMessageContentFields(payload);
+
           // Create message (sent by us)
           const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
             source: 'realtime',
             messageType: mapContentType(payload.content.type),
-            textContent: sanitizeText(payload.content.text),
+            textContent: sentContent.textContent,
             platformTimestamp: new Date(event.timestamp),
             // Sender info (from us)
             senderPersonId: metadata.personId,
@@ -813,8 +867,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             isFromMe: true,
             senderAgentId: (payload as MessageSentPayload & { senderAgentId?: string }).senderAgentId ?? null,
             // Media
-            hasMedia: !!payload.content.mediaUrl,
-            mediaUrl: payload.content.mediaUrl,
+            hasMedia: sentContent.hasMedia,
+            mediaMimeType: sentContent.mediaMimeType,
+            mediaUrl: sentContent.mediaUrl,
+            mediaLocalPath: sentContent.mediaLocalPath,
+            mediaMetadata: sentContent.mediaMetadata,
+            rawPayload: sentContent.rawPayload,
             // Reply info - truncate varchar(255) fields
             replyToExternalId: truncate(payload.replyToId, 255),
           });
@@ -830,7 +888,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           // Update chat recency — marks lastMessageFromMe=true so the chat no longer
           // shows as pending/attention-needing after we send a reply.
           services.chats
-            .updateLastMessage(chat.id, sanitizeText(payload.content.text ?? '') ?? '', new Date(event.timestamp), true)
+            .updateLastMessage(
+              chat.id,
+              sanitizeText(buildSentChatPreview(payload)) ?? '',
+              new Date(event.timestamp),
+              true,
+            )
             .catch((err: unknown) => log.debug('Failed to update chat recency (sent)', { error: String(err) }));
 
           // Track consumer offset after successful processing
