@@ -20,6 +20,7 @@ import {
   buildEmbeddedDatabaseUrl,
   buildRuntimeEnv,
   resolveDatabaseUrl,
+  resolvePgservePort,
 } from '../runtime-env.js';
 
 const LEGACY_DEFAULT = 'postgresql://postgres:postgres@localhost:5432/omni';
@@ -76,6 +77,30 @@ describe('buildEmbeddedDatabaseUrl', () => {
 
   test('honors a custom port', () => {
     expect(buildEmbeddedDatabaseUrl(9999)).toBe('postgresql://postgres:postgres@localhost:9999/omni');
+  });
+});
+
+describe('resolvePgservePort', () => {
+  test('falls back to the CANONICAL port (5432), NOT the legacy 8432', () => {
+    // Regression guard: the fallback feeds the PGSERVE_PORT env that
+    // `omni doctor` probes. Defaulting to 8432 false-FAILed pgserve-reachable
+    // on every healthy canonical host.
+    expect(resolvePgservePort(DEFAULT_SERVER_CONFIG)).toBe(CANONICAL_PG_PORT);
+    expect(resolvePgservePort(DEFAULT_SERVER_CONFIG)).toBe(5432);
+  });
+
+  test('honors an explicit server.pgservePort override', () => {
+    const config = { ...DEFAULT_SERVER_CONFIG, pgservePort: 6543 } as typeof DEFAULT_SERVER_CONFIG & {
+      pgservePort: number;
+    };
+    expect(resolvePgservePort(config)).toBe(6543);
+  });
+
+  test('ignores a non-positive / non-finite override and uses canonical', () => {
+    const bad = { ...DEFAULT_SERVER_CONFIG, pgservePort: 0 } as typeof DEFAULT_SERVER_CONFIG & {
+      pgservePort: number;
+    };
+    expect(resolvePgservePort(bad)).toBe(CANONICAL_PG_PORT);
   });
 });
 

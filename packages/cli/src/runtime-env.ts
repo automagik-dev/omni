@@ -70,20 +70,20 @@ const LEGACY_DEFAULT_DATABASE_URL = 'postgresql://postgres:postgres@localhost:54
 const LEGACY_PHASE2_DATABASE_URL = 'postgresql://postgres:postgres@localhost:8432/omni';
 
 /**
- * Default pgserve port when none is set explicitly.
+ * Default pgserve port when none is set explicitly — the CANONICAL port.
  *
  * Phase 2 of the canonical-pgserve cutover (omni#595/#596/#597) used the
  * bun-bridge port `8432`. Phase 3 (`pgserve-singleton-no-proxy`) lands the
- * postmaster directly on **5432** (canonical postgres port) and listens
- * on the canonical UDS at `$XDG_RUNTIME_DIR/pgserve/.s.PGSQL.5432`.
- *
- * Kept as the module-level default for backwards compatibility with the
- * stored `~/.omni/config.json` entries that still record `8432`. Use
- * {@link resolveDatabaseUrl} as the entry point — it prefers the canonical
- * UDS when available and falls back to the legacy port only when the
- * socket is missing AND the operator hasn't migrated their config.
+ * postmaster directly on **5432** (the canonical postgres port) and listens
+ * on the canonical UDS at `$XDG_RUNTIME_DIR/pgserve/.s.PGSQL.5432`. There is
+ * no embedded 8432 listener anymore, so the default MUST be canonical — a
+ * hardcoded 8432 here leaked into `resolvePgservePort` (→ the `PGSERVE_PORT`
+ * env that `omni doctor`'s `pgserve-reachable` check probes), making doctor
+ * false-FAIL "cannot connect to pgserve on :8432" on every healthy host.
+ * Stored `8432` entries in `~/.omni/config.json` are treated as a stale
+ * default and re-resolved by {@link resolveDatabaseUrl} (UDS-first).
  */
-export const DEFAULT_PGSERVE_PORT = 8432;
+export const DEFAULT_PGSERVE_PORT = CANONICAL_PG_PORT;
 
 /** Canonical postgres TCP port the postmaster binds in singleton mode. */
 export { CANONICAL_PG_PORT } from './lib/pgserve-transport.js';
@@ -112,9 +112,13 @@ export function buildCanonicalSocketDatabaseUrl(): string {
 
 /**
  * Extract the effective pgserve port. Honors an explicit override on the
- * server config first (`server.pgservePort`, if ever added), then the
- * hard-coded default. This function intentionally does NOT read
- * `process.env.PGSERVE_PORT` — env pollution is the bug we're fixing.
+ * server config first (`server.pgservePort`), then falls back to
+ * {@link DEFAULT_PGSERVE_PORT} — which is now the CANONICAL port (5432), not
+ * the legacy 8432. This value feeds the runtime `PGSERVE_PORT` env that
+ * `omni doctor`'s `pgserve-reachable` check probes.
+ *
+ * This function intentionally does NOT read `process.env.PGSERVE_PORT` —
+ * env pollution is the bug we're fixing.
  */
 export function resolvePgservePort(serverConfig: ServerConfig): number {
   const maybe = (serverConfig as ServerConfig & { pgservePort?: number }).pgservePort;
