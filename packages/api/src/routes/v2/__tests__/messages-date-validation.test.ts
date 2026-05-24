@@ -74,4 +74,17 @@ describe('GET /messages — date parameter validation (#494)', () => {
     expect(calls[0]?.query.since).toBeInstanceOf(Date);
     expect(calls[0]?.query.until).toBeInstanceOf(Date);
   });
+
+  test('passes externalId as an exact-match filter instead of search text', async () => {
+    const calls: ListCall[] = [];
+    const app = mountMessagesRoutes(calls);
+
+    const res = await app.request('/messages?externalId=3EB029FAF90BE7AB265311&limit=5');
+
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.query.externalId).toBe('3EB029FAF90BE7AB265311');
+    expect(calls[0]?.query.search).toBeUndefined();
+    expect(calls[0]?.query.limit).toBe(5);
+  });
 });
