@@ -34,7 +34,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 
 import { zValidator } from '@hono/zod-validator';
 import { sanitizeOutboundText } from '@omni/channel-sdk';
@@ -60,6 +60,39 @@ const log = createLogger('routes:messages');
 const mediaDownloadLog = createLogger('routes:messages:media-download');
 
 const messagesRoutes = new Hono<{ Variables: AppVariables }>();
+
+const MIME_BY_EXTENSION: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.opus': 'audio/opus',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.avi': 'video/x-msvideo',
+  '.pdf': 'application/pdf',
+};
+
+const DEFAULT_MIME_BY_MEDIA_TYPE: Record<'image' | 'audio' | 'video' | 'document', string> = {
+  image: 'image/jpeg',
+  audio: 'audio/ogg',
+  video: 'video/mp4',
+  document: 'application/octet-stream',
+};
+
+function inferMediaMimeType(type: 'image' | 'audio' | 'video' | 'document', filename?: string): string {
+  if (filename) {
+    const fromExtension = MIME_BY_EXTENSION[extname(filename).toLowerCase()];
+    if (fromExtension) return fromExtension;
+  }
+  return DEFAULT_MIME_BY_MEDIA_TYPE[type];
+}
 
 // ============================================================================
 // Helper Functions
@@ -1027,6 +1060,8 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   // Resolve recipient (handles person ID to platform ID resolution)
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
+  const mediaMimeType = data.mimeType ?? inferMediaMimeType(data.type, data.filename);
+
   // Build outgoing message
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -1036,7 +1071,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
       mediaUrl: data.url,
       caption: data.caption,
       filename: data.filename,
-      mimeType: data.mimeType,
+      mimeType: mediaMimeType,
     } as OutgoingContent,
     metadata: {
       base64: data.base64,

@@ -1281,6 +1281,55 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /**
    * Send a message through WhatsApp
    */
+  private getSentMediaSource(message: OutgoingMessage): string | undefined {
+    if (message.content.mediaUrl) return 'url';
+    if (message.content.localPath) return 'localPath';
+    if (message.metadata?.base64) return 'base64';
+    return undefined;
+  }
+
+  private buildSentRawPayload(externalId: string, originalMessage: OutgoingMessage, processedMessage: OutgoingMessage) {
+    const mediaSource = this.getSentMediaSource(processedMessage);
+    return {
+      externalId,
+      isFromMe: true,
+      to: originalMessage.to,
+      ...(processedMessage.content.caption ? { caption: processedMessage.content.caption } : {}),
+      ...(processedMessage.content.filename ? { filename: processedMessage.content.filename } : {}),
+      ...(processedMessage.content.mimeType ? { mimeType: processedMessage.content.mimeType } : {}),
+      ...(processedMessage.metadata?.ptt === true ? { voiceNote: true } : {}),
+      ...(mediaSource ? { mediaSource } : {}),
+    };
+  }
+
+  private buildSentEventPayload(
+    instanceId: string,
+    externalId: string,
+    chatId: string,
+    originalMessage: OutgoingMessage,
+    processedMessage: OutgoingMessage,
+  ) {
+    return {
+      instanceId,
+      externalId,
+      chatId,
+      to: originalMessage.to,
+      content: {
+        type: processedMessage.content.type,
+        text: processedMessage.content.text ?? processedMessage.content.caption,
+        caption: processedMessage.content.caption,
+        mediaUrl: processedMessage.content.mediaUrl,
+        localPath: processedMessage.content.localPath,
+        mimeType: processedMessage.content.mimeType,
+        filename: processedMessage.content.filename,
+        isVoiceNote: processedMessage.metadata?.ptt === true,
+      },
+      replyToId: originalMessage.replyTo,
+      rawPayload: this.buildSentRawPayload(externalId, originalMessage, processedMessage),
+      senderAgentId: originalMessage.metadata?.senderAgentId as string | undefined,
+    };
+  }
+
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const sock = this.getSocket(instanceId);
     const jid = await this.resolveSendTarget(sock, instanceId, message.to);
@@ -1328,18 +1377,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       }
 
       // Emit sent event
-      await this.emitMessageSent({
-        instanceId,
-        externalId,
-        chatId: jid,
-        to: message.to,
-        content: {
-          type: message.content.type,
-          text: message.content.text,
-        },
-        replyToId: message.replyTo,
-        senderAgentId: message.metadata?.senderAgentId as string | undefined,
-      });
+      await this.emitMessageSent(this.buildSentEventPayload(instanceId, externalId, jid, message, processedMessage));
 
       // Reset rate limit state on successful send
       rateLimiter.reset();
