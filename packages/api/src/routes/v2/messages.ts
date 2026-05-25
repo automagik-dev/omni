@@ -323,6 +323,7 @@ const listQuerySchema = z.object({
     .transform((v) => v?.split(',') as z.infer<typeof MessageStatusSchema>[] | undefined),
   hasMedia: z.coerce.boolean().optional(),
   senderPersonId: z.string().uuid().optional(),
+  externalId: z.string().min(1).optional(),
   since: optionalDateParam('since'),
   until: optionalDateParam('until'),
   search: z.string().optional(),

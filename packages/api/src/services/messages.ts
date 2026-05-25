@@ -32,6 +32,7 @@ export interface ListMessagesOptions {
   status?: MessageStatus[];
   hasMedia?: boolean;
   senderPersonId?: string;
+  externalId?: string;
   since?: Date;
   until?: Date;
   search?: string;
@@ -134,6 +135,7 @@ export class MessageService {
       status,
       hasMedia,
       senderPersonId,
+      externalId,
       since,
       until,
       search,
@@ -153,6 +155,7 @@ export class MessageService {
     if (status?.length) conditions.push(inArray(messages.status, status));
     if (hasMedia !== undefined) conditions.push(eq(messages.hasMedia, hasMedia));
     if (senderPersonId) conditions.push(eq(messages.senderPersonId, senderPersonId));
+    if (externalId) conditions.push(eq(messages.externalId, externalId));
     if (since) conditions.push(gte(messages.platformTimestamp, since));
     if (until) conditions.push(lte(messages.platformTimestamp, until));
     if (search) {
