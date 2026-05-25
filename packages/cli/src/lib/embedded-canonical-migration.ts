@@ -171,7 +171,7 @@ function safeReaddir(path: string): string[] {
 export const MIGRATION_SKIP_TABLES = new Set(['media_content', 'api_keys', 'api_key_audit_logs']);
 
 /** A postgres binary plus the lib dir it needs on LD_LIBRARY_PATH (fetched readers). */
-export interface ReaderHandle {
+interface ReaderHandle {
   binary: string;
   /** Set as LD_LIBRARY_PATH when spawning (undefined for self-contained autopg binaries). */
   libDir?: string;
@@ -284,7 +284,7 @@ function fetchEmbeddedReader(major: number, log: (line: string) => void): Reader
  * matching-major embedded-postgres reader. Returns null only when neither is
  * available (unsupported platform / offline).
  */
-export function resolveReaderForMajor(wantMajor: number | null, log: (line: string) => void): ReaderHandle | null {
+function resolveReaderForMajor(wantMajor: number | null, log: (line: string) => void): ReaderHandle | null {
   const installed = findAutopgPostgresBinary(wantMajor);
   if (installed) return { binary: installed };
   if (wantMajor === null) return null;
