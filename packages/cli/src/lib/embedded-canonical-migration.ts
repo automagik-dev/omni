@@ -24,13 +24,20 @@
  *
  * Solution
  * --------
- * Spawn autopg's bundled `postgres` binary against the unmounted embedded
- * data dir on a free TCP port, copy every public-schema table over to
- * canonical via psql `COPY ... TO STDOUT | COPY ... FROM STDIN` pipes
- * (psql 17 happily connects to a PG18 server — only pg_dump is strict),
- * then shut the temp postmaster down. Postgres version compatibility is
- * sidestepped: both embedded and canonical use the same autopg-bundled
- * postgres binary on this host.
+ * Spawn a matching-major `postgres` reader against the unmounted embedded
+ * data dir on a free TCP port, copy the shared public-schema tables over to
+ * canonical via psql `\copy`, then shut the temp postmaster down.
+ *
+ * Cross-major + cross-schema seamless: a PostgreSQL server can only open a
+ * data dir of its OWN major, so the reader major MUST match the embedded
+ * cluster (e.g. legacy PG17 data → reader PG17 even though canonical is PG18).
+ * {@link resolveReaderForMajor} finds an installed autopg binary of that major
+ * or AUTO-FETCHES one (`@embedded-postgres/<platform>@<major>`, cached under
+ * `~/.omni/cache/`) — the operator never deals with PG versions. The copy is
+ * TEXT format over the INTERSECTION of each table's columns, so it survives
+ * both the major-version wire gap and schema drift between an old embedded
+ * schema and the current canonical one. Install-local auth tables are
+ * preserved (see SKIP_TABLES) so the live CLI key keeps working.
  *
  * Idempotency: caller is expected to gate on `canonical omni DB is
  * empty + embedded dir has data` so re-running this isn't destructive.
@@ -49,10 +56,10 @@
  */
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { arch, homedir, platform, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const EMBEDDED_DIR = join(homedir(), '.omni', 'data', 'pgserve');
@@ -146,11 +153,142 @@ export function compareVersionDesc(a: string, b: string): number {
 
 function safeReaddir(path: string): string[] {
   try {
-    const { readdirSync } = require('node:fs') as typeof import('node:fs');
     return readdirSync(path);
   } catch {
     return [];
   }
+}
+
+/**
+ * Tables NOT copied embedded→canonical.
+ *  - media_content: large blobs that overflow the COPY pipe; omni-api re-syncs
+ *    media from the source channel on next message.
+ *  - api_keys / api_key_audit_logs: INSTALL-LOCAL auth state the canonical
+ *    install created fresh (the operator's live CLI key). Overwriting them with
+ *    the stale embedded `__primary__` key breaks `omni` CLI auth immediately,
+ *    and copying the audit logs would violate their FK to the preserved keys.
+ */
+export const MIGRATION_SKIP_TABLES = new Set(['media_content', 'api_keys', 'api_key_audit_logs']);
+
+/** A postgres binary plus the lib dir it needs on LD_LIBRARY_PATH (fetched readers). */
+interface ReaderHandle {
+  binary: string;
+  /** Set as LD_LIBRARY_PATH when spawning (undefined for self-contained autopg binaries). */
+  libDir?: string;
+}
+
+/** Map the host to its `@embedded-postgres/<platform>` package name. */
+export function embeddedPostgresPackage(): string | null {
+  const a = arch() === 'arm64' ? 'arm64' : arch() === 'x64' ? 'x64' : null;
+  if (!a) return null;
+  if (platform() === 'linux') return `@embedded-postgres/linux-${a}`;
+  if (platform() === 'darwin') return `@embedded-postgres/darwin-${a}`;
+  if (platform() === 'win32' && a === 'x64') return '@embedded-postgres/windows-x64';
+  return null;
+}
+
+/** Highest published `<major>.x` version of the embedded-postgres package. */
+function latestReaderVersion(pkg: string, major: number): string | null {
+  try {
+    const raw = execFileSync('npm', ['view', pkg, 'versions', '--json'], { encoding: 'utf8', timeout: 30_000 });
+    const versions = JSON.parse(raw) as string[] | string;
+    const list = Array.isArray(versions) ? versions : [versions];
+    // Sort explicitly (newest first) rather than trusting npm's ordering —
+    // string order mis-ranks multi-digit components (17.10 vs 17.2).
+    const matching = list.filter((v) => v.startsWith(`${major}.`)).sort(compareVersionDesc);
+    return matching.length ? matching[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Materialize the `.so` symlinks the embedded-postgres binary needs to run
+ * outside its packaged layout: the major-version sonames its DT_NEEDED list
+ * references (e.g. `libicui18n.so.60` → the shipped `libicui18n.so.60.2`)
+ * plus anything the package's own `pg-symlinks.json` declares. Idempotent.
+ */
+function materializeReaderLibs(nativeDir: string): void {
+  const libDir = join(nativeDir, 'lib');
+  // pg-symlinks.json (authoritative, package-relative source/target pairs).
+  try {
+    const pkgRoot = dirname(nativeDir);
+    const pairs = JSON.parse(readFileSync(join(nativeDir, 'pg-symlinks.json'), 'utf8')) as {
+      source: string;
+      target: string;
+    }[];
+    for (const { source, target } of pairs) {
+      const tgt = join(pkgRoot, target);
+      if (!existsSync(tgt)) {
+        try {
+          symlinkSync(join(pkgRoot, source), tgt);
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+  } catch {
+    /* no pg-symlinks.json — fall through to heuristic */
+  }
+  // Heuristic major-soname links (libfoo.so.N -> libfoo.so.N.M) for ICU/SSL.
+  for (const f of safeReaddir(libDir)) {
+    const m = f.match(/^(.*\.so\.\d+)\.\d+/);
+    if (!m) continue;
+    const base = join(libDir, m[1]);
+    if (!existsSync(base)) {
+      try {
+        symlinkSync(join(libDir, f), base);
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+}
+
+/**
+ * Fetch a matching-major `postgres` reader on the operator's behalf when no
+ * installed autopg binary matches the embedded cluster's major. This is what
+ * makes a cross-major upgrade (e.g. legacy PG17 embedded data → canonical
+ * PG18) SEAMLESS: the user never has to know about PG versions or hand-install
+ * an old reader. The binary is cached under `~/.omni/cache/pg-reader-<major>/`
+ * so repeat runs are instant. Returns null (caller skips with a clear reason)
+ * if the platform is unsupported or the download fails.
+ */
+function fetchEmbeddedReader(major: number, log: (line: string) => void): ReaderHandle | null {
+  const pkg = embeddedPostgresPackage();
+  if (!pkg) return null;
+  const cacheDir = join(homedir(), '.omni', 'cache', `pg-reader-${major}`);
+  const nativeDir = join(cacheDir, 'node_modules', pkg, 'native');
+  const binary = join(nativeDir, 'bin', 'postgres');
+  if (existsSync(binary) && binaryMajor(binary) === major) {
+    materializeReaderLibs(nativeDir);
+    return { binary, libDir: join(nativeDir, 'lib') };
+  }
+  const version = latestReaderVersion(pkg, major);
+  if (!version) return null;
+  log(`  fetching PG ${major} reader (${pkg}@${version}) — one-time, cached at ${cacheDir}`);
+  try {
+    mkdirSync(cacheDir, { recursive: true });
+    const res = spawnSync('bun', ['add', `${pkg}@${version}`], { cwd: cacheDir, encoding: 'utf8', timeout: 180_000 });
+    if (res.status !== 0 || !existsSync(binary)) return null;
+    materializeReaderLibs(nativeDir);
+    return binaryMajor(binary) === major ? { binary, libDir: join(nativeDir, 'lib') } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a postgres reader whose major matches the embedded cluster:
+ * prefer an installed autopg binary (self-contained), else auto-fetch a
+ * matching-major embedded-postgres reader. Returns null only when neither is
+ * available (unsupported platform / offline).
+ */
+function resolveReaderForMajor(wantMajor: number | null, log: (line: string) => void): ReaderHandle | null {
+  const installed = findAutopgPostgresBinary(wantMajor);
+  if (installed) return { binary: installed };
+  if (wantMajor === null) return null;
+  return fetchEmbeddedReader(wantMajor, log);
 }
 
 /** Find a free TCP port on 127.0.0.1 by binding ':0' and reading the port. */
@@ -177,15 +315,27 @@ async function findFreePort(): Promise<number> {
  * throws on bind / startup failure.
  */
 async function spawnTempPostmaster(
-  binary: string,
+  reader: ReaderHandle,
   dataDir: string,
   port: number,
   log: (line: string) => void,
 ): Promise<{ pid: number; socketDir: string; stop: () => Promise<void> }> {
   const socketDir = mkdtempSync(join(tmpdir(), 'omni-migrate-pg-'));
   log(`  spawning temp postmaster: pid=… port=${port} socket=${socketDir}`);
+  // Fetched readers ship their ICU/SSL libs alongside the binary; put that dir
+  // first on the platform's dynamic-loader search path so the postmaster
+  // resolves them — Linux: LD_LIBRARY_PATH, macOS: DYLD_LIBRARY_PATH, Windows:
+  // PATH (DLLs also resolve from the binary's own dir).
+  let env = process.env;
+  if (reader.libDir) {
+    const loaderVar =
+      platform() === 'darwin' ? 'DYLD_LIBRARY_PATH' : platform() === 'win32' ? 'PATH' : 'LD_LIBRARY_PATH';
+    const sep = platform() === 'win32' ? ';' : ':';
+    const prev = process.env[loaderVar];
+    env = { ...process.env, [loaderVar]: prev ? `${reader.libDir}${sep}${prev}` : reader.libDir };
+  }
   const child = spawn(
-    binary,
+    reader.binary,
     [
       '-D',
       dataDir,
@@ -199,6 +349,7 @@ async function spawnTempPostmaster(
     {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
+      env,
     },
   );
   let started = false;
@@ -243,6 +394,32 @@ async function spawnTempPostmaster(
   };
 }
 
+/** List public tables on a server. */
+function listTables(args: string[]): string[] {
+  return psqlCapture([...args, '-tAc', `SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename`])
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * List a table's columns. `insertableOnly` excludes STORED generated columns
+ * (`is_generated='ALWAYS'`) which COPY cannot populate; identity columns are
+ * kept (the migrate path runs under `session_replication_role='replica'`,
+ * which permits explicit identity values so PKs/FKs stay intact).
+ */
+function listColumns(args: string[], table: string, insertableOnly = false): string[] {
+  const filter = insertableOnly ? `AND is_generated <> 'ALWAYS'` : '';
+  return psqlCapture([
+    ...args,
+    '-tAc',
+    `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='${table}' ${filter} ORDER BY ordinal_position`,
+  ])
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /** psql wrapper. Returns stdout on success; throws on non-zero exit. */
 function psqlCapture(args: string[]): string {
   const result = spawnSync('psql', args, {
@@ -272,18 +449,29 @@ function psqlCapture(args: string[]): string {
  * stage is sequential, disk has no buffer-size cliff, and on failure the
  * file is preserved at `/tmp/omni-migrate-<table>.copy` for inspection.
  *
- * BINARY format reasoning unchanged: byte-exact, no text-escaping bugs,
- * postgres 18 ↔ 18 same wire format.
+ * Format is TEXT (not BINARY) and the column list is the INTERSECTION of the
+ * columns present on both sides. This makes the copy correct across a major
+ * gap (binary wire format is not guaranteed identical 17↔18) AND across schema
+ * drift (a legacy embedded schema rarely matches the current canonical one):
+ * we copy only the columns both sides share, in an explicit order, so added /
+ * dropped / reordered columns can't corrupt or abort the load. Columns only on
+ * the destination take their defaults; columns only on the source are dropped.
  *
  * The temp file gets cleaned up in `finally`. Caller is expected to have
  * stopped omni-api so the table isn't being written to mid-COPY.
  */
 async function copyTable(
   table: string,
+  columns: string[],
   srcArgs: string[],
   dstArgs: string[],
   log: (line: string) => void,
 ): Promise<void> {
+  if (columns.length === 0) {
+    log(`  skip ${table} (no shared columns)`);
+    return;
+  }
+  const colList = columns.map((c) => `"${c}"`).join(', ');
   const tmpFile = join(tmpdir(), `omni-migrate-${table}-${process.pid}.copy`);
   try {
     // Phase 1: source → file. `\copy ... TO '<file>'` is psql's
@@ -291,7 +479,7 @@ async function copyTable(
     // require the postgres process to have FS write perms on that path).
     const srcResult = spawnSync(
       'psql',
-      [...srcArgs, '-c', `\\copy public.${table} TO '${tmpFile}' WITH (FORMAT binary)`],
+      [...srcArgs, '-c', `\\copy public."${table}" (${colList}) TO '${tmpFile}' WITH (FORMAT text)`],
       {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, PGPASSWORD: 'postgres' },
@@ -312,7 +500,7 @@ async function copyTable(
         '-c',
         `SET session_replication_role='replica';`,
         '-c',
-        `\\copy public.${table} FROM '${tmpFile}' WITH (FORMAT binary)`,
+        `\\copy public."${table}" (${colList}) FROM '${tmpFile}' WITH (FORMAT text)`,
       ],
       {
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -399,19 +587,19 @@ export async function compareEmbeddedVsCanonicalCounts(opts: CompareOptions = {}
     return { kind: 'skipped', reason: 'embedded dir absent' };
   }
   const wantMajor = readDataDirMajor(EMBEDDED_DIR);
-  const binary = findAutopgPostgresBinary(wantMajor);
-  if (!binary) {
+  const reader = resolveReaderForMajor(wantMajor, () => {});
+  if (!reader) {
     return {
       kind: 'skipped',
       reason: wantMajor
-        ? `no PostgreSQL ${wantMajor} reader under ~/.local/share/autopg (embedded dir is PG ${wantMajor})`
+        ? `no PostgreSQL ${wantMajor} reader available (autopg or fetchable embedded-postgres) for the PG ${wantMajor} embedded dir`
         : 'autopg postgres binary not found',
     };
   }
   const tempPort = await findFreePort();
   let temp: { stop: () => Promise<void> } | null = null;
   try {
-    temp = await spawnTempPostmaster(binary, EMBEDDED_DIR, tempPort, () => {});
+    temp = await spawnTempPostmaster(reader, EMBEDDED_DIR, tempPort, () => {});
     const srcArgs = ['-h', '127.0.0.1', '-p', String(tempPort), '-U', 'postgres', '-d', 'omni'];
     const dstArgs = ['-h', '127.0.0.1', '-p', String(canonicalPort), '-U', 'postgres', '-d', 'omni'];
     // Enumerate then count per-table in a loop (simpler + portable across
@@ -430,8 +618,8 @@ export async function compareEmbeddedVsCanonicalCounts(opts: CompareOptions = {}
     let totalExtra = 0;
     for (const t of tables) {
       try {
-        const em = Number.parseInt(psqlCapture([...srcArgs, '-tAc', `SELECT count(*) FROM public.${t}`]).trim(), 10);
-        const ca = Number.parseInt(psqlCapture([...dstArgs, '-tAc', `SELECT count(*) FROM public.${t}`]).trim(), 10);
+        const em = Number.parseInt(psqlCapture([...srcArgs, '-tAc', `SELECT count(*) FROM public."${t}"`]).trim(), 10);
+        const ca = Number.parseInt(psqlCapture([...dstArgs, '-tAc', `SELECT count(*) FROM public."${t}"`]).trim(), 10);
         if (Number.isFinite(em) && Number.isFinite(ca) && em > ca) {
           divergent.push(t);
           totalExtra += em - ca;
@@ -464,16 +652,18 @@ export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions =
   }
 
   const wantMajor = readDataDirMajor(EMBEDDED_DIR);
-  const binary = findAutopgPostgresBinary(wantMajor);
-  if (!binary) {
+  const reader = resolveReaderForMajor(wantMajor, log);
+  if (!reader) {
     return {
       status: 'skipped',
       reason: wantMajor
-        ? `no PostgreSQL ${wantMajor} reader installed under ~/.local/share/autopg — your data is PG ${wantMajor}; install a matching autopg/reader so it can be dumped into the canonical cluster`
+        ? `could not obtain a PostgreSQL ${wantMajor} reader (no installed autopg match and embedded-postgres fetch unavailable — unsupported platform or offline)`
         : 'autopg postgres binary not found — install autopg first',
     };
   }
-  log(`  using postgres binary: ${binary} (matched PG ${wantMajor ?? '?'})`);
+  log(
+    `  using postgres binary: ${reader.binary} (matched PG ${wantMajor ?? '?'}${reader.libDir ? ', fetched reader' : ''})`,
+  );
 
   // Stop omni-api during the copy. Otherwise omni-api's bootstrap (default
   // global_settings, Baileys instance reattach, etc.) races our COPYs and
@@ -485,42 +675,48 @@ export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions =
 
   const tempPort = await findFreePort();
   const t0 = Date.now();
-  const temp = await spawnTempPostmaster(binary, EMBEDDED_DIR, tempPort, log);
+  const temp = await spawnTempPostmaster(reader, EMBEDDED_DIR, tempPort, log);
   let apiRestarted = false;
   try {
     // Verify the temp instance has the `omni` database.
     const srcBaseArgs = ['-h', '127.0.0.1', '-p', String(tempPort), '-U', 'postgres', '-d', 'omni'];
     const dstBaseArgs = ['-h', '127.0.0.1', '-p', String(canonicalPort), '-U', 'postgres', '-d', 'omni'];
 
-    // Enumerate tables (alphabetical; FK checks are off for the copy).
-    const tablesRaw = psqlCapture([
-      ...srcBaseArgs,
-      '-tAc',
-      `SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename`,
-    ]);
-    const tables = tablesRaw
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (tables.length === 0) {
+    // Enumerate tables on BOTH sides and copy only the intersection. The
+    // canonical (dst) schema is authoritative for what omni-api needs; tables
+    // that exist in the legacy embedded dir but not in canonical are obsolete
+    // and skipped, tables only in canonical stay empty (no source data).
+    const srcTables = new Set(listTables(srcBaseArgs));
+    if (srcTables.size === 0) {
       return { status: 'skipped', reason: 'embedded omni has no public tables' };
     }
-    // Tables to skip during migration. media_content holds large binary
-    // blobs (image / video / audio attachments) that frequently exceed
-    // Node's child_process pipe buffer limits and abort the COPY stream
-    // with "unexpected EOF in COPY data". Skipping is safe because
-    // omni-api re-syncs media from the source channel (WhatsApp Baileys
-    // restores media on next message arrival per chat). Operators who
-    // need the blobs preserved can re-run the migration with
+    const dstTables = listTables(dstBaseArgs);
+    const tables = dstTables.filter((t) => srcTables.has(t));
+    const onlyEmbedded = [...srcTables].filter((t) => !dstTables.includes(t));
+    if (onlyEmbedded.length > 0) {
+      log(`  ${onlyEmbedded.length} obsolete embedded-only table(s) skipped: ${onlyEmbedded.join(', ')}`);
+    }
+    if (tables.length === 0) {
+      return { status: 'skipped', reason: 'no tables shared between embedded and canonical schemas' };
+    }
+    // Tables to skip during migration.
+    //
+    // media_content holds large binary blobs (image / video / audio
+    // attachments) that frequently exceed Node's child_process pipe buffer
+    // limits and abort the COPY stream with "unexpected EOF in COPY data".
+    // Skipping is safe because omni-api re-syncs media from the source channel
+    // (WhatsApp Baileys restores media on next message arrival per chat).
+    // Operators who need the blobs preserved can re-run with
     // OMNI_MIGRATE_INCLUDE_MEDIA=1 (TODO: wire flag).
-    const SKIP_TABLES = new Set(['media_content']);
-    const filteredTables = tables.filter((t) => !SKIP_TABLES.has(t));
-    const skipped = tables.filter((t) => SKIP_TABLES.has(t));
+    //
+    // See MIGRATION_SKIP_TABLES for why each table is preserved/skipped.
+    const filteredTables = tables.filter((t) => !MIGRATION_SKIP_TABLES.has(t));
+    const skipped = tables.filter((t) => MIGRATION_SKIP_TABLES.has(t));
     if (skipped.length > 0) log(`  skipping ${skipped.length} table(s) (rebuilt at runtime): ${skipped.join(', ')}`);
     log(`  ${filteredTables.length} tables to migrate`);
 
     // TRUNCATE canonical with replica role so FKs don't block.
-    const truncateList = filteredTables.map((t) => `public.${t}`).join(',');
+    const truncateList = filteredTables.map((t) => `public."${t}"`).join(',');
     psqlCapture([
       ...dstBaseArgs,
       '-c',
@@ -528,9 +724,12 @@ export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions =
     ]);
     log('  truncated canonical (CASCADE)');
 
-    // COPY each table.
+    // COPY each table using the intersection of its columns on both sides
+    // (text format) — robust to cross-major wire differences and schema drift.
     for (const t of filteredTables) {
-      await copyTable(t, srcBaseArgs, dstBaseArgs, log);
+      const srcCols = new Set(listColumns(srcBaseArgs, t));
+      const sharedCols = listColumns(dstBaseArgs, t, true).filter((c) => srcCols.has(c));
+      await copyTable(t, sharedCols, srcBaseArgs, dstBaseArgs, log);
     }
 
     // Reset sequences.
