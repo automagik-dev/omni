@@ -48,8 +48,8 @@
  *     (postgres self-heals stale pidfiles on startup)
  */
 
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -72,23 +72,76 @@ function defaultLog(line: string): void {
   process.stdout.write(`${line}\n`);
 }
 
+/** Read the catalog major (e.g. 17, 18) recorded in a data dir's PG_VERSION. */
+export function readDataDirMajor(dataDir: string): number | null {
+  try {
+    const major = Number.parseInt(readFileSync(join(dataDir, 'PG_VERSION'), 'utf8').trim(), 10);
+    return Number.isFinite(major) ? major : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve the server major of a `postgres` binary via `postgres --version`. */
+function binaryMajor(binary: string): number | null {
+  try {
+    // e.g. "postgres (PostgreSQL) 17.4" / "... 18.3.0-beta.17"
+    const out = execFileSync(binary, ['--version'], { encoding: 'utf8', timeout: 5000 });
+    const m = out.match(/(\d+)(?:[.\s]|$)/);
+    return m ? Number.parseInt(m[1], 10) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Locate autopg's bundled `postgres` binary. Required for the temp spawn
- * because the embedded data dir's catalog version must match the binary's
- * server version exactly. Returns null when not found — caller surfaces
- * the install-autopg-first hint.
+ * Locate an autopg-bundled `postgres` binary whose server major MATCHES the
+ * embedded data dir's catalog version. A PostgreSQL server refuses to open a
+ * data dir from a different major ("database files are incompatible with
+ * server"), so the temp-postmaster reader MUST match exactly.
+ *
+ * Previously this returned the *last* binary found under
+ * `~/.local/share/autopg/<version>/postgres/bin/postgres` regardless of major.
+ * On a v3-only host (PG 18) reading a legacy PG 17 dir, that handed back PG 18
+ * and the temp postmaster died — surfacing as
+ * "temp postmaster exited before ready" / orphaned data. Now we pick the
+ * matching-major binary and return null when none is installed, so the caller
+ * can tell the operator to install a PG<major> reader instead of silently
+ * failing.
+ *
+ * `wantMajor === null` (unknown data-dir version) falls back to the
+ * newest installed binary.
+ *
+ * Candidates are sorted by their `~/.local/share/autopg/<version>` dir name
+ * (newest first, version-aware) so selection is deterministic regardless of
+ * the OS-dependent `readdirSync` order — picking the highest patch within the
+ * wanted major, and the newest overall when the major is unknown.
  */
-function findAutopgPostgresBinary(): string | null {
+function findAutopgPostgresBinary(wantMajor: number | null): string | null {
   const autopgRoot = join(homedir(), '.local', 'share', 'autopg');
   if (!existsSync(autopgRoot)) return null;
-  // Walk to find the highest-version postgres binary at
-  // ~/.local/share/autopg/<version>/postgres/bin/postgres.
-  let bestPath: string | null = null;
-  for (const entry of safeReaddir(autopgRoot)) {
-    const candidate = join(autopgRoot, entry, 'postgres', 'bin', 'postgres');
-    if (existsSync(candidate)) bestPath = candidate;
+  const candidates = safeReaddir(autopgRoot)
+    .sort((a, b) => compareVersionDesc(a, b))
+    .map((entry) => join(autopgRoot, entry, 'postgres', 'bin', 'postgres'))
+    .filter((candidate) => existsSync(candidate));
+  if (candidates.length === 0) return null;
+  if (wantMajor === null) return candidates[0];
+  for (const candidate of candidates) {
+    if (binaryMajor(candidate) === wantMajor) return candidate;
   }
-  return bestPath;
+  return null;
+}
+
+/** Compare two `vX.Y.Z`-ish dir names numerically, newest first. */
+export function compareVersionDesc(a: string, b: string): number {
+  const parse = (s: string): number[] => (s.match(/\d+/g) ?? []).map(Number);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pb[i] ?? 0) - (pa[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return b.localeCompare(a);
 }
 
 function safeReaddir(path: string): string[] {
@@ -345,8 +398,16 @@ export async function compareEmbeddedVsCanonicalCounts(opts: CompareOptions = {}
   if (!existsSync(EMBEDDED_DIR) || !existsSync(join(EMBEDDED_DIR, 'PG_VERSION'))) {
     return { kind: 'skipped', reason: 'embedded dir absent' };
   }
-  const binary = findAutopgPostgresBinary();
-  if (!binary) return { kind: 'skipped', reason: 'autopg postgres binary not found' };
+  const wantMajor = readDataDirMajor(EMBEDDED_DIR);
+  const binary = findAutopgPostgresBinary(wantMajor);
+  if (!binary) {
+    return {
+      kind: 'skipped',
+      reason: wantMajor
+        ? `no PostgreSQL ${wantMajor} reader under ~/.local/share/autopg (embedded dir is PG ${wantMajor})`
+        : 'autopg postgres binary not found',
+    };
+  }
   const tempPort = await findFreePort();
   let temp: { stop: () => Promise<void> } | null = null;
   try {
@@ -402,11 +463,17 @@ export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions =
     return { status: 'skipped', reason: 'embedded dir missing PG_VERSION' };
   }
 
-  const binary = findAutopgPostgresBinary();
+  const wantMajor = readDataDirMajor(EMBEDDED_DIR);
+  const binary = findAutopgPostgresBinary(wantMajor);
   if (!binary) {
-    return { status: 'skipped', reason: 'autopg postgres binary not found — install autopg first' };
+    return {
+      status: 'skipped',
+      reason: wantMajor
+        ? `no PostgreSQL ${wantMajor} reader installed under ~/.local/share/autopg — your data is PG ${wantMajor}; install a matching autopg/reader so it can be dumped into the canonical cluster`
+        : 'autopg postgres binary not found — install autopg first',
+    };
   }
-  log(`  using postgres binary: ${binary}`);
+  log(`  using postgres binary: ${binary} (matched PG ${wantMajor ?? '?'})`);
 
   // Stop omni-api during the copy. Otherwise omni-api's bootstrap (default
   // global_settings, Baileys instance reattach, etc.) races our COPYs and

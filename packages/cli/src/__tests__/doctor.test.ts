@@ -670,8 +670,10 @@ describe('runDoctor — --fix mode', () => {
     // Accept three valid shapes:
     //   - Plain UDS form: postgres@localhost/omni  (PR #645+ post-postgres.js fix)
     //   - Legacy UDS w/ libpq: postgres@localhost/omni?host=… (pre-#645)
-    //   - TCP fallback: postgres@<host>:8432/omni
-    expect(startCall?.env?.DATABASE_URL).toMatch(/postgres@(localhost\/omni|[^/]+:8432\/omni)/);
+    //   - TCP fallback: postgres@<host>:<DEFAULT_PGSERVE_PORT>/omni (now canonical 5432)
+    expect(startCall?.env?.DATABASE_URL).toMatch(
+      new RegExp(`postgres@(localhost/omni|[^/]+:${DEFAULT_PGSERVE_PORT}/omni)`),
+    );
     // Recheck sees the drift as fixed.
     const drift = report.checks.find((c) => c.id === 'pm2-env-drift');
     expect(drift?.level).toBe('OK');
