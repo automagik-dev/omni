@@ -193,8 +193,10 @@ function latestReaderVersion(pkg: string, major: number): string | null {
     const raw = execFileSync('npm', ['view', pkg, 'versions', '--json'], { encoding: 'utf8', timeout: 30_000 });
     const versions = JSON.parse(raw) as string[] | string;
     const list = Array.isArray(versions) ? versions : [versions];
-    const matching = list.filter((v) => v.startsWith(`${major}.`));
-    return matching.length ? matching[matching.length - 1] : null;
+    // Sort explicitly (newest first) rather than trusting npm's ordering —
+    // string order mis-ranks multi-digit components (17.10 vs 17.2).
+    const matching = list.filter((v) => v.startsWith(`${major}.`)).sort(compareVersionDesc);
+    return matching.length ? matching[0] : null;
   } catch {
     return null;
   }
@@ -320,14 +322,18 @@ async function spawnTempPostmaster(
 ): Promise<{ pid: number; socketDir: string; stop: () => Promise<void> }> {
   const socketDir = mkdtempSync(join(tmpdir(), 'omni-migrate-pg-'));
   log(`  spawning temp postmaster: pid=… port=${port} socket=${socketDir}`);
-  // Fetched readers ship their ICU/SSL libs alongside the binary; put that
-  // dir first on LD_LIBRARY_PATH so the postmaster resolves them.
-  const env = reader.libDir
-    ? {
-        ...process.env,
-        LD_LIBRARY_PATH: `${reader.libDir}${process.env.LD_LIBRARY_PATH ? `:${process.env.LD_LIBRARY_PATH}` : ''}`,
-      }
-    : process.env;
+  // Fetched readers ship their ICU/SSL libs alongside the binary; put that dir
+  // first on the platform's dynamic-loader search path so the postmaster
+  // resolves them — Linux: LD_LIBRARY_PATH, macOS: DYLD_LIBRARY_PATH, Windows:
+  // PATH (DLLs also resolve from the binary's own dir).
+  let env = process.env;
+  if (reader.libDir) {
+    const loaderVar =
+      platform() === 'darwin' ? 'DYLD_LIBRARY_PATH' : platform() === 'win32' ? 'PATH' : 'LD_LIBRARY_PATH';
+    const sep = platform() === 'win32' ? ';' : ':';
+    const prev = process.env[loaderVar];
+    env = { ...process.env, [loaderVar]: prev ? `${reader.libDir}${sep}${prev}` : reader.libDir };
+  }
   const child = spawn(
     reader.binary,
     [
@@ -473,7 +479,7 @@ async function copyTable(
     // require the postgres process to have FS write perms on that path).
     const srcResult = spawnSync(
       'psql',
-      [...srcArgs, '-c', `\\copy public.${table} (${colList}) TO '${tmpFile}' WITH (FORMAT text)`],
+      [...srcArgs, '-c', `\\copy public."${table}" (${colList}) TO '${tmpFile}' WITH (FORMAT text)`],
       {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, PGPASSWORD: 'postgres' },
@@ -494,7 +500,7 @@ async function copyTable(
         '-c',
         `SET session_replication_role='replica';`,
         '-c',
-        `\\copy public.${table} (${colList}) FROM '${tmpFile}' WITH (FORMAT text)`,
+        `\\copy public."${table}" (${colList}) FROM '${tmpFile}' WITH (FORMAT text)`,
       ],
       {
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -612,8 +618,8 @@ export async function compareEmbeddedVsCanonicalCounts(opts: CompareOptions = {}
     let totalExtra = 0;
     for (const t of tables) {
       try {
-        const em = Number.parseInt(psqlCapture([...srcArgs, '-tAc', `SELECT count(*) FROM public.${t}`]).trim(), 10);
-        const ca = Number.parseInt(psqlCapture([...dstArgs, '-tAc', `SELECT count(*) FROM public.${t}`]).trim(), 10);
+        const em = Number.parseInt(psqlCapture([...srcArgs, '-tAc', `SELECT count(*) FROM public."${t}"`]).trim(), 10);
+        const ca = Number.parseInt(psqlCapture([...dstArgs, '-tAc', `SELECT count(*) FROM public."${t}"`]).trim(), 10);
         if (Number.isFinite(em) && Number.isFinite(ca) && em > ca) {
           divergent.push(t);
           totalExtra += em - ca;
@@ -710,7 +716,7 @@ export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions =
     log(`  ${filteredTables.length} tables to migrate`);
 
     // TRUNCATE canonical with replica role so FKs don't block.
-    const truncateList = filteredTables.map((t) => `public.${t}`).join(',');
+    const truncateList = filteredTables.map((t) => `public."${t}"`).join(',');
     psqlCapture([
       ...dstBaseArgs,
       '-c',
