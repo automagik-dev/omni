@@ -3465,13 +3465,24 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     const timestamp = this.getMessageTimestamp(msg);
 
+    // Messages without a timestamp cannot be reliably ordered or filtered.
+    // Skip them instead of fabricating a misleading ingest-time timestamp.
+    if (!timestamp) {
+      this.logger.debug('Skipping history message without timestamp', {
+        instanceId,
+        messageId: msg.key.id,
+        chatId: msg.key.remoteJid,
+      });
+      return;
+    }
+
     // Filter by date range if specified
     if (syncState?.since && timestamp < syncState.since) {
       this.logger.debug('Skipping history message - before since', {
         instanceId,
         messageId: msg.key.id,
         chatId: msg.key.remoteJid,
-        timestamp: new Date(timestamp).toISOString(),
+        timestamp: timestamp.toISOString(),
         since: new Date(syncState.since).toISOString(),
       });
       return;
@@ -3481,7 +3492,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         instanceId,
         messageId: msg.key.id,
         chatId: msg.key.remoteJid,
-        timestamp: new Date(timestamp).toISOString(),
+        timestamp: timestamp.toISOString(),
         until: new Date(syncState.until).toISOString(),
       });
       return;
@@ -3587,12 +3598,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Get timestamp from a message
+   * Get timestamp from a message.
+   * Returns null when messageTimestamp is absent or zero — callers must handle this
+   * explicitly rather than silently falling back to the current time.
    * @internal
    */
-  private getMessageTimestamp(msg: WAMessage): Date {
-    if (!msg.messageTimestamp) return new Date();
+  private getMessageTimestamp(msg: WAMessage): Date | null {
+    if (!msg.messageTimestamp) return null;
     const ts = typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp);
+    if (!ts || Number.isNaN(ts)) return null;
     return new Date(ts * 1000);
   }
 
