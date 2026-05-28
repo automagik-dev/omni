@@ -7,6 +7,7 @@
  */
 
 import { createLogger } from '../logger';
+import { buildOmniExecutionContext } from './execution-context';
 import {
   type AgentTrigger,
   type AgentTriggerResult,
@@ -63,6 +64,7 @@ export class WebhookAgentProvider implements IAgentProvider {
         emoji: context.content.emoji,
       },
       traceId: context.traceId,
+      executionContext: buildOmniExecutionContext(context),
       replyEndpoint: 'POST /api/v2/messages/send',
     };
 

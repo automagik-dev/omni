@@ -45,6 +45,7 @@ import {
   type MediaProcessedPayload,
   type MessageReceivedPayload,
   NatsGenieProvider,
+  type OmniCustomerContext,
   OpenClawAgentProvider,
   OpenClawClient,
   type OpenClawClientConfig,
@@ -1131,6 +1132,75 @@ async function resolvePersonId(
   return undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function pickString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function compactCustomerContext(context: OmniCustomerContext): OmniCustomerContext | undefined {
+  const compacted = Object.fromEntries(Object.entries(context).filter(([, value]) => value !== undefined));
+  return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
+
+function customerContextFromRecord(record: Record<string, unknown>): OmniCustomerContext | undefined {
+  return compactCustomerContext({
+    externalUserId: pickString(record, 'externalUserId', 'external_user_id'),
+    customerId: pickString(record, 'customerId', 'customer_id'),
+    organizationId: pickString(record, 'organizationId', 'organization_id', 'orgId', 'org_id'),
+    tenantId: pickString(record, 'tenantId', 'tenant_id'),
+  });
+}
+
+function extractA2ACustomerContext(messages: BufferedMessage[], channel: ChannelType): OmniCustomerContext | undefined {
+  if (channel !== 'a2a') return undefined;
+
+  const rawPayload = messages[0]?.payload.rawPayload;
+  if (!isRecord(rawPayload)) return undefined;
+
+  const executionContext = rawPayload.omniExecutionContext;
+  if (!isRecord(executionContext)) return undefined;
+
+  const customer = isRecord(executionContext.customer) ? executionContext.customer : {};
+  const identity = isRecord(executionContext.identity) ? executionContext.identity : {};
+
+  return compactCustomerContext({
+    ...customerContextFromRecord(customer),
+    externalUserId:
+      pickString(customer, 'externalUserId', 'external_user_id') ?? pickString(identity, 'platformUserId', 'userId'),
+  });
+}
+
+async function resolveCustomerContext(
+  services: Services,
+  personId: string | undefined,
+  externalContext?: OmniCustomerContext,
+): Promise<OmniCustomerContext | undefined> {
+  let storedContext: OmniCustomerContext | undefined;
+
+  if (personId) {
+    try {
+      const person = await services.persons.getById(personId);
+      if (person && isRecord(person.metadata)) {
+        storedContext = customerContextFromRecord(person.metadata);
+      }
+    } catch (error) {
+      log.debug('Failed to resolve customer context', { personId, error: String(error) });
+    }
+  }
+
+  return compactCustomerContext({
+    ...(externalContext ?? {}),
+    ...(storedContext ?? {}),
+  });
+}
+
 /**
  * Fetch sender identity metadata (avatar URL, username)
  */
@@ -1406,6 +1476,7 @@ function buildMessageTrigger(
   messageTexts: string[],
   triggerFiles: ProviderFile[] | undefined,
   sessionId: string,
+  customerContext: OmniCustomerContext | undefined,
   allContextMessages: string[],
 ): AgentTrigger {
   const threadId = extractThreadId(messages);
@@ -1439,6 +1510,8 @@ function buildMessageTrigger(
       referencedMessageId: messages[0]?.payload.replyToId || undefined,
     },
     sessionId,
+    sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
+    customer: customerContext,
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
     env: Object.keys(env).length > 0 ? env : undefined,
   };
@@ -1496,6 +1569,11 @@ async function dispatchViaStreamingProvider(
   // TODO: before_message_write for streaming — batch after stream completes
   // (per-segment hooks would add latency; batch transform is the right approach)
 
+  const customerContext = await resolveCustomerContext(
+    services,
+    personId,
+    extractA2ACustomerContext(messages, channel),
+  );
   const trigger = buildMessageTrigger(
     traceId,
     triggerType,
@@ -1510,6 +1588,7 @@ async function dispatchViaStreamingProvider(
     messageTexts,
     triggerFiles,
     sessionId,
+    customerContext,
     allContextMessages,
   );
 
@@ -1894,6 +1973,11 @@ async function dispatchViaProvider(
     triggerFiles,
   );
 
+  const customerContext = await resolveCustomerContext(
+    services,
+    personId,
+    extractA2ACustomerContext(messages, channel),
+  );
   const trigger = buildMessageTrigger(
     traceId,
     triggerType,
@@ -1908,6 +1992,7 @@ async function dispatchViaProvider(
     messageTexts,
     triggerFiles,
     sessionId,
+    customerContext,
     allContextMessages,
   );
 
@@ -3474,6 +3559,7 @@ async function processReactionTrigger(
       const effectivePersonId = reactionPersonId ?? metadata.personId;
       const senderName = await services.agentRunner.getSenderName(effectivePersonId, undefined);
       const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', payload.from, externalChatId);
+      const customerContext = await resolveCustomerContext(services, effectivePersonId);
 
       const trigger: AgentTrigger = {
         traceId: metadata.traceId,
@@ -3495,6 +3581,8 @@ async function processReactionTrigger(
           referencedMessageId: payload.messageId,
         },
         sessionId,
+        sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
+        customer: customerContext,
       };
 
       const result = await provider.trigger(trigger);
@@ -4628,6 +4716,8 @@ export const __test__ = {
   checkProcessedColumn,
   getProcessedColumn,
   MEDIA_WAIT_NULL,
+  extractA2ACustomerContext,
+  resolveCustomerContext,
   mergeRouteOverrides,
   getDebounceConfig,
   createNatsGenieProviderInstance,

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { OMNI_EXECUTION_CONTEXT_EXTENSION_URI } from '@omni/core';
 import type { Agent, Instance } from '@omni/db';
 import { resolveA2AAgentCard } from '../a2a-discovery';
 import type { Services } from '../index';
@@ -94,5 +95,25 @@ describe('resolveA2AAgentCard', () => {
     });
 
     expect(resolved?.card.metadata).toBeUndefined();
+  });
+
+  test('declares Omni execution context extension by default', async () => {
+    const agent = createAgent();
+    const instance = createInstance();
+
+    const resolved = await resolveA2AAgentCard({
+      services: createServices(agent, instance),
+      baseUrl: 'http://localhost:8882',
+      instanceId: instance.id,
+    });
+
+    expect(resolved?.card.extensions).toEqual([
+      {
+        uri: OMNI_EXECUTION_CONTEXT_EXTENSION_URI,
+        description: 'Omni execution context metadata for user, source, session, trace, and customer identity.',
+        version: '1.0',
+        required: false,
+      },
+    ]);
   });
 });

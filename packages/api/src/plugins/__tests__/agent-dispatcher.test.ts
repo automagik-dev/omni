@@ -1621,6 +1621,77 @@ describe('agent-dispatcher', () => {
   });
 
   // ======================================================================
+  // A2A customer context — remote identity is external-only
+  // ======================================================================
+  describe('A2A customer context', () => {
+    const { extractA2ACustomerContext, resolveCustomerContext } = __test__;
+
+    it('extracts external customer context from A2A raw payload without internal IDs', () => {
+      const messages = [
+        {
+          payload: {
+            externalId: 'a2a-msg-1',
+            chatId: 'a2a-task-1',
+            from: 'workos-user-1',
+            content: { type: 'text', text: 'hello' },
+            rawPayload: {
+              omniExecutionContext: {
+                identity: {
+                  userId: 'remote-person-should-not-be-trusted',
+                  personId: 'remote-internal-person',
+                  platformUserId: 'workos-user-1',
+                },
+                customer: {
+                  customerId: 'cust-1',
+                  organizationId: 'org-1',
+                  tenantId: 'tenant-1',
+                },
+              },
+            },
+          },
+          metadata: {
+            instanceId: 'inst-1',
+            traceId: 'trace-1',
+          },
+          timestamp: Date.now(),
+        },
+      ] as Parameters<typeof extractA2ACustomerContext>[0];
+
+      expect(extractA2ACustomerContext(messages, 'a2a')).toEqual({
+        externalUserId: 'workos-user-1',
+        customerId: 'cust-1',
+        organizationId: 'org-1',
+        tenantId: 'tenant-1',
+      });
+    });
+
+    it('merges remote customer context with stored person metadata, preferring stored values', async () => {
+      const services = {
+        persons: {
+          getById: mock(async () => ({
+            metadata: {
+              externalUserId: 'stored-user-1',
+              customerId: 'stored-cust-1',
+            },
+          })),
+        },
+      } as unknown as import('../../services').Services;
+
+      const context = await resolveCustomerContext(services, 'person-1', {
+        externalUserId: 'remote-user-1',
+        customerId: 'remote-cust-1',
+        organizationId: 'remote-org-1',
+      });
+
+      expect(context).toEqual({
+        externalUserId: 'stored-user-1',
+        customerId: 'stored-cust-1',
+        organizationId: 'remote-org-1',
+      });
+    });
+  });
+
+  // ======================================================================
   // buildContextMessages — DM context behavior
   // ======================================================================
   describe('buildContextMessages (DM context)', () => {

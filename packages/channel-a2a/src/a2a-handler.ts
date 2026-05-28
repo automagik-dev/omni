@@ -5,7 +5,8 @@
  * v0.3-style Omni method names as compatibility aliases.
  */
 
-import { generateCorrelationId } from '@omni/core';
+import { OMNI_EXECUTION_CONTEXT_EXTENSION_URI, generateCorrelationId } from '@omni/core';
+import type { OmniExecutionContext } from '@omni/core';
 import type { EventBus } from '@omni/core/events';
 import { z } from 'zod';
 import type { A2AChannelPlugin } from './plugin';
@@ -44,6 +45,7 @@ const MessageSendParamsSchema = z.object({
     messageId: z.string().optional(),
     taskId: z.string().optional(),
     contextId: z.string().optional(),
+    extensions: z.array(z.string()).optional(),
     metadata: z.record(z.unknown()).optional(),
   }),
   configuration: z
@@ -161,6 +163,7 @@ function normalizeMessage(message: z.infer<typeof MessageSendParamsSchema>['mess
     messageId: message.messageId,
     taskId: message.taskId,
     contextId: message.contextId,
+    extensions: message.extensions,
     metadata: message.metadata,
   };
 }
@@ -170,6 +173,52 @@ function extractText(message: A2AMessage): string {
     .filter((p): p is { text: string } => typeof (p as { text?: unknown }).text === 'string')
     .map((p) => p.text)
     .join('\n');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function asOmniExecutionContext(value: unknown): OmniExecutionContext | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const identity = value.identity;
+  const source = value.source;
+  const session = value.session;
+  const trace = value.trace;
+
+  if (!isRecord(identity) || typeof identity.userId !== 'string') return undefined;
+  if (!isRecord(source) || typeof source.instanceId !== 'string') return undefined;
+  if (!isRecord(session) || typeof session.id !== 'string') return undefined;
+  if (!isRecord(trace) || typeof trace.id !== 'string') return undefined;
+
+  return value as unknown as OmniExecutionContext;
+}
+
+function extractOmniExecutionContext(
+  message: A2AMessage,
+  requestMetadata?: Record<string, unknown>,
+): OmniExecutionContext | undefined {
+  const messageContext = asOmniExecutionContext(message.metadata?.omniExecutionContext);
+  if (messageContext) return messageContext;
+
+  const requestContext = asOmniExecutionContext(requestMetadata?.omniExecutionContext);
+  if (requestContext) return requestContext;
+
+  return undefined;
+}
+
+function a2aEventFrom(contextId: string, executionContext?: OmniExecutionContext): string {
+  return (
+    executionContext?.customer?.externalUserId ??
+    executionContext?.identity.platformUserId ??
+    executionContext?.identity.userId ??
+    `a2a:${contextId}`
+  );
+}
+
+function hasOmniExecutionContextExtension(message: A2AMessage): boolean {
+  return message.extensions?.includes(OMNI_EXECUTION_CONTEXT_EXTENSION_URI) ?? false;
 }
 
 // ─── Helper: JSON-RPC response builders ──────────────────────
@@ -444,7 +493,15 @@ async function handleMessageSend(
   const timings = ctx.plugin.inboundTimings(t0);
 
   try {
-    const correlationId = await emitMessageReceived(normalizedMessage, text, taskId, contextId, ctx, timings);
+    const correlationId = await emitMessageReceived(
+      normalizedMessage,
+      text,
+      taskId,
+      contextId,
+      ctx,
+      timings,
+      sendParams.metadata,
+    );
     if (timings) ctx.plugin.recordT2(correlationId, timings);
   } catch {
     await taskStore.updateStatus(ctx.instanceId, taskId, 'TASK_STATE_FAILED');
@@ -490,7 +547,15 @@ async function handleMessageStream(
   const timings = ctx.plugin.inboundTimings(t0);
 
   try {
-    const correlationId = await emitMessageReceived(normalizedMessage, text, taskId, contextId, ctx, timings);
+    const correlationId = await emitMessageReceived(
+      normalizedMessage,
+      text,
+      taskId,
+      contextId,
+      ctx,
+      timings,
+      sendParams.metadata,
+    );
     if (timings) ctx.plugin.recordT2(correlationId, timings);
   } catch {
     await taskStore.updateStatus(ctx.instanceId, taskId, 'TASK_STATE_FAILED');
@@ -723,26 +788,39 @@ async function emitMessageReceived(
   contextId: string,
   ctx: A2AHandlerContext,
   timings?: Record<string, number>,
+  requestMetadata?: Record<string, unknown>,
 ): Promise<string> {
   const correlationId = generateCorrelationId('evt');
+  const executionContext = extractOmniExecutionContext(message, requestMetadata);
+  const rawPayload: Record<string, unknown> = {
+    a2aTaskId: taskId,
+    a2aContextId: contextId,
+    a2aMessage: message,
+  };
 
-  await ctx.eventBus.publish(
-    'message.received',
-    {
-      externalId: message.messageId ?? taskId,
-      chatId: taskId, // taskId as chatId -> dispatcher uses it for sendResponseParts routing
-      from: `a2a:${contextId}`,
-      content: { type: 'text', text },
-      rawPayload: { a2aTaskId: taskId, a2aContextId: contextId, a2aMessage: message },
-    },
-    {
-      correlationId,
-      instanceId: ctx.instanceId,
-      channelType: ctx.channelType,
-      source: 'channel:a2a',
-      timings,
-    },
-  );
+  if (executionContext) {
+    rawPayload.omniExecutionContext = executionContext;
+    rawPayload.omniExecutionContextExtension = hasOmniExecutionContextExtension(message);
+  }
+  const eventPayload = {
+    externalId: message.messageId ?? taskId,
+    chatId: taskId, // taskId as chatId -> dispatcher uses it for sendResponseParts routing
+    from: a2aEventFrom(contextId, executionContext),
+    ...(executionContext?.identity.displayName ? { senderName: executionContext.identity.displayName } : {}),
+    ...(executionContext?.source.threadId ? { threadId: executionContext.source.threadId } : {}),
+    content: { type: 'text' as const, text },
+    rawPayload,
+  };
+  const eventMetadata = {
+    correlationId,
+    instanceId: ctx.instanceId,
+    channelType: ctx.channelType,
+    ...(executionContext?.trace.id ? { traceId: executionContext.trace.id } : {}),
+    source: 'channel:a2a',
+    ...(timings ? { timings } : {}),
+  };
+
+  await ctx.eventBus.publish('message.received', eventPayload, eventMetadata);
 
   return correlationId;
 }

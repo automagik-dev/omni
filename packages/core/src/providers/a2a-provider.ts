@@ -9,6 +9,7 @@
 
 import { createLogger } from '../logger';
 import { createA2AClient } from './a2a-client';
+import { buildProviderRequestContext } from './execution-context';
 import type {
   AgentTrigger,
   AgentTriggerResult,
@@ -50,10 +51,9 @@ export class A2AAgentProvider implements IAgentProvider {
     }
 
     const request: ProviderRequest = {
+      ...buildProviderRequestContext(context),
       message,
       agentId: this.config.agentId,
-      sessionId: context.sessionId,
-      userId: context.sender.platformUserId,
       timeoutMs: this.config.timeoutMs ?? 60_000,
     };
 
@@ -97,10 +97,9 @@ export class A2AAgentProvider implements IAgentProvider {
     }
 
     const request: ProviderRequest = {
+      ...buildProviderRequestContext(context),
       message,
       agentId: this.config.agentId,
-      sessionId: context.sessionId,
-      userId: context.sender.platformUserId,
       timeoutMs: this.config.timeoutMs ?? 60_000,
     };
 

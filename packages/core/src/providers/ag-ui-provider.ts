@@ -8,6 +8,7 @@
 
 import { createLogger } from '../logger';
 import { createAgUiClient } from './ag-ui-client';
+import { buildProviderRequestContext } from './execution-context';
 import type {
   AgentTrigger,
   AgentTriggerResult,
@@ -49,10 +50,9 @@ export class AgUiAgentProvider implements IAgentProvider {
     }
 
     const request: ProviderRequest = {
+      ...buildProviderRequestContext(context),
       message,
       agentId: this.config.agentId,
-      sessionId: context.sessionId,
-      userId: context.sender.platformUserId,
       timeoutMs: this.config.timeoutMs ?? 60_000,
     };
 
@@ -91,10 +91,9 @@ export class AgUiAgentProvider implements IAgentProvider {
     }
 
     const request: ProviderRequest = {
+      ...buildProviderRequestContext(context),
       message,
       agentId: this.config.agentId,
-      sessionId: context.sessionId,
-      userId: context.sender.platformUserId,
       timeoutMs: this.config.timeoutMs ?? 60_000,
     };
 

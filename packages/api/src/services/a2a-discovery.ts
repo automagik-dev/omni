@@ -1,3 +1,4 @@
+import { OMNI_EXECUTION_CONTEXT_EXTENSION_URI } from '@omni/core';
 import type { Agent, AgentProvider, Instance } from '@omni/db';
 import type { Services } from './index';
 
@@ -85,6 +86,16 @@ function buildA2AAgentCard(params: {
       extendedAgentCard: false,
       ...(isRecord(override.capabilities) ? override.capabilities : {}),
     },
+    extensions: Array.isArray(override.extensions)
+      ? override.extensions
+      : [
+          {
+            uri: OMNI_EXECUTION_CONTEXT_EXTENSION_URI,
+            description: 'Omni execution context metadata for user, source, session, trace, and customer identity.',
+            version: '1.0',
+            required: false,
+          },
+        ],
     defaultInputModes: stringArray(override.defaultInputModes) ?? ['text/plain'],
     defaultOutputModes: stringArray(override.defaultOutputModes) ?? ['text/plain'],
     skills: Array.isArray(override.skills) ? override.skills : buildDefaultSkills(capabilities),

@@ -9,6 +9,7 @@
  */
 
 import { createLogger } from '../logger';
+import { OMNI_EXECUTION_CONTEXT_EXTENSION_URI } from './execution-context';
 import { ProviderError } from './types';
 import type { IAgentClient, ProviderRequest, ProviderResponse, StreamChunk } from './types';
 
@@ -157,16 +158,25 @@ export class A2AClient implements IAgentClient {
   }
 
   private buildJsonRpcRequest(method: string, request: ProviderRequest): unknown {
+    const message: Record<string, unknown> = {
+      role: 'ROLE_USER',
+      parts: [{ text: request.message, mediaType: 'text/plain' }],
+      messageId: `msg-${crypto.randomUUID()}`,
+    };
+
+    if (request.executionContext) {
+      message.extensions = [OMNI_EXECUTION_CONTEXT_EXTENSION_URI];
+      message.metadata = {
+        omniExecutionContext: request.executionContext,
+      };
+    }
+
     return {
       jsonrpc: '2.0',
       id: `omni-${crypto.randomUUID()}`,
       method,
       params: {
-        message: {
-          role: 'ROLE_USER',
-          parts: [{ text: request.message, mediaType: 'text/plain' }],
-          messageId: `msg-${crypto.randomUUID()}`,
-        },
+        message,
         configuration: {
           acceptedOutputModes: ['text/plain'],
           returnImmediately: true,
