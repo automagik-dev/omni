@@ -675,7 +675,15 @@ export type FollowUpDisarmReason =
   | 'sequence_complete'
   | 'agent_error'
   | 'send_failed'
-  | 'session_cleared';
+  | 'session_cleared'
+  /**
+   * Pre-fire probe detected a human agent active on the chat (out-of-band
+   * activity that didn't pass through our agent pipeline). The sweeper
+   * disarms instead of firing to avoid stepping on a live human handoff
+   * that wasn't initiated via the `human_handoff` tool. Re-arm happens
+   * normally on the next genuine `message.sent` from the agent.
+   */
+  | 'human_active';
 
 /**
  * Fired when a chat is flagged for human takeover. Any armed follow-up

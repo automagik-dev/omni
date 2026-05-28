@@ -19,8 +19,10 @@ import {
   type EventBus,
   type FollowUpStateRepo,
   type FollowUpStateRow,
+  type HumanActiveProbe,
   type Logger,
   type MessagingWindowProbe,
+  createDbHumanActiveProbe,
   createLogger,
   createMessagingWindowProbe,
   sweepFollowUps,
@@ -34,6 +36,7 @@ const log = createLogger('follow-up-sweeper');
 export class FollowUpSweeperService {
   private readonly repo: FollowUpStateRepo;
   private readonly messagingWindowProbe: MessagingWindowProbe;
+  private readonly humanActiveProbe: HumanActiveProbe;
 
   constructor(
     private db: Database,
@@ -56,6 +59,13 @@ export class FollowUpSweeperService {
       },
     };
     this.messagingWindowProbe = createMessagingWindowProbe();
+    // DB-only probe: relies on `chats.lastMessageAt` / `lastMessageFromMe`
+    // already loaded by `findAndLockDue`. Cheap, no network. Disarms with
+    // `human_active` when the chat's most recent message is outbound and
+    // post-dates the last agent reply by more than the grace window —
+    // strong signal that a human operator took over directly in the
+    // channel inbox without going through `human_handoff`.
+    this.humanActiveProbe = createDbHumanActiveProbe();
   }
 
   /**
@@ -71,6 +81,7 @@ export class FollowUpSweeperService {
       eventBus: this.eventBus,
       logger: this.logger,
       messagingWindowProbe: this.messagingWindowProbe,
+      humanActiveProbe: this.humanActiveProbe,
     });
   }
 
@@ -110,6 +121,8 @@ export class FollowUpSweeperService {
           lastInboundCustomerMessageAt: chatFollowUpState.lastInboundCustomerMessageAt,
           chatName: chats.name,
           channelType: instances.channel,
+          chatLastMessageAt: chats.lastMessageAt,
+          chatLastMessageFromMe: chats.lastMessageFromMe,
         })
         .from(chatFollowUpState)
         .leftJoin(chats, eq(chatFollowUpState.chatId, chats.id))
@@ -135,6 +148,8 @@ export class FollowUpSweeperService {
         lastAgentMessageAt: r.lastAgentMessageAt,
         lastInboundCustomerMessageAt: r.lastInboundCustomerMessageAt ?? null,
         channelType: (r.channelType ?? null) as ChannelType | null,
+        chatLastMessageAt: r.chatLastMessageAt ?? null,
+        chatLastMessageFromMe: r.chatLastMessageFromMe ?? null,
       }),
     );
   }

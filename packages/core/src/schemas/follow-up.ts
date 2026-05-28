@@ -21,6 +21,9 @@ import { z } from 'zod';
  * - `agent_error` — agent failed while generating a follow-up.
  * - `send_failed` — outbound send failed after render.
  * - `session_cleared` — user cleared the agent session (e.g. trash emoji).
+ * - `human_active` — pre-fire probe detected a human agent handling the
+ *   chat out-of-band (operator took over in the channel inbox without
+ *   `human_handoff`). Re-arm is allowed on the next genuine agent reply.
  */
 export const DisarmReasonSchema = z.enum([
   'customer_replied',
@@ -31,6 +34,7 @@ export const DisarmReasonSchema = z.enum([
   'agent_error',
   'send_failed',
   'session_cleared',
+  'human_active',
 ]);
 
 export type DisarmReason = z.infer<typeof DisarmReasonSchema>;

@@ -18,6 +18,7 @@ import {
   MESSAGING_WINDOW_MS,
   channelHasMessagingWindow,
   channelSupportsTypingIndicator,
+  createDbHumanActiveProbe,
   createMessagingWindowProbe,
   playTypingIndicator,
 } from '../capabilities';
@@ -262,5 +263,58 @@ describe('playTypingIndicator', () => {
     expect(logger.debug).toHaveBeenCalled();
     // No wait when the indicator failed to start.
     expect(waitCalls).toEqual([]);
+  });
+});
+
+describe('createDbHumanActiveProbe', () => {
+  const lastAgentReply = new Date('2026-04-14T12:00:00.000Z');
+  const probeNow = new Date('2026-04-14T12:10:00.000Z');
+
+  test("returns 'active' when last message is outbound AND past grace window", async () => {
+    const probe = createDbHumanActiveProbe({ graceMs: 2 * 60 * 1000 });
+    const r = row({
+      lastAgentMessageAt: lastAgentReply,
+      chatLastMessageAt: new Date(lastAgentReply.getTime() + 5 * 60 * 1000),
+      chatLastMessageFromMe: true,
+    });
+    expect(await probe(r, probeNow)).toBe('active');
+  });
+
+  test("returns 'inactive' when last message is outbound but within grace window", async () => {
+    const probe = createDbHumanActiveProbe({ graceMs: 2 * 60 * 1000 });
+    const r = row({
+      lastAgentMessageAt: lastAgentReply,
+      chatLastMessageAt: new Date(lastAgentReply.getTime() + 30 * 1000),
+      chatLastMessageFromMe: true,
+    });
+    expect(await probe(r, probeNow)).toBe('inactive');
+  });
+
+  test("returns 'inactive' when last message is inbound (customer_replied path covers it)", async () => {
+    const probe = createDbHumanActiveProbe({ graceMs: 2 * 60 * 1000 });
+    const r = row({
+      lastAgentMessageAt: lastAgentReply,
+      chatLastMessageAt: new Date(lastAgentReply.getTime() + 5 * 60 * 1000),
+      chatLastMessageFromMe: false,
+    });
+    expect(await probe(r, probeNow)).toBe('inactive');
+  });
+
+  test("returns 'unknown' when chat metadata is missing", async () => {
+    const probe = createDbHumanActiveProbe();
+    expect(await probe(row({ chatLastMessageAt: null, chatLastMessageFromMe: null }), probeNow)).toBe('unknown');
+    expect(await probe(row({ chatLastMessageAt: new Date(), chatLastMessageFromMe: null }), probeNow)).toBe('unknown');
+    expect(await probe(row({ chatLastMessageAt: null, chatLastMessageFromMe: true }), probeNow)).toBe('unknown');
+  });
+
+  test('grace window is configurable', async () => {
+    const probe = createDbHumanActiveProbe({ graceMs: 10 * 60 * 1000 });
+    const r = row({
+      lastAgentMessageAt: lastAgentReply,
+      chatLastMessageAt: new Date(lastAgentReply.getTime() + 5 * 60 * 1000),
+      chatLastMessageFromMe: true,
+    });
+    // 5min < 10min grace ⇒ inactive
+    expect(await probe(r, probeNow)).toBe('inactive');
   });
 });

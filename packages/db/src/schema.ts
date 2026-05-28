@@ -2658,6 +2658,10 @@ export const followUpDisarmReasons = [
   'agent_error',
   'send_failed',
   'session_cleared',
+  // Pre-fire human-active probe detected a human agent handling the chat
+  // out-of-band (operator took over directly in the channel inbox without
+  // going through `human_handoff`). See sweeper.ts `HumanActiveProbe`.
+  'human_active',
 ] as const;
 export type FollowUpDisarmReasonDb = (typeof followUpDisarmReasons)[number];
 

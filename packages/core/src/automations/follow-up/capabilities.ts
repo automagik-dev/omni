@@ -29,7 +29,7 @@
  */
 
 import type { ChannelType } from '../../types/channel';
-import type { FollowUpStateRow, MessagingWindowProbe } from './sweeper';
+import type { FollowUpStateRow, HumanActiveProbe, MessagingWindowProbe } from './sweeper';
 
 /**
  * WhatsApp BSP / Cloud API enforces a 24-hour window after the customer's
@@ -124,6 +124,68 @@ export function createMessagingWindowProbe(options: CreateMessagingWindowProbeOp
     }
     const elapsedMs = now.getTime() - lastInbound.getTime();
     return elapsedMs > windowMs ? 'expired' : 'within';
+  };
+}
+
+/**
+ * Probe options for {@link createDbHumanActiveProbe}.
+ */
+export interface CreateDbHumanActiveProbeOptions {
+  /**
+   * Minimum gap between `chatLastMessageAt` and `lastAgentMessageAt` to
+   * consider the chat as having out-of-band human activity. Buffers race
+   * conditions where the agent's own message takes a tick to propagate
+   * into `chats.lastMessageAt`. Defaults to 2 minutes.
+   */
+  graceMs?: number;
+}
+
+const DEFAULT_HUMAN_ACTIVE_GRACE_MS = 2 * 60 * 1000;
+
+/**
+ * Build a {@link HumanActiveProbe} backed only by columns already loaded
+ * into {@link FollowUpStateRow} (no I/O, no channel HTTP calls).
+ *
+ * Detection rule: if the chat's most recent message is **outbound**
+ * (`chatLastMessageFromMe = true`) AND its timestamp is more than `graceMs`
+ * after `lastAgentMessageAt`, conclude that someone outside the bot pipeline
+ * (typically a human operator who took over the chat in the channel inbox)
+ * sent the message. The sweeper then disarms with `human_active`.
+ *
+ * Inbound messages (`chatLastMessageFromMe = false`) are NOT treated as
+ * human-active: they are the customer replying, which the existing
+ * `customer_replied` disarm path covers.
+ *
+ * Return values:
+ * - `'active'` — out-of-band outbound activity detected.
+ * - `'inactive'` — no signal.
+ * - `'unknown'` — required columns missing on the row (probe gracefully
+ *   degrades to no-op rather than guessing).
+ *
+ * This probe is intentionally cheap (no network) and conservative (only
+ * outbound messages count). Channels can add an HTTP-backed probe on top
+ * if they want stronger guarantees (e.g. ask Gupshup Agent Assist directly
+ * whether a chat is currently assigned to a human agent) — see
+ * brain/snapshots/cego-historico-gupshup-2026-05-28 (Caso B) for the
+ * production incident this addresses.
+ */
+export function createDbHumanActiveProbe(options: CreateDbHumanActiveProbeOptions = {}): HumanActiveProbe {
+  const graceMs = options.graceMs ?? DEFAULT_HUMAN_ACTIVE_GRACE_MS;
+
+  return async (row: FollowUpStateRow, _now: Date) => {
+    const lastMessageAt = row.chatLastMessageAt ?? null;
+    const fromMe = row.chatLastMessageFromMe ?? null;
+
+    if (lastMessageAt === null || fromMe === null) {
+      return 'unknown';
+    }
+    if (!fromMe) {
+      // Inbound — customer_replied will (or already did) cover this path.
+      return 'inactive';
+    }
+
+    const gapMs = lastMessageAt.getTime() - row.lastAgentMessageAt.getTime();
+    return gapMs > graceMs ? 'active' : 'inactive';
   };
 }
 

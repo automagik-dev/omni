@@ -50,6 +50,20 @@ export interface FollowUpStateRow {
   channelType?: ChannelType | null;
   /** Timestamp of the most recent inbound customer message — consumed by the 24h BSP window guard. */
   lastInboundCustomerMessageAt?: Date | null;
+  /**
+   * Most recent message timestamp on the chat (any direction). Consumed
+   * by `HumanActiveProbe` implementations to detect out-of-band activity
+   * — when this is more recent than `lastAgentMessageAt` AND
+   * `chatLastMessageFromMe` is `true`, it strongly suggests a human
+   * operator replied directly in the channel inbox without going through
+   * the bot pipeline.
+   */
+  chatLastMessageAt?: Date | null;
+  /**
+   * Direction of the most recent message on the chat. Companion to
+   * `chatLastMessageAt` — see field doc above for usage.
+   */
+  chatLastMessageFromMe?: boolean | null;
 }
 
 /**
@@ -96,6 +110,31 @@ export interface FollowUpStateRepo {
 export type MessagingWindowProbe = (row: FollowUpStateRow, now: Date) => 'within' | 'expired' | 'unknown';
 
 /**
+ * Out-of-band human-agent probe. Lets the sweeper detect that a human agent
+ * is actively handling the chat outside the bot pipeline (e.g. an operator
+ * took over the conversation directly in the channel's agent inbox without
+ * going through our `human_handoff` tool).
+ *
+ * - `'active'`  — a human agent is currently handling the chat; the sweeper
+ *                 disarms with reason `human_active` and does NOT emit
+ *                 `chat.idle_timeout`. Re-arm happens normally on the next
+ *                 genuine `message.sent` from the configured agent.
+ * - `'inactive'` — no human-agent activity detected; the fire proceeds.
+ * - `'unknown'` — probe is unable to decide (channel doesn't expose the
+ *                 signal, transient error). Treated as `'inactive'` —
+ *                 fire-on-uncertainty preserves the existing behaviour for
+ *                 channels/configurations without the probe wired in.
+ *
+ * Implementations are expected to be cheap (read DB columns the sweeper
+ * already has access to) OR to apply their own pre-filter before doing any
+ * expensive lookup (HTTP to a channel API). The sweeper does not pre-filter.
+ *
+ * See: brain/snapshots/cego-historico-gupshup-2026-05-28 (Caso B) for the
+ * production incident this probe addresses.
+ */
+export type HumanActiveProbe = (row: FollowUpStateRow, now: Date) => Promise<'active' | 'inactive' | 'unknown'>;
+
+/**
  * Dependencies for a single sweep invocation.
  */
 export interface SweeperDeps {
@@ -104,6 +143,13 @@ export interface SweeperDeps {
   logger: Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>;
   /** Optional window probe — if omitted, the window guard is skipped. */
   messagingWindowProbe?: MessagingWindowProbe;
+  /**
+   * Optional human-active probe — if omitted, the human-active guard is
+   * skipped (current behaviour preserved). When provided, the sweeper
+   * disarms candidate rows where the probe returns `'active'` instead of
+   * firing `chat.idle_timeout`.
+   */
+  humanActiveProbe?: HumanActiveProbe;
   /**
    * Max rows processed per tick. Defaults to 100 — enough to keep 6k/min of
    * throughput on a single worker while bounding DB load per query.
@@ -207,6 +253,19 @@ async function processRow(row: FollowUpStateRow, now: Date, deps: SweeperDeps, s
     const verdict = deps.messagingWindowProbe(row, now);
     if (verdict === 'expired') {
       await disarm(deps, row, 'window_expired', now);
+      stats.disarmed += 1;
+      return;
+    }
+  }
+
+  // Out-of-band human-agent guard. If a human is actively handling the
+  // chat outside the bot pipeline, disarm instead of firing — otherwise
+  // the proactive nudge would step on the live human conversation. See
+  // brain/snapshots/cego-historico-gupshup-2026-05-28 (Caso B).
+  if (deps.humanActiveProbe) {
+    const verdict = await deps.humanActiveProbe(row, now);
+    if (verdict === 'active') {
+      await disarm(deps, row, 'human_active', now);
       stats.disarmed += 1;
       return;
     }

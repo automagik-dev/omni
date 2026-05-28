@@ -11,7 +11,13 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { EventBus } from '../../../events/bus';
 import type { Logger } from '../../../logger/types';
 import type { FollowUpSequenceConfig } from '../../../schemas/follow-up';
-import type { AdvanceInput, FollowUpStateRepo, FollowUpStateRow, MessagingWindowProbe } from '../sweeper';
+import type {
+  AdvanceInput,
+  FollowUpStateRepo,
+  FollowUpStateRow,
+  HumanActiveProbe,
+  MessagingWindowProbe,
+} from '../sweeper';
 import { renderSyntheticPrompt, sweepFollowUps } from '../sweeper';
 
 type PublishFn = EventBus['publish'];
@@ -285,6 +291,82 @@ describe('sweepFollowUps', () => {
     });
 
     expect(probe).not.toHaveBeenCalled();
+  });
+
+  test('humanActiveProbe=active disarms with human_active, does NOT fire idle_timeout', async () => {
+    const r = row();
+    const { repo, disarmed, fired } = makeRepo([r]);
+    const { bus, calls } = makeEventBus();
+    const probe: HumanActiveProbe = async () => 'active';
+
+    const stats = await sweepFollowUps({
+      repo,
+      eventBus: bus,
+      logger: silentLogger,
+      humanActiveProbe: probe,
+      now: () => fixedNow,
+    });
+
+    expect(stats).toEqual({ scanned: 1, fired: 0, disarmed: 1, skipped: 0 });
+    expect(calls.map((c) => c.type)).toEqual(['follow_up.disarmed']);
+    expect(fired).toHaveLength(0);
+    expect(disarmed).toHaveLength(1);
+    expect(disarmed[0]?.reason).toBe('human_active');
+  });
+
+  test('humanActiveProbe=inactive allows fire', async () => {
+    const r = row();
+    const { repo } = makeRepo([r]);
+    const { bus, calls } = makeEventBus();
+    const probe: HumanActiveProbe = async () => 'inactive';
+
+    await sweepFollowUps({
+      repo,
+      eventBus: bus,
+      logger: silentLogger,
+      humanActiveProbe: probe,
+      now: () => fixedNow,
+    });
+
+    expect(calls.map((c) => c.type)).toContain('chat.idle_timeout');
+  });
+
+  test('humanActiveProbe=unknown allows fire (graceful degrade)', async () => {
+    const r = row();
+    const { repo } = makeRepo([r]);
+    const { bus, calls } = makeEventBus();
+    const probe: HumanActiveProbe = async () => 'unknown';
+
+    await sweepFollowUps({
+      repo,
+      eventBus: bus,
+      logger: silentLogger,
+      humanActiveProbe: probe,
+      now: () => fixedNow,
+    });
+
+    expect(calls.map((c) => c.type)).toContain('chat.idle_timeout');
+  });
+
+  test('humanActiveProbe consulted AFTER messagingWindowProbe (window guard wins on expired)', async () => {
+    const r = row();
+    const { repo, disarmed } = makeRepo([r]);
+    const { bus } = makeEventBus();
+    const winProbe = mock<MessagingWindowProbe>(() => 'expired');
+    const humProbe = mock<HumanActiveProbe>(async () => 'active');
+
+    await sweepFollowUps({
+      repo,
+      eventBus: bus,
+      logger: silentLogger,
+      messagingWindowProbe: winProbe,
+      humanActiveProbe: humProbe,
+      now: () => fixedNow,
+    });
+
+    expect(disarmed).toHaveLength(1);
+    expect(disarmed[0]?.reason).toBe('window_expired');
+    expect(humProbe).not.toHaveBeenCalled();
   });
 
   test('per-row exception is isolated, emits follow_up.skipped, continues processing', async () => {
