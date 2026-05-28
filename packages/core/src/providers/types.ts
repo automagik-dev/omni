@@ -355,6 +355,8 @@ export interface IAgentProvider {
   readonly name: string;
   readonly schema: ProviderSchema;
   readonly mode: 'round-trip' | 'fire-and-forget' | 'turn-based';
+  /** Optional observability hooks for trace propagation and silent-failure detection. */
+  readonly observability?: ProviderObservability;
 
   /** Check if this provider can handle a given trigger */
   canHandle(trigger: AgentTrigger): boolean;

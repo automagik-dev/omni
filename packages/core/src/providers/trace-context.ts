@@ -12,7 +12,7 @@ interface KhalHeaderContext {
 }
 
 /** Format a W3C traceparent value from a backend-agnostic trace context. */
-export function formatTraceparent(ctx: TraceContext): string {
+function formatTraceparent(ctx: TraceContext): string {
   const traceFlags = (ctx.traceFlags ?? 1) & 0xff;
   const flagsHex = traceFlags.toString(16);
   const paddedFlagsHex = flagsHex.length === 1 ? `0${flagsHex}` : flagsHex;
