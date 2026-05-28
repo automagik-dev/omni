@@ -1187,7 +1187,7 @@ async function resolveCustomerContext(
   if (personId) {
     try {
       const person = await services.persons.getById(personId);
-      if (isRecord(person.metadata)) {
+      if (person && isRecord(person.metadata)) {
         storedContext = customerContextFromRecord(person.metadata);
       }
     } catch (error) {

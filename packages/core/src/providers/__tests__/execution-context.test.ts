@@ -79,4 +79,22 @@ describe('execution context', () => {
     expect(requestContext.replyToMessageId).toBe('quoted-001');
     expect(requestContext.executionContext?.customer?.tenantId).toBe('tenant_abc');
   });
+
+  it('uses the trigger classification to identify direct messages', () => {
+    const requestContext = buildProviderRequestContext({
+      ...trigger,
+      type: 'dm',
+      source: {
+        ...trigger.source,
+        channelType: 'slack',
+        chatId: 'D123',
+        threadId: undefined,
+      },
+      sender: {
+        platformUserId: 'U123',
+      },
+    });
+
+    expect(requestContext.chat?.type).toBe('dm');
+  });
 });

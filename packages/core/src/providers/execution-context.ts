@@ -10,6 +10,7 @@ function compactEnv(values: Record<string, string | undefined>): Record<string, 
 }
 
 function inferChatType(context: AgentTrigger): 'dm' | 'group' | 'channel' {
+  if (context.type === 'dm') return 'dm';
   if (context.source.chatId === context.sender.platformUserId) return 'dm';
   if (context.source.threadId) return 'channel';
   return 'group';
