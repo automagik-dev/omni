@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { A2AClient, createA2AClient } from '../a2a-client';
+import { OMNI_EXECUTION_CONTEXT_EXTENSION_URI } from '../execution-context';
 import { ProviderError, type StreamChunk } from '../types';
 
 // ─── Mock fetch helpers ───────────────────────────────────────
@@ -171,6 +172,43 @@ describe('A2AClient', () => {
 
       const body = JSON.parse((mockImpl.mock.calls[0]?.[1] as RequestInit).body as string);
       expect(body.params.contextId).toBe('my-session');
+    });
+
+    it('serializes Omni execution context as A2A message metadata', async () => {
+      const rpcResponse = {
+        jsonrpc: '2.0',
+        result: { task: { id: 't', contextId: 'ctx', status: { state: 'completed' }, artifacts: [] } },
+      };
+      mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(rpcResponse), { status: 200 }));
+
+      const client = new A2AClient(CONFIG);
+      await client.run({
+        message: 'Hi',
+        userId: 'person-111',
+        agentId: 'test-agent',
+        sessionId: 'session-1',
+        executionContext: {
+          identity: {
+            userId: 'person-111',
+            personId: 'person-111',
+            platformUserId: 'sender-999',
+          },
+          source: {
+            channel: 'whatsapp-baileys',
+            instanceId: 'instance-123',
+            chatId: 'chat-456',
+            messageId: 'message-789',
+          },
+          session: { id: 'session-1', strategy: 'per_chat' },
+          trace: { id: 'trace-123' },
+          customer: { externalUserId: 'usr_123' },
+        },
+      });
+
+      const body = JSON.parse((mockImpl.mock.calls[0]?.[1] as RequestInit).body as string);
+      expect(body.params.message.extensions).toEqual([OMNI_EXECUTION_CONTEXT_EXTENSION_URI]);
+      expect(body.params.message.metadata.omniExecutionContext.identity.userId).toBe('person-111');
+      expect(body.params.message.metadata.omniExecutionContext.customer.externalUserId).toBe('usr_123');
     });
 
     it('throws ProviderError on non-ok HTTP response', async () => {

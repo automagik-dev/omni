@@ -6,6 +6,7 @@
  */
 
 import { createLogger } from '../logger';
+import { buildProviderRequestContext } from './execution-context';
 import type { AgentTrigger, AgentTriggerResult, IAgentClient, IAgentProvider, ProviderRequest } from './types';
 
 const log = createLogger('provider:agno');
@@ -62,12 +63,11 @@ export class AgnoAgentProvider implements IAgentProvider {
     }
 
     const request: ProviderRequest = {
+      ...buildProviderRequestContext(context),
       message,
       agentId: this.config.agentId,
       agentType: this.config.agentType,
       stream: false,
-      sessionId: context.sessionId,
-      userId: context.sender.platformUserId,
       timeoutMs: this.config.timeoutMs ?? 60000,
     };
 

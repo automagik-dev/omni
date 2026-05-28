@@ -6,7 +6,8 @@
  */
 
 import { describe, expect, it, mock } from 'bun:test';
-import type { EventBus } from '@omni/core';
+import { OMNI_EXECUTION_CONTEXT_EXTENSION_URI } from '@omni/core';
+import type { EventBus, OmniExecutionContext } from '@omni/core';
 import { handleA2ARequest } from '../a2a-handler';
 import { A2AStreamStore } from '../stream-store';
 import type { A2ATaskStore } from '../task-store';
@@ -194,6 +195,63 @@ describe('handleA2ARequest', () => {
 
       const published = bus.calls.find((c) => c.type === 'message.received');
       expect((published?.metadata as Record<string, unknown>).instanceId).toBe('inst-1');
+    });
+
+    it('maps Omni execution context metadata onto message.received', async () => {
+      const bus = createMockEventBus();
+      const executionContext: OmniExecutionContext = {
+        identity: {
+          userId: 'customer-user-1',
+          personId: 'person-1',
+          platformUserId: 'workos-user-1',
+          displayName: 'Luis',
+        },
+        source: {
+          channel: 'a2a',
+          instanceId: 'a2a-inst',
+          chatId: 'agent-chat',
+          threadId: 'thread-1',
+          messageId: 'source-msg-1',
+        },
+        session: { id: 'session-1', strategy: 'per_user' },
+        trace: { id: 'trace-1' },
+        customer: {
+          externalUserId: 'workos-user-1',
+          customerId: 'cust-1',
+          organizationId: 'org-1',
+          tenantId: 'tenant-1',
+        },
+      };
+      const reqWithContext = {
+        ...validSend,
+        params: {
+          ...validSend.params,
+          message: {
+            ...validSend.params.message,
+            extensions: [OMNI_EXECUTION_CONTEXT_EXTENSION_URI],
+            metadata: { omniExecutionContext: executionContext },
+          },
+        },
+      };
+
+      await handleA2ARequest(makeRequest(reqWithContext), makeCtx(bus));
+
+      const published = bus.calls.find((c) => c.type === 'message.received');
+      const payload = published?.payload as Record<string, unknown>;
+      const metadata = published?.metadata as Record<string, unknown>;
+
+      expect(payload.from).toBe('workos-user-1');
+      expect(payload.senderName).toBe('Luis');
+      expect(payload.threadId).toBe('thread-1');
+      expect(payload.rawPayload).toMatchObject({
+        omniExecutionContext: executionContext,
+        omniExecutionContextExtension: true,
+      });
+      expect(metadata).toMatchObject({
+        traceId: 'trace-1',
+      });
+      expect(metadata).not.toHaveProperty('personId');
+      expect(metadata).not.toHaveProperty('platformIdentityId');
     });
 
     it('returns 400 when params.message is missing', async () => {

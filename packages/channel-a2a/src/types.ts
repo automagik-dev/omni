@@ -50,6 +50,7 @@ export interface A2AMessage {
   messageId?: string;
   taskId?: string;
   contextId?: string;
+  extensions?: string[];
   metadata?: Record<string, unknown>;
 }
 

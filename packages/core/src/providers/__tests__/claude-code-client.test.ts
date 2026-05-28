@@ -460,7 +460,11 @@ describe('ClaudeCodeAgentProvider', () => {
     expect(capturedRequest?.env.OMNI_CHAT).toBe('chat-456');
     expect(capturedRequest?.env.OMNI_MESSAGE).toBe('message-789');
     expect(capturedRequest?.env.OMNI_SESSION).toBe('session-chat-456');
+    expect(capturedRequest?.env.OMNI_USER_ID).toBe('person-111');
+    expect(capturedRequest?.env.OMNI_PERSON_ID).toBe('person-111');
+    expect(capturedRequest?.env.OMNI_PLATFORM_USER_ID).toBe('sender-999');
     expect(capturedRequest?.env.OMNI_SENDER).toBe('sender-999');
+    expect(capturedRequest?.executionContext.identity.userId).toBe('person-111');
     expect(capturedRequest?.mcpUrlParams).toEqual({ chat_id: 'chat-456' });
   });
 

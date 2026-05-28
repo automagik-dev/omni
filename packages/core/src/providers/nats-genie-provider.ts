@@ -20,7 +20,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { type NatsConnection, StringCodec, connect } from 'nats';
 import { createLogger } from '../logger';
-import type { AgentTrigger, AgentTriggerResult, IAgentProvider, ProviderFile } from './types';
+import { buildOmniEnv, buildOmniExecutionContext } from './execution-context';
+import type { AgentTrigger, AgentTriggerResult, IAgentProvider, OmniExecutionContext, ProviderFile } from './types';
 
 const log = createLogger('provider:nats-genie');
 
@@ -56,6 +57,7 @@ interface NatsOutboundMessage {
   files?: ProviderFile[];
   /** Environment variables for turn-based agents (OMNI_INSTANCE, OMNI_CHAT, etc.) */
   env?: Record<string, string>;
+  executionContext?: OmniExecutionContext;
 }
 
 /** NATS reply payload received from omni.reply.{instance}.{chat_id} */
@@ -129,7 +131,8 @@ export class NatsGenieProvider implements IAgentProvider {
       traceId: context.traceId,
       messageId: context.source.messageId,
       files: context.content.files,
-      env: context.env,
+      env: buildOmniEnv(context),
+      executionContext: buildOmniExecutionContext(context),
     };
 
     try {

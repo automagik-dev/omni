@@ -83,6 +83,9 @@ export interface ProviderRequest {
 
   /** Environment variables to expose to provider subprocesses/SDK runtimes. */
   env?: Record<string, string>;
+
+  /** Canonical Omni execution context propagated across local CLIs and remote protocols. */
+  executionContext?: OmniExecutionContext;
 }
 
 export interface ProviderFile {
@@ -345,6 +348,40 @@ export interface ProviderObservability {
   heartbeat(): Promise<{ healthy: boolean; lastProcessedAt?: Date; backlog?: number }>;
 }
 
+export interface OmniCustomerContext {
+  externalUserId?: string;
+  customerId?: string;
+  organizationId?: string;
+  tenantId?: string;
+}
+
+export interface OmniExecutionContext {
+  identity: {
+    /** Canonical requester ID: internal person UUID when available, otherwise platform user ID. */
+    userId: string;
+    /** Omni internal person UUID, when identity graph resolution succeeded. */
+    personId?: string;
+    /** Platform-specific sender ID, such as WhatsApp JID, Discord user ID, Telegram user ID. */
+    platformUserId: string;
+    displayName?: string;
+  };
+  source: {
+    channel: ChannelType;
+    instanceId: string;
+    chatId: string;
+    threadId?: string;
+    messageId: string;
+  };
+  session: {
+    id: string;
+    strategy?: 'per_user' | 'per_chat' | 'per_thread' | string;
+  };
+  trace: {
+    id: string;
+  };
+  customer?: OmniCustomerContext;
+}
+
 /**
  * Unified agent provider interface
  *
@@ -427,6 +464,10 @@ export interface AgentTrigger {
   };
   /** Session ID computed from instance's session strategy */
   sessionId: string;
+  /** Session strategy used to compute sessionId. */
+  sessionStrategy?: 'per_user' | 'per_chat' | 'per_thread' | string;
+  /** Optional customer/account identifiers resolved from person metadata. */
+  customer?: OmniCustomerContext;
   /** Recent message history for context (optional, formatted as "[Name - time] message") */
   contextMessages?: string[];
   /**
@@ -501,6 +542,7 @@ export interface WebhookPayload {
     emoji?: string;
   };
   traceId: string;
+  executionContext?: OmniExecutionContext;
   /** The endpoint to call back for sending responses */
   replyEndpoint: string;
 }

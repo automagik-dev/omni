@@ -133,6 +133,7 @@ function makeTrigger(): AgentTrigger {
     content: {
       text: 'hello',
     },
+    sessionId: '5511999999999',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }
@@ -298,13 +299,19 @@ describe('NatsGenieProvider.trigger() — env pass-through', () => {
     await provider.trigger(trigger);
     expect(publishCalls.length).toBeGreaterThan(0);
     const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
-    expect(payload.env).toEqual({
+    expect(payload.env).toMatchObject({
       OMNI_INSTANCE: 'inst-1',
-      OMNI_CHAT: 'chat-42',
+      OMNI_CHAT: '5511999999999@s.whatsapp.net',
       OMNI_MESSAGE: 'msg-1',
       OMNI_TURN_ID: 'turn-xyz',
       GENIE_TMUX_SESSION: 'whatsapp-scout-12',
+      OMNI_USER_ID: '5511999999999',
+      OMNI_PLATFORM_USER_ID: '5511999999999',
+      OMNI_SENDER: '5511999999999',
+      OMNI_SESSION: '5511999999999',
+      OMNI_TRACE_ID: 'trace-1',
     });
+    expect(payload.executionContext.identity.platformUserId).toBe('5511999999999');
   });
 
   it('omits GENIE_TMUX_SESSION from payload.env when the dispatcher did not set it', async () => {
@@ -320,14 +327,20 @@ describe('NatsGenieProvider.trigger() — env pass-through', () => {
     const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
     expect(payload.env).not.toHaveProperty('GENIE_TMUX_SESSION');
     expect(payload.env.OMNI_INSTANCE).toBe('inst-1');
+    expect(payload.env.OMNI_USER_ID).toBe('5511999999999');
   });
 
-  it('preserves trigger.env untouched when it has no GENIE_ prefixed keys (backward compat)', async () => {
+  it('merges trigger.env with canonical Omni execution env', async () => {
     const provider = makeProvider();
     const trigger = makeTrigger();
     trigger.env = { OMNI_INSTANCE: 'inst-1', OMNI_CHAT: 'chat-42' };
     await provider.trigger(trigger);
     const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
-    expect(payload.env).toEqual({ OMNI_INSTANCE: 'inst-1', OMNI_CHAT: 'chat-42' });
+    expect(payload.env).toMatchObject({
+      OMNI_INSTANCE: 'inst-1',
+      OMNI_CHAT: '5511999999999@s.whatsapp.net',
+      OMNI_USER_ID: '5511999999999',
+      OMNI_PLATFORM_USER_ID: '5511999999999',
+    });
   });
 });
