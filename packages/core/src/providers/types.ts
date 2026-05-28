@@ -83,6 +83,17 @@ export interface ProviderRequest {
 
   /** Environment variables to expose to provider subprocesses/SDK runtimes. */
   env?: Record<string, string>;
+  /** Distributed trace context to propagate on outbound provider calls. */
+  traceContext?: TraceContext;
+  /** Khal session id for cross-service session stitching. Falls back to sessionId when unset. */
+  khalSessionId?: string;
+  /** Omni source metadata propagated to provider transports. */
+  omni?: {
+    instanceId?: string;
+    chatId?: string;
+    messageId?: string;
+    channel?: ChannelType;
+  };
 }
 
 export interface ProviderFile {
@@ -305,6 +316,10 @@ export interface TraceContext {
   parentSpanId?: string;
   /** W3C trace flags (1 = sampled, 0 = not). Default 1 when unset. */
   traceFlags?: number;
+  /** W3C tracestate header value. */
+  tracestate?: string;
+  /** Backward-compatible camelCase alias for tracestate. */
+  traceState?: string;
 }
 
 /**
@@ -440,6 +455,8 @@ export interface AgentTrigger {
    * Includes OMNI_INSTANCE, OMNI_CHAT, OMNI_MESSAGE, OMNI_TURN_ID.
    */
   env?: Record<string, string>;
+  /** Distributed trace context to propagate on outbound provider calls. */
+  traceContext?: TraceContext;
 }
 
 /**

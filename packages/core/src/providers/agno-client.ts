@@ -5,6 +5,7 @@
  * with both sync and streaming support.
  */
 
+import { buildTraceHeaders } from './trace-context';
 import {
   type AgentDiscoveryEntry,
   type AgentHealthResult,
@@ -191,12 +192,15 @@ export class AgnoClient implements IAgentClient {
     formData.append('message', request.message);
     formData.append('stream', String(stream));
 
-    if (request.sessionId) {
-      formData.append('session_id', request.sessionId);
+    const sessionId = request.khalSessionId ?? request.sessionId;
+    if (sessionId) {
+      formData.append('session_id', sessionId);
     }
     if (request.userId) {
       formData.append('user_id', request.userId);
     }
+
+    this.appendStructuredMetadata(formData, request);
 
     if (request.files?.length) {
       for (const file of request.files) {
@@ -217,6 +221,31 @@ export class AgnoClient implements IAgentClient {
     }
 
     return formData;
+  }
+
+  private appendStructuredMetadata(formData: FormData, request: ProviderRequest): void {
+    const appendJson = (key: string, value: unknown) => {
+      if (value !== undefined) {
+        formData.append(key, JSON.stringify(value));
+      }
+    };
+
+    if (request.khalSessionId) {
+      formData.append('khal_session_id', request.khalSessionId);
+    }
+    if (request.messageId) {
+      formData.append('message_id', request.messageId);
+    }
+    if (request.replyToMessageId) {
+      formData.append('reply_to_message_id', request.replyToMessageId);
+    }
+
+    appendJson('platform', request.platform);
+    appendJson('sender', request.sender);
+    appendJson('chat', request.chat);
+    appendJson('mcp_url_params', request.mcpUrlParams);
+    appendJson('env', request.env);
+    appendJson('omni', request.omni);
   }
 
   async runAgent(agentId: string, request: ProviderRequest): Promise<ProviderResponse> {
@@ -244,7 +273,15 @@ export class AgnoClient implements IAgentClient {
       url,
       {
         method: 'POST',
-        headers: this.getHeaders(),
+        headers: {
+          ...this.getHeaders(),
+          ...buildTraceHeaders(request.traceContext, {
+            khalSessionId: request.khalSessionId ?? request.sessionId,
+            userId: request.userId,
+            messageId: request.omni?.messageId,
+            omni: request.omni,
+          }),
+        },
         body: formData,
       },
       timeoutMs,
@@ -311,7 +348,15 @@ export class AgnoClient implements IAgentClient {
       url,
       {
         method: 'POST',
-        headers: this.getHeaders(),
+        headers: {
+          ...this.getHeaders(),
+          ...buildTraceHeaders(request.traceContext, {
+            khalSessionId: request.khalSessionId ?? request.sessionId,
+            userId: request.userId,
+            messageId: request.omni?.messageId,
+            omni: request.omni,
+          }),
+        },
         body: formData,
       },
       timeoutMs,
