@@ -2605,7 +2605,7 @@ messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c
  * Throws FORBIDDEN if the message's chat is owned by a different instance.
  */
 async function verifyMessageInstanceOwnership(
-  services: Services,
+  services: Pick<Services, 'chats'>,
   message: { chatId: string; externalId: string },
   instanceId: string,
 ): Promise<void> {
@@ -2619,6 +2619,27 @@ async function verifyMessageInstanceOwnership(
       recoverable: false,
     });
   }
+}
+
+/**
+ * Resolve a message ID for channel plugin calls.
+ *
+ * Channel plugins need platform-native IDs (e.g. Baileys message key IDs), not
+ * Omni internal UUIDs. If the caller passes an internal UUID, resolve it to the
+ * stored externalId and enforce instance ownership before returning it.
+ */
+export async function resolveChannelMessageId(
+  services: Pick<Services, 'messages' | 'chats'>,
+  messageId: string,
+  instanceId: string,
+): Promise<string> {
+  if (!isUUID(messageId)) return messageId;
+
+  const message = await services.messages.getById(messageId);
+  await verifyMessageInstanceOwnership(services, message, instanceId);
+
+  log.debug('Resolved internal UUID to external ID', { messageId, externalId: message.externalId });
+  return message.externalId;
 }
 
 /**
@@ -2672,15 +2693,7 @@ messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema
     });
   }
 
-  // Resolve messageId: if it's an internal UUID, look up the external ID from the database.
-  // Channel plugins (e.g. Baileys) need the platform-native message ID, not the Omni UUID.
-  let resolvedMessageId = messageId;
-  if (isUUID(messageId)) {
-    const message = await services.messages.getById(messageId);
-    await verifyMessageInstanceOwnership(services, message, instanceId);
-    resolvedMessageId = message.externalId;
-    log.debug('Resolved internal UUID to external ID', { messageId, externalId: resolvedMessageId });
-  }
+  const resolvedMessageId = await resolveChannelMessageId(services, messageId, instanceId);
 
   // Edit via channel plugin — catch and surface plugin errors
   try {
@@ -2758,16 +2771,18 @@ messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSc
     });
   }
 
+  const resolvedMessageId = await resolveChannelMessageId(services, messageId, instanceId);
+
   // Delete via channel plugin
   await (
     plugin as {
       deleteMessage: (instanceId: string, channelId: string, messageId: string, fromMe?: boolean) => Promise<void>;
     }
-  ).deleteMessage(instanceId, channelId, messageId, fromMe);
+  ).deleteMessage(instanceId, channelId, resolvedMessageId, fromMe);
 
   return c.json({
     success: true,
-    data: { messageId, deleted: true },
+    data: { messageId, externalId: resolvedMessageId, deleted: true },
   });
 });
 

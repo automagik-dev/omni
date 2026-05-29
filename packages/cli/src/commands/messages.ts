@@ -331,7 +331,7 @@ export function createMessagesCommand(): Command {
           output.error('--chat is required');
           return;
         }
-        const resolvedMessageId = await resolveMessageId(messageId);
+        const resolvedMessageId = await resolveMessageId(messageId, channelId);
         const instanceId = await resolveInstanceId(options.instance);
         const config = (await import('../config.js')).loadConfig();
         const baseUrl = config.apiUrl ?? 'http://localhost:8882';
