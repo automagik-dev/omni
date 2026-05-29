@@ -83,6 +83,17 @@ export interface ProviderRequest {
 
   /** Environment variables to expose to provider subprocesses/SDK runtimes. */
   env?: Record<string, string>;
+  /** Distributed trace context to propagate on outbound provider calls. */
+  traceContext?: TraceContext;
+  /** Khal session id for cross-service session stitching. Falls back to sessionId when unset. */
+  khalSessionId?: string;
+  /** Omni source metadata propagated to provider transports. */
+  omni?: {
+    instanceId?: string;
+    chatId?: string;
+    messageId?: string;
+    channel?: ChannelType;
+  };
 }
 
 export interface ProviderFile {
@@ -269,6 +280,71 @@ export type ProviderErrorCode =
 export type AgentTriggerType = 'mention' | 'reaction' | 'dm' | 'reply' | 'name_match' | 'command';
 
 /**
+ * Distributed trace context for cross-process propagation.
+ *
+ * Aligns with W3C Trace Context (`traceparent` HTTP header) so providers can
+ * propagate trace identity across HTTP/NATS/gRPC boundaries without coupling
+ * to any specific OpenTelemetry SDK. Producers receive this from the dispatcher
+ * and inject it on outbound calls so cross-process traces stitch correctly.
+ *
+ * Backend-agnostic: the trace identifier itself is a 16-byte hex string per
+ * W3C; how it's exported (OTLP, Zipkin, vendor-native) is the host's concern,
+ * configured via standard `OTEL_*` env vars.
+ */
+export interface TraceContext {
+  /** W3C trace-id — 32 hex chars (16 bytes). */
+  traceId: string;
+  /** W3C span-id of the current span — 16 hex chars (8 bytes). */
+  spanId: string;
+  /** Optional parent span-id for nested propagation. */
+  parentSpanId?: string;
+  /** W3C trace flags (1 = sampled, 0 = not). Default 1 when unset. */
+  traceFlags?: number;
+  /** W3C tracestate header value. */
+  tracestate?: string;
+  /** Backward-compatible camelCase alias for tracestate. */
+  traceState?: string;
+}
+
+/**
+ * Optional observability hooks on a provider.
+ *
+ * Providers that want to participate in distributed tracing (propagate the
+ * W3C `traceparent` on outbound HTTP/NATS calls, emit OTel spans for internal
+ * operations, expose a health probe for silent-failure detection) implement
+ * this interface. Providers without an `observability` field fall back to
+ * default no-op behavior — no behavior change for legacy providers.
+ *
+ * **Backend-neutral by design.** Emitted spans flow through whatever OTel SDK
+ * the host configured via standard `OTEL_EXPORTER_OTLP_ENDPOINT` /
+ * `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES`. No vendor SDK is coupled
+ * here.
+ */
+export interface ProviderObservability {
+  /**
+   * Receive a trace context from the dispatcher when triggering this provider.
+   *
+   * The provider SHOULD propagate it on any outbound calls it makes:
+   * - HTTP requests: inject `traceparent` header
+   * - NATS publishes: inject `traceparent` AND custom
+   *   `x-trace-id`/`x-span-id`/`x-parent-span-id` headers (forward-compat
+   *   with khal-os o11y consumer)
+   * - Subprocess spawns: pass through env vars if the child reads them
+   */
+  propagateTrace(ctx: TraceContext): void;
+
+  /**
+   * Health probe — does the provider currently process inbound work?
+   *
+   * Used by silent-failure detection: e.g. a NATS bridge that has lost its
+   * consumer subscription should report `{ healthy: false }` even if the
+   * outer process is alive. Optional `lastProcessedAt` and `backlog` enrich
+   * alerting context.
+   */
+  heartbeat(): Promise<{ healthy: boolean; lastProcessedAt?: Date; backlog?: number }>;
+}
+
+/**
  * Unified agent provider interface
  *
  * All agent providers (Agno, OpenClaw webhook, Claude SDK, etc.)
@@ -279,6 +355,8 @@ export interface IAgentProvider {
   readonly name: string;
   readonly schema: ProviderSchema;
   readonly mode: 'round-trip' | 'fire-and-forget' | 'turn-based';
+  /** Optional observability hooks for trace propagation and silent-failure detection. */
+  readonly observability?: ProviderObservability;
 
   /** Check if this provider can handle a given trigger */
   canHandle(trigger: AgentTrigger): boolean;
@@ -353,6 +431,8 @@ export interface AgentTrigger {
    * Includes OMNI_INSTANCE, OMNI_CHAT, OMNI_MESSAGE, OMNI_TURN_ID.
    */
   env?: Record<string, string>;
+  /** Distributed trace context to propagate on outbound provider calls. */
+  traceContext?: TraceContext;
 }
 
 /**

@@ -109,6 +109,144 @@ describe('AgnoClient', () => {
       expect(mockImpl).toHaveBeenCalledTimes(1);
     });
 
+    it('propagates W3C trace context in headers for Langfuse session stitching', async () => {
+      const response = {
+        run_id: 'run-123',
+        agent_id: 'agent-1',
+        session_id: 'session-456',
+        content: 'Hello from agent!',
+        status: 'COMPLETED',
+      };
+
+      mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }));
+
+      const client = new AgnoClient(config);
+      await client.run({
+        message: 'Hello!',
+        agentId: 'agent-1',
+        agentType: 'agent',
+        sessionId: 'chat-123',
+        userId: 'user-456',
+        traceContext: {
+          traceId: '0123456789ABCDEF0123456789ABCDEF',
+          spanId: 'FEDCBA9876543210',
+          parentSpanId: '0011223344556677',
+          traceFlags: 1,
+          tracestate: 'vendor=value',
+        },
+        khalSessionId: 'khal-session-123',
+        omni: {
+          instanceId: 'inst-1',
+          chatId: 'chat-123',
+          messageId: 'msg-789',
+          channel: 'whatsapp-cloud',
+        },
+      });
+
+      const init = mockImpl.mock.calls[0]?.[1] as RequestInit;
+      const headers = init.headers as Record<string, string>;
+      const formData = init.body as FormData;
+      expect(headers.traceparent).toBe('00-0123456789abcdef0123456789abcdef-fedcba9876543210-01');
+      expect(headers.tracestate).toBe('vendor=value');
+      expect(headers['x-trace-id']).toBe('0123456789abcdef0123456789abcdef');
+      expect(headers['x-span-id']).toBe('fedcba9876543210');
+      expect(headers['x-parent-span-id']).toBe('0011223344556677');
+      expect(headers['x-khal-session-id']).toBe('khal-session-123');
+      expect(headers['x-khal-user-id']).toBe('user-456');
+      expect(headers['x-khal-message-id']).toBe('msg-789');
+      expect(headers['x-omni-instance-id']).toBe('inst-1');
+      expect(headers['x-omni-chat-id']).toBe('chat-123');
+      expect(headers['x-omni-channel']).toBe('whatsapp-cloud');
+      expect(formData.get('session_id')).toBe('khal-session-123');
+    });
+
+    it('includes structured Omni metadata in Agno run form payloads', async () => {
+      const response = {
+        run_id: 'run-123',
+        agent_id: 'agent-1',
+        session_id: 'session-456',
+        content: 'Hello from agent!',
+        status: 'COMPLETED',
+      };
+
+      mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }));
+
+      const client = new AgnoClient(config);
+      await client.run({
+        message: 'Hello!',
+        agentId: 'agent-1',
+        agentType: 'agent',
+        sessionId: 'chat-123',
+        khalSessionId: 'khal-session-123',
+        userId: 'person-uuid',
+        platform: {
+          id: '5511999999999',
+          channel: 'whatsapp-cloud',
+          instanceId: 'inst-1',
+        },
+        sender: { displayName: 'Felipe' },
+        chat: { type: 'group', id: 'group-1', threadId: 'topic-1' },
+        messageId: 'msg-789',
+        replyToMessageId: 'msg-456',
+        mcpUrlParams: { chat_id: 'group-1' },
+        env: { OMNI_CHAT: 'group-1' },
+        omni: {
+          instanceId: 'inst-1',
+          chatId: 'group-1',
+          messageId: 'msg-789',
+          channel: 'whatsapp-cloud',
+        },
+      });
+
+      const init = mockImpl.mock.calls[0]?.[1] as RequestInit;
+      const formData = init.body as FormData;
+      expect(formData.get('user_id')).toBe('person-uuid');
+      expect(formData.get('khal_session_id')).toBe('khal-session-123');
+      expect(formData.get('message_id')).toBe('msg-789');
+      expect(formData.get('reply_to_message_id')).toBe('msg-456');
+      expect(JSON.parse(String(formData.get('platform')))).toEqual({
+        id: '5511999999999',
+        channel: 'whatsapp-cloud',
+        instanceId: 'inst-1',
+      });
+      expect(JSON.parse(String(formData.get('sender')))).toEqual({ displayName: 'Felipe' });
+      expect(JSON.parse(String(formData.get('chat')))).toEqual({ type: 'group', id: 'group-1', threadId: 'topic-1' });
+      expect(JSON.parse(String(formData.get('mcp_url_params')))).toEqual({ chat_id: 'group-1' });
+      expect(JSON.parse(String(formData.get('env')))).toEqual({ OMNI_CHAT: 'group-1' });
+      expect(JSON.parse(String(formData.get('omni')))).toEqual({
+        instanceId: 'inst-1',
+        chatId: 'group-1',
+        messageId: 'msg-789',
+        channel: 'whatsapp-cloud',
+      });
+    });
+
+    it('uses sessionId as x-khal-session-id when khalSessionId is omitted', async () => {
+      const response = {
+        run_id: 'run-123',
+        agent_id: 'agent-1',
+        session_id: 'session-456',
+        content: 'Hello response',
+        status: 'COMPLETED',
+      };
+
+      mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }));
+
+      const client = new AgnoClient(config);
+      await client.run({
+        message: 'Hello!',
+        agentId: 'agent-1',
+        userId: 'test-user-id',
+        sessionId: 'legacy-session-123',
+      });
+
+      const init = mockImpl.mock.calls[0]?.[1] as RequestInit;
+      const headers = init.headers as Record<string, string>;
+      const formData = init.body as FormData;
+      expect(headers['x-khal-session-id']).toBe('legacy-session-123');
+      expect(formData.get('session_id')).toBe('legacy-session-123');
+    });
+
     it('routes to teams endpoint for team agentType', async () => {
       const response = {
         run_id: 'run-123',
