@@ -69,6 +69,26 @@ function createClient(chunks: StreamChunk[] = []): IAgentClient & { lastRequest?
   return client;
 }
 
+function createThrowingStreamClient(): IAgentClient & { lastRequest?: ProviderRequest } {
+  const client: IAgentClient & { lastRequest?: ProviderRequest } = {
+    run: mock(async (request: ProviderRequest): Promise<ProviderResponse> => {
+      client.lastRequest = request;
+      return { content: 'done', runId: 'run-1', sessionId: 'session-1', status: 'completed' };
+    }),
+    stream: mock(async function* (request: ProviderRequest): AsyncGenerator<StreamChunk> {
+      client.lastRequest = request;
+      if (request.agentId === 'unreachable') {
+        yield { event: 'unreachable', isComplete: false };
+      }
+      throw new Error('stream exploded');
+    }),
+    discover: mock(async () => []),
+    checkHealth: mock(async () => ({ healthy: true, latencyMs: 1 })),
+  };
+
+  return client;
+}
+
 async function collect<T>(stream: AsyncGenerator<T>): Promise<T[]> {
   const results: T[] = [];
   for await (const item of stream) {
@@ -157,5 +177,38 @@ describe('AgnoAgentProvider', () => {
       },
       platform: { id: '5511999999999' },
     });
+  });
+
+  it('derives a W3C trace context from Omni traceId when dispatcher did not provide one', async () => {
+    const client = createClient();
+    const provider = new AgnoAgentProvider('agno-1', 'Agno', client, {
+      agentId: 'agent-1',
+      agentType: 'agent',
+    });
+
+    await provider.trigger(
+      createTrigger({
+        traceId: 'trc-homolog-dispatch-1',
+        traceContext: undefined,
+      }),
+    );
+
+    expect(client.lastRequest?.traceContext?.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(client.lastRequest?.traceContext?.spanId).toMatch(/^[0-9a-f]{16}$/);
+    expect(client.lastRequest?.traceContext?.traceFlags).toBe(1);
+  });
+
+  it('converts Agno stream exceptions into error deltas instead of throwing', async () => {
+    const client = createThrowingStreamClient();
+    const provider = new AgnoAgentProvider('agno-1', 'Agno', client, {
+      agentId: 'agent-1',
+      agentType: 'agent',
+    });
+
+    const deltas = await collect(provider.triggerStream(createTrigger()));
+
+    expect(deltas).toEqual([{ phase: 'error', error: 'stream exploded' }]);
+    expect(client.stream).toHaveBeenCalledTimes(1);
+    expect(client.run).not.toHaveBeenCalled();
   });
 });

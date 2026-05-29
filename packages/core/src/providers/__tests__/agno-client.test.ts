@@ -128,8 +128,8 @@ describe('AgnoClient', () => {
         sessionId: 'chat-123',
         userId: 'user-456',
         traceContext: {
-          traceId: '0123456789abcdef0123456789abcdef',
-          spanId: 'fedcba9876543210',
+          traceId: '0123456789ABCDEF0123456789ABCDEF',
+          spanId: 'FEDCBA9876543210',
           parentSpanId: '0011223344556677',
           traceFlags: 1,
           tracestate: 'vendor=value',

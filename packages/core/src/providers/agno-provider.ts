@@ -6,6 +6,7 @@
  */
 
 import { createLogger } from '../logger';
+import { createTraceContextFromTraceId } from './trace-context';
 import type {
   AgentTrigger,
   AgentTriggerResult,
@@ -120,14 +121,24 @@ export class AgnoAgentProvider implements IAgentProvider {
       traceId: context.traceId,
     });
 
-    for await (const chunk of this.client.stream(request)) {
-      if (chunk.content) {
-        yield { phase: 'content', content: chunk.content };
-      }
+    try {
+      for await (const chunk of this.client.stream(request)) {
+        if (chunk.content) {
+          yield { phase: 'content', content: chunk.content };
+        }
 
-      if (chunk.isComplete) {
-        yield { phase: 'final', content: chunk.fullContent ?? chunk.content ?? '' };
+        if (chunk.isComplete) {
+          yield { phase: 'final', content: chunk.fullContent ?? chunk.content ?? '' };
+        }
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error('Error in Agno agent stream', {
+        agentId: this.config.agentId,
+        traceId: context.traceId,
+        error: message,
+      });
+      yield { phase: 'error', error: message };
     }
   }
 
@@ -154,6 +165,12 @@ export class AgnoAgentProvider implements IAgentProvider {
 
   private buildRequest(context: AgentTrigger, message: string, stream: boolean): ProviderRequest {
     const chatType = context.source.chatId === context.sender.platformUserId ? 'dm' : 'group';
+    const traceContext =
+      context.traceContext ??
+      createTraceContextFromTraceId(
+        context.traceId,
+        `${context.source.instanceId}:${context.source.chatId}:${context.source.messageId}:agno`,
+      );
 
     return {
       message,
@@ -165,7 +182,7 @@ export class AgnoAgentProvider implements IAgentProvider {
       timeoutMs: this.config.timeoutMs ?? 60000,
       files: context.content.files,
       env: context.env,
-      traceContext: context.traceContext,
+      traceContext,
       khalSessionId: context.sessionId,
       omni: {
         instanceId: context.source.instanceId,
