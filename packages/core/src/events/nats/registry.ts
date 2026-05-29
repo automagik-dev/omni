@@ -262,3 +262,46 @@ export const SystemEventSchemas = {
     { description: 'System health degradation detected' },
   ),
 };
+
+/**
+ * Built-in custom event schemas emitted by first-party channels/plugins.
+ * Registering these keeps runtime validation useful without warning on normal traffic.
+ */
+export const CustomEventSchemas = {
+  chatUnreadUpdated: createEventSchema(
+    'custom.chat.unread-updated',
+    z.object({
+      chatId: z.string(),
+      unreadCount: z.number(),
+    }),
+    { description: 'Platform-native chat unread count update' },
+  ),
+
+  contactsNames: createEventSchema(
+    'custom.contacts.names',
+    z.object({
+      names: z.array(
+        z.object({
+          jid: z.string(),
+          name: z.string(),
+        }),
+      ),
+    }),
+    { description: 'Contact display names discovered by a channel' },
+  ),
+
+  lidMappingBatch: createEventSchema(
+    'custom.lid-mapping.batch',
+    z.object({
+      mappings: z.array(
+        z.object({
+          lidJid: z.string(),
+          phoneJid: z.string(),
+        }),
+      ),
+    }),
+    { description: 'Batch of WhatsApp LID to phone JID mappings' },
+  ),
+};
+
+registerSchemas([...Object.values(SystemEventSchemas), ...Object.values(CustomEventSchemas)]);

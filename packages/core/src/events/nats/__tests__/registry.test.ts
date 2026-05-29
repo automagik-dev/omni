@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { z } from 'zod';
-import { EventRegistry, SystemEventSchemas, createEventSchema } from '../registry';
+import { CustomEventSchemas, EventRegistry, SystemEventSchemas, createEventSchema, eventRegistry } from '../registry';
 
 describe('EventRegistry', () => {
   let registry: EventRegistry;
@@ -211,5 +211,38 @@ describe('SystemEventSchemas', () => {
 
     const result = SystemEventSchemas.healthDegraded.schema.safeParse(validPayload);
     expect(result.success).toBe(true);
+  });
+});
+
+describe('CustomEventSchemas', () => {
+  test('chat unread schema validates first-party payloads', () => {
+    const result = CustomEventSchemas.chatUnreadUpdated.schema.safeParse({
+      chatId: '5511999999999@s.whatsapp.net',
+      unreadCount: 3,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('contact names schema validates first-party payloads', () => {
+    const result = CustomEventSchemas.contactsNames.schema.safeParse({
+      names: [{ jid: '5511999999999@s.whatsapp.net', name: 'Felipe' }],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('LID mapping schema validates first-party payloads', () => {
+    const result = CustomEventSchemas.lidMappingBatch.schema.safeParse({
+      mappings: [{ lidJid: '123@lid', phoneJid: '5511999999999@s.whatsapp.net' }],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('built-in custom schemas are registered in singleton registry', () => {
+    expect(eventRegistry.has('custom.chat.unread-updated')).toBe(true);
+    expect(eventRegistry.has('custom.contacts.names')).toBe(true);
+    expect(eventRegistry.has('custom.lid-mapping.batch')).toBe(true);
   });
 });

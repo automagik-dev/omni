@@ -654,6 +654,33 @@ async function waitForRecord<T>(
   return null;
 }
 
+const MEDIA_WAIT_TIMEOUT_MS = 30_000;
+
+function awaitMediaCompletion(msgId: string): Promise<{ content: string; error?: string }> {
+  return new Promise<{ content: string; error?: string }>((resolvePromise, rejectPromise) => {
+    mediaCompletions.set(msgId, { resolve: resolvePromise, reject: rejectPromise, createdAt: Date.now() });
+    setTimeout(() => {
+      if (mediaCompletions.has(msgId)) {
+        mediaCompletions.delete(msgId);
+        rejectPromise(new Error(`media wait timeout (${MEDIA_WAIT_TIMEOUT_MS}ms)`));
+      }
+    }, MEDIA_WAIT_TIMEOUT_MS);
+  });
+}
+
+async function recoverProcessedMediaAfterTimeout(
+  services: Services,
+  chatRecordId: string,
+  externalId: string,
+  column: string,
+): Promise<{ content: string; localPath: string | null } | null> {
+  const refreshed = await services.messages.getByExternalId(chatRecordId, externalId);
+  if (!refreshed) return null;
+  const recovered = checkProcessedColumn(refreshed, column);
+  if (recovered === 'pending' || recovered === 'error') return null;
+  return recovered;
+}
+
 /**
  * Await media processing via NATS event instead of DB polling.
  * Checks: DB first (already done) → event cache (arrived early) → await promise (NATS delivery).
@@ -700,10 +727,24 @@ async function awaitMediaProcessing(
     return { content: cached.content, localPath };
   }
 
-  // 3. Await NATS event — guaranteed delivery via durable consumer
-  const result = await new Promise<{ content: string; error?: string }>((resolvePromise, rejectPromise) => {
-    mediaCompletions.set(msg.id, { resolve: resolvePromise, reject: rejectPromise, createdAt: Date.now() });
-  });
+  // 3. Await NATS event — guaranteed delivery via durable consumer (with 30s timeout fallback).
+  // If the event is delayed/lost (e.g. host overload), we re-read the DB before giving up so a
+  // successful processing whose event was dropped is still recovered.
+  let result: { content: string; error?: string };
+  try {
+    result = await awaitMediaCompletion(msg.id);
+  } catch (error) {
+    log.warn('Media wait timed out, retrying DB read', {
+      instanceId,
+      chatId,
+      externalId,
+      msgId: msg.id,
+      error: String(error),
+    });
+    const recovered = await recoverProcessedMediaAfterTimeout(services, chat.id, externalId, column);
+    if (recovered) return recovered;
+    return MEDIA_WAIT_NULL;
+  }
 
   if (!result.content || result.error) return MEDIA_WAIT_NULL;
 
