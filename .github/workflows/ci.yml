@@ -70,11 +70,22 @@ jobs:
       - name: Download NATS
         run: ./scripts/ensure-nats.sh
 
+      - name: Install autopg v3
+        # Use the current canonical pgserve distribution. `bunx pgserve@...`
+        # installs the legacy npm wrapper; Omni's runtime resolver prefers
+        # `autopg` v3 and only falls back to `pgserve` for old hosts.
+        # The installer verifies release attestations via gh/cosign; gh needs
+        # GH_TOKEN in Actions to make the verification API call. It also runs
+        # `autopg install`, which currently expects pm2 to be present even
+        # though the CI job starts autopg directly afterward.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bun add -g pm2
+          curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash
+
       - name: Start pgserve
-        # Pin to ~2.4 (the singleton supervisor entry); pgserve 2.4 dropped
-        # the bare `pgserve --port ... --no-cluster` legacy form (which now
-        # only prints a help banner) in favour of `pgserve serve`.
-        run: bunx pgserve@~2.4.0 serve --port 8432 --data .pgserve-data &
+        run: ~/.local/bin/autopg serve --port 8432 --data .pgserve-data &
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
@@ -86,6 +97,13 @@ jobs:
               echo "Database ready" && exit 0 || sleep 1
           done
           echo "Database failed to start" && exit 1
+
+      - name: Create omni database
+        # autopg v3 is consumer-only: it starts postgres/template DBs, not
+        # per-app databases. Create the `omni` DB explicitly for tests.
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -p 8432 -U postgres -c "CREATE DATABASE omni"
 
       - name: Build
         run: bun run build
@@ -148,11 +166,22 @@ jobs:
       - name: Download NATS
         run: ./scripts/ensure-nats.sh
 
+      - name: Install autopg v3
+        # Use the current canonical pgserve distribution. `bunx pgserve@...`
+        # installs the legacy npm wrapper; Omni's runtime resolver prefers
+        # `autopg` v3 and only falls back to `pgserve` for old hosts.
+        # The installer verifies release attestations via gh/cosign; gh needs
+        # GH_TOKEN in Actions to make the verification API call. It also runs
+        # `autopg install`, which currently expects pm2 to be present even
+        # though the CI job starts autopg directly afterward.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bun add -g pm2
+          curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash
+
       - name: Start pgserve
-        # Pin to ~2.4 (the singleton supervisor entry); pgserve 2.4 dropped
-        # the bare `pgserve --port ... --no-cluster` legacy form (which now
-        # only prints a help banner) in favour of `pgserve serve`.
-        run: bunx pgserve@~2.4.0 serve --port 8432 --data .pgserve-data &
+        run: ~/.local/bin/autopg serve --port 8432 --data .pgserve-data &
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
@@ -166,12 +195,10 @@ jobs:
           echo "Database failed to start" && exit 1
 
       - name: Create omni database
-        # pgserve@~2.4 `serve` is the consumer-only singleton supervisor: it
-        # boots the postmaster with the default postgres/template DBs only —
-        # it does NOT auto-provision per-app databases the way the legacy 2.3
-        # multi-tenant router did. omni-api connects to `…/omni`, so create
-        # it explicitly here. In production this is owned by `pgserve install`
-        # / `omni doctor --fix` (see pgserve-singleton-no-proxy wish G2/G5).
+        # autopg v3 is consumer-only: it starts postgres/template DBs, not
+        # per-app databases. omni-api connects to `…/omni`, so create it
+        # explicitly here. In production this is owned by `autopg install`
+        # / `omni doctor --fix`.
         env:
           PGPASSWORD: postgres
         run: psql -h localhost -p 8432 -U postgres -c "CREATE DATABASE omni"
