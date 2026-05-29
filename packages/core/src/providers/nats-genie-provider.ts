@@ -137,7 +137,7 @@ export class NatsGenieProvider implements IAgentProvider {
       contextMessages: context.contextMessages,
       files: context.content.files,
       traceContext: context.traceContext,
-      metadata: propagationHeaders,
+      metadata: this.buildSafePayloadMetadata(propagationHeaders),
       env: context.env,
     };
 
@@ -356,6 +356,24 @@ export class NatsGenieProvider implements IAgentProvider {
     }
 
     return { headers: natsHeaders };
+  }
+
+  private buildSafePayloadMetadata(traceHeaders: Record<string, string>): Record<string, string> {
+    const metadata: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(traceHeaders)) {
+      if (key === 'x-khal-user-id') {
+        metadata['x-khal-user-hash'] = this.safeHash(value);
+        continue;
+      }
+      if (key === 'x-omni-chat-id') {
+        metadata['x-omni-chat-hash'] = this.safeHash(value);
+        continue;
+      }
+      metadata[key] = value;
+    }
+
+    return metadata;
   }
 
   private safeHash(value: string): string {

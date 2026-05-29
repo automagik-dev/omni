@@ -370,4 +370,25 @@ describe('NatsGenieProvider.trigger() — trace context propagation', () => {
     expect(payload.metadata.traceparent).toBe('00-0123456789abcdef0123456789abcdef-fedcba9876543210-01');
     expect(payload.metadata['x-khal-session-id']).toBe('session-abc');
   });
+
+  it('keeps raw user and chat identifiers out of mirrored payload metadata', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.sessionId = 'session-abc';
+    trigger.traceContext = {
+      traceId: '0123456789abcdef0123456789abcdef',
+      spanId: 'fedcba9876543210',
+      traceFlags: 1,
+    };
+
+    await provider.trigger(trigger);
+
+    const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
+    expect(payload.metadata['x-khal-user-id']).toBeUndefined();
+    expect(payload.metadata['x-omni-chat-id']).toBeUndefined();
+    expect(JSON.stringify(payload.metadata)).not.toContain('5511999999999');
+    expect(JSON.stringify(payload.metadata)).not.toContain('s.whatsapp.net');
+    expect(payload.metadata['x-khal-user-hash']).toMatch(/^[a-f0-9]{12}$/);
+    expect(payload.metadata['x-omni-chat-hash']).toMatch(/^[a-f0-9]{12}$/);
+  });
 });
