@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { type NatsConnection, StringCodec, connect, headers as createNatsHeaders } from 'nats';
 import { createLogger } from '../logger';
 import { buildOmniEnv, buildOmniExecutionContext } from './execution-context';
-import { buildTraceHeaders } from './trace-context';
+import { buildTraceHeaders, createTraceContextFromTraceId } from './trace-context';
 import type {
   AgentTrigger,
   AgentTriggerResult,
@@ -133,7 +133,8 @@ export class NatsGenieProvider implements IAgentProvider {
     }
 
     const topic = `omni.message.${this.config.instanceId}.${context.source.chatId}`;
-    const propagationHeaders = this.buildPropagationHeaders(context);
+    const traceContext = this.resolveTraceContext(context);
+    const propagationHeaders = this.buildPropagationHeaders(context, traceContext);
     const payload: NatsOutboundMessage = {
       content: message,
       sender: context.sender.displayName ?? context.sender.platformUserId,
@@ -145,7 +146,7 @@ export class NatsGenieProvider implements IAgentProvider {
       messageId: context.source.messageId,
       contextMessages: context.contextMessages,
       files: context.content.files,
-      traceContext: context.traceContext,
+      traceContext,
       metadata: this.buildSafePayloadMetadata(propagationHeaders),
       env: buildOmniEnv(context),
       executionContext: buildOmniExecutionContext(context),
@@ -342,8 +343,18 @@ export class NatsGenieProvider implements IAgentProvider {
     log.info('Connected to NATS', { url: this.config.natsUrl });
   }
 
-  private buildPropagationHeaders(context: AgentTrigger): Record<string, string> {
-    return buildTraceHeaders(context.traceContext, {
+  private resolveTraceContext(context: AgentTrigger): TraceContext | undefined {
+    return (
+      context.traceContext ??
+      createTraceContextFromTraceId(
+        context.traceId,
+        `${context.source.instanceId}:${context.source.chatId}:${context.source.messageId}:nats-genie`,
+      )
+    );
+  }
+
+  private buildPropagationHeaders(context: AgentTrigger, traceContext?: TraceContext): Record<string, string> {
+    return buildTraceHeaders(traceContext, {
       khalSessionId: context.sessionId,
       userId: context.sender.personId ?? context.sender.platformUserId,
       messageId: context.source.messageId,

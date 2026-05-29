@@ -407,4 +407,27 @@ describe('NatsGenieProvider.trigger() — trace context propagation', () => {
     expect(payload.metadata['x-khal-user-hash']).toMatch(/^[a-f0-9]{12}$/);
     expect(payload.metadata['x-omni-chat-hash']).toMatch(/^[a-f0-9]{12}$/);
   });
+
+  it('derives W3C trace headers and payload trace context from dispatcher traceId when traceContext is omitted', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.traceId = 'LEGACY-TRACE-ID';
+    trigger.traceContext = undefined;
+
+    await provider.trigger(trigger);
+
+    const call = publishCalls[publishCalls.length - 1]!;
+    const headers = call.options?.headers;
+    expect(headers?.get('traceparent')).toMatch(/^00-[a-f0-9]{32}-[a-f0-9]{16}-01$/);
+    expect(headers?.get('x-trace-id')).toMatch(/^[a-f0-9]{32}$/);
+    expect(headers?.get('x-span-id')).toMatch(/^[a-f0-9]{16}$/);
+
+    const payload = JSON.parse(call.data);
+    expect(payload.traceContext).toEqual({
+      traceId: headers?.get('x-trace-id'),
+      spanId: headers?.get('x-span-id'),
+      traceFlags: 1,
+    });
+    expect(payload.metadata.traceparent).toBe(headers?.get('traceparent'));
+  });
 });

@@ -16,7 +16,7 @@ const W3C_TRACE_ID = /^[0-9a-f]{32}$/i;
 const W3C_SPAN_ID = /^[0-9a-f]{16}$/i;
 
 function isNonZeroHex(value: string): boolean {
-  return !/^0+$/.test(value);
+  return value.length > 0 && !/^0+$/.test(value);
 }
 
 function hashHex(value: string, length: 16 | 32): string {
@@ -28,7 +28,7 @@ function normalizeTraceId(value: string): string {
   if (W3C_TRACE_ID.test(lower) && isNonZeroHex(lower)) {
     return lower;
   }
-  return hashHex(value, 32);
+  return hashHex(lower, 32);
 }
 
 function normalizeSpanId(value: string): string {
@@ -36,7 +36,7 @@ function normalizeSpanId(value: string): string {
   if (W3C_SPAN_ID.test(lower) && isNonZeroHex(lower)) {
     return lower;
   }
-  return hashHex(value, 16);
+  return hashHex(lower, 16);
 }
 
 /** Build a W3C trace context from Omni's legacy trace id when no span context is available. */
