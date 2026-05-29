@@ -15,13 +15,22 @@
  * Agent replies come back via NATS subscription.
  */
 
+import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { type NatsConnection, StringCodec, connect } from 'nats';
+import { type NatsConnection, StringCodec, connect, headers as createNatsHeaders } from 'nats';
 import { createLogger } from '../logger';
 import { buildOmniEnv, buildOmniExecutionContext } from './execution-context';
-import type { AgentTrigger, AgentTriggerResult, IAgentProvider, OmniExecutionContext, ProviderFile } from './types';
+import { buildTraceHeaders } from './trace-context';
+import type {
+  AgentTrigger,
+  AgentTriggerResult,
+  IAgentProvider,
+  OmniExecutionContext,
+  ProviderFile,
+  TraceContext,
+} from './types';
 
 const log = createLogger('provider:nats-genie');
 
@@ -54,7 +63,10 @@ interface NatsOutboundMessage {
   timestamp: string;
   traceId: string;
   messageId?: string;
+  contextMessages?: string[];
   files?: ProviderFile[];
+  traceContext?: TraceContext;
+  metadata?: Record<string, string>;
   /** Environment variables for turn-based agents (OMNI_INSTANCE, OMNI_CHAT, etc.) */
   env?: Record<string, string>;
   executionContext?: OmniExecutionContext;
@@ -121,6 +133,7 @@ export class NatsGenieProvider implements IAgentProvider {
     }
 
     const topic = `omni.message.${this.config.instanceId}.${context.source.chatId}`;
+    const propagationHeaders = this.buildPropagationHeaders(context);
     const payload: NatsOutboundMessage = {
       content: message,
       sender: context.sender.displayName ?? context.sender.platformUserId,
@@ -130,24 +143,30 @@ export class NatsGenieProvider implements IAgentProvider {
       timestamp: new Date().toISOString(),
       traceId: context.traceId,
       messageId: context.source.messageId,
+      contextMessages: context.contextMessages,
       files: context.content.files,
+      traceContext: context.traceContext,
+      metadata: this.buildSafePayloadMetadata(propagationHeaders),
       env: buildOmniEnv(context),
       executionContext: buildOmniExecutionContext(context),
     };
 
     try {
       await this.ensureConnected();
-      this.nc?.publish(topic, this.sc.encode(JSON.stringify(payload)));
+      this.nc?.publish(topic, this.sc.encode(JSON.stringify(payload)), this.buildPublishOptions(propagationHeaders));
 
       log.info('Published to NATS', {
-        topic,
+        subject: 'omni.message.<instance>.<chat_hash>',
         agent: this.config.agentName,
-        chatId: context.source.chatId,
+        instanceId: this.config.instanceId,
+        chatHash: this.safeHash(context.source.chatId),
         traceId: context.traceId,
       });
     } catch (error) {
       log.error('Failed to publish to NATS, writing to dead-letter queue', {
-        topic,
+        subject: 'omni.message.<instance>.<chat_hash>',
+        instanceId: this.config.instanceId,
+        chatHash: this.safeHash(context.source.chatId),
         error: error instanceof Error ? error.message : String(error),
         traceId: context.traceId,
       });
@@ -214,7 +233,8 @@ export class NatsGenieProvider implements IAgentProvider {
           }
         } catch (error) {
           log.error('Error processing reply', {
-            subject: msg.subject,
+            subject: 'omni.reply.<instance>.<chat_hash>',
+            subjectHash: this.safeHash(msg.subject),
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -253,7 +273,7 @@ export class NatsGenieProvider implements IAgentProvider {
     if (!chatId) {
       log.warn('NATS session reset skipped: missing chatId', {
         providerId: this.id,
-        sessionKey,
+        sessionKeyHash: this.safeHash(sessionKey),
       });
       throw new Error('chatId is required to reset NATS Genie session');
     }
@@ -272,14 +292,17 @@ export class NatsGenieProvider implements IAgentProvider {
       await this.ensureConnected();
       this.nc?.publish(topic, this.sc.encode(JSON.stringify(payload)));
       log.info('Published session reset to NATS', {
-        topic,
+        subject: 'omni.session.reset.<instance>.<chat_hash>',
         providerId: this.id,
-        sessionKey,
-        chatId,
+        instanceId: resolvedInstanceId,
+        sessionKeyHash: this.safeHash(sessionKey),
+        chatHash: this.safeHash(chatId),
       });
     } catch (error) {
       log.error('Failed to publish NATS session reset', {
-        topic,
+        subject: 'omni.session.reset.<instance>.<chat_hash>',
+        instanceId: resolvedInstanceId,
+        chatHash: this.safeHash(chatId),
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;
@@ -317,6 +340,54 @@ export class NatsGenieProvider implements IAgentProvider {
     });
 
     log.info('Connected to NATS', { url: this.config.natsUrl });
+  }
+
+  private buildPropagationHeaders(context: AgentTrigger): Record<string, string> {
+    return buildTraceHeaders(context.traceContext, {
+      khalSessionId: context.sessionId,
+      userId: context.sender.personId ?? context.sender.platformUserId,
+      messageId: context.source.messageId,
+      omni: {
+        instanceId: context.source.instanceId,
+        chatId: context.source.chatId,
+        channel: context.source.channelType,
+      },
+    });
+  }
+
+  private buildPublishOptions(
+    traceHeaders: Record<string, string>,
+  ): { headers?: ReturnType<typeof createNatsHeaders> } | undefined {
+    if (Object.keys(traceHeaders).length === 0) return undefined;
+
+    const natsHeaders = createNatsHeaders();
+    for (const [key, value] of Object.entries(traceHeaders)) {
+      natsHeaders.set(key, value);
+    }
+
+    return { headers: natsHeaders };
+  }
+
+  private buildSafePayloadMetadata(traceHeaders: Record<string, string>): Record<string, string> {
+    const metadata: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(traceHeaders)) {
+      if (key === 'x-khal-user-id') {
+        metadata['x-khal-user-hash'] = this.safeHash(value);
+        continue;
+      }
+      if (key === 'x-omni-chat-id') {
+        metadata['x-omni-chat-hash'] = this.safeHash(value);
+        continue;
+      }
+      metadata[key] = value;
+    }
+
+    return metadata;
+  }
+
+  private safeHash(value: string): string {
+    return createHash('sha256').update(value).digest('hex').slice(0, 12);
   }
 
   private buildMessage(context: AgentTrigger): string {

@@ -86,6 +86,17 @@ export interface ProviderRequest {
 
   /** Canonical Omni execution context propagated across local CLIs and remote protocols. */
   executionContext?: OmniExecutionContext;
+  /** Distributed trace context to propagate on outbound provider calls. */
+  traceContext?: TraceContext;
+  /** Khal session id for cross-service session stitching. Falls back to sessionId when unset. */
+  khalSessionId?: string;
+  /** Omni source metadata propagated to provider transports. */
+  omni?: {
+    instanceId?: string;
+    chatId?: string;
+    messageId?: string;
+    channel?: ChannelType;
+  };
 }
 
 export interface ProviderFile {
@@ -308,6 +319,10 @@ export interface TraceContext {
   parentSpanId?: string;
   /** W3C trace flags (1 = sampled, 0 = not). Default 1 when unset. */
   traceFlags?: number;
+  /** W3C tracestate header value. */
+  tracestate?: string;
+  /** Backward-compatible camelCase alias for tracestate. */
+  traceState?: string;
 }
 
 /**
@@ -393,6 +408,15 @@ export interface IAgentProvider {
   readonly name: string;
   readonly schema: ProviderSchema;
   readonly mode: 'round-trip' | 'fire-and-forget' | 'turn-based';
+  /**
+   * Optional observability hooks. See {@link ProviderObservability}.
+   *
+   * Providers that don't implement this fall back to no-op tracing — the
+   * dispatcher checks for the field's presence and skips propagation calls
+   * when absent. Backend-neutral: emitted spans use whatever OTel SDK the
+   * host configured via OTEL_* env vars; no vendor coupling here.
+   */
+  readonly observability?: ProviderObservability;
 
   /** Check if this provider can handle a given trigger */
   canHandle(trigger: AgentTrigger): boolean;
@@ -414,16 +438,6 @@ export interface IAgentProvider {
    *  can reconstruct the correct session key.
    *  instanceId is provided for providers that scope persistence by instance. */
   resetSession?(sessionKey: string, chatId?: string, instanceId?: string): Promise<void>;
-
-  /**
-   * Optional observability hooks. See {@link ProviderObservability}.
-   *
-   * Providers that don't implement this fall back to no-op tracing — the
-   * dispatcher checks for the field's presence and skips propagation calls
-   * when absent. Backend-neutral: emitted spans use whatever OTel SDK the
-   * host configured via OTEL_* env vars; no vendor coupling here.
-   */
-  observability?: ProviderObservability;
 }
 
 /**
@@ -481,6 +495,8 @@ export interface AgentTrigger {
    * Includes OMNI_INSTANCE, OMNI_CHAT, OMNI_MESSAGE, OMNI_TURN_ID.
    */
   env?: Record<string, string>;
+  /** Distributed trace context to propagate on outbound provider calls. */
+  traceContext?: TraceContext;
 }
 
 /**

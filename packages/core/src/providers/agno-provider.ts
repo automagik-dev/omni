@@ -7,7 +7,15 @@
 
 import { createLogger } from '../logger';
 import { buildProviderRequestContext } from './execution-context';
-import type { AgentTrigger, AgentTriggerResult, IAgentClient, IAgentProvider, ProviderRequest } from './types';
+import { createTraceContextFromTraceId } from './trace-context';
+import type {
+  AgentTrigger,
+  AgentTriggerResult,
+  IAgentClient,
+  IAgentProvider,
+  ProviderRequest,
+  StreamDelta,
+} from './types';
 
 const log = createLogger('provider:agno');
 
@@ -36,14 +44,7 @@ export class AgnoAgentProvider implements IAgentProvider {
   async trigger(context: AgentTrigger): Promise<AgentTriggerResult> {
     const startTime = Date.now();
 
-    // Build the message from trigger content
-    let message = '';
-    if (context.content.text) {
-      message = context.content.text;
-    } else if (context.content.emoji) {
-      // For reaction triggers, format as a reaction notification
-      message = `[Reaction: ${context.content.emoji} on message ${context.content.referencedMessageId ?? context.source.messageId}]`;
-    }
+    const message = this.buildMessage(context);
 
     if (!message) {
       log.debug('No content to send to agent', { traceId: context.traceId });
@@ -57,19 +58,7 @@ export class AgnoAgentProvider implements IAgentProvider {
       };
     }
 
-    // Prefix sender name if configured
-    if (this.config.prefixSenderName !== false && context.sender.displayName) {
-      message = `[${context.sender.displayName}]: ${message}`;
-    }
-
-    const request: ProviderRequest = {
-      ...buildProviderRequestContext(context),
-      message,
-      agentId: this.config.agentId,
-      agentType: this.config.agentType,
-      stream: false,
-      timeoutMs: this.config.timeoutMs ?? 60000,
-    };
+    const request = this.buildRequest(context, message, false);
 
     log.info('Triggering Agno agent', {
       agentId: this.config.agentId,
@@ -116,7 +105,90 @@ export class AgnoAgentProvider implements IAgentProvider {
     };
   }
 
+  async *triggerStream(context: AgentTrigger): AsyncGenerator<StreamDelta> {
+    const message = this.buildMessage(context);
+
+    if (!message) {
+      log.debug('No content to send to Agno agent (stream)', { traceId: context.traceId });
+      return;
+    }
+
+    const request = this.buildRequest(context, message, true);
+
+    log.info('Streaming Agno agent', {
+      agentId: this.config.agentId,
+      agentType: this.config.agentType,
+      triggerType: context.type,
+      traceId: context.traceId,
+    });
+
+    try {
+      for await (const chunk of this.client.stream(request)) {
+        if (chunk.content) {
+          yield { phase: 'content', content: chunk.content };
+        }
+
+        if (chunk.isComplete) {
+          yield { phase: 'final', content: chunk.fullContent ?? chunk.content ?? '' };
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error('Error in Agno agent stream', {
+        agentId: this.config.agentId,
+        traceId: context.traceId,
+        error: message,
+      });
+      yield { phase: 'error', error: message };
+    }
+  }
+
   async checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
     return this.client.checkHealth();
+  }
+
+  private buildMessage(context: AgentTrigger): string {
+    let message = '';
+    if (context.content.text) {
+      message = context.content.text;
+    } else if (context.content.emoji) {
+      // For reaction triggers, format as a reaction notification
+      message = `[Reaction: ${context.content.emoji} on message ${context.content.referencedMessageId ?? context.source.messageId}]`;
+    }
+
+    // Prefix sender name if configured
+    if (message && this.config.prefixSenderName !== false && context.sender.displayName) {
+      message = `[${context.sender.displayName}]: ${message}`;
+    }
+
+    return message;
+  }
+
+  private buildRequest(context: AgentTrigger, message: string, stream: boolean): ProviderRequest {
+    const traceContext =
+      context.traceContext ??
+      createTraceContextFromTraceId(
+        context.traceId,
+        `${context.source.instanceId}:${context.source.chatId}:${context.source.messageId}:agno`,
+      );
+
+    return {
+      ...buildProviderRequestContext(context),
+      message,
+      agentId: this.config.agentId,
+      agentType: this.config.agentType,
+      stream,
+      timeoutMs: this.config.timeoutMs ?? 60000,
+      files: context.content.files,
+      traceContext,
+      khalSessionId: context.sessionId,
+      omni: {
+        instanceId: context.source.instanceId,
+        chatId: context.source.chatId,
+        messageId: context.source.messageId,
+        channel: context.source.channelType,
+      },
+      ...(context.source.chatId ? { mcpUrlParams: { chat_id: context.source.chatId } } : {}),
+    };
   }
 }
