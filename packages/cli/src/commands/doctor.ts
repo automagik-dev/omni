@@ -254,6 +254,11 @@ export interface DoctorDeps {
   /** Resolve canonical pgserve's on-disk data dir for operator-facing logs. */
   getCanonicalPgserveDataDir: () => string;
   /**
+   * Optional test seam for the expensive host-local orphaned embedded data
+   * comparison. Production leaves this undefined and uses the real disk.
+   */
+  checkEmbeddedDataOrphaned?: () => Promise<CheckResult | null>;
+  /**
    * Persist a partial server config (merges with existing). Stubbed in
    * tests so the canonical-pgserve fix can be validated without writing
    * to ~/.omni/config.json.
@@ -526,6 +531,9 @@ async function checkOmniDbExists(deps: DoctorDeps): Promise<CheckResult> {
  * against the embedded dir, copies tables to canonical, shuts down).
  */
 async function checkEmbeddedDataOrphaned(deps: DoctorDeps): Promise<CheckResult> {
+  const injected = await deps.checkEmbeddedDataOrphaned?.();
+  if (injected) return injected;
+
   const { serverConfig } = deps.loadState();
   if (serverConfig.useCanonicalPgserve !== true) {
     return { id: 'embedded-data-orphaned', level: 'OK', detail: 'embedded mode — no orphan check needed' };

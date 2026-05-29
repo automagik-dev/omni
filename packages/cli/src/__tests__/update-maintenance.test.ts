@@ -258,9 +258,14 @@ describe('runDoctor dryRun contract', () => {
       listLockedInstances: async () => [],
       cliHasSigningKey: () => true,
       setupCanonicalPgserve: async () => 'postgres://localhost/omni',
-      dumpEmbeddedDb: async () => ({ status: 'no-embedded-data' }),
+      dumpEmbeddedDb: async () => ({ status: 'no-embedded-data', embeddedDir: '/tmp/embedded' }),
       restoreSnapshotToCanonical: async () => ({ status: 'skipped' }),
       getCanonicalPgserveDataDir: () => '/tmp/canonical',
+      checkEmbeddedDataOrphaned: async () => ({
+        id: 'embedded-data-orphaned',
+        level: 'OK',
+        detail: 'test harness: no host-local embedded data comparison',
+      }),
       saveServerConfig: () => {
         throw new Error('saveServerConfig must NOT be called in dry-run');
       },

@@ -324,6 +324,11 @@ function mkDeps(state: HarnessState): DoctorDeps {
         : { status: 'skipped' as const };
     },
     getCanonicalPgserveDataDir: () => state.canonicalDataDir,
+    checkEmbeddedDataOrphaned: async () => ({
+      id: 'embedded-data-orphaned',
+      level: 'OK',
+      detail: 'test harness: no host-local embedded data comparison',
+    }),
     saveServerConfig: (partial) => {
       state.serverConfig = { ...state.serverConfig, ...partial };
       state.savedServerConfigs.push({ ...partial });
