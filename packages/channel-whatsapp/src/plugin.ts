@@ -3068,6 +3068,126 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   // ALL EVENT HANDLERS (for comprehensive Baileys coverage)
   // ─────────────────────────────────────────────────────────────
 
+  private whatsappEventMeta(instanceId: string, suffix: string): Record<string, unknown> {
+    return {
+      instanceId,
+      channelType: this.id,
+      source: `channel:${this.id}`,
+      correlationId: `${suffix}-${instanceId}`,
+    };
+  }
+
+  /**
+   * Handle Baileys messaging-history.status events.
+   * Read-only observability event: no WhatsApp side effects.
+   * @internal
+   */
+  handleMessagingHistoryStatus(
+    instanceId: string,
+    status: { syncType?: unknown; status?: string; explicit?: boolean },
+  ): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.whatsapp.messaging-history-status',
+        {
+          instanceId,
+          syncType: status.syncType,
+          status: status.status ?? 'unknown',
+          explicit: status.explicit,
+          timestamp: Date.now(),
+        },
+        this.whatsappEventMeta(instanceId, 'history-status'),
+      )
+      .catch((err) => this.logger.warn('Failed to publish messaging history status', { error: String(err) }));
+  }
+
+  /**
+   * Handle Baileys message-capping.update events.
+   * Read-only observability event: no WhatsApp side effects.
+   * @internal
+   */
+  handleMessageCappingUpdate(instanceId: string, info: unknown): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.whatsapp.message-capping-updated',
+        { instanceId, info, timestamp: Date.now() },
+        this.whatsappEventMeta(instanceId, 'message-capping'),
+      )
+      .catch((err) => this.logger.warn('Failed to publish message capping update', { error: String(err) }));
+  }
+
+  /**
+   * Handle Baileys settings.update events.
+   * Read-only observability event: no WhatsApp side effects.
+   * @internal
+   */
+  handleSettingsUpdate(instanceId: string, update: { setting?: string; value?: unknown }): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.whatsapp.settings-updated',
+        {
+          instanceId,
+          setting: update.setting ?? 'unknown',
+          value: update.value,
+          timestamp: Date.now(),
+        },
+        this.whatsappEventMeta(instanceId, `settings-${update.setting ?? 'unknown'}`),
+      )
+      .catch((err) => this.logger.warn('Failed to publish settings update', { error: String(err) }));
+  }
+
+  /**
+   * Handle Baileys chats.lock events.
+   * Read-only observability event: no WhatsApp side effects.
+   * @internal
+   */
+  handleChatLockUpdate(instanceId: string, update: { id?: string; locked?: boolean }): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.whatsapp.chat-lock-updated',
+        {
+          instanceId,
+          chatId: update.id ?? '',
+          locked: update.locked ?? false,
+          timestamp: Date.now(),
+        },
+        this.whatsappEventMeta(instanceId, `chat-lock-${update.id ?? 'unknown'}`),
+      )
+      .catch((err) => this.logger.warn('Failed to publish chat lock update', { error: String(err) }));
+  }
+
+  /**
+   * Handle Baileys group.member-tag.update events.
+   * Read-only observability event: no WhatsApp side effects.
+   * @internal
+   */
+  handleGroupMemberTagUpdate(
+    instanceId: string,
+    update: {
+      groupId?: string;
+      participant?: string;
+      participantAlt?: string;
+      label?: string;
+      messageTimestamp?: number;
+    },
+  ): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.whatsapp.group-member-tag-updated',
+        {
+          instanceId,
+          groupId: update.groupId ?? '',
+          participant: update.participant ?? '',
+          participantAlt: update.participantAlt,
+          label: update.label ?? '',
+          messageTimestamp: update.messageTimestamp,
+          timestamp: Date.now(),
+        },
+        this.whatsappEventMeta(instanceId, `group-member-tag-${update.groupId ?? 'unknown'}`),
+      )
+      .catch((err) => this.logger.warn('Failed to publish group member tag update', { error: String(err) }));
+  }
+
   /**
    * Handle incoming call (voice/video)
    * @internal

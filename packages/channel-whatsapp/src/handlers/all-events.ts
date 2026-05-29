@@ -13,6 +13,8 @@ import type { WhatsAppPlugin } from '../plugin';
 const waLog = createLogger('whatsapp:events');
 const DEBUG = process.env.DEBUG_PAYLOADS === 'true';
 
+type BaileysEventListener = (event: string, listener: (payload: never) => void) => void;
+
 function logEvent(event: string, data: unknown): void {
   waLog.debug('Event received', { event });
   if (DEBUG) {
@@ -50,6 +52,11 @@ function processLidMappings(data: unknown, plugin: WhatsAppPlugin, instanceId: s
  * This captures everything for debugging and future feature development
  */
 export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, instanceId: string): void {
+  // Some read-only events are available at runtime in newer Baileys RCs before
+  // the local vendored typings catch up. Keep those listeners string-based and
+  // isolated so this file remains type-safe without blocking observability.
+  const onReadOnlyEvent = sock.ev.on.bind(sock.ev) as BaileysEventListener;
+
   // ============================================================================
   // CALLS - Voice/Video calls
   // ============================================================================
@@ -105,6 +112,12 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
     plugin.handleChatsDelete(instanceId, chatIds);
   });
 
+  onReadOnlyEvent('chats.lock', (update: { id?: string; locked?: boolean }) => {
+    waLog.info('Chat lock update', { chatId: update.id, locked: update.locked });
+    if (DEBUG) logEvent('chats.lock', update);
+    plugin.handleChatLockUpdate(instanceId, update);
+  });
+
   // ============================================================================
   // CONTACTS - Contact list updates
   // ============================================================================
@@ -147,6 +160,25 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
     plugin.handleGroupJoinRequest(instanceId, request);
   });
 
+  onReadOnlyEvent(
+    'group.member-tag.update',
+    (update: {
+      groupId?: string;
+      participant?: string;
+      participantAlt?: string;
+      label?: string;
+      messageTimestamp?: number;
+    }) => {
+      waLog.info('Group member tag update', {
+        groupId: update.groupId,
+        participant: update.participant,
+        label: update.label,
+      });
+      if (DEBUG) logEvent('group.member-tag.update', update);
+      plugin.handleGroupMemberTagUpdate(instanceId, update);
+    },
+  );
+
   // ============================================================================
   // MESSAGE RECEIPTS - Delivery/read confirmations
   // ============================================================================
@@ -173,6 +205,15 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
     }
   });
 
+  onReadOnlyEvent('message-capping.update', (info: unknown) => {
+    waLog.info('Message capping update', {
+      type: info && typeof info === 'object' ? (info as { type?: unknown }).type : undefined,
+      reason: info && typeof info === 'object' ? (info as { reason?: unknown }).reason : undefined,
+    });
+    if (DEBUG) logEvent('message-capping.update', info);
+    plugin.handleMessageCappingUpdate(instanceId, info);
+  });
+
   // ============================================================================
   // HISTORY SYNC - Initial chat/message sync
   // ============================================================================
@@ -196,6 +237,16 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
     await plugin.handleHistorySync(instanceId, history);
   });
 
+  onReadOnlyEvent('messaging-history.status', (status: { syncType?: unknown; status?: string; explicit?: boolean }) => {
+    waLog.info('History sync status', {
+      syncType: status.syncType,
+      status: status.status,
+      explicit: status.explicit,
+    });
+    if (DEBUG) logEvent('messaging-history.status', status);
+    plugin.handleMessagingHistoryStatus(instanceId, status);
+  });
+
   // ============================================================================
   // BLOCKLIST - Blocked contacts
   // ============================================================================
@@ -209,6 +260,12 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
     waLog.info('Blocklist update', { type: data.type, count: data.blocklist.length });
     if (DEBUG) logEvent('blocklist.update', data);
     plugin.handleBlocklistUpdate(instanceId, data.blocklist, data.type);
+  });
+
+  onReadOnlyEvent('settings.update', (update: { setting?: string; value?: unknown }) => {
+    waLog.info('Settings update', { setting: update.setting });
+    if (DEBUG) logEvent('settings.update', update);
+    plugin.handleSettingsUpdate(instanceId, update);
   });
 
   // ============================================================================
