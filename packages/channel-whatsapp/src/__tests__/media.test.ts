@@ -3,6 +3,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   buildAudioContent,
   buildDocumentContent,
@@ -78,6 +79,15 @@ describe('Media Utilities', () => {
         if (original === undefined) process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB = undefined;
         else process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB = original;
       }
+    });
+  });
+
+  describe('downloadMediaToFile cleanup', () => {
+    it('removes partial files when stream download fails or writes zero bytes', () => {
+      const source = readFileSync(new URL('../utils/download.ts', import.meta.url), 'utf8');
+      expect(source).toContain('await rm(outputPath, { force: true });');
+      expect(source).toContain('catch (error)');
+      expect(source).toContain('if (size === 0)');
     });
   });
 });

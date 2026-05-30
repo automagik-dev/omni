@@ -6,7 +6,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -283,8 +283,16 @@ export async function downloadMediaToFile(
 
   const stream = await downloadMediaMessage(msg, 'stream', {});
   await mkdir(dirname(outputPath), { recursive: true });
-  await pipeline(stream, sizeGuard, createWriteStream(outputPath));
+  try {
+    await pipeline(stream, sizeGuard, createWriteStream(outputPath));
+  } catch (error) {
+    await rm(outputPath, { force: true });
+    throw error;
+  }
 
-  if (size === 0) return null;
+  if (size === 0) {
+    await rm(outputPath, { force: true });
+    return null;
+  }
   return { mimeType: mediaInfo.mimeType, size };
 }

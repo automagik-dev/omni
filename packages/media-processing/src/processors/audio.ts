@@ -461,6 +461,12 @@ async function normalizeAudioFileForProvider(filePath: string, mimeType: string)
         timeout: 5 * 60_000,
       },
     );
+    const normalizedStats = await fs.stat(output);
+    if (normalizedStats.size > PROVIDER_AUDIO_TARGET_BYTES) {
+      throw new Error(
+        `Normalized audio still exceeds provider upload limit: ${normalizedStats.size} bytes > ${PROVIDER_AUDIO_TARGET_BYTES} bytes`,
+      );
+    }
     return { filePath: output, mimeType: 'audio/mpeg', format: 'mp3', cleanupPath: dir };
   } catch (error) {
     await fs.rm(dir, { recursive: true, force: true });

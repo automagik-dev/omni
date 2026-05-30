@@ -108,6 +108,13 @@ describe('processors', () => {
       expect(source).not.toContain('mkdtempSync');
       expect(source).not.toContain('rmSync');
     });
+
+    it('checks provider upload limit after ffmpeg normalization', () => {
+      const source = readFileSync(new URL('../src/processors/audio.ts', import.meta.url), 'utf8');
+      expect(source).toContain('const normalizedStats = await fs.stat(output);');
+      expect(source).toContain('normalizedStats.size > PROVIDER_AUDIO_TARGET_BYTES');
+      expect(source).toContain('Normalized audio still exceeds provider upload limit');
+    });
   });
 
   describe('ImageProcessor', () => {
