@@ -45,7 +45,7 @@ export function createReactCommand(): Command {
 
       try {
         const instanceId = await resolveInstanceId(ctx.instanceId);
-        const chatId = await resolveRecipient(ctx.chatId);
+        const chatId = await resolveRecipient(ctx.chatId, instanceId);
 
         // Resolve message to react to
         const messageId = await resolveReplyTo(options.message);

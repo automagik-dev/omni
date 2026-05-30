@@ -236,4 +236,30 @@ describe('WhatsAppPlugin read-only Baileys event publishing', () => {
       source: `channel:${plugin.id}`,
     });
   });
+
+  test('ignores null unread counts from Baileys chat events', () => {
+    const { plugin, publishGeneric } = createPluginWithEventBus();
+
+    plugin.handleChatsUpsert(instanceId, [{ id: '5511999999999@s.whatsapp.net', unreadCount: null }]);
+    plugin.handleChatsUpdate(instanceId, [{ id: '5511888888888@s.whatsapp.net', unreadCount: null }]);
+
+    expect(publishGeneric).not.toHaveBeenCalled();
+  });
+
+  test('publishes zero unread counts from Baileys chat events', () => {
+    const { plugin, publishGeneric } = createPluginWithEventBus();
+
+    plugin.handleChatsUpsert(instanceId, [{ id: '5511999999999@s.whatsapp.net', unreadCount: 0 }]);
+    plugin.handleChatsUpdate(instanceId, [{ id: '5511888888888@s.whatsapp.net', unreadCount: 0 }]);
+
+    expect(publishGeneric).toHaveBeenCalledTimes(2);
+    expect(publishGeneric.mock.calls[0]?.[1]).toMatchObject({
+      chatId: '5511999999999@s.whatsapp.net',
+      unreadCount: 0,
+    });
+    expect(publishGeneric.mock.calls[1]?.[1]).toMatchObject({
+      chatId: '5511888888888@s.whatsapp.net',
+      unreadCount: 0,
+    });
+  });
 });

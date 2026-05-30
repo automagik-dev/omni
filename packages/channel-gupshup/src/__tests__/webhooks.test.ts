@@ -182,7 +182,7 @@ describe('Gupshup native inbound payload shapes', () => {
   it('contacts message has raw.payload.contacts array', () => {
     const contacts = [
       {
-        name: { formatted_name: 'Cezar Namastex Vasconcelos', first_name: 'Cezar Namastex', last_name: 'Vasconcelos' },
+        name: { formatted_name: 'Example Contact', first_name: 'Example', last_name: 'Contact' },
         phones: [{ phone: '5551997285829', wa_id: '555197285829' }],
       },
     ];
@@ -203,7 +203,7 @@ describe('Gupshup native inbound payload shapes', () => {
 
     expect(payload.messageobj.type).toBe('contacts');
     const raw = (payload.messageobj as { raw: { payload: { contacts: typeof contacts } } }).raw;
-    expect(raw.payload.contacts[0]?.name.formatted_name).toBe('Cezar Namastex Vasconcelos');
+    expect(raw.payload.contacts[0]?.name.formatted_name).toBe('Example Contact');
     expect(raw.payload.contacts[0]?.phones[0]?.phone).toBe('5551997285829');
   });
 

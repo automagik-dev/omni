@@ -2,10 +2,11 @@
 
 ## Reporting a Vulnerability
 
-Email `security@namastex.ai` with a description of the issue and steps to
-reproduce. We will acknowledge within 2 business days and target a fix
-window proportional to severity. Do NOT file public issues for
-security-sensitive reports.
+Use GitHub Security Advisories for private vulnerability reports:
+`https://github.com/automagik-dev/omni/security/advisories/new`.
+Include a description of the issue and steps to reproduce. We will
+acknowledge within 2 business days and target a fix window proportional to
+severity. Do NOT file public issues for security-sensitive reports.
 
 ## Release Signing — Pinned Identity (cosign keyless)
 
@@ -52,18 +53,17 @@ gh attestation verify omni-<version>-<platform>.tar.gz --owner automagik-dev
 ### Consumer Trust
 
 `pgserve verify --slug omni` (pgserve v3+) verifies omni release tarballs
-against this exact certificate identity. The pgserve trust-list at
-`src/cosign/trust-list.js` in `namastexlabs/pgserve` anchors on this
-regex literally — renaming the `sign-attest.yml` workflow file breaks the
-trust loop.
+against this exact certificate identity. Downstream trust lists anchor on
+this regex literally — renaming the `sign-attest.yml` workflow file breaks
+the trust loop.
 
 ### Rotation
 
 Rotating the signing identity (workflow rename, repo rename, OIDC issuer
 change, source-URI rebind) requires:
 
-1. Two Namastex security officers landing a single PR that updates all
-   four witnesses AND `scripts/check-fingerprint-pinning.sh`.
+1. Two project maintainers landing a single PR that updates all four
+   witnesses AND `scripts/check-fingerprint-pinning.sh`.
 2. A new `.github/ISSUE_TEMPLATE/signing-key-fingerprint.md` filing dated
    `SIGNING_CERT_IDENTITY_YYYYMMDD` that supersedes the previous pin.
 3. Coordination with downstream consumers (notably pgserve's trust-list)

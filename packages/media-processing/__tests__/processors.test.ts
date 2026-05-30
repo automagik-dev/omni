@@ -173,6 +173,46 @@ describe('processors', () => {
         expect(processor.canProcess('video/mp4')).toBe(false);
       });
     });
+
+    it('falls back to OOXML extraction when ExcelJS cannot parse workbook metadata', async () => {
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+      zip.file(
+        '[Content_Types].xml',
+        '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>',
+      );
+      zip.file(
+        'docProps/core.xml',
+        '<?xml version="1.0"?><coreProperties><lastModifiedBy>Some User</lastModifiedBy></coreProperties>',
+      );
+      zip.file(
+        'xl/workbook.xml',
+        '<?xml version="1.0"?><workbook><sheets><sheet name="Budget &amp; Ops" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      );
+      zip.file('xl/sharedStrings.xml', '<sst><si><t>Name</t></si><si><t>Total</t></si><si><t>ACME, Inc</t></si></sst>');
+      zip.file(
+        'xl/worksheets/sheet1.xml',
+        '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>42</v></c></row></sheetData></worksheet>',
+      );
+
+      const excelPath = join(tmpdir(), `omni-excel-fallback-${Date.now()}.xlsx`);
+      await writeFile(excelPath, Buffer.from(await zip.generateAsync({ type: 'uint8array' })));
+
+      try {
+        const result = await processor.process(
+          excelPath,
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.model).toBe('xlsx-ooxml-fallback');
+        expect(result.content).toContain('## Budget & Ops');
+        expect(result.content).toContain('Name,Total');
+        expect(result.content).toContain('"ACME, Inc",42');
+      } finally {
+        await rm(excelPath, { force: true });
+      }
+    });
   });
 
   describe('VideoProcessor', () => {
@@ -196,6 +236,12 @@ describe('processors', () => {
         expect(processor.canProcess('image/jpeg')).toBe(false);
         expect(processor.canProcess('application/pdf')).toBe(false);
       });
+    });
+
+    it('normalizes oversized videos before provider upload instead of dropping them', () => {
+      const source = readFileSync(new URL('../src/processors/video.ts', import.meta.url), 'utf8');
+      expect(source).toContain('prepareVideoForGemini');
+      expect(source).not.toContain('Video too large');
     });
 
     describe('process (without API keys)', () => {

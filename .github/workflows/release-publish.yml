@@ -60,7 +60,7 @@ on:
         required: true
         type: choice
         default: stable
-        # Canonical channel taxonomy (Felipe directive 2026-05-12,
+        # Canonical channel taxonomy (release taxonomy 2026-05-12,
         # unified across pgserve/omni/genie). beta + canary retired.
         options:
           - stable
@@ -265,7 +265,7 @@ jobs:
           done
 
           git config user.name "release-bot"
-          git config user.email "release-bot@namastex.com"
+          git config user.email "release-bot@example.com"
           # Stage first, then compare against HEAD. `git diff --quiet <path>`
           # returns 0 (no diff) for *untracked* files because they aren't in
           # the index — staging registers the path; then

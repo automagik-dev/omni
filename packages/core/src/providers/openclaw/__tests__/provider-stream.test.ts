@@ -143,7 +143,7 @@ function createMockTrigger(overrides?: Partial<AgentTrigger>): AgentTrigger {
     sender: {
       platformUserId: 'u-1',
       personId: 'p-1',
-      displayName: 'Felipe',
+      displayName: 'Example User',
     },
     content: {
       text: 'hello',

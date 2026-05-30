@@ -183,7 +183,7 @@ omni instances profile <id> <userId>      # Get user profile
 ## Persons
 
 ```bash
-omni persons search "Felipe"               # Search by name
+omni persons search "Example User"               # Search by name
 omni persons search "+5511"                # Search by phone
 omni persons get <id>                      # Get person details
 omni persons presence <id>                # Cross-channel presence

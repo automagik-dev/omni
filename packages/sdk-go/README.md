@@ -5,7 +5,7 @@ Go SDK for the Omni v2 omnichannel messaging API.
 ## Installation
 
 ```bash
-go get github.com/anthropics/omni-v2/packages/sdk-go
+go get github.com/automagik-dev/omni/packages/sdk-go
 ```
 
 ## Quick Start
@@ -17,7 +17,7 @@ import (
     "fmt"
     "log"
 
-    omni "github.com/anthropics/omni-v2/packages/sdk-go"
+    omni "github.com/automagik-dev/omni/packages/sdk-go"
 )
 
 func main() {
@@ -154,7 +154,7 @@ result, err := client.Webhooks.Trigger(&omni.TriggerEventParams{
 ## Error Handling
 
 ```go
-import "github.com/anthropics/omni-v2/packages/sdk-go"
+import "github.com/automagik-dev/omni/packages/sdk-go"
 
 instance, err := client.Instances.Get("non-existent-id")
 if err != nil {

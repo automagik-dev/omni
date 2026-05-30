@@ -306,6 +306,7 @@
         "@omni/core": "workspace:*",
         "exceljs": "^4.4.0",
         "groq-sdk": "^0.15.0",
+        "jszip": "^3.10.1",
         "mammoth": "^1.8.0",
         "openai": "^4.77.0",
         "pdf-parse": "^1.1.1",

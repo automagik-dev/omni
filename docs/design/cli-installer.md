@@ -9,15 +9,15 @@ Currently, the Omni CLI is installed via `make cli-link` during development. Thi
 On the local development machine (`genie-os`), a manual helper exists at `~/.omni/bin/omni` which is a bash wrapper:
 ```bash
 #!/usr/bin/env bash
-exec bun "/home/genie/workspace/repos/automagik/omni/packages/cli/src/index.ts" "$@"
+exec bun "/path/to/omni/packages/cli/src/index.ts" "$@"
 ```
 
-In production (`10.114.1.140`), the `omni` command is **not** currently installed in the PATH.
+In a production-like server environment, the `omni` command may not yet be installed in the user's PATH.
 
 ## 2. Proposed Behavior: `install.sh`
 
 The goal is a one-liner:
-`curl -fsSL https://omni.namastex.io/install.sh | bash`
+`curl -fsSL https://example.com/omni/install.sh | bash`
 
 ### 2.1. Key Responsibilities
 1.  **Environment Detection:** Detect OS (Linux/macOS) and Architecture (x64/arm64).
@@ -100,12 +100,12 @@ echo "Run 'omni --help' to get started."
 -   **Multiple Shells:** If a user uses both Bash and Zsh, we might only update the current one. Maybe check for existence of common RC files.
 -   **Uninstall:** Provide `uninstall.sh` or a command `omni self-uninstall` that removes `~/.omni` and cleans up RC files (though cleaning RC files is tricky/dangerous).
 
-## 4. Production Findings (10.114.1.140)
+## 4. Production-like Findings
 
--   **User:** `omni`
+-   **User:** dedicated service account
 -   **Shell:** `/bin/bash`
 -   **Current PATH:** Standard, missing Omni.
--   **Recommendation:** Running `install.sh` on this machine should target `/home/omni/.omni/bin` and update `/home/omni/.bashrc`.
+-   **Recommendation:** Running `install.sh` should target `$HOME/.omni/bin` and update the service account shell profile.
 
 ## 5. Next Steps
 
