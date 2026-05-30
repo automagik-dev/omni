@@ -66,7 +66,24 @@ export async function resolveInstanceId(input: string): Promise<string> {
  * Exits with error if no match or ambiguous.
  */
 export async function resolveChatId(input: string, instanceId?: string): Promise<string> {
-  if (UUID_RE.test(input)) return input;
+  if (UUID_RE.test(input)) {
+    if (instanceId) {
+      const client = getClient();
+      let chat: { id: string; instanceId: string } | null = null;
+      try {
+        chat = (await client.chats.get(input)) as { id: string; instanceId: string } | null;
+      } catch {
+        // Treat exceptions the same as a missing chat below.
+      }
+      if (!chat) {
+        output.error(`No chat found matching "${input}"`);
+      }
+      if (chat.instanceId !== instanceId) {
+        output.error(`Chat ${input.slice(0, 8)} belongs to instance ${chat.instanceId}, not ${instanceId}`);
+      }
+    }
+    return input;
+  }
 
   const client = getClient();
   const result = await client.chats.list({ limit: 100, instanceId });

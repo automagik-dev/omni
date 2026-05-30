@@ -41,9 +41,11 @@ mock.module('../output.js', () => ({
 // Mock getClient
 const mockGetMessages = mock();
 const mockListChats = mock();
+const mockGetChat = mock();
 mock.module('../client.js', () => ({
   getClient: () => ({
     chats: {
+      get: mockGetChat,
       getMessages: mockGetMessages,
       list: mockListChats,
     },
@@ -135,6 +137,36 @@ describe('resolveChatId', () => {
   beforeEach(() => {
     mockError.mockClear();
     mockListChats.mockClear();
+    mockGetChat.mockClear();
+  });
+
+  test('validates full UUID chat belongs to provided instance', async () => {
+    const chatId = '11111111-1111-4111-8111-111111111111';
+    mockGetChat.mockResolvedValue({ id: chatId, instanceId: 'instance-b', name: 'Example Contact' });
+
+    const result = await resolveChatId(chatId, 'instance-b');
+
+    expect(result).toBe(chatId);
+    expect(mockGetChat).toHaveBeenCalledWith(chatId);
+    expect(mockListChats).not.toHaveBeenCalled();
+  });
+
+  test('rejects full UUID chat from a different instance', async () => {
+    const chatId = '11111111-1111-4111-8111-111111111111';
+    mockGetChat.mockResolvedValue({ id: chatId, instanceId: 'instance-a', name: 'Example Contact' });
+
+    await expect(resolveChatId(chatId, 'instance-b')).rejects.toThrow(
+      `Chat ${chatId.slice(0, 8)} belongs to instance instance-a, not instance-b`,
+    );
+    expect(mockListChats).not.toHaveBeenCalled();
+  });
+
+  test('rejects full UUID chat when API returns null', async () => {
+    const chatId = '11111111-1111-4111-8111-111111111111';
+    mockGetChat.mockResolvedValue(null);
+
+    await expect(resolveChatId(chatId, 'instance-b')).rejects.toThrow(`No chat found matching "${chatId}"`);
+    expect(mockListChats).not.toHaveBeenCalled();
   });
 
   test('scopes chat lookup by instance when provided', async () => {
