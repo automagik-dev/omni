@@ -57,7 +57,8 @@
         "libsodium-wrappers",
         "mammoth",
         "opusscript",
-        "pdf-parse"
+        "pdf-parse",
+        "sharp"
       ]
     },
     "packages/db": {
