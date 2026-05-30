@@ -2,8 +2,11 @@
  * Tests for media processors
  */
 
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AudioProcessor, DocumentProcessor, ImageProcessor, VideoProcessor } from '../src/processors';
 import type { ProcessorConfig } from '../src/types';
 
@@ -14,6 +17,12 @@ const mockConfig: ProcessorConfig = {
   defaultLanguage: 'pt',
   maxFileSizeMb: 25,
 };
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
 
 describe('processors', () => {
   describe('AudioProcessor', () => {
@@ -50,6 +59,46 @@ describe('processors', () => {
         expect(result.success).toBe(false);
         expect(result.errorMessage).toContain('not configured');
       });
+    });
+
+    it('falls back from OpenAI audio-chat to OpenAI transcriptions before Gemini/Groq', async () => {
+      const audioPath = join(tmpdir(), `omni-audio-processor-${Date.now()}.mp3`);
+      await writeFile(audioPath, Buffer.from('fake-audio'));
+      const calls: Array<{ url: string; init?: RequestInit }> = [];
+      globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), init });
+        if (String(url).includes('/chat/completions')) {
+          return new Response('audio chat unavailable', { status: 400 });
+        }
+        return new Response(JSON.stringify({ text: 'fallback transcript' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as unknown as typeof fetch;
+
+      try {
+        const processorWithOpenAi = new AudioProcessor({
+          ...mockConfig,
+          openaiApiKey: 'test-openai-key',
+          geminiApiKey: 'test-gemini-key',
+          groqApiKey: undefined,
+          audioProvider: 'openai',
+          audioModel: 'gpt-audio-mini',
+        });
+
+        const result = await processorWithOpenAi.process(audioPath, 'audio/mpeg', { language: 'pt-BR' });
+
+        expect(result.success).toBe(true);
+        expect(result.content).toBe('fallback transcript');
+        expect(result.provider).toBe('openai');
+        expect(result.model).toBe('gpt-4o-transcribe');
+        expect(calls.map((call) => call.url)).toEqual([
+          'https://api.openai.com/v1/chat/completions',
+          'https://api.openai.com/v1/audio/transcriptions',
+        ]);
+      } finally {
+        await rm(audioPath, { force: true });
+      }
     });
 
     it('does not use synchronous ffmpeg/file normalization in the event loop', () => {

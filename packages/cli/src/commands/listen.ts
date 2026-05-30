@@ -2,6 +2,7 @@
  * Listen Command — Speech-to-text verb
  *
  * omni listen audio.ogg                       — print transcription to stdout
+ * omni listen audio.ogg --provider openai     — force OpenAI STT (quality default)
  * omni listen audio.ogg --provider gemini     — force Gemini STT (handles >19.5MB)
  * omni listen audio.ogg --provider groq       — force Groq Whisper (fast, 19.5MB cap)
  * omni listen audio.ogg --language pt         — language hint
@@ -83,7 +84,7 @@ export function createListenCommand(): Command {
     new Command('listen')
       .description('Transcribe an audio file to text and print (or send as reply)')
       .argument('<file>', 'Path to the audio file to transcribe')
-      .option('--provider <name>', 'STT provider (gemini, groq). Default: server config.')
+      .option('--provider <name>', 'STT provider (openai, gemini, groq). Default: server config.')
       .option('--language <code>', 'BCP-47 language hint (e.g. en, pt-BR)')
       .option('--timestamps', 'Include per-segment timestamps')
       .option('--format <fmt>', `Output format: ${ALLOWED_FORMATS.join(', ')} (default: text)`)
