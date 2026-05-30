@@ -3742,7 +3742,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const mediaResult = await tryDownloadMedia(msg, instanceId, msg.key.id, this.config.apiBaseUrl);
     if (mediaResult) {
       content.mediaUrl = mediaResult.mediaUrl;
-      // Note: content doesn't have mediaLocalPath field, but mediaUrl is enough for storage
+      content.localPath = mediaResult.mediaLocalPath;
+      content.mimeType = mediaResult.mimeType;
     }
 
     const chatId = msg.key.remoteJid;
@@ -3781,6 +3782,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const rawPayload: Record<string, unknown> = {
         ...(msg as unknown as Record<string, unknown>),
       };
+      if (content.localPath) rawPayload.mediaLocalPath = content.localPath;
       this.enrichPayloadWithChatName(rawPayload, instanceId, chatId);
 
       const historySenderName = (msg as { pushName?: string | null }).pushName ?? undefined;
@@ -3903,9 +3905,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Simplified version for history sync processing
    * @internal
    */
-  private extractHistoryMessageContent(
-    msg: WAMessage,
-  ): { type: string; text?: string; mediaUrl?: string; mimeType?: string; caption?: string } | null {
+  private extractHistoryMessageContent(msg: WAMessage): {
+    type: string;
+    text?: string;
+    mediaUrl?: string;
+    localPath?: string;
+    mimeType?: string;
+    caption?: string;
+  } | null {
     const message = msg.message;
     if (!message) return null;
 

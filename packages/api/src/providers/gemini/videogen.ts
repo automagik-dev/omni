@@ -25,6 +25,7 @@ const log = createLogger('gemini-videogen');
 /** Settings reader interface — avoids circular dep on SettingsService */
 export interface GeminiVideoGenSettingsReader {
   getSecret(key: string, envFallback?: string): Promise<string | undefined>;
+  getString(key: string, envFallback?: string, defaultValue?: string): Promise<string | undefined>;
 }
 
 /**
@@ -56,20 +57,27 @@ export class GeminiVideoGenProvider implements IVideoGenProvider {
     const aspectRatio =
       options?.aspectRatio === '9:16' || options?.aspectRatio === '16:9' ? options.aspectRatio : '16:9';
 
+    const model =
+      (await this.settings.getString('videogen.gemini.model', 'GEMINI_VIDEO_MODEL', GEMINI_MODELS.VIDEO_GEN)) ??
+      GEMINI_MODELS.VIDEO_GEN;
+
     log.info('Submitting Veo 3.1 video generation', {
+      model,
       promptLen: prompt.length,
       aspectRatio,
       durationSec: options?.durationSec,
+      audio: options?.audio !== false,
     });
 
     const operation = await client.models.generateVideos({
-      model: GEMINI_MODELS.VIDEO_GEN,
+      model,
       prompt,
       config: {
         aspectRatio,
         ...(options?.durationSec !== undefined ? { durationSeconds: options.durationSec } : {}),
         ...(options?.seed !== undefined ? { seed: options.seed } : {}),
-        ...(options?.audio !== undefined ? { generateAudio: options.audio } : {}),
+        generateAudio: options?.audio !== false,
+        ...(options?.resolution !== undefined ? { resolution: options.resolution } : {}),
       },
     });
 

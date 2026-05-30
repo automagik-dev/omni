@@ -47,6 +47,18 @@ export const PRICING_REGISTRY: Record<string, PricingRate> = {
     unit: 'per_minute',
     inputRate: 0.006, // $0.006 per minute
   },
+  'openai_whisper:gpt-audio-mini': {
+    model: 'gpt-audio-mini',
+    provider: 'openai',
+    unit: 'per_minute',
+    inputRate: 0.006, // estimated duration-based allocation for reporting
+  },
+  'openai_whisper:gpt-4o-transcribe': {
+    model: 'gpt-4o-transcribe',
+    provider: 'openai',
+    unit: 'per_minute',
+    inputRate: 0.006, // $0.006 per minute transcription lane
+  },
 
   // ============================================================================
   // OPENAI VISION (Image Description - Fallback)

@@ -893,7 +893,8 @@ export class BatchJobService {
     if (jobType === 'time_based_batch' && daysBack !== undefined) {
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - daysBack);
-      conditions.push(gte(messages.createdAt, cutoffDate));
+      // For retroactive sync/backfill, platformTimestamp is the message date; createdAt is ingestion time.
+      conditions.push(gte(messages.platformTimestamp, cutoffDate));
     }
 
     // Query with join
@@ -902,7 +903,7 @@ export class BatchJobService {
       .from(messages)
       .innerJoin(chats, eq(messages.chatId, chats.id))
       .where(and(...conditions, ...chatConditions))
-      .orderBy(desc(messages.createdAt))
+      .orderBy(desc(messages.platformTimestamp))
       .$dynamic();
 
     if (limit) {

@@ -12,9 +12,11 @@ describe('pricing', () => {
       expect(PRICING_REGISTRY['groq_whisper:whisper-large-v3-turbo']?.inputRate).toBe(0.04);
     });
 
-    it('contains OpenAI Whisper pricing', () => {
+    it('contains OpenAI STT pricing', () => {
       expect(PRICING_REGISTRY['openai_whisper:whisper-1']).toBeDefined();
       expect(PRICING_REGISTRY['openai_whisper:whisper-1']?.unit).toBe('per_minute');
+      expect(PRICING_REGISTRY['openai_whisper:gpt-audio-mini']).toBeDefined();
+      expect(PRICING_REGISTRY['openai_whisper:gpt-4o-transcribe']).toBeDefined();
     });
 
     it('contains Gemini Vision pricing', () => {
@@ -77,12 +79,17 @@ describe('pricing', () => {
         expect(costCents).toBe(6);
       });
 
-      it('calculates cost for 1 minute of audio', () => {
+      it('calculates cost for 1 minute of legacy OpenAI audio', () => {
         const costCents = calculateCost('openai_whisper', 'whisper-1', {
           durationSeconds: 60,
         });
         // $0.006/minute = 0.6 cents (fractional, not rounded)
         expect(costCents).toBeCloseTo(0.6, 2);
+      });
+
+      it('calculates non-zero cost for current OpenAI STT defaults', () => {
+        expect(calculateCost('openai_whisper', 'gpt-audio-mini', { durationSeconds: 60 })).toBeGreaterThan(0);
+        expect(calculateCost('openai_whisper', 'gpt-4o-transcribe', { durationSeconds: 60 })).toBeGreaterThan(0);
       });
     });
 

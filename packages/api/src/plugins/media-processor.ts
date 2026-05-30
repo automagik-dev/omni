@@ -116,7 +116,9 @@ interface MediaProcessorContext {
   services: Services;
   mediaService: MediaProcessingService;
   mediaStorage: MediaStorageService;
+  defaultLanguage: string;
   promptOverrides: {
+    audio?: string;
     image?: string;
     video?: string;
     document?: string;
@@ -339,6 +341,7 @@ async function persistProcessingResult(
  * Resolve the prompt override for a given content type
  */
 function getPromptOverride(ctx: MediaProcessorContext, contentType: string | undefined): string | undefined {
+  if (contentType === 'audio') return ctx.promptOverrides.audio;
   if (contentType === 'image') return ctx.promptOverrides.image;
   if (contentType === 'video') return ctx.promptOverrides.video;
   if (contentType === 'document') return ctx.promptOverrides.document;
@@ -376,7 +379,7 @@ async function processMessageMedia(
   log.info('Processing media', { messageId: media.messageId, mimeType, filePath: media.fullPath });
 
   const result = await ctx.mediaService.process(media.fullPath, mimeType, {
-    language: 'pt',
+    language: ctx.defaultLanguage,
     caption: content.text,
     prompt: getPromptOverride(ctx, content.type),
   });
@@ -527,22 +530,38 @@ async function resolveMediaIdForCrash(
  */
 export async function setupMediaProcessor(eventBus: EventBus, db: Database, services: Services): Promise<void> {
   // Read API keys and prompt overrides from settings DB with env var fallback
-  const [groqApiKey, openaiApiKey, geminiApiKey, defaultLanguage, imagePrompt, videoPrompt, documentPrompt] =
-    await Promise.all([
-      services.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
-      services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
-      services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
-      services.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
-      services.settings.getString('prompt.image_description'),
-      services.settings.getString('prompt.video_description'),
-      services.settings.getString('prompt.document_ocr'),
-    ]);
+  const [
+    groqApiKey,
+    openaiApiKey,
+    geminiApiKey,
+    defaultLanguage,
+    audioProvider,
+    audioModel,
+    audioPrompt,
+    imagePrompt,
+    videoPrompt,
+    documentPrompt,
+  ] = await Promise.all([
+    services.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
+    services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
+    services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
+    services.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
+    services.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
+    services.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
+    services.settings.getString('prompt.audio_transcription'),
+    services.settings.getString('prompt.image_description'),
+    services.settings.getString('prompt.video_description'),
+    services.settings.getString('prompt.document_ocr'),
+  ]);
 
   const mediaService = createMediaProcessingService({
     groqApiKey,
     openaiApiKey,
     geminiApiKey,
     defaultLanguage,
+    audioProvider: audioProvider ?? 'openai',
+    audioModel: audioModel ?? 'gpt-audio-mini',
+    audioPrompt: audioPrompt ?? undefined,
   });
   const mediaStorage = new MediaStorageService(db);
 
@@ -552,7 +571,9 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     services,
     mediaService,
     mediaStorage,
+    defaultLanguage: defaultLanguage ?? 'pt',
     promptOverrides: {
+      audio: audioPrompt,
       image: imagePrompt,
       video: videoPrompt,
       document: documentPrompt,
