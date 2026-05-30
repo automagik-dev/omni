@@ -40,6 +40,7 @@ class ProviderRegistry {
     imagegen: 'imagegen.provider',
     videogen: 'videogen.provider',
     vision: 'vision.provider',
+    musicgen: 'musicgen.provider',
   };
 
   /**

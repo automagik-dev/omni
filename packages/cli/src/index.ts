@@ -39,6 +39,7 @@ import { createListenCommand } from './commands/listen.js';
 import { createLogsCommand } from './commands/logs.js';
 import { createMediaCommand } from './commands/media.js';
 import { createMessagesCommand } from './commands/messages.js';
+import { createMusicCommand } from './commands/music.js';
 import { createOpenCommand } from './commands/open.js';
 import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
@@ -144,6 +145,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Core',
     helpDescription: 'Generate a video from a prompt (Gemini Veo 3.1, verb command)',
+  },
+  {
+    create: createMusicCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Generate music/audio from a prompt (Gemini Lyria, verb command)',
   },
   {
     create: createSpeakCommand,

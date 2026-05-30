@@ -61,25 +61,35 @@ export class GeminiVideoGenProvider implements IVideoGenProvider {
       (await this.settings.getString('videogen.gemini.model', 'GEMINI_VIDEO_MODEL', GEMINI_MODELS.VIDEO_GEN)) ??
       GEMINI_MODELS.VIDEO_GEN;
 
-    log.info('Submitting Veo 3.1 video generation', {
+    const veoPrompt = buildVeoPrompt(prompt, options);
+    const request: Record<string, unknown> = {
       model,
-      promptLen: prompt.length,
-      aspectRatio,
-      durationSec: options?.durationSec,
-      audio: options?.audio !== false,
-    });
-
-    const operation = await client.models.generateVideos({
-      model,
-      prompt,
+      prompt: veoPrompt,
       config: {
         aspectRatio,
         ...(options?.durationSec !== undefined ? { durationSeconds: options.durationSec } : {}),
         ...(options?.seed !== undefined ? { seed: options.seed } : {}),
-        generateAudio: options?.audio !== false,
         ...(options?.resolution !== undefined ? { resolution: options.resolution } : {}),
       },
+    };
+    if (options?.imageBase64) {
+      request.image = {
+        imageBytes: options.imageBase64,
+        mimeType: options.imageMimeType ?? 'image/png',
+      };
+    }
+
+    log.info('Submitting Veo 3.1 video generation', {
+      model,
+      promptLen: veoPrompt.length,
+      aspectRatio,
+      durationSec: options?.durationSec,
+      audio: options?.audio !== false,
+      imageToVideo: !!options?.imageBase64,
     });
+
+    // biome-ignore lint/suspicious/noExplicitAny: Veo image-to-video SDK typing lags API shape.
+    const operation = await client.models.generateVideos(request as any);
 
     return this.toVideoGenOperation(operation);
   }
@@ -193,4 +203,16 @@ export class GeminiVideoGenProvider implements IVideoGenProvider {
     const data = Buffer.from(arrayBuffer);
     return { data, mimeType, durationMs: 0 };
   }
+}
+
+function buildVeoPrompt(prompt: string, options?: VideoGenOptions): string {
+  const parts = [prompt];
+  if (options?.style) parts.push(`Visual style: ${options.style}.`);
+  if (options?.camera) parts.push(`Camera/framing: ${options.camera}.`);
+  if (options?.dialogue) parts.push(`Dialogue: ${options.dialogue}.`);
+  if (options?.audioDirection) parts.push(`Audio direction: ${options.audioDirection}.`);
+  if (options?.music) parts.push(`Music: ${options.music}.`);
+  if (options?.shotList?.length)
+    parts.push(`Shot list:\n${options.shotList.map((shot, i) => `${i + 1}. ${shot}`).join('\n')}`);
+  return parts.join('\n\n');
 }

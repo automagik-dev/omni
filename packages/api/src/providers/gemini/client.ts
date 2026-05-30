@@ -21,9 +21,9 @@ export const GEMINI_MODELS = {
   /** Pro model — highest quality text/vision */
   PRO: 'gemini-2.5-pro-preview-06-05',
   /** TTS — text-to-speech via multimodal live */
-  TTS: 'gemini-2.5-flash-preview-tts',
-  /** Image generation — Imagen 3 (Nano Banana 2) */
-  IMAGE_GEN: 'imagen-3.0-generate-002',
+  TTS: 'gemini-3.1-flash-tts-preview',
+  /** Image generation — Gemini 3.1 Flash Image / Nano Banana 2 */
+  IMAGE_GEN: 'gemini-3.1-flash-image',
   /** Video generation — Veo 3.1 */
   VIDEO_GEN: 'veo-3.1-generate-preview',
   /** Vision — image/video understanding */
