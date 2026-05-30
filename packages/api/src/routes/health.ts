@@ -4,7 +4,7 @@
 
 import { consumerOffsets, instances } from '@omni/db';
 import { sql } from 'drizzle-orm';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import packageJson from '../../package.json';
 import { arePluginsDegraded, getPluginsDegradedReason } from '../plugin-state';
 import type { AppVariables, HealthCheck, HealthResponse } from '../types';
@@ -17,7 +17,7 @@ export const healthRoutes = new Hono<{ Variables: AppVariables }>();
 /**
  * GET /health - Basic health check (no auth required)
  */
-healthRoutes.get('/health', async (c) => {
+export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
   const db = c.get('db');
   const eventBus = c.get('eventBus');
   const channelRegistry = c.get('channelRegistry');
@@ -106,7 +106,9 @@ healthRoutes.get('/health', async (c) => {
   };
 
   return c.json(response, status === 'healthy' ? 200 : 503);
-});
+};
+
+healthRoutes.get('/health', getHealth);
 
 /**
  * GET /info - System info (no auth required)
