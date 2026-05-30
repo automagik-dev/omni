@@ -76,7 +76,7 @@ import { rateLimitMiddleware } from './middleware/rate-limit';
 import { defaultTimeoutMiddleware } from './middleware/timeout';
 import { versionHeadersMiddleware } from './middleware/version-headers';
 import { createWebhookAuthMiddleware } from './middleware/webhook-auth';
-import { healthRoutes } from './routes/health';
+import { getHealth, healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
 import type { Services } from './services';
@@ -149,7 +149,7 @@ export function createApp(
   app.onError(errorHandler);
 
   // Root-level health redirect for external checkers (k8s probes, genie providers)
-  app.get('/health', (c) => c.redirect('/api/v2/health', 307));
+  app.get('/health', getHealth);
 
   // Health routes (no auth required)
   app.route('/api/v2', healthRoutes);
