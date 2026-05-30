@@ -182,7 +182,7 @@ export class OpenAiSttProvider implements ISttProvider {
   }
 }
 
-export function buildPrompt(options?: SttOptions, flags?: { compact?: boolean }): string {
+function buildPrompt(options?: SttOptions, flags?: { compact?: boolean }): string {
   const parts: string[] = [];
   const language = (options?.language ?? '').toLowerCase();
   if (options?.prompt) {
