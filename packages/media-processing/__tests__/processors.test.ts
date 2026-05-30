@@ -3,6 +3,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { AudioProcessor, DocumentProcessor, ImageProcessor, VideoProcessor } from '../src/processors';
 import type { ProcessorConfig } from '../src/types';
 
@@ -49,6 +50,14 @@ describe('processors', () => {
         expect(result.success).toBe(false);
         expect(result.errorMessage).toContain('not configured');
       });
+    });
+
+    it('does not use synchronous ffmpeg/file normalization in the event loop', () => {
+      const source = readFileSync(new URL('../src/processors/audio.ts', import.meta.url), 'utf8');
+      expect(source).not.toContain('execFileSync');
+      expect(source).not.toContain('readFileSync');
+      expect(source).not.toContain('mkdtempSync');
+      expect(source).not.toContain('rmSync');
     });
   });
 

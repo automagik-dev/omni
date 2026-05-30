@@ -8,11 +8,12 @@
  * Uses centralized retry + circuit breaker for resilience.
  */
 
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
 import { statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { promisify } from 'node:util';
 import Groq from 'groq-sdk';
 import type { Uploadable } from 'openai/uploads';
 
@@ -25,6 +26,7 @@ import { BaseProcessor } from './base';
 const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const GEMINI_GENERATE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const execFileAsync = promisify(execFile);
 
 /** Audio processor using quality-first STT with fallbacks. */
 export class AudioProcessor extends BaseProcessor {
@@ -146,7 +148,7 @@ export class AudioProcessor extends BaseProcessor {
       const text = await this.executeWithResilience(
         'openai',
         async () => {
-          const normalized = normalizeFileForOpenAiAudioChat(filePath, mimeType);
+          const normalized = await normalizeFileForOpenAiAudioChat(filePath, mimeType);
           const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
             method: 'POST',
             headers: {
@@ -389,16 +391,19 @@ function extractText(content: unknown): string {
   }
 }
 
-function normalizeFileForOpenAiAudioChat(filePath: string, mimeType: string): { audio: Buffer; format: 'mp3' | 'wav' } {
+async function normalizeFileForOpenAiAudioChat(
+  filePath: string,
+  mimeType: string,
+): Promise<{ audio: Buffer; format: 'mp3' | 'wav' }> {
   const format = toOpenAiAudioFormat(mimeType);
   if (format === 'mp3' || format === 'wav') {
-    return { audio: readFileSync(filePath), format };
+    return { audio: await fs.readFile(filePath), format };
   }
 
-  const dir = mkdtempSync(join(tmpdir(), 'omni-openai-audio-'));
+  const dir = await fs.mkdtemp(join(tmpdir(), 'omni-openai-audio-'));
   const output = join(dir, `${basename(filePath)}.mp3`);
   try {
-    execFileSync(
+    await execFileAsync(
       'ffmpeg',
       [
         '-y',
@@ -418,12 +423,11 @@ function normalizeFileForOpenAiAudioChat(filePath: string, mimeType: string): { 
       ],
       {
         timeout: 60_000,
-        stdio: ['ignore', 'ignore', 'pipe'],
       },
     );
-    return { audio: readFileSync(output), format: 'mp3' };
+    return { audio: await fs.readFile(output), format: 'mp3' };
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    await fs.rm(dir, { recursive: true, force: true });
   }
 }
 

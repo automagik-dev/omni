@@ -5,10 +5,11 @@
  * Stable fallback: gpt-4o-transcribe via /audio/transcriptions.
  */
 
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { createLogger } from '@omni/core';
 import type { ISttProvider, SttOptions, SttResult, SttSegment } from '../types';
 
@@ -18,6 +19,7 @@ const DEFAULT_AUDIO_CHAT_MODEL = 'gpt-audio-mini';
 const DEFAULT_TRANSCRIBE_MODEL = 'gpt-4o-transcribe';
 const CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
 const TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
+const execFileAsync = promisify(execFile);
 
 export interface OpenAiSttSettingsReader {
   getSecret(key: string, envFallback?: string): Promise<string | undefined>;
@@ -53,13 +55,13 @@ export class OpenAiSttProvider implements ISttProvider {
     );
     const model = options?.model ?? configuredModel ?? DEFAULT_AUDIO_CHAT_MODEL;
 
-    if (model.startsWith('gpt-audio')) {
+    if (model.startsWith('gpt-audio') && !options?.timestamps) {
       return this.transcribeWithAudioChat(apiKey, model, audio, mimeType, options, started);
     }
 
     return this.transcribeWithTranscriptions(
       apiKey,
-      model || DEFAULT_TRANSCRIBE_MODEL,
+      model.startsWith('gpt-audio') ? DEFAULT_TRANSCRIBE_MODEL : model || DEFAULT_TRANSCRIBE_MODEL,
       audio,
       mimeType,
       options,
@@ -76,7 +78,7 @@ export class OpenAiSttProvider implements ISttProvider {
     started: number,
   ): Promise<SttResult> {
     const prompt = buildPrompt(options);
-    const normalized = normalizeForOpenAiAudioChat(audio, mimeType);
+    const normalized = await normalizeForOpenAiAudioChat(audio, mimeType);
     log.debug('Calling OpenAI audio chat STT', {
       model,
       mimeType,
@@ -233,18 +235,21 @@ function extractAssistantText(data: OpenAiChatResponse): string {
   }
 }
 
-function normalizeForOpenAiAudioChat(audio: Buffer, mimeType: string): { audio: Buffer; format: 'mp3' | 'wav' } {
+async function normalizeForOpenAiAudioChat(
+  audio: Buffer,
+  mimeType: string,
+): Promise<{ audio: Buffer; format: 'mp3' | 'wav' }> {
   const format = toOpenAiAudioFormat(mimeType);
   if (format === 'mp3' || format === 'wav') {
     return { audio, format };
   }
 
-  const dir = mkdtempSync(join(tmpdir(), 'omni-openai-audio-'));
+  const dir = await fs.mkdtemp(join(tmpdir(), 'omni-openai-audio-'));
   const input = join(dir, `input.${sourceExtension(mimeType)}`);
   const output = join(dir, 'output.mp3');
   try {
-    writeFileSync(input, audio);
-    execFileSync(
+    await fs.writeFile(input, audio);
+    await execFileAsync(
       'ffmpeg',
       [
         '-y',
@@ -264,12 +269,11 @@ function normalizeForOpenAiAudioChat(audio: Buffer, mimeType: string): { audio: 
       ],
       {
         timeout: 60_000,
-        stdio: ['ignore', 'ignore', 'pipe'],
       },
     );
-    return { audio: readFileSync(output), format: 'mp3' };
+    return { audio: await fs.readFile(output), format: 'mp3' };
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    await fs.rm(dir, { recursive: true, force: true });
   }
 }
 
