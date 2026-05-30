@@ -226,7 +226,7 @@ describe('CustomEventSchemas', () => {
 
   test('contact names schema validates first-party payloads', () => {
     const result = CustomEventSchemas.contactsNames.schema.safeParse({
-      names: [{ jid: '5511999999999@s.whatsapp.net', name: 'Felipe' }],
+      names: [{ jid: '5511999999999@s.whatsapp.net', name: 'Example User' }],
     });
 
     expect(result.success).toBe(true);

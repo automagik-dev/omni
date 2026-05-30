@@ -65,11 +65,11 @@ export async function resolveInstanceId(input: string): Promise<string> {
  *
  * Exits with error if no match or ambiguous.
  */
-export async function resolveChatId(input: string): Promise<string> {
+export async function resolveChatId(input: string, instanceId?: string): Promise<string> {
   if (UUID_RE.test(input)) return input;
 
   const client = getClient();
-  const result = await client.chats.list({ limit: 100 });
+  const result = await client.chats.list({ limit: 100, instanceId });
   const chats = result.items;
 
   // Partial UUID prefix (at least 2 chars, looks hex-ish)
@@ -107,7 +107,7 @@ export async function resolveChatId(input: string): Promise<string> {
  * Otherwise, resolves as a chat identifier (full UUID, UUID prefix, name).
  * Exits with error if resolution fails.
  */
-export async function resolveRecipient(input: string): Promise<string> {
+export async function resolveRecipient(input: string, instanceId?: string): Promise<string> {
   // Full UUID — pass through
   if (UUID_RE.test(input)) return input;
 
@@ -118,7 +118,7 @@ export async function resolveRecipient(input: string): Promise<string> {
   if (input.includes('@')) return input;
 
   // Try to resolve as a chat identifier (short ID or name)
-  return resolveChatId(input);
+  return resolveChatId(input, instanceId);
 }
 
 /**

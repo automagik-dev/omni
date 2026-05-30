@@ -26,6 +26,7 @@ import { BaseProcessor } from './base';
 const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 const GEMINI_GENERATE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const PROVIDER_AUDIO_TARGET_BYTES = 24 * 1024 * 1024;
 const execFileAsync = promisify(execFile);
 
 /** Audio processor using quality-first STT with fallbacks. */
@@ -206,25 +207,30 @@ export class AudioProcessor extends BaseProcessor {
       const text = await this.executeWithResilience(
         'openai',
         async () => {
-          const fileBuffer = await Bun.file(filePath).arrayBuffer();
-          const form = new FormData();
-          form.append(
-            'file',
-            new File([fileBuffer], `audio.${toOpenAiAudioFormat(mimeType)}`, { type: mimeType }) as unknown as Blob,
-          );
-          form.append('model', model);
-          form.append('response_format', 'json');
-          if (language) form.append('language', language.toLowerCase() === 'pt-br' ? 'pt' : language);
-          form.append('prompt', buildPrompt(language, options, this.config.audioPrompt, this.config.audioGlossary));
-          const response = await fetch(OPENAI_TRANSCRIPTIONS_URL, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${this.config.openaiApiKey}` },
-            body: form,
-          });
-          if (!response.ok)
-            throw new Error(`OpenAI transcription error (${response.status}): ${await response.text()}`);
-          const data = (await response.json()) as { text?: string };
-          return data.text ?? '';
+          const normalized = await normalizeAudioFileForProvider(filePath, mimeType);
+          try {
+            const fileBuffer = await Bun.file(normalized.filePath).arrayBuffer();
+            const form = new FormData();
+            form.append(
+              'file',
+              new File([fileBuffer], `audio.${normalized.format}`, { type: normalized.mimeType }) as unknown as Blob,
+            );
+            form.append('model', model);
+            form.append('response_format', 'json');
+            if (language) form.append('language', language.toLowerCase() === 'pt-br' ? 'pt' : language);
+            form.append('prompt', buildPrompt(language, options, this.config.audioPrompt, this.config.audioGlossary));
+            const response = await fetch(OPENAI_TRANSCRIPTIONS_URL, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${this.config.openaiApiKey}` },
+              body: form,
+            });
+            if (!response.ok)
+              throw new Error(`OpenAI transcription error (${response.status}): ${await response.text()}`);
+            const data = (await response.json()) as { text?: string };
+            return data.text ?? '';
+          } finally {
+            if (normalized.cleanupPath) await fs.rm(normalized.cleanupPath, { recursive: true, force: true });
+          }
         },
         { timeoutMs: timeouts.audioTimeoutMs },
       );
@@ -250,34 +256,39 @@ export class AudioProcessor extends BaseProcessor {
       const text = await this.executeWithResilience(
         'gemini',
         async () => {
-          const fileBuffer = await Bun.file(filePath).arrayBuffer();
-          const url = `${GEMINI_GENERATE_URL}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.config.geminiApiKey ?? '')}`;
-          const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [
-                {
-                  role: 'user',
-                  parts: [
-                    { text: buildPrompt(language, options, this.config.audioPrompt, this.config.audioGlossary) },
-                    {
-                      inlineData: {
-                        data: Buffer.from(fileBuffer).toString('base64'),
-                        mimeType: normalizeGeminiAudioMimeType(mimeType),
+          const normalized = await normalizeAudioFileForProvider(filePath, mimeType);
+          try {
+            const fileBuffer = await Bun.file(normalized.filePath).arrayBuffer();
+            const url = `${GEMINI_GENERATE_URL}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.config.geminiApiKey ?? '')}`;
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [
+                  {
+                    role: 'user',
+                    parts: [
+                      { text: buildPrompt(language, options, this.config.audioPrompt, this.config.audioGlossary) },
+                      {
+                        inlineData: {
+                          data: Buffer.from(fileBuffer).toString('base64'),
+                          mimeType: normalizeGeminiAudioMimeType(normalized.mimeType),
+                        },
                       },
-                    },
-                  ],
-                },
-              ],
-            }),
-          });
-          if (!response.ok)
-            throw new Error(`Gemini transcription error (${response.status}): ${await response.text()}`);
-          const data = (await response.json()) as {
-            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-          };
-          return data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('\n') ?? '';
+                    ],
+                  },
+                ],
+              }),
+            });
+            if (!response.ok)
+              throw new Error(`Gemini transcription error (${response.status}): ${await response.text()}`);
+            const data = (await response.json()) as {
+              candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+            };
+            return data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('\n') ?? '';
+          } finally {
+            if (normalized.cleanupPath) await fs.rm(normalized.cleanupPath, { recursive: true, force: true });
+          }
         },
         { timeoutMs: timeouts.audioTimeoutMs },
       );
@@ -298,17 +309,23 @@ export class AudioProcessor extends BaseProcessor {
       const text = await this.executeWithResilience(
         'groq',
         async () => {
-          const ext = mimeTypeToExtension(mimeType ?? '');
-          const filename = ext ? `audio.${ext}` : (filePath.split('/').pop() ?? 'audio');
-          const fileBuffer = await Bun.file(filePath).arrayBuffer();
-          const file = new File([fileBuffer], filename, { type: mimeType?.split(';')[0] ?? 'audio/ogg' });
-          const transcription = await client.audio.transcriptions.create({
-            file: file as unknown as Uploadable,
-            model: GROQ_WHISPER_MODEL,
-            language: language.toLowerCase() === 'pt-br' ? 'pt' : language,
-            response_format: 'text',
-          });
-          return typeof transcription === 'string' ? transcription : ((transcription as { text?: string }).text ?? '');
+          const normalized = await normalizeAudioFileForProvider(filePath, mimeType ?? '');
+          try {
+            const filename = `audio.${normalized.format}`;
+            const fileBuffer = await Bun.file(normalized.filePath).arrayBuffer();
+            const file = new File([fileBuffer], filename, { type: normalized.mimeType });
+            const transcription = await client.audio.transcriptions.create({
+              file: file as unknown as Uploadable,
+              model: GROQ_WHISPER_MODEL,
+              language: language.toLowerCase() === 'pt-br' ? 'pt' : language,
+              response_format: 'text',
+            });
+            return typeof transcription === 'string'
+              ? transcription
+              : ((transcription as { text?: string }).text ?? '');
+          } finally {
+            if (normalized.cleanupPath) await fs.rm(normalized.cleanupPath, { recursive: true, force: true });
+          }
         },
         { timeoutMs: timeouts.audioTimeoutMs },
       );
@@ -395,13 +412,30 @@ async function normalizeFileForOpenAiAudioChat(
   filePath: string,
   mimeType: string,
 ): Promise<{ audio: Buffer; format: 'mp3' | 'wav' }> {
+  const normalized = await normalizeAudioFileForProvider(filePath, mimeType);
+  try {
+    return { audio: await fs.readFile(normalized.filePath), format: normalized.format === 'wav' ? 'wav' : 'mp3' };
+  } finally {
+    if (normalized.cleanupPath) await fs.rm(normalized.cleanupPath, { recursive: true, force: true });
+  }
+}
+
+interface NormalizedAudioFile {
+  filePath: string;
+  mimeType: string;
+  format: 'mp3' | 'wav';
+  cleanupPath?: string;
+}
+
+async function normalizeAudioFileForProvider(filePath: string, mimeType: string): Promise<NormalizedAudioFile> {
   const format = toOpenAiAudioFormat(mimeType);
-  if (format === 'mp3' || format === 'wav') {
-    return { audio: await fs.readFile(filePath), format };
+  const stats = statSync(filePath);
+  if ((format === 'mp3' || format === 'wav') && stats.size <= PROVIDER_AUDIO_TARGET_BYTES) {
+    return { filePath, mimeType: format === 'wav' ? 'audio/wav' : 'audio/mpeg', format };
   }
 
-  const dir = await fs.mkdtemp(join(tmpdir(), 'omni-openai-audio-'));
-  const output = join(dir, `${basename(filePath)}.mp3`);
+  const dir = await fs.mkdtemp(join(tmpdir(), 'omni-provider-audio-'));
+  const output = join(dir, `${basename(filePath)}.provider.mp3`);
   try {
     await execFileAsync(
       'ffmpeg',
@@ -415,6 +449,8 @@ async function normalizeFileForOpenAiAudioChat(
         '-vn',
         '-acodec',
         'libmp3lame',
+        '-b:a',
+        '32k',
         '-ar',
         '24000',
         '-ac',
@@ -422,12 +458,13 @@ async function normalizeFileForOpenAiAudioChat(
         output,
       ],
       {
-        timeout: 60_000,
+        timeout: 5 * 60_000,
       },
     );
-    return { audio: await fs.readFile(output), format: 'mp3' };
-  } finally {
+    return { filePath: output, mimeType: 'audio/mpeg', format: 'mp3', cleanupPath: dir };
+  } catch (error) {
     await fs.rm(dir, { recursive: true, force: true });
+    throw error;
   }
 }
 
@@ -448,18 +485,4 @@ function normalizeGeminiAudioMimeType(mimeType: string): string {
   if (lower === 'audio/x-m4a' || lower === 'audio/m4a' || lower === 'audio/mp4') return 'audio/mp4';
   if (lower === 'audio/opus') return 'audio/ogg';
   return lower;
-}
-
-function mimeTypeToExtension(mimeType: string): string {
-  const base = mimeType.split(';')[0]?.trim() ?? '';
-  const map: Record<string, string> = {
-    'audio/ogg': 'ogg',
-    'audio/opus': 'ogg',
-    'audio/mpeg': 'mp3',
-    'audio/mp4': 'm4a',
-    'audio/webm': 'webm',
-    'audio/wav': 'wav',
-    'audio/flac': 'flac',
-  };
-  return map[base] ?? '';
 }

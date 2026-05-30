@@ -7,7 +7,7 @@
 #   - .github/cosign.pub (NO-KEY sentinel)
 # Drift in any single channel is treated as a compromise.
 
-Contact: mailto:security@namastex.ai
+Contact: https://github.com/automagik-dev/omni/security/advisories/new
 Expires: 2027-01-01T00:00:00Z
 Preferred-Languages: en, pt-BR
 Canonical: https://raw.githubusercontent.com/automagik-dev/omni/main/.well-known/security.txt
@@ -19,5 +19,5 @@ Canonical: https://raw.githubusercontent.com/automagik-dev/omni/main/.well-known
 #
 # Signing mechanism: cosign keyless (Sigstore + Fulcio) — NO long-lived key.
 # Workflow file:     .github/workflows/sign-attest.yml
-# Rotation:          requires two-officer PR updating all four witnesses
+# Rotation:          requires two-maintainer PR updating all four witnesses
 #                    plus a new SIGNING_CERT_IDENTITY_YYYYMMDD issue.

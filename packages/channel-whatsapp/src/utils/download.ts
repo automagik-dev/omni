@@ -5,11 +5,31 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { DownloadTooLargeError } from '@omni/channel-sdk';
 import type { WAMessage } from 'baileys';
 import { downloadMediaMessage } from 'baileys';
 import { getDocumentMessage } from './message';
+
+const DEFAULT_WHATSAPP_MEDIA_MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024; // 2GiB: WhatsApp document-scale media ceiling
+
+/**
+ * Inbound WhatsApp download ceiling is intentionally independent from provider
+ * upload limits. Omni should preserve what WhatsApp delivered, then processors
+ * can transcode/downsample before calling model providers.
+ */
+export function getWhatsAppMediaDownloadMaxBytes(): number {
+  const overrideMb = process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB;
+  if (!overrideMb) return DEFAULT_WHATSAPP_MEDIA_MAX_DOWNLOAD_BYTES;
+
+  const parsed = Number.parseInt(overrideMb, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_WHATSAPP_MEDIA_MAX_DOWNLOAD_BYTES;
+  return parsed * 1024 * 1024;
+}
 
 /**
  * Result of downloading media
@@ -23,6 +43,13 @@ export interface DownloadResult {
   size: number;
   /** Original filename if available */
   filename?: string;
+}
+
+export interface DownloadToFileResult {
+  /** MIME type of the media */
+  mimeType: string;
+  /** File size in bytes */
+  size: number;
 }
 
 /**
@@ -227,4 +254,37 @@ export async function downloadMediaToBuffer(msg: WAMessage): Promise<{ buffer: B
   } catch {
     return null;
   }
+}
+
+/**
+ * Stream media from Baileys directly to disk while counting bytes. This avoids
+ * allocating giant WhatsApp videos/documents in the Bun heap just to persist
+ * them before provider-side normalization.
+ */
+export async function downloadMediaToFile(
+  msg: WAMessage,
+  outputPath: string,
+  maxSizeBytes = getWhatsAppMediaDownloadMaxBytes(),
+): Promise<DownloadToFileResult | null> {
+  const mediaInfo = detectMediaType(msg);
+  if (!mediaInfo) return null;
+
+  let size = 0;
+  const sizeGuard = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      size += chunk.length;
+      if (size > maxSizeBytes) {
+        callback(new DownloadTooLargeError(size, maxSizeBytes));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+
+  const stream = await downloadMediaMessage(msg, 'stream', {});
+  await mkdir(dirname(outputPath), { recursive: true });
+  await pipeline(stream, sizeGuard, createWriteStream(outputPath));
+
+  if (size === 0) return null;
+  return { mimeType: mediaInfo.mimeType, size };
 }

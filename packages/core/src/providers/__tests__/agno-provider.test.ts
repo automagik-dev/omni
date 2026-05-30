@@ -26,7 +26,7 @@ function createTrigger(overrides: Partial<AgentTrigger> = {}): AgentTrigger {
     sender: {
       platformUserId: '5511999999999',
       personId: 'person-uuid',
-      displayName: 'Felipe',
+      displayName: 'Example User',
     },
     content: {
       text: 'hello agno',
@@ -140,7 +140,7 @@ describe('AgnoAgentProvider', () => {
         channel: 'whatsapp-cloud',
         instanceId: 'inst-1',
       },
-      sender: { displayName: 'Felipe' },
+      sender: { displayName: 'Example User' },
       chat: { type: 'channel', id: 'group-1', threadId: 'thread-1' },
       traceContext: {
         traceId: '0123456789abcdef0123456789abcdef',

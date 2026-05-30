@@ -573,7 +573,7 @@ program.addHelpText('afterAll', (context) => {
     { command: 'omni send --to +55119999 --text "Hi"', description: 'Send text' },
     { command: 'omni send --to +55119999 --media ./pic.jpg', description: 'Send image' },
     { command: 'omni chats messages <chat-id>', description: 'Read conversation' },
-    { command: 'omni persons search "Felipe"', description: 'Find contact' },
+    { command: 'omni persons search "Example User"', description: 'Find contact' },
   ]);
 
   let output = `

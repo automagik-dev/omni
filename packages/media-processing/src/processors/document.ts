@@ -208,9 +208,143 @@ export class DocumentProcessor extends BaseProcessor {
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      this.log.error('Excel extraction failed', { error: errorMsg });
+      this.log.warn('ExcelJS extraction failed, trying OOXML fallback', { error: errorMsg });
+
+      try {
+        return await this.processExcelOoxmlFallback(filePath);
+      } catch (fallbackError) {
+        const fallbackErrorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        this.log.error('Excel extraction failed', { error: errorMsg, fallbackError: fallbackErrorMsg });
+      }
+
       return this.createFailedResult(errorMsg, 'local', 'exceljs');
     }
+  }
+
+  /**
+   * Minimal OOXML .xlsx fallback for files that are valid enough to read but trip ExcelJS metadata parsing.
+   * Observed in the wild: docProps/core.xml containing un-namespaced `<lastModifiedBy>` makes ExcelJS throw
+   * before worksheets are read. This fallback ignores workbook metadata and extracts visible cell text directly.
+   */
+  private async processExcelOoxmlFallback(filePath: string): Promise<ProcessingResult> {
+    const JSZip = (await import('jszip')).default;
+    const zip = await JSZip.loadAsync(readFileSync(filePath));
+
+    const sharedStringsXml = await this.getZipText(zip, 'xl/sharedStrings.xml');
+    const sharedStrings = sharedStringsXml ? this.parseSharedStrings(sharedStringsXml) : [];
+    const sheetNames = await this.parseWorkbookSheetNames(zip);
+
+    const sheetPaths = Object.keys(zip.files)
+      .filter((path) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(path))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    if (sheetPaths.length === 0) {
+      throw new Error('No worksheet XML files found in XLSX archive');
+    }
+
+    const sheets: string[] = [];
+    for (const [index, sheetPath] of sheetPaths.entries()) {
+      const sheetXml = await this.getZipText(zip, sheetPath);
+      if (!sheetXml) continue;
+      const rows = this.parseWorksheetRows(sheetXml, sharedStrings);
+      const sheetName = sheetNames[index] ?? `Sheet${index + 1}`;
+      sheets.push(`## ${sheetName}\n\n${rows.join('\n')}`);
+    }
+
+    return {
+      success: true,
+      content: sheets.join('\n\n---\n\n'),
+      contentFormat: 'markdown',
+      processingType: 'extraction',
+      provider: 'local',
+      model: 'xlsx-ooxml-fallback',
+      processingTimeMs: 0,
+      costCents: 0,
+    };
+  }
+
+  private async getZipText(zip: import('jszip'), path: string): Promise<string | null> {
+    const file = zip.file(path);
+    return file ? await file.async('text') : null;
+  }
+
+  private parseSharedStrings(xml: string): string[] {
+    const strings: string[] = [];
+    for (const si of xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/gi)) {
+      const siBody = si[1] ?? '';
+      const text = [...siBody.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gi)]
+        .map((match) => this.decodeXml(match[1] ?? ''))
+        .join('');
+      strings.push(text);
+    }
+    return strings;
+  }
+
+  private async parseWorkbookSheetNames(zip: import('jszip')): Promise<string[]> {
+    const workbookXml = await this.getZipText(zip, 'xl/workbook.xml');
+    if (!workbookXml) return [];
+
+    return [...workbookXml.matchAll(/<sheet\b[^>]*\bname="([^"]*)"[^>]*>/gi)].map((match) =>
+      this.decodeXml(match[1] ?? ''),
+    );
+  }
+
+  private parseWorksheetRows(xml: string, sharedStrings: string[]): string[] {
+    const rows: string[] = [];
+    for (const rowMatch of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/gi)) {
+      const rowBody = rowMatch[1] ?? '';
+      const cells = new Map<number, string>();
+      for (const cellMatch of rowBody.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/gi)) {
+        const attrs = cellMatch[1] ?? '';
+        const body = cellMatch[2] ?? '';
+        const ref = attrs.match(/\br="([A-Z]+)\d+"/i)?.[1];
+        const colIndex = ref ? this.excelColumnToIndex(ref) : cells.size;
+        cells.set(colIndex, this.csvEscape(this.parseWorksheetCellValue(attrs, body, sharedStrings)));
+      }
+
+      const width = cells.size > 0 ? Math.max(...cells.keys()) + 1 : 0;
+      const values = Array.from({ length: width }, (_, idx) => cells.get(idx) ?? '');
+      rows.push(values.join(','));
+    }
+    return rows;
+  }
+
+  private parseWorksheetCellValue(attrs: string, body: string, sharedStrings: string[]): string {
+    const type = attrs.match(/\bt="([^"]+)"/i)?.[1];
+    const rawValue = body.match(/<v>([\s\S]*?)<\/v>/i)?.[1];
+    const inlineValue = [...body.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gi)]
+      .map((match) => this.decodeXml(match[1] ?? ''))
+      .join('');
+
+    if (type === 's' && rawValue !== undefined) {
+      return sharedStrings[Number(rawValue)] ?? '';
+    }
+    if (inlineValue) return inlineValue;
+    if (rawValue !== undefined) return this.decodeXml(rawValue);
+    return '';
+  }
+
+  private excelColumnToIndex(column: string): number {
+    let index = 0;
+    for (const char of column.toUpperCase()) {
+      index = index * 26 + (char.charCodeAt(0) - 64);
+    }
+    return index - 1;
+  }
+
+  private csvEscape(value: string): string {
+    return value.includes(',') || value.includes('"') || value.includes('\n')
+      ? `"${value.replace(/"/g, '""')}"`
+      : value;
+  }
+
+  private decodeXml(value: string): string {
+    return value
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&amp;/g, '&');
   }
 
   /**

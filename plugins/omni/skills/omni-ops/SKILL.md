@@ -58,7 +58,7 @@ omni resync --instance <id> --since 2h --json
 omni resync --all --since 1h --dry-run --json
 
 # Contacts and groups
-omni instances contacts <id> --limit 100 --search "Felipe" --json
+omni instances contacts <id> --limit 100 --search "Example User" --json
 omni instances groups <id> --search "team" --json
 omni instances check <id> +5511999 --json
 
@@ -425,7 +425,7 @@ Search and inspect contacts in the Omni person directory. Persons are auto-creat
 
 ```bash
 # Search by name or phone
-omni persons search "Felipe" --json
+omni persons search "Example User" --json
 omni persons search "+5511999" --limit 5 --json
 omni persons search "partial name" --limit 50 --json
 
@@ -440,7 +440,7 @@ omni persons presence <personId> --json
 
 ```bash
 # Find a person and check their presence
-omni persons search "Felipe" --json | jq '.[0] | {id, name, phone}'
+omni persons search "Example User" --json | jq '.[0] | {id, name, phone}'
 omni persons presence <personId> --json | jq '{online: .online, lastSeen: .lastSeen}'
 
 # List all persons matching a phone prefix

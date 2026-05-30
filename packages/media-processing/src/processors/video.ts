@@ -8,7 +8,12 @@
  * Uses centralized retry + circuit breaker for resilience.
  */
 
+import { execFile } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
+import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
+import { promisify } from 'node:util';
 import { type GenerativeModel, GoogleGenerativeAI } from '@google/generative-ai';
 
 import { GEMINI_MODEL } from '../models';
@@ -19,6 +24,9 @@ import { getMediaTimeouts } from '../types';
 import { BaseProcessor } from './base';
 
 const MAX_VIDEO_SIZE_MB = 20; // Gemini inline limit
+const TARGET_VIDEO_SIZE_BYTES = 18 * 1024 * 1024; // leave base64/API overhead below provider cap
+const MAX_VIDEO_PROVIDER_DURATION_SECONDS = 15 * 60;
+const execFileAsync = promisify(execFile);
 
 /**
  * Video processor using Gemini Flash
@@ -59,43 +67,40 @@ export class VideoProcessor extends BaseProcessor {
       return this.createFailedResult('No video API configured (missing Gemini API key)', 'none', 'none');
     }
 
-    // Check file size
     const stats = statSync(filePath);
-    const fileSizeMb = stats.size / (1024 * 1024);
-
-    if (fileSizeMb > MAX_VIDEO_SIZE_MB) {
-      return this.createFailedResult(
-        `Video too large (${fileSizeMb.toFixed(1)}MB). Max: ${MAX_VIDEO_SIZE_MB}MB. Use batch processing for larger files.`,
-        'google',
-        GEMINI_MODEL,
-      );
-    }
+    const originalFileSizeMb = stats.size / (1024 * 1024);
 
     const basePrompt = options?.prompt ?? VIDEO_DESCRIPTION_PROMPT;
     const prompt = options?.caption ? `${basePrompt}\n\nAdditional context: ${options.caption}` : basePrompt;
 
-    // Read video file
-    const videoData = readFileSync(filePath);
+    const prepared = await prepareVideoForGemini(filePath, mimeType, stats.size);
+    try {
+      const videoData = readFileSync(prepared.filePath);
 
-    // Process with Gemini
-    const result = await this.describeWithGemini(videoData, mimeType, prompt);
+      // Process with Gemini
+      const result = await this.describeWithGemini(videoData, prepared.mimeType, prompt);
 
-    // Update processing time
-    result.processingTimeMs = Math.round(performance.now() - startTime);
+      // Update processing time
+      result.processingTimeMs = Math.round(performance.now() - startTime);
 
-    if (result.success) {
-      this.log.info('Video description successful', {
-        provider: result.provider,
-        model: result.model,
-        processingTimeMs: result.processingTimeMs,
-        costCents: result.costCents,
-        fileSizeMb: fileSizeMb.toFixed(1),
-      });
-    } else {
-      this.log.error('Video description failed', { error: result.errorMessage });
+      if (result.success) {
+        this.log.info('Video description successful', {
+          provider: result.provider,
+          model: result.model,
+          processingTimeMs: result.processingTimeMs,
+          costCents: result.costCents,
+          fileSizeMb: originalFileSizeMb.toFixed(1),
+          providerFileSizeMb: (prepared.size / (1024 * 1024)).toFixed(1),
+          normalized: prepared.normalized,
+        });
+      } else {
+        this.log.error('Video description failed', { error: result.errorMessage });
+      }
+
+      return result;
+    } finally {
+      if (prepared.cleanupPath) await fs.rm(prepared.cleanupPath, { recursive: true, force: true });
     }
-
-    return result;
   }
 
   /**
@@ -187,5 +192,87 @@ export class VideoProcessor extends BaseProcessor {
       costCents: 0,
       errorMessage,
     };
+  }
+}
+
+interface PreparedVideo {
+  filePath: string;
+  mimeType: string;
+  size: number;
+  normalized: boolean;
+  cleanupPath?: string;
+}
+
+async function prepareVideoForGemini(filePath: string, mimeType: string, sizeBytes: number): Promise<PreparedVideo> {
+  if (sizeBytes <= MAX_VIDEO_SIZE_MB * 1024 * 1024) {
+    return { filePath, mimeType, size: sizeBytes, normalized: false };
+  }
+
+  const dir = await fs.mkdtemp(join(tmpdir(), 'omni-gemini-video-'));
+  const output = join(dir, `${basename(filePath)}.provider.mp4`);
+  const durationSeconds = await probeDurationSeconds(filePath);
+  const targetDurationSeconds = Math.min(
+    durationSeconds ?? MAX_VIDEO_PROVIDER_DURATION_SECONDS,
+    MAX_VIDEO_PROVIDER_DURATION_SECONDS,
+  );
+  const targetKbps = Math.max(
+    96,
+    Math.floor((TARGET_VIDEO_SIZE_BYTES * 8) / 1000 / Math.max(1, targetDurationSeconds)) - 48,
+  );
+
+  try {
+    await execFileAsync(
+      'ffmpeg',
+      [
+        '-y',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        filePath,
+        '-t',
+        String(MAX_VIDEO_PROVIDER_DURATION_SECONDS),
+        '-vf',
+        'scale=min(720\\,iw):-2',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-b:v',
+        `${targetKbps}k`,
+        '-maxrate',
+        `${targetKbps}k`,
+        '-bufsize',
+        `${targetKbps * 2}k`,
+        '-c:a',
+        'aac',
+        '-b:a',
+        '48k',
+        '-movflags',
+        '+faststart',
+        output,
+      ],
+      { timeout: 10 * 60_000 },
+    );
+
+    const normalizedSize = statSync(output).size;
+    return { filePath: output, mimeType: 'video/mp4', size: normalizedSize, normalized: true, cleanupPath: dir };
+  } catch (error) {
+    await fs.rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function probeDurationSeconds(filePath: string): Promise<number | undefined> {
+  try {
+    const { stdout } = await execFileAsync(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath],
+      { timeout: 30_000 },
+    );
+    const parsed = Number.parseFloat(stdout.trim());
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  } catch {
+    return undefined;
   }
 }

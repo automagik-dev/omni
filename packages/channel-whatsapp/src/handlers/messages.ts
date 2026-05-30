@@ -9,8 +9,7 @@
  * - Lifecycle: edit, delete
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
 import type { DedupeCache } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
@@ -19,7 +18,12 @@ import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from
 import { fromJid, isLidJid, isUserJid, resolveCanonicalJid, resolveToPhoneJidLegacy } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
 import type { DecryptFailureTracker } from '../utils/decrypt-failure-tracker';
-import { detectMediaType, downloadMediaToBuffer, getExtension } from '../utils/download';
+import {
+  detectMediaType,
+  downloadMediaToFile,
+  getExtension,
+  getWhatsAppMediaDownloadMaxBytes,
+} from '../utils/download';
 import { getDocumentMessage, getMessageContextInfo } from '../utils/message';
 import { getMediaSize } from './media';
 
@@ -28,8 +32,8 @@ const log = createLogger('whatsapp:messages');
 /** Fallback dedupe cache — used when no per-instance cache is provided */
 const fallbackDedupeCache = createInboundDedupeCache();
 
-/** Download size guard — 50MB default */
-const downloadGuard = createDownloadGuard();
+/** Download size guard — WhatsApp-scale default; provider processors downsample later */
+const downloadGuard = createDownloadGuard({ maxSizeBytes: getWhatsAppMediaDownloadMaxBytes() });
 
 /**
  * Extract message content from a WAMessage
@@ -562,45 +566,32 @@ export async function tryDownloadMedia(
       downloadGuard.checkSize(declaredSize, log, { instanceId, channel: 'whatsapp' });
     }
 
-    // Try download with retry — iOS/macOS media sometimes needs a second attempt
-    let result = await downloadMediaToBuffer(msg);
-    if (!result) {
-      await new Promise((r) => setTimeout(r, 1000));
-      result = await downloadMediaToBuffer(msg);
-    }
-    if (!result) return null;
-
-    // Also verify actual buffer size after download (declared size may be absent or differ)
-    downloadGuard.checkSize(result.buffer.length, log, {
-      instanceId,
-      channel: 'whatsapp',
-    });
-
-    // Build path matching MediaStorageService layout
+    // Build path matching MediaStorageService layout before streaming to disk
     const now = new Date();
     const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const ext = getExtension(result.mimeType);
+    const ext = getExtension(mediaInfo.mimeType);
     // Sanitize externalId to prevent path traversal: strip directory components
     // and replace any non-alphanumeric characters (WhatsApp IDs are hex/alphanum).
     const safeExternalId = basename(externalId).replace(/[^a-zA-Z0-9_\-]/g, '_');
     const relativePath = join(instanceId, yearMonth, `${safeExternalId}${ext}`);
     const fullPath = join(MEDIA_BASE_PATH, relativePath);
 
-    // Write to disk
-    const dir = dirname(fullPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+    // Try streaming download with retry — iOS/macOS media sometimes needs a second attempt
+    let result = await downloadMediaToFile(msg, fullPath, downloadGuard.maxSizeBytes);
+    if (!result) {
+      await new Promise((r) => setTimeout(r, 1000));
+      result = await downloadMediaToFile(msg, fullPath, downloadGuard.maxSizeBytes);
     }
-    writeFileSync(fullPath, result.buffer);
+    if (!result) return null;
 
-    log.debug('Downloaded media', { externalId, path: relativePath, size: result.buffer.length });
+    log.debug('Downloaded media', { externalId, path: relativePath, size: result.size });
 
     const mediaPath = `/api/v2/media/${relativePath}`;
     return {
       mediaUrl: apiBaseUrl ? `${apiBaseUrl}${mediaPath}` : mediaPath,
       mediaLocalPath: relativePath,
       mimeType: result.mimeType,
-      size: result.buffer.length,
+      size: result.size,
     };
   } catch (error) {
     log.warn('Media download failed, continuing without media', { externalId, error: String(error) });

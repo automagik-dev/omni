@@ -139,7 +139,7 @@ async function isCanonicalPgservePm2Online(): Promise<boolean> {
  * the shell-out. This dodges the well-known EADDRINUSE bind-check bug in
  * `<bin> install` (port 5432 is already bound by the pm2-supervised
  * postmaster → install errors before recognizing its own listener).
- * Detected on Felipe's box on 2026-05-20 mid-dogfood; same class of bug
+ * Detected on a dogfood host on 2026-05-20 mid-dogfood; same class of bug
  * the genie side worked around on 2026-05-11.
  */
 async function runPgserveInstall(): Promise<boolean> {

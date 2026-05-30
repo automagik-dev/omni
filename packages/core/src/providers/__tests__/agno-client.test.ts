@@ -184,7 +184,7 @@ describe('AgnoClient', () => {
           channel: 'whatsapp-cloud',
           instanceId: 'inst-1',
         },
-        sender: { displayName: 'Felipe' },
+        sender: { displayName: 'Example User' },
         chat: { type: 'group', id: 'group-1', threadId: 'topic-1' },
         messageId: 'msg-789',
         replyToMessageId: 'msg-456',
@@ -209,7 +209,7 @@ describe('AgnoClient', () => {
         channel: 'whatsapp-cloud',
         instanceId: 'inst-1',
       });
-      expect(JSON.parse(String(formData.get('sender')))).toEqual({ displayName: 'Felipe' });
+      expect(JSON.parse(String(formData.get('sender')))).toEqual({ displayName: 'Example User' });
       expect(JSON.parse(String(formData.get('chat')))).toEqual({ type: 'group', id: 'group-1', threadId: 'topic-1' });
       expect(JSON.parse(String(formData.get('mcp_url_params')))).toEqual({ chat_id: 'group-1' });
       expect(JSON.parse(String(formData.get('env')))).toEqual({ OMNI_CHAT: 'group-1' });

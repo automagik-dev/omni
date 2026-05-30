@@ -7,7 +7,7 @@ assignees: []
 ---
 
 <!--
-  Instructions for the Namastex security officer filing this issue:
+  Instructions for the project maintainer filing this issue:
 
   1. File whenever the cosign keyless contract changes: workflow file path
      moves, repository is renamed, OIDC issuer changes, or source URI is
@@ -81,6 +81,6 @@ gh attestation verify omni-<version>-<platform>.tar.gz --owner automagik-dev
 ## Reporting a Suspected Compromise
 
 If the certificate-identity or OIDC issuer appears altered, or a release
-verifies under an identity that does NOT appear here, email
-`security@namastex.ai` immediately. Do NOT install or upgrade omni until
-a new pinning issue is filed and the three channels re-converge.
+verifies under an identity that does NOT appear here, open a private GitHub
+Security Advisory immediately. Do NOT install or upgrade omni until a new
+pinning issue is filed and the three channels re-converge.

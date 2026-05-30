@@ -10,7 +10,7 @@ import {
   buildStickerContent,
   buildVideoContent,
 } from '../senders/media';
-import { generateFilename, getExtension } from '../utils/download';
+import { generateFilename, getExtension, getWhatsAppMediaDownloadMaxBytes } from '../utils/download';
 
 describe('Media Utilities', () => {
   describe('getExtension', () => {
@@ -61,6 +61,23 @@ describe('Media Utilities', () => {
       const filename1 = generateFilename('audio/ogg');
       const filename2 = generateFilename('audio/ogg');
       expect(filename1).not.toBe(filename2);
+    });
+  });
+
+  describe('getWhatsAppMediaDownloadMaxBytes', () => {
+    it('defaults to the WhatsApp document-scale ceiling instead of the provider ceiling', () => {
+      expect(getWhatsAppMediaDownloadMaxBytes()).toBe(2 * 1024 * 1024 * 1024);
+    });
+
+    it('supports explicit env override in MiB', () => {
+      const original = process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB;
+      process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB = '512';
+      try {
+        expect(getWhatsAppMediaDownloadMaxBytes()).toBe(512 * 1024 * 1024);
+      } finally {
+        if (original === undefined) process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB = undefined;
+        else process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB = original;
+      }
     });
   });
 });

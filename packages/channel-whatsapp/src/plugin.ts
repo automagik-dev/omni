@@ -3245,7 +3245,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
 
     for (const chat of chats) {
-      const c = chat as { id?: string; displayName?: string; name?: string; unreadCount?: number };
+      const c = chat as { id?: string; displayName?: string; name?: string; unreadCount?: number | null };
       if (!c.id) continue;
 
       // Always cache the JID — even without a name — so getKnownChatJids() discovers all chats
@@ -3253,9 +3253,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       cache.set(c.id, name ?? c.id);
 
       // Sync unread count from WhatsApp and cache for periodic refresh
-      if (c.unreadCount !== undefined) {
-        unreadCache.set(c.id, c.unreadCount);
-        this.emitChatUnreadUpdate(instanceId, c.id, c.unreadCount);
+      const unreadCount = c.unreadCount;
+      if (typeof unreadCount === 'number' && Number.isFinite(unreadCount)) {
+        unreadCache.set(c.id, unreadCount);
+        this.emitChatUnreadUpdate(instanceId, c.id, unreadCount);
       }
     }
 
@@ -3285,7 +3286,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
 
     for (const update of updates) {
-      const u = update as { id?: string; displayName?: string; name?: string; unreadCount?: number };
+      const u = update as { id?: string; displayName?: string; name?: string; unreadCount?: number | null };
       if (!u.id) continue;
 
       // Always ensure the JID is in the cache for discovery
@@ -3295,9 +3296,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       }
 
       // Sync unread count from WhatsApp (fires when user reads on phone or new messages arrive)
-      if (u.unreadCount !== undefined) {
-        unreadCache.set(u.id, u.unreadCount);
-        this.emitChatUnreadUpdate(instanceId, u.id, u.unreadCount);
+      const unreadCount = u.unreadCount;
+      if (typeof unreadCount === 'number' && Number.isFinite(unreadCount)) {
+        unreadCache.set(u.id, unreadCount);
+        this.emitChatUnreadUpdate(instanceId, u.id, unreadCount);
       }
     }
   }

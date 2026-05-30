@@ -169,7 +169,7 @@ function createMockTrigger(overrides?: Partial<AgentTrigger>): AgentTrigger {
     sender: {
       platformUserId: 'user-1',
       personId: 'person-1',
-      displayName: 'Felipe',
+      displayName: 'Example User',
     },
     content: {
       text: 'Hello agent!',
@@ -473,9 +473,9 @@ describe('OpenClawAgentProvider', () => {
       }
     };
 
-    await provider.trigger(createMockTrigger({ sender: { displayName: 'Felipe', platformUserId: 'u1' } }));
+    await provider.trigger(createMockTrigger({ sender: { displayName: 'Example User', platformUserId: 'u1' } }));
 
-    expect(sentMessage).toBe('[Felipe]: Hello agent!');
+    expect(sentMessage).toBe('[Example User]: Hello agent!');
 
     client.stop();
   });

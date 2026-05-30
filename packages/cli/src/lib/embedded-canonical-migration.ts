@@ -18,7 +18,7 @@
  *     `~/.omni/data/pgserve/` as an unmounted postmaster data dir
  *   - The canonical `omni` database on autopg is empty
  *
- * Found during Felipe's 2026-05-20 dogfood: omni-api boots cleanly on
+ * Found during 2026-05-20 dogfood: omni-api boots cleanly on
  * canonical but `omni instances list` returns nothing — the data is
  * stranded.
  *
@@ -441,7 +441,7 @@ function psqlCapture(args: string[]): string {
  * Why not stream the pipe directly: Node's child_process pipe between two
  * spawned processes hits EPIPE / "unexpected EOF in COPY data" on rows
  * whose serialized binary payload exceeds the OS pipe buffer (observed
- * on Felipe's host with media_content blobs and messages.raw_payload
+ * on a dogfood host with media_content blobs and messages.raw_payload
  * Buffer-serialized JSON at rows 60822 + 53288). The OS-level pipe has
  * no flow control beyond its 64KB buffer; once full, the writer EAGAINs
  * and Node's stream.pipe() either silently drops or aborts depending on
@@ -668,7 +668,7 @@ export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions =
   // Stop omni-api during the copy. Otherwise omni-api's bootstrap (default
   // global_settings, Baileys instance reattach, etc.) races our COPYs and
   // causes `duplicate key value violates unique constraint` errors after
-  // the TRUNCATE — observed on Felipe's host with the global_settings row
+  // the TRUNCATE — observed on a dogfood host with the global_settings row
   // for elevenlabs.api_key. Restart on success OR failure (finally).
   log('  stopping omni-api during data copy');
   spawnSync('pm2', ['stop', 'omni-api'], { stdio: 'inherit' });

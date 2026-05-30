@@ -788,7 +788,7 @@ X-API-Key: sk-your-api-key
     `.trim(),
     contact: {
       name: 'Omni Support',
-      url: 'https://github.com/namastexlabs/omni-v2',
+      url: 'https://github.com/automagik-dev/omni',
     },
     license: {
       name: 'MIT',

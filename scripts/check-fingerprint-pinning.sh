@@ -5,7 +5,7 @@
 # @automagik/omni release signing is cosign KEYLESS ONLY. There is no
 # long-lived public key to pin — the "pin" is the three-value tuple below
 # (certificate-identity-regexp + OIDC issuer + provenance source-uri). The
-# rotation procedure requires two Namastex security officers to land any
+# rotation procedure requires two project maintainers to land any
 # change; this script is the CI merge-gate that blocks a single-channel
 # edit from slipping through.
 #
@@ -45,7 +45,7 @@ cd "${REPO_ROOT}"
 # These three lines are the source of truth. They are duplicated verbatim in
 # this script on purpose: if the script itself drifts, CI catches it against
 # the witnesses below. To rotate the pin, follow the rotation procedure and
-# update this constant list in the same two-officer PR that updates the
+# update this constant list in the same two-maintainer PR that updates the
 # witnesses.
 CANONICAL=(
   "certificate-identity-regexp: ^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@"
@@ -134,7 +134,7 @@ done
 
 if [ "${drift}" -ne 0 ]; then
   err "signing-identity pin has drifted across ${#WITNESSES[@]} witnesses"
-  err "escalation contact: security@namastex.ai"
+  err "escalation contact: https://github.com/automagik-dev/omni/security/advisories/new"
   exit 1
 fi
 

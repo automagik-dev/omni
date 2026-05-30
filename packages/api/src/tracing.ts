@@ -22,7 +22,7 @@
  * MUST be imported BEFORE most other modules so HTTP auto-instrumentation
  * can monkey-patch the `http`/`https` globals — see index.ts.
  *
- * Refs: namastexlabs/genie-omni observability-hub-p2-omni-otel WISH.md
+ * Refs: observability integration design notes
  */
 
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';

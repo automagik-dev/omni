@@ -19,7 +19,7 @@ name: Sign + Attest Tarballs
 # See SECURITY.md "Release Signing — Pinned Identity (cosign keyless)".
 #
 # IMPORTANT — pgserve trust-list anchors on this filename literally:
-#   src/cosign/trust-list.js (namastexlabs/pgserve) has:
+#   src/cosign/trust-list.js has:
 #     identityRegexp: '^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@refs/tags/v.*$'
 # Renaming or relocating this file breaks `pgserve verify --slug omni`.
 #

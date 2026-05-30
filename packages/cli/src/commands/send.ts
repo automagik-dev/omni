@@ -290,13 +290,14 @@ async function validateSendOptions(options: SendOptions): Promise<string> {
     output.error('--to <recipient> is required');
   }
 
+  // Resolve instance name/prefix to UUID before recipient scoping
+  const instanceId = await resolveInstanceId(instanceInput);
+
   // Resolve --to: supports short chat IDs, names, UUIDs, phone numbers, JIDs
   if (options.to) {
-    options.to = await resolveRecipient(options.to);
+    options.to = await resolveRecipient(options.to, instanceId);
   }
 
-  // Resolve instance name/prefix to UUID
-  const instanceId = await resolveInstanceId(instanceInput);
   return instanceId;
 }
 
