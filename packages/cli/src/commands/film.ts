@@ -12,7 +12,7 @@
  * and enforces a 5-minute timeout.
  */
 
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { Command } from 'commander';
 import ora from 'ora';
@@ -33,6 +33,12 @@ interface FilmOptions {
   aspectRatio?: string;
   seed?: string;
   audio?: boolean;
+  dialogue?: string;
+  camera?: string;
+  shot?: string[];
+  audioDirection?: string;
+  music?: string;
+  style?: string;
 }
 
 export function createFilmCommand(): Command {
@@ -43,8 +49,19 @@ export function createFilmCommand(): Command {
       .option('--duration <seconds>', 'Clip duration in seconds (provider-dependent max)')
       .option('--resolution <res>', 'Resolution hint (720p or 1080p)')
       .option('--aspect-ratio <ratio>', 'Aspect ratio (16:9 or 9:16)', '16:9')
-      .option('--reference <path>', 'Reference image path (reserved for future use)')
+      .option('--reference <path>', 'Reference image path for image-to-video')
       .option('--extend <operationId>', 'Extend an existing video operation (reserved for future use)')
+      .option('--dialogue <text>', 'Dialogue direction to fold into the prompt')
+      .option('--camera <text>', 'Camera/framing direction')
+      .option(
+        '--shot <text>',
+        'Shot-list item (repeatable)',
+        (value, previous: string[] = []) => [...previous, value],
+        [],
+      )
+      .option('--audio-direction <text>', 'Sound/dialogue/ambient direction')
+      .option('--music <text>', 'Music direction')
+      .option('--style <text>', 'Visual style direction')
       .option('--seed <number>', 'RNG seed for reproducible output')
       .option('--no-audio', 'Disable audio generation')
       .option('-o, --output <path>', 'Save video to file locally (does not send)')
@@ -99,6 +116,18 @@ export function createFilmCommand(): Command {
         if (options.seed !== undefined && Number.isNaN(seed)) {
           return output.error(`Invalid --seed value: ${options.seed}`);
         }
+        let imageBase64: string | undefined;
+        let imageMimeType: string | undefined;
+        if (options.reference) {
+          try {
+            const ref = readFileSync(resolvePath(options.reference));
+            imageBase64 = ref.toString('base64');
+            imageMimeType = mimeForImagePath(options.reference);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Unknown error';
+            return output.error(`Failed to read --reference ${options.reference}: ${message}`);
+          }
+        }
 
         const spinner = ora({
           text: 'Submitting video generation request…',
@@ -120,6 +149,14 @@ export function createFilmCommand(): Command {
             aspectRatio: options.aspectRatio,
             seed,
             audio: options.audio !== false,
+            imageBase64,
+            imageMimeType,
+            dialogue: options.dialogue,
+            camera: options.camera,
+            shotList: options.shot,
+            audioDirection: options.audioDirection,
+            music: options.music,
+            style: options.style,
           });
 
           clearInterval(tick);
@@ -159,4 +196,11 @@ export function createFilmCommand(): Command {
         }
       })
   );
+}
+
+function mimeForImagePath(path: string): string {
+  const lower = path.toLowerCase();
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  return 'image/png';
 }

@@ -7,8 +7,8 @@
  * Nano Banana 2 (fast preview).
  *
  * Model aliases (resolved via the `--model` flag or `imagegen.model` setting):
- *   - "nano-banana-2"   → gemini-3.1-flash-image-preview  (default)
- *   - "nano-banana-pro" → gemini-3.1-pro-image-preview
+ *   - "nano-banana-2"   → gemini-3.1-flash-image  (default)
+ *   - "nano-banana-pro" → gemini-3.1-pro-image
  *
  * Docs: https://ai.google.dev/gemini-api/docs/image-generation
  */
@@ -27,9 +27,11 @@ export interface GeminiImageGenSettingsReader {
 
 /** Map friendly aliases to underlying Gemini image model IDs. */
 const MODEL_ALIASES: Record<string, string> = {
-  'nano-banana-2': 'gemini-3.1-flash-image-preview',
-  'nano-banana-pro': 'gemini-3.1-pro-image-preview',
+  'nano-banana-2': 'gemini-3.1-flash-image',
+  'nano-banana-pro': 'gemini-3.1-pro-image',
   // Allow passing the raw model ID through as well
+  'gemini-3.1-flash-image': 'gemini-3.1-flash-image',
+  'gemini-3.1-pro-image': 'gemini-3.1-pro-image',
   'gemini-3.1-flash-image-preview': 'gemini-3.1-flash-image-preview',
   'gemini-3.1-pro-image-preview': 'gemini-3.1-pro-image-preview',
 };
@@ -138,7 +140,11 @@ export class GeminiImageGenProvider implements IImageGenProvider {
     const client = getGeminiClient(apiKey);
 
     // Resolve model: explicit option > settings override > default alias.
-    const modelSetting = await this.settings.getString('imagegen.model', 'GEMINI_IMAGE_MODEL', DEFAULT_MODEL_ALIAS);
+    const modelSetting = await this.settings.getString(
+      'imagegen.gemini.model',
+      'GEMINI_IMAGE_MODEL',
+      DEFAULT_MODEL_ALIAS,
+    );
     const model = resolveModel(options?.model || modelSetting);
 
     const count = Math.max(1, Math.min(options?.count ?? 1, 4));

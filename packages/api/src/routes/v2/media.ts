@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { providerRegistry } from '../../providers/registry';
 import type {
   IImageGenProvider,
+  IMusicGenProvider,
   ISttProvider,
   ITtsProvider,
   IVideoGenProvider,
@@ -73,12 +74,24 @@ const ttsAudioFormatSchema = z.enum(['mp3', 'ogg', 'opus', 'wav', 'pcm', 'flac',
 
 const ttsRequestSchema = z.object({
   text: z.string().min(1).max(5000).describe('Text to synthesize'),
-  provider: z.string().optional().describe('Provider name (gemini, elevenlabs). Defaults to config default.'),
+  provider: z.string().optional().describe('Provider name (gemini, openai, elevenlabs). Defaults to config default.'),
   voice: z.string().optional().describe('Voice identifier (provider-specific)'),
   language: z.string().optional().describe('BCP-47 language code (e.g. "en-US")'),
   speed: z.number().min(0.5).max(2.0).optional().describe('Speaking speed multiplier (0.5-2.0)'),
   format: ttsAudioFormatSchema.optional().describe('Output audio format (default: ogg)'),
   style: z.string().optional().describe('Style prompt (provider-specific, e.g. Gemini style prompts)'),
+  model: z.string().optional().describe('Model override (provider-specific)'),
+  instructions: z.string().max(4000).optional().describe('Provider-native voice instructions'),
+  tone: z.string().optional().describe('Tone guidance'),
+  accent: z.string().optional().describe('Accent guidance'),
+  pace: z.string().optional().describe('Pace guidance'),
+  emotion: z.string().optional().describe('Emotion guidance'),
+  voiceNoteProfile: z.string().optional().describe('Expression preset/profile name'),
+  multiSpeaker: z
+    .array(z.object({ speaker: z.string().min(1), voice: z.string().min(1) }))
+    .max(2)
+    .optional()
+    .describe('Gemini multi-speaker voice mapping'),
 });
 
 /**
@@ -119,8 +132,15 @@ mediaRoutes.post('/tts', zValidator('json', ttsRequestSchema), async (c) => {
       language: body.language,
       speed: body.speed,
       format: body.format,
-      // Style is a Gemini-specific extension carried via the options bag.
-      ...(body.style ? { style: body.style } : {}),
+      model: body.model,
+      instructions: body.instructions,
+      style: body.style,
+      tone: body.tone,
+      accent: body.accent,
+      pace: body.pace,
+      emotion: body.emotion,
+      voiceNoteProfile: body.voiceNoteProfile,
+      multiSpeaker: body.multiSpeaker,
     });
 
     return c.json({
@@ -257,13 +277,17 @@ const imagineAspectRatioSchema = z.enum(['1:1', '4:3', '3:4', '16:9', '9:16', '3
 
 const imagineRequestSchema = z.object({
   prompt: z.string().min(1).max(5000).describe('Text prompt describing the image(s) to generate'),
-  provider: z.string().optional().describe('Provider name (gemini). Defaults to config default.'),
+  provider: z.string().optional().describe('Provider name (gemini, openai). Defaults to config default.'),
   count: z.number().int().min(1).max(4).optional().describe('Number of images to generate (1-4)'),
   aspectRatio: imagineAspectRatioSchema.optional().describe('Aspect ratio preset'),
   imageSize: z.string().optional().describe('Longest-edge preset (provider-specific, e.g. "1K", "2K")'),
-  model: z.string().optional().describe('Model alias override (e.g. nano-banana-2, nano-banana-pro)'),
+  model: z.string().optional().describe('Model alias override (e.g. nano-banana-2, nano-banana-pro, gpt-image-2)'),
   negativePrompt: z.string().optional().describe('What to avoid in the generated image'),
   seed: z.number().int().optional().describe('RNG seed for reproducibility'),
+  quality: z.string().optional().describe('Quality hint (OpenAI/provider-specific)'),
+  background: z.string().optional().describe('Background mode (OpenAI/provider-specific)'),
+  outputFormat: z.enum(['png', 'jpeg', 'webp']).optional().describe('Output image format'),
+  compression: z.number().int().min(0).max(100).optional().describe('Output compression 0-100'),
 });
 
 /**
@@ -302,9 +326,12 @@ mediaRoutes.post('/imagine', zValidator('json', imagineRequestSchema), async (c)
       aspectRatio: body.aspectRatio,
       negativePrompt: body.negativePrompt,
       seed: body.seed,
-      // Extended options for Gemini — model alias and image size preset.
-      ...(body.model ? { model: body.model } : {}),
-      ...(body.imageSize ? { imageSize: body.imageSize } : {}),
+      model: body.model,
+      imageSize: body.imageSize,
+      quality: body.quality,
+      background: body.background,
+      outputFormat: body.outputFormat,
+      compression: body.compression,
     });
 
     return c.json({
@@ -435,6 +462,14 @@ mediaRoutes.post('/vision', zValidator('json', visionRequestSchema), async (c) =
 // ---------------------------------------------------------------------------
 
 const filmAspectRatioSchema = z.enum(['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3']);
+const imageMimeTypeSchema = z
+  .string()
+  .regex(/^image\/(png|jpeg|jpg|webp)$/i, 'Expected image/png, image/jpeg, or image/webp');
+const imageBase64Schema = z
+  .string()
+  .min(1)
+  .max(12_000_000)
+  .regex(/^[A-Za-z0-9+/]+={0,2}$/, 'Expected base64 image data');
 
 const filmRequestSchema = z.object({
   prompt: z.string().min(1).max(5000).describe('Text prompt describing the video'),
@@ -444,6 +479,14 @@ const filmRequestSchema = z.object({
   aspectRatio: filmAspectRatioSchema.optional().describe('Aspect ratio (Veo supports 16:9, 9:16)'),
   seed: z.number().int().optional().describe('RNG seed for reproducible output'),
   audio: z.boolean().optional().describe('Whether to generate audio along with the video'),
+  imageBase64: imageBase64Schema.optional().describe('Reference image base64 for image-to-video'),
+  imageMimeType: imageMimeTypeSchema.optional().describe('Reference image MIME type'),
+  dialogue: z.string().optional().describe('Dialogue direction to fold into the prompt'),
+  camera: z.string().optional().describe('Camera/framing direction'),
+  shotList: z.array(z.string().min(1)).max(20).optional().describe('Shot list directions'),
+  audioDirection: z.string().optional().describe('Sound/dialogue/ambient direction'),
+  music: z.string().optional().describe('Music direction'),
+  style: z.string().optional().describe('Visual style direction'),
 });
 
 /** Max wall-clock time to wait for a video generation to complete (ms). */
@@ -492,6 +535,14 @@ mediaRoutes.post('/film', zValidator('json', filmRequestSchema), async (c) => {
       seed: body.seed,
       audio: body.audio ?? true,
       resolution: body.resolution,
+      imageBase64: body.imageBase64,
+      imageMimeType: body.imageMimeType,
+      dialogue: body.dialogue,
+      camera: body.camera,
+      shotList: body.shotList,
+      audioDirection: body.audioDirection,
+      music: body.music,
+      style: body.style,
     });
 
     while (operation.state === 'pending' || operation.state === 'processing') {
@@ -555,6 +606,99 @@ mediaRoutes.post('/film', zValidator('json', filmRequestSchema), async (c) => {
       {
         error: {
           code: 'VIDEO_GEN_FAILED',
+          message,
+          provider: provider.name,
+        },
+      },
+      500,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Music — Music generation with provider routing
+// ---------------------------------------------------------------------------
+
+const musicRequestSchema = z.object({
+  prompt: z.string().min(1).max(5000).describe('Text prompt describing the song/music'),
+  provider: z.string().optional().describe('Provider name (gemini). Defaults to config default.'),
+  model: z.string().optional().describe('Model override (provider-specific)'),
+  mode: z.enum(['clip', 'pro']).optional().describe('Generation mode'),
+  durationSec: z.number().int().min(1).max(600).optional().describe('Target duration in seconds'),
+  instrumental: z.boolean().optional().describe('Generate instrumental music without vocals'),
+  lyrics: z.string().max(10000).optional().describe('Lyrics to include'),
+  timedSections: z
+    .array(z.object({ start: z.string(), end: z.string(), instruction: z.string().min(1) }))
+    .max(50)
+    .optional()
+    .describe('Timed song sections'),
+  genre: z.string().optional().describe('Genre hint'),
+  mood: z.string().optional().describe('Mood hint'),
+  bpm: z.number().int().min(20).max(300).optional().describe('Tempo in BPM'),
+  instruments: z.array(z.string().min(1)).max(30).optional().describe('Instrument hints'),
+  singerProfile: z.string().optional().describe('Singer/vocal profile'),
+  imageBase64: imageBase64Schema.optional().describe('Reference image base64'),
+  imageMimeType: imageMimeTypeSchema.optional().describe('Reference image MIME type'),
+  style: z.string().optional().describe('Style direction'),
+});
+
+mediaRoutes.post('/music', zValidator('json', musicRequestSchema), async (c) => {
+  const body = c.req.valid('json');
+
+  let provider: IMusicGenProvider;
+  try {
+    provider = await providerRegistry.resolve('musicgen', body.provider);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    log.warn('Musicgen provider resolution failed', { provider: body.provider, error: message });
+    return c.json(
+      {
+        error: {
+          code: 'PROVIDER_NOT_AVAILABLE',
+          message,
+          available: providerRegistry.list('musicgen'),
+        },
+      },
+      400,
+    );
+  }
+
+  try {
+    const result = await provider.generate(body.prompt, {
+      model: body.model,
+      mode: body.mode,
+      durationSec: body.durationSec,
+      instrumental: body.instrumental,
+      lyrics: body.lyrics,
+      timedSections: body.timedSections,
+      genre: body.genre,
+      mood: body.mood,
+      bpm: body.bpm,
+      instruments: body.instruments,
+      singerProfile: body.singerProfile,
+      imageBase64: body.imageBase64,
+      imageMimeType: body.imageMimeType,
+      style: body.style,
+    });
+
+    return c.json({
+      data: {
+        provider: provider.name,
+        model: result.model,
+        mimeType: result.audio.mimeType,
+        sizeBytes: result.audio.sizeBytes,
+        durationMs: result.audio.durationMs,
+        processingMs: result.processingMs,
+        audioBase64: result.audio.data.toString('base64'),
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    log.error('Music generation failed', { provider: provider.name, error: message });
+    return c.json(
+      {
+        error: {
+          code: 'MUSIC_GEN_FAILED',
           message,
           provider: provider.name,
         },
