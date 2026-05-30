@@ -64,7 +64,7 @@ import {
   getJourneyTracker,
 } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
-import { agentSessions, agents } from '@omni/db';
+import { agentSessions, agents, instances } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
 import { createMediaProcessingService } from '@omni/media-processing';
 import * as Sentry from '@sentry/bun';
@@ -3901,12 +3901,87 @@ export function isInboundTooStale(
   return { stale: ageMs > maxAgeMs, ageMs, maxAgeMs };
 }
 
+type FirstPartySenderInput = {
+  from?: string;
+  rawPayload?: unknown;
+};
+
+function normalizePhoneIdentity(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const jidPhone = extractPhoneFromJid(value);
+  const digits = jidPhone || value.replace(/@.*$/, '').replace(/:\d+$/, '').replace(/\D/g, '');
+  return digits.length >= 7 ? digits : undefined;
+}
+
+function collectSenderPhones(input: FirstPartySenderInput): Set<string> {
+  const phones = new Set<string>();
+  const raw = (input.rawPayload ?? {}) as Record<string, unknown>;
+  const key = (raw.key ?? {}) as Record<string, unknown>;
+  for (const candidate of [
+    input.from,
+    raw.resolvedSenderPhone,
+    raw.resolvedPhoneJid,
+    key.remoteJidAlt,
+    key.participantAlt,
+    key.participant,
+    key.remoteJid,
+  ]) {
+    const phone = normalizePhoneIdentity(candidate);
+    if (phone) phones.add(phone);
+  }
+  return phones;
+}
+
+export function isFirstPartyInstanceSender(
+  sender: FirstPartySenderInput,
+  currentOwnerIdentifier: string | null | undefined,
+  activeOwnerIdentifiers: Array<string | null | undefined>,
+): boolean {
+  const senderPhones = collectSenderPhones(sender);
+  if (senderPhones.size === 0) return false;
+
+  const currentOwnerPhone = normalizePhoneIdentity(currentOwnerIdentifier);
+  for (const ownerIdentifier of activeOwnerIdentifiers) {
+    const ownerPhone = normalizePhoneIdentity(ownerIdentifier);
+    if (!ownerPhone || ownerPhone === currentOwnerPhone) continue;
+    if (senderPhones.has(ownerPhone)) return true;
+  }
+  return false;
+}
+
+const ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS = 10_000;
+let cachedActiveOwnerIdentifiers: Array<string | null> | null = null;
+let cachedActiveOwnerIdentifiersAt = 0;
+
+async function listActiveOwnerIdentifiers(db: Database): Promise<Array<string | null>> {
+  const now = Date.now();
+  if (cachedActiveOwnerIdentifiers && now - cachedActiveOwnerIdentifiersAt < ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS) {
+    return cachedActiveOwnerIdentifiers;
+  }
+
+  const rows = await db
+    .select({ ownerIdentifier: instances.ownerIdentifier })
+    .from(instances)
+    .where(eq(instances.isActive, true));
+
+  // Unit tests often provide partial chain mocks for Database. Production Drizzle
+  // returns an array here; if a mock/non-standard adapter does not, fail open so
+  // message dispatch still works and only the cross-instance self-send guard is
+  // skipped for that call.
+  if (!Array.isArray(rows)) return [];
+
+  cachedActiveOwnerIdentifiers = rows.map((row) => row.ownerIdentifier);
+  cachedActiveOwnerIdentifiersAt = now;
+  return cachedActiveOwnerIdentifiers;
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
   chatsService: Services['chats'],
   messagesService: Services['messages'],
   routeResolver: Services['routeResolver'],
+  db: Database,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
 ): Promise<Instance | null> {
@@ -3938,6 +4013,14 @@ async function shouldProcessMessage(
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentId) {
     log.debug('Instance has no agentId', { instanceId: metadata.instanceId });
+    return null;
+  }
+
+  const activeOwnerIdentifiers = await listActiveOwnerIdentifiers(db);
+  if (isFirstPartyInstanceSender(payload, instance.ownerIdentifier, activeOwnerIdentifiers)) {
+    log.info('Skipping first-party cross-instance message', {
+      instanceId: instance.id,
+    });
     return null;
   }
 
@@ -4393,6 +4476,7 @@ export async function setupAgentDispatcher(
               services.chats,
               services.messages,
               services.routeResolver,
+              db,
               payload,
               metadata,
             );

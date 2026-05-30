@@ -47,6 +47,15 @@ import { type RateLimitManager, createRateLimitManager, isRateLimitError } from 
 // Re-export for external consumers that previously imported from this module
 export type { FetchHistoryResult, HistorySyncMessage };
 
+export function isTransientConnectionClosedError(error: unknown): boolean {
+  if (!error) return false;
+  const message =
+    typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+      ? error.message
+      : String(error instanceof Error ? error.message : error);
+  return /\bConnection Closed\b/i.test(message);
+}
+
 /**
  * Anchor point for fetching older messages in a chat
  */
@@ -2546,6 +2555,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // keys.transaction mutex while fetching devices/sessions over the network.
       await this.prewarmAllGroupCaches(instanceId, sock, groups);
     } catch (err) {
+      if (isTransientConnectionClosedError(err)) {
+        this.logger.debug('Group metadata prefetch skipped; socket closed during reconnect', {
+          instanceId,
+          error: String(err),
+        });
+        return;
+      }
       this.logger.warn('groupFetchAllParticipating failed', { instanceId, error: String(err) });
     }
   }
@@ -2665,6 +2681,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         devices: deviceJids.length,
       });
     } catch (err) {
+      if (isTransientConnectionClosedError(err)) {
+        this.logger.debug('Bulk group cache pre-warm skipped; socket closed during reconnect', {
+          instanceId,
+          error: String(err),
+        });
+        return;
+      }
       this.logger.warn('Bulk group cache pre-warm failed (non-fatal)', {
         instanceId,
         error: String(err),

@@ -158,7 +158,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     chats: new ChatService(db, eventBus),
     messages: new MessageService(db, eventBus),
     syncJobs: new SyncJobService(db, eventBus),
-    batchJobs: new BatchJobService(db, eventBus),
+    batchJobs: new BatchJobService(db, eventBus, settings),
     agentRunner: new AgentRunnerService(db),
     tts,
     turns: new TurnService(db),

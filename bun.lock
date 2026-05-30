@@ -224,6 +224,7 @@
         "baileys": "file:vendor/baileys-v7.0.0-rc10.tgz",
         "node-cache": "^5.1.2",
         "pino": "^9.6.0",
+        "sharp": "^0.34.5",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -252,6 +253,7 @@
         "ora": "^8.1.1",
         "pdf-parse": "^1.1.1",
         "qrcode-terminal": "^0.12.0",
+        "sharp": "^0.34.5",
       },
       "devDependencies": {
         "@omni/api": "workspace:*",

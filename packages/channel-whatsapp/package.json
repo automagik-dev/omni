@@ -20,7 +20,8 @@
     "audio-decode": "workspace:*",
     "baileys": "file:vendor/baileys-v7.0.0-rc10.tgz",
     "node-cache": "^5.1.2",
-    "pino": "^9.6.0"
+    "pino": "^9.6.0",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@types/bun": "latest",

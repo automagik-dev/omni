@@ -31,6 +31,7 @@ import {
 import {
   type MediaProcessingService,
   type ProcessingResult,
+  type ProcessorConfig,
   createMediaProcessingService,
 } from '@omni/media-processing';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
@@ -38,6 +39,11 @@ import { BATCH_PRICING_VERSION, computeEstimatedCostCents } from './batch-pricin
 import { MediaStorageService } from './media-storage';
 
 const log = createLogger('services:batch-jobs');
+
+interface MediaSettingsReader {
+  getSecret(key: string, envFallback?: string): Promise<string | null | undefined>;
+  getString(key: string, envFallback?: string, defaultValue?: string): Promise<string | null | undefined>;
+}
 
 /**
  * Content types that can be batch processed
@@ -115,7 +121,7 @@ interface JobProcessingState {
  * Batch Job Service
  */
 export class BatchJobService {
-  private mediaService: MediaProcessingService;
+  private mediaServicePromise: Promise<MediaProcessingService> | null = null;
   private mediaStorage: MediaStorageService;
   /** Track active job executions for cancellation */
   private activeJobs = new Map<string, { cancelled: boolean }>();
@@ -131,9 +137,46 @@ export class BatchJobService {
   constructor(
     private db: Database,
     private eventBus: EventBus | null,
+    private settings?: MediaSettingsReader,
   ) {
-    this.mediaService = createMediaProcessingService();
     this.mediaStorage = new MediaStorageService(db);
+  }
+
+  private getMediaService(): Promise<MediaProcessingService> {
+    if (!this.mediaServicePromise) {
+      this.mediaServicePromise = this.createMediaService().catch((error) => {
+        this.mediaServicePromise = null;
+        throw error;
+      });
+    }
+    return this.mediaServicePromise;
+  }
+
+  private async createMediaService(): Promise<MediaProcessingService> {
+    let config: Partial<ProcessorConfig> | undefined;
+    if (this.settings) {
+      const [groqApiKey, openaiApiKey, geminiApiKey, defaultLanguage, audioProvider, audioModel, audioPrompt] =
+        await Promise.all([
+          this.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
+          this.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
+          this.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
+          this.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
+          this.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
+          this.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
+          this.settings.getString('prompt.audio_transcription'),
+        ]);
+      config = {
+        groqApiKey: groqApiKey ?? undefined,
+        openaiApiKey: openaiApiKey ?? undefined,
+        geminiApiKey: geminiApiKey ?? undefined,
+        defaultLanguage: defaultLanguage ?? 'pt',
+        audioProvider: audioProvider ?? 'openai',
+        audioModel: audioModel ?? 'gpt-audio-mini',
+        audioPrompt: audioPrompt ?? undefined,
+      };
+    }
+
+    return createMediaProcessingService(config);
   }
 
   /**
@@ -751,7 +794,8 @@ export class BatchJobService {
    */
   private async processItem(instanceId: string, message: Message, batchJobId: string): Promise<ProcessingResult> {
     const mimeType = message.mediaMimeType;
-    if (!mimeType || !this.mediaService.canProcess(mimeType)) {
+    const mediaService = await this.getMediaService();
+    if (!mimeType || !mediaService.canProcess(mimeType)) {
       return this.failedResult(`MIME type not processable: ${mimeType}`);
     }
 
@@ -761,8 +805,7 @@ export class BatchJobService {
     }
 
     const fullPath = join(this.mediaStorage.getBasePath(), resolved.path);
-    const result = await this.mediaService.process(fullPath, mimeType, {
-      language: 'pt',
+    const result = await mediaService.process(fullPath, mimeType, {
       caption: message.textContent ?? undefined,
     });
 

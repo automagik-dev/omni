@@ -8,7 +8,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { apiKeys } from '@omni/db/schema';
 import { eq } from 'drizzle-orm';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import type { AppVariables } from '../../types';
 
@@ -23,6 +23,35 @@ const setContextSchema = z.object({
   chatId: z.string().uuid().optional().describe('Active chat ID'),
   messageId: z.string().uuid().optional().describe('Trigger message ID'),
 });
+
+// ============================================================================
+// ROUTE HELPERS
+// ============================================================================
+
+async function getCurrentContextInstanceId(
+  c: Context<{ Variables: AppVariables }>,
+  keyId: string,
+): Promise<string | undefined> {
+  const db = c.get('db');
+  const [row] = await db
+    .select({
+      activeInstanceId: apiKeys.activeInstanceId,
+      contextInstanceId: apiKeys.contextInstanceId,
+    })
+    .from(apiKeys)
+    .where(eq(apiKeys.id, keyId))
+    .limit(1);
+  return row?.contextInstanceId ?? row?.activeInstanceId ?? undefined;
+}
+
+async function getContextChat(c: Context<{ Variables: AppVariables }>, chatId: string) {
+  const services = c.get('services');
+  try {
+    return ((await services.chats.getById(chatId)) as { id: string; instanceId: string } | null) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // ============================================================================
 // ROUTES
@@ -76,6 +105,38 @@ contextRoutes.post('/', zValidator('json', setContextSchema), async (c) => {
 
   const body = c.req.valid('json');
   const db = c.get('db');
+  let resolvedInstanceId = body.instanceId;
+
+  if (body.chatId) {
+    if (!resolvedInstanceId) {
+      resolvedInstanceId = await getCurrentContextInstanceId(c, keyData.id);
+    }
+
+    const chat = await getContextChat(c, body.chatId);
+    if (!chat) {
+      return c.json(
+        {
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Chat not found',
+          },
+        },
+        404,
+      );
+    }
+    if (resolvedInstanceId && chat.instanceId !== resolvedInstanceId) {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Chat does not belong to the requested instance',
+            details: { chatId: body.chatId, chatInstanceId: chat.instanceId, instanceId: resolvedInstanceId },
+          },
+        },
+        400,
+      );
+    }
+  }
 
   // If instanceId is set, verify it's within this key's allowed instances
   if (body.instanceId && keyData.instanceIds && keyData.instanceIds.length > 0) {
@@ -147,7 +208,13 @@ contextRoutes.post('/use', zValidator('json', z.object({ instanceId: z.string().
 
   await db
     .update(apiKeys)
-    .set({ activeInstanceId: instanceId, contextUpdatedAt: new Date() })
+    .set({
+      activeInstanceId: instanceId,
+      contextInstanceId: instanceId,
+      contextChatId: null,
+      contextMessageId: null,
+      contextUpdatedAt: new Date(),
+    })
     .where(eq(apiKeys.id, keyData.id));
 
   return c.json({ data: { activeInstanceId: instanceId } });
