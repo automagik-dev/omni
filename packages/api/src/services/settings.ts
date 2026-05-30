@@ -191,6 +191,13 @@ const DEFAULT_SETTINGS: Array<{
     defaultValue: 'cedar',
   },
   {
+    key: 'tts.openai.default_instructions',
+    category: 'prompts',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default OpenAI TTS speaking instructions (null = provider default).',
+  },
+  {
     key: 'stt.provider',
     category: 'providers',
     valueType: 'string',

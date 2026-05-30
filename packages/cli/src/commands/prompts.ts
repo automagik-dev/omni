@@ -15,10 +15,13 @@ import * as output from '../output.js';
 
 /** Prompt name → settings key mapping */
 const PROMPT_MAP: Record<string, string> = {
+  audio: 'prompt.audio_transcription',
   image: 'prompt.image_description',
   video: 'prompt.video_description',
   document: 'prompt.document_ocr',
   gate: 'prompt.response_gate',
+  'tts-openai': 'tts.openai.default_instructions',
+  'tts-gemini': 'tts.gemini.default_style',
 };
 
 const PROMPT_NAMES = Object.keys(PROMPT_MAP);
@@ -65,7 +68,7 @@ export function createPromptsCommand(): Command {
   // omni prompts get <name>
   prompts
     .command('get <name>')
-    .description('Show current prompt (image|video|document|gate)')
+    .description(`Show current prompt (${PROMPT_NAMES.join('|')})`)
     .action(async (name: string) => {
       const key = resolveKey(name);
       const client = getClient();

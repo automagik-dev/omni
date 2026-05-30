@@ -8,7 +8,7 @@ describe('OpenAiTtsProvider', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('sends expressive instructions to the OpenAI speech endpoint', async () => {
+  it('sends expressive instructions to instruction-capable OpenAI speech models', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
       calls.push({ url: String(url), init });
@@ -39,5 +39,28 @@ describe('OpenAiTtsProvider', () => {
     expect(body.instructions).toContain('Language/accent: pt-BR.');
     expect(body.instructions).toContain('Style: WhatsApp note.');
     expect(body.instructions).toContain('Tone: direto.');
+  });
+
+  it('omits instructions for legacy OpenAI speech models', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'audio/mpeg' } });
+    }) as unknown as typeof fetch;
+
+    const provider = new OpenAiTtsProvider({
+      getSecret: async () => 'test-key',
+      getString: async (key, _env, defaultValue) => (key === 'tts.openai.model' ? 'tts-1' : defaultValue),
+    });
+
+    await provider.synthesize('fala curto', {
+      language: 'pt-BR',
+      instructions: 'Use emoção dramática.',
+      format: 'mp3',
+    });
+
+    const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, string>;
+    expect(body.model).toBe('tts-1');
+    expect(body.instructions).toBeUndefined();
   });
 });

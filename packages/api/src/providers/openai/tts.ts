@@ -65,9 +65,16 @@ export class OpenAiTtsProvider implements ITtsProvider {
       DEFAULT_VOICE;
     const requestedFormat = normalizeOutputFormat(options?.format ?? 'mp3');
     const nativeFormat = requestedFormat === 'ogg' || requestedFormat === 'opus' ? 'mp3' : requestedFormat;
-    const instructions = await this.buildInstructions(options);
+    const instructions = supportsInstructions(model) ? await this.buildInstructions(options) : undefined;
 
-    log.debug('Calling OpenAI TTS', { model, voice, requestedFormat, nativeFormat, textLen: text.length });
+    log.debug('Calling OpenAI TTS', {
+      model,
+      voice,
+      requestedFormat,
+      nativeFormat,
+      textLen: text.length,
+      hasInstructions: !!instructions,
+    });
     const response = await fetch(SPEECH_URL, {
       method: 'POST',
       headers: {
@@ -141,6 +148,10 @@ function normalizeOutputFormat(format: AudioFormat): 'mp3' | 'opus' | 'aac' | 'f
   if (format === 'opus') return 'opus';
   if (format === 'aac' || format === 'flac' || format === 'wav' || format === 'pcm') return format;
   return 'mp3';
+}
+
+function supportsInstructions(model: string): boolean {
+  return /^gpt(?:-[\w.]+)*-tts$/i.test(model);
 }
 
 function mimeForFormat(format: string): string {
