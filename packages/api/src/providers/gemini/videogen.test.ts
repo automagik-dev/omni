@@ -72,4 +72,32 @@ describe('GeminiVideoGenProvider', () => {
     expect(request.prompt).toContain('Music: no music.');
     expect(request.prompt).toContain('1. hero frame');
   });
+
+  it('preserves generateAudio for text-to-video requests', async () => {
+    generateVideoCalls.length = 0;
+    const provider = new GeminiVideoGenProvider({
+      getSecret: async () => 'test-gemini-key',
+      getString: async (_key: string, _env?: string, defaultValue?: string) => defaultValue,
+    });
+
+    await provider.submit('cinematic product reveal', { audio: true });
+
+    expect(generateVideoCalls).toHaveLength(1);
+    const request = generateVideoCalls[0] as { config?: Record<string, unknown> };
+    expect(request.config?.generateAudio).toBe(true);
+  });
+
+  it('can disable generated audio for text-to-video requests', async () => {
+    generateVideoCalls.length = 0;
+    const provider = new GeminiVideoGenProvider({
+      getSecret: async () => 'test-gemini-key',
+      getString: async (_key: string, _env?: string, defaultValue?: string) => defaultValue,
+    });
+
+    await provider.submit('silent product reveal', { audio: false });
+
+    expect(generateVideoCalls).toHaveLength(1);
+    const request = generateVideoCalls[0] as { config?: Record<string, unknown> };
+    expect(request.config?.generateAudio).toBe(false);
+  });
 });

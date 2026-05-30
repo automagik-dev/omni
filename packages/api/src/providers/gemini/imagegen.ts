@@ -139,12 +139,10 @@ export class GeminiImageGenProvider implements IImageGenProvider {
     const apiKey = await resolveGeminiApiKey(this.settings);
     const client = getGeminiClient(apiKey);
 
-    // Resolve model: explicit option > settings override > default alias.
-    const modelSetting = await this.settings.getString(
-      'imagegen.gemini.model',
-      'GEMINI_IMAGE_MODEL',
-      DEFAULT_MODEL_ALIAS,
-    );
+    // Resolve model: explicit option > env override > settings/default alias.
+    const modelSetting =
+      process.env.GEMINI_IMAGE_MODEL ??
+      (await this.settings.getString('imagegen.gemini.model', undefined, DEFAULT_MODEL_ALIAS));
     const model = resolveModel(options?.model || modelSetting);
 
     const count = Math.max(1, Math.min(options?.count ?? 1, 4));

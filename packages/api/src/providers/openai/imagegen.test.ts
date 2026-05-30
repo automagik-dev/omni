@@ -47,4 +47,36 @@ describe('OpenAiImageGenProvider', () => {
     expect(body.output_compression).toBe(80);
     expect(String(body.prompt)).toContain('Avoid: watermark.');
   });
+
+  it('omits GPT-image-only output controls for DALL-E model overrides', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const png = Buffer.from([137, 80, 78, 71]).toString('base64');
+    globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ data: [{ b64_json: png }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = new OpenAiImageGenProvider({
+      getSecret: async () => 'test-key',
+      getString: async () => 'dall-e-3',
+    });
+
+    await provider.generate('a clean product render', {
+      model: 'dall-e-3',
+      background: 'transparent',
+      outputFormat: 'webp',
+      compression: 70,
+    });
+
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+    expect(body.model).toBe('dall-e-3');
+    expect(body.response_format).toBe('b64_json');
+    expect(body.background).toBeUndefined();
+    expect(body.output_format).toBeUndefined();
+    expect(body.output_compression).toBeUndefined();
+  });
 });

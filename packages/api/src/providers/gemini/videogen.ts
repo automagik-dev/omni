@@ -70,6 +70,7 @@ export class GeminiVideoGenProvider implements IVideoGenProvider {
         ...(options?.durationSec !== undefined ? { durationSeconds: options.durationSec } : {}),
         ...(options?.seed !== undefined ? { seed: options.seed } : {}),
         ...(options?.resolution !== undefined ? { resolution: options.resolution } : {}),
+        ...(!options?.imageBase64 ? { generateAudio: options?.audio !== false } : {}),
       },
     };
     if (options?.imageBase64) {

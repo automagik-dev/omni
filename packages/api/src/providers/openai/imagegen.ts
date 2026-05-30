@@ -33,18 +33,7 @@ export class OpenAiImageGenProvider implements IImageGenProvider {
     const count = Math.max(1, Math.min(options?.count ?? 1, 4));
     const outputFormat = options?.outputFormat ?? options?.format ?? 'png';
     const size = normalizeSize(options?.imageSize, options?.aspectRatio);
-
-    const body: Record<string, unknown> = {
-      model,
-      prompt: buildPrompt(prompt, options),
-      n: count,
-      size,
-      ...(!model.startsWith('gpt-image-') ? { response_format: 'b64_json' } : {}),
-      ...(options?.quality ? { quality: options.quality } : {}),
-      ...(options?.background ? { background: options.background } : {}),
-      ...(outputFormat ? { output_format: outputFormat } : {}),
-      ...(options?.compression !== undefined ? { output_compression: options.compression } : {}),
-    };
+    const body = buildGenerationRequest(model, buildPrompt(prompt, options), count, size, outputFormat, options);
 
     log.info('Generating OpenAI image(s)', { model, count, size, outputFormat });
     const response = await fetch(IMAGE_GENERATIONS_URL, {
@@ -83,6 +72,30 @@ function buildPrompt(prompt: string, options?: ImageGenOptions): string {
   if (options?.style) parts.push(`Style: ${options.style}.`);
   if (options?.negativePrompt) parts.push(`Avoid: ${options.negativePrompt}.`);
   return parts.join('\n');
+}
+
+function buildGenerationRequest(
+  model: string,
+  prompt: string,
+  count: number,
+  size: string,
+  outputFormat: string,
+  options?: ImageGenOptions,
+): Record<string, unknown> {
+  const supportsGptImageControls = model.startsWith('gpt-image-');
+  return {
+    model,
+    prompt,
+    n: count,
+    size,
+    ...(!supportsGptImageControls ? { response_format: 'b64_json' } : {}),
+    ...(options?.quality ? { quality: options.quality } : {}),
+    ...(supportsGptImageControls && options?.background ? { background: options.background } : {}),
+    ...(supportsGptImageControls && outputFormat ? { output_format: outputFormat } : {}),
+    ...(supportsGptImageControls && options?.compression !== undefined
+      ? { output_compression: options.compression }
+      : {}),
+  };
 }
 
 function normalizeSize(size?: string, aspectRatio?: string): string {
