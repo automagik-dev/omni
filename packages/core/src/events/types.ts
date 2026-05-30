@@ -448,6 +448,22 @@ export interface SyncJobConfig {
   until?: string;
   /** Specific chat JIDs to fetch history for (WhatsApp only) */
   chatJids?: string[];
+  /** Queue media processing/backfill after sync completes */
+  backfillMedia?: boolean;
+  /** Alias for backfillMedia */
+  processMedia?: boolean;
+  /** Media batch daysBack override */
+  daysBack?: number;
+  /** Media batch item limit */
+  mediaLimit?: number;
+  /** Media content types to process */
+  contentTypes?: Array<'audio' | 'image' | 'video' | 'document'>;
+  /** Reprocess media that already has extracted content */
+  forceMedia?: boolean;
+  /** Minimum delay between media batch items */
+  delayMinMs?: number;
+  /** Maximum delay between media batch items */
+  delayMaxMs?: number;
 }
 
 export interface SyncJobProgress {

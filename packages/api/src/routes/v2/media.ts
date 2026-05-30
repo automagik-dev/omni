@@ -155,10 +155,13 @@ mediaRoutes.post('/tts', zValidator('json', ttsRequestSchema), async (c) => {
 const sttRequestSchema = z.object({
   audioBase64: z.string().min(1).describe('Base64-encoded audio data'),
   mimeType: z.string().min(1).describe('Audio MIME type (e.g. "audio/ogg", "audio/mpeg", "audio/wav")'),
-  provider: z.string().optional().describe('Provider name (gemini, groq). Defaults to config default.'),
+  provider: z.string().optional().describe('Provider name (openai, gemini, groq). Defaults to config default.'),
   language: z.string().optional().describe('BCP-47 language hint (e.g. "en", "pt-BR")'),
   timestamps: z.boolean().optional().describe('Include word/segment timestamps in response'),
   model: z.string().optional().describe('Model override (provider-specific)'),
+  prompt: z.string().max(4000).optional().describe('Provider transcription prompt/instructions'),
+  context: z.string().max(4000).optional().describe('Domain context for acoustic disambiguation'),
+  glossary: z.array(z.string().min(1).max(100)).max(200).optional().describe('Likely terms/acronyms/products'),
 });
 
 /**
@@ -216,6 +219,9 @@ mediaRoutes.post('/stt', zValidator('json', sttRequestSchema), async (c) => {
       language: body.language,
       timestamps: body.timestamps,
       model: body.model,
+      prompt: body.prompt,
+      context: body.context,
+      glossary: body.glossary,
     });
 
     return c.json({
@@ -484,7 +490,8 @@ mediaRoutes.post('/film', zValidator('json', filmRequestSchema), async (c) => {
       aspectRatio,
       durationSec: body.durationSec,
       seed: body.seed,
-      audio: body.audio,
+      audio: body.audio ?? true,
+      resolution: body.resolution,
     });
 
     while (operation.state === 'pending' || operation.state === 'processing') {

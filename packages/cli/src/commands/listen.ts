@@ -27,6 +27,9 @@ interface ListenOptions {
   timestamps?: boolean;
   format?: string;
   model?: string;
+  prompt?: string;
+  context?: string;
+  glossary?: string;
   reply?: string | true;
   instance?: string;
   chat?: string;
@@ -85,6 +88,9 @@ export function createListenCommand(): Command {
       .option('--timestamps', 'Include per-segment timestamps')
       .option('--format <fmt>', `Output format: ${ALLOWED_FORMATS.join(', ')} (default: text)`)
       .option('--model <name>', 'Model override (provider-specific)')
+      .option('--prompt <text>', 'Provider transcription prompt/instructions')
+      .option('--context <text>', 'Domain context for acoustic disambiguation')
+      .option('--glossary <terms>', 'Comma-separated likely names/acronyms/products')
       .option('--reply [message-id]', 'Send transcript as a quote-reply to the trigger or a specific message')
       .option('--instance <id>', 'Override instance (default: from context, only with --reply)')
       .option('--chat <id>', 'Override chat (default: from context, only with --reply)')
@@ -109,6 +115,13 @@ export function createListenCommand(): Command {
 
         const mimeType = guessAudioMimeType(file);
 
+        const glossary = options.glossary
+          ? options.glossary
+              .split(',')
+              .map((term) => term.trim())
+              .filter(Boolean)
+          : undefined;
+
         // Transcribe via server-side provider registry
         let result: {
           provider: string;
@@ -125,6 +138,9 @@ export function createListenCommand(): Command {
             language: options.language,
             timestamps: wantTimestamps,
             model: options.model,
+            prompt: options.prompt,
+            context: options.context,
+            glossary,
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';

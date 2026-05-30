@@ -25,11 +25,11 @@ export const GEMINI_MODELS = {
   /** Image generation — Imagen 3 (Nano Banana 2) */
   IMAGE_GEN: 'imagen-3.0-generate-002',
   /** Video generation — Veo 3.1 */
-  VIDEO_GEN: 'veo-3.0-generate-preview',
+  VIDEO_GEN: 'veo-3.1-generate-preview',
   /** Vision — image/video understanding */
-  VISION: 'gemini-2.0-flash',
+  VISION: 'gemini-3.1-flash-lite',
   /** STT — speech-to-text */
-  STT: 'gemini-2.0-flash',
+  STT: 'gemini-3.1-flash-lite',
 } as const;
 
 // ---------------------------------------------------------------------------

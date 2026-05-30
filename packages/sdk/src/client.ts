@@ -3360,6 +3360,9 @@ export function createOmniClient(config: OmniClientConfig) {
         language?: string;
         timestamps?: boolean;
         model?: string;
+        prompt?: string;
+        context?: string;
+        glossary?: string[];
       }): Promise<{
         provider: string;
         text: string;
@@ -3377,6 +3380,9 @@ export function createOmniClient(config: OmniClientConfig) {
             language: body.language,
             timestamps: body.timestamps,
             model: body.model,
+            prompt: body.prompt,
+            context: body.context,
+            glossary: body.glossary,
           }),
         });
         const json = (await resp.json()) as {

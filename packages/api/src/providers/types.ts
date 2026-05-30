@@ -71,8 +71,14 @@ export interface SttOptions {
   language?: string;
   /** Return word-level timestamps */
   timestamps?: boolean;
-  /** Model variant (provider-specific, e.g. "whisper-large-v3-turbo") */
+  /** Model variant (provider-specific, e.g. "gpt-audio-mini") */
   model?: string;
+  /** Provider-specific transcription instruction/prompt */
+  prompt?: string;
+  /** Domain context used for acoustic disambiguation */
+  context?: string;
+  /** Likely names, acronyms, product names, and phrases */
+  glossary?: string[];
 }
 
 export interface SttSegment {
@@ -155,6 +161,8 @@ export interface VideoGenOptions {
   seed?: number;
   /** Whether to generate with audio */
   audio?: boolean;
+  /** Resolution hint (provider-specific, e.g. "720p", "1080p") */
+  resolution?: string;
 }
 
 export interface GeneratedVideo {

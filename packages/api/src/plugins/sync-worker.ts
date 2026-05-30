@@ -458,8 +458,12 @@ async function processMessageSync(
           externalId: msg.externalId,
           source: 'sync',
           messageType: mapContentType(msg.content.type),
-          textContent: msg.content.text,
+          textContent: msg.content.text ?? msg.content.caption,
           platformTimestamp: msg.timestamp,
+          hasMedia: ['audio', 'image', 'video', 'document', 'sticker'].includes(msg.content.type),
+          mediaMimeType: msg.content.mimeType,
+          mediaUrl: msg.content.mediaUrl,
+          mediaLocalPath: msg.content.localPath,
           senderPlatformUserId: msg.from,
           isFromMe: msg.isFromMe,
           rawPayload: msg.rawPayload as Record<string, unknown>,
@@ -490,6 +494,8 @@ async function processMessageSync(
     duplicates,
   });
 
+  await queueMediaBackfillAfterSync(services, config, instanceId, jobId, stored);
+
   // Complete the job
   await services.syncJobs.complete(jobId);
 
@@ -499,6 +505,33 @@ async function processMessageSync(
     stored,
     duplicates,
   });
+}
+
+async function queueMediaBackfillAfterSync(
+  services: Services,
+  config: SyncJobConfig,
+  instanceId: string,
+  jobId: string,
+  stored: number,
+): Promise<void> {
+  if ((config.backfillMedia !== true && config.processMedia !== true) || stored === 0) return;
+
+  try {
+    const params = {
+      jobType: 'time_based_batch' as const,
+      instanceId,
+      daysBack: config.daysBack ?? 3650,
+      limit: config.mediaLimit,
+      contentTypes: config.contentTypes ?? ['audio', 'image', 'video', 'document'],
+      force: config.forceMedia === true,
+      delayMinMs: config.delayMinMs ?? 1000,
+      delayMaxMs: config.delayMaxMs ?? 3000,
+    };
+    const batch = await services.batchJobs.create(params);
+    log.info('Queued media backfill batch after message sync', { jobId, batchJobId: batch.id, stored });
+  } catch (error) {
+    log.warn('Failed to queue media backfill batch after message sync', { jobId, error: String(error) });
+  }
 }
 
 /**

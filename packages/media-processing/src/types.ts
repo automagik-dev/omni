@@ -44,6 +44,14 @@ export interface ProcessorConfig {
   groqApiKey?: string;
   /** OpenAI API key (fallback for audio, vision) */
   openaiApiKey?: string;
+  /** Preferred audio provider (openai, gemini, groq) */
+  audioProvider?: string;
+  /** Preferred audio model */
+  audioModel?: string;
+  /** Default audio transcription prompt/context */
+  audioPrompt?: string;
+  /** Default audio glossary */
+  audioGlossary?: string[];
   /** Google Gemini API key (vision, document OCR) */
   geminiApiKey?: string;
   /** Default language for transcription (default: 'pt') */
@@ -86,8 +94,16 @@ export interface ProcessOptions {
   durationSeconds?: number;
   /** Caption context for images (improves description quality) */
   caption?: string;
-  /** Override prompt for LLM-based processing (description, OCR) */
+  /** Override prompt for LLM-based processing (description, OCR, transcription) */
   prompt?: string;
+  /** Domain context for transcription disambiguation */
+  context?: string;
+  /** Likely terms/acronyms/products for transcription */
+  glossary?: string[];
+  /** Provider override */
+  provider?: string;
+  /** Model override */
+  model?: string;
 }
 
 /**
