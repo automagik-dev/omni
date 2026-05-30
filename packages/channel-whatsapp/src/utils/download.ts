@@ -6,7 +6,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -269,6 +269,17 @@ export async function downloadMediaToFile(
   const mediaInfo = detectMediaType(msg);
   if (!mediaInfo) return null;
 
+  const stream = await downloadMediaMessage(msg, 'stream', {});
+  const size = await writeMediaStreamToFile(stream, outputPath, maxSizeBytes);
+  if (size === 0) return null;
+  return { mimeType: mediaInfo.mimeType, size };
+}
+
+export async function writeMediaStreamToFile(
+  stream: NodeJS.ReadableStream,
+  outputPath: string,
+  maxSizeBytes = getWhatsAppMediaDownloadMaxBytes(),
+): Promise<number> {
   let size = 0;
   const sizeGuard = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
@@ -281,10 +292,16 @@ export async function downloadMediaToFile(
     },
   });
 
-  const stream = await downloadMediaMessage(msg, 'stream', {});
   await mkdir(dirname(outputPath), { recursive: true });
-  await pipeline(stream, sizeGuard, createWriteStream(outputPath));
+  try {
+    await pipeline(stream, sizeGuard, createWriteStream(outputPath));
+  } catch (error) {
+    await rm(outputPath, { force: true });
+    throw error;
+  }
 
-  if (size === 0) return null;
-  return { mimeType: mediaInfo.mimeType, size };
+  if (size === 0) {
+    await rm(outputPath, { force: true });
+  }
+  return size;
 }

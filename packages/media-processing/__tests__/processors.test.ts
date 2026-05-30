@@ -4,7 +4,7 @@
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AudioProcessor, DocumentProcessor, ImageProcessor, VideoProcessor } from '../src/processors';
@@ -19,9 +19,11 @@ const mockConfig: ProcessorConfig = {
 };
 
 const originalFetch = globalThis.fetch;
+const originalPath = process.env.PATH;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  process.env.PATH = originalPath;
 });
 
 describe('processors', () => {
@@ -101,12 +103,41 @@ describe('processors', () => {
       }
     });
 
-    it('does not use synchronous ffmpeg/file normalization in the event loop', () => {
-      const source = readFileSync(new URL('../src/processors/audio.ts', import.meta.url), 'utf8');
-      expect(source).not.toContain('execFileSync');
-      expect(source).not.toContain('readFileSync');
-      expect(source).not.toContain('mkdtempSync');
-      expect(source).not.toContain('rmSync');
+    it('normalizes once across fallback attempts and rejects oversized normalized audio', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'omni-audio-normalize-'));
+      const audioPath = join(dir, 'input.ogg');
+      const ffmpegPath = join(dir, 'ffmpeg');
+      const counterPath = join(dir, 'ffmpeg-count');
+      await writeFile(audioPath, Buffer.from('fake ogg input'));
+      await writeFile(
+        ffmpegPath,
+        `#!/usr/bin/env bash
+set -euo pipefail
+counter=${counterPath}
+count=0
+if [ -f "$counter" ]; then count=$(cat "$counter"); fi
+echo $((count + 1)) > "$counter"
+out="${'${@: -1}'}"
+python3 - "$out" <<'PY'
+from pathlib import Path
+import sys
+Path(sys.argv[1]).write_bytes(b'x' * (25 * 1024 * 1024))
+PY
+`,
+      );
+      await chmod(ffmpegPath, 0o755);
+      process.env.PATH = `${dir}:${originalPath ?? ''}`;
+
+      try {
+        const processorWithOpenAi = new AudioProcessor({ ...mockConfig, openaiApiKey: 'test-openai-key' });
+        const result = await processorWithOpenAi.process(audioPath, 'audio/ogg', { language: 'pt-BR' });
+
+        expect(result.success).toBe(false);
+        expect(result.errorMessage).toContain('Normalized audio still exceeds provider upload limit');
+        expect(readFileSync(counterPath, 'utf8').trim()).toBe('1');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
     });
   });
 

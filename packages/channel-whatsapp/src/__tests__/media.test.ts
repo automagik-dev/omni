@@ -3,6 +3,11 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import {
   buildAudioContent,
   buildDocumentContent,
@@ -10,7 +15,12 @@ import {
   buildStickerContent,
   buildVideoContent,
 } from '../senders/media';
-import { generateFilename, getExtension, getWhatsAppMediaDownloadMaxBytes } from '../utils/download';
+import {
+  generateFilename,
+  getExtension,
+  getWhatsAppMediaDownloadMaxBytes,
+  writeMediaStreamToFile,
+} from '../utils/download';
 
 describe('Media Utilities', () => {
   describe('getExtension', () => {
@@ -77,6 +87,36 @@ describe('Media Utilities', () => {
       } finally {
         if (original === undefined) process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB = undefined;
         else process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB = original;
+      }
+    });
+  });
+
+  describe('downloadMediaToFile cleanup', () => {
+    it('removes partial files when stream download fails', async () => {
+      const outputPath = join(tmpdir(), `omni-download-partial-${Date.now()}.bin`);
+      const failingStream = Readable.from(
+        (async function* () {
+          yield Buffer.from('partial');
+          throw new Error('stream failed');
+        })(),
+      );
+
+      try {
+        await expect(writeMediaStreamToFile(failingStream, outputPath)).rejects.toThrow('stream failed');
+        expect(existsSync(outputPath)).toBe(false);
+      } finally {
+        await rm(outputPath, { force: true });
+      }
+    });
+
+    it('removes zero-byte files and returns size 0', async () => {
+      const outputPath = join(tmpdir(), `omni-download-empty-${Date.now()}.bin`);
+      try {
+        const size = await writeMediaStreamToFile(Readable.from([]), outputPath);
+        expect(size).toBe(0);
+        expect(existsSync(outputPath)).toBe(false);
+      } finally {
+        await rm(outputPath, { force: true });
       }
     });
   });
