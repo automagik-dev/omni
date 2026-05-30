@@ -263,6 +263,7 @@ const CLI_COMMANDS: Record<string, string> = {
   'media.vision': 'see <file> [prompt]',
   'media.imagine': 'imagine <prompt...>',
   'media.film': 'film <prompt>',
+  'media.music': 'music <prompt...>',
 
   // ============================================================================
   // AGENTS

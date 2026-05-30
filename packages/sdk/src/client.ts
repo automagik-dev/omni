@@ -3320,6 +3320,14 @@ export function createOmniClient(config: OmniClientConfig) {
         speed?: number;
         format?: 'mp3' | 'ogg' | 'opus' | 'wav' | 'pcm' | 'flac' | 'aac';
         style?: string;
+        model?: string;
+        instructions?: string;
+        tone?: string;
+        accent?: string;
+        pace?: string;
+        emotion?: string;
+        voiceNoteProfile?: string;
+        multiSpeaker?: Array<{ speaker: string; voice: string }>;
       }): Promise<{ provider: string; mimeType: string; durationMs: number; sizeBytes: number; audio: Buffer }> {
         const resp = await apiFetch(`${baseUrl}/api/v2/media/tts`, {
           method: 'POST',
@@ -3428,6 +3436,10 @@ export function createOmniClient(config: OmniClientConfig) {
         model?: string;
         negativePrompt?: string;
         seed?: number;
+        quality?: string;
+        background?: string;
+        outputFormat?: 'png' | 'jpeg' | 'webp';
+        compression?: number;
       }): Promise<{
         provider: string;
         processingMs: number;
@@ -3532,6 +3544,14 @@ export function createOmniClient(config: OmniClientConfig) {
         aspectRatio?: string;
         seed?: number;
         audio?: boolean;
+        imageBase64?: string;
+        imageMimeType?: string;
+        dialogue?: string;
+        camera?: string;
+        shotList?: string[];
+        audioDirection?: string;
+        music?: string;
+        style?: string;
       }): Promise<{
         provider: string;
         operationId: string;
@@ -3559,6 +3579,57 @@ export function createOmniClient(config: OmniClientConfig) {
         const data = json?.data;
         if (!data) {
           throw new OmniApiError('Film response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return data;
+      },
+
+      /** Generate music/audio via the registered music-generation provider. */
+      async music(body: {
+        prompt: string;
+        provider?: string;
+        model?: string;
+        mode?: 'clip' | 'pro';
+        durationSec?: number;
+        instrumental?: boolean;
+        lyrics?: string;
+        timedSections?: Array<{ start: string; end: string; instruction: string }>;
+        genre?: string;
+        mood?: string;
+        bpm?: number;
+        instruments?: string[];
+        singerProfile?: string;
+        imageBase64?: string;
+        imageMimeType?: string;
+        style?: string;
+      }): Promise<{
+        provider: string;
+        model: string;
+        mimeType: string;
+        sizeBytes: number;
+        durationMs?: number;
+        processingMs: number;
+        audioBase64: string;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/music`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as {
+          data?: {
+            provider: string;
+            model: string;
+            mimeType: string;
+            sizeBytes: number;
+            durationMs?: number;
+            processingMs: number;
+            audioBase64: string;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('Music response missing data', 'INVALID_RESPONSE', undefined, 500);
         }
         return data;
       },

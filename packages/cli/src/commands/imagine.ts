@@ -20,13 +20,19 @@ import { resolveContext, resolveReplyTo } from '../context.js';
 import * as output from '../output.js';
 
 type AspectRatio = '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '3:2' | '2:3';
+type OutputFormat = 'png' | 'jpeg' | 'webp';
 const ALLOWED_ASPECT_RATIOS: readonly AspectRatio[] = ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3'];
+const ALLOWED_OUTPUT_FORMATS: readonly OutputFormat[] = ['png', 'jpeg', 'webp'];
 
 interface ImagineOptions {
   aspectRatio?: string;
   size?: string;
   model?: string;
   provider?: string;
+  quality?: string;
+  background?: string;
+  outputFormat?: string;
+  compression?: string;
   count?: string;
   output?: string;
   reply?: string | true;
@@ -64,6 +70,14 @@ function parseAspectRatio(value: string | undefined): AspectRatio | undefined {
   return value as AspectRatio;
 }
 
+function parseOutputFormat(value: string | undefined): OutputFormat | undefined {
+  if (!value) return undefined;
+  if (!(ALLOWED_OUTPUT_FORMATS as readonly string[]).includes(value)) {
+    output.error(`Invalid --output-format "${value}". Allowed: ${ALLOWED_OUTPUT_FORMATS.join(', ')}`);
+  }
+  return value as OutputFormat;
+}
+
 export function createImagineCommand(): Command {
   return (
     new Command('imagine')
@@ -73,6 +87,10 @@ export function createImagineCommand(): Command {
       .option('--size <size>', 'Image size preset (1K, 2K, 4K — not all models support all sizes)')
       .option('--model <name>', 'Model alias (nano-banana-2, nano-banana-pro) or raw Gemini model ID')
       .option('--provider <name>', 'Provider override (default: config imagegen.provider)')
+      .option('--quality <quality>', 'Quality hint (OpenAI/provider-specific)')
+      .option('--background <mode>', 'Background mode (OpenAI/provider-specific)')
+      .option('--output-format <fmt>', 'Output format: png, jpeg, webp')
+      .option('--compression <0-100>', 'Output compression 0-100')
       .option('--count <n>', 'Number of images to generate (1-4)', '1')
       .option('--output <path>', 'Save locally instead of sending (appends -N for count > 1)')
       .option('--reply [message-id]', 'Quote-reply to the trigger message or a specific message ID')
@@ -91,6 +109,14 @@ export function createImagineCommand(): Command {
         }
 
         const aspectRatio = parseAspectRatio(options.aspectRatio);
+        const outputFormat = parseOutputFormat(options.outputFormat);
+        let compression: number | undefined;
+        if (options.compression !== undefined) {
+          compression = Number.parseInt(options.compression, 10);
+          if (Number.isNaN(compression) || compression < 0 || compression > 100) {
+            return output.error('--compression must be an integer between 0 and 100');
+          }
+        }
         const saveLocally = !!options.output;
 
         // Resolve context only when we need to send — output-only runs don't
@@ -140,6 +166,10 @@ export function createImagineCommand(): Command {
             aspectRatio,
             imageSize: options.size,
             model: options.model,
+            quality: options.quality,
+            background: options.background,
+            outputFormat,
+            compression,
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';

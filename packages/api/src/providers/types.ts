@@ -1,10 +1,9 @@
 /**
  * Provider interfaces for multimodal capabilities.
  *
- * Each interface defines a single capability (TTS, STT, image gen, video gen, vision).
- * Providers implement one or more interfaces and register with the provider registry.
- * Verb commands (speak, listen, imagine, film, see) resolve the active provider
- * through the registry and call the interface method.
+ * Each interface defines a single capability (TTS, STT, image gen, video gen,
+ * music gen, vision). Providers implement one or more interfaces and register
+ * with the provider registry.
  */
 
 // ---------------------------------------------------------------------------
@@ -33,32 +32,31 @@ export interface TtsVoice {
 }
 
 export interface TtsOptions {
-  /** Voice identifier (provider-specific) */
   voice?: string;
-  /** Language code (BCP-47, e.g. "en-US", "pt-BR") */
   language?: string;
-  /** Speaking speed multiplier (0.5 - 2.0, default 1.0) */
   speed?: number;
-  /** Output audio format */
   format?: AudioFormat;
+  model?: string;
+  instructions?: string;
+  style?: string;
+  tone?: string;
+  accent?: string;
+  pace?: string;
+  emotion?: string;
+  voiceNoteProfile?: string;
+  multiSpeaker?: Array<{ speaker: string; voice: string }>;
 }
 
 export interface TtsResult {
-  /** Audio buffer */
   audio: Buffer;
-  /** MIME type of the audio (e.g. "audio/ogg; codecs=opus") */
   mimeType: string;
-  /** Duration in milliseconds */
   durationMs: number;
-  /** Size in bytes */
   sizeBytes: number;
 }
 
 export interface ITtsProvider {
   readonly name: string;
-  /** Synthesize text to speech */
   synthesize(text: string, options?: TtsOptions): Promise<TtsResult>;
-  /** List available voices */
   listVoices?(): Promise<TtsVoice[]>;
 }
 
@@ -67,17 +65,11 @@ export interface ITtsProvider {
 // ---------------------------------------------------------------------------
 
 export interface SttOptions {
-  /** Language hint (BCP-47) */
   language?: string;
-  /** Return word-level timestamps */
   timestamps?: boolean;
-  /** Model variant (provider-specific, e.g. "gpt-audio-mini") */
   model?: string;
-  /** Provider-specific transcription instruction/prompt */
   prompt?: string;
-  /** Domain context used for acoustic disambiguation */
   context?: string;
-  /** Likely names, acronyms, product names, and phrases */
   glossary?: string[];
 }
 
@@ -88,19 +80,14 @@ export interface SttSegment {
 }
 
 export interface SttResult {
-  /** Full transcription text */
   text: string;
-  /** Per-segment breakdown (if timestamps requested) */
   segments?: SttSegment[];
-  /** Detected language */
   detectedLanguage?: string;
-  /** Processing duration in milliseconds */
   processingMs: number;
 }
 
 export interface ISttProvider {
   readonly name: string;
-  /** Transcribe audio to text */
   transcribe(audio: Buffer, mimeType: string, options?: SttOptions): Promise<SttResult>;
 }
 
@@ -109,42 +96,35 @@ export interface ISttProvider {
 // ---------------------------------------------------------------------------
 
 export interface ImageGenOptions {
-  /** Aspect ratio */
   aspectRatio?: AspectRatio;
-  /** Output format */
   format?: ImageFormat;
-  /** Number of images to generate (default 1) */
   count?: number;
-  /** Negative prompt — what to avoid */
   negativePrompt?: string;
-  /** Style preset (provider-specific) */
   style?: string;
-  /** Seed for reproducibility */
   seed?: number;
+  model?: string;
+  imageSize?: string;
+  quality?: string;
+  background?: string;
+  outputFormat?: ImageFormat;
+  compression?: number;
 }
 
 export interface GeneratedImage {
-  /** Image data */
   data: Buffer;
-  /** MIME type */
   mimeType: string;
-  /** Width in pixels */
   width: number;
-  /** Height in pixels */
   height: number;
-  /** Seed used (for reproducibility) */
   seed?: number;
 }
 
 export interface ImageGenResult {
   images: GeneratedImage[];
-  /** Processing duration in milliseconds */
   processingMs: number;
 }
 
 export interface IImageGenProvider {
   readonly name: string;
-  /** Generate image(s) from a text prompt */
   generate(prompt: string, options?: ImageGenOptions): Promise<ImageGenResult>;
 }
 
@@ -153,49 +133,79 @@ export interface IImageGenProvider {
 // ---------------------------------------------------------------------------
 
 export interface VideoGenOptions {
-  /** Aspect ratio */
   aspectRatio?: AspectRatio;
-  /** Duration in seconds (provider-dependent max) */
   durationSec?: number;
-  /** Seed for reproducibility */
   seed?: number;
-  /** Whether to generate with audio */
   audio?: boolean;
-  /** Resolution hint (provider-specific, e.g. "720p", "1080p") */
   resolution?: string;
+  imageBase64?: string;
+  imageMimeType?: string;
+  dialogue?: string;
+  camera?: string;
+  shotList?: string[];
+  audioDirection?: string;
+  music?: string;
+  style?: string;
 }
 
 export interface GeneratedVideo {
-  /** Video data */
   data: Buffer;
-  /** MIME type (e.g. "video/mp4") */
   mimeType: string;
-  /** Duration in milliseconds */
   durationMs: number;
-  /** Width in pixels */
   width?: number;
-  /** Height in pixels */
   height?: number;
 }
 
-/** Video generation is async — submit returns an operation, poll until complete */
 export interface VideoGenOperation {
-  /** Operation ID for polling */
   operationId: string;
-  /** Current state */
   state: 'pending' | 'processing' | 'complete' | 'failed';
-  /** Result when state is 'complete' */
   video?: GeneratedVideo;
-  /** Error message when state is 'failed' */
   error?: string;
 }
 
 export interface IVideoGenProvider {
   readonly name: string;
-  /** Submit a video generation request (async) */
   submit(prompt: string, options?: VideoGenOptions): Promise<VideoGenOperation>;
-  /** Poll for operation status */
   poll(operationId: string): Promise<VideoGenOperation>;
+}
+
+// ---------------------------------------------------------------------------
+// Music Generation
+// ---------------------------------------------------------------------------
+
+export interface MusicGenOptions {
+  model?: string;
+  mode?: 'clip' | 'pro';
+  durationSec?: number;
+  instrumental?: boolean;
+  lyrics?: string;
+  timedSections?: Array<{ start: string; end: string; instruction: string }>;
+  genre?: string;
+  mood?: string;
+  bpm?: number;
+  instruments?: string[];
+  singerProfile?: string;
+  imageBase64?: string;
+  imageMimeType?: string;
+  style?: string;
+}
+
+export interface GeneratedMusic {
+  data: Buffer;
+  mimeType: string;
+  durationMs?: number;
+  sizeBytes: number;
+}
+
+export interface MusicGenResult {
+  audio: GeneratedMusic;
+  processingMs: number;
+  model: string;
+}
+
+export interface IMusicGenProvider {
+  readonly name: string;
+  generate(prompt: string, options?: MusicGenOptions): Promise<MusicGenResult>;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,24 +213,18 @@ export interface IVideoGenProvider {
 // ---------------------------------------------------------------------------
 
 export interface VisionOptions {
-  /** Custom prompt for description */
   prompt?: string;
-  /** Language for the response */
   language?: string;
-  /** Max output tokens */
   maxTokens?: number;
 }
 
 export interface VisionResult {
-  /** Text description */
   text: string;
-  /** Processing duration in milliseconds */
   processingMs: number;
 }
 
 export interface IVisionProvider {
   readonly name: string;
-  /** Describe an image or video */
   describe(media: Buffer, mimeType: string, options?: VisionOptions): Promise<VisionResult>;
 }
 
@@ -228,14 +232,13 @@ export interface IVisionProvider {
 // Provider capability type union
 // ---------------------------------------------------------------------------
 
-/** All provider capability types */
-export type ProviderCapability = 'tts' | 'stt' | 'imagegen' | 'videogen' | 'vision';
+export type ProviderCapability = 'tts' | 'stt' | 'imagegen' | 'videogen' | 'vision' | 'musicgen';
 
-/** Map capability names to their provider interfaces */
 export interface ProviderInterfaceMap {
   tts: ITtsProvider;
   stt: ISttProvider;
   imagegen: IImageGenProvider;
   videogen: IVideoGenProvider;
   vision: IVisionProvider;
+  musicgen: IMusicGenProvider;
 }
