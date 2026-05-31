@@ -319,7 +319,9 @@ export async function handleGupshupWebhook(
     });
   }
 
-  const processed = await processInboundMessage(plugin, instanceId, webhook, dedupeCache);
+  const processed = await processInboundMessage(plugin, instanceId, webhook, dedupeCache, {
+    khalSessionId: request.headers.get('x-khal-session-id')?.trim() || undefined,
+  });
 
   // Unknown event_type wins the label — the alerting signal is format drift
   // detection, independent of whether the downstream extraction succeeded.
@@ -350,6 +352,7 @@ async function processInboundMessage(
   instanceId: string,
   webhook: GupshupNativeInboundWebhook,
   dedupeCache: DedupeCache,
+  options: { khalSessionId?: string } = {},
 ): Promise<boolean> {
   const msg = webhook.messageobj;
   const from = webhook.sender;
@@ -382,6 +385,8 @@ async function processInboundMessage(
     webhook.senderobj?.display ??
     webhook.contextobj?.senderName ??
     (webhook.messageobj?.raw?.sender as { name?: string } | undefined)?.name;
+  const threadId = webhook.contextobj?.contextid;
+  const khalSessionHeaders = options.khalSessionId ? { 'x-khal-session-id': options.khalSessionId } : undefined;
 
   await plugin.handleMessageReceived({
     instanceId,
@@ -389,7 +394,13 @@ async function processInboundMessage(
     chatId: from,
     from,
     content,
-    rawPayload: { ...webhook, pushName: senderName } as unknown as Record<string, unknown>,
+    rawPayload: {
+      ...webhook,
+      pushName: senderName,
+      ...(threadId ? { threadId } : {}),
+      ...(options.khalSessionId ? { khalSessionId: options.khalSessionId } : {}),
+      ...(khalSessionHeaders ? { headers: khalSessionHeaders } : {}),
+    } as unknown as Record<string, unknown>,
     platformTimestamp,
     replyTo,
   });

@@ -495,6 +495,8 @@ export interface AgentTrigger {
    * Includes OMNI_INSTANCE, OMNI_CHAT, OMNI_MESSAGE, OMNI_TURN_ID.
    */
   env?: Record<string, string>;
+  /** Headers providers should propagate on outbound trigger requests. */
+  headers?: Record<string, string>;
   /** Distributed trace context to propagate on outbound provider calls. */
   traceContext?: TraceContext;
 }
@@ -558,6 +560,8 @@ export interface WebhookPayload {
     emoji?: string;
   };
   traceId: string;
+  /** Headers propagated from the AgentTrigger; webhook providers also send these as HTTP headers. */
+  headers?: Record<string, string>;
   executionContext?: OmniExecutionContext;
   /** The endpoint to call back for sending responses */
   replyEndpoint: string;

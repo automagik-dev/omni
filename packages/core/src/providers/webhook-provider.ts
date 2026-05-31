@@ -64,6 +64,7 @@ export class WebhookAgentProvider implements IAgentProvider {
         emoji: context.content.emoji,
       },
       traceId: context.traceId,
+      headers: context.headers,
       executionContext: buildOmniExecutionContext(context),
       replyEndpoint: 'POST /api/v2/messages/send',
     };
@@ -136,10 +137,11 @@ export class WebhookAgentProvider implements IAgentProvider {
     }
   }
 
-  private buildHeaders(): Record<string, string> {
+  private buildHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Omni-Provider': 'webhook',
+      ...extraHeaders,
     };
     if (this.config.apiKey) {
       headers.Authorization = `Bearer ${this.config.apiKey}`;
@@ -152,7 +154,7 @@ export class WebhookAgentProvider implements IAgentProvider {
 
     const response = await fetch(this.config.webhookUrl, {
       method: 'POST',
-      headers: this.buildHeaders(),
+      headers: this.buildHeaders(payload.headers),
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(timeoutMs),
     });
