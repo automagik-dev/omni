@@ -360,6 +360,7 @@ function makeHandlerHarness() {
     externalId: string;
     from: string;
     content: { type: string; text?: string };
+    rawPayload?: Record<string, unknown>;
   }> = [];
 
   const logger = {
@@ -385,12 +386,14 @@ function makeHandlerHarness() {
       externalId: string;
       from: string;
       content: { type: string; text?: string };
+      rawPayload?: Record<string, unknown>;
     }) => {
       received.push({
         instanceId: params.instanceId,
         externalId: params.externalId,
         from: params.from,
         content: params.content,
+        rawPayload: params.rawPayload,
       });
     },
   } as unknown as GupshupPlugin;
@@ -398,11 +401,11 @@ function makeHandlerHarness() {
   return { plugin, logs, received };
 }
 
-function makeWebhookRequest(payload: Record<string, unknown> | string): Request {
+function makeWebhookRequest(payload: Record<string, unknown> | string, headers: Record<string, string> = {}): Request {
   const body = typeof payload === 'string' ? payload : JSON.stringify(payload);
   return new Request('https://example.com/api/v2/channels/gupshup/inst-gs-handler/webhook', {
     method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
     body,
   });
 }
@@ -429,6 +432,27 @@ describe('handleGupshupWebhook — event_type routing against real fixtures (#50
     expect(received[0]?.externalId).toBe('wamid.TEST_ASYNC_RESPONSE_TEXT_001');
     expect(received[0]?.content.text).toBe('Boa noite, gostaria de contratar um plano');
     expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unknown event_type'))).toHaveLength(0);
+  });
+
+  it('maps inbound KHAL session headers and Gupshup context into rawPayload', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(loadFixtureText('async_response-text.json'), { 'x-khal-session-id': 'khal-session-abc' }),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.rawPayload?.khalSessionId).toBe('khal-session-abc');
+    expect((received[0]?.rawPayload?.headers as Record<string, string> | undefined)?.['x-khal-session-id']).toBe(
+      'khal-session-abc',
+    );
+    expect(received[0]?.rawPayload?.threadId).toBe('5521900000002');
   });
 
   it('processes user_input text message (legacy format regression guard)', async () => {
