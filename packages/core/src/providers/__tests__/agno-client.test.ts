@@ -364,6 +364,53 @@ describe('AgnoClient', () => {
       expect(chunks[3]).toMatchObject({ event: 'RunCompleted', isComplete: true, fullContent: 'Hello World!' });
     });
 
+    it('propagates W3C trace context and Khal session headers for streaming runs', async () => {
+      const sseData = 'event: RunCompleted\ndata: {"run_id": "run-1", "content": "done"}\n\n';
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(sseData));
+          controller.close();
+        },
+      });
+
+      mockImpl.mockResolvedValueOnce(
+        new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+      );
+
+      const client = new AgnoClient(config);
+      for await (const _chunk of client.stream({
+        message: 'Hi!',
+        agentId: 'agent-1',
+        userId: 'user-456',
+        khalSessionId: 'khal-session-stream',
+        traceContext: {
+          traceId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          spanId: 'bbbbbbbbbbbbbbbb',
+          traceFlags: 1,
+        },
+        omni: {
+          instanceId: 'inst-1',
+          chatId: 'chat-123',
+          messageId: 'msg-stream-1',
+          channel: 'gupshup',
+        },
+      })) {
+        // exhaust stream so the request is issued
+      }
+
+      const init = mockImpl.mock.calls[0]?.[1] as RequestInit;
+      const headers = init.headers as Record<string, string>;
+      const formData = init.body as FormData;
+      expect(headers.traceparent).toBe('00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01');
+      expect(headers['x-khal-session-id']).toBe('khal-session-stream');
+      expect(headers['x-khal-message-id']).toBe('msg-stream-1');
+      expect(headers['x-omni-instance-id']).toBe('inst-1');
+      expect(headers['x-omni-chat-id']).toBe('chat-123');
+      expect(headers['x-omni-channel']).toBe('gupshup');
+      expect(formData.get('session_id')).toBe('khal-session-stream');
+    });
+
     it('handles stream errors', async () => {
       const sseData = 'event: RunFailed\ndata: {"error": "Agent crashed"}\n\n';
 
