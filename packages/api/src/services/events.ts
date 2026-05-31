@@ -12,6 +12,7 @@ export interface ListEventsOptions {
   instanceId?: string;
   instanceIds?: string[];
   personId?: string;
+  senderId?: string;
   eventType?: EventType[];
   contentType?: ContentType[];
   direction?: 'inbound' | 'outbound';
@@ -53,6 +54,7 @@ export class EventService {
       channel,
       instanceId,
       personId,
+      senderId,
       eventType,
       contentType,
       direction,
@@ -77,6 +79,10 @@ export class EventService {
 
     if (personId) {
       conditions.push(eq(omniEvents.personId, personId));
+    }
+
+    if (senderId) {
+      conditions.push(or(eq(omniEvents.chatId, senderId), eq(omniEvents.canonicalChatId, senderId)));
     }
 
     if (eventType?.length) {
@@ -106,6 +112,11 @@ export class EventService {
           ilike(omniEvents.textContent, searchPattern),
           ilike(omniEvents.transcription, searchPattern),
           ilike(omniEvents.imageDescription, searchPattern),
+          ilike(omniEvents.externalId, searchPattern),
+          ilike(omniEvents.chatId, searchPattern),
+          ilike(omniEvents.canonicalChatId, searchPattern),
+          sql`${omniEvents.rawPayload}::text ilike ${searchPattern}`,
+          sql`${omniEvents.metadata}::text ilike ${searchPattern}`,
         ),
       );
     }
