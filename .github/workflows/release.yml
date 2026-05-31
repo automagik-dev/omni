@@ -143,6 +143,13 @@ jobs:
           echo "Previous release tag: ${PREV:-none}"
 
       - name: Generate changelog
+        # git-cliff-action can fail after writing the requested file when the
+        # generated multi-line changelog trips GitHub output delimiter parsing
+        # ("Invalid value. Matching delimiter not found 'EOF'"). The release
+        # artifact should not go red for that wrapper-output bug; the next step
+        # uses /tmp/release-notes.md if it exists and otherwise leaves the
+        # generated release body in place.
+        continue-on-error: true
         uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
         with:
           config: cliff.toml
