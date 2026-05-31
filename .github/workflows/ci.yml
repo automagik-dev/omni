@@ -71,7 +71,7 @@ jobs:
         run: ./scripts/ensure-nats.sh
 
       - name: Start pgserve
-        run: bunx pgserve --port 8432 --data .pgserve-data --no-cluster &
+        run: bunx pgserve postmaster --port 8432 --data .pgserve-data &
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
@@ -80,9 +80,13 @@ jobs:
         run: |
           for i in $(seq 1 30); do
             pg_isready -h localhost -p 8432 >/dev/null 2>&1 && \
-              echo "Database ready" && exit 0 || sleep 1
+              echo "Database server ready" && break || sleep 1
           done
-          echo "Database failed to start" && exit 1
+          pg_isready -h localhost -p 8432 >/dev/null 2>&1 || \
+            (echo "Database failed to start" && exit 1)
+          createdb -h localhost -p 8432 -U postgres omni 2>/dev/null || true
+          pg_isready -h localhost -p 8432 -d omni >/dev/null 2>&1 && \
+            echo "Database ready" || (echo "Database omni failed readiness" && exit 1)
 
       - name: Build
         run: bun run build
@@ -146,7 +150,7 @@ jobs:
         run: ./scripts/ensure-nats.sh
 
       - name: Start pgserve
-        run: bunx pgserve --port 8432 --data .pgserve-data --no-cluster &
+        run: bunx pgserve postmaster --port 8432 --data .pgserve-data &
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
@@ -155,9 +159,13 @@ jobs:
         run: |
           for i in $(seq 1 30); do
             pg_isready -h localhost -p 8432 >/dev/null 2>&1 && \
-              echo "Database ready" && exit 0 || sleep 1
+              echo "Database server ready" && break || sleep 1
           done
-          echo "Database failed to start" && exit 1
+          pg_isready -h localhost -p 8432 >/dev/null 2>&1 || \
+            (echo "Database failed to start" && exit 1)
+          createdb -h localhost -p 8432 -U postgres omni 2>/dev/null || true
+          pg_isready -h localhost -p 8432 -d omni >/dev/null 2>&1 && \
+            echo "Database ready" || (echo "Database omni failed readiness" && exit 1)
 
       - name: Build all packages
         run: bun run build

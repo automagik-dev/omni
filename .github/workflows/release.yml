@@ -74,6 +74,12 @@ jobs:
           echo "Previous release tag: ${PREV:-none}"
 
       - name: Generate changelog
+        # git-cliff-action can fail after writing the requested file when the
+        # generated multi-line changelog trips GitHub output delimiter parsing
+        # ("Invalid value. Matching delimiter not found 'EOF'"). The release
+        # artifact should not go red for that wrapper-output bug; use the file
+        # when present and otherwise fall back to a small release note.
+        continue-on-error: true
         uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
         if: steps.exists.outputs.skip != 'true'
         with:
@@ -83,6 +89,15 @@ jobs:
             --output /tmp/release-notes.md
         env:
           GITHUB_REPO: ${{ github.repository }}
+
+      - name: Ensure release notes file exists
+        if: steps.exists.outputs.skip != 'true'
+        run: |
+          if [[ ! -s /tmp/release-notes.md ]]; then
+            TAG="${{ steps.pkg.outputs.tag }}"
+            printf 'Release %s\n' "${TAG}" > /tmp/release-notes.md
+            echo "::warning::git-cliff produced no notes file; using fallback release body"
+          fi
 
       - name: Create release
         if: steps.exists.outputs.skip != 'true'
