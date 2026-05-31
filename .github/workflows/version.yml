@@ -1,13 +1,15 @@
 name: Version
 
 on:
-  # Fire when a PR merges to dev — the canonical "new thing shipped" event.
+  # Fire when a PR merges to dev or homolog.
+  # homolog is the canonical image-build branch for controlled HML promotion,
+  # so homolog PR merges must bump the build number on homolog, not on dev.
   # Prior trigger (workflow_run CI on branch=dev) never fired because CI's
   # `on.push` only lists `[main, homolog]`, never `dev`; merges to dev thus
   # produced no push-event CI run for workflow_run to observe.
   pull_request:
     types: [closed]
-    branches: [dev]
+    branches: [dev, homolog]
   # main-side promotion arrives via CI-on-push (main IS in CI's push
   # branches). Keep this path so release-to-@latest continues to trigger
   # automatically when the rolling PR dev→main merges. homolog branch
@@ -30,8 +32,8 @@ permissions:
   id-token: write
 
 concurrency:
-  # Always writes to `dev` regardless of trigger ref. Keep a single group to serialize.
-  group: version-dev
+  # Serialize per target branch so dev and homolog bumps cannot overwrite each other.
+  group: version-${{ github.event_name }}-${{ github.event.workflow_run.head_branch || github.event.pull_request.base.ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -53,7 +55,8 @@ jobs:
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main' &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        github.event.workflow_run.head_branch == 'homolog') &&
        !contains(github.event.workflow_run.head_commit.message, '[skip ci]') &&
        startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request') &&
        (contains(github.event.workflow_run.head_commit.message, '/dev') ||
@@ -64,23 +67,46 @@ jobs:
         id: context
         run: |
           # Branch semantics:
-          #   - workflow_run on main → promoted release → @latest
-          #   - pull_request merged on dev → new dev build → @next
-          #   - workflow_dispatch → defaults to @next (manual dev trigger)
-          if [ "${{ github.event_name }}" = "workflow_run" ] && \
-             [ "${{ github.event.workflow_run.head_branch }}" = "main" ]; then
-            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
-            echo "Triggering branch: main → npm tag: latest"
-          else
-            echo "npm_tag=next" >> "$GITHUB_OUTPUT"
-            echo "Triggering event: ${{ github.event_name }} → npm tag: next"
+          #   - workflow_run on main → promoted release → @latest, bump carried on dev
+          #   - pull_request merged on dev → new dev build → @next, bump dev
+          #   - pull_request/workflow_run on homolog → canonical HML build → @homolog, bump homolog
+          #   - workflow_dispatch → defaults to dev/@next
+          TRIGGER_BRANCH="dev"
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            TRIGGER_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            TRIGGER_BRANCH="${{ github.event.pull_request.base.ref }}"
           fi
+
+          case "${TRIGGER_BRANCH}" in
+            main)
+              echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+              echo "release_channel=stable" >> "$GITHUB_OUTPUT"
+              echo "checkout_ref=dev" >> "$GITHUB_OUTPUT"
+              echo "push_ref=dev" >> "$GITHUB_OUTPUT"
+              ;;
+            homolog)
+              echo "npm_tag=homolog" >> "$GITHUB_OUTPUT"
+              echo "release_channel=homolog" >> "$GITHUB_OUTPUT"
+              echo "checkout_ref=homolog" >> "$GITHUB_OUTPUT"
+              echo "push_ref=homolog" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "npm_tag=next" >> "$GITHUB_OUTPUT"
+              echo "release_channel=dev" >> "$GITHUB_OUTPUT"
+              echo "checkout_ref=dev" >> "$GITHUB_OUTPUT"
+              echo "push_ref=dev" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+          echo "trigger_branch=${TRIGGER_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "Triggering branch: ${TRIGGER_BRANCH}"
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          # Always bump on `dev`. main-triggered runs still push to dev — the rolling dev->main PR
-          # carries the bump back to main at release time.
-          ref: dev
+          # Bump the canonical target branch. main-triggered runs preserve the
+          # historical behavior of carrying the bump on dev; homolog-triggered
+          # runs bump homolog because HML images are built from homolog.
+          ref: ${{ steps.context.outputs.checkout_ref }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -143,9 +169,9 @@ jobs:
           fi
 
           git tag "v${VERSION}"
-          # When triggered via workflow_run we checkout by SHA (detached HEAD). Push the current commit to `dev`
-          # explicitly so the version bump commit and its tag are both reachable from the branch.
-          git push --atomic origin HEAD:refs/heads/dev "refs/tags/v${VERSION}"
+          # Push the current commit to the target branch explicitly so the
+          # version bump commit and its tag are both reachable from the branch.
+          git push --atomic origin HEAD:refs/heads/${{ steps.context.outputs.push_ref }} "refs/tags/v${VERSION}"
 
       # Dispatch the signed-tarball release pipeline (build → sign-attest →
       # publish) via release.yml's workflow_dispatch entry. GITHUB_TOKEN-
@@ -194,27 +220,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="refs/tags/v${VERSION}"
-          # Determine channel from the triggering branch. The branch
-          # semantics here mirror the npm_tag step above:
-          #   workflow_run on main → main → stable
-          #   pull_request close on dev / workflow_dispatch → dev
-          # Canonical channel taxonomy (release taxonomy 2026-05-12,
-          # unified across pgserve/omni/genie):
-          #   main branch    → stable
-          #   homolog branch → homolog
-          #   dev branch     → dev (default fallback)
-          # The triggering branch comes from workflow_run.head_branch
-          # (for the workflow_run trigger path) or stays at the dev
-          # default for pull_request close + workflow_dispatch paths.
-          TRIGGER_BRANCH=""
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            TRIGGER_BRANCH="${{ github.event.workflow_run.head_branch }}"
-          fi
-          case "${TRIGGER_BRANCH}" in
-            main)    CHANNEL="stable" ;;
-            homolog) CHANNEL="homolog" ;;
-            *)       CHANNEL="dev" ;;
-          esac
+          CHANNEL="${{ steps.context.outputs.release_channel }}"
           echo "Dispatching release pipeline against ${TAG} (channel=${CHANNEL})..."
           if ! gh workflow run release.yml --repo "${GITHUB_REPOSITORY}" --ref "${TAG}" --field version="${VERSION}" --field channel="${CHANNEL}"; then
             echo "::error ::release-trigger.dispatch_failed release.yml dispatch failed for ${TAG} — investigate gh CLI auth or workflow availability before re-running manually"
