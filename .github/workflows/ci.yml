@@ -71,7 +71,7 @@ jobs:
         run: ./scripts/ensure-nats.sh
 
       - name: Start pgserve
-        run: bunx pgserve --port 8432 --data .pgserve-data --no-cluster &
+        run: bunx pgserve postmaster --port 8432 --data .pgserve-data &
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
@@ -146,7 +146,7 @@ jobs:
         run: ./scripts/ensure-nats.sh
 
       - name: Start pgserve
-        run: bunx pgserve --port 8432 --data .pgserve-data --no-cluster &
+        run: bunx pgserve postmaster --port 8432 --data .pgserve-data &
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
