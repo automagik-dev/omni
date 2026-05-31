@@ -265,6 +265,19 @@ function emitLifecycleSpan(name: string, attributes: Record<string, LifecycleAtt
   });
 }
 
+function activeProviderTraceContext(): AgentTrigger['traceContext'] {
+  const activeSpan = trace.getActiveSpan();
+  const spanContext = activeSpan?.spanContext();
+  if (!spanContext?.traceId || !spanContext?.spanId) return undefined;
+
+  return {
+    traceId: spanContext.traceId,
+    spanId: spanContext.spanId,
+    traceFlags: spanContext.traceFlags,
+    traceState: spanContext.traceState?.serialize(),
+  };
+}
+
 // ============================================================================
 // Plugin → AckProvider adapter
 // ============================================================================
@@ -2253,104 +2266,122 @@ async function dispatchViaProvider(
     inputText: messageTexts.join('\n'),
   };
 
-  emitLifecycleSpan(
-    'omni.provider_inbound',
+  return withLifecycleSpan(
+    'omni.turn',
     buildLifecycleSpanAttributes({
       ...lifecycleBase,
-      stage: 'provider_inbound',
-      extra: { trigger_type: triggerType, message_count: messages.length },
+      stage: 'turn',
+      extra: {
+        trigger_type: triggerType,
+        message_count: messages.length,
+        provider_id: provider.id,
+        provider_schema: provider.schema,
+      },
     }),
-  );
+    async () => {
+      await withLifecycleSpan(
+        'omni.provider_inbound',
+        buildLifecycleSpanAttributes({
+          ...lifecycleBase,
+          stage: 'provider_inbound',
+          extra: { trigger_type: triggerType, message_count: messages.length },
+        }),
+        async () => undefined,
+      );
 
-  // ── Turn-based mode: delegate to extracted helper ──
-  if (provider.mode === 'turn-based') {
-    return dispatchViaTurnBasedProvider(services, instance, provider, trigger, messages, chatId, traceId, db);
-  }
+      // ── Turn-based mode: delegate to extracted helper ──
+      if (provider.mode === 'turn-based') {
+        return dispatchViaTurnBasedProvider(services, instance, provider, trigger, messages, chatId, traceId, db);
+      }
 
-  // ── Standard (round-trip / fire-and-forget) dispatch ──
-  const correlationId = messages[0]?.metadata.correlationId;
-  const dispatchStart = Date.now();
-  const result = await withLifecycleSpan(
-    'omni.dispatch_to_agno',
-    buildLifecycleSpanAttributes({
-      ...lifecycleBase,
-      stage: 'dispatch_to_agno',
-      extra: { trigger_type: triggerType, provider_id: provider.id, provider_schema: provider.schema },
-    }),
-    () => provider.trigger(trigger),
-  );
-  const dispatchDurationMs = Date.now() - dispatchStart;
+      // ── Standard (round-trip / fire-and-forget) dispatch ──
+      const correlationId = messages[0]?.metadata.correlationId;
+      const dispatchStart = Date.now();
+      const result = await withLifecycleSpan(
+        'omni.dispatch_to_agno',
+        buildLifecycleSpanAttributes({
+          ...lifecycleBase,
+          stage: 'dispatch_to_agno',
+          extra: { trigger_type: triggerType, provider_id: provider.id, provider_schema: provider.schema },
+        }),
+        () => provider.trigger({ ...trigger, traceContext: activeProviderTraceContext() ?? trigger.traceContext }),
+      );
+      const dispatchDurationMs = Date.now() - dispatchStart;
 
-  // Sentry metrics: agent dispatch count and latency
-  if (sentryEnabled()) {
-    Sentry.metrics.count('agent.dispatch', 1, { attributes: { provider_type: provider.schema } });
-    Sentry.metrics.distribution('agent.dispatch.latency', dispatchDurationMs, {
-      unit: 'millisecond',
-      attributes: { provider_type: provider.schema },
-    });
-  }
+      // Sentry metrics: agent dispatch count and latency
+      if (sentryEnabled()) {
+        Sentry.metrics.count('agent.dispatch', 1, { attributes: { provider_type: provider.schema } });
+        Sentry.metrics.distribution('agent.dispatch.latency', dispatchDurationMs, {
+          unit: 'millisecond',
+          attributes: { provider_type: provider.schema },
+        });
+      }
 
-  // If the agent triggered a handoff during this run (agentPaused: true),
-  // suppress the response — the handoff message already notified the user.
-  const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
-  const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+      // If the agent triggered a handoff during this run (agentPaused: true),
+      // suppress the response — the handoff message already notified the user.
+      const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
+      const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
 
-  if (result && result.parts.length > 0 && !handoffTriggered) {
-    const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
-    const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
-    // Apply before_message_write hooks to each response part before sending
-    const parts = await Promise.all(rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)));
-    const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-    const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
+      if (result && result.parts.length > 0 && !handoffTriggered) {
+        const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
+        const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+        // Apply before_message_write hooks to each response part before sending
+        const parts = await Promise.all(
+          rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)),
+        );
+        const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+        const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
 
-    // T8: Processing send request
-    recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+        // T8: Processing send request
+        recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
 
-    await withLifecycleSpan(
-      'omni.provider_outbound',
-      buildLifecycleSpanAttributes({
-        ...lifecycleBase,
-        stage: 'provider_outbound',
-        outputText: parts.join('\n'),
-        extra: { parts_count: parts.length, provider_id: provider.id, provider_schema: provider.schema },
-      }),
-      () =>
-        sendResponseParts(
-          channel,
-          instance.id,
+        await withLifecycleSpan(
+          'omni.provider_outbound',
+          buildLifecycleSpanAttributes({
+            ...lifecycleBase,
+            stage: 'provider_outbound',
+            outputText: parts.join('\n'),
+            extra: { parts_count: parts.length, provider_id: provider.id, provider_schema: provider.schema },
+          }),
+          () =>
+            sendResponseParts(
+              channel,
+              instance.id,
+              chatId,
+              parts,
+              getSplitDelayConfig(instance),
+              _fmtMode,
+              replyTo,
+              correlationId,
+              senderAgentId,
+            ),
+        );
+
+        // T9: Outbound sent via plugin
+        recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
+
+        // T10: Agent chaining — forward response to chained instance if configured
+        await forwardToChainedInstance(instance, parts, correlationId, messages);
+      } else if (handoffTriggered) {
+        log.info('Agent response suppressed — handoff triggered during run', {
+          instanceId: instance.id,
           chatId,
-          parts,
-          getSplitDelayConfig(instance),
-          _fmtMode,
-          replyTo,
-          correlationId,
-          senderAgentId,
-        ),
-    );
+        });
+      }
 
-    // T9: Outbound sent via plugin
-    recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
+      log.info('Agent response via IAgentProvider', {
+        instanceId: instance.id,
+        chatId,
+        parts: result?.parts.length ?? 0,
+        providerId: result?.metadata.providerId,
+        durationMs: result?.metadata.durationMs,
+        triggerType,
+        traceId,
+      });
 
-    // T10: Agent chaining — forward response to chained instance if configured
-    await forwardToChainedInstance(instance, parts, correlationId, messages);
-  } else if (handoffTriggered) {
-    log.info('Agent response suppressed — handoff triggered during run', {
-      instanceId: instance.id,
-      chatId,
-    });
-  }
-
-  log.info('Agent response via IAgentProvider', {
-    instanceId: instance.id,
-    chatId,
-    parts: result?.parts.length ?? 0,
-    providerId: result?.metadata.providerId,
-    durationMs: result?.metadata.durationMs,
-    triggerType,
-    traceId,
-  });
-
-  return true;
+      return true;
+    },
+  );
 }
 
 /**
