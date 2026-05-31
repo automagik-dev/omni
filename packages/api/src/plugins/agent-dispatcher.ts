@@ -1255,6 +1255,37 @@ function extractThreadId(messages: BufferedMessage[]): string | undefined {
   return ((messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>).threadId as string | undefined;
 }
 
+function pickString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function recordValue(record: Record<string, unknown>, key: string): unknown {
+  return record[key];
+}
+
+function nestedRecord(record: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = recordValue(record, key);
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function extractExplicitSessionId(messages: BufferedMessage[]): string | undefined {
+  const raw = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
+  const contextObj = nestedRecord(raw, 'contextobj');
+  const messageHeader = nestedRecord(raw, 'messageHeader');
+  const messageObj = nestedRecord(raw, 'messageobj');
+  const messageRaw = nestedRecord(messageObj, 'raw');
+  const headers = nestedRecord(raw, 'headers');
+
+  return (
+    pickString(raw.khalSessionId) ??
+    pickString(contextObj.khalSessionId) ??
+    pickString(messageHeader.khalSessionId) ??
+    pickString(messageRaw.khalSessionId) ??
+    pickString(headers['x-khal-session-id']) ??
+    pickString(headers['X-Khal-Session-Id'])
+  );
+}
+
 /** Merge per-thread history context with DB-fetched context messages (extra comes first) */
 function mergeContextMessages(extra: string[] | undefined, db: string[]): string[] {
   return extra?.length ? [...extra, ...db] : db;
@@ -1410,7 +1441,9 @@ async function dispatchViaStreamingProvider(
   if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
 
   const rawThreadId = extractThreadId(messages);
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
+  const sessionId =
+    extractExplicitSessionId(messages) ??
+    computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
   const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
   const replyToId = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
 
@@ -1808,7 +1841,9 @@ async function dispatchViaProvider(
   }
 
   const rawThreadId = extractThreadId(messages);
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
+  const sessionId =
+    extractExplicitSessionId(messages) ??
+    computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
 
   // Build context messages for group and DM conversations (messages since last bot response)
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
