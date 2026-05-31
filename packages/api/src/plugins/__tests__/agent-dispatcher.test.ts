@@ -1692,6 +1692,46 @@ describe('agent-dispatcher', () => {
   });
 
   // ======================================================================
+  // KHAL session correlation
+  // ======================================================================
+  describe('KHAL session correlation', () => {
+    it('extracts an explicit KHAL session id from rawPayload and mirrors it into trigger headers', () => {
+      const messages = [
+        {
+          payload: {
+            rawPayload: {
+              khalSessionId: ' khal-session-123 ',
+            },
+          },
+        },
+      ] as any;
+
+      const sessionId = __test__.extractKhalSessionId(messages);
+
+      expect(sessionId).toBe('khal-session-123');
+      expect(__test__.buildTriggerHeaders(sessionId!)).toEqual({ 'x-khal-session-id': 'khal-session-123' });
+    });
+
+    it('extracts KHAL session id from inbound rawPayload headers', () => {
+      const messages = [
+        {
+          payload: {
+            rawPayload: {
+              headers: { 'x-khal-session-id': 'khal-header-session' },
+            },
+          },
+        },
+      ] as any;
+
+      expect(__test__.extractKhalSessionId(messages)).toBe('khal-header-session');
+    });
+
+    it('does not build a KHAL header for computed fallback sessions', () => {
+      expect(__test__.buildTriggerHeaders(undefined)).toBeUndefined();
+    });
+  });
+
+  // ======================================================================
   // buildContextMessages — DM context behavior
   // ======================================================================
   describe('buildContextMessages (DM context)', () => {
