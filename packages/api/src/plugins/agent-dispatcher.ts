@@ -1450,7 +1450,10 @@ function buildCanonicalKhalSessionId(
   if (channel !== 'gupshup') return undefined;
 
   const instanceSegment = normalizeKhalSessionSegment(instance.id);
-  const participantSegment = normalizeKhalSessionSegment(personId) ?? normalizeKhalSessionSegment(chatId);
+  // Gupshup's externally visible conversation handle is the WhatsApp chat/sender id.
+  // The internal Omni person id is useful metadata, but using it as the Langfuse
+  // session segment makes operator proof drift from the actual WhatsApp sender.
+  const participantSegment = normalizeKhalSessionSegment(chatId) ?? normalizeKhalSessionSegment(personId);
   if (!instanceSegment || !participantSegment) return undefined;
 
   return `khal:hml:omni:${instanceSegment}:gupshup:${participantSegment}`;

@@ -1752,7 +1752,7 @@ describe('agent-dispatcher', () => {
       expect(__test__.buildTriggerHeaders(undefined)).toBeUndefined();
     });
 
-    it('uses the same person-scoped canonical KHAL session id for reset checks and dispatch', () => {
+    it('uses the same externally-visible chat-scoped canonical KHAL session id for reset checks and dispatch', () => {
       const messages = [
         {
           payload: {
@@ -1777,7 +1777,7 @@ describe('agent-dispatcher', () => {
         '551151986804',
       );
 
-      expect(dispatchSessionId).toBe('khal:hml:omni:inst-1:gupshup:person-123');
+      expect(dispatchSessionId).toBe('khal:hml:omni:inst-1:gupshup:551151986804');
       expect(resetSessionId).toBe(dispatchSessionId!);
     });
 
