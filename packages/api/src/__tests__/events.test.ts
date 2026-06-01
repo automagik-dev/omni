@@ -193,6 +193,36 @@ describeWithDb('Events Service', () => {
       expect(result.items[0]?.textContent).toContain('world');
     });
 
+    test('searches by proof identifiers without requiring customer text', async () => {
+      const unique = `p7-proof-${Date.now()}`;
+      const externalId = `wamid.${unique}-1`;
+      const chatId = `559999${Date.now()}`;
+      const sessionId = `${unique}-session`;
+
+      await insertTestEvent(
+        createTestEvent({
+          externalId,
+          chatId,
+          textContent: 'sanitized body can be unrelated',
+          rawPayload: {
+            khalSessionId: sessionId,
+            headers: { 'x-khal-session-id': sessionId },
+            messageHeader: { khalSessionId: sessionId },
+          },
+          metadata: { correlationId: `${unique}-correlation` },
+        }),
+      );
+
+      const byExternalId = await services.events.list({ search: externalId });
+      expect(byExternalId.items.map((event) => event.externalId)).toContain(externalId);
+
+      const byChatId = await services.events.list({ search: chatId });
+      expect(byChatId.items.map((event) => event.chatId)).toContain(chatId);
+
+      const bySessionId = await services.events.list({ search: sessionId });
+      expect(bySessionId.items.map((event) => event.externalId)).toContain(externalId);
+    });
+
     test('respects limit', async () => {
       const uniqueText = `limit-test-${Date.now()}`;
       // Insert more than the limit
@@ -415,6 +445,27 @@ describeWithDb('Events API Routes', () => {
     test('returns 404 for non-existent event', async () => {
       const res = await app.request('/events/00000000-0000-0000-0000-000000000000');
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('GET /events/by-sender/:senderId', () => {
+    test('returns events whose chat id matches the sender id', async () => {
+      const senderId = `559999${Date.now()}`;
+      const externalId = `wamid.sender-${senderId}`;
+      await insertTestEvent(
+        createTestEvent({
+          externalId,
+          chatId: senderId,
+          textContent: 'message body does not include sender id',
+        }),
+      );
+
+      const res = await app.request(`/events/by-sender/${senderId}`);
+      expect(res.status).toBe(200);
+
+      const body = (await res.json()) as { items: Array<{ externalId: string; chatId: string }> };
+      expect(body.items.map((event) => event.externalId)).toContain(externalId);
+      expect(body.items.every((event) => event.chatId === senderId)).toBe(true);
     });
   });
 

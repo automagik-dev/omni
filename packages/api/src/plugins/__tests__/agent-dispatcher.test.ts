@@ -1726,8 +1726,99 @@ describe('agent-dispatcher', () => {
       expect(__test__.extractKhalSessionId(messages)).toBe('khal-header-session');
     });
 
+    it('builds the canonical HML Gupshup session id when no explicit KHAL session is present', () => {
+      expect(__test__.buildCanonicalKhalSessionId({ id: 'inst-1' }, 'gupshup', undefined, '551151986804')).toBe(
+        'khal:hml:omni:inst-1:gupshup:551151986804',
+      );
+    });
+
+    it('prefers explicit KHAL session ids over canonical Gupshup fallback', () => {
+      const messages = [
+        {
+          payload: {
+            rawPayload: {
+              headers: { 'x-khal-session-id': 'explicit-khal-session' },
+            },
+          },
+        },
+      ] as any;
+
+      expect(__test__.resolveKhalSessionId(messages, { id: 'inst-1' }, 'gupshup', undefined, '551151986804')).toBe(
+        'explicit-khal-session',
+      );
+    });
+
     it('does not build a KHAL header for computed fallback sessions', () => {
       expect(__test__.buildTriggerHeaders(undefined)).toBeUndefined();
+    });
+
+    it('uses the same person-scoped canonical KHAL session id for reset checks and dispatch', () => {
+      const messages = [
+        {
+          payload: {
+            rawPayload: {},
+          },
+        },
+      ] as any;
+
+      const dispatchSessionId = __test__.resolveKhalSessionId(
+        messages,
+        { id: 'inst-1' },
+        'gupshup',
+        'person-123',
+        '551151986804',
+      );
+      const resetSessionId = __test__.resolveResetSessionId(
+        messages[0],
+        { id: 'inst-1', agentSessionStrategy: 'per_chat' } as any,
+        'gupshup',
+        'platform-user-ignored',
+        'person-123',
+        '551151986804',
+      );
+
+      expect(dispatchSessionId).toBe('khal:hml:omni:inst-1:gupshup:person-123');
+      expect(resetSessionId).toBe(dispatchSessionId!);
+    });
+
+    it('preserves explicit KHAL session id precedence for reset checks', () => {
+      const message = {
+        payload: {
+          rawPayload: {
+            headers: { 'x-khal-session-id': 'explicit-khal-session' },
+          },
+        },
+      } as any;
+
+      expect(
+        __test__.resolveResetSessionId(
+          message,
+          { id: 'inst-1', agentSessionStrategy: 'per_chat' } as any,
+          'gupshup',
+          'platform-user-ignored',
+          'person-123',
+          '551151986804',
+        ),
+      ).toBe('explicit-khal-session');
+    });
+
+    it('preserves legacy computed reset session fallback for non-Gupshup channels', () => {
+      const message = {
+        payload: {
+          rawPayload: { threadId: 'thread-1' },
+        },
+      } as any;
+
+      expect(
+        __test__.resolveResetSessionId(
+          message,
+          { id: 'inst-1', agentSessionStrategy: 'per_thread' } as any,
+          'telegram',
+          'sender-123',
+          'person-123',
+          'chat-456',
+        ),
+      ).toBe('thread:chat-456:thread-1');
     });
   });
 

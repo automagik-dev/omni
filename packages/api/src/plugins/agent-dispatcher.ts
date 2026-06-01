@@ -1434,6 +1434,54 @@ function extractKhalSessionId(messages: BufferedMessage[]): string | undefined {
   return undefined;
 }
 
+function normalizeKhalSessionSegment(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.replace(/\s+/g, '-').replace(/:/g, '-');
+}
+
+function buildCanonicalKhalSessionId(
+  instance: Pick<DispatchInstance, 'id'>,
+  channel: ChannelType,
+  personId: string | undefined,
+  chatId: string,
+): string | undefined {
+  if (channel !== 'gupshup') return undefined;
+
+  const instanceSegment = normalizeKhalSessionSegment(instance.id);
+  const participantSegment = normalizeKhalSessionSegment(personId) ?? normalizeKhalSessionSegment(chatId);
+  if (!instanceSegment || !participantSegment) return undefined;
+
+  return `khal:hml:omni:${instanceSegment}:gupshup:${participantSegment}`;
+}
+
+function resolveKhalSessionId(
+  messages: BufferedMessage[],
+  instance: Pick<DispatchInstance, 'id'>,
+  channel: ChannelType,
+  personId: string | undefined,
+  chatId: string,
+): string | undefined {
+  return extractKhalSessionId(messages) ?? buildCanonicalKhalSessionId(instance, channel, personId, chatId);
+}
+
+function resolveResetSessionId(
+  firstMessage: BufferedMessage,
+  instance: Pick<Instance, 'id' | 'agentSessionStrategy'>,
+  channel: ChannelType,
+  senderId: string,
+  personId: string | undefined,
+  chatId: string,
+): string {
+  const msgRawPayload = firstMessage.payload.rawPayload ?? {};
+  const rawThreadIdForReset = (msgRawPayload as Record<string, unknown>).threadId as string | undefined;
+  return (
+    resolveKhalSessionId([firstMessage], instance, channel, personId, chatId) ??
+    computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadIdForReset)
+  );
+}
+
 function buildTriggerHeaders(khalSessionId: string | undefined): Record<string, string> | undefined {
   return khalSessionId ? { 'x-khal-session-id': khalSessionId } : undefined;
 }
@@ -1607,10 +1655,9 @@ async function dispatchViaStreamingProvider(
   if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
 
   const rawThreadId = extractThreadId(messages);
-  const explicitKhalSessionId = extractKhalSessionId(messages);
+  const khalSessionId = resolveKhalSessionId(messages, instance, channel, personId, chatId);
   const sessionId =
-    explicitKhalSessionId ??
-    computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
+    khalSessionId ?? computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
   const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
   const replyToId = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
 
@@ -1656,7 +1703,7 @@ async function dispatchViaStreamingProvider(
     sessionId,
     customerContext,
     allContextMessages,
-    explicitKhalSessionId,
+    khalSessionId,
   );
 
   const chatType = determineChatType(chatId, channel, rawPl);
@@ -2019,10 +2066,9 @@ async function dispatchViaProvider(
   }
 
   const rawThreadId = extractThreadId(messages);
-  const explicitKhalSessionId = extractKhalSessionId(messages);
+  const khalSessionId = resolveKhalSessionId(messages, instance, channel, personId, chatId);
   const sessionId =
-    explicitKhalSessionId ??
-    computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
+    khalSessionId ?? computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
 
   // Build context messages for group and DM conversations (messages since last bot response)
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
@@ -2064,7 +2110,7 @@ async function dispatchViaProvider(
     sessionId,
     customerContext,
     allContextMessages,
-    explicitKhalSessionId,
+    khalSessionId,
   );
 
   // ── Turn-based mode: delegate to extracted helper ──
@@ -2319,6 +2365,7 @@ async function handleSessionReset(
   instance: Instance,
   channel: ChannelType,
   senderId: string,
+  personId: string | undefined,
   chatId: string,
   services: Services,
   db: Database,
@@ -2344,10 +2391,7 @@ async function handleSessionReset(
       ? 'group'
       : resolvedChatType;
 
-  const rawThreadIdForReset = (msgRawPayload as Record<string, unknown>).threadId as string | undefined;
-  const sessionId =
-    extractKhalSessionId([firstMessage]) ??
-    computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadIdForReset);
+  const sessionId = resolveResetSessionId(firstMessage, instance, channel, senderId, personId, chatId);
   const sessionResetConfig = inst.sessionReset as SessionResetConfig | null;
   const activity = sessionActivityStore.getActivity(instance.id, sessionId);
   const resetResult = checkSessionReset(sessionResetConfig, resetChatType, activity);
@@ -2953,7 +2997,18 @@ async function processAgentResponse(
   }
 
   // ── Session Reset Check + Activity Recording (post-personId guard) ──
-  await handleSessionReset(firstMessage, instance, channel, senderId, chatId, services, db, eventBus, traceId);
+  await handleSessionReset(
+    firstMessage,
+    instance,
+    channel,
+    senderId,
+    personId,
+    chatId,
+    services,
+    db,
+    eventBus,
+    traceId,
+  );
 
   const rawPayload = firstMessage.payload.rawPayload ?? {};
   const pushName =
@@ -4873,6 +4928,9 @@ export const __test__ = {
   mergeRouteOverrides,
   getDebounceConfig,
   extractKhalSessionId,
+  buildCanonicalKhalSessionId,
+  resolveKhalSessionId,
+  resolveResetSessionId,
   buildTriggerHeaders,
   createNatsGenieProviderInstance,
   /** Override the NatsGenieProvider constructor for tests (avoids barrel mock contamination). */

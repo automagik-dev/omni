@@ -283,7 +283,7 @@ eventsRoutes.get('/by-sender/:senderId', async (c) => {
     return c.json({ error: { code: 'FORBIDDEN', message: 'API key does not have access to this instance' } }, 403);
   }
 
-  const queryWithAccess = applyInstanceAccess({ instanceId: scopedInstanceId, search: senderId, limit }, apiKey);
+  const queryWithAccess = applyInstanceAccess({ instanceId: scopedInstanceId, senderId, limit }, apiKey);
   const result = await services.events.list(queryWithAccess);
 
   return c.json({
