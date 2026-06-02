@@ -73,7 +73,7 @@ describe('GeminiVideoGenProvider', () => {
     expect(request.prompt).toContain('1. hero frame');
   });
 
-  it('preserves generateAudio for text-to-video requests', async () => {
+  it('omits generateAudio for text-to-video requests because current Veo 3.1 API rejects it', async () => {
     generateVideoCalls.length = 0;
     const provider = new GeminiVideoGenProvider({
       getSecret: async () => 'test-gemini-key',
@@ -84,10 +84,10 @@ describe('GeminiVideoGenProvider', () => {
 
     expect(generateVideoCalls).toHaveLength(1);
     const request = generateVideoCalls[0] as { config?: Record<string, unknown> };
-    expect(request.config?.generateAudio).toBe(true);
+    expect(request.config?.generateAudio).toBeUndefined();
   });
 
-  it('can disable generated audio for text-to-video requests', async () => {
+  it('treats --no-audio as a compatibility no-op while generateAudio is unsupported', async () => {
     generateVideoCalls.length = 0;
     const provider = new GeminiVideoGenProvider({
       getSecret: async () => 'test-gemini-key',
@@ -98,6 +98,6 @@ describe('GeminiVideoGenProvider', () => {
 
     expect(generateVideoCalls).toHaveLength(1);
     const request = generateVideoCalls[0] as { config?: Record<string, unknown> };
-    expect(request.config?.generateAudio).toBe(false);
+    expect(request.config?.generateAudio).toBeUndefined();
   });
 });
