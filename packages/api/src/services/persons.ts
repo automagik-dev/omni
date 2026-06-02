@@ -15,7 +15,7 @@ import {
   persons,
   platformIdentities,
 } from '@omni/db';
-import { and, desc, eq, ilike, isNotNull, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, ne, or, sql } from 'drizzle-orm';
 
 export interface PersonWithIdentities extends Person {
   identities: PlatformIdentity[];
@@ -76,22 +76,76 @@ export class PersonService {
   }
 
   /**
-   * Search persons by name, email, or phone
+   * Search persons by name, email, phone, platform identity, or chat participant display name.
+   *
+   * WhatsApp LID DMs frequently have the useful contact name only on chat_participants,
+   * while the canonical person row is intentionally sparse. Searching persons alone makes
+   * the identity graph useless for the main operational task: "find my chat with X".
    */
   async search(query: string, limit = 20): Promise<Person[]> {
     const searchPattern = `%${query}%`;
 
-    return this.db
-      .select()
-      .from(persons)
-      .where(
-        or(
-          ilike(persons.displayName, searchPattern),
-          ilike(persons.primaryEmail, searchPattern),
-          ilike(persons.primaryPhone, searchPattern),
-        ),
+    const result = await this.db.execute(sql`
+      WITH candidates AS (
+        SELECT
+          p.id,
+          CASE
+            WHEN p.display_name ILIKE ${searchPattern} ESCAPE '' THEN p.display_name
+            WHEN pi.platform_username ILIKE ${searchPattern} ESCAPE '' THEN pi.platform_username
+            WHEN cp.display_name ILIKE ${searchPattern} ESCAPE '' THEN cp.display_name
+            ELSE COALESCE(NULLIF(p.display_name, ''), NULLIF(pi.platform_username, ''), NULLIF(cp.display_name, ''))
+          END AS "displayName",
+          p.primary_phone AS "primaryPhone",
+          p.primary_email AS "primaryEmail",
+          p.avatar_url AS "avatarUrl",
+          p.metadata,
+          p.created_at AS "createdAt",
+          p.updated_at AS "updatedAt",
+          GREATEST(
+            COALESCE(pi.last_seen_at, 'epoch'::timestamptz),
+            COALESCE(cp.last_seen_at, 'epoch'::timestamptz),
+            COALESCE(p.updated_at, 'epoch'::timestamptz)
+          ) AS rank_ts
+        FROM persons p
+        LEFT JOIN platform_identities pi ON pi.person_id = p.id
+        LEFT JOIN chat_participants cp ON cp.person_id = p.id OR cp.platform_identity_id = pi.id
+        WHERE
+          p.display_name ILIKE ${searchPattern} ESCAPE ''
+          OR p.primary_email ILIKE ${searchPattern} ESCAPE ''
+          OR p.primary_phone ILIKE ${searchPattern} ESCAPE ''
+          OR pi.platform_username ILIKE ${searchPattern} ESCAPE ''
+          OR pi.platform_user_id ILIKE ${searchPattern} ESCAPE ''
+          OR cp.display_name ILIKE ${searchPattern} ESCAPE ''
+          OR cp.platform_user_id ILIKE ${searchPattern} ESCAPE ''
+      ), distinct_candidates AS (
+        SELECT DISTINCT ON (id)
+          id,
+          "displayName",
+          "primaryPhone",
+          "primaryEmail",
+          "avatarUrl",
+          metadata,
+          "createdAt",
+          "updatedAt",
+          rank_ts
+        FROM candidates
+        ORDER BY id, rank_ts DESC
       )
-      .limit(limit);
+      SELECT
+        id,
+        "displayName",
+        "primaryPhone",
+        "primaryEmail",
+        "avatarUrl",
+        metadata,
+        "createdAt",
+        "updatedAt"
+      FROM distinct_candidates
+      ORDER BY rank_ts DESC
+      LIMIT ${limit}
+    `);
+
+    return result as unknown as Person[];
   }
 
   /**

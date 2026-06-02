@@ -88,6 +88,28 @@ describe('PersonService', () => {
     service = new PersonService(mockDb as unknown as Database, mockEventBus);
   });
 
+  describe('search()', () => {
+    test('returns people whose WhatsApp name only exists on chat participants', async () => {
+      const participantBackedPerson = {
+        id: 'person-cadu',
+        displayName: 'Cadu Cassau',
+        primaryPhone: null,
+        primaryEmail: null,
+        avatarUrl: null,
+        metadata: null,
+        createdAt: new Date('2026-04-10T06:36:32Z'),
+        updatedAt: new Date('2026-06-02T09:36:18Z'),
+      };
+
+      (mockDb as unknown as { execute: ReturnType<typeof mock> }).execute = mock(async () => [participantBackedPerson]);
+
+      const result = await service.search('Cadu Cassau', 5);
+
+      expect((mockDb as unknown as { execute: ReturnType<typeof mock> }).execute).toHaveBeenCalled();
+      expect(result).toEqual([participantBackedPerson]);
+    });
+  });
+
   describe('getIdentityForChannel()', () => {
     test('returns identity when person has single identity on channel', async () => {
       const identity = createMockIdentity({
