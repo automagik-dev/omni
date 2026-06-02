@@ -36,14 +36,16 @@ export function createPersonsCommand(): Command {
         const persons = results as Array<{
           id: string;
           displayName: string | null;
-          email: string | null;
-          phone: string | null;
+          primaryEmail?: string | null;
+          primaryPhone?: string | null;
+          email?: string | null;
+          phone?: string | null;
         }>;
         const items = persons.map((p) => ({
           id: p.id,
           displayName: p.displayName ?? '-',
-          email: p.email ?? '-',
-          phone: p.phone ?? '-',
+          email: p.primaryEmail ?? p.email ?? '-',
+          phone: p.primaryPhone ?? p.phone ?? '-',
         }));
 
         output.list(items, { emptyMessage: 'No persons found.' });
