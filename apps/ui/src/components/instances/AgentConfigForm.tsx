@@ -20,7 +20,7 @@ interface AgentConfigFormProps {
 export function AgentConfigForm({ instance }: AgentConfigFormProps) {
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(instance.agentProviderId ?? null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(instance.agentId ?? null);
-  const [agentTimeout, setAgentTimeout] = useState(instance.agentTimeout ?? 60);
+  const [agentTimeout, setAgentTimeout] = useState(instance.agentTimeout ?? 600);
   const [streamMode, setStreamMode] = useState(instance.agentStreamMode ?? false);
   const [isDirty, setIsDirty] = useState(false);
 
@@ -34,7 +34,7 @@ export function AgentConfigForm({ instance }: AgentConfigFormProps) {
     const hasChanges =
       selectedProviderId !== (instance.agentProviderId ?? null) ||
       selectedAgentId !== (instance.agentId ?? null) ||
-      agentTimeout !== (instance.agentTimeout ?? 60) ||
+      agentTimeout !== (instance.agentTimeout ?? 600) ||
       streamMode !== (instance.agentStreamMode ?? false);
     setIsDirty(hasChanges);
   }, [selectedProviderId, selectedAgentId, agentTimeout, streamMode, instance]);
@@ -231,12 +231,12 @@ export function AgentConfigForm({ instance }: AgentConfigFormProps) {
                 id="agent-timeout"
                 type="number"
                 min={10}
-                max={300}
+                max={600}
                 value={agentTimeout}
                 onChange={(e) => setAgentTimeout(Number(e.target.value))}
                 className="max-w-[120px]"
               />
-              <p className="text-xs text-muted-foreground">Maximum time to wait for agent response (10-300 seconds)</p>
+              <p className="text-xs text-muted-foreground">Maximum time to wait for agent response (10-600 seconds)</p>
             </div>
 
             <div className="flex items-center justify-between rounded-lg border p-3">
