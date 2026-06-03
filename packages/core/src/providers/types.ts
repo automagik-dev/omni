@@ -210,6 +210,13 @@ export interface AgnoWorkflow {
   description?: string;
 }
 
+export interface SessionDeleteResult {
+  ok: boolean;
+  status: number;
+  sessionId: string;
+  existed: boolean | undefined;
+}
+
 /**
  * Generic agent client interface
  *
@@ -230,7 +237,7 @@ export interface IAgentClient {
   checkHealth(): Promise<AgentHealthResult>;
 
   /** Optional: delete a session (clear conversation history) */
-  deleteSession?(sessionId: string): Promise<void>;
+  deleteSession?(sessionId: string): Promise<SessionDeleteResult>;
 }
 
 /**

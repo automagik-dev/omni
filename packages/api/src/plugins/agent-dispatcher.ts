@@ -82,6 +82,7 @@ import {
   getSplitDelayConfig,
   shouldAgentReply,
 } from '../services/agent-runner';
+import { resolveKhalSessionId } from '../services/agent-session-identity';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import type { ResolvedRoute } from '../services/route-resolver';
 import { publishTurnOpen } from '../services/turn-events';
@@ -1776,11 +1777,20 @@ async function dispatchViaStreamingProvider(
   if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
 
   const rawThreadId = extractThreadId(messages);
-  const explicitKhalSessionId = extractKhalSessionId(messages);
-  const sessionId =
-    explicitKhalSessionId ??
-    computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
   const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
+  const sessionIdentity = resolveKhalSessionId({
+    providerSchema: resolved.provider.schema,
+    sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
+    from: senderId,
+    chatId,
+    channel,
+    instanceId: instance.id,
+    personId,
+    rawPayload: rawPl,
+    threadId: rawThreadId,
+  });
+  const sessionId = sessionIdentity.sessionId;
+  const explicitKhalSessionId = sessionIdentity.canonicalSessionId;
   const replyToId = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
 
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
@@ -2205,10 +2215,20 @@ async function dispatchViaProvider(
   }
 
   const rawThreadId = extractThreadId(messages);
-  const explicitKhalSessionId = extractKhalSessionId(messages);
-  const sessionId =
-    explicitKhalSessionId ??
-    computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
+  const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
+  const sessionIdentity = resolveKhalSessionId({
+    providerSchema: provider.schema,
+    sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
+    from: senderId,
+    chatId,
+    channel,
+    instanceId: instance.id,
+    personId,
+    rawPayload: rawPl,
+    threadId: rawThreadId,
+  });
+  const sessionId = sessionIdentity.sessionId;
+  const explicitKhalSessionId = sessionIdentity.canonicalSessionId;
 
   // Build context messages for group and DM conversations (messages since last bot response)
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
@@ -3917,7 +3937,16 @@ async function processReactionTrigger(
       // Build AgentTrigger for the provider
       const effectivePersonId = reactionPersonId ?? metadata.personId;
       const senderName = await services.agentRunner.getSenderName(effectivePersonId, undefined);
-      const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', payload.from, externalChatId);
+      const sessionId = resolveKhalSessionId({
+        providerSchema: provider.schema,
+        sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
+        from: payload.from,
+        chatId: externalChatId,
+        channel,
+        instanceId: instance.id,
+        personId: effectivePersonId,
+        rawPayload: payload.rawPayload as Record<string, unknown> | undefined,
+      }).sessionId;
       const customerContext = await resolveCustomerContext(services, effectivePersonId);
 
       const trigger: AgentTrigger = {
