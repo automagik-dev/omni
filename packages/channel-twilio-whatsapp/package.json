@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-twilio-whatsapp",
-  "version": "2.260603.3",
+  "version": "2.260603.5",
   "description": "Twilio WhatsApp channel plugin for Omni",
   "type": "module",
   "main": "src/index.ts",
