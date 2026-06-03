@@ -71,7 +71,7 @@ export function extractKhalSessionIdFromRawPayload(rawPayload?: Record<string, u
   return readHeader(rawPayload?.headers, 'x-khal-session-id');
 }
 
-export function resolveKhalEnvironment(
+function resolveKhalEnvironment(
   rawPayload?: Record<string, unknown> | null,
   explicitEnvironment?: string | null,
 ): string | undefined {
@@ -90,7 +90,7 @@ export function resolveKhalEnvironment(
   );
 }
 
-export function channelToKhalSessionSegment(channel?: ChannelType | string): string | undefined {
+function channelToKhalSessionSegment(channel?: ChannelType | string): string | undefined {
   if (!channel) return undefined;
   if (channel === 'whatsapp-gupshup') return 'gupshup';
   if (channel === 'whatsapp-cloud') return 'whatsapp';
