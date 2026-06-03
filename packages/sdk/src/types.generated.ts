@@ -2072,6 +2072,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/voice/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Join a voice channel
+         * @description Join a voice channel via a voice-capable channel plugin. Returns the created session.
+         */
+        post: operations["voiceJoin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/voice/leave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Leave a voice session
+         * @description Leave an active voice session.
+         */
+        post: operations["voiceLeave"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/voice/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List active voice sessions
+         * @description List all active voice sessions across voice-capable plugins.
+         */
+        get: operations["listVoiceSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/voice/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get voice session details
+         * @description Get details of a specific voice session by ID.
+         */
+        get: operations["getVoiceSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2116,6 +2196,10 @@ export interface components {
             isActive: boolean;
             /** @description Arbitrary metadata */
             metadata: {
+                [key: string]: unknown;
+            } | null;
+            /** @description A2A Agent Card overrides */
+            agentCard: {
                 [key: string]: unknown;
             } | null;
             /**
@@ -2174,6 +2258,10 @@ export interface components {
             isActive: boolean;
             /** @description Arbitrary metadata */
             metadata?: {
+                [key: string]: unknown;
+            };
+            /** @description A2A Agent Card overrides */
+            agentCard?: {
                 [key: string]: unknown;
             };
         };
@@ -2341,7 +2429,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -2384,7 +2472,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -2392,7 +2480,7 @@ export interface components {
             agentId?: string | null;
             /**
              * @description Agent timeout in seconds
-             * @default 60
+             * @default 600
              */
             agentTimeout: number;
             /**
@@ -2479,7 +2567,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
+            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -3578,7 +3666,7 @@ export interface components {
             defaultStream: boolean;
             /**
              * @description Default timeout
-             * @default 60
+             * @default 600
              */
             defaultTimeout: number;
             /**
@@ -4762,6 +4850,35 @@ export interface components {
             /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
             showTypingIndicator: boolean;
         };
+        VoiceSession: {
+            /** @description Voice session ID */
+            sessionId: string;
+            /** @description Channel instance ID */
+            instanceId: string;
+            /** @description Voice channel ID */
+            channelId: string;
+            /** @description Session state (e.g. connecting, ready, disconnected) */
+            state: string;
+            /** @description User IDs of current participants */
+            participants: string[];
+            /**
+             * Format: date-time
+             * @description Session creation timestamp
+             */
+            createdAt?: string;
+        };
+        VoiceJoinRequest: {
+            /** @description Channel instance ID */
+            instanceId: string;
+            /** @description Voice channel ID to join */
+            channelId: string;
+            /** @description Guild/server ID (required for Discord) */
+            guildId?: string;
+        };
+        VoiceLeaveRequest: {
+            /** @description Voice session ID to leave */
+            sessionId: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -4832,6 +4949,10 @@ export interface operations {
                             isActive: boolean;
                             /** @description Arbitrary metadata */
                             metadata: {
+                                [key: string]: unknown;
+                            } | null;
+                            /** @description A2A Agent Card overrides */
+                            agentCard: {
                                 [key: string]: unknown;
                             } | null;
                             /**
@@ -4906,6 +5027,10 @@ export interface operations {
                     metadata?: {
                         [key: string]: unknown;
                     };
+                    /** @description A2A Agent Card overrides */
+                    agentCard?: {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -4957,6 +5082,10 @@ export interface operations {
                             isActive: boolean;
                             /** @description Arbitrary metadata */
                             metadata: {
+                                [key: string]: unknown;
+                            } | null;
+                            /** @description A2A Agent Card overrides */
+                            agentCard: {
                                 [key: string]: unknown;
                             } | null;
                             /**
@@ -5054,6 +5183,10 @@ export interface operations {
                             isActive: boolean;
                             /** @description Arbitrary metadata */
                             metadata: {
+                                [key: string]: unknown;
+                            } | null;
+                            /** @description A2A Agent Card overrides */
+                            agentCard: {
                                 [key: string]: unknown;
                             } | null;
                             /**
@@ -5199,6 +5332,10 @@ export interface operations {
                     metadata?: {
                         [key: string]: unknown;
                     };
+                    /** @description A2A Agent Card overrides */
+                    agentCard?: {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -5250,6 +5387,10 @@ export interface operations {
                             isActive: boolean;
                             /** @description Arbitrary metadata */
                             metadata: {
+                                [key: string]: unknown;
+                            } | null;
+                            /** @description A2A Agent Card overrides */
+                            agentCard: {
                                 [key: string]: unknown;
                             } | null;
                             /**
@@ -5590,7 +5731,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -5653,7 +5794,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
+                    channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -5661,7 +5802,7 @@ export interface operations {
                     agentId?: string | null;
                     /**
                      * @description Agent timeout in seconds
-                     * @default 60
+                     * @default 600
                      */
                     agentTimeout?: number;
                     /**
@@ -5699,7 +5840,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -5782,7 +5923,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
+                            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -5831,7 +5972,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -5959,7 +6100,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
+                    channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -5967,7 +6108,7 @@ export interface operations {
                     agentId?: string | null;
                     /**
                      * @description Agent timeout in seconds
-                     * @default 60
+                     * @default 600
                      */
                     agentTimeout?: number;
                     /**
@@ -6005,7 +6146,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "gupshup";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -10720,7 +10861,7 @@ export interface operations {
                     defaultStream?: boolean;
                     /**
                      * @description Default timeout
-                     * @default 60
+                     * @default 600
                      */
                     defaultTimeout?: number;
                     /**
@@ -11075,7 +11216,7 @@ export interface operations {
                     defaultStream?: boolean;
                     /**
                      * @description Default timeout
-                     * @default 60
+                     * @default 600
                      */
                     defaultTimeout?: number;
                     /**
@@ -16656,6 +16797,259 @@ export interface operations {
                             message: string;
                             /** @description Additional error details */
                             details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    voiceJoin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Channel instance ID */
+                    instanceId: string;
+                    /** @description Voice channel ID to join */
+                    channelId: string;
+                    /** @description Guild/server ID (required for Discord) */
+                    guildId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successfully joined voice channel */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Voice session ID */
+                            sessionId: string;
+                            /** @description Channel instance ID */
+                            instanceId: string;
+                            /** @description Voice channel ID */
+                            channelId: string;
+                            /** @description Session state (e.g. connecting, ready, disconnected) */
+                            state: string;
+                            /** @description User IDs of current participants */
+                            participants: string[];
+                            /**
+                             * Format: date-time
+                             * @description Session creation timestamp
+                             */
+                            createdAt?: string;
+                        };
+                    };
+                };
+            };
+            /** @description No voice-capable channel plugin available */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /** @description Error code */
+                            code: string;
+                            /** @description Error message */
+                            message: string;
+                        };
+                    };
+                };
+            };
+            /** @description Failed to join voice channel */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /** @description Error code */
+                            code: string;
+                            /** @description Error message */
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    voiceLeave: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Voice session ID to leave */
+                    sessionId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successfully left voice session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success: boolean;
+                    };
+                };
+            };
+            /** @description No voice-capable channel plugin available */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /** @description Error code */
+                            code: string;
+                            /** @description Error message */
+                            message: string;
+                        };
+                    };
+                };
+            };
+            /** @description Failed to leave voice session */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /** @description Error code */
+                            code: string;
+                            /** @description Error message */
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listVoiceSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of active voice sessions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /** @description Voice session ID */
+                            sessionId: string;
+                            /** @description Channel instance ID */
+                            instanceId: string;
+                            /** @description Voice channel ID */
+                            channelId: string;
+                            /** @description Session state (e.g. connecting, ready, disconnected) */
+                            state: string;
+                            /** @description User IDs of current participants */
+                            participants: string[];
+                            /**
+                             * Format: date-time
+                             * @description Session creation timestamp
+                             */
+                            createdAt?: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    getVoiceSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Voice session ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Voice session details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Voice session ID */
+                            sessionId: string;
+                            /** @description Channel instance ID */
+                            instanceId: string;
+                            /** @description Voice channel ID */
+                            channelId: string;
+                            /** @description Session state (e.g. connecting, ready, disconnected) */
+                            state: string;
+                            /** @description User IDs of current participants */
+                            participants: string[];
+                            /**
+                             * Format: date-time
+                             * @description Session creation timestamp
+                             */
+                            createdAt?: string;
+                        };
+                    };
+                };
+            };
+            /** @description No voice-capable channel plugin available */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /** @description Error code */
+                            code: string;
+                            /** @description Error message */
+                            message: string;
+                        };
+                    };
+                };
+            };
+            /** @description Voice session not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /** @description Error code */
+                            code: string;
+                            /** @description Error message */
+                            message: string;
                         };
                     };
                 };
