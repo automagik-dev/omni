@@ -79,7 +79,7 @@ export const CreateProviderSchema = z.object({
       example: { projectPath: '/home/user/my-project', model: 'claude-haiku-4-5-20251001', maxTurns: 5 },
     }),
   defaultStream: z.boolean().default(true).openapi({ description: 'Default streaming' }),
-  defaultTimeout: z.number().int().positive().default(60).openapi({ description: 'Default timeout' }),
+  defaultTimeout: z.number().int().positive().default(600).openapi({ description: 'Default timeout' }),
   supportsStreaming: z.boolean().default(true).openapi({ description: 'Supports streaming' }),
   supportsImages: z
     .boolean()
