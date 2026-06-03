@@ -39,7 +39,7 @@ import { extname, join } from 'node:path';
 import { zValidator } from '@hono/zod-validator';
 import { sanitizeOutboundText } from '@omni/channel-sdk';
 import type { ChannelRegistry, OutgoingContent, OutgoingMessage } from '@omni/channel-sdk';
-import { ERROR_CODES, JOURNEY_STAGES, OmniError, createLogger, getJourneyTracker } from '@omni/core';
+import { ERROR_CODES, JOURNEY_STAGES, NotFoundError, OmniError, createLogger, getJourneyTracker } from '@omni/core';
 import type { ChatClosedPayload, CloseContactOutcome } from '@omni/core/events';
 import type { ChannelType } from '@omni/core/types';
 import type { Database } from '@omni/db';
@@ -114,6 +114,92 @@ function extractReactionTargetParticipant(rawPayload: Record<string, unknown> | 
   const key = rawPayload?.key as Record<string, unknown> | undefined;
   const participant = key?.participant;
   return typeof participant === 'string' && participant.length > 0 ? participant : undefined;
+}
+
+async function resolveReactionTarget(
+  services: Services,
+  instanceId: string,
+  resolvedTo: string,
+  messageId: string,
+): Promise<{ targetMessageId: string; metadata: Record<string, unknown> }> {
+  const metadata: Record<string, unknown> = {};
+  const chat = await services.chats.findByExternalIdSmart(instanceId, resolvedTo);
+
+  if (!chat) {
+    if (isUUID(messageId)) {
+      throw new OmniError({
+        code: ERROR_CODES.NOT_FOUND,
+        message: `Reaction target message not found: ${messageId}`,
+        context: { instanceId, resolvedTo, messageId },
+        recoverable: false,
+      });
+    }
+
+    log.warn('Reaction target chat not found in DB; deferring fromMe to channel plugin fallback (#386)', {
+      instanceId,
+      resolvedTo,
+      messageId,
+      fallback: 'plugin-heuristic',
+    });
+    return { targetMessageId: messageId, metadata };
+  }
+
+  const target = isUUID(messageId)
+    ? await getReactionTargetByOmniId(services, instanceId, chat.id, messageId)
+    : await services.messages.getByExternalId(chat.id, messageId);
+
+  if (!target) {
+    log.warn('Reaction target message not found in DB; deferring fromMe to channel plugin fallback (#386)', {
+      instanceId,
+      chatId: chat.id,
+      messageId,
+      fallback: 'plugin-heuristic',
+    });
+    return { targetMessageId: messageId, metadata };
+  }
+
+  metadata.fromMe = target.isFromMe === true;
+  if (target.isFromMe !== true) {
+    const participant = extractReactionTargetParticipant(
+      target.rawPayload as Record<string, unknown> | null | undefined,
+    );
+    if (participant) metadata.targetParticipant = participant;
+  }
+
+  return { targetMessageId: target.externalId, metadata };
+}
+
+async function getReactionTargetByOmniId(
+  services: Services,
+  instanceId: string,
+  chatId: string,
+  messageId: string,
+): Promise<Awaited<ReturnType<Services['messages']['getByExternalId']>>> {
+  let target: Awaited<ReturnType<Services['messages']['getById']>>;
+
+  try {
+    target = await services.messages.getById(messageId);
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      throw reactionTargetNotFound(instanceId, chatId, messageId);
+    }
+    throw error;
+  }
+
+  if (target.chatId !== chatId) {
+    throw reactionTargetNotFound(instanceId, chatId, messageId);
+  }
+
+  return target;
+}
+
+function reactionTargetNotFound(instanceId: string, chatId: string, messageId: string): OmniError {
+  return new OmniError({
+    code: ERROR_CODES.NOT_FOUND,
+    message: `Reaction target message not found: ${messageId}`,
+    context: { instanceId, chatId, messageId },
+    recoverable: false,
+  });
 }
 
 /**
@@ -446,6 +532,21 @@ const sendMediaSchema = z.object({
   voiceNote: z.boolean().optional().describe('Send audio as voice note'),
   threadId: z.string().optional().describe('Thread/topic ID (e.g. Telegram forum topic)'),
 });
+
+function normalizeSendMediaMimeType(data: z.infer<typeof sendMediaSchema>): string {
+  const inferred = data.mimeType ?? inferMediaMimeType(data.type, data.filename);
+  if (data.type === 'audio' && data.voiceNote === true && inferred === 'audio/ogg') {
+    return 'audio/ogg; codecs=opus';
+  }
+  return inferred;
+}
+
+function buildSendMediaMetadata(data: z.infer<typeof sendMediaSchema>): Record<string, unknown> {
+  if (data.type === 'audio' && data.voiceNote === true && data.base64) {
+    return { audioBuffer: Buffer.from(data.base64, 'base64'), ptt: true };
+  }
+  return { base64: data.base64, ptt: data.voiceNote };
+}
 
 // Send reaction schema
 const sendReactionSchema = z.object({
@@ -1061,7 +1162,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   // Resolve recipient (handles person ID to platform ID resolution)
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
-  const mediaMimeType = data.mimeType ?? inferMediaMimeType(data.type, data.filename);
+  const mediaMimeType = normalizeSendMediaMimeType(data);
 
   // Build outgoing message
   const outgoingMessage: OutgoingMessage = {
@@ -1074,11 +1175,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
       filename: data.filename,
       mimeType: mediaMimeType,
     } as OutgoingContent,
-    metadata: {
-      base64: data.base64,
-      // WhatsApp uses 'ptt' (push-to-talk) flag for voice notes
-      ptt: data.voiceNote,
-    },
+    metadata: buildSendMediaMetadata(data),
   };
 
   // T8: API processed the send request
@@ -1175,39 +1272,16 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
   // Note: For reactions, 'to' is typically a chat ID, but we support person ID resolution too
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
 
-  // Look up the target message to determine fromMe (critical for WhatsApp reactions).
-  // Baileys needs key.fromMe to locate the correct message — if wrong, the reaction
-  // is silently dropped by WhatsApp. When the target isn't in our DB (history gap
-  // or unsynced chat), we leave fromMe undefined and let the channel plugin's
-  // heuristic decide — forcing false here breaks bot-to-own-message reactions (#386).
-  const reactionMetadata: Record<string, unknown> = {};
-  const chat = await services.chats.findByExternalIdSmart(instanceId, resolvedTo);
-  if (chat) {
-    const target = await services.messages.getByExternalId(chat.id, messageId);
-    if (target) {
-      reactionMetadata.fromMe = target.isFromMe === true;
-      if (target.isFromMe !== true) {
-        const participant = extractReactionTargetParticipant(
-          target.rawPayload as Record<string, unknown> | null | undefined,
-        );
-        if (participant) reactionMetadata.targetParticipant = participant;
-      }
-    } else {
-      log.warn('Reaction target message not found in DB; deferring fromMe to channel plugin fallback (#386)', {
-        instanceId,
-        chatId: chat.id,
-        messageId,
-        fallback: 'plugin-heuristic',
-      });
-    }
-  } else {
-    log.warn('Reaction target chat not found in DB; deferring fromMe to channel plugin fallback (#386)', {
-      instanceId,
-      resolvedTo,
-      messageId,
-      fallback: 'plugin-heuristic',
-    });
-  }
+  // Look up the target message to determine the provider-native ID and fromMe
+  // (critical for WhatsApp reactions). CLI/history surfaces Omni message UUIDs,
+  // but Baileys needs the WhatsApp externalId in key.id; sending an Omni UUID can
+  // return command-level success while WhatsApp silently ignores the reaction.
+  const { targetMessageId, metadata: reactionMetadata } = await resolveReactionTarget(
+    services,
+    instanceId,
+    resolvedTo,
+    messageId,
+  );
 
   // Build outgoing message for reaction. When the target is unknown, omit
   // metadata so the plugin applies its own fallback (defaults to true for Baileys).
@@ -1216,7 +1290,7 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
     content: {
       type: 'reaction',
       emoji,
-      targetMessageId: messageId,
+      targetMessageId,
     } as OutgoingContent,
     metadata: reactionMetadata,
   };

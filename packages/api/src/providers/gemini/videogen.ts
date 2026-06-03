@@ -70,7 +70,9 @@ export class GeminiVideoGenProvider implements IVideoGenProvider {
         ...(options?.durationSec !== undefined ? { durationSeconds: options.durationSec } : {}),
         ...(options?.seed !== undefined ? { seed: options.seed } : {}),
         ...(options?.resolution !== undefined ? { resolution: options.resolution } : {}),
-        ...(!options?.imageBase64 ? { generateAudio: options?.audio !== false } : {}),
+        // The current Gemini Veo 3.1 API rejects generateAudio in this SDK path.
+        // Keep --no-audio as a no-op compatibility flag until the provider exposes
+        // a supported audio toggle again.
       },
     };
     if (options?.imageBase64) {
