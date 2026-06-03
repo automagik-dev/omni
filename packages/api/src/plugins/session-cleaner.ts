@@ -10,11 +10,11 @@
 import type { EventBus, TypedOmniEvent } from '@omni/core';
 import { createAgnoClient, createLogger } from '@omni/core';
 import type { ChannelType, Database } from '@omni/db';
-import { agents } from '@omni/db';
-import { eq } from 'drizzle-orm';
+import { agents, chatParticipants } from '@omni/db';
+import { and, eq } from 'drizzle-orm';
 import { withIdempotency } from '../lib/idempotency';
 import type { Services } from '../services';
-import { computeSessionId } from '../services/agent-runner';
+import { type ResolvedAgentSessionIdentity, resolveKhalSessionId } from '../services/agent-session-identity';
 import { applyAgentFkOverrides, resolveProvider } from './agent-dispatcher';
 import { getPlugin } from './loader';
 
@@ -55,13 +55,36 @@ async function sendMessage(services: Services, instanceId: string, chatId: strin
  * Tries IAgentProvider.resetSession() first (supports OpenClaw, Webhook, etc.),
  * falls back to direct AgnoOS client for legacy.
  */
+async function resolveCleanupPersonId(
+  services: Services,
+  db: Database,
+  instanceId: string,
+  chatId: string,
+  from: string,
+  metadataPersonId?: string,
+): Promise<string | undefined> {
+  if (metadataPersonId?.trim()) return metadataPersonId.trim();
+
+  const dbChat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+  if (!dbChat?.id) return undefined;
+
+  const [participant] = await db
+    .select({ personId: chatParticipants.personId })
+    .from(chatParticipants)
+    .where(and(eq(chatParticipants.chatId, dbChat.id), eq(chatParticipants.platformUserId, from)))
+    .limit(1);
+
+  return participant?.personId ?? undefined;
+}
+
 export async function clearAgentSession(
   services: Services,
   db: Database,
   instanceId: string,
   from: string,
   chatId: string,
-): Promise<{ sessionId: string; sessionStrategy: string }> {
+  options: { personId?: string; rawPayload?: Record<string, unknown> } = {},
+): Promise<ResolvedAgentSessionIdentity> {
   // Get instance with provider
   const instance = await services.agentRunner.getInstanceWithProvider(instanceId);
 
@@ -83,9 +106,22 @@ export async function clearAgentSession(
   // Get provider record from DB
   const providerRecord = await services.providers.getById(agentRow.agentProviderId);
 
-  // Compute session ID using the same strategy as agent-runner
-  const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
-  const sessionId = computeSessionId(sessionStrategy, from, chatId);
+  const personId = await resolveCleanupPersonId(services, db, instanceId, chatId, from, options.personId);
+  const identity = resolveKhalSessionId({
+    providerSchema: providerRecord.schema,
+    sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
+    from,
+    chatId,
+    channel: instance.channel,
+    instanceId,
+    personId,
+    rawPayload: options.rawPayload,
+  });
+  const { sessionId, legacySessionId } = identity;
+  const hasKhalContext = !!identity.canonicalSessionId || !!identity.environment || !!options.rawPayload?.khalSessionId;
+  if (providerRecord.schema === 'agno' && hasKhalContext && identity.source === 'legacy') {
+    throw new Error('Canonical KHAL session resolution failed; refusing blind legacy Agno reset');
+  }
 
   // Try IAgentProvider.resetSession() first (covers OpenClaw, Agno, Claude, etc.)
   // Pass chatId so providers that build their own key format (e.g. OpenClaw)
@@ -100,7 +136,10 @@ export async function clearAgentSession(
   const agentProvider = resolveProvider(providerRecord, dispatchInstance, db);
   if (agentProvider?.resetSession) {
     await agentProvider.resetSession(sessionId, chatId, instanceId);
-    return { sessionId, sessionStrategy };
+    if (legacySessionId !== sessionId) {
+      await agentProvider.resetSession(legacySessionId, chatId, instanceId);
+    }
+    return identity;
   }
 
   // Fallback: direct AgnoOS client
@@ -114,9 +153,19 @@ export async function clearAgentSession(
     defaultTimeoutMs: (providerRecord.defaultTimeout ?? 60) * 1000,
   });
 
-  await client.deleteSession?.(sessionId);
+  const primaryDelete = await client.deleteSession?.(sessionId);
+  const legacyDelete = legacySessionId !== sessionId ? await client.deleteSession?.(legacySessionId) : undefined;
+  log.info('Agno session delete verified', {
+    instanceId,
+    sessionId,
+    legacySessionId,
+    primaryStatus: primaryDelete?.status,
+    primaryExisted: primaryDelete?.existed,
+    legacyStatus: legacyDelete?.status,
+    legacyExisted: legacyDelete?.existed,
+  });
 
-  return { sessionId, sessionStrategy };
+  return identity;
 }
 
 /**
@@ -135,14 +184,14 @@ async function handleTrashEmojiMessage(
   db: Database,
   event: TypedOmniEvent<'message.received'>,
 ): Promise<void> {
-  const { content, chatId, from } = event.payload;
+  const { content, chatId } = event.payload;
   const { instanceId } = event.metadata;
 
   if (!instanceId || !content?.text) return;
   if (!isTrashEmojiOnly(content.text)) return;
 
   const result = await withIdempotency(db, event.id, 'session-cleaner', async () => {
-    await runTrashEmojiCleanup(services, db, instanceId, chatId, from);
+    await runTrashEmojiCleanup(services, db, event);
   });
 
   if (!result.executed) {
@@ -157,16 +206,30 @@ async function handleTrashEmojiMessage(
 async function runTrashEmojiCleanup(
   services: Services,
   db: Database,
-  instanceId: string,
-  chatId: string,
-  from: string,
+  event: TypedOmniEvent<'message.received'>,
 ): Promise<void> {
-  log.info('Trash emoji detected, clearing session', { instanceId, chatId, from });
+  const { chatId, from, rawPayload } = event.payload;
+  const { instanceId, personId } = event.metadata;
+  if (!instanceId) return;
+
+  log.info('Trash emoji detected, clearing session', { instanceId, chatId, from, personId });
 
   try {
-    const { sessionId, sessionStrategy } = await clearAgentSession(services, db, instanceId, from, chatId);
+    const identity = await clearAgentSession(services, db, instanceId, from, chatId, { personId, rawPayload });
+    const { sessionId, legacySessionId, sessionStrategy, source, canonicalSessionId, environment, channelSegment } =
+      identity;
 
-    log.info('Session cleared successfully', { instanceId, sessionId, sessionStrategy });
+    log.info('Session cleared successfully', {
+      instanceId,
+      sessionId,
+      legacySessionId,
+      sessionStrategy,
+      source,
+      canonicalSessionId,
+      personId: identity.personId,
+      environment,
+      channelSegment,
+    });
 
     // Disarm any active follow-up sequence — clearing the session means the
     // user has explicitly reset the conversation; queued follow-ups referencing
