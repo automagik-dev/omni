@@ -324,6 +324,45 @@ function createReactionEvent(overrides: Record<string, unknown> = {}) {
 // ============================================================================
 
 describe('agent-dispatcher', () => {
+  describe('human lifecycle observability helpers', () => {
+    it('builds redacted-readable lifecycle attributes without raw PII or secrets', () => {
+      const attributes = __test__.buildLifecycleSpanAttributes({
+        stage: 'provider_inbound',
+        eventType: 'user_message_turn',
+        channel: 'whatsapp-baileys',
+        provider: 'gupshup',
+        instanceId: 'inst-1',
+        chatId: '5511999887766@s.whatsapp.net',
+        sessionId: 'p0r-hml-20260531T204449Z',
+        traceId: 'trc-test-123',
+        messageId: 'wamid.123',
+        agentId: 'eugenia-seller',
+        inputText: 'Olá, meu telefone é 5511999887766 e email felipe@example.com. Quero cotar plano.',
+        outputText: 'Claro, posso ajudar com a cotação.',
+        extra: {
+          authorization: 'Bearer super-secret-token',
+          token: 'abc123',
+        },
+      });
+
+      expect(attributes['khal.lifecycle.stage']).toBe('provider_inbound');
+      expect(attributes['khal.event_type']).toBe('user_message_turn');
+      expect(attributes['khal.channel']).toBe('whatsapp-baileys');
+      expect(attributes['khal.provider']).toBe('gupshup');
+      expect(attributes['langfuse.session.id']).toBe('p0r-hml-20260531T204449Z');
+      expect(attributes['session.id']).toBe('p0r-hml-20260531T204449Z');
+      expect(attributes['khal.input_chars']).toBeGreaterThan(0);
+      expect(String(attributes['khal.input_sha256'])).toStartWith('sha256:');
+      expect(String(attributes['khal.output_sha256'])).toStartWith('sha256:');
+      expect(String(attributes['khal.input_preview_redacted'])).toContain('[PHONE]');
+      expect(String(attributes['khal.input_preview_redacted'])).toContain('[EMAIL]');
+      expect(JSON.stringify(attributes)).not.toContain('felipe@example.com');
+      expect(JSON.stringify(attributes)).not.toContain('5511999887766');
+      expect(JSON.stringify(attributes)).not.toContain('super-secret-token');
+      expect(JSON.stringify(attributes)).not.toContain('abc123');
+    });
+  });
+
   // ======================================================================
   // setupAgentDispatcher — subscribes to correct NATS subjects
   // ======================================================================

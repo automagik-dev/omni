@@ -17,6 +17,7 @@
  * - Preserves existing debouncing for message events
  */
 
+import { createHash } from 'node:crypto';
 import { unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -67,6 +68,7 @@ import type { AgentProvider, Database } from '@omni/db';
 import { agentSessions, agents, instances } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
 import { createMediaProcessingService } from '@omni/media-processing';
+import { SpanStatusCode, trace } from '@opentelemetry/api';
 import * as Sentry from '@sentry/bun';
 import { and, eq } from 'drizzle-orm';
 import { withIdempotency } from '../lib/idempotency';
@@ -108,6 +110,173 @@ const QUOTED_MESSAGE_MAX_CHARS = 4000;
 
 /** Hard cap on history messages fetched for DM conversations. */
 const DM_HISTORY_LIMIT = 20;
+
+const LIFECYCLE_PREVIEW_MAX_CHARS = 160;
+const LIFECYCLE_SENSITIVE_KEY_PARTS = ['authorization', 'bearer', 'password', 'secret', 'token', 'api_key', 'apikey'];
+
+type LifecycleAttributeValue = string | number | boolean;
+
+interface LifecycleSpanAttributeInput {
+  stage: 'provider_inbound' | 'dispatch_to_agno' | 'provider_outbound' | 'turn';
+  eventType: string;
+  channel: string;
+  provider?: string;
+  instanceId?: string;
+  chatId?: string;
+  sessionId?: string;
+  traceId?: string;
+  messageId?: string;
+  agentId?: string;
+  inputText?: string;
+  outputText?: string;
+  extra?: Record<string, unknown>;
+}
+
+function sha256Digest(value: string): string {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+}
+
+function redactLifecycleText(value: string): string {
+  return value
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[EMAIL]')
+    .replace(/\b\+?\d[\d\s().-]{5,}\d\b/g, '[PHONE]')
+    .replace(/\b\d{6,}\b/g, '[NUMBER]')
+    .replace(/\b[^\s@]+@(s\.whatsapp\.net|g\.us|lid|newsletter)\b/gi, '[JID]');
+}
+
+function previewLifecycleText(value: string): string {
+  const redacted = redactLifecycleText(value).replace(/\s+/g, ' ').trim();
+  if (redacted.length <= LIFECYCLE_PREVIEW_MAX_CHARS) return redacted;
+  return `${redacted.slice(0, LIFECYCLE_PREVIEW_MAX_CHARS - 1)}…`;
+}
+
+function isLifecycleSafeExtraKey(key: string): boolean {
+  const lowered = key.toLowerCase();
+  return !LIFECYCLE_SENSITIVE_KEY_PARTS.some((part) => lowered.includes(part));
+}
+
+function setTextLifecycleAttributes(
+  attributes: Record<string, LifecycleAttributeValue>,
+  prefix: 'input' | 'output',
+  value: string | undefined,
+): void {
+  if (value === undefined) return;
+  attributes[`khal.${prefix}_chars`] = value.length;
+  attributes[`khal.${prefix}_sha256`] = sha256Digest(value);
+  attributes[`khal.${prefix}_preview_redacted`] = previewLifecycleText(value);
+}
+
+function setOptionalLifecycleAttributes(
+  attributes: Record<string, LifecycleAttributeValue>,
+  pairs: Array<[string, string | undefined]>,
+): void {
+  for (const [key, value] of pairs) {
+    if (value) attributes[key] = value;
+  }
+}
+
+function setChatLifecycleAttributes(
+  attributes: Record<string, LifecycleAttributeValue>,
+  chatId: string | undefined,
+): void {
+  if (!chatId) return;
+  attributes['omni.chat_id_sha256'] = sha256Digest(chatId);
+  attributes['omni.chat_id_preview_redacted'] = previewLifecycleText(chatId);
+}
+
+function setSessionLifecycleAttributes(
+  attributes: Record<string, LifecycleAttributeValue>,
+  sessionId: string | undefined,
+): void {
+  if (!sessionId) return;
+  attributes['khal.session_id'] = sessionId;
+  attributes['langfuse.session.id'] = sessionId;
+  attributes['session.id'] = sessionId;
+}
+
+function setExtraLifecycleAttributes(
+  attributes: Record<string, LifecycleAttributeValue>,
+  extra: Record<string, unknown> | undefined,
+): void {
+  if (!extra) return;
+  for (const [key, value] of Object.entries(extra)) {
+    if (!isLifecycleSafeExtraKey(key) || value === undefined || value === null) continue;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      attributes[`khal.${key}`] = typeof value === 'string' ? previewLifecycleText(value) : value;
+    }
+  }
+}
+
+function buildLifecycleSpanAttributes(input: LifecycleSpanAttributeInput): Record<string, LifecycleAttributeValue> {
+  const attributes: Record<string, LifecycleAttributeValue> = {
+    'khal.lifecycle.stage': input.stage,
+    'khal.event_type': input.eventType,
+    'khal.channel': input.channel,
+  };
+
+  setOptionalLifecycleAttributes(attributes, [
+    ['khal.provider', input.provider],
+    ['omni.instance_id', input.instanceId],
+    ['khal.trace_id', input.traceId],
+    ['khal.turn.message_id', input.messageId],
+    ['khal.agent_id', input.agentId],
+  ]);
+  setChatLifecycleAttributes(attributes, input.chatId);
+  setSessionLifecycleAttributes(attributes, input.sessionId);
+  setTextLifecycleAttributes(attributes, 'input', input.inputText);
+  setTextLifecycleAttributes(attributes, 'output', input.outputText);
+  setExtraLifecycleAttributes(attributes, input.extra);
+
+  return attributes;
+}
+
+async function withLifecycleSpan<T>(
+  name: string,
+  attributes: Record<string, LifecycleAttributeValue>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  let callbackStarted = false;
+  try {
+    const tracer = trace.getTracer('omni.agent-dispatcher');
+    return await tracer.startActiveSpan(name, { attributes }, async (span) => {
+      callbackStarted = true;
+      try {
+        const result = await fn();
+        span.setStatus({ code: SpanStatusCode.OK });
+        return result;
+      } catch (error) {
+        span.recordException(error instanceof Error ? error : new Error(String(error)));
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
+        throw error;
+      } finally {
+        span.end();
+      }
+    });
+  } catch (error) {
+    if (callbackStarted) throw error;
+    log.warn('Lifecycle span wrapper failed before dispatch; continuing without span', { spanName: name });
+    return fn();
+  }
+}
+
+function emitLifecycleSpan(name: string, attributes: Record<string, LifecycleAttributeValue>): void {
+  withLifecycleSpan(name, attributes, async () => undefined).catch(() => {
+    // best-effort — never throw from instrumentation path
+  });
+}
+
+function activeProviderTraceContext(): AgentTrigger['traceContext'] {
+  const activeSpan = trace.getActiveSpan();
+  const spanContext = activeSpan?.spanContext();
+  if (!spanContext?.traceId || !spanContext?.spanId) return undefined;
+
+  return {
+    traceId: spanContext.traceId,
+    spanId: spanContext.spanId,
+    traceFlags: spanContext.traceFlags,
+    traceState: spanContext.traceState?.serialize(),
+  };
+}
 
 // ============================================================================
 // Plugin → AckProvider adapter
@@ -1960,7 +2129,24 @@ async function dispatchViaTurnBasedProvider(
 
   // Dispatch (fire-and-forget — agent uses verb commands + omni done)
   const dispatchStart = Date.now();
-  await provider.trigger(trigger);
+  await withLifecycleSpan(
+    'omni.dispatch_to_agno',
+    buildLifecycleSpanAttributes({
+      stage: 'dispatch_to_agno',
+      eventType: 'user_message_turn',
+      channel: instance.channel,
+      provider: provider.schema,
+      instanceId: instance.id,
+      chatId,
+      sessionId: trigger.sessionId,
+      traceId,
+      messageId,
+      agentId: agentRecord.id,
+      inputText: trigger.content.text,
+      extra: { mode: 'turn-based', provider_id: provider.id, provider_schema: provider.schema },
+    }),
+    () => provider.trigger(trigger),
+  );
   const dispatchDurationMs = Date.now() - dispatchStart;
 
   if (sentryEnabled()) {
@@ -2067,77 +2253,135 @@ async function dispatchViaProvider(
     explicitKhalSessionId,
   );
 
-  // ── Turn-based mode: delegate to extracted helper ──
-  if (provider.mode === 'turn-based') {
-    return dispatchViaTurnBasedProvider(services, instance, provider, trigger, messages, chatId, traceId, db);
-  }
-
-  // ── Standard (round-trip / fire-and-forget) dispatch ──
-  const correlationId = messages[0]?.metadata.correlationId;
-  const dispatchStart = Date.now();
-  const result = await provider.trigger(trigger);
-  const dispatchDurationMs = Date.now() - dispatchStart;
-
-  // Sentry metrics: agent dispatch count and latency
-  if (sentryEnabled()) {
-    Sentry.metrics.count('agent.dispatch', 1, { attributes: { provider_type: provider.schema } });
-    Sentry.metrics.distribution('agent.dispatch.latency', dispatchDurationMs, {
-      unit: 'millisecond',
-      attributes: { provider_type: provider.schema },
-    });
-  }
-
-  // If the agent triggered a handoff during this run (agentPaused: true),
-  // suppress the response — the handoff message already notified the user.
-  const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
-  const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
-
-  if (result && result.parts.length > 0 && !handoffTriggered) {
-    const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
-    const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
-    // Apply before_message_write hooks to each response part before sending
-    const parts = await Promise.all(rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)));
-    const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-    const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
-
-    // T8: Processing send request
-    recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
-
-    await sendResponseParts(
-      channel,
-      instance.id,
-      chatId,
-      parts,
-      getSplitDelayConfig(instance),
-      _fmtMode,
-      replyTo,
-      correlationId,
-      senderAgentId,
-    );
-
-    // T9: Outbound sent via plugin
-    recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
-
-    // T10: Agent chaining — forward response to chained instance if configured
-    await forwardToChainedInstance(instance, parts, correlationId, messages);
-  } else if (handoffTriggered) {
-    log.info('Agent response suppressed — handoff triggered during run', {
-      instanceId: instance.id,
-      chatId,
-    });
-  }
-
-  log.info('Agent response via IAgentProvider', {
+  const lifecycleBase = {
+    eventType: 'user_message_turn',
+    channel,
+    provider: provider.schema,
     instanceId: instance.id,
     chatId,
-    parts: result?.parts.length ?? 0,
-    providerId: result?.metadata.providerId,
-    durationMs: result?.metadata.durationMs,
-    triggerType,
+    sessionId,
     traceId,
-  });
+    messageId: messages[0]?.payload.externalId,
+    agentId: instance.agentInternalId ?? instance.agentId ?? undefined,
+    inputText: messageTexts.join('\n'),
+  };
 
-  return true;
+  return withLifecycleSpan(
+    'omni.turn',
+    buildLifecycleSpanAttributes({
+      ...lifecycleBase,
+      stage: 'turn',
+      extra: {
+        trigger_type: triggerType,
+        message_count: messages.length,
+        provider_id: provider.id,
+        provider_schema: provider.schema,
+      },
+    }),
+    async () => {
+      await withLifecycleSpan(
+        'omni.provider_inbound',
+        buildLifecycleSpanAttributes({
+          ...lifecycleBase,
+          stage: 'provider_inbound',
+          extra: { trigger_type: triggerType, message_count: messages.length },
+        }),
+        async () => undefined,
+      );
+
+      // ── Turn-based mode: delegate to extracted helper ──
+      if (provider.mode === 'turn-based') {
+        return dispatchViaTurnBasedProvider(services, instance, provider, trigger, messages, chatId, traceId, db);
+      }
+
+      // ── Standard (round-trip / fire-and-forget) dispatch ──
+      const correlationId = messages[0]?.metadata.correlationId;
+      const dispatchStart = Date.now();
+      const result = await withLifecycleSpan(
+        'omni.dispatch_to_agno',
+        buildLifecycleSpanAttributes({
+          ...lifecycleBase,
+          stage: 'dispatch_to_agno',
+          extra: { trigger_type: triggerType, provider_id: provider.id, provider_schema: provider.schema },
+        }),
+        () => provider.trigger({ ...trigger, traceContext: activeProviderTraceContext() ?? trigger.traceContext }),
+      );
+      const dispatchDurationMs = Date.now() - dispatchStart;
+
+      // Sentry metrics: agent dispatch count and latency
+      if (sentryEnabled()) {
+        Sentry.metrics.count('agent.dispatch', 1, { attributes: { provider_type: provider.schema } });
+        Sentry.metrics.distribution('agent.dispatch.latency', dispatchDurationMs, {
+          unit: 'millisecond',
+          attributes: { provider_type: provider.schema },
+        });
+      }
+
+      // If the agent triggered a handoff during this run (agentPaused: true),
+      // suppress the response — the handoff message already notified the user.
+      const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
+      const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+
+      if (result && result.parts.length > 0 && !handoffTriggered) {
+        const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
+        const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+        // Apply before_message_write hooks to each response part before sending
+        const parts = await Promise.all(
+          rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)),
+        );
+        const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+        const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
+
+        // T8: Processing send request
+        recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+
+        await withLifecycleSpan(
+          'omni.provider_outbound',
+          buildLifecycleSpanAttributes({
+            ...lifecycleBase,
+            stage: 'provider_outbound',
+            outputText: parts.join('\n'),
+            extra: { parts_count: parts.length, provider_id: provider.id, provider_schema: provider.schema },
+          }),
+          () =>
+            sendResponseParts(
+              channel,
+              instance.id,
+              chatId,
+              parts,
+              getSplitDelayConfig(instance),
+              _fmtMode,
+              replyTo,
+              correlationId,
+              senderAgentId,
+            ),
+        );
+
+        // T9: Outbound sent via plugin
+        recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
+
+        // T10: Agent chaining — forward response to chained instance if configured
+        await forwardToChainedInstance(instance, parts, correlationId, messages);
+      } else if (handoffTriggered) {
+        log.info('Agent response suppressed — handoff triggered during run', {
+          instanceId: instance.id,
+          chatId,
+        });
+      }
+
+      log.info('Agent response via IAgentProvider', {
+        instanceId: instance.id,
+        chatId,
+        parts: result?.parts.length ?? 0,
+        providerId: result?.metadata.providerId,
+        durationMs: result?.metadata.durationMs,
+        triggerType,
+        traceId,
+      });
+
+      return true;
+    },
+  );
 }
 
 /**
@@ -2200,20 +2444,57 @@ async function dispatchViaLegacy(
     mediaFiles.length > 0 ? (mediaFiles as unknown as ProviderFile[]) : undefined,
   );
 
-  const result = await services.agentRunner.run({
-    instance,
-    chatId,
-    personId,
+  const lifecycleSessionId = computeSessionId(
+    instance.agentSessionStrategy ?? 'per_chat',
     senderId,
-    senderName,
-    senderAvatarUrl,
-    senderPlatformUsername,
-    chatType,
-    chatName,
-    participantCount,
-    messages: messageTexts,
-    files: mediaFiles.length > 0 ? mediaFiles : undefined,
-  });
+    chatId,
+    (rawPl as Record<string, unknown>).threadId as string | undefined,
+  );
+  const lifecycleBase = {
+    eventType: 'user_message_turn',
+    channel,
+    provider: 'legacy-agent-runner',
+    instanceId: instance.id,
+    chatId,
+    sessionId: lifecycleSessionId,
+    traceId,
+    messageId: messages[0]?.payload.externalId,
+    agentId: instance.agentInternalId ?? instance.agentId ?? undefined,
+    inputText: messageTexts.join('\n'),
+  };
+
+  emitLifecycleSpan(
+    'omni.provider_inbound',
+    buildLifecycleSpanAttributes({
+      ...lifecycleBase,
+      stage: 'provider_inbound',
+      extra: { trigger_type: triggerType, message_count: messages.length },
+    }),
+  );
+
+  const result = await withLifecycleSpan(
+    'omni.dispatch_to_agno',
+    buildLifecycleSpanAttributes({
+      ...lifecycleBase,
+      stage: 'dispatch_to_agno',
+      extra: { trigger_type: triggerType, provider_schema: 'legacy-agent-runner' },
+    }),
+    () =>
+      services.agentRunner.run({
+        instance,
+        chatId,
+        personId,
+        senderId,
+        senderName,
+        senderAvatarUrl,
+        senderPlatformUsername,
+        chatType,
+        chatName,
+        participantCount,
+        messages: messageTexts,
+        files: mediaFiles.length > 0 ? mediaFiles : undefined,
+      }),
+  );
 
   const correlationId = messages[0]?.metadata.correlationId;
   const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
@@ -2228,16 +2509,26 @@ async function dispatchViaLegacy(
   // T8: Processing send request
   recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
 
-  await sendResponseParts(
-    channel,
-    instance.id,
-    chatId,
-    parts,
-    getSplitDelayConfig(instance),
-    _fmtMode,
-    replyTo,
-    correlationId,
-    senderAgentId,
+  await withLifecycleSpan(
+    'omni.provider_outbound',
+    buildLifecycleSpanAttributes({
+      ...lifecycleBase,
+      stage: 'provider_outbound',
+      outputText: parts.join('\n'),
+      extra: { parts_count: parts.length, provider_schema: 'legacy-agent-runner' },
+    }),
+    () =>
+      sendResponseParts(
+        channel,
+        instance.id,
+        chatId,
+        parts,
+        getSplitDelayConfig(instance),
+        _fmtMode,
+        replyTo,
+        correlationId,
+        senderAgentId,
+      ),
   );
 
   // T9: Outbound sent via plugin
@@ -4874,6 +5165,7 @@ export const __test__ = {
   getDebounceConfig,
   extractKhalSessionId,
   buildTriggerHeaders,
+  buildLifecycleSpanAttributes,
   createNatsGenieProviderInstance,
   /** Override the NatsGenieProvider constructor for tests (avoids barrel mock contamination). */
   set NatsGenieProviderClass(cls: typeof NatsGenieProvider) {
