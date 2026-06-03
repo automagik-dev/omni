@@ -637,6 +637,33 @@ describe('AgnoClient', () => {
     });
   });
 
+  // --- IAgentClient interface: deleteSession() ---
+
+  describe('deleteSession', () => {
+    it('returns a verified delete result on success', async () => {
+      mockImpl.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+      const client = new AgnoClient(config);
+      const result = await client.deleteSession('khal:hml:omni:inst:gupshup:person');
+
+      expect(result).toEqual({
+        ok: true,
+        status: 204,
+        sessionId: 'khal:hml:omni:inst:gupshup:person',
+        existed: true,
+      });
+    });
+
+    it('treats a missing session as a verified no-op instead of throwing', async () => {
+      mockImpl.mockResolvedValueOnce(new Response('missing', { status: 404 }));
+
+      const client = new AgnoClient(config);
+      const result = await client.deleteSession('legacy-phone-session');
+
+      expect(result).toEqual({ ok: true, status: 404, sessionId: 'legacy-phone-session', existed: false });
+    });
+  });
+
   // --- Authentication ---
 
   describe('authentication', () => {
