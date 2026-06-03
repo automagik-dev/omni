@@ -3427,7 +3427,7 @@ function createAgnoProvider(provider: AgentProvider, instance: DispatchInstance)
     schema: provider.schema,
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
@@ -3435,7 +3435,7 @@ function createAgnoProvider(provider: AgentProvider, instance: DispatchInstance)
   return new AgnoAgentProvider(provider.id, provider.name, client, {
     agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
     agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
-    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 600) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
   });
@@ -3518,12 +3518,12 @@ function createAgUiProviderInstance(provider: AgentProvider, instance: DispatchI
     schema: provider.schema,
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   return new AgUiAgentProvider(provider.id, provider.name, client, {
     agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
-    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 600) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
   });
@@ -3541,12 +3541,12 @@ function createA2AProviderInstance(provider: AgentProvider, instance: DispatchIn
     schema: provider.schema,
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   return new A2AAgentProvider(provider.id, provider.name, client, {
     agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
-    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 600) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
   });

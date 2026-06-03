@@ -34,7 +34,7 @@ export const CreateInstanceSchema = z.object({
   name: z.string().min(1).max(255).openapi({ description: 'Unique name for the instance' }),
   channel: ChannelTypeSchema.openapi({ description: 'Channel type' }),
   agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
-  agentTimeout: z.number().int().positive().default(60).openapi({ description: 'Agent timeout in seconds' }),
+  agentTimeout: z.number().int().positive().default(600).openapi({ description: 'Agent timeout in seconds' }),
   agentStreamMode: z.boolean().default(false).openapi({ description: 'Enable streaming responses' }),
   isDefault: z.boolean().default(false).openapi({ description: 'Set as default instance for channel' }),
   token: z.string().optional().openapi({ description: 'Bot token for Discord instances' }),

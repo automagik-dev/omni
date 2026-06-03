@@ -348,7 +348,7 @@ export class AgentRunnerService {
       schema: provider.schema,
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
-      defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+      defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
     });
 
     // Cache it
@@ -465,7 +465,7 @@ export class AgentRunnerService {
         name: chatName,
         participantCount,
       },
-      timeoutMs: (instance.agentTimeout ?? 60) * 1000,
+      timeoutMs: (instance.agentTimeout ?? 600) * 1000,
       files,
     };
 
@@ -589,7 +589,7 @@ export class AgentRunnerService {
         name: chatName,
         participantCount,
       },
-      timeoutMs: (instance.agentTimeout ?? 60) * 1000,
+      timeoutMs: (instance.agentTimeout ?? 600) * 1000,
     };
 
     // Client routes by agentType internally

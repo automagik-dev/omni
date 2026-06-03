@@ -57,7 +57,7 @@ const createInstanceSchema = z.object({
   name: z.string().min(1).max(255).describe('Unique name for the instance'),
   channel: ChannelTypeSchema.describe('Channel type (e.g., whatsapp-baileys, discord)'),
   agentId: z.string().uuid().nullable().optional().describe('Agent UUID referencing agents table'),
-  agentTimeout: z.number().int().positive().default(60).describe('Agent timeout in seconds'),
+  agentTimeout: z.number().int().positive().default(600).describe('Agent timeout in seconds'),
   agentStreamMode: z.boolean().default(false).describe('Enable streaming responses'),
   agentReplyFilter: agentReplyFilterSchema.optional().nullable().describe('When agent should reply'),
   agentSessionStrategy: z
