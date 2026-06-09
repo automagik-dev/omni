@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.260609.3",
+  "version": "2.260609.5",
   "type": "module",
   "exports": {
     ".": {
