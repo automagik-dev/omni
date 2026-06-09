@@ -13,6 +13,18 @@ import type { ConnectionStatus, InstanceConfig } from './instance';
 import type { OutgoingMessage, SendResult } from './messaging';
 import type { StreamSender } from './streaming';
 
+export type GroupParticipantAction = 'add' | 'remove' | 'promote' | 'demote';
+export type GroupSetting = 'announcement' | 'not_announcement' | 'locked' | 'unlocked';
+
+export interface GroupParticipantUpdateResult {
+  groupJid: string;
+  action: GroupParticipantAction;
+  participants: Array<{
+    jid?: string;
+    status: string;
+  }>;
+}
+
 /**
  * Health status for the plugin
  */
@@ -329,6 +341,51 @@ export interface ChannelPlugin {
       role?: 'admin' | 'superadmin' | 'member';
     }>;
   }>;
+
+  /**
+   * Add, remove, promote, or demote group participants.
+   *
+   * Optional - implement to support group participant mutations.
+   *
+   * @param instanceId - Instance to mutate group participants for
+   * @param groupJid - Group JID to mutate
+   * @param participants - User phone numbers or JIDs
+   * @param action - Mutation action
+   */
+  updateGroupParticipants?(
+    instanceId: string,
+    groupJid: string,
+    participants: string[],
+    action: GroupParticipantAction,
+  ): Promise<GroupParticipantUpdateResult>;
+
+  /**
+   * Rename a group.
+   *
+   * Optional - implement to support group subject updates.
+   */
+  updateGroupSubject?(instanceId: string, groupJid: string, subject: string): Promise<void>;
+
+  /**
+   * Set or clear a group description.
+   *
+   * Optional - implement to support group description updates.
+   */
+  updateGroupDescription?(instanceId: string, groupJid: string, description?: string): Promise<void>;
+
+  /**
+   * Update WhatsApp-style group settings.
+   *
+   * Optional - implement to support group settings updates.
+   */
+  updateGroupSettings?(instanceId: string, groupJid: string, setting: GroupSetting): Promise<void>;
+
+  /**
+   * Leave a group.
+   *
+   * Optional - implement to support leaving groups.
+   */
+  leaveGroup?(instanceId: string, groupJid: string): Promise<void>;
 
   // ─────────────────────────────────────────────────────────────
   // Health
