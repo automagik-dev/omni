@@ -1632,6 +1632,51 @@ describe('agent-dispatcher', () => {
       ]);
     });
 
+    it('falls back to the latest outbound bot message before the inbound native reply when Gupshup returns no provider aliases', async () => {
+      const chatRow = { id: 'chat-db-1', externalId: 'chat-ext-1', chatType: 'dm' };
+      const quotedRow = {
+        externalId: 'omni-outbound-uuid',
+        senderDisplayName: 'Eugenia',
+        senderPlatformUserId: 'bot-123',
+        isFromMe: true,
+        platformTimestamp: new Date('2026-06-09T13:13:22Z').getTime(),
+        messageType: 'text',
+        textContent: '**Opção 2, Nosso Plano Completo Enfermaria** R$ 182,47/mês',
+        transcription: null,
+        imageDescription: null,
+        videoDescription: null,
+        documentExtraction: null,
+      };
+      const findRecentOutboundBefore = mock(async (_chatId: string, before: Date, _hint?: string) =>
+        before.toISOString() === '2026-06-09T13:13:55.000Z' ? quotedRow : null,
+      );
+      const services = {
+        chats: { findByExternalIdSmart: mock(async () => chatRow) },
+        messages: {
+          getByExternalId: mock(async () => null),
+          findByProviderAlias: mock(async () => null),
+          findRecentOutboundBefore,
+        },
+      } as unknown as import('../../services').Services;
+
+      const result = await resolveQuotedMessage(
+        services,
+        'inst-1',
+        'chat-ext-1',
+        '033voYFyV6Txceb45MFW7k',
+        ['ddbf1157-be24-4176-a1f8-9f679a26a39c'],
+        { inboundAt: new Date('2026-06-09T13:13:55Z'), inboundText: 'quero esse' },
+      );
+
+      expect(result).not.toBeNull();
+      expect(result).toContain('Opção 2');
+      expect(findRecentOutboundBefore).toHaveBeenCalledWith(
+        'chat-db-1',
+        new Date('2026-06-09T13:13:55Z'),
+        'quero esse',
+      );
+    });
+
     it('returns full text when content is under 4000 chars', async () => {
       const content = 'A'.repeat(3999);
       const services = createQuotedMessageServices(content);
