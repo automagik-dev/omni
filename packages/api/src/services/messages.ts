@@ -340,6 +340,12 @@ export class MessageService {
    * after exact external-id and provider-alias lookup fail.
    */
   async findRecentOutboundBefore(chatId: string, before: Date, inboundText?: string): Promise<Message | null> {
+    // Gupshup's native reply payload timestamp is second-precision while our
+    // outbound rows retain millisecond precision. A customer can reply in the
+    // same second as the outbound send; allow a tiny future grace window so the
+    // just-quoted outbound is not accidentally excluded in favor of older plans.
+    const upperBound = new Date(before.getTime() + 2000);
+
     const rows = await this.db
       .select()
       .from(messages)
@@ -347,7 +353,7 @@ export class MessageService {
         and(
           eq(messages.chatId, chatId),
           eq(messages.isFromMe, true),
-          lte(messages.platformTimestamp, before),
+          lte(messages.platformTimestamp, upperBound),
           sql`${messages.deletedAt} IS NULL`,
         ),
       )
