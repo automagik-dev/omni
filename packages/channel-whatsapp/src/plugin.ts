@@ -11,6 +11,9 @@ import type {
   DedupeCache,
   FetchHistoryOptions,
   FetchHistoryResult,
+  GroupParticipantAction,
+  GroupParticipantUpdateResult,
+  GroupSetting,
   HistorySyncMessage,
   InstanceConfig,
   OutgoingMessage,
@@ -32,7 +35,7 @@ import {
   setupConnectionHandlers,
 } from './handlers/connection';
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
-import { fromJid, isGroupJid, isLidJid, isUserJid, toJid } from './jid';
+import { fromJid, isGroupJid, isLidJid, isUserJid, toGroupJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { computeWaid } from './senders/contact';
 import { removeReaction, sendReaction } from './senders/reaction';
@@ -2450,6 +2453,116 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       });
 
       return { members };
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
+    }
+  }
+
+  /**
+   * Add, remove, promote, or demote group participants.
+   */
+  async updateGroupParticipants(
+    instanceId: string,
+    groupJid: string,
+    participants: string[],
+    action: GroupParticipantAction,
+  ): Promise<GroupParticipantUpdateResult> {
+    await this.humanDelay(instanceId);
+    const sock = this.getSocket(instanceId);
+    const jid = toGroupJid(groupJid);
+    const participantJids = participants.map((participant) => toJid(participant));
+
+    try {
+      const result = await sock.groupParticipantsUpdate(jid, participantJids, action);
+      this.invalidateGroupMetadataCache(instanceId, jid);
+      this.logger.info('Group participants updated', {
+        instanceId,
+        groupJid: jid,
+        action,
+        participantCount: participantJids.length,
+      });
+
+      return {
+        groupJid: jid,
+        action,
+        participants: result.map((participant) => ({
+          jid: participant.jid,
+          status: participant.status,
+        })),
+      };
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
+    }
+  }
+
+  /**
+   * Rename a group.
+   */
+  async updateGroupSubject(instanceId: string, groupJid: string, subject: string): Promise<void> {
+    await this.humanDelay(instanceId);
+    const sock = this.getSocket(instanceId);
+    const jid = toGroupJid(groupJid);
+
+    try {
+      await sock.groupUpdateSubject(jid, subject);
+      this.invalidateGroupMetadataCache(instanceId, jid);
+      this.logger.info('Group subject updated', { instanceId, groupJid: jid });
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
+    }
+  }
+
+  /**
+   * Set or clear a group description.
+   */
+  async updateGroupDescription(instanceId: string, groupJid: string, description?: string): Promise<void> {
+    await this.humanDelay(instanceId);
+    const sock = this.getSocket(instanceId);
+    const jid = toGroupJid(groupJid);
+
+    try {
+      await sock.groupUpdateDescription(jid, description);
+      this.invalidateGroupMetadataCache(instanceId, jid);
+      this.logger.info('Group description updated', { instanceId, groupJid: jid, cleared: !description });
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
+    }
+  }
+
+  /**
+   * Update group settings.
+   */
+  async updateGroupSettings(instanceId: string, groupJid: string, setting: GroupSetting): Promise<void> {
+    await this.humanDelay(instanceId);
+    const sock = this.getSocket(instanceId);
+    const jid = toGroupJid(groupJid);
+
+    try {
+      await sock.groupSettingUpdate(jid, setting);
+      this.invalidateGroupMetadataCache(instanceId, jid);
+      this.logger.info('Group settings updated', { instanceId, groupJid: jid, setting });
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
+    }
+  }
+
+  /**
+   * Leave a group.
+   */
+  async leaveGroup(instanceId: string, groupJid: string): Promise<void> {
+    await this.humanDelay(instanceId);
+    const sock = this.getSocket(instanceId);
+    const jid = toGroupJid(groupJid);
+
+    try {
+      await sock.groupLeave(jid);
+      this.invalidateGroupMetadataCache(instanceId, jid);
+      this.logger.info('Left group', { instanceId, groupJid: jid });
     } catch (error) {
       const waError = mapBaileysError(error);
       throw waError;
