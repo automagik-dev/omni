@@ -298,6 +298,41 @@ export class MessageService {
     return result ?? null;
   }
 
+  /**
+   * Get an outbound message by provider alias captured in raw_payload.
+   *
+   * Gupshup native replies may reference provider-generated ids
+   * (replyContext.id / gsId / internalId) instead of Omni's external_id. When
+   * the send path preserved the provider response, search those aliases before
+   * giving up on quoted-message context.
+   */
+  async findByProviderAlias(chatId: string, aliases: string[]): Promise<Message | null> {
+    const candidates = [
+      ...new Set(
+        aliases.filter((alias) => typeof alias === 'string' && alias.length > 0).map((alias) => alias.slice(0, 255)),
+      ),
+    ].slice(0, 8);
+    if (candidates.length === 0) return null;
+
+    const aliasConditions = candidates.flatMap((alias) => [
+      eq(messages.externalId, alias),
+      sql`${messages.rawPayload}->'gupshupResponse'->>'messageId' = ${alias}`,
+      sql`${messages.rawPayload}->'gupshupResponse'->>'gsId' = ${alias}`,
+      sql`${messages.rawPayload}->'gupshupResponse'->>'id' = ${alias}`,
+      sql`${messages.rawPayload}->'gupshupResponse'->'messageIds' @> ${JSON.stringify([alias])}::jsonb`,
+      sql`${messages.rawPayload}->'gupshupProviderAliases' @> ${JSON.stringify([alias])}::jsonb`,
+    ]);
+
+    const [result] = await this.db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), eq(messages.isFromMe, true), or(...aliasConditions)))
+      .orderBy(desc(messages.platformTimestamp))
+      .limit(1);
+
+    return result ?? null;
+  }
+
   /** Get multiple messages by external IDs in a single query */
   async getByExternalIds(chatId: string, externalIds: string[]): Promise<Message[]> {
     if (externalIds.length === 0) return [];

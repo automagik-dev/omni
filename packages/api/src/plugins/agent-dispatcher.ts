@@ -981,17 +981,51 @@ function getMessageContentText(msg: {
  * Resolve a quoted message into formatted text for the agent.
  * Looks up the referenced message and formats its content.
  */
+type MessageAliasLookup = Services['messages'] & {
+  findByProviderAlias?: (chatId: string, aliases: string[]) => ReturnType<Services['messages']['getByExternalId']>;
+};
+
+function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0))];
+}
+
+async function lookupQuotedMessage(
+  messages: Services['messages'],
+  chatDbId: string,
+  replyToId: string,
+  aliases: string[],
+): ReturnType<Services['messages']['getByExternalId']> {
+  const quoted = await messages.getByExternalId(chatDbId, replyToId);
+  if (quoted) return quoted;
+
+  const candidates = uniqueNonEmpty([replyToId, ...aliases]);
+  const aliasLookup = messages as MessageAliasLookup;
+  if (aliasLookup.findByProviderAlias && candidates.length > 0) {
+    const byAlias = await aliasLookup.findByProviderAlias(chatDbId, candidates);
+    if (byAlias) return byAlias;
+  }
+
+  for (const candidate of candidates) {
+    if (candidate === replyToId) continue;
+    const byExternalId = await messages.getByExternalId(chatDbId, candidate);
+    if (byExternalId) return byExternalId;
+  }
+
+  return null;
+}
+
 export async function resolveQuotedMessage(
   services: Services,
   instanceId: string,
   chatId: string,
   replyToId: string,
+  providerAliases: string[] = [],
 ): Promise<string | null> {
   try {
     const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     if (!chat) return null;
 
-    const quoted = await services.messages.getByExternalId(chat.id, replyToId);
+    const quoted = await lookupQuotedMessage(services.messages, chat.id, replyToId, providerAliases);
     if (!quoted) return null;
 
     const sender = quoted.senderDisplayName ?? quoted.senderPlatformUserId ?? (quoted.isFromMe ? 'You' : 'unknown');
@@ -1129,6 +1163,24 @@ async function collectProcessedMedia(
 /**
  * Resolve quoted messages and prepend context to message texts.
  */
+function extractQuotedProviderAliases(rawPayload: Record<string, unknown> | undefined): string[] {
+  if (!rawPayload) return [];
+
+  const messageObj = isRecord(rawPayload.messageobj) ? rawPayload.messageobj : undefined;
+  const replyContext = isRecord(messageObj?.replyContext) ? messageObj.replyContext : undefined;
+  const rawMessage = isRecord(messageObj?.raw) ? messageObj.raw : undefined;
+  const rawContext = isRecord(rawMessage?.context) ? rawMessage.context : undefined;
+  const topContext = isRecord(rawPayload.context) ? rawPayload.context : undefined;
+
+  return uniqueNonEmpty([
+    replyContext?.internalId as string | undefined,
+    rawContext?.gsId as string | undefined,
+    rawContext?.id as string | undefined,
+    topContext?.gsId as string | undefined,
+    topContext?.id as string | undefined,
+  ]);
+}
+
 async function prependQuotedContext(
   services: Services,
   instanceId: string,
@@ -1141,7 +1193,8 @@ async function prependQuotedContext(
     const replyToId = m.payload.replyToId;
     if (!replyToId) continue;
 
-    const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId);
+    const providerAliases = extractQuotedProviderAliases(m.payload.rawPayload as Record<string, unknown> | undefined);
+    const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId, providerAliases);
     if (!quotedText) continue;
 
     const messageKey = messageKeyByIndex.get(index);

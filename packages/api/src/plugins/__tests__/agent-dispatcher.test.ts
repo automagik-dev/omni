@@ -1585,6 +1585,53 @@ describe('agent-dispatcher', () => {
       } as unknown as import('../../services').Services;
     }
 
+    it('resolves gupshup native reply aliases when replyContext.id is not the outbound external id', async () => {
+      const chatRow = { id: 'chat-db-1', externalId: 'chat-ext-1', chatType: 'dm' };
+      const quotedRow = {
+        externalId: 'omni-outbound-uuid',
+        senderDisplayName: 'You',
+        senderPlatformUserId: 'bot-123',
+        isFromMe: true,
+        platformTimestamp: new Date('2026-06-09T05:49:16Z').getTime(),
+        messageType: 'text',
+        textContent: '*Notrelife SP* com coparticipação parcial',
+        transcription: null,
+        imageDescription: null,
+        videoDescription: null,
+        documentExtraction: null,
+        rawPayload: {
+          gupshupResponse: {
+            messageId: '033ve4XFB8ikDjlsH9KcOI',
+            gsId: 'f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b',
+          },
+        },
+      };
+      const getByExternalId = mock(async (_chatId: string, externalId: string) =>
+        externalId === 'omni-outbound-uuid' ? quotedRow : null,
+      );
+      const findByProviderAlias = mock(async (_chatId: string, aliases: string[]) =>
+        aliases.includes('033ve4XFB8ikDjlsH9KcOI') || aliases.includes('f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b')
+          ? quotedRow
+          : null,
+      );
+      const services = {
+        chats: { findByExternalIdSmart: mock(async () => chatRow) },
+        messages: { getByExternalId, findByProviderAlias },
+      } as unknown as import('../../services').Services;
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', '033ve4XFB8ikDjlsH9KcOI', [
+        'f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b',
+      ]);
+
+      expect(result).not.toBeNull();
+      expect(result).toContain('*Notrelife SP*');
+      expect(getByExternalId).toHaveBeenCalledWith('chat-db-1', '033ve4XFB8ikDjlsH9KcOI');
+      expect(findByProviderAlias).toHaveBeenCalledWith('chat-db-1', [
+        '033ve4XFB8ikDjlsH9KcOI',
+        'f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b',
+      ]);
+    });
+
     it('returns full text when content is under 4000 chars', async () => {
       const content = 'A'.repeat(3999);
       const services = createQuotedMessageServices(content);

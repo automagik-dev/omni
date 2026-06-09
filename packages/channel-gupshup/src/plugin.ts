@@ -75,6 +75,38 @@ interface GupshupInstanceState {
   dedupeCache: DedupeCache;
 }
 
+function extractResponseString(response: GupshupSendResponse, key: string): string | undefined {
+  const value = response[key];
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  return value.slice(0, 255);
+}
+
+function extractGupshupMessageIds(response: GupshupSendResponse): string[] {
+  if (!Array.isArray(response.messageIds)) return [];
+  return response.messageIds
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .map((value) => value.slice(0, 255));
+}
+
+function extractGupshupProviderAliases(response: GupshupSendResponse): string[] {
+  return [
+    extractResponseString(response, 'messageId'),
+    extractResponseString(response, 'gsId'),
+    extractResponseString(response, 'id'),
+    ...extractGupshupMessageIds(response),
+  ].filter((value, index, values): value is string => typeof value === 'string' && values.indexOf(value) === index);
+}
+
+function buildGupshupResponseMetadata(response: GupshupSendResponse): Record<string, unknown> {
+  return {
+    status: extractResponseString(response, 'status'),
+    messageId: extractResponseString(response, 'messageId'),
+    gsId: extractResponseString(response, 'gsId'),
+    id: extractResponseString(response, 'id'),
+    messageIds: extractGupshupMessageIds(response),
+  };
+}
+
 export class GupshupPlugin extends BaseChannelPlugin {
   readonly id = 'gupshup' as ChannelType;
   readonly name = 'Gupshup WhatsApp';
@@ -190,9 +222,11 @@ export class GupshupPlugin extends BaseChannelPlugin {
 
     try {
       const response = await dispatchContent(client, dest, message);
-      // Gupshup doesn't reliably return a messageId — fall back to a UUID so each
-      // sent message gets a unique externalId and is stored as its own DB row.
-      const messageId = typeof response.messageId === 'string' ? response.messageId : crypto.randomUUID();
+      const providerAliases = extractGupshupProviderAliases(response);
+      // Preserve existing externalId semantics: use Gupshup's canonical
+      // messageId when present, otherwise keep Omni's UUID fallback. Other
+      // provider ids remain searchable through rawPayload aliases.
+      const messageId = extractResponseString(response, 'messageId') ?? crypto.randomUUID();
 
       // Journey timing: T11 (platformDeliveredAt) after API responds
       if (correlationId) this.captureT11(correlationId);
@@ -208,6 +242,10 @@ export class GupshupPlugin extends BaseChannelPlugin {
           mediaUrl: content.mediaUrl,
         },
         replyToId: message.replyTo,
+        rawPayload: {
+          gupshupResponse: buildGupshupResponseMetadata(response),
+          gupshupProviderAliases: providerAliases,
+        },
         senderAgentId: message.metadata?.senderAgentId as string | undefined,
       });
 
