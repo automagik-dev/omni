@@ -983,7 +983,17 @@ function getMessageContentText(msg: {
  */
 type MessageAliasLookup = Services['messages'] & {
   findByProviderAlias?: (chatId: string, aliases: string[]) => ReturnType<Services['messages']['getByExternalId']>;
+  findRecentOutboundBefore?: (
+    chatId: string,
+    before: Date,
+    inboundText?: string,
+  ) => ReturnType<Services['messages']['getByExternalId']>;
 };
+
+interface QuotedLookupOptions {
+  inboundAt?: Date;
+  inboundText?: string;
+}
 
 function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0))];
@@ -994,6 +1004,7 @@ async function lookupQuotedMessage(
   chatDbId: string,
   replyToId: string,
   aliases: string[],
+  options: QuotedLookupOptions = {},
 ): ReturnType<Services['messages']['getByExternalId']> {
   const quoted = await messages.getByExternalId(chatDbId, replyToId);
   if (quoted) return quoted;
@@ -1011,6 +1022,11 @@ async function lookupQuotedMessage(
     if (byExternalId) return byExternalId;
   }
 
+  if (options.inboundAt && aliasLookup.findRecentOutboundBefore) {
+    const fallback = await aliasLookup.findRecentOutboundBefore(chatDbId, options.inboundAt, options.inboundText);
+    if (fallback) return fallback;
+  }
+
   return null;
 }
 
@@ -1020,12 +1036,13 @@ export async function resolveQuotedMessage(
   chatId: string,
   replyToId: string,
   providerAliases: string[] = [],
+  options: QuotedLookupOptions = {},
 ): Promise<string | null> {
   try {
     const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     if (!chat) return null;
 
-    const quoted = await lookupQuotedMessage(services.messages, chat.id, replyToId, providerAliases);
+    const quoted = await lookupQuotedMessage(services.messages, chat.id, replyToId, providerAliases, options);
     if (!quoted) return null;
 
     const sender = quoted.senderDisplayName ?? quoted.senderPlatformUserId ?? (quoted.isFromMe ? 'You' : 'unknown');
@@ -1181,6 +1198,16 @@ function extractQuotedProviderAliases(rawPayload: Record<string, unknown> | unde
   ]);
 }
 
+function extractInboundPlatformDate(rawPayload: Record<string, unknown> | undefined): Date | undefined {
+  if (!rawPayload) return undefined;
+  const messageObj = isRecord(rawPayload.messageobj) ? rawPayload.messageobj : undefined;
+  const timestamp = messageObj?.timestamp;
+  if (typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 0) {
+    return new Date(timestamp * 1000);
+  }
+  return undefined;
+}
+
 async function prependQuotedContext(
   services: Services,
   instanceId: string,
@@ -1193,8 +1220,12 @@ async function prependQuotedContext(
     const replyToId = m.payload.replyToId;
     if (!replyToId) continue;
 
-    const providerAliases = extractQuotedProviderAliases(m.payload.rawPayload as Record<string, unknown> | undefined);
-    const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId, providerAliases);
+    const rawPayload = m.payload.rawPayload as Record<string, unknown> | undefined;
+    const providerAliases = extractQuotedProviderAliases(rawPayload);
+    const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId, providerAliases, {
+      inboundAt: extractInboundPlatformDate(rawPayload),
+      inboundText: m.payload.content?.text,
+    });
     if (!quotedText) continue;
 
     const messageKey = messageKeyByIndex.get(index);
