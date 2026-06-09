@@ -333,6 +333,51 @@ export class MessageService {
     return result ?? null;
   }
 
+  /**
+   * Best-effort fallback for providers that expose native reply ids on inbound
+   * replies but do not return those ids on outbound sends. This is deliberately
+   * scoped to recent outbound bot messages in the same chat and is used only
+   * after exact external-id and provider-alias lookup fail.
+   */
+  async findRecentOutboundBefore(chatId: string, before: Date, inboundText?: string): Promise<Message | null> {
+    const rows = await this.db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.chatId, chatId),
+          eq(messages.isFromMe, true),
+          lte(messages.platformTimestamp, before),
+          sql`${messages.deletedAt} IS NULL`,
+        ),
+      )
+      .orderBy(desc(messages.platformTimestamp))
+      .limit(8);
+
+    if (rows.length === 0) return null;
+
+    const hint = (inboundText ?? '').toLocaleLowerCase('pt-BR');
+    const wantsPlanLikeTarget = /\b(esse|essa|este|esta|op[cç][aã]o|plano|quero|gostei)\b/i.test(hint);
+    if (!wantsPlanLikeTarget) return rows[0] ?? null;
+
+    const score = (message: Message): number => {
+      const text = (message.textContent ?? '').toLocaleLowerCase('pt-BR');
+      let value = 0;
+      if (/op[cç][aã]o|plano/.test(text)) value += 4;
+      if (/r\$|mensal|coparticipa|enfermaria|apartamento|ambulatorial|notrelife|hapvida/.test(text)) value += 3;
+      if (/\?\s*$/.test(text) && !/r\$/.test(text)) value -= 2;
+      return value;
+    };
+
+    return (
+      rows
+        .map((message) => ({ message, score: score(message) }))
+        .sort(
+          (a, b) => b.score - a.score || b.message.platformTimestamp.getTime() - a.message.platformTimestamp.getTime(),
+        )[0]?.message ?? null
+    );
+  }
+
   /** Get multiple messages by external IDs in a single query */
   async getByExternalIds(chatId: string, externalIds: string[]): Promise<Message[]> {
     if (externalIds.length === 0) return [];
