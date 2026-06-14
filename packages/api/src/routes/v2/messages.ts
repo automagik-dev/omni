@@ -533,6 +533,21 @@ const sendMediaSchema = z.object({
   threadId: z.string().optional().describe('Thread/topic ID (e.g. Telegram forum topic)'),
 });
 
+function normalizeSendMediaMimeType(data: z.infer<typeof sendMediaSchema>): string {
+  const inferred = data.mimeType ?? inferMediaMimeType(data.type, data.filename);
+  if (data.type === 'audio' && data.voiceNote === true && inferred === 'audio/ogg') {
+    return 'audio/ogg; codecs=opus';
+  }
+  return inferred;
+}
+
+function buildSendMediaMetadata(data: z.infer<typeof sendMediaSchema>): Record<string, unknown> {
+  if (data.type === 'audio' && data.voiceNote === true && data.base64) {
+    return { audioBuffer: Buffer.from(data.base64, 'base64'), ptt: true };
+  }
+  return { base64: data.base64, ptt: data.voiceNote };
+}
+
 // Send reaction schema
 const sendReactionSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID'),
@@ -1147,7 +1162,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   // Resolve recipient (handles person ID to platform ID resolution)
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
-  const mediaMimeType = data.mimeType ?? inferMediaMimeType(data.type, data.filename);
+  const mediaMimeType = normalizeSendMediaMimeType(data);
 
   // Build outgoing message
   const outgoingMessage: OutgoingMessage = {
@@ -1160,11 +1175,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
       filename: data.filename,
       mimeType: mediaMimeType,
     } as OutgoingContent,
-    metadata: {
-      base64: data.base64,
-      // WhatsApp uses 'ptt' (push-to-talk) flag for voice notes
-      ptt: data.voiceNote,
-    },
+    metadata: buildSendMediaMetadata(data),
   };
 
   // T8: API processed the send request

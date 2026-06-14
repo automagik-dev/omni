@@ -69,7 +69,7 @@ export const appRouter = t.router({
           channel: ChannelTypeSchema,
           agentProviderId: z.string().uuid().optional(),
           agentId: z.string().max(255).default('default'),
-          agentTimeout: z.number().int().positive().default(60),
+          agentTimeout: z.number().int().positive().default(600),
           agentStreamMode: z.boolean().default(false),
           isDefault: z.boolean().default(false),
         }),
@@ -336,7 +336,7 @@ export const appRouter = t.router({
           apiKey: z.string().optional(),
           schemaConfig: z.record(z.string(), z.unknown()).optional(),
           defaultStream: z.boolean().default(true),
-          defaultTimeout: z.number().int().positive().default(60),
+          defaultTimeout: z.number().int().positive().default(600),
         }),
       )
       .mutation(async ({ ctx, input }) => {

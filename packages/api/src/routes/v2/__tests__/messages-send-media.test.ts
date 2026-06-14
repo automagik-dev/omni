@@ -67,4 +67,44 @@ describe('POST /messages/send/media', () => {
       },
     });
   });
+
+  test('forwards WhatsApp voice-note audio as audioBuffer instead of base64', async () => {
+    const sendMessage = mock(async (_instanceId: string, _message: unknown) => ({
+      success: true,
+      messageId: 'VOICE-MSG-ID',
+      timestamp: 123,
+    }));
+    const app = mountMessagesRoutes(sendMessage);
+    const audio = Buffer.from('ogg-opus-bytes');
+
+    const res = await app.request('/messages/send/media', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        instanceId: '11111111-1111-4111-8111-111111111111',
+        to: '5511999999999@s.whatsapp.net',
+        type: 'audio',
+        base64: audio.toString('base64'),
+        filename: 'voice.ogg',
+        voiceNote: true,
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const message = sendMessage.mock.calls[0]?.[1] as { metadata?: Record<string, unknown> };
+    expect(message).toMatchObject({
+      content: {
+        type: 'audio',
+        filename: 'voice.ogg',
+        mimeType: 'audio/ogg; codecs=opus',
+      },
+      metadata: {
+        ptt: true,
+      },
+    });
+    expect(message.metadata?.base64).toBeUndefined();
+    expect(Buffer.isBuffer(message.metadata?.audioBuffer)).toBe(true);
+    expect((message.metadata?.audioBuffer as Buffer).equals(audio)).toBe(true);
+  });
 });

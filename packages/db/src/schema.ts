@@ -288,7 +288,7 @@ export const agentProviders = pgTable(
 
     // Default settings
     defaultStream: boolean('default_stream').notNull().default(true),
-    defaultTimeout: integer('default_timeout').notNull().default(60),
+    defaultTimeout: integer('default_timeout').notNull().default(600),
 
     // Capabilities (auto-detected or manually set)
     supportsStreaming: boolean('supports_streaming').notNull().default(true),
@@ -690,7 +690,7 @@ export const instances = pgTable(
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
 
     // ---- Agent Configuration (Instance Override) ----
-    agentTimeout: integer('agent_timeout').notNull().default(60),
+    agentTimeout: integer('agent_timeout').notNull().default(600),
     agentStreamMode: boolean('agent_stream_mode').notNull().default(false),
     /** When agent should reply to messages */
     agentReplyFilter: jsonb('agent_reply_filter').$type<AgentReplyFilter>(),

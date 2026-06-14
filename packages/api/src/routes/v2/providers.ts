@@ -48,7 +48,7 @@ const providerBaseSchema = z.object({
         'Note: apiKey in schemaConfig overrides the provider-level apiKey.',
     ),
   defaultStream: z.boolean().default(true).describe('Default streaming setting'),
-  defaultTimeout: z.number().int().positive().default(60).describe('Default timeout in seconds'),
+  defaultTimeout: z.number().int().positive().default(600).describe('Default timeout in seconds'),
   supportsStreaming: z.boolean().default(true).describe('Provider supports streaming'),
   supportsImages: z
     .boolean()
@@ -211,7 +211,7 @@ providersRoutes.get('/:id/agents', async (c) => {
   const client = createAgnoClient({
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   const allEntries = (await client.discover?.()) ?? [];
@@ -240,7 +240,7 @@ providersRoutes.get('/:id/teams', async (c) => {
   const client = createAgnoClient({
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   const allEntries = (await client.discover?.()) ?? [];
@@ -269,7 +269,7 @@ providersRoutes.get('/:id/workflows', async (c) => {
   const client = createAgnoClient({
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   const allEntries = (await client.discover?.()) ?? [];

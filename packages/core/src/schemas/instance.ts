@@ -58,7 +58,7 @@ export const CreateAgentProviderSchema = z.object({
   apiKey: z.string().optional(),
   schemaConfig: MetadataSchema.optional(),
   defaultStream: z.boolean().default(true),
-  defaultTimeout: z.number().int().positive().default(60),
+  defaultTimeout: z.number().int().positive().default(600),
   supportsStreaming: z.boolean().default(true),
   supportsImages: z.boolean().default(false),
   supportsAudio: z.boolean().default(false),
@@ -151,7 +151,7 @@ export const CreateInstanceSchema = z.object({
   name: z.string().max(255),
   channel: ChannelTypeSchema,
   agentId: z.string().uuid().nullable().optional(),
-  agentTimeout: z.number().int().positive().default(60),
+  agentTimeout: z.number().int().positive().default(600),
   agentStreamMode: z.boolean().default(false),
   isDefault: z.boolean().default(false),
 });

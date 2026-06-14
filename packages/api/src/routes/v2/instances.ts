@@ -3,7 +3,7 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
+import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
 import type { SyncJobType } from '@omni/db';
 import { Hono } from 'hono';
@@ -57,7 +57,7 @@ const createInstanceSchema = z.object({
   name: z.string().min(1).max(255).describe('Unique name for the instance'),
   channel: ChannelTypeSchema.describe('Channel type (e.g., whatsapp-baileys, discord)'),
   agentId: z.string().uuid().nullable().optional().describe('Agent UUID referencing agents table'),
-  agentTimeout: z.number().int().positive().default(60).describe('Agent timeout in seconds'),
+  agentTimeout: z.number().int().positive().default(600).describe('Agent timeout in seconds'),
   agentStreamMode: z.boolean().default(false).describe('Enable streaming responses'),
   agentReplyFilter: agentReplyFilterSchema.optional().nullable().describe('When agent should reply'),
   agentSessionStrategy: z
@@ -2357,6 +2357,71 @@ instancesRoutes.delete('/:id/profile/picture', instanceAccess, async (c) => {
   }
 });
 
+const groupParticipantActionSchema = z.enum(['add', 'remove', 'promote', 'demote']);
+const groupSettingSchema = z.enum(['announcement', 'not_announcement', 'locked', 'unlocked']);
+
+const groupParticipantsSchema = z.object({
+  participants: z.array(z.string().min(1)).min(1).describe('Phone numbers or JIDs to mutate'),
+});
+
+const groupParticipantsPatchSchema = groupParticipantsSchema.extend({
+  action: groupParticipantActionSchema.describe('Participant mutation action'),
+});
+
+const updateGroupSubjectSchema = z.object({
+  subject: z.string().min(1).max(100).describe('New group name/subject'),
+});
+
+const updateGroupDescriptionSchema = z.object({
+  description: z.string().max(2048).describe('New group description. Empty string clears the description.'),
+});
+
+const updateGroupSettingsSchema = z.object({
+  setting: groupSettingSchema.describe('Group setting to apply'),
+});
+
+const patchGroupSchema = z
+  .object({
+    subject: z.string().min(1).max(100).optional(),
+    description: z.string().max(2048).optional(),
+    setting: groupSettingSchema.optional(),
+  })
+  .refine((value) => value.subject !== undefined || value.description !== undefined || value.setting !== undefined, {
+    message: 'At least one of subject, description, or setting is required',
+  });
+
+async function resolveInstancePlugin(
+  services: Services,
+  channelRegistry: ChannelRegistry | null | undefined,
+  instanceId: string,
+): Promise<
+  { ok: true; plugin: ChannelPlugin } | { ok: false; status: 400 | 503; error: { code: string; message: string } }
+> {
+  const instance = await services.instances.getById(instanceId);
+
+  if (!channelRegistry) {
+    return { ok: false, status: 503, error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } };
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin) {
+    return {
+      ok: false,
+      status: 400,
+      error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` },
+    };
+  }
+
+  return { ok: true, plugin };
+}
+
+function participantUpdateResponse(result: GroupParticipantUpdateResult) {
+  return {
+    ...result,
+    changedCount: result.participants.length,
+  };
+}
+
 // ============================================================================
 // Group Create
 // ============================================================================
@@ -2410,6 +2475,342 @@ instancesRoutes.post(
     return c.json({ data: result }, 201);
   },
 );
+
+// ============================================================================
+// Group Participant Mutations
+// ============================================================================
+
+/**
+ * POST /instances/:id/groups/:groupJid/participants - Add participants to a group
+ */
+instancesRoutes.post(
+  '/:id/groups/:groupJid/participants',
+  instanceAccess,
+  zValidator('json', groupParticipantsSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { participants } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupParticipants !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group participant updates' } },
+        400,
+      );
+    }
+
+    try {
+      const result = await resolved.plugin.updateGroupParticipants(id, groupJid, participants, 'add');
+      return c.json({ success: true, data: participantUpdateResponse(result) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_PARTICIPANTS_UPDATE_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * POST /instances/:id/groups/:groupJid/participants/:action - Remove/promote/demote participants
+ */
+instancesRoutes.post(
+  '/:id/groups/:groupJid/participants/:action',
+  instanceAccess,
+  zValidator('json', groupParticipantsSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const parsedAction = groupParticipantActionSchema.safeParse(c.req.param('action'));
+    const { participants } = c.req.valid('json');
+
+    if (!parsedAction.success) {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Invalid group participant action. Expected add, remove, promote, or demote.',
+          },
+        },
+        400,
+      );
+    }
+
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupParticipants !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group participant updates' } },
+        400,
+      );
+    }
+
+    try {
+      const result = await resolved.plugin.updateGroupParticipants(id, groupJid, participants, parsedAction.data);
+      return c.json({ success: true, data: participantUpdateResponse(result) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_PARTICIPANTS_UPDATE_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * PATCH /instances/:id/groups/:groupJid/participants - Mutate participants with body.action
+ */
+instancesRoutes.patch(
+  '/:id/groups/:groupJid/participants',
+  instanceAccess,
+  zValidator('json', groupParticipantsPatchSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { action, participants } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupParticipants !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group participant updates' } },
+        400,
+      );
+    }
+
+    try {
+      const result = await resolved.plugin.updateGroupParticipants(id, groupJid, participants, action);
+      return c.json({ success: true, data: participantUpdateResponse(result) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_PARTICIPANTS_UPDATE_FAILED', message } }, 500);
+    }
+  },
+);
+
+// ============================================================================
+// Group Metadata Mutations
+// ============================================================================
+
+/**
+ * PATCH /instances/:id/groups/:groupJid - Update group subject, description, or settings
+ */
+instancesRoutes.patch('/:id/groups/:groupJid', instanceAccess, zValidator('json', patchGroupSchema), async (c) => {
+  const id = c.req.param('id');
+  const groupJid = c.req.param('groupJid');
+  const body = c.req.valid('json');
+  const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+  if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+  if (body.subject !== undefined && typeof resolved.plugin.updateGroupSubject !== 'function') {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group rename' } }, 400);
+  }
+  if (body.description !== undefined && typeof resolved.plugin.updateGroupDescription !== 'function') {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group description updates' } },
+      400,
+    );
+  }
+  if (body.setting !== undefined && typeof resolved.plugin.updateGroupSettings !== 'function') {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group settings updates' } }, 400);
+  }
+
+  try {
+    const updated: string[] = [];
+    if (body.subject !== undefined) {
+      await resolved.plugin.updateGroupSubject?.(id, groupJid, body.subject);
+      updated.push('subject');
+    }
+    if (body.description !== undefined) {
+      await resolved.plugin.updateGroupDescription?.(id, groupJid, body.description);
+      updated.push('description');
+    }
+    if (body.setting !== undefined) {
+      await resolved.plugin.updateGroupSettings?.(id, groupJid, body.setting);
+      updated.push('settings');
+    }
+
+    return c.json({ success: true, data: { instanceId: id, groupJid, updated, ...body } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: { code: 'GROUP_UPDATE_FAILED', message } }, 500);
+  }
+});
+
+/**
+ * PUT /instances/:id/groups/:groupJid/subject - Rename a group
+ */
+instancesRoutes.put(
+  '/:id/groups/:groupJid/subject',
+  instanceAccess,
+  zValidator('json', updateGroupSubjectSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { subject } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupSubject !== 'function') {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group rename' } }, 400);
+    }
+
+    try {
+      await resolved.plugin.updateGroupSubject(id, groupJid, subject);
+      return c.json({ success: true, data: { instanceId: id, groupJid, subject, action: 'group_subject_updated' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_RENAME_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * POST /instances/:id/groups/:groupJid/subject - Rename a group
+ */
+instancesRoutes.post(
+  '/:id/groups/:groupJid/subject',
+  instanceAccess,
+  zValidator('json', updateGroupSubjectSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { subject } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupSubject !== 'function') {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group rename' } }, 400);
+    }
+
+    try {
+      await resolved.plugin.updateGroupSubject(id, groupJid, subject);
+      return c.json({ success: true, data: { instanceId: id, groupJid, subject, action: 'group_subject_updated' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_RENAME_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * PUT /instances/:id/groups/:groupJid/description - Set or clear group description
+ */
+instancesRoutes.put(
+  '/:id/groups/:groupJid/description',
+  instanceAccess,
+  zValidator('json', updateGroupDescriptionSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { description } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupDescription !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group description updates' } },
+        400,
+      );
+    }
+
+    try {
+      await resolved.plugin.updateGroupDescription(id, groupJid, description);
+      return c.json({
+        success: true,
+        data: { instanceId: id, groupJid, description, action: 'group_description_updated' },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_DESCRIPTION_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * POST /instances/:id/groups/:groupJid/description - Set or clear group description
+ */
+instancesRoutes.post(
+  '/:id/groups/:groupJid/description',
+  instanceAccess,
+  zValidator('json', updateGroupDescriptionSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { description } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupDescription !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group description updates' } },
+        400,
+      );
+    }
+
+    try {
+      await resolved.plugin.updateGroupDescription(id, groupJid, description);
+      return c.json({
+        success: true,
+        data: { instanceId: id, groupJid, description, action: 'group_description_updated' },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_DESCRIPTION_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * POST /instances/:id/groups/:groupJid/settings - Update group settings
+ */
+instancesRoutes.post(
+  '/:id/groups/:groupJid/settings',
+  instanceAccess,
+  zValidator('json', updateGroupSettingsSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { setting } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupSettings !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group settings updates' } },
+        400,
+      );
+    }
+
+    try {
+      await resolved.plugin.updateGroupSettings(id, groupJid, setting);
+      return c.json({ success: true, data: { instanceId: id, groupJid, setting, action: 'group_settings_updated' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_SETTINGS_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * POST /instances/:id/groups/:groupJid/leave - Leave a group
+ */
+instancesRoutes.post('/:id/groups/:groupJid/leave', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const groupJid = c.req.param('groupJid');
+  const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+  if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+  if (typeof resolved.plugin.leaveGroup !== 'function') {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support leaving groups' } }, 400);
+  }
+
+  try {
+    await resolved.plugin.leaveGroup(id, groupJid);
+    return c.json({ success: true, data: { instanceId: id, groupJid, left: true } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: { code: 'GROUP_LEAVE_FAILED', message } }, 500);
+  }
+});
 
 // ============================================================================
 // C3: Group Invite Links

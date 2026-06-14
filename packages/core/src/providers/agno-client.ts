@@ -17,6 +17,7 @@ import {
   ProviderError,
   type ProviderRequest,
   type ProviderResponse,
+  type SessionDeleteResult,
   type StreamChunk,
 } from './types';
 
@@ -519,7 +520,7 @@ export class AgnoClient implements IAgentClient {
 
   // --- Session Management ---
 
-  async deleteSession(sessionId: string): Promise<void> {
+  async deleteSession(sessionId: string): Promise<SessionDeleteResult> {
     const url = `${this.baseUrl}/sessions/${encodeURIComponent(sessionId)}`;
     const response = await this.fetchWithTimeout(
       url,
@@ -527,9 +528,15 @@ export class AgnoClient implements IAgentClient {
       this.defaultTimeoutMs,
     );
 
+    if (response.status === 404) {
+      return { ok: true, status: response.status, sessionId, existed: false };
+    }
+
     if (!response.ok) {
       this.handleErrorResponse(response, `deleting session ${sessionId}`);
     }
+
+    return { ok: true, status: response.status, sessionId, existed: true };
   }
 }
 

@@ -324,6 +324,45 @@ function createReactionEvent(overrides: Record<string, unknown> = {}) {
 // ============================================================================
 
 describe('agent-dispatcher', () => {
+  describe('human lifecycle observability helpers', () => {
+    it('builds redacted-readable lifecycle attributes without raw PII or secrets', () => {
+      const attributes = __test__.buildLifecycleSpanAttributes({
+        stage: 'provider_inbound',
+        eventType: 'user_message_turn',
+        channel: 'whatsapp-baileys',
+        provider: 'gupshup',
+        instanceId: 'inst-1',
+        chatId: '5511999887766@s.whatsapp.net',
+        sessionId: 'p0r-hml-20260531T204449Z',
+        traceId: 'trc-test-123',
+        messageId: 'wamid.123',
+        agentId: 'eugenia-seller',
+        inputText: 'Olá, meu telefone é 5511999887766 e email felipe@example.com. Quero cotar plano.',
+        outputText: 'Claro, posso ajudar com a cotação.',
+        extra: {
+          authorization: 'Bearer super-secret-token',
+          token: 'abc123',
+        },
+      });
+
+      expect(attributes['khal.lifecycle.stage']).toBe('provider_inbound');
+      expect(attributes['khal.event_type']).toBe('user_message_turn');
+      expect(attributes['khal.channel']).toBe('whatsapp-baileys');
+      expect(attributes['khal.provider']).toBe('gupshup');
+      expect(attributes['langfuse.session.id']).toBe('p0r-hml-20260531T204449Z');
+      expect(attributes['session.id']).toBe('p0r-hml-20260531T204449Z');
+      expect(attributes['khal.input_chars']).toBeGreaterThan(0);
+      expect(String(attributes['khal.input_sha256'])).toStartWith('sha256:');
+      expect(String(attributes['khal.output_sha256'])).toStartWith('sha256:');
+      expect(String(attributes['khal.input_preview_redacted'])).toContain('[PHONE]');
+      expect(String(attributes['khal.input_preview_redacted'])).toContain('[EMAIL]');
+      expect(JSON.stringify(attributes)).not.toContain('felipe@example.com');
+      expect(JSON.stringify(attributes)).not.toContain('5511999887766');
+      expect(JSON.stringify(attributes)).not.toContain('super-secret-token');
+      expect(JSON.stringify(attributes)).not.toContain('abc123');
+    });
+  });
+
   // ======================================================================
   // setupAgentDispatcher — subscribes to correct NATS subjects
   // ======================================================================
@@ -1546,6 +1585,98 @@ describe('agent-dispatcher', () => {
       } as unknown as import('../../services').Services;
     }
 
+    it('resolves gupshup native reply aliases when replyContext.id is not the outbound external id', async () => {
+      const chatRow = { id: 'chat-db-1', externalId: 'chat-ext-1', chatType: 'dm' };
+      const quotedRow = {
+        externalId: 'omni-outbound-uuid',
+        senderDisplayName: 'You',
+        senderPlatformUserId: 'bot-123',
+        isFromMe: true,
+        platformTimestamp: new Date('2026-06-09T05:49:16Z').getTime(),
+        messageType: 'text',
+        textContent: '*Notrelife SP* com coparticipação parcial',
+        transcription: null,
+        imageDescription: null,
+        videoDescription: null,
+        documentExtraction: null,
+        rawPayload: {
+          gupshupResponse: {
+            messageId: '033ve4XFB8ikDjlsH9KcOI',
+            gsId: 'f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b',
+          },
+        },
+      };
+      const getByExternalId = mock(async (_chatId: string, externalId: string) =>
+        externalId === 'omni-outbound-uuid' ? quotedRow : null,
+      );
+      const findByProviderAlias = mock(async (_chatId: string, aliases: string[]) =>
+        aliases.includes('033ve4XFB8ikDjlsH9KcOI') || aliases.includes('f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b')
+          ? quotedRow
+          : null,
+      );
+      const services = {
+        chats: { findByExternalIdSmart: mock(async () => chatRow) },
+        messages: { getByExternalId, findByProviderAlias },
+      } as unknown as import('../../services').Services;
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', '033ve4XFB8ikDjlsH9KcOI', [
+        'f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b',
+      ]);
+
+      expect(result).not.toBeNull();
+      expect(result).toContain('*Notrelife SP*');
+      expect(getByExternalId).toHaveBeenCalledWith('chat-db-1', '033ve4XFB8ikDjlsH9KcOI');
+      expect(findByProviderAlias).toHaveBeenCalledWith('chat-db-1', [
+        '033ve4XFB8ikDjlsH9KcOI',
+        'f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b',
+      ]);
+    });
+
+    it('falls back to the latest outbound bot message before the inbound native reply when Gupshup returns no provider aliases', async () => {
+      const chatRow = { id: 'chat-db-1', externalId: 'chat-ext-1', chatType: 'dm' };
+      const quotedRow = {
+        externalId: 'omni-outbound-uuid',
+        senderDisplayName: 'Eugenia',
+        senderPlatformUserId: 'bot-123',
+        isFromMe: true,
+        platformTimestamp: new Date('2026-06-09T13:13:22Z').getTime(),
+        messageType: 'text',
+        textContent: '**Opção 2, Nosso Plano Completo Enfermaria** R$ 182,47/mês',
+        transcription: null,
+        imageDescription: null,
+        videoDescription: null,
+        documentExtraction: null,
+      };
+      const findRecentOutboundBefore = mock(async (_chatId: string, before: Date, _hint?: string) =>
+        before.toISOString() === '2026-06-09T13:13:55.000Z' ? quotedRow : null,
+      );
+      const services = {
+        chats: { findByExternalIdSmart: mock(async () => chatRow) },
+        messages: {
+          getByExternalId: mock(async () => null),
+          findByProviderAlias: mock(async () => null),
+          findRecentOutboundBefore,
+        },
+      } as unknown as import('../../services').Services;
+
+      const result = await resolveQuotedMessage(
+        services,
+        'inst-1',
+        'chat-ext-1',
+        '033voYFyV6Txceb45MFW7k',
+        ['ddbf1157-be24-4176-a1f8-9f679a26a39c'],
+        { inboundAt: new Date('2026-06-09T13:13:55Z'), inboundText: 'quero esse' },
+      );
+
+      expect(result).not.toBeNull();
+      expect(result).toContain('Opção 2');
+      expect(findRecentOutboundBefore).toHaveBeenCalledWith(
+        'chat-db-1',
+        new Date('2026-06-09T13:13:55Z'),
+        'quero esse',
+      );
+    });
+
     it('returns full text when content is under 4000 chars', async () => {
       const content = 'A'.repeat(3999);
       const services = createQuotedMessageServices(content);
@@ -1688,6 +1819,46 @@ describe('agent-dispatcher', () => {
         customerId: 'stored-cust-1',
         organizationId: 'remote-org-1',
       });
+    });
+  });
+
+  // ======================================================================
+  // KHAL session correlation
+  // ======================================================================
+  describe('KHAL session correlation', () => {
+    it('extracts an explicit KHAL session id from rawPayload and mirrors it into trigger headers', () => {
+      const messages = [
+        {
+          payload: {
+            rawPayload: {
+              khalSessionId: ' khal-session-123 ',
+            },
+          },
+        },
+      ] as any;
+
+      const sessionId = __test__.extractKhalSessionId(messages);
+
+      expect(sessionId).toBe('khal-session-123');
+      expect(__test__.buildTriggerHeaders(sessionId!)).toEqual({ 'x-khal-session-id': 'khal-session-123' });
+    });
+
+    it('extracts KHAL session id from inbound rawPayload headers', () => {
+      const messages = [
+        {
+          payload: {
+            rawPayload: {
+              headers: { 'x-khal-session-id': 'khal-header-session' },
+            },
+          },
+        },
+      ] as any;
+
+      expect(__test__.extractKhalSessionId(messages)).toBe('khal-header-session');
+    });
+
+    it('does not build a KHAL header for computed fallback sessions', () => {
+      expect(__test__.buildTriggerHeaders(undefined)).toBeUndefined();
     });
   });
 

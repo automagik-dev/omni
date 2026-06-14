@@ -1,32 +1,37 @@
 /**
- * Tests for root-level /health redirect (#335)
+ * Tests for root-level /health
  *
  * External health checkers (k8s probes, genie providers) hit GET /health
- * which should redirect to /api/v2/health.
+ * and should receive the same JSON health payload as /api/v2/health.
  */
 
 import { describe, expect, test } from 'bun:test';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 
-describe('GET /health redirect', () => {
+describe('GET /health', () => {
   function createTestApp() {
     const app = new Hono();
+    const healthPayload = { status: 'healthy' };
 
-    // Root-level health redirect (mirrors app.ts)
-    app.get('/health', (c) => c.redirect('/api/v2/health', 307));
+    // Root-level health response (mirrors app.ts)
+    app.get('/health', (c: Context) => c.json(healthPayload));
 
     // Stub /api/v2/health so we can verify it still works
-    app.get('/api/v2/health', (c) => c.json({ status: 'healthy' }));
+    app.get('/api/v2/health', (c: Context) => c.json(healthPayload));
 
     return app;
   }
 
-  test('GET /health returns 307 redirect to /api/v2/health', async () => {
+  test('GET /health returns 200 JSON directly', async () => {
     const app = createTestApp();
     const res = await app.request('/health', { redirect: 'manual' });
 
-    expect(res.status).toBe(307);
-    expect(res.headers.get('Location')).toBe('/api/v2/health');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Location')).toBeNull();
+    expect(res.headers.get('content-type')).toContain('application/json');
+
+    const body = (await res.json()) as { status: string };
+    expect(body.status).toBe('healthy');
   });
 
   test('GET /api/v2/health still returns 200', async () => {
