@@ -117,18 +117,23 @@ describe('pinManifestEntry', () => {
     expect(readFileSync(path, 'utf-8')).toBe(before);
   });
 
-  test('readonly directory → false (no crash, manifest preserved)', () => {
-    const dir = join(tmp, 'locked');
-    mkdirSync(dir);
-    const path = join(dir, 'package.json');
-    writeFileSync(path, JSON.stringify({ dependencies: { '@automagik/omni': '^2.260430.10' } }));
-    require('node:fs').chmodSync(dir, 0o500);
-    try {
-      const changed = pinManifestEntry(path, '2.260430.10');
-      // Atomic-rename failed; the manifest stays as-is.
-      expect(changed).toBe(false);
-    } finally {
-      require('node:fs').chmodSync(dir, 0o755);
-    }
-  });
+  // Skipped under root: the superuser bypasses filesystem permission bits, so a
+  // 0o500 dir is still writable and the "atomic-rename fails" path can't trigger.
+  test.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+    'readonly directory → false (no crash, manifest preserved)',
+    () => {
+      const dir = join(tmp, 'locked');
+      mkdirSync(dir);
+      const path = join(dir, 'package.json');
+      writeFileSync(path, JSON.stringify({ dependencies: { '@automagik/omni': '^2.260430.10' } }));
+      require('node:fs').chmodSync(dir, 0o500);
+      try {
+        const changed = pinManifestEntry(path, '2.260430.10');
+        // Atomic-rename failed; the manifest stays as-is.
+        expect(changed).toBe(false);
+      } finally {
+        require('node:fs').chmodSync(dir, 0o755);
+      }
+    },
+  );
 });
