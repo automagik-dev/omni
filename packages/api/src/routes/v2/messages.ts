@@ -2213,15 +2213,51 @@ const sendPresenceSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID to send from'),
   to: z.string().min(1).describe('Chat ID to show presence in'),
   type: z.enum(['typing', 'recording', 'paused']).describe('Presence type'),
+  threadId: z.string().min(1).optional().describe('Thread timestamp/id for thread-scoped presence surfaces'),
+  status: z.string().min(1).max(100).optional().describe('Custom status text for channels that support it'),
+  loadingMessages: z
+    .array(z.string().min(1).max(100))
+    .max(10)
+    .optional()
+    .describe('Rotating loading messages for channels that support them'),
   duration: z
     .number()
     .int()
     .min(0)
     .max(30000)
     .optional()
-    .default(5000)
-    .describe('Duration in ms before auto-pause (default 5000, 0 = until paused)'),
+    .describe('Duration in ms before auto-pause; omit for channel default, 0 = until paused'),
 });
+
+type SendPresenceInput = z.infer<typeof sendPresenceSchema>;
+
+type PresenceStatusResult = {
+  delivered?: boolean;
+  method?: string;
+  threadId?: string;
+  status?: string;
+  loadingMessages?: string[];
+  reason?: string;
+};
+
+type PresenceStatusSender = {
+  sendPresenceStatus: (
+    instanceId: string,
+    chatId: string,
+    type: SendPresenceInput['type'],
+    duration?: number,
+    options?: { threadId?: string; status?: string; loadingMessages?: string[] },
+  ) => Promise<PresenceStatusResult | undefined>;
+};
+
+function hasPresenceStatusSender(plugin: unknown): plugin is PresenceStatusSender {
+  return (
+    typeof plugin === 'object' &&
+    plugin !== null &&
+    'sendPresenceStatus' in plugin &&
+    typeof (plugin as { sendPresenceStatus?: unknown }).sendPresenceStatus === 'function'
+  );
+}
 
 /**
  * POST /messages/send/presence - Send presence indicator (typing, recording)
@@ -2229,42 +2265,55 @@ const sendPresenceSchema = z.object({
  * Shows typing/recording indicator in a chat. Auto-pauses after duration.
  * - WhatsApp: supports typing, recording, paused
  * - Discord: supports typing only (recording/paused treated as typing)
+ * - Slack: supports AI Assistant thread status via assistant.threads.setStatus
  */
 messagesRoutes.post('/send/presence', zValidator('json', sendPresenceSchema), async (c) => {
-  const { instanceId, to, type, duration } = c.req.valid('json');
+  const { instanceId, to, type, duration, threadId, status, loadingMessages } = c.req.valid('json');
   const services = c.get('services');
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
-  const { instance, plugin } = await getPluginForInstance(
-    services,
-    c.get('channelRegistry'),
-    instanceId,
-    'canSendTyping',
-  );
+  const { instance, plugin } = await getPluginForInstance(services, c.get('channelRegistry'), instanceId);
 
   // Resolve recipient (handles person ID to platform ID resolution)
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
 
-  // Check if plugin has sendTyping method
-  if (!('sendTyping' in plugin) || typeof plugin.sendTyping !== 'function') {
+  const canSendNativeTyping = plugin.capabilities.canSendTyping === true;
+  const canSendThreadStatus = hasPresenceStatusSender(plugin);
+
+  if (!canSendNativeTyping && !canSendThreadStatus) {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
-      message: `Channel ${instance.channel} plugin does not implement sendTyping`,
+      message: `Channel ${instance.channel} does not support typing indicators or thread status`,
       context: { channelType: instance.channel },
       recoverable: false,
     });
   }
 
-  // For paused type, send with 0 duration to immediately stop
-  const effectiveDuration = type === 'paused' ? 0 : duration;
+  // Native typing indicators keep the historical short burst default.
+  // Slack thread status follows Slack's loading-state model: omit duration to
+  // persist until reply cleanup, explicit pause, or Slack's own timeout.
+  const effectiveDuration = type === 'paused' ? 0 : (duration ?? (canSendThreadStatus ? 0 : 5000));
 
   // If recording type and plugin is discord, still use sendTyping (Discord only supports typing)
   // WhatsApp plugin handles all three types internally
-  await (plugin as { sendTyping: (instanceId: string, chatId: string, duration?: number) => Promise<void> }).sendTyping(
-    instanceId,
-    resolvedTo,
-    effectiveDuration,
-  );
+  const presenceResult = canSendThreadStatus
+    ? await plugin.sendPresenceStatus(instanceId, resolvedTo, type, effectiveDuration, {
+        threadId,
+        status,
+        loadingMessages,
+      })
+    : await (async (): Promise<PresenceStatusResult> => {
+        if (!('sendTyping' in plugin) || typeof plugin.sendTyping !== 'function') {
+          throw new OmniError({
+            code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+            message: `Channel ${instance.channel} plugin does not implement sendTyping`,
+            context: { channelType: instance.channel },
+            recoverable: false,
+          });
+        }
+        await plugin.sendTyping(instanceId, resolvedTo, effectiveDuration);
+        return { delivered: true, method: 'typing_indicator' };
+      })();
 
   return c.json({
     success: true,
@@ -2273,6 +2322,12 @@ messagesRoutes.post('/send/presence', zValidator('json', sendPresenceSchema), as
       chatId: resolvedTo,
       type,
       duration: effectiveDuration,
+      threadId: presenceResult?.threadId ?? threadId,
+      delivered: presenceResult?.delivered ?? true,
+      method: presenceResult?.method ?? 'typing_indicator',
+      reason: presenceResult?.reason,
+      status: presenceResult?.status,
+      loadingMessages: presenceResult?.loadingMessages,
     },
   });
 });

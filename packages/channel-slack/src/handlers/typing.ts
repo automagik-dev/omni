@@ -2,12 +2,14 @@
  * Slack thread typing indicator helper
  *
  * Uses assistant.threads.setStatus to show/clear typing status in Slack threads.
- * Only works for thread messages — channel-level messages are a no-op.
+ * Requires a Slack thread timestamp; for top-level channel messages, use the
+ * source message timestamp as the thread timestamp.
  *
- * Requires the "Agents & AI Apps" feature flag on the Slack App.
+ * Requires Slack Web API scope `chat:write`. The legacy `assistant:write` scope
+ * is also accepted by Slack during their transition period.
  * Failures are swallowed gracefully — typing never blocks message processing.
  *
- * @see https://api.slack.com/methods/assistant.threads.setStatus
+ * @see https://docs.slack.dev/reference/methods/assistant.threads.setStatus/
  */
 
 import type { Logger } from '@omni/channel-sdk';
@@ -26,18 +28,20 @@ export async function setSlackThreadStatus(params: {
   channelId: string;
   threadTs?: string;
   status: string;
+  loadingMessages?: string[];
   logger: Logger;
   instanceId?: string;
-}): Promise<void> {
-  const { client, channelId, threadTs, status, logger, instanceId } = params;
+}): Promise<boolean> {
+  const { client, channelId, threadTs, status, loadingMessages, logger, instanceId } = params;
 
   // Thread-only guard
-  if (!threadTs) return;
+  if (!threadTs) return false;
 
   const payload = {
     channel_id: channelId,
     thread_ts: threadTs,
     status,
+    ...(loadingMessages?.length ? { loading_messages: loadingMessages } : {}),
   };
 
   try {
@@ -52,21 +56,26 @@ export async function setSlackThreadStatus(params: {
 
     if (typeof clientAny.assistant?.threads?.setStatus === 'function') {
       await clientAny.assistant.threads.setStatus(payload);
-      return;
+      return true;
     }
 
     if (typeof clientAny.apiCall === 'function') {
       await clientAny.apiCall('assistant.threads.setStatus', payload);
+      return true;
     }
   } catch (err) {
     logger.warn('setSlackThreadStatus: failed', {
       instanceId,
       channelId,
       threadTs,
-      status,
+      clearing: status.length === 0,
+      statusLength: status.length,
+      loadingMessageCount: loadingMessages?.length ?? 0,
       error: String(err),
     });
   }
+
+  return false;
 }
 
 /**
@@ -78,7 +87,7 @@ export async function setTypingStatus(params: {
   threadTs?: string;
   logger: Logger;
   instanceId?: string;
-}): Promise<void> {
+}): Promise<boolean> {
   return setSlackThreadStatus({ ...params, status: TYPING_STATUS });
 }
 
@@ -91,6 +100,6 @@ export async function clearTypingStatus(params: {
   threadTs?: string;
   logger: Logger;
   instanceId?: string;
-}): Promise<void> {
+}): Promise<boolean> {
   return setSlackThreadStatus({ ...params, status: CLEAR_STATUS });
 }
