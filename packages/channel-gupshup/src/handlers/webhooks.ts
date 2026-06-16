@@ -137,7 +137,7 @@ function toUnixSeconds(ts: string | number | undefined): number {
 }
 
 /** Map the simplified Entry-Flow payload onto the native inbound webhook shape. */
-export function normalizeSimplifiedWebhook(
+function normalizeSimplifiedWebhook(
   p: z.infer<typeof GupshupSimplifiedWebhookSchema>,
 ): GupshupNativeInboundWebhook {
   const phone = p.sender.id;
