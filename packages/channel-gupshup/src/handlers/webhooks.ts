@@ -102,6 +102,117 @@ const GupshupNativeWebhookSchema = z
   })
   .passthrough();
 
+// ─────────────────────────────────────────────────────────────
+// Simplified payload (HV-Entry-Flow "Payload Data Clean-up", 2026-06)
+// The Entry-Flow may send a slimmed-down shape instead of the native one:
+//   { sender: { id, name }, message: { text, timestamp }, event: { project_id } }
+// We accept it and normalize to the native shape so the rest of the handler —
+// and every downstream consumer — stays unchanged. Old + new both work.
+// ─────────────────────────────────────────────────────────────
+
+export const GupshupSimplifiedWebhookSchema = z
+  .object({
+    sender: z.object({
+      id: z.string().min(1).max(32),
+      name: z.string().max(256).optional(),
+    }),
+    message: z.object({
+      id: z.string().max(512).optional(),
+      text: z.string().max(65536).optional(),
+      timestamp: z.union([z.string(), z.number()]).optional(),
+    }),
+    event: z
+      .object({ project_id: z.string().max(64).optional() })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+/** messageobj.timestamp is unix *seconds* (int); accept seconds or millis from the source. */
+function toUnixSeconds(ts: string | number | undefined): number {
+  const n = typeof ts === 'number' ? ts : Number.parseInt(String(ts ?? ''), 10);
+  if (!Number.isFinite(n) || n <= 0) return Math.floor(Date.now() / 1000);
+  // Math.floor guarantees an integer even when a float timestamp is passed in.
+  return Math.floor(n > 1e12 ? n / 1000 : n);
+}
+
+/** Map the simplified Entry-Flow payload onto the native inbound webhook shape. */
+function normalizeSimplifiedWebhook(p: z.infer<typeof GupshupSimplifiedWebhookSchema>): GupshupNativeInboundWebhook {
+  const phone = p.sender.id;
+  const text = p.message?.text;
+  const tsSeconds = toUnixSeconds(p.message?.timestamp);
+  // No native message id in the simplified payload — prefer one if present, else
+  // synthesize a stable id (phone+ts+len) so retries of the same message still
+  // dedupe. Distinct messages within the same second would collide (rare).
+  const id = p.message?.id ?? `gs-simplified-${phone}-${tsSeconds}-${text ? text.length : 0}`;
+  return {
+    source: 'gupshup-hv-entry-flow-simplified',
+    sender: phone,
+    channel: 'whatsapp',
+    destination: '',
+    botname: '',
+    event_type: 'user_input',
+    message: text,
+    postbackText: null,
+    senderobj: { channelid: phone, display: p.sender.name, channeltype: 'whatsapp' },
+    messageobj: {
+      id,
+      type: 'text',
+      from: phone,
+      timestamp: tsSeconds,
+      text,
+      raw: { sender: { name: p.sender.name } },
+    },
+    messageHeader: { event_type: 'user_input', project_id: p.event?.project_id },
+  };
+}
+
+/** Try the simplified schema; return a normalized native webhook, or null if it doesn't match. */
+export function parseSimplifiedWebhook(parsed: unknown): GupshupNativeInboundWebhook | null {
+  const r = GupshupSimplifiedWebhookSchema.safeParse(parsed);
+  return r.success ? normalizeSimplifiedWebhook(r.data) : null;
+}
+
+/**
+ * Resolve the parsed body into a native inbound webhook: native schema first,
+ * then the simplified HV-Entry-Flow fallback. Returns null when neither matches
+ * (already logged + drop metric recorded — the caller just acks with 200).
+ */
+function resolveInboundWebhook(
+  parsed: unknown,
+  instanceId: string,
+  logger: import('@omni/core').Logger,
+): GupshupNativeInboundWebhook | null {
+  const result = GupshupNativeWebhookSchema.safeParse(parsed);
+  if (result.success) {
+    return result.data as unknown as GupshupNativeInboundWebhook;
+  }
+  const simplified = parseSimplifiedWebhook(parsed);
+  if (simplified) {
+    logger.info('[gupshup] simplified Entry-Flow payload normalized', {
+      instanceId,
+      sender: simplified.sender,
+    });
+    return simplified;
+  }
+  logger.warn('[gupshup] webhook payload unrecognized shape (acking anyway)', {
+    instanceId,
+    errors: result.error.issues,
+    parsed,
+  });
+  // Fail-open: always ack so Gupshup doesn't retry.
+  const parsedEventType =
+    parsed !== null && typeof parsed === 'object' && 'event_type' in parsed
+      ? String((parsed as { event_type: unknown }).event_type ?? 'unparsed')
+      : 'unparsed';
+  recordGupshupWebhookReceived(logger, {
+    instanceId,
+    event_type: parsedEventType,
+    handled: 'dropped_unrecognized_shape',
+  });
+  return null;
+}
+
 // Download guard for media (100MB limit)
 const _downloadGuard = createInboundDedupeCache;
 
@@ -260,27 +371,12 @@ export async function handleGupshupWebhook(
     return new Response('OK', { status: 200 });
   }
 
-  const result = GupshupNativeWebhookSchema.safeParse(parsed);
-  if (!result.success) {
-    logger.warn('[gupshup] webhook payload unrecognized shape (acking anyway)', {
-      instanceId,
-      errors: result.error.issues,
-      parsed,
-    });
-    // Fail-open: always ack so Gupshup doesn't retry
-    const parsedEventType =
-      parsed !== null && typeof parsed === 'object' && 'event_type' in parsed
-        ? String((parsed as { event_type: unknown }).event_type ?? 'unparsed')
-        : 'unparsed';
-    recordGupshupWebhookReceived(logger, {
-      instanceId,
-      event_type: parsedEventType,
-      handled: 'dropped_unrecognized_shape',
-    });
+  // Native schema first, then the simplified HV-Entry-Flow fallback.
+  // resolveInboundWebhook logs + records the drop metric when neither matches.
+  const webhook = resolveInboundWebhook(parsed, instanceId, logger);
+  if (!webhook) {
     return new Response('OK', { status: 200 });
   }
-
-  const webhook = result.data as unknown as GupshupNativeInboundWebhook;
 
   // First-seen WARN — fires once per process per event_type value. Would have
   // caught the 2026-04-22 async_response cutover at webhook #1.

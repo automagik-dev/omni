@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { handleGupshupWebhook } from '../handlers/webhooks';
+import { GupshupSimplifiedWebhookSchema, handleGupshupWebhook, parseSimplifiedWebhook } from '../handlers/webhooks';
 import { GUPSHUP_WEBHOOK_METRIC } from '../observability';
 import type { GupshupPlugin } from '../plugin';
 
@@ -683,5 +683,139 @@ describe('handleGupshupWebhook — observability signals (#504)', () => {
     expect(firstSeenWarns).toHaveLength(1);
     expect(firstSeenWarns[0]?.data?.knownMessage).toBe(false);
     expect(firstSeenWarns[0]?.data?.knownNonMessage).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Simplified HV-Entry-Flow payload (2026-06 "Payload Data Clean-up")
+// ─────────────────────────────────────────────────────────────
+
+describe('Gupshup simplified Entry-Flow payload', () => {
+  const SIMPLIFIED = {
+    sender: { id: '5535984370828', name: 'Henrique GupShup' },
+    message: { text: 'Mensagem', timestamp: '1776273477' },
+    event: { project_id: '15646' },
+  };
+
+  it('schema accepts the simplified shape', () => {
+    expect(GupshupSimplifiedWebhookSchema.safeParse(SIMPLIFIED).success).toBe(true);
+  });
+
+  it('normalizes onto the native inbound shape', () => {
+    const w = parseSimplifiedWebhook(SIMPLIFIED);
+    expect(w).not.toBeNull();
+    expect(w?.sender).toBe('5535984370828');
+    expect(w?.event_type).toBe('user_input');
+    expect(w?.channel).toBe('whatsapp');
+    expect(w?.messageobj.type).toBe('text');
+    expect(w?.messageobj.text).toBe('Mensagem');
+    expect(w?.messageobj.from).toBe('5535984370828');
+    expect(w?.messageobj.timestamp).toBe(1776273477);
+    expect(w?.senderobj.display).toBe('Henrique GupShup');
+    expect(w?.messageHeader?.project_id).toBe('15646');
+  });
+
+  it('synthesizes a dedupe-stable id when none is provided (retries dedupe)', () => {
+    const a = parseSimplifiedWebhook(SIMPLIFIED);
+    const b = parseSimplifiedWebhook(SIMPLIFIED);
+    expect(a?.messageobj.id).toBe(b?.messageobj.id);
+    expect(a?.messageobj.id).toContain('5535984370828');
+  });
+
+  it('prefers an explicit message.id when present', () => {
+    const w = parseSimplifiedWebhook({ ...SIMPLIFIED, message: { ...SIMPLIFIED.message, id: 'wamid.X1' } });
+    expect(w?.messageobj.id).toBe('wamid.X1');
+  });
+
+  it('accepts millisecond timestamps and returns an integer unix-seconds value', () => {
+    const w = parseSimplifiedWebhook({ ...SIMPLIFIED, message: { text: 'oi', timestamp: 1776273477000 } });
+    expect(w?.messageobj.timestamp).toBe(1776273477);
+    expect(Number.isInteger(w?.messageobj.timestamp)).toBe(true);
+  });
+
+  it('floors a fractional timestamp to an integer (native schema requires int)', () => {
+    const w = parseSimplifiedWebhook({ ...SIMPLIFIED, message: { text: 'oi', timestamp: 1776273477.9 } });
+    expect(w?.messageobj.timestamp).toBe(1776273477);
+  });
+
+  it('returns null for the native (old) format — not its job', () => {
+    const native = { sender: '5511960008976', messageobj: { type: 'text', text: 'Oi' } };
+    expect(parseSimplifiedWebhook(native)).toBeNull();
+  });
+
+  it('returns null for the routing envelope (mensagem.tipo=route, conteudo null)', () => {
+    const route = {
+      event: 'message',
+      mensagem: { tipo: 'route', conteudo: null },
+      destino_previsto: 'eugenia-2',
+      context: { 'contact.phone': '5511984420290' },
+    };
+    expect(parseSimplifiedWebhook(route)).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// End-to-end: simplified payload dispatches identically to native
+// ─────────────────────────────────────────────────────────────
+
+describe('handleGupshupWebhook — simplified payload dispatches like native', () => {
+  it('native and simplified payloads reach the agent with the same phone + text', async () => {
+    // Native (legacy) payload
+    const nativeH = makeHandlerHarness();
+    const nativeRes = await handleGupshupWebhook(
+      makeWebhookRequest(
+        makePayload({ type: 'text', text: 'Oi', from: '5511960008976', timestamp: 1776273477, id: 'wamid.NATIVE1' }),
+      ),
+      nativeH.plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    // Simplified (HV-Entry-Flow) payload — same lead, same text
+    const simpleH = makeHandlerHarness();
+    const simpleRes = await handleGupshupWebhook(
+      makeWebhookRequest({
+        sender: { id: '5511960008976', name: 'Tuane' },
+        message: { text: 'Oi', timestamp: 1776273477 },
+        event: { project_id: '31569198' },
+      }),
+      simpleH.plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    // Both ack and both dispatch exactly one inbound message…
+    expect(nativeRes.status).toBe(200);
+    expect(simpleRes.status).toBe(200);
+    expect(nativeH.received).toHaveLength(1);
+    expect(simpleH.received).toHaveLength(1);
+
+    // …with the same phone + text, so the rest of the pipeline behaves identically.
+    expect(nativeH.received[0]?.from).toBe('5511960008976');
+    expect(nativeH.received[0]?.content.text).toBe('Oi');
+    expect(simpleH.received[0]?.from).toBe(nativeH.received[0]?.from);
+    expect(simpleH.received[0]?.content.text).toBe(nativeH.received[0]?.content.text);
+  });
+
+  it('simplified payload is processed, not dropped (no unrecognized-shape warn)', async () => {
+    const { plugin, logs, received } = makeHandlerHarness();
+    const res = await handleGupshupWebhook(
+      makeWebhookRequest({
+        sender: { id: '5535984370828', name: 'Henrique' },
+        message: { text: 'oi quero plano' },
+        event: { project_id: '15646' },
+      }),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.content.text).toBe('oi quero plano');
+    expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unrecognized shape'))).toHaveLength(0);
   });
 });
