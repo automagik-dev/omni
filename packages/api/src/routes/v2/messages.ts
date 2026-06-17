@@ -1650,9 +1650,12 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
     });
   }
 
-  // Set agentPaused — chains: chat.handoff_activated → follow-up disarm + agent stop
+  // Set agentPaused — chains: chat.handoff_activated → follow-up disarm + agent stop.
+  // Merge into existing settings so unrelated keys (followUpConfig, close*, …)
+  // survive — a bare `{ agentPaused: true }` replaces the whole JSONB column.
+  const handoffChat = await services.chats.getById(data.chatId);
   await services.chats.update(data.chatId, {
-    settings: { agentPaused: true },
+    settings: { ...((handoffChat?.settings as Record<string, unknown>) ?? {}), agentPaused: true },
   });
 
   // Close the race between chat.handoff_activated (two NATS hops away) and the
@@ -1884,8 +1887,12 @@ messagesRoutes.post('/send/close-contact', zValidator('json', sendCloseContactSc
   // terminal) for skip and treats a pure soft cooldown as pass.
   const shouldPauseAgent = outcome === 'lost';
   const closedAt = new Date();
+  // Merge into existing settings — replacing the whole JSONB column here would
+  // drop unrelated keys such as followUpConfig.
+  const closeChat = await services.chats.getById(data.chatId);
   await services.chats.update(data.chatId, {
     settings: {
+      ...((closeChat?.settings as Record<string, unknown>) ?? {}),
       ...(shouldPauseAgent ? { agentPaused: true } : {}),
       closed: terminal,
       closeUntil: closeUntil?.toISOString() ?? null,
@@ -1913,7 +1920,7 @@ messagesRoutes.post('/send/close-contact', zValidator('json', sendCloseContactSc
       agentId: instance.agentId ?? null,
       outcome,
       reason: data.reason ?? null,
-      escalated: terminal,
+      escalated,
       closedFields: data.closeFields ?? null,
       closedAt: closedAt.toISOString(),
     };
