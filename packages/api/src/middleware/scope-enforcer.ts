@@ -238,19 +238,54 @@ function readBodyTargets(body: unknown): { instanceId: string | null; to: string
  * Merge path-param and body-derived target candidates into a single
  * `LockTargets`. Exported so tests can exercise extraction without HTTP.
  */
-export function extractLockTargets(method: string, rawPath: string, body: unknown): LockTargets {
+/**
+ * Route-derived targets carried in `x-omni-instance` / `x-omni-chat` headers.
+ * These are trusted like path params (set by the platform / API-key context),
+ * not like the caller-controllable JSON body.
+ */
+export interface HeaderLockTargets {
+  instance?: string | null;
+  chat?: string | null;
+}
+
+/** Read the `x-omni-*` target headers off a request context. */
+export function readHeaderTargets(c: Context<{ Variables: AppVariables }>): HeaderLockTargets {
+  const norm = (v: string | undefined): string | null => (v && v.length > 0 ? v : null);
+  return {
+    instance: norm(c.req.header('x-omni-instance')),
+    chat: norm(c.req.header('x-omni-chat')),
+  };
+}
+
+export function extractLockTargets(
+  method: string,
+  rawPath: string,
+  body: unknown,
+  headers?: HeaderLockTargets,
+): LockTargets {
   const cleanPath = normalizePath(rawPath);
   const { instanceId, to, chatId } = readBodyTargets(body);
-
-  let instance: string | null = instanceId;
-  let chat: string | null = chatId;
-  let recipient: string | null = null;
 
   // Path-param extraction: /instances/:id, /chats/:id
   const pathInstance = PATH_INSTANCE_PREFIXES.map((p) => firstPathSegment(cleanPath, p)).find((v) => v != null) ?? null;
   const pathChat = PATH_CHAT_PREFIXES.map((p) => firstPathSegment(cleanPath, p)).find((v) => v != null) ?? null;
-  if (!instance && pathInstance) instance = pathInstance;
-  if (!chat && pathChat) chat = pathChat;
+  const headerInstance = headers?.instance && headers.instance.length > 0 ? headers.instance : null;
+  const headerChat = headers?.chat && headers.chat.length > 0 ? headers.chat : null;
+
+  // Precedence: route-derived targets (path param first, then x-omni-* header)
+  // win over the request body. The body is caller-controllable, so:
+  //   • Letting it override a path/header target would let a caller authorize
+  //     against one instance/chat while the operation runs against another
+  //     (scope bypass — e.g. PATCH /instances/:realId with body.instanceId set
+  //     to an allowlisted id).
+  //   • Ignoring header targets entirely makes header-scoped routes (e.g.
+  //     POST /turns/close, which targets via x-omni-instance / x-omni-chat)
+  //     invisible to allowlist + signature enforcement.
+  // Body fields are used only when neither path nor header supplies the target
+  // (outbound sends, explicit-body turn close, etc.).
+  const instance = pathInstance ?? headerInstance ?? instanceId;
+  let chat = pathChat ?? headerChat ?? chatId;
+  let recipient: string | null = null;
 
   if (isOutboundSendRoute(cleanPath)) {
     // `to` is the outbound recipient. It is ALSO the chat target for DM sends
@@ -421,7 +456,7 @@ export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariable
   // Admin (wildcard) keys still pass through locks because a profile key MAY
   // have been granted '*' via overrides; rely on the lock columns to decide.
   const body = await safeReadJsonBody(c);
-  const targets = extractLockTargets(method, path, body);
+  const targets = extractLockTargets(method, path, body, readHeaderTargets(c));
 
   const instanceResult = enforceInstanceAllowlist(apiKey, targets.instance);
   if (!instanceResult.allowed) {
