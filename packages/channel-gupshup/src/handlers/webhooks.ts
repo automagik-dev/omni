@@ -136,15 +136,32 @@ function toUnixSeconds(ts: string | number | undefined): number {
   return Math.floor(n > 1e12 ? n / 1000 : n);
 }
 
-/** Map the simplified Entry-Flow payload onto the native inbound webhook shape. */
-function normalizeSimplifiedWebhook(p: z.infer<typeof GupshupSimplifiedWebhookSchema>): GupshupNativeInboundWebhook {
+/** Deterministic, dependency-free 32-bit FNV-1a digest of the text, as base36. */
+function textDigest(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * Map the simplified Entry-Flow payload onto the native inbound webhook shape.
+ * Returns null when there's no text — the simplified shape only carries text
+ * messages, and dispatching an empty inbound is worse than dropping it.
+ */
+function normalizeSimplifiedWebhook(
+  p: z.infer<typeof GupshupSimplifiedWebhookSchema>,
+): GupshupNativeInboundWebhook | null {
   const phone = p.sender.id;
   const text = p.message?.text;
+  if (!text) return null;
   const tsSeconds = toUnixSeconds(p.message?.timestamp);
   // No native message id in the simplified payload — prefer one if present, else
-  // synthesize a stable id (phone+ts+len) so retries of the same message still
-  // dedupe. Distinct messages within the same second would collide (rare).
-  const id = p.message?.id ?? `gs-simplified-${phone}-${tsSeconds}-${text ? text.length : 0}`;
+  // synthesize a stable id (phone+ts+content-digest) so retries of the same
+  // message dedupe while distinct messages in the same second stay distinct.
+  const id = p.message?.id ?? `gs-simplified-${phone}-${tsSeconds}-${textDigest(text)}`;
   return {
     source: 'gupshup-hv-entry-flow-simplified',
     sender: phone,

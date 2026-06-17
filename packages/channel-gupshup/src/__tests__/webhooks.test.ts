@@ -752,6 +752,17 @@ describe('Gupshup simplified Entry-Flow payload', () => {
     };
     expect(parseSimplifiedWebhook(route)).toBeNull();
   });
+
+  it('returns null when there is no text (does not dispatch an empty inbound)', () => {
+    expect(parseSimplifiedWebhook({ sender: { id: '5535984370828' }, event: { project_id: '1' } })).toBeNull();
+    expect(parseSimplifiedWebhook({ ...SIMPLIFIED, message: { timestamp: '1776273477' } })).toBeNull();
+  });
+
+  it('gives distinct ids to distinct same-second messages of equal length (no dedupe collision)', () => {
+    const a = parseSimplifiedWebhook({ ...SIMPLIFIED, message: { text: 'Oi', timestamp: '1776273477' } });
+    const b = parseSimplifiedWebhook({ ...SIMPLIFIED, message: { text: 'Ok', timestamp: '1776273477' } });
+    expect(a?.messageobj.id).not.toBe(b?.messageobj.id);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
