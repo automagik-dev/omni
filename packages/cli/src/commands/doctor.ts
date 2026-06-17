@@ -968,7 +968,7 @@ async function fixPgserveCanonical(deps: DoctorDeps): Promise<string> {
     dumpResult = await deps.dumpEmbeddedDb(serverConfig.databaseUrl);
   } catch (err) {
     throw new Error(
-      `pg_dump of embedded omni DB failed (${err instanceof Error ? err.message : String(err)}); omni-api still running on embedded — install postgresql-client (apt install postgresql-client) if pg_dump is missing, then retry`,
+      `pg_dump of embedded omni DB failed (${err instanceof Error ? err.message : String(err)}); omni-api still running on embedded — the dump hint above names the exact client major to install (the distro-default postgresql-client is often older than the embedded server and will fail), then re-run \`omni doctor --fix\``,
     );
   }
 
