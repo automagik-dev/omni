@@ -409,6 +409,28 @@ function getEmbeddedPgserveDataDir(): string {
   return OMNI_EMBEDDED_PGSERVE_DATA_DIR;
 }
 
+/** Read the embedded cluster's PG major from its PG_VERSION file (null if absent). */
+function embeddedServerMajor(): number | null {
+  try {
+    const v = Number.parseInt(readFileSync(join(getEmbeddedPgserveDataDir(), 'PG_VERSION'), 'utf8').trim(), 10);
+    return Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build a client-tool remediation hint that names the REQUIRED major.
+ * The distro default `postgresql-client` is frequently older than the embedded
+ * server (e.g. Ubuntu 24.04 ships PG16) and a `pg_dump`/`psql` older than the
+ * server refuses to run — so never suggest the bare package.
+ */
+function clientToolHint(tool: 'pg_dump' | 'psql'): string {
+  const major = embeddedServerMajor();
+  const v = major ?? '<server-major>';
+  return `${tool} not found in PATH (or older than the embedded server). The embedded cluster is PostgreSQL ${v}; you need a ${tool} of major >= ${v}. Debian/Ubuntu (PGDG): \`apt install postgresql-client-${v}\` — NOT the bare \`postgresql-client\`, which may be older and will fail with "server version is newer". macOS: \`brew install postgresql@${v}\`. Then re-run \`omni doctor --fix\`.`;
+}
+
 /**
  * Resolve the canonical pgserve data dir from `~/.pgserve/config.json`.
  * pgserve writes `{dataDir, port, registeredAt}` during `pgserve install`.
@@ -504,9 +526,7 @@ export async function dumpEmbeddedDb(currentDatabaseUrl: string): Promise<Embedd
   }
 
   if (!commandIsAvailable('pg_dump')) {
-    throw new Error(
-      'pg_dump not found in PATH — install postgresql-client (apt install postgresql-client / brew install postgresql) and retry',
-    );
+    throw new Error(clientToolHint('pg_dump'));
   }
 
   const snapshotPath = getSnapshotPath();
@@ -571,9 +591,7 @@ export async function restoreSnapshotToCanonical(
   }
 
   if (!commandIsAvailable('psql')) {
-    throw new Error(
-      'psql not found in PATH — install postgresql-client (apt install postgresql-client / brew install postgresql) and retry',
-    );
+    throw new Error(clientToolHint('psql'));
   }
 
   output.raw('  Restoring snapshot into canonical pgserve via psql...');
