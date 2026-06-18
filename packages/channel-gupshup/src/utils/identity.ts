@@ -16,6 +16,10 @@
 
 /** Strip transport formatting (leading +, JID @suffix, :device suffix). Digits kept verbatim. */
 function stripFormatting(phone: string): string {
+  // Defensive: these values originate from external webhooks/storage, so a
+  // non-string is a contract violation rather than a usable recipient.
+  // Mirrors agent-dispatcher's normalizePhoneIdentity guard.
+  if (typeof phone !== 'string') return '';
   return phone.trim().replace(/^\+/, '').replace(/@.*$/, '').replace(/:\d+$/, '');
 }
 

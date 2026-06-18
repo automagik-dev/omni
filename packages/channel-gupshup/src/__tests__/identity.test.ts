@@ -59,4 +59,11 @@ describe('toGupshupPhone', () => {
   it('leaves an already-clean 12-digit number unchanged', () => {
     expect(toGupshupPhone('555197285829')).toBe('555197285829');
   });
+
+  it('returns empty string for non-string input (contract violation, no crash)', () => {
+    // biome-ignore lint/suspicious/noExplicitAny: simulating a runtime contract violation
+    expect(toGupshupPhone(undefined as any)).toBe('');
+    // biome-ignore lint/suspicious/noExplicitAny: simulating a runtime contract violation
+    expect(toGupshupPhone(null as any)).toBe('');
+  });
 });
