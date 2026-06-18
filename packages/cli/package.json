@@ -48,6 +48,7 @@
     "opusscript": "^0.1.1",
     "ora": "^8.1.1",
     "pdf-parse": "^1.1.1",
+    "postgres": "^3.4.5",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5"
   },
