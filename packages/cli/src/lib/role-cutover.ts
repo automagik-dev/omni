@@ -33,6 +33,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import postgres from 'postgres';
 
 // ============================================================================
 // Naming
@@ -245,7 +246,11 @@ $$;`,
     `GRANT CONNECT, TEMPORARY, CREATE ON DATABASE "${database}" TO "${roleName}";`,
   ];
   // Run the role + database-grants script on the postgres database.
-  const dbCreateOk = await runPsql(sqlScript.join('\n'), { socketDir: opts.socketDir, port, database: 'postgres' });
+  const dbCreateOk = await runProvisioningSql(sqlScript.join('\n'), {
+    socketDir: opts.socketDir,
+    port,
+    database: 'postgres',
+  });
   if (!dbCreateOk) {
     return { status: 'skipped', reason: 'psql role provisioning failed' };
   }
@@ -286,7 +291,7 @@ $$;`,
     `ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle GRANT ALL ON TABLES TO "${roleName}";`,
     `ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle GRANT ALL ON SEQUENCES TO "${roleName}";`,
   ].join('\n');
-  const grantsOk = await runPsql(grantsScript, { socketDir: opts.socketDir, port, database });
+  const grantsOk = await runProvisioningSql(grantsScript, { socketDir: opts.socketDir, port, database });
   if (!grantsOk) {
     return { status: 'skipped', reason: 'psql grant step failed' };
   }
@@ -301,40 +306,45 @@ $$;`,
     : { status: 'provisioned', roleName };
 }
 
-interface PsqlOptions {
+interface ProvisioningSqlOptions {
   socketDir: string;
   port: number;
   database: string;
 }
 
-async function runPsql(sql: string, opts: PsqlOptions): Promise<boolean> {
-  const proc = Bun.spawn({
-    cmd: [
-      'psql',
-      '-h',
-      opts.socketDir,
-      '-p',
-      String(opts.port),
-      '-U',
-      'postgres',
-      '-d',
-      opts.database,
-      '-v',
-      'ON_ERROR_STOP=1',
-      '-c',
-      sql,
-    ],
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: { ...process.env, PGPASSWORD: 'postgres' },
+/**
+ * Run a (possibly multi-statement) provisioning script over the wire via
+ * postgres.js — NOT `psql`. The autopg/pgserve postmaster ships only the
+ * server trio (no client tools), so `psql` is frequently absent on a fresh
+ * host; shelling to it aborted role/grant provisioning. postgres.js runs the
+ * script as a simple query, which fails-fast on the first error (the
+ * `ON_ERROR_STOP=1` equivalent). Connects on the local unix socket as the
+ * `postgres` superuser. Best-effort: returns false on any failure.
+ */
+async function runProvisioningSql(script: string, opts: ProvisioningSqlOptions): Promise<boolean> {
+  const sql = postgres({
+    host: opts.socketDir, // absolute path → unix socket
+    port: opts.port,
+    user: 'postgres',
+    password: 'postgres',
+    database: opts.database,
+    max: 1,
+    idle_timeout: 5,
+    connect_timeout: 30,
+    onnotice: () => {},
+    prepare: false,
   });
-  const stderr = await new Response(proc.stderr).text();
-  const code = await proc.exited;
-  if (code !== 0) {
-    process.stderr.write(`role-cutover: psql exited ${code}: ${stderr.trim()}\n`);
+  try {
+    await sql.unsafe(script);
+    return true;
+  } catch (err) {
+    process.stderr.write(
+      `role-cutover: provisioning SQL failed: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
     return false;
+  } finally {
+    await sql.end({ timeout: 5 });
   }
-  return true;
 }
 
 // ============================================================================

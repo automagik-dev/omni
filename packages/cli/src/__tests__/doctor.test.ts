@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type DoctorDeps, runDoctor } from '../commands/doctor.js';
 import type { Config, ServerConfig } from '../config.js';
+import type { MigrationResult } from '../lib/embedded-canonical-migration.js';
 import { DEFAULT_PGSERVE_PORT, buildRuntimeEnv } from '../runtime-env.js';
 
 // Neutralize host XDG_RUNTIME_DIR so the synchronous canonical-pgserve socket
@@ -115,13 +116,25 @@ interface HarnessState {
   restoreCalled: boolean;
   /** Canonical data dir reported by the stubbed `getCanonicalPgserveDataDir()`. */
   canonicalDataDir: string;
+  /** Result the stubbed `migrateEmbeddedData()` returns (host-tooling-free copy). */
+  migrateResult: MigrationResult;
+  /** When set, the stubbed `migrateEmbeddedData()` throws this error. */
+  migrateError: Error | null;
+  /** Set to true the first time `migrateEmbeddedData()` is called. */
+  migrateCalled: boolean;
   /**
-   * Records the order in which fix-handler dependencies were invoked, so
-   * tests can assert the correct dump → stop → install → restore → delete
-   * → start sequence.
+   * Records the order in which fix-handler dependencies were invoked, so tests
+   * can assert the canonical-migration sequence: stop → install → delete →
+   * start → migrate.
    */
   callOrder: Array<
-    'pm2-stop-api' | 'dump-embedded' | 'setup-canonical' | 'restore-snapshot' | 'pm2-start-api' | 'pm2-delete-api'
+    | 'pm2-stop-api'
+    | 'dump-embedded'
+    | 'setup-canonical'
+    | 'restore-snapshot'
+    | 'migrate-embedded'
+    | 'pm2-start-api'
+    | 'pm2-delete-api'
   >;
 }
 
@@ -184,6 +197,9 @@ function mkHarness(overrides?: Partial<HarnessState>): HarnessState {
     restoreError: null,
     restoreCalled: false,
     canonicalDataDir: '/tmp/omni-test/canonical',
+    migrateResult: { status: 'migrated', tables: 12, durationMs: 5 },
+    migrateError: null,
+    migrateCalled: false,
     callOrder: [],
     ...overrides,
   };
@@ -324,6 +340,12 @@ function mkDeps(state: HarnessState): DoctorDeps {
         : { status: 'skipped' as const };
     },
     getCanonicalPgserveDataDir: () => state.canonicalDataDir,
+    migrateEmbeddedData: async (_canonicalPort: number) => {
+      state.migrateCalled = true;
+      state.callOrder.push('migrate-embedded');
+      if (state.migrateError) throw state.migrateError;
+      return state.migrateResult;
+    },
     checkEmbeddedDataOrphaned: async () => ({
       id: 'embedded-data-orphaned',
       level: 'OK',
@@ -1033,137 +1055,104 @@ describe('runDoctor — pgserve-canonical check', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Embedded → canonical data migration via pg_dump + psql (issue #584)
+  // Embedded → canonical data migration — host-tooling-free (issue #722)
   //
-  // Before the data-migration step landed, `omni doctor --fix` flipped
-  // `databaseUrl` to canonical without moving the existing PG cluster.
-  // Operators with non-trivial data ended up on an empty canonical DB even
-  // though their messages/chats/etc. were still on disk under
-  // `~/.omni/data/pgserve/`. These tests pin the new ordering — mirroring
-  // genie's `db backup` / `db restore` pattern (pg_dump → gzip → psql):
-  //   dump (while embedded live) → stop omni-api → install canonical →
-  //   restore snapshot → persist → relaunch.
+  // The copy no longer shells to pg_dump/psql: omni-api boots on canonical to
+  // create the schema (drizzle migrations), then data is streamed over the
+  // wire (postgres.js COPY) by migrateEmbeddedData. New ordering:
+  //   stop omni-api → install canonical → persist → delete+start (schema) →
+  //   wait healthy → copy data.
   // -------------------------------------------------------------------------
 
-  test('--fix runs dump → stop → install → restore → delete → start in that order', async () => {
+  test('--fix runs stop → install → delete → start → migrate in that order', async () => {
     const { VERSION } = await import('../version.js');
     const state = mkHarness({ serverVersion: VERSION });
     state.serverConfig = { ...state.serverConfig, useCanonicalPgserve: false };
-    state.dumpResult = {
-      status: 'dumped',
-      embeddedDir: '/home/operator/.omni/data/pgserve',
-      snapshotPath: '/home/operator/.omni/backups/embedded-migration-2026-04-30T23-30-00-000Z.sql.gz',
-      bytes: 42_000_000,
-    };
     state.canonicalDataDir = '/home/operator/.pgserve/data';
+    state.migrateResult = { status: 'migrated', tables: 23, durationMs: 1200 };
 
     const report = await runDoctor({ fix: true }, mkDeps(state));
 
-    // All four side-effects ran
-    expect(state.dumpCalled).toBe(true);
     expect(state.canonicalPgserveSetupCalled).toBe(true);
-    expect(state.restoreCalled).toBe(true);
+    expect(state.migrateCalled).toBe(true);
+    // No host-tooling path — dump/restore are never invoked.
+    expect(state.dumpCalled).toBe(false);
+    expect(state.restoreCalled).toBe(false);
 
-    // Required ordering: dump must come BEFORE stop (embedded must be live
-    // for pg_dump). install must come BEFORE restore (canonical must exist
-    // for psql to write into).
-    const dumpIdx = state.callOrder.indexOf('dump-embedded');
+    // Ordering: stop (free embedded lock) → install canonical → delete+start
+    // omni-api on canonical (creates schema) → copy data last (after schema +
+    // health). The data copy MUST come after the relaunch (delete).
     const stopIdx = state.callOrder.indexOf('pm2-stop-api');
     const setupIdx = state.callOrder.indexOf('setup-canonical');
-    const restoreIdx = state.callOrder.indexOf('restore-snapshot');
-    expect(dumpIdx).toBeGreaterThanOrEqual(0);
-    expect(stopIdx).toBeGreaterThan(dumpIdx);
+    const deleteIdx = state.callOrder.indexOf('pm2-delete-api');
+    const migrateIdx = state.callOrder.indexOf('migrate-embedded');
+    expect(stopIdx).toBeGreaterThanOrEqual(0);
     expect(setupIdx).toBeGreaterThan(stopIdx);
-    expect(restoreIdx).toBeGreaterThan(setupIdx);
+    expect(deleteIdx).toBeGreaterThan(setupIdx);
+    expect(migrateIdx).toBeGreaterThan(deleteIdx);
+    // omni-api was relaunched on canonical (delete + start) before the copy.
+    expect(state.pm2Calls.map((c) => c.args[0])).toContain('start');
 
-    // Final result message surfaces the snapshot path AND the canonical data
-    // dir so the operator can verify the destination without grepping logs.
+    // Config persisted with the canonical flag + url, before the data copy.
+    expect(state.savedServerConfigs).toHaveLength(1);
+    expect(state.savedServerConfigs[0]).toMatchObject({ useCanonicalPgserve: true });
+
     const fix = report.fixesApplied.find((f) => f.includes('canonical pgserve'));
     expect(fix).toBeDefined();
-    expect(fix).toContain('embedded-migration-2026-04-30T23-30-00-000Z.sql.gz');
+    expect(fix).toContain('copied 23 table(s)');
     expect(fix).toContain('/home/operator/.pgserve/data');
-    expect(fix).toContain('postgresql://postgres:postgres@localhost:8432/omni');
   });
 
-  test('--fix on a fresh install (no embedded data) skips dump+restore and proceeds', async () => {
+  test('--fix on a fresh install (no embedded data) proceeds; copy reports skipped', async () => {
     const { VERSION } = await import('../version.js');
     const state = mkHarness({ serverVersion: VERSION });
     state.serverConfig = { ...state.serverConfig, useCanonicalPgserve: false };
     state.canonicalDataDir = '/home/operator/.pgserve/data';
-    // Default dumpResult is already 'no-embedded-data'; explicit for readability.
-    state.dumpResult = { status: 'no-embedded-data', embeddedDir: '/home/operator/.omni/data/pgserve' };
+    state.migrateResult = { status: 'skipped', reason: 'no embedded data dir' };
 
     const report = await runDoctor({ fix: true }, mkDeps(state));
 
-    // Dump probe ran (so we don't second-guess) but returned no-op.
-    expect(state.dumpCalled).toBe(true);
     expect(state.canonicalPgserveSetupCalled).toBe(true);
-    // Restore was still called but skipped internally (status === 'skipped')
-    // because dump status was no-embedded-data.
-    expect(state.restoreCalled).toBe(true);
+    expect(state.migrateCalled).toBe(true);
     expect(state.savedServerConfigs).toHaveLength(1);
     const fix = report.fixesApplied.find((f) => f.includes('canonical pgserve'));
-    expect(fix).toContain('no embedded data to migrate; canonical started empty');
+    expect(fix).toContain('no data copied (no embedded data dir)');
     expect(fix).toContain('/home/operator/.pgserve/data');
   });
 
-  test('--fix rolls back omni-api to embedded when pg_dump throws (omni-api never stopped)', async () => {
+  test('--fix records FAILED when omni-api never becomes healthy on canonical', async () => {
     const { VERSION } = await import('../version.js');
     const state = mkHarness({ serverVersion: VERSION });
     state.serverConfig = { ...state.serverConfig, useCanonicalPgserve: false };
-    state.dumpError = new Error('pg_dump not found in PATH — install postgresql-client');
+    // omni-api never reports a version → health wait times out → schema unknown.
+    state.serverVersion = null;
 
     const report = await runDoctor({ fix: true }, mkDeps(state));
 
-    expect(state.dumpCalled).toBe(true);
-    // We never proceeded past dump — no stop, no setup, no restore.
-    expect(state.callOrder).not.toContain('pm2-stop-api');
-    expect(state.canonicalPgserveSetupCalled).toBe(false);
-    expect(state.restoreCalled).toBe(false);
-    expect(state.savedServerConfigs).toHaveLength(0);
-
+    // Got far enough to flip config + relaunch, but bailed before the copy.
+    expect(state.canonicalPgserveSetupCalled).toBe(true);
+    expect(state.migrateCalled).toBe(false);
     const failedFix = report.fixesApplied.find((f) => f.startsWith('FAILED pgserve-canonical'));
     expect(failedFix).toBeDefined();
-    expect(failedFix).toContain('pg_dump of embedded omni DB failed');
-    expect(failedFix).toContain('postgresql-client');
+    expect(failedFix).toContain('did not become healthy');
   });
 
-  test('--fix rolls back to embedded + preserves snapshot when restore fails', async () => {
+  test('--fix surfaces FAILED when the data copy throws (embedded data is intact)', async () => {
     const { VERSION } = await import('../version.js');
     const state = mkHarness({ serverVersion: VERSION });
     state.serverConfig = { ...state.serverConfig, useCanonicalPgserve: false };
-    state.dumpResult = {
-      status: 'dumped',
-      embeddedDir: '/home/op/.omni/data/pgserve',
-      snapshotPath: '/home/op/.omni/backups/embedded-migration-2026-04-30T23-31-00-000Z.sql.gz',
-      bytes: 12_345_678,
-    };
-    state.restoreError = new Error('ERROR: relation "messages" already exists');
+    state.migrateError = new Error('temp postmaster failed to become ready within 20s');
 
     const report = await runDoctor({ fix: true }, mkDeps(state));
 
-    // Sequence reached restore but failed there
-    expect(state.dumpCalled).toBe(true);
-    expect(state.canonicalPgserveSetupCalled).toBe(true);
-    expect(state.restoreCalled).toBe(true);
-
-    // omni-api must have been brought back up so operator isn't dead.
-    expect(state.callOrder).toContain('pm2-stop-api');
-    expect(state.callOrder).toContain('pm2-start-api');
-    const stopIdx = state.callOrder.indexOf('pm2-stop-api');
-    const startIdx = state.callOrder.indexOf('pm2-start-api');
-    expect(startIdx).toBeGreaterThan(stopIdx);
-
-    // No config write — embedded mode preserved.
-    expect(state.savedServerConfigs).toHaveLength(0);
-
-    // Failure message includes the snapshot path so operators can replay
-    // manually with `gunzip -c <path> | psql <canonical-url>`.
+    expect(state.migrateCalled).toBe(true);
+    // Config was already flipped to canonical (the only runnable state for this
+    // build); the embedded data dir is untouched and the idempotent
+    // embedded-data-orphaned check re-runs the copy next time.
+    expect(state.savedServerConfigs).toHaveLength(1);
     const failedFix = report.fixesApplied.find((f) => f.startsWith('FAILED pgserve-canonical'));
     expect(failedFix).toBeDefined();
-    expect(failedFix).toContain('psql restore into canonical pgserve failed');
-    expect(failedFix).toContain('snapshot preserved at /home/op/.omni/backups/embedded-migration-');
-    expect(failedFix).toContain('relation "messages" already exists');
+    expect(failedFix).toContain('temp postmaster failed to become ready');
   });
 });
 
