@@ -1,33 +1,35 @@
 /**
  * Gupshup identity utilities
  *
- * Phone normalization and user ID extraction for Gupshup Custom Integration.
- * Strips BR extra-9 for outbound to match what Gupshup expects.
+ * Identity is round-tripped, never reshaped: the number Omni receives on
+ * inbound (and stores as the chat id) is exactly what goes back out on the
+ * Custom Integration callback (customer_id / user.phone), so Journey/Goals
+ * can match the contact.
+ *
+ * We only strip transport formatting (leading +, a JID @suffix, a :device
+ * suffix). We deliberately do NOT touch the Brazilian extra-9: it is present
+ * on some numbers and absent on others, so any add/strip heuristic corrupts
+ * identity. This mirrors the platform-wide convention — AccessService
+ * .normalizePhone and agent-dispatcher's normalizePhoneIdentity also preserve
+ * the digits and only drop formatting.
  */
 
-/**
- * Normalize a phone number for use in Gupshup API requests.
- * - Remove leading + if present
- * - Strip extra 9 from Brazilian mobile: 5551997285829 → 555197285829
- */
+/** Strip transport formatting (leading +, JID @suffix, :device suffix). Digits kept verbatim. */
+function stripFormatting(phone: string): string {
+  return phone.trim().replace(/^\+/, '').replace(/@.*$/, '').replace(/:\d+$/, '');
+}
+
+/** Normalize a phone number for identity use (formatting stripped, digits — incl. BR 9 — preserved). */
 export function normalizePhone(phone: string): string {
-  // Remove leading + if present
-  const clean = phone.startsWith('+') ? phone.slice(1) : phone;
-  // Strip extra 9 from Brazilian mobile: 5551997285829 → 555197285829
-  return clean.replace(/^(55\d{2})9(\d{8})$/, '$1$2');
+  return stripFormatting(phone);
 }
 
-/**
- * Convert a phone number to Gupshup format (no leading +, BR extra-9 stripped).
- */
+/** Convert a phone number to Gupshup outbound format. Identity is preserved verbatim. */
 export function toGupshupPhone(phone: string): string {
-  return normalizePhone(phone);
+  return stripFormatting(phone);
 }
 
-/**
- * Extract the user ID from a webhook source field.
- * Returns normalized phone (no leading +, BR extra-9 stripped).
- */
+/** Extract the user ID from a webhook source field (formatting stripped, digits preserved). */
 export function extractUserId(phone: string): string {
-  return normalizePhone(phone);
+  return stripFormatting(phone);
 }
