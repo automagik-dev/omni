@@ -203,6 +203,8 @@ describe('writeDiagnostics', () => {
     expect(existsSync(dir)).toBe(true);
   });
 
+  // 30s timeout: the body is synchronous + instant, but the default 5s per-test
+  // timeout flakes under heavy host load (CPU starvation inflates wall-clock).
   test('returns null on a write failure (never throws)', () => {
     // Point OMNI_CONFIG_DIR at a path that cannot be created — the parent
     // `/proc/1` is a kernel-managed directory we cannot mkdir under as a
@@ -210,5 +212,5 @@ describe('writeDiagnostics', () => {
     process.env.OMNI_CONFIG_DIR = '/proc/1/omni-diag-test';
     const state = createDiagnostics({ runningVersion: 'x', channel: 'latest' });
     expect(writeDiagnostics(state, 0)).toBeNull();
-  });
+  }, 30_000);
 });
