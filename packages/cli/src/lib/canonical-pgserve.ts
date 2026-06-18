@@ -227,6 +227,37 @@ function buildOmniDatabaseUrl(port: number): string {
  * Best-effort: any non-fatal failure returns false so the caller can warn
  * without aborting the install.
  */
+/**
+ * Poll the canonical postmaster until it accepts a connection (or give up after
+ * ~30s). Closes the post-`pgserve install` startup race so db/role provisioning
+ * doesn't connect before the server is listening.
+ */
+async function waitForCanonicalReady(port: number, attempts = 30): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    const sql = postgres({
+      host: '127.0.0.1',
+      port,
+      user: 'postgres',
+      password: 'postgres',
+      database: 'postgres',
+      max: 1,
+      idle_timeout: 2,
+      connect_timeout: 5,
+      onnotice: () => {},
+      prepare: false,
+    });
+    try {
+      await sql`SELECT 1`;
+      return true;
+    } catch {
+      await new Promise((r) => setTimeout(r, 1000));
+    } finally {
+      await sql.end({ timeout: 2 }).catch(() => {});
+    }
+  }
+  return false;
+}
+
 async function ensureOmniDatabaseExists(port: number): Promise<boolean> {
   const sql = postgres({
     host: '127.0.0.1',
@@ -284,6 +315,12 @@ export async function setupCanonicalPgserve(): Promise<string | null> {
   if (!(await runPgserveInstall())) return null;
   const port = await readPgservePort();
   if (port === null) return null;
+  // A freshly-`pgserve install`ed postmaster may not accept connections for a
+  // second or two. Wait for readiness BEFORE provisioning — otherwise the
+  // db-create + role connect races startup, silently no-ops (best-effort), and
+  // the operator is left with omni-api crash-looping on a missing `omni` db
+  // until they re-run `omni doctor --fix`.
+  await waitForCanonicalReady(port);
   // Best-effort: db-create failure does not abort the install; operator
   // can rerun `omni doctor --fix` later. The URL is still returned so
   // the caller persists the correct port even when DB creation lags.
