@@ -28,6 +28,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
+import postgres from 'postgres';
 
 import { loadServerConfig } from '../config.js';
 import * as output from '../output.js';
@@ -218,45 +219,42 @@ function buildOmniDatabaseUrl(port: number): string {
  * attempts` because omni-api can connect to the postmaster but the
  * `omni` DB simply doesn't exist there yet. This helper closes the gap.
  *
- * Idempotent via Postgres's "IF NOT EXISTS"-equivalent: catch the
- * `42P04` (duplicate_database) error code and treat as success. Uses
- * `psql` because the CLI already has it on PATH whenever autopg / pgserve
- * is installed (it's bundled with the postmaster).
+ * Idempotent: a `42P04` (duplicate_database) error means it already exists →
+ * success. Uses postgres.js over the wire (NOT `psql`) — the autopg/pgserve
+ * postmaster ships only the server trio (initdb/pg_ctl/postgres), so `psql`
+ * is frequently absent on a fresh host; shelling to it aborted the migration.
  *
- * Best-effort: any non-fatal failure (binary missing, transient timeout)
- * returns false so the caller can warn without aborting the install.
+ * Best-effort: any non-fatal failure returns false so the caller can warn
+ * without aborting the install.
  */
 async function ensureOmniDatabaseExists(port: number): Promise<boolean> {
-  const psqlArgs = [
-    '-h',
-    '127.0.0.1',
-    '-p',
-    String(port),
-    '-U',
-    'postgres',
-    '-d',
-    'postgres',
-    '-tAc',
-    `CREATE DATABASE ${OMNI_DATABASE_NAME}`,
-  ];
-  const proc = Bun.spawn({
-    cmd: ['psql', ...psqlArgs],
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: { ...process.env, PGPASSWORD: 'postgres' },
+  const sql = postgres({
+    host: '127.0.0.1',
+    port,
+    user: 'postgres',
+    password: 'postgres',
+    database: 'postgres',
+    max: 1,
+    idle_timeout: 5,
+    connect_timeout: 30,
+    onnotice: () => {},
+    prepare: false,
   });
-  const stderr = await new Response(proc.stderr).text();
-  const code = await proc.exited;
-  if (code === 0) {
+  try {
+    // CREATE DATABASE cannot run inside a transaction; .unsafe() simple-queries it.
+    await sql.unsafe(`CREATE DATABASE ${OMNI_DATABASE_NAME}`);
     output.raw(`  Created \`${OMNI_DATABASE_NAME}\` database on canonical postmaster.`);
     return true;
+  } catch (err) {
+    // 42P04 duplicate_database → already exists → success (idempotent).
+    const code = (err as { code?: string })?.code;
+    const msg = err instanceof Error ? err.message : String(err);
+    if (code === '42P04' || msg.includes('already exists')) return true;
+    output.warn(`Could not ensure \`${OMNI_DATABASE_NAME}\` database exists: ${msg}`);
+    return false;
+  } finally {
+    await sql.end({ timeout: 5 });
   }
-  // Already-exists is success. Postgres surfaces 42P04 in the error text.
-  if (stderr.includes('42P04') || stderr.includes('already exists')) {
-    return true;
-  }
-  output.warn(`Could not ensure \`${OMNI_DATABASE_NAME}\` database exists (psql exit ${code}): ${stderr.trim()}`);
-  return false;
 }
 
 /**
