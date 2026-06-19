@@ -1,9 +1,10 @@
 /**
  * update-verify tests
  *
- * Covers the pure `decideUpdateVerify` decision function that drives the
- * 3-step post-update verification. We do NOT spin up pm2 or a real server
- * here — the caller (runUpdate) is what ties this into the outside world.
+ * Covers the pure `decideVerify` decision function (and its deprecated
+ * alias `decideUpdateVerify`) that drives the 3-step post-update
+ * verification. We do NOT spin up pm2 or a real server here — the caller
+ * (runUpdate) is what ties this into the outside world.
  *
  * Error message strings are also asserted so the exact user-facing text
  * in the wish ("Server version mismatch: ... Run: omni doctor" and
@@ -14,9 +15,12 @@ import { describe, expect, test } from 'bun:test';
 import {
   UPDATE_ERROR_AUTH_INVALID,
   decideUpdateVerify,
+  decideVerify,
   normalizeVersion,
+  resolveChannel,
   updateErrorVersionMismatch,
 } from '../commands/update.js';
+import type { Config } from '../config.js';
 
 describe('normalizeVersion', () => {
   test('strips a git-hash suffix', () => {
@@ -94,6 +98,64 @@ describe('decideUpdateVerify', () => {
       keyValid: false,
     });
     expect(result).toEqual({ kind: 'auth-invalid' });
+  });
+});
+
+describe('decideVerify (canonical name) — public-shape parity', () => {
+  test('decideUpdateVerify is a pointer-equal alias of decideVerify', () => {
+    expect(decideUpdateVerify).toBe(decideVerify);
+  });
+
+  test('returns skipped { reason: "no-restart" } when skipReason is set', () => {
+    const result = decideVerify({ skipReason: 'no-restart' });
+    expect(result).toEqual({ kind: 'skipped', reason: 'no-restart' });
+  });
+
+  test('returns skipped { reason: "no-verify-flag" } when --no-verify is wired in', () => {
+    const result = decideVerify({ skipReason: 'no-verify-flag' });
+    expect(result).toEqual({ kind: 'skipped', reason: 'no-verify-flag' });
+  });
+
+  test('returns skipped { reason: "no-running-services" } when no pm2 services were online', () => {
+    const result = decideVerify({ skipReason: 'no-running-services' });
+    expect(result).toEqual({ kind: 'skipped', reason: 'no-running-services' });
+  });
+
+  test('full-args path produces same result as decideUpdateVerify (byte-identical)', () => {
+    const args = {
+      latest: '2.20260218.18',
+      apiPort: 8882,
+      healthBody: { status: 'healthy', version: '2.20260218.18' },
+      keyValid: true,
+    } as const;
+    expect(decideVerify(args)).toEqual(decideUpdateVerify(args));
+  });
+});
+
+describe('resolveChannel', () => {
+  test('--next overrides everything else', () => {
+    const config: Config = { updateChannel: 'latest' };
+    expect(resolveChannel({ next: true }, config)).toBe('next');
+  });
+
+  test('--stable overrides everything else', () => {
+    const config: Config = { updateChannel: 'next' };
+    expect(resolveChannel({ stable: true }, config)).toBe('latest');
+  });
+
+  test('uses saved updateChannel when no flag is provided', () => {
+    expect(resolveChannel({}, { updateChannel: 'next' })).toBe('next');
+    expect(resolveChannel({}, { updateChannel: 'latest' })).toBe('latest');
+  });
+
+  test('defaults to latest when no flag and no saved channel', () => {
+    expect(resolveChannel({}, {})).toBe('latest');
+  });
+
+  test('defaults to latest when saved channel is invalid', () => {
+    // Simulate a legacy 'main' value left over from before the rename.
+    const config = { updateChannel: 'main' } as unknown as Config;
+    expect(resolveChannel({}, config)).toBe('latest');
   });
 });
 

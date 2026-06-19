@@ -1,6 +1,6 @@
 {
   "name": "@omni/core",
-  "version": "2.260410.1",
+  "version": "2.260619.1",
   "type": "module",
   "exports": {
     ".": {
@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.62",
+    "@opentelemetry/api": "^1.9.1",
     "croner": "^9.1.0",
     "nats": "^2.29.3",
     "prom-client": "^15.1.3",

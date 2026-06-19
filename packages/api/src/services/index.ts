@@ -8,13 +8,18 @@
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { accessCache } from '../cache/cache-keys';
+import { DeepSeekVisionProvider } from '../providers/deepseek/vision';
 import { ElevenLabsTtsProvider } from '../providers/elevenlabs/tts';
 import { GeminiImageGenProvider } from '../providers/gemini/imagegen';
+import { GeminiMusicGenProvider } from '../providers/gemini/musicgen';
 import { GeminiSttProvider } from '../providers/gemini/stt';
 import { GeminiTtsProvider } from '../providers/gemini/tts';
 import { GeminiVideoGenProvider } from '../providers/gemini/videogen';
 import { GeminiVisionProvider } from '../providers/gemini/vision';
 import { GroqSttProvider } from '../providers/groq/stt';
+import { OpenAiImageGenProvider } from '../providers/openai/imagegen';
+import { OpenAiSttProvider } from '../providers/openai/stt';
+import { OpenAiTtsProvider } from '../providers/openai/tts';
 import { providerRegistry } from '../providers/registry';
 import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
@@ -33,6 +38,7 @@ import { EventOpsService } from './event-ops';
 import { EventService } from './events';
 import { FollowUpLifecycleService } from './follow-up-lifecycle';
 import { FollowUpSweeperService } from './follow-up-sweeper';
+import { GenieHostsService } from './genie-hosts';
 import { InstanceService } from './instances';
 import { MessageService } from './messages';
 import { PayloadStoreService } from './payload-store';
@@ -79,6 +85,15 @@ export interface Services {
   consumerOffsets: ConsumerOffsetService;
   followUpLifecycle: FollowUpLifecycleService;
   followUpSweeper: FollowUpSweeperService;
+  genieHosts: GenieHostsService;
+  /**
+   * Direct access to the event bus for routes that need to publish
+   * domain events alongside service calls (e.g. /messages/send/close-contact
+   * emits `chat.closed` after the chat-settings patch). Most code should
+   * prefer service-mediated emission; reach for this only when the event
+   * payload is built from route-level state the service doesn't see.
+   */
+  eventBus: EventBus | null;
 }
 
 /**
@@ -101,11 +116,24 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   const tts = new TTSService(settings);
   providerRegistry.register('tts', 'elevenlabs', new ElevenLabsTtsProvider(tts));
   providerRegistry.register('tts', 'gemini', new GeminiTtsProvider(settings));
+  providerRegistry.register('tts', 'openai', new OpenAiTtsProvider(settings));
+  providerRegistry.register('stt', 'openai', new OpenAiSttProvider(settings));
   providerRegistry.register('stt', 'gemini', new GeminiSttProvider(settings));
   providerRegistry.register('stt', 'groq', new GroqSttProvider(settings));
   providerRegistry.register('imagegen', 'gemini', new GeminiImageGenProvider(settings));
+  providerRegistry.register('imagegen', 'openai', new OpenAiImageGenProvider(settings));
   providerRegistry.register('videogen', 'gemini', new GeminiVideoGenProvider(settings));
+  providerRegistry.register('musicgen', 'gemini', new GeminiMusicGenProvider(settings));
   providerRegistry.register('vision', 'gemini', new GeminiVisionProvider(settings));
+  providerRegistry.register('vision', 'deepseek', new DeepSeekVisionProvider(settings));
+
+  // #624 — wire sweeper to lifecycle so the stale-pause re-arm pass can
+  // defer per-row arming to the central lifecycle gates. Built outside
+  // the literal to avoid forward-referencing `services.X` inside its own
+  // initializer.
+  const followUpLifecycle = new FollowUpLifecycleService(db, eventBus);
+  const followUpSweeper = new FollowUpSweeperService(db, eventBus);
+  followUpSweeper.setLifecycle(followUpLifecycle);
 
   return {
     agents: new AgentService(db, eventBus),
@@ -130,13 +158,15 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     chats: new ChatService(db, eventBus),
     messages: new MessageService(db, eventBus),
     syncJobs: new SyncJobService(db, eventBus),
-    batchJobs: new BatchJobService(db, eventBus),
+    batchJobs: new BatchJobService(db, eventBus, settings),
     agentRunner: new AgentRunnerService(db),
     tts,
     turns: new TurnService(db),
     consumerOffsets: new ConsumerOffsetService(db),
-    followUpLifecycle: new FollowUpLifecycleService(db, eventBus),
-    followUpSweeper: new FollowUpSweeperService(db, eventBus),
+    followUpLifecycle,
+    followUpSweeper,
+    genieHosts: new GenieHostsService(db),
+    eventBus,
   };
 }
 

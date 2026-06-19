@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni",
-  "version": "2.260410.1",
+  "version": "2.260619.1",
   "description": "LLM-optimized CLI for Omni",
   "type": "module",
   "bin": {
@@ -8,33 +8,54 @@
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist", "bin", "db"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    }
+  },
+  "files": ["dist", "bin", "db", "scripts/postinstall-pin-version.cjs"],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun run build:types",
+    "build": "bun run build:sdk-subpath && bun build ./src/index.ts --outdir ./dist --target bun && bun run build:types",
+    "build:sdk-subpath": "cd ../sdk && bun run build && cd ../cli && mkdir -p ./dist/sdk && cp -r ../sdk/dist/. ./dist/sdk/",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "dev": "echo 'CLI package - no dev server (use: bun run ./src/index.ts <command>)'",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "postinstall": "node scripts/postinstall-pin-version.cjs",
     "test:integration": "RUN_INTEGRATION_TESTS=1 bun test",
     "clean": "rm -rf dist db",
-    "build:server": "bun build src/bundled-server-entry.ts --outfile dist/server/index.js --target bun --external @anthropic-ai/claude-agent-sdk",
+    "build:server": "bun build src/bundled-server-entry.ts --outdir dist/server --entry-naming 'index.[ext]' --asset-naming '[name].[ext]' --target bun --external @anthropic-ai/claude-agent-sdk --external @snazzah/davey --external libsodium-wrappers --external opusscript --external pdf-parse --external mammoth --external exceljs --external sharp",
     "build:migrations": "rm -rf db/drizzle && mkdir -p db && cp -r ../db/drizzle db/drizzle",
     "prepack": "bun run build && bun run build:server && bun run build:migrations"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.62",
     "@sentry/bun": "^10.43.0",
+    "@snazzah/davey": "^0.1.11",
     "chalk": "^5.4.0",
     "commander": "^13.1.0",
+    "exceljs": "^4.4.0",
+    "libsodium-wrappers": "^0.7.15",
+    "mammoth": "^1.8.0",
+    "opusscript": "^0.1.1",
     "ora": "^8.1.1",
-    "qrcode-terminal": "^0.12.0"
+    "pdf-parse": "^1.1.1",
+    "postgres": "^3.4.5",
+    "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@omni/api": "workspace:*",
     "@omni/channel-discord": "workspace:*",
+    "@omni/channel-gupshup": "workspace:*",
     "@omni/channel-sdk": "workspace:*",
     "@omni/channel-slack": "workspace:*",
     "@omni/channel-telegram": "workspace:*",

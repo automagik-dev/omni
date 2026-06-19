@@ -1,68 +1,69 @@
 /**
  * Gupshup identity utilities — unit tests
  *
- * Covers phone normalization edge cases and user ID extraction.
- * New behavior: normalizePhone strips + and handles BR extra-9.
+ * Identity is round-tripped: only transport formatting (+, @suffix, :device)
+ * is stripped. The Brazilian extra-9 is always preserved — stripping it would
+ * point the outbound callback at a different (non-existent) contact and break
+ * Journey/Goals matching.
  */
 
 import { describe, expect, it } from 'bun:test';
 import { extractUserId, normalizePhone, toGupshupPhone } from '../utils/identity';
 
 describe('normalizePhone', () => {
-  it('strips leading + and BR extra-9 from E.164 mobile', () => {
-    // +55 11 9 99999999 → 551199999999
-    expect(normalizePhone('+5511999999999')).toBe('551199999999');
+  it('strips a leading + but preserves all digits, including the BR extra-9', () => {
+    expect(normalizePhone('+5511999999999')).toBe('5511999999999');
   });
 
-  it('strips BR extra-9 digit for 13-digit mobile', () => {
-    // 5551997285829 (13 digits with 9) → 555197285829 (12 digits without 9)
-    expect(normalizePhone('5551997285829')).toBe('555197285829');
+  it('preserves the BR extra-9 on a 13-digit mobile', () => {
+    expect(normalizePhone('5511959946920')).toBe('5511959946920');
   });
 
-  it('strips + and then BR extra-9', () => {
-    expect(normalizePhone('+5551997285829')).toBe('555197285829');
-  });
-
-  it('does not strip 9 from non-BR numbers', () => {
-    expect(normalizePhone('+12125551234')).toBe('12125551234');
-  });
-
-  it('does not strip 9 from BR landline (12 digits, no extra-9)', () => {
-    // 55 + 11 + 33334444 = 12 digits — regex requires 13, so no match
+  it('leaves a 12-digit number (no extra-9) unchanged', () => {
     expect(normalizePhone('551133334444')).toBe('551133334444');
   });
 
-  it('strips extra-9 from SP mobile (5511 prefix)', () => {
-    // 5511999999999 = 55 + 11 + 9 + 99999999 → matches BR mobile pattern
-    expect(normalizePhone('5511999999999')).toBe('551199999999');
+  it('strips a JID @suffix', () => {
+    expect(normalizePhone('5511959946920@s.whatsapp.net')).toBe('5511959946920');
+  });
+
+  it('strips a :device suffix', () => {
+    expect(normalizePhone('5511959946920:12')).toBe('5511959946920');
+  });
+
+  it('does not touch non-BR numbers', () => {
+    expect(normalizePhone('+12125551234')).toBe('12125551234');
   });
 });
 
 describe('extractUserId', () => {
-  it('normalizes source phone (strips + and BR extra-9)', () => {
-    expect(extractUserId('5551997285829')).toBe('555197285829');
+  it('preserves the real number (incl. BR extra-9)', () => {
+    expect(extractUserId('+5511959946920')).toBe('5511959946920');
   });
 
-  it('strips + prefix and BR extra-9', () => {
-    expect(extractUserId('+5511999999999')).toBe('551199999999');
-  });
-
-  it('handles already-clean phone', () => {
-    expect(extractUserId('5511888880000')).toBe('5511888880000');
+  it('strips a JID @suffix', () => {
+    expect(extractUserId('5585999726413@s.whatsapp.net')).toBe('5585999726413');
   });
 });
 
 describe('toGupshupPhone', () => {
-  it('strips leading + and BR extra-9', () => {
-    expect(toGupshupPhone('+5511999999999')).toBe('551199999999');
+  it('round-trips the contact number with the BR extra-9 (regression: customer_id must keep the 9)', () => {
+    // The exact case behind the Journey mismatch: must NOT become 551159946920.
+    expect(toGupshupPhone('5511959946920')).toBe('5511959946920');
   });
 
-  it('strips BR extra-9', () => {
-    expect(toGupshupPhone('5551997285829')).toBe('555197285829');
+  it('strips a leading + but keeps the 9', () => {
+    expect(toGupshupPhone('+5511911349383')).toBe('5511911349383');
   });
 
-  it('leaves already-clean 12-digit number unchanged', () => {
-    // 12-digit BR number (no extra-9 to strip)
+  it('leaves an already-clean 12-digit number unchanged', () => {
     expect(toGupshupPhone('555197285829')).toBe('555197285829');
+  });
+
+  it('returns empty string for non-string input (contract violation, no crash)', () => {
+    // biome-ignore lint/suspicious/noExplicitAny: simulating a runtime contract violation
+    expect(toGupshupPhone(undefined as any)).toBe('');
+    // biome-ignore lint/suspicious/noExplicitAny: simulating a runtime contract violation
+    expect(toGupshupPhone(null as any)).toBe('');
   });
 });

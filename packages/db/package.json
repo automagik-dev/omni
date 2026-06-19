@@ -1,6 +1,6 @@
 {
   "name": "@omni/db",
-  "version": "2.260410.1",
+  "version": "2.260619.1",
   "type": "module",
   "exports": {
     ".": {
@@ -17,7 +17,9 @@
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && bun run scripts/check-tz-naive.ts",
+    "test": "bun test",
+    "lint:tz": "bun run scripts/check-tz-naive.ts",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/migrate.ts",

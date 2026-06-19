@@ -1,19 +1,24 @@
 /**
  * A2A Stream Store
  *
- * In-memory store for pending SSE streams. Each `message/stream` request
+ * In-memory store for pending SSE streams. Each `SendStreamingMessage` request
  * creates a ReadableStream keyed by (instanceId, taskId). The dispatcher
  * writes parts via A2AChannelPlugin.sendMessage() which calls writePart().
  */
 
-import type { A2ATaskState, TaskArtifactUpdateEvent, TaskStatusUpdateEvent } from './types';
+import { textPart } from './task-store';
+import type { A2AArtifact, A2AStreamResponse, A2ATask, A2ATaskState } from './types';
 
 interface StreamEntry {
   enqueue: (data: Uint8Array) => void;
   close: () => void;
   closeTimer?: ReturnType<typeof setTimeout>;
+  contextId: string;
   partIndex: number;
+  rpcId: string | number | null;
 }
+
+type StreamCloseObserver = (instanceId: string, taskId: string, state: A2ATaskState) => void;
 
 const IDLE_CLOSE_MS = 30_000;
 const MAX_STREAMS = 5000;
@@ -23,6 +28,11 @@ export class A2AStreamStore {
   private readonly streams = new Map<string, StreamEntry>();
   private readonly encoder = new TextEncoder();
 
+  constructor(
+    private readonly onClose?: StreamCloseObserver,
+    private readonly idleCloseMs = IDLE_CLOSE_MS,
+  ) {}
+
   streamKey(instanceId: string, taskId: string): string {
     return `${instanceId}:${taskId}`;
   }
@@ -31,7 +41,12 @@ export class A2AStreamStore {
    * Create a pending SSE stream for the given instance + task.
    * The stream auto-closes after IDLE_CLOSE_MS of inactivity.
    */
-  createPendingStream(instanceId: string, taskId: string): ReadableStream<Uint8Array> {
+  createPendingStream(
+    instanceId: string,
+    taskId: string,
+    rpcId: string | number | null = null,
+    contextId = taskId,
+  ): ReadableStream<Uint8Array> {
     if (this.streams.size >= MAX_STREAMS) {
       throw new Error('Stream store capacity exceeded');
     }
@@ -78,7 +93,9 @@ export class A2AStreamStore {
               store.streams.delete(key);
             }
           },
+          contextId,
           partIndex: 0,
+          rpcId,
         };
 
         entryRef = entry;
@@ -86,8 +103,8 @@ export class A2AStreamStore {
 
         // Auto-close on idle (no parts received)
         entry.closeTimer = setTimeout(() => {
-          store.closeStream(instanceId, taskId, 'failed');
-        }, IDLE_CLOSE_MS);
+          store.closeIdleStream(instanceId, taskId);
+        }, store.idleCloseMs);
       },
       cancel() {
         if (store.streams.get(key) === entryRef) {
@@ -106,40 +123,41 @@ export class A2AStreamStore {
    * Write a response part to the pending stream.
    * Resets the idle close timer.
    */
+  writeTask(instanceId: string, taskId: string, task: A2ATask): void {
+    const key = this.streamKey(instanceId, taskId);
+    const entry = this.streams.get(key);
+    if (!entry) return;
+
+    this.resetIdleTimer(instanceId, taskId, entry);
+    this.writeStreamResponse(entry, { task });
+  }
+
   writePart(instanceId: string, taskId: string, text: string): void {
     const key = this.streamKey(instanceId, taskId);
     const entry = this.streams.get(key);
     if (!entry) return;
 
-    // Reset idle timer
-    if (entry.closeTimer !== undefined) {
-      clearTimeout(entry.closeTimer);
-    }
+    this.resetIdleTimer(instanceId, taskId, entry);
 
     entry.partIndex++;
 
-    const event: TaskArtifactUpdateEvent = {
-      type: 'taskArtifactUpdateEvent',
-      taskId,
-      artifact: {
-        artifactId: `part-${entry.partIndex}`,
-        index: entry.partIndex - 1,
-        parts: [{ type: 'text', text }],
-        lastChunk: false,
-      },
+    const artifact: A2AArtifact = {
+      artifactId: `artifact-${entry.partIndex}`,
+      parts: [textPart(text)],
     };
 
-    const sseData = `data: ${JSON.stringify(event)}\n\n`;
-    entry.enqueue(this.encoder.encode(sseData));
-
-    // Re-schedule auto-close
-    entry.closeTimer = setTimeout(() => {
-      this.closeStream(instanceId, taskId, 'failed');
-    }, IDLE_CLOSE_MS);
+    this.writeStreamResponse(entry, {
+      taskArtifactUpdate: {
+        taskId,
+        contextId: entry.contextId,
+        artifact,
+        index: entry.partIndex - 1,
+      },
+    });
   }
 
   /**
-   * Close the pending stream with a final status event.
+   * Close the pending stream with a terminal status event.
    */
   closeStream(instanceId: string, taskId: string, state: A2ATaskState): void {
     const key = this.streamKey(instanceId, taskId);
@@ -150,19 +168,45 @@ export class A2AStreamStore {
       clearTimeout(entry.closeTimer);
     }
 
-    const statusEvent: TaskStatusUpdateEvent = {
-      type: 'taskStatusUpdateEvent',
-      taskId,
-      status: { state, timestamp: new Date().toISOString() },
-      final: true,
-    };
+    this.writeStreamResponse(entry, {
+      taskStatusUpdate: {
+        taskId,
+        contextId: entry.contextId,
+        status: { state, timestamp: new Date().toISOString() },
+      },
+    });
+    this.onClose?.(instanceId, taskId, state);
+    entry.close();
+  }
 
-    const sseData = `data: ${JSON.stringify(statusEvent)}\n\n`;
-    entry.enqueue(this.encoder.encode(sseData));
+  private closeIdleStream(instanceId: string, taskId: string): void {
+    const key = this.streamKey(instanceId, taskId);
+    const entry = this.streams.get(key);
+    if (!entry) return;
+
+    if (entry.closeTimer !== undefined) {
+      clearTimeout(entry.closeTimer);
+    }
+
     entry.close();
   }
 
   hasStream(instanceId: string, taskId: string): boolean {
     return this.streams.has(this.streamKey(instanceId, taskId));
+  }
+
+  private resetIdleTimer(instanceId: string, taskId: string, entry: StreamEntry): void {
+    if (entry.closeTimer !== undefined) {
+      clearTimeout(entry.closeTimer);
+    }
+
+    entry.closeTimer = setTimeout(() => {
+      this.closeStream(instanceId, taskId, 'TASK_STATE_FAILED');
+    }, IDLE_CLOSE_MS);
+  }
+
+  private writeStreamResponse(entry: StreamEntry, result: A2AStreamResponse): void {
+    const sseData = `data: ${JSON.stringify({ jsonrpc: '2.0', id: entry.rpcId, result })}\n\n`;
+    entry.enqueue(this.encoder.encode(sseData));
   }
 }

@@ -2,7 +2,7 @@
   "$schema": "https://unpkg.com/knip@5.85.0/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["scripts/test-messaging.ts"],
+      "entry": ["scripts/test-messaging.ts", "scripts/kill-stale-test-daemons.ts"],
       "project": ["scripts/**/*.ts"],
       "ignore": [
         "scripts/backfill-*.ts",
@@ -50,7 +50,16 @@
     "packages/cli": {
       "entry": ["src/commands/*.ts", "src/bundled-server-entry.ts"],
       "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["@anthropic-ai/claude-agent-sdk"]
+      "ignoreDependencies": [
+        "@anthropic-ai/claude-agent-sdk",
+        "@snazzah/davey",
+        "exceljs",
+        "libsodium-wrappers",
+        "mammoth",
+        "opusscript",
+        "pdf-parse",
+        "sharp"
+      ]
     },
     "packages/db": {
       "project": ["src/**/*.ts"]

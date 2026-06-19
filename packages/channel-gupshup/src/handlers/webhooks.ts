@@ -6,8 +6,12 @@
  * Wire format: Content-Type is application/x-www-form-urlencoded but the body
  * is raw JSON — JSON.parse(await request.text()) is the correct parse strategy.
  *
- * Only event_type === 'user_input' is processed. All other event types (status
- * updates, billing, etc.) are acknowledged with 200 and discarded.
+ * Message-bearing event_types (`user_input`, `async_response`,
+ * `click_to_chat_advertise`) are dispatched to processInboundMessage. Known
+ * non-message events (status, billing, opt-in/out, etc.) are acknowledged with
+ * 200 and discarded at DEBUG. Unknown event_types that pass schema validation
+ * fail-open (processed + WARN) so Gupshup format drift surfaces in logs
+ * instead of silently dropping messages (see incident 2026-04-22 #503).
  *
  * Webhook verification: query param `?token=X` is compared against instance
  * `webhookVerifyToken`. If not set, skip token check.
@@ -17,6 +21,7 @@ import { createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
 import type { DedupeCache } from '@omni/channel-sdk';
 import { z } from 'zod';
 
+import { type GupshupWebhookHandled, recordGupshupWebhookReceived, seenEventTypes } from '../observability';
 import type { GupshupPlugin } from '../plugin';
 import type { GupshupNativeInboundWebhook, GupshupNativeMessageObj } from '../types';
 
@@ -97,8 +102,156 @@ const GupshupNativeWebhookSchema = z
   })
   .passthrough();
 
+// ─────────────────────────────────────────────────────────────
+// Simplified payload (HV-Entry-Flow "Payload Data Clean-up", 2026-06)
+// The Entry-Flow may send a slimmed-down shape instead of the native one:
+//   { sender: { id, name }, message: { text, timestamp }, event: { project_id } }
+// We accept it and normalize to the native shape so the rest of the handler —
+// and every downstream consumer — stays unchanged. Old + new both work.
+// ─────────────────────────────────────────────────────────────
+
+export const GupshupSimplifiedWebhookSchema = z
+  .object({
+    sender: z.object({
+      id: z.string().min(1).max(32),
+      name: z.string().max(256).optional(),
+    }),
+    message: z.object({
+      id: z.string().max(512).optional(),
+      text: z.string().max(65536).optional(),
+      timestamp: z.union([z.string(), z.number()]).optional(),
+    }),
+    event: z
+      .object({ project_id: z.string().max(64).optional() })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+/** messageobj.timestamp is unix *seconds* (int); accept seconds or millis from the source. */
+function toUnixSeconds(ts: string | number | undefined): number {
+  const n = typeof ts === 'number' ? ts : Number.parseInt(String(ts ?? ''), 10);
+  if (!Number.isFinite(n) || n <= 0) return Math.floor(Date.now() / 1000);
+  // Math.floor guarantees an integer even when a float timestamp is passed in.
+  return Math.floor(n > 1e12 ? n / 1000 : n);
+}
+
+/** Deterministic, dependency-free 32-bit FNV-1a digest of the text, as base36. */
+function textDigest(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * Map the simplified Entry-Flow payload onto the native inbound webhook shape.
+ * Returns null when there's no text — the simplified shape only carries text
+ * messages, and dispatching an empty inbound is worse than dropping it.
+ */
+function normalizeSimplifiedWebhook(
+  p: z.infer<typeof GupshupSimplifiedWebhookSchema>,
+): GupshupNativeInboundWebhook | null {
+  const phone = p.sender.id;
+  const text = p.message?.text;
+  if (!text) return null;
+  const tsSeconds = toUnixSeconds(p.message?.timestamp);
+  // No native message id in the simplified payload — prefer one if present, else
+  // synthesize a stable id (phone+ts+content-digest) so retries of the same
+  // message dedupe while distinct messages in the same second stay distinct.
+  const id = p.message?.id ?? `gs-simplified-${phone}-${tsSeconds}-${textDigest(text)}`;
+  return {
+    source: 'gupshup-hv-entry-flow-simplified',
+    sender: phone,
+    channel: 'whatsapp',
+    destination: '',
+    botname: '',
+    event_type: 'user_input',
+    message: text,
+    postbackText: null,
+    senderobj: { channelid: phone, display: p.sender.name, channeltype: 'whatsapp' },
+    messageobj: {
+      id,
+      type: 'text',
+      from: phone,
+      timestamp: tsSeconds,
+      text,
+      raw: { sender: { name: p.sender.name } },
+    },
+    messageHeader: { event_type: 'user_input', project_id: p.event?.project_id },
+  };
+}
+
+/** Try the simplified schema; return a normalized native webhook, or null if it doesn't match. */
+export function parseSimplifiedWebhook(parsed: unknown): GupshupNativeInboundWebhook | null {
+  const r = GupshupSimplifiedWebhookSchema.safeParse(parsed);
+  return r.success ? normalizeSimplifiedWebhook(r.data) : null;
+}
+
+/**
+ * Resolve the parsed body into a native inbound webhook: native schema first,
+ * then the simplified HV-Entry-Flow fallback. Returns null when neither matches
+ * (already logged + drop metric recorded — the caller just acks with 200).
+ */
+function resolveInboundWebhook(
+  parsed: unknown,
+  instanceId: string,
+  logger: import('@omni/core').Logger,
+): GupshupNativeInboundWebhook | null {
+  const result = GupshupNativeWebhookSchema.safeParse(parsed);
+  if (result.success) {
+    return result.data as unknown as GupshupNativeInboundWebhook;
+  }
+  const simplified = parseSimplifiedWebhook(parsed);
+  if (simplified) {
+    logger.info('[gupshup] simplified Entry-Flow payload normalized', {
+      instanceId,
+      sender: simplified.sender,
+    });
+    return simplified;
+  }
+  logger.warn('[gupshup] webhook payload unrecognized shape (acking anyway)', {
+    instanceId,
+    errors: result.error.issues,
+    parsed,
+  });
+  // Fail-open: always ack so Gupshup doesn't retry.
+  const parsedEventType =
+    parsed !== null && typeof parsed === 'object' && 'event_type' in parsed
+      ? String((parsed as { event_type: unknown }).event_type ?? 'unparsed')
+      : 'unparsed';
+  recordGupshupWebhookReceived(logger, {
+    instanceId,
+    event_type: parsedEventType,
+    handled: 'dropped_unrecognized_shape',
+  });
+  return null;
+}
+
 // Download guard for media (100MB limit)
 const _downloadGuard = createInboundDedupeCache;
+
+// Known event_type values that carry a user message in messageobj.
+// Unknown values still fall through to processInboundMessage (schema validation
+// is the real gate) but are logged at WARN so format drift is visible.
+const KNOWN_MESSAGE_EVENT_TYPES = new Set<string>([
+  'user_input', // legacy — pre-2026-04-22 format
+  'async_response', // current — post-2026-04-22 17:58 BRT cutover
+  'click_to_chat_advertise', // ad click → message from FB/IG ad
+]);
+
+// Known event_type values that are NOT messages (status/billing/etc.)
+const KNOWN_NON_MESSAGE_EVENT_TYPES = new Set<string>([
+  'message_event', // delivery/read receipts
+  'billing_event',
+  'opt_in',
+  'opt_out',
+  'template_event',
+  'system_event',
+  'account_event',
+]);
 
 // ─────────────────────────────────────────────────────────────
 // Payload extraction — handles multiple Gupshup envelope formats
@@ -227,29 +380,78 @@ export async function handleGupshupWebhook(
 
   if (!parsed) {
     // Can't parse at all — ack and move on, we already logged the raw body
-    return new Response('OK', { status: 200 });
-  }
-
-  const result = GupshupNativeWebhookSchema.safeParse(parsed);
-  if (!result.success) {
-    logger.warn('[gupshup] webhook payload unrecognized shape (acking anyway)', {
+    recordGupshupWebhookReceived(logger, {
       instanceId,
-      errors: result.error.issues,
-      parsed,
+      event_type: 'unparsed',
+      handled: 'dropped_unrecognized_shape',
     });
-    // Fail-open: always ack so Gupshup doesn't retry
     return new Response('OK', { status: 200 });
   }
 
-  const webhook = result.data as unknown as GupshupNativeInboundWebhook;
-
-  // Only process user input events — ignore status, billing, etc.
-  if (webhook.event_type !== 'user_input') {
-    logger.debug('[gupshup] non-user_input event ignored', { instanceId, event_type: webhook.event_type });
+  // Native schema first, then the simplified HV-Entry-Flow fallback.
+  // resolveInboundWebhook logs + records the drop metric when neither matches.
+  const webhook = resolveInboundWebhook(parsed, instanceId, logger);
+  if (!webhook) {
     return new Response('OK', { status: 200 });
   }
 
-  await processInboundMessage(plugin, instanceId, webhook, dedupeCache);
+  // First-seen WARN — fires once per process per event_type value. Would have
+  // caught the 2026-04-22 async_response cutover at webhook #1.
+  if (seenEventTypes.markIfFirst(webhook.event_type)) {
+    logger.warn('[gupshup] first time seeing this event_type', {
+      instanceId,
+      event_type: webhook.event_type,
+      knownMessage: KNOWN_MESSAGE_EVENT_TYPES.has(webhook.event_type),
+      knownNonMessage: KNOWN_NON_MESSAGE_EVENT_TYPES.has(webhook.event_type),
+    });
+  }
+
+  if (KNOWN_NON_MESSAGE_EVENT_TYPES.has(webhook.event_type)) {
+    logger.debug('[gupshup] known non-message event ignored', {
+      instanceId,
+      event_type: webhook.event_type,
+    });
+    recordGupshupWebhookReceived(logger, {
+      instanceId,
+      event_type: webhook.event_type,
+      handled: 'dropped_known_non_message',
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  const knownMessageEvent = KNOWN_MESSAGE_EVENT_TYPES.has(webhook.event_type);
+  if (!knownMessageEvent) {
+    // Unknown event_type that passed schema validation (has valid messageobj).
+    // Fail-open: process it + WARN so operators notice format drift early.
+    logger.warn('[gupshup] unknown event_type with valid messageobj — processing anyway', {
+      instanceId,
+      event_type: webhook.event_type,
+      messageHeaderEventType: webhook.messageHeader?.event_type,
+      messageType: webhook.messageobj?.type,
+      sender: webhook.sender,
+    });
+  }
+
+  const processed = await processInboundMessage(plugin, instanceId, webhook, dedupeCache, {
+    khalSessionId: request.headers.get('x-khal-session-id')?.trim() || undefined,
+  });
+
+  // Unknown event_type wins the label — the alerting signal is format drift
+  // detection, independent of whether the downstream extraction succeeded.
+  let handled: GupshupWebhookHandled;
+  if (!knownMessageEvent) {
+    handled = 'dropped_unknown_fail_open';
+  } else if (!processed) {
+    handled = 'dropped_empty_content';
+  } else {
+    handled = 'processed';
+  }
+
+  recordGupshupWebhookReceived(logger, {
+    instanceId,
+    event_type: webhook.event_type,
+    handled,
+  });
 
   return new Response('OK', { status: 200 });
 }
@@ -263,18 +465,19 @@ async function processInboundMessage(
   instanceId: string,
   webhook: GupshupNativeInboundWebhook,
   dedupeCache: DedupeCache,
-): Promise<void> {
+  options: { khalSessionId?: string } = {},
+): Promise<boolean> {
   const msg = webhook.messageobj;
   const from = webhook.sender;
 
   // Dedupe by sender phone + message ID
   const dedupeKey = `${from.trim()}:${msg.id}`;
   if (dedupeCache.isDuplicate(instanceId, dedupeKey, 'gupshup', plugin.getLogger() as import('@omni/core').Logger)) {
-    return;
+    return false;
   }
 
   const content = extractContent(msg);
-  if (!content) return;
+  if (!content) return false;
 
   // Sanitize text
   if (content.text) {
@@ -282,7 +485,7 @@ async function processInboundMessage(
       instanceId,
       messageId: msg.id,
     });
-    if (!sanitized.ok) return;
+    if (!sanitized.ok) return false;
     content.text = sanitized.text;
   }
 
@@ -295,6 +498,8 @@ async function processInboundMessage(
     webhook.senderobj?.display ??
     webhook.contextobj?.senderName ??
     (webhook.messageobj?.raw?.sender as { name?: string } | undefined)?.name;
+  const threadId = webhook.contextobj?.contextid;
+  const khalSessionHeaders = options.khalSessionId ? { 'x-khal-session-id': options.khalSessionId } : undefined;
 
   await plugin.handleMessageReceived({
     instanceId,
@@ -302,10 +507,17 @@ async function processInboundMessage(
     chatId: from,
     from,
     content,
-    rawPayload: { ...webhook, pushName: senderName } as unknown as Record<string, unknown>,
+    rawPayload: {
+      ...webhook,
+      pushName: senderName,
+      ...(threadId ? { threadId } : {}),
+      ...(options.khalSessionId ? { khalSessionId: options.khalSessionId } : {}),
+      ...(khalSessionHeaders ? { headers: khalSessionHeaders } : {}),
+    } as unknown as Record<string, unknown>,
     platformTimestamp,
     replyTo,
   });
+  return true;
 }
 
 // ─────────────────────────────────────────────────────────────

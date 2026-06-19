@@ -11,7 +11,7 @@ import type { ChannelRegistry, FetchHistoryOptions, HistorySyncMessage } from '@
 import type { EventBus } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
-import type { Database, SyncJobConfig, SyncJobType } from '@omni/db';
+import type { Database, SyncJobConfig, SyncJobProgress, SyncJobType } from '@omni/db';
 import { omniGroups } from '@omni/db';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Services } from '../services';
@@ -458,8 +458,12 @@ async function processMessageSync(
           externalId: msg.externalId,
           source: 'sync',
           messageType: mapContentType(msg.content.type),
-          textContent: msg.content.text,
+          textContent: msg.content.text ?? msg.content.caption,
           platformTimestamp: msg.timestamp,
+          hasMedia: ['audio', 'image', 'video', 'document', 'sticker'].includes(msg.content.type),
+          mediaMimeType: msg.content.mimeType,
+          mediaUrl: msg.content.mediaUrl,
+          mediaLocalPath: msg.content.localPath,
           senderPlatformUserId: msg.from,
           isFromMe: msg.isFromMe,
           rawPayload: msg.rawPayload as Record<string, unknown>,
@@ -490,6 +494,8 @@ async function processMessageSync(
     duplicates,
   });
 
+  await queueMediaBackfillAfterSync(services, config, instanceId, jobId, stored);
+
   // Complete the job
   await services.syncJobs.complete(jobId);
 
@@ -499,6 +505,33 @@ async function processMessageSync(
     stored,
     duplicates,
   });
+}
+
+async function queueMediaBackfillAfterSync(
+  services: Services,
+  config: SyncJobConfig,
+  instanceId: string,
+  jobId: string,
+  stored: number,
+): Promise<void> {
+  if ((config.backfillMedia !== true && config.processMedia !== true) || stored === 0) return;
+
+  try {
+    const params = {
+      jobType: 'time_based_batch' as const,
+      instanceId,
+      daysBack: config.daysBack ?? 3650,
+      limit: config.mediaLimit,
+      contentTypes: config.contentTypes ?? ['audio', 'image', 'video', 'document'],
+      force: config.forceMedia === true,
+      delayMinMs: config.delayMinMs ?? 1000,
+      delayMaxMs: config.delayMaxMs ?? 3000,
+    };
+    const batch = await services.batchJobs.create(params);
+    log.info('Queued media backfill batch after message sync', { jobId, batchJobId: batch.id, stored });
+  } catch (error) {
+    log.warn('Failed to queue media backfill batch after message sync', { jobId, error: String(error) });
+  }
 }
 
 /**
@@ -889,6 +922,16 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
         const { instanceId, channelType } = event.payload;
 
         try {
+          // Reuse an already-running history-push job for this instance instead of
+          // creating a duplicate on every reconnect.
+          if (await services.syncJobs.hasActiveJob(instanceId, 'history-push')) {
+            historyPushLog.debug('Active history-push job already exists — skipping create', {
+              instanceId,
+              channel: channelType,
+            });
+            return;
+          }
+
           // Create a running history-push sync job
           const job = await services.syncJobs.create({
             instanceId,
@@ -943,16 +986,22 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
             return;
           }
 
-          await services.syncJobs.updateProgress(historyPushJob.id, {
-            fetched: payload.fetched ?? 0,
-            stored: 0,
-            duplicates: 0,
-            mediaDownloaded: 0,
-            totalEstimated:
-              payload.progress && payload.progress > 0
-                ? Math.round((payload.fetched ?? 0) / (payload.progress / 100))
-                : 0,
-          });
+          // Only update counters we actually have from Baileys. Never reset
+          // stored/duplicates/mediaDownloaded to 0 — ingestion updates them
+          // separately and they must not be clobbered by a progress event.
+          // `fetched` is also preserved when absent: a progress event missing
+          // the counter must not reset the stored value to 0.
+          const update: Partial<SyncJobProgress> = {};
+          if (typeof payload.fetched === 'number') {
+            update.fetched = payload.fetched;
+          }
+          if (typeof payload.progress === 'number' && payload.progress > 0 && typeof payload.fetched === 'number') {
+            update.totalEstimated = Math.round(payload.fetched / (payload.progress / 100));
+          }
+
+          if (Object.keys(update).length === 0) return;
+
+          await services.syncJobs.updateProgress(historyPushJob.id, update);
 
           historyPushLog.debug('Updated history-push progress', {
             jobId: historyPushJob.id,

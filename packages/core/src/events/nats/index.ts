@@ -63,5 +63,6 @@ export {
   createEventSchema,
   registerSchemas,
   SystemEventSchemas,
+  CustomEventSchemas,
 } from './registry';
 export type { EventSchemaEntry, ValidationResult } from './registry';

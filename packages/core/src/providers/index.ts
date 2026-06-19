@@ -12,6 +12,8 @@ export {
   type ProviderResponse,
   type ProviderMetrics,
   type StreamChunk,
+  type OmniCustomerContext,
+  type OmniExecutionContext,
   type AgnoAgent,
   type AgnoTeam,
   type AgnoWorkflow,
@@ -22,6 +24,13 @@ export {
   ProviderError,
   type ProviderErrorCode,
 } from './types';
+
+export {
+  OMNI_EXECUTION_CONTEXT_EXTENSION_URI,
+  buildOmniEnv,
+  buildOmniExecutionContext,
+  buildProviderRequestContext,
+} from './execution-context';
 
 // Types — unified AgentProvider abstraction
 export type {

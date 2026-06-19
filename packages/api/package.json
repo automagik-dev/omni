@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.260410.1",
+  "version": "2.260619.1",
   "type": "module",
   "exports": {
     ".": {
@@ -14,6 +14,10 @@
     "./trpc": {
       "types": "./src/trpc/index.ts",
       "default": "./src/trpc/index.ts"
+    },
+    "./admin": {
+      "types": "./src/admin.ts",
+      "default": "./src/admin.ts"
     }
   },
   "scripts": {
@@ -25,21 +29,26 @@
     "postinstall": "node ../../scripts/ensure-libicu-symlinks.cjs"
   },
   "dependencies": {
+    "@google/genai": "^1.0.0",
     "@hono/swagger-ui": "^0.4.1",
     "@hono/zod-validator": "^0.4.3",
-    "@google/genai": "^1.0.0",
     "@omni/channel-sdk": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/db": "workspace:*",
     "@omni/media-processing": "workspace:*",
     "@omni/voice-client": "workspace:*",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.55.0",
+    "@opentelemetry/instrumentation-http": "^0.55.0",
+    "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/sdk-node": "^0.55.0",
+    "@opentelemetry/semantic-conventions": "^1.30.0",
     "@sentry/bun": "^10.43.0",
     "@trpc/server": "^11.0.0-rc.608",
     "drizzle-orm": "^0.38.4",
     "hono": "^4.6.17",
     "lru-cache": "^11.2.6",
     "nats": "^2.29.3",
-    "pgserve": "^1.1.8",
     "zod": "^3.24.1"
   },
   "devDependencies": {

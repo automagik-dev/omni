@@ -1,6 +1,6 @@
 {
   "name": "omni-v2",
-  "version": "2.260410.1",
+  "version": "2.260619.1",
   "private": true,
   "type": "module",
   "workspaces": ["packages/*", "apps/*"],
@@ -13,6 +13,7 @@
     "format": "biome format --write .",
     "test": "turbo test",
     "verify:versions": "bun scripts/verify-versions.ts",
+    "db:verify-drift": "bun scripts/verify-schema-drift.ts",
     "clean": "turbo clean && rm -rf node_modules",
     "generate:sdk": "bun scripts/generate-sdk.ts",
     "generate:sdk-python": "bun scripts/generate-sdk-python.ts",

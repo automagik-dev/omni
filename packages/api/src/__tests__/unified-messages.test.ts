@@ -316,6 +316,71 @@ describeWithDb('Unified Messages', () => {
       expect(messages.length).toBe(5);
     });
 
+    test('findRecentOutboundBefore allows Gupshup second-precision reply timestamp grace', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, `test-msg-gupshup-grace-${Date.now()}@g.us`, {
+        chatType: 'dm',
+        channel: 'gupshup',
+      });
+      const inboundSecond = new Date('2026-06-09T17:51:55.000Z');
+
+      await messageService.create({
+        chatId: chat.id,
+        externalId: `old-plan-${Date.now()}`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Opção antiga Nosso Médico SP Leste R$ 160,00/mês',
+        platformTimestamp: new Date('2026-06-08T22:16:45.000Z'),
+        isFromMe: true,
+      });
+      await messageService.create({
+        chatId: chat.id,
+        externalId: `new-plan-${Date.now()}`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'QUOTE-CANARY — Opção 2 Nosso Plano Completo Enfermaria R$ 182,47/mês',
+        platformTimestamp: new Date('2026-06-09T17:51:55.211Z'),
+        isFromMe: true,
+      });
+
+      const result = await messageService.findRecentOutboundBefore(chat.id, inboundSecond, 'quero esse');
+
+      expect(result?.textContent).toContain('QUOTE-CANARY');
+      expect(result?.textContent).toContain('R$ 182,47');
+    });
+
+    test('should filter list by exact externalId only', async () => {
+      const externalId = `BAE5EXACT${Date.now()}`;
+      const { chat } = await chatService.findOrCreate(testInstanceId, `test-msg-external-${Date.now()}@g.us`, {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      await messageService.create({
+        chatId: chat.id,
+        externalId,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Target message',
+        platformTimestamp: new Date(),
+      });
+      await messageService.create({
+        chatId: chat.id,
+        externalId: `${externalId}-other`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: `Debug log mentions ${externalId}`,
+        platformTimestamp: new Date(Date.now() + 1000),
+      });
+
+      const result = await messageService.list({ externalId });
+      const total = await messageService.count({ externalId });
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]?.externalId).toBe(externalId);
+      expect(result.items[0]?.textContent).toBe('Target message');
+      expect(total).toBe(1);
+    });
+
     test('should mark message as deleted', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-delete@g.us', {
         chatType: 'group',

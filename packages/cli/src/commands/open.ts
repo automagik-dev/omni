@@ -35,7 +35,7 @@ export function createOpenCommand(): Command {
       // Resolve the contact to a chat ID
       let chatId: string;
       try {
-        chatId = await resolveChatId(contact);
+        chatId = await resolveChatId(contact, instanceId);
       } catch {
         return output.error(`Could not resolve contact "${contact}". Try a chat ID, name, or phone number.`);
       }

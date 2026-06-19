@@ -6,6 +6,7 @@ import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type AgentProvider, type NewAgentProvider, agentProviders } from '@omni/db';
 import { eq } from 'drizzle-orm';
+import { invalidateProviderCache } from '../plugins/agent-dispatcher';
 
 export interface ProviderHealthResult {
   healthy: boolean;
@@ -82,6 +83,8 @@ export class ProviderService {
       throw new NotFoundError('AgentProvider', id);
     }
 
+    invalidateProviderCache(id);
+
     return updated;
   }
 
@@ -94,6 +97,8 @@ export class ProviderService {
     if (!result.length) {
       throw new NotFoundError('AgentProvider', id);
     }
+
+    invalidateProviderCache(id);
   }
 
   /**

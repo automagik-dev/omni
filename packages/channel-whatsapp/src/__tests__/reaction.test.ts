@@ -26,6 +26,20 @@ describe('Reaction Sender', () => {
       expect(react.key.fromMe).toBe(false);
     });
 
+    it('includes participant for group messages from other users', () => {
+      const content = buildReactionContent(
+        '120363424772797713@g.us',
+        '3AAFEE9E6DB2E7864DE2',
+        '👍',
+        false,
+        '178035101794451@lid',
+      );
+
+      const react = (content as { react: { key: { fromMe: boolean; participant?: string } } }).react;
+      expect(react.key.fromMe).toBe(false);
+      expect(react.key.participant).toBe('178035101794451@lid');
+    });
+
     it('builds removal reaction with empty string', () => {
       const content = buildReactionContent('1234567890@s.whatsapp.net', 'msg_123', '', true);
 

@@ -31,12 +31,19 @@ import {
 import {
   type MediaProcessingService,
   type ProcessingResult,
+  type ProcessorConfig,
   createMediaProcessingService,
 } from '@omni/media-processing';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
+import { BATCH_PRICING_VERSION, computeEstimatedCostCents } from './batch-pricing';
 import { MediaStorageService } from './media-storage';
 
 const log = createLogger('services:batch-jobs');
+
+interface MediaSettingsReader {
+  getSecret(key: string, envFallback?: string): Promise<string | null | undefined>;
+  getString(key: string, envFallback?: string, defaultValue?: string): Promise<string | null | undefined>;
+}
 
 /**
  * Content types that can be batch processed
@@ -114,7 +121,7 @@ interface JobProcessingState {
  * Batch Job Service
  */
 export class BatchJobService {
-  private mediaService: MediaProcessingService;
+  private mediaServicePromise: Promise<MediaProcessingService> | null = null;
   private mediaStorage: MediaStorageService;
   /** Track active job executions for cancellation */
   private activeJobs = new Map<string, { cancelled: boolean }>();
@@ -130,9 +137,46 @@ export class BatchJobService {
   constructor(
     private db: Database,
     private eventBus: EventBus | null,
+    private settings?: MediaSettingsReader,
   ) {
-    this.mediaService = createMediaProcessingService();
     this.mediaStorage = new MediaStorageService(db);
+  }
+
+  private getMediaService(): Promise<MediaProcessingService> {
+    if (!this.mediaServicePromise) {
+      this.mediaServicePromise = this.createMediaService().catch((error) => {
+        this.mediaServicePromise = null;
+        throw error;
+      });
+    }
+    return this.mediaServicePromise;
+  }
+
+  private async createMediaService(): Promise<MediaProcessingService> {
+    let config: Partial<ProcessorConfig> | undefined;
+    if (this.settings) {
+      const [groqApiKey, openaiApiKey, geminiApiKey, defaultLanguage, audioProvider, audioModel, audioPrompt] =
+        await Promise.all([
+          this.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
+          this.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
+          this.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
+          this.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
+          this.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
+          this.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
+          this.settings.getString('prompt.audio_transcription'),
+        ]);
+      config = {
+        groqApiKey: groqApiKey ?? undefined,
+        openaiApiKey: openaiApiKey ?? undefined,
+        geminiApiKey: geminiApiKey ?? undefined,
+        defaultLanguage: defaultLanguage ?? 'pt',
+        audioProvider: audioProvider ?? 'openai',
+        audioModel: audioModel ?? 'gpt-audio-mini',
+        audioPrompt: audioPrompt ?? undefined,
+      };
+    }
+
+    return createMediaProcessingService(config);
   }
 
   /**
@@ -167,6 +211,14 @@ export class BatchJobService {
       force,
       delayMinMs: delayMinMs ?? BatchJobService.DEFAULT_DELAY_MIN_MS,
       delayMaxMs: delayMaxMs ?? BatchJobService.DEFAULT_DELAY_MAX_MS,
+      // Stamp the pricing table version used to derive any cost estimate
+      // at creation time. Persisted on the batch record via the
+      // `request_params` jsonb column for audit + pricing-drift
+      // provenance (see #485, follow-up to #477). No dedicated
+      // `pricing_version` column — storing alongside requestParams keeps
+      // the fix migration-free; a schema column can be added later if
+      // filtering/indexing by version becomes useful.
+      pricingVersion: BATCH_PRICING_VERSION,
     };
 
     const jobData: NewBatchJob = {
@@ -189,7 +241,12 @@ export class BatchJobService {
       throw new Error('Failed to create batch job');
     }
 
-    log.info('Batch job created', { jobId: created.id, jobType, instanceId });
+    log.info('Batch job created', {
+      jobId: created.id,
+      jobType,
+      instanceId,
+      pricingVersion: BATCH_PRICING_VERSION,
+    });
 
     // Emit created event
     if (this.eventBus) {
@@ -357,13 +414,16 @@ export class BatchJobService {
       else if (type === 'document') counts.documentCount++;
     }
 
-    // Rough cost estimates (in cents)
-    // Audio: ~$0.04/hour = ~0.1 cents per 10-second clip
-    // Image: ~$0.01 per image (Gemini vision tokens)
-    // Video: ~$0.02 per video (Gemini)
-    // Document: ~$0.00 (local processing)
-    const estimatedCostCents =
-      counts.audioCount * 10 + counts.imageCount * 1 + counts.videoCount * 2 + counts.documentCount * 0;
+    // Cost estimate derived from the declarative provider pricing table
+    // (`batch-pricing.ts`, pinned to default Groq STT + Gemini Flash-Lite
+    // vision as of 2026-04). See issue #477: the previous hardcoded
+    // per-item cents were off by ~150× for that provider mix.
+    const estimatedCostCents = computeEstimatedCostCents(counts);
+    log.debug('Batch cost estimated', {
+      totalItems: items.length,
+      estimatedCostCents,
+      pricingVersion: BATCH_PRICING_VERSION,
+    });
 
     // Factor in average random delay between items (midpoint of default range)
     const avgDelayMs = (BatchJobService.DEFAULT_DELAY_MIN_MS + BatchJobService.DEFAULT_DELAY_MAX_MS) / 2;
@@ -734,18 +794,18 @@ export class BatchJobService {
    */
   private async processItem(instanceId: string, message: Message, batchJobId: string): Promise<ProcessingResult> {
     const mimeType = message.mediaMimeType;
-    if (!mimeType || !this.mediaService.canProcess(mimeType)) {
+    const mediaService = await this.getMediaService();
+    if (!mimeType || !mediaService.canProcess(mimeType)) {
       return this.failedResult(`MIME type not processable: ${mimeType}`);
     }
 
-    const filePath = await this.resolveFilePath(instanceId, message, mimeType);
-    if (!filePath) {
-      return this.failedResult('No media file path available');
+    const resolved = await this.resolveFilePath(instanceId, message, mimeType);
+    if (!resolved.ok) {
+      return this.failedResult(resolved.reason);
     }
 
-    const fullPath = join(this.mediaStorage.getBasePath(), filePath);
-    const result = await this.mediaService.process(fullPath, mimeType, {
-      language: 'pt',
+    const fullPath = join(this.mediaStorage.getBasePath(), resolved.path);
+    const result = await mediaService.process(fullPath, mimeType, {
       caption: message.textContent ?? undefined,
     });
 
@@ -773,15 +833,24 @@ export class BatchJobService {
   }
 
   /**
-   * Resolve file path - download from URL if needed
+   * Resolve file path - download from URL if needed.
+   *
+   * Returns a tagged result so callers can surface the real reason a file
+   * could not be resolved (missing local path, missing url, download failure).
+   * Previously all three paths collapsed into a generic "No media file path
+   * available" error, which made #500 diagnosis impossible.
    */
-  private async resolveFilePath(instanceId: string, message: Message, mimeType: string): Promise<string | null> {
+  private async resolveFilePath(
+    instanceId: string,
+    message: Message,
+    mimeType: string,
+  ): Promise<{ ok: true; path: string } | { ok: false; reason: string }> {
     if (message.mediaLocalPath) {
-      return message.mediaLocalPath;
+      return { ok: true, path: message.mediaLocalPath };
     }
 
     if (!message.mediaUrl) {
-      return null;
+      return { ok: false, reason: 'No media_url and no media_local_path on message' };
     }
 
     try {
@@ -793,9 +862,15 @@ export class BatchJobService {
         message.platformTimestamp ?? undefined,
       );
       await this.mediaStorage.updateMessageLocalPath(message.id, result.localPath);
-      return result.localPath;
-    } catch {
-      return null;
+      return { ok: true, path: result.localPath };
+    } catch (error) {
+      const reason = `storeFromUrl failed: ${error instanceof Error ? error.message : String(error)}`;
+      log.warn('storeFromUrl failed during batch retrofill', {
+        messageId: message.id,
+        mediaUrl: message.mediaUrl,
+        error: reason,
+      });
+      return { ok: false, reason };
     }
   }
 
@@ -861,7 +936,8 @@ export class BatchJobService {
     if (jobType === 'time_based_batch' && daysBack !== undefined) {
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - daysBack);
-      conditions.push(gte(messages.createdAt, cutoffDate));
+      // For retroactive sync/backfill, platformTimestamp is the message date; createdAt is ingestion time.
+      conditions.push(gte(messages.platformTimestamp, cutoffDate));
     }
 
     // Query with join
@@ -870,7 +946,7 @@ export class BatchJobService {
       .from(messages)
       .innerJoin(chats, eq(messages.chatId, chats.id))
       .where(and(...conditions, ...chatConditions))
-      .orderBy(desc(messages.createdAt))
+      .orderBy(desc(messages.platformTimestamp))
       .$dynamic();
 
     if (limit) {

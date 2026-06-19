@@ -20,7 +20,7 @@ interface AgentConfigFormProps {
 export function AgentConfigForm({ instance }: AgentConfigFormProps) {
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(instance.agentProviderId ?? null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(instance.agentId ?? null);
-  const [agentTimeout, setAgentTimeout] = useState(instance.agentTimeout ?? 60);
+  const [agentTimeout, setAgentTimeout] = useState(instance.agentTimeout ?? 600);
   const [streamMode, setStreamMode] = useState(instance.agentStreamMode ?? false);
   const [isDirty, setIsDirty] = useState(false);
 
@@ -34,7 +34,7 @@ export function AgentConfigForm({ instance }: AgentConfigFormProps) {
     const hasChanges =
       selectedProviderId !== (instance.agentProviderId ?? null) ||
       selectedAgentId !== (instance.agentId ?? null) ||
-      agentTimeout !== (instance.agentTimeout ?? 60) ||
+      agentTimeout !== (instance.agentTimeout ?? 600) ||
       streamMode !== (instance.agentStreamMode ?? false);
     setIsDirty(hasChanges);
   }, [selectedProviderId, selectedAgentId, agentTimeout, streamMode, instance]);
@@ -186,27 +186,30 @@ export function AgentConfigForm({ instance }: AgentConfigFormProps) {
               </div>
             ) : (
               <div className="space-y-2">
-                {agents.map((agent) => (
-                  <button
-                    key={agent.agent_id}
-                    type="button"
-                    onClick={() => setSelectedAgentId(agent.agent_id)}
-                    className={cn(
-                      'flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-                      selectedAgentId === agent.agent_id
-                        ? 'border-primary bg-primary/5'
-                        : 'hover:border-muted-foreground/50 hover:bg-accent',
-                    )}
-                  >
-                    <div className="flex-1">
-                      <p className="font-medium">{agent.name}</p>
-                      {agent.description && (
-                        <p className="text-sm text-muted-foreground line-clamp-1">{agent.description}</p>
+                {agents.map((agent) => {
+                  const agentId = agent.id ?? agent.agent_id;
+                  return (
+                    <button
+                      key={agentId}
+                      type="button"
+                      onClick={() => agentId && setSelectedAgentId(agentId)}
+                      className={cn(
+                        'flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors',
+                        selectedAgentId === agentId
+                          ? 'border-primary bg-primary/5'
+                          : 'hover:border-muted-foreground/50 hover:bg-accent',
                       )}
-                    </div>
-                    {selectedAgentId === agent.agent_id && <Check className="h-5 w-5 text-primary" />}
-                  </button>
-                ))}
+                    >
+                      <div className="flex-1">
+                        <p className="font-medium">{agent.name}</p>
+                        {agent.description && (
+                          <p className="text-sm text-muted-foreground line-clamp-1">{agent.description}</p>
+                        )}
+                      </div>
+                      {selectedAgentId === agentId && <Check className="h-5 w-5 text-primary" />}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </CardContent>
@@ -228,12 +231,12 @@ export function AgentConfigForm({ instance }: AgentConfigFormProps) {
                 id="agent-timeout"
                 type="number"
                 min={10}
-                max={300}
+                max={600}
                 value={agentTimeout}
                 onChange={(e) => setAgentTimeout(Number(e.target.value))}
                 className="max-w-[120px]"
               />
-              <p className="text-xs text-muted-foreground">Maximum time to wait for agent response (10-300 seconds)</p>
+              <p className="text-xs text-muted-foreground">Maximum time to wait for agent response (10-600 seconds)</p>
             </div>
 
             <div className="flex items-center justify-between rounded-lg border p-3">

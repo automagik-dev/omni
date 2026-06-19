@@ -27,6 +27,12 @@ export interface EmitMessageReceivedParams {
   /** Sender identifier on the platform */
   from: string;
 
+  /** Display name of the sender (normalized across channels) */
+  senderName?: string;
+
+  /** Group/chat display name (for group chats) */
+  chatName?: string;
+
   /** Message content */
   content: {
     type: ContentType;
@@ -77,11 +83,19 @@ export interface EmitMessageSentParams {
   content: {
     type: ContentType;
     text?: string;
+    caption?: string;
     mediaUrl?: string;
+    localPath?: string;
+    mimeType?: string;
+    filename?: string;
+    isVoiceNote?: boolean;
   };
 
   /** ID of message this was replying to */
   replyToId?: string;
+
+  /** Raw payload / sanitized send metadata (never include inline media bytes) */
+  rawPayload?: Record<string, unknown>;
 
   /** agents.id UUID — set by agent-dispatcher when agent sends */
   senderAgentId?: string;

@@ -1,0 +1,48 @@
+{
+  "source": "channel",
+  "sender": "5521900000002",
+  "channel": "whatsapp",
+  "isGroup": false,
+  "destination": 558007779070,
+  "botname": "wFXLdg7dVyO1H9eKL9l9fSL5",
+  "event_type": "async_response",
+  "request_id": "5521900000002_00000000-0000-0000-0000-000000000000_1777400100000",
+  "stack_id": 1777400100000,
+  "postbackText": null,
+  "senderobj": {
+    "channelid": "5521900000002",
+    "display": "Test Lead",
+    "channeltype": "whatsapp"
+  },
+  "contextobj": {
+    "senderName": "Test Lead",
+    "botname": "wFXLdg7dVyO1H9eKL9l9fSL5",
+    "channeltype": "whatsapp",
+    "contexttype": "p2p",
+    "contextid": "5521900000002"
+  },
+  "messageobj": {
+    "id": "wamid.TEST_ASYNC_RESPONSE_AUDIO_001",
+    "type": "audio",
+    "from": "5521900000002",
+    "timestamp": 1777400100,
+    "text": "https://filemanager.gupshup.io/wa/media/0000000000000001?download=false",
+    "url": "https://filemanager.gupshup.io/wa/media/0000000000000001?download=false",
+    "mediaId": "0000000000000001",
+    "contentType": "audio/ogg; codecs=opus",
+    "raw": {
+      "payload": { "url": "https://filemanager.gupshup.io/wa/media/0000000000000001?download=false" },
+      "sender": { "phone": "5521900000002", "name": "Test Lead" },
+      "id": "wamid.TEST_ASYNC_RESPONSE_AUDIO_001",
+      "source": "5521900000002",
+      "type": "audio"
+    }
+  },
+  "messageHeader": {
+    "event_type": "async_response",
+    "nsTraceId": "6CF432CE21239AF-0000000000001235",
+    "project_id": "31569577",
+    "x-gs-priority": 4
+  },
+  "metadata": {}
+}

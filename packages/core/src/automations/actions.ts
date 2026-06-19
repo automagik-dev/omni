@@ -67,6 +67,36 @@ export interface ActionDependencies {
    * The response is stored in variables for use in subsequent actions.
    */
   callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
+  /**
+   * Optional consumer-side stale-event gate. Invoked by the engine for
+   * `chat.idle_timeout` events before matching automations execute.
+   * Returns `{ skip: true, reason }` when the event is no longer relevant:
+   *   - chat in active close-contact state (`closed:true` or
+   *     `closeUntil` still in window)
+   *   - follow-up row already disarmed (`sequence_complete`,
+   *     `customer_replied`, `handoff`, `contact_closed`, etc.)
+   *   - row has advanced past the event's `sequenceIndex` (event is a
+   *     replay or redelivery from before the row's last sweeper tick)
+   *
+   * Defense-in-depth against NATS replay of historical or duplicate
+   * idle-timeout events that the sweeper had already processed before a
+   * restart drained the durable consumer's ack state, or that NATS
+   * redelivered after a transient handler failure.
+   *
+   * `eventSequenceIndex` is the `sequenceIndex` field from the
+   * `chat.idle_timeout` payload at publish time. The row's current
+   * `sequence_index` is read by the gate; if it is strictly greater than
+   * the event's value, the row has already advanced via a more recent
+   * sweep and this event is stale.
+   *
+   * Returning `{ skip: false }` (or omitting the gate entirely) lets the
+   * engine proceed with normal matching+execution.
+   */
+  staleIdleTimeoutGate?: (
+    chatId: string,
+    instanceId: string,
+    eventSequenceIndex: number | null,
+  ) => Promise<{ skip: boolean; reason?: string }>;
 }
 
 /**

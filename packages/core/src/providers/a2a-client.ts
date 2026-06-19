@@ -4,11 +4,12 @@
  * HTTP + SSE client for calling external A2A-compatible agents.
  * Implements IAgentClient over the A2A JSON-RPC protocol.
  *
- * message/send  → sync: polls until terminal state
- * message/stream → async: parses SSE taskArtifactUpdateEvent chunks
+ * SendMessage → sync: polls until terminal state
+ * SendStreamingMessage → async: parses A2A v1 StreamResponse chunks
  */
 
 import { createLogger } from '../logger';
+import { OMNI_EXECUTION_CONTEXT_EXTENSION_URI } from './execution-context';
 import { ProviderError } from './types';
 import type { IAgentClient, ProviderRequest, ProviderResponse, StreamChunk } from './types';
 
@@ -40,7 +41,7 @@ export class A2AClient implements IAgentClient {
 
   async run(request: ProviderRequest): Promise<ProviderResponse> {
     const startMs = Date.now();
-    const body = this.buildJsonRpcRequest('message/send', request);
+    const body = this.buildJsonRpcRequest('SendMessage', request);
 
     const response = await this.post(body, request.timeoutMs ?? this.defaultTimeoutMs);
     if (!response.ok) {
@@ -63,7 +64,7 @@ export class A2AClient implements IAgentClient {
 
     // If state is already terminal, return immediately
     const state = (task?.status as Record<string, unknown> | undefined)?.state as string | undefined;
-    if (state === 'completed' || state === 'failed') {
+    if (isTerminalState(state)) {
       return this.taskToProviderResponse(task, taskId, startMs);
     }
 
@@ -72,7 +73,7 @@ export class A2AClient implements IAgentClient {
   }
 
   async *stream(request: ProviderRequest): AsyncGenerator<StreamChunk> {
-    const body = this.buildJsonRpcRequest('message/stream', request);
+    const body = this.buildJsonRpcRequest('SendStreamingMessage', request);
     const controller = new AbortController();
     const timeoutMs = request.timeoutMs ?? this.defaultTimeoutMs;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -114,10 +115,11 @@ export class A2AClient implements IAgentClient {
       const response = await fetch(this.baseUrl, {
         method: 'POST',
         headers: this.headers({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ jsonrpc: '2.0', id: 'health', method: 'tasks/get', params: { id: 'ping' } }),
+        body: JSON.stringify({ jsonrpc: '2.0', id: 'health', method: 'GetTask', params: { id: 'ping' } }),
         signal: AbortSignal.timeout(5_000),
       });
-      return { healthy: response.ok, latencyMs: Date.now() - start };
+      const healthy = response.status < 500 && response.status !== 401 && response.status !== 403;
+      return { healthy, latencyMs: Date.now() - start, error: healthy ? undefined : `HTTP ${response.status}` };
     } catch (error) {
       return { healthy: false, latencyMs: Date.now() - start, error: String(error) };
     }
@@ -127,6 +129,7 @@ export class A2AClient implements IAgentClient {
 
   private headers(extra?: Record<string, string>): Record<string, string> {
     return {
+      'A2A-Version': '1.0',
       ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
       ...extra,
     };
@@ -155,18 +158,28 @@ export class A2AClient implements IAgentClient {
   }
 
   private buildJsonRpcRequest(method: string, request: ProviderRequest): unknown {
+    const message: Record<string, unknown> = {
+      role: 'ROLE_USER',
+      parts: [{ text: request.message, mediaType: 'text/plain' }],
+      messageId: `msg-${crypto.randomUUID()}`,
+    };
+
+    if (request.executionContext) {
+      message.extensions = [OMNI_EXECUTION_CONTEXT_EXTENSION_URI];
+      message.metadata = {
+        omniExecutionContext: request.executionContext,
+      };
+    }
+
     return {
       jsonrpc: '2.0',
       id: `omni-${crypto.randomUUID()}`,
       method,
       params: {
-        message: {
-          role: 'user',
-          parts: [{ type: 'text', text: request.message }],
-          messageId: `msg-${crypto.randomUUID()}`,
-        },
+        message,
         configuration: {
-          acceptedOutputModes: ['text'],
+          acceptedOutputModes: ['text/plain'],
+          returnImmediately: true,
         },
         contextId: request.sessionId,
       },
@@ -209,16 +222,59 @@ export class A2AClient implements IAgentClient {
   }
 
   private parseSSEEvent(event: Record<string, unknown>): StreamChunk | null {
+    const result = (event.result as Record<string, unknown> | undefined) ?? event;
+    return this.parseArtifactUpdate(result) ?? this.parseStatusUpdate(result) ?? this.parseLegacySSEEvent(event);
+  }
+
+  private parseArtifactUpdate(result: Record<string, unknown>): StreamChunk | null {
+    const artifactUpdate =
+      (result.taskArtifactUpdate as Record<string, unknown> | undefined) ??
+      (result.artifactUpdate as Record<string, unknown> | undefined) ??
+      (result.artifact_update as Record<string, unknown> | undefined);
+    if (artifactUpdate) {
+      const artifact = artifactUpdate.artifact as Record<string, unknown> | undefined;
+      if (!artifact) return null;
+      const text = extractTextFromParts((artifact.parts as Array<Record<string, unknown>>) ?? []);
+      if (!text) return null;
+      return {
+        event: 'artifact',
+        content: text,
+        isComplete: false,
+        runId: artifactUpdate.taskId as string | undefined,
+      };
+    }
+
+    return null;
+  }
+
+  private parseStatusUpdate(result: Record<string, unknown>): StreamChunk | null {
+    const statusUpdate =
+      (result.taskStatusUpdate as Record<string, unknown> | undefined) ??
+      (result.statusUpdate as Record<string, unknown> | undefined) ??
+      (result.status_update as Record<string, unknown> | undefined);
+    if (statusUpdate) {
+      const status = statusUpdate.status as Record<string, unknown> | undefined;
+      const state = status?.state as string | undefined;
+      if (isTerminalState(state)) {
+        return {
+          event: 'final',
+          isComplete: true,
+          runId: statusUpdate.taskId as string | undefined,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private parseLegacySSEEvent(event: Record<string, unknown>): StreamChunk | null {
+    // Legacy v0.3 event shapes are still accepted for older external servers.
     const type = event.type as string | undefined;
 
     if (type === 'taskArtifactUpdateEvent') {
       const artifact = event.artifact as Record<string, unknown> | undefined;
       if (!artifact) return null;
-      const parts = (artifact.parts as Array<Record<string, unknown>>) ?? [];
-      const textParts = parts
-        .filter((p) => p.type === 'text')
-        .map((p) => p.text as string)
-        .join('');
+      const textParts = extractTextFromParts((artifact.parts as Array<Record<string, unknown>>) ?? []);
       if (!textParts) return null;
       return {
         event: 'artifact',
@@ -231,7 +287,7 @@ export class A2AClient implements IAgentClient {
     if (type === 'taskStatusUpdateEvent') {
       const status = event.status as Record<string, unknown> | undefined;
       const state = status?.state as string | undefined;
-      const isFinal = event.final === true || state === 'completed' || state === 'failed';
+      const isFinal = event.final === true || isTerminalState(state);
       if (isFinal) {
         return {
           event: 'final',
@@ -253,11 +309,8 @@ export class A2AClient implements IAgentClient {
     const textParts: string[] = [];
     for (const artifact of artifacts) {
       const parts = (artifact.parts as Array<Record<string, unknown>>) ?? [];
-      for (const part of parts) {
-        if (part.type === 'text' && part.text) {
-          textParts.push(part.text as string);
-        }
-      }
+      const text = extractTextFromParts(parts);
+      if (text) textParts.push(text);
     }
 
     const status = task?.status as Record<string, unknown> | undefined;
@@ -267,7 +320,7 @@ export class A2AClient implements IAgentClient {
       content: textParts.join('\n'),
       runId: taskId,
       sessionId: (task?.contextId as string | undefined) ?? taskId,
-      status: state === 'failed' ? 'failed' : 'completed',
+      status: state === 'TASK_STATE_COMPLETED' || state === 'completed' ? 'completed' : 'failed',
       metrics: {
         inputTokens: 0,
         outputTokens: 0,
@@ -287,7 +340,7 @@ export class A2AClient implements IAgentClient {
       const body = {
         jsonrpc: '2.0',
         id: `poll-${attempt}`,
-        method: 'tasks/get',
+        method: 'GetTask',
         params: { id: taskId },
       };
 
@@ -310,7 +363,7 @@ export class A2AClient implements IAgentClient {
       const status = task?.status as Record<string, unknown> | undefined;
       const state = status?.state as string | undefined;
 
-      if (state === 'completed' || state === 'failed') {
+      if (isTerminalState(state)) {
         return this.taskToProviderResponse(task, taskId, startMs);
       }
 
@@ -323,6 +376,27 @@ export class A2AClient implements IAgentClient {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTerminalState(state: string | undefined): boolean {
+  return (
+    state === 'TASK_STATE_COMPLETED' ||
+    state === 'TASK_STATE_FAILED' ||
+    state === 'TASK_STATE_CANCELED' ||
+    state === 'TASK_STATE_REJECTED' ||
+    state === 'TASK_STATE_INPUT_REQUIRED' ||
+    state === 'TASK_STATE_AUTH_REQUIRED' ||
+    state === 'completed' ||
+    state === 'failed' ||
+    state === 'canceled'
+  );
+}
+
+function extractTextFromParts(parts: Array<Record<string, unknown>>): string {
+  return parts
+    .filter((part) => typeof part.text === 'string')
+    .map((part) => part.text as string)
+    .join('');
 }
 
 export function createA2AClient(config: A2AClientConfig): A2AClient {

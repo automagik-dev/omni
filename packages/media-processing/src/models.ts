@@ -20,7 +20,16 @@ export const GEMINI_MODEL = 'gemini-3-flash-preview';
 export const OPENAI_VISION_MODEL = 'gpt-4o-mini';
 
 /** Fallback model for audio transcription (when Groq unavailable) */
-export const OPENAI_WHISPER_MODEL = 'whisper-1';
+export const OPENAI_AUDIO_CHAT_MODEL = 'gpt-audio-mini';
+
+/** Stable fallback OpenAI transcription model */
+export const OPENAI_TRANSCRIBE_MODEL = 'gpt-4o-transcribe';
+
+/** Backward-compatible alias for OpenAI transcription fallback */
+export const OPENAI_WHISPER_MODEL = OPENAI_TRANSCRIBE_MODEL;
+
+/** Gemini direct-audio fallback model */
+export const GEMINI_AUDIO_MODEL = 'gemini-3.1-flash-lite';
 
 // ============================================================================
 // Groq

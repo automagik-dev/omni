@@ -49,6 +49,11 @@ export class AutomationService {
   async startEngine(deps?: {
     sendMessage?: (instanceId: string, to: string, content: string) => Promise<void>;
     callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
+    staleIdleTimeoutGate?: (
+      chatId: string,
+      instanceId: string,
+      eventSequenceIndex: number | null,
+    ) => Promise<{ skip: boolean; reason?: string }>;
   }): Promise<void> {
     if (!this.eventBus) {
       return;

@@ -140,6 +140,19 @@ export interface Subscription {
 
   /** Unsubscribe from events */
   unsubscribe(): Promise<void>;
+
+  /**
+   * Whether the underlying consumer/iterator is still delivering events.
+   *
+   * Returns false when the iterator has exited (server-side consumer GC'd,
+   * NATS reset, stream deleted, …). Callers — most importantly the
+   * automation engine reconciler (#546) — use this to detect silently dead
+   * subscriptions and re-subscribe.
+   *
+   * Optional for compatibility with mock buses; defaults to alive when
+   * unimplemented.
+   */
+  isAlive?(): boolean;
 }
 
 /**

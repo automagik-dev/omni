@@ -1,6 +1,6 @@
 {
   "name": "@omni/media-processing",
-  "version": "2.260410.1",
+  "version": "2.260619.1",
   "type": "module",
   "exports": {
     ".": {
@@ -32,7 +32,8 @@
     "@google/generative-ai": "^0.21.0",
     "pdf-parse": "^1.1.1",
     "mammoth": "^1.8.0",
-    "exceljs": "^4.4.0"
+    "exceljs": "^4.4.0",
+    "jszip": "^3.10.1"
   },
   "devDependencies": {
     "@types/pdf-parse": "^1.1.5",

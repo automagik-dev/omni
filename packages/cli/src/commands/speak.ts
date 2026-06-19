@@ -24,6 +24,13 @@ interface SpeakOptions {
   voice?: string;
   provider?: string;
   style?: string;
+  model?: string;
+  instructions?: string;
+  tone?: string;
+  accent?: string;
+  pace?: string;
+  emotion?: string;
+  voiceNoteProfile?: string;
   language?: string;
   speed?: string;
   format?: string;
@@ -58,9 +65,16 @@ export function createSpeakCommand(): Command {
     new Command('speak')
       .description('Synthesize text to speech and send as a voice note (or save with --output)')
       .argument('<text>', 'Text to convert to speech')
-      .option('--provider <name>', 'TTS provider (gemini, elevenlabs). Default: server config.')
+      .option('--provider <name>', 'TTS provider (gemini, openai, elevenlabs). Default: server config.')
+      .option('--model <model>', 'TTS model override (provider-specific)')
       .option('--voice <name>', 'Voice identifier (e.g. Kore for Gemini, JBFqn... for ElevenLabs)')
       .option('--style <prompt>', 'Style prompt prepended to text (Gemini only, e.g. "Say cheerfully")')
+      .option('--instructions <text>', 'Provider-native speaking instructions')
+      .option('--tone <text>', 'Tone guidance')
+      .option('--accent <text>', 'Accent guidance')
+      .option('--pace <text>', 'Pace guidance')
+      .option('--emotion <text>', 'Emotion guidance')
+      .option('--voice-note-profile <name>', 'Voice-note profile/preset name')
       .option('--language <code>', 'BCP-47 language code (e.g. en-US, pt-BR)')
       .option('--speed <factor>', 'Speaking speed multiplier 0.5-2.0 (provider-dependent)')
       .option('--format <fmt>', `Audio format: ${ALLOWED_FORMATS.join(', ')} (default: ogg)`)
@@ -87,6 +101,13 @@ export function createSpeakCommand(): Command {
             speed,
             format,
             style: options.style,
+            model: options.model,
+            instructions: options.instructions,
+            tone: options.tone,
+            accent: options.accent,
+            pace: options.pace,
+            emotion: options.emotion,
+            voiceNoteProfile: options.voiceNoteProfile,
           });
           audioBuffer = result.audio;
           mimeType = result.mimeType;

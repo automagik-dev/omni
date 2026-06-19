@@ -1,29 +1,56 @@
 /**
- * A2A protocol type definitions
+ * A2A protocol v1 type definitions.
  *
- * Based on the Google DeepMind Agent-to-Agent (A2A) protocol.
- * @see https://google.github.io/A2A/
+ * The public JSON model uses camelCase field names and ProtoJSON enum values.
+ * @see https://a2a-protocol.org/latest/specification/
  */
 
 // ─── Task State ───────────────────────────────────────────────
 
-export type A2ATaskState = 'submitted' | 'working' | 'completed' | 'failed' | 'canceled' | 'input-required';
+export type A2ATaskState =
+  | 'TASK_STATE_SUBMITTED'
+  | 'TASK_STATE_WORKING'
+  | 'TASK_STATE_COMPLETED'
+  | 'TASK_STATE_FAILED'
+  | 'TASK_STATE_CANCELED'
+  | 'TASK_STATE_INPUT_REQUIRED'
+  | 'TASK_STATE_REJECTED'
+  | 'TASK_STATE_AUTH_REQUIRED'
+  // Legacy v0.3 compatibility.
+  | 'submitted'
+  | 'working'
+  | 'completed'
+  | 'failed'
+  | 'canceled'
+  | 'input-required';
 
 // ─── Message Parts ────────────────────────────────────────────
 
-export type A2ATextPart = { type: 'text'; text: string };
-export type A2ADataPart = { type: 'data'; data: Record<string, unknown> };
-export type A2AFilePart = { type: 'file'; file: { name?: string; mimeType?: string; uri?: string } };
-export type A2APart = A2ATextPart | A2ADataPart | A2AFilePart;
+export type A2ATextPart = { text: string; mediaType?: string; metadata?: Record<string, unknown> };
+export type A2ADataPart = { data: unknown; mediaType?: string; metadata?: Record<string, unknown> };
+export type A2AFileUrlPart = {
+  url: string;
+  filename?: string;
+  mediaType?: string;
+  metadata?: Record<string, unknown>;
+};
+export type A2AFileRawPart = {
+  raw: string;
+  filename?: string;
+  mediaType?: string;
+  metadata?: Record<string, unknown>;
+};
+export type A2APart = A2ATextPart | A2ADataPart | A2AFileUrlPart | A2AFileRawPart;
 
 // ─── Message ──────────────────────────────────────────────────
 
 export interface A2AMessage {
-  role: 'user' | 'agent';
+  role: 'ROLE_USER' | 'ROLE_AGENT';
   parts: A2APart[];
   messageId?: string;
   taskId?: string;
   contextId?: string;
+  extensions?: string[];
   metadata?: Record<string, unknown>;
 }
 
@@ -34,10 +61,8 @@ export interface A2AArtifact {
   name?: string;
   description?: string;
   parts: A2APart[];
-  index?: number;
-  append?: boolean;
-  lastChunk?: boolean;
   metadata?: Record<string, unknown>;
+  extensions?: string[];
 }
 
 // ─── Task ─────────────────────────────────────────────────────
@@ -54,6 +79,8 @@ export interface A2ATask {
   status: A2ATaskStatus;
   artifacts?: A2AArtifact[];
   history?: A2AMessage[];
+  createdAt?: string;
+  lastModified?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -76,10 +103,14 @@ export interface JSONRPCResponse {
 // ─── Method Params ────────────────────────────────────────────
 
 export interface MessageSendParams {
+  tenant?: string;
   message: A2AMessage;
   configuration?: {
     acceptedOutputModes?: string[];
+    pushNotificationConfig?: unknown;
     historyLength?: number;
+    returnImmediately?: boolean;
+    /** Legacy v0.3 compatibility. */
     blocking?: boolean;
   };
   taskId?: string;
@@ -90,21 +121,28 @@ export interface MessageSendParams {
 // ─── SSE Events ───────────────────────────────────────────────
 
 export interface TaskStatusUpdateEvent {
-  type: 'taskStatusUpdateEvent';
   taskId: string;
-  contextId?: string;
+  contextId: string;
   status: A2ATaskStatus;
-  final: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 export interface TaskArtifactUpdateEvent {
-  type: 'taskArtifactUpdateEvent';
   taskId: string;
-  contextId?: string;
+  contextId: string;
   artifact: A2AArtifact;
+  index?: number;
+  append?: boolean;
+  lastChunk?: boolean;
+  metadata?: Record<string, unknown>;
 }
 
-export type A2ASSEEvent = TaskStatusUpdateEvent | TaskArtifactUpdateEvent;
+export interface A2AStreamResponse {
+  task?: A2ATask;
+  message?: A2AMessage;
+  taskStatusUpdate?: TaskStatusUpdateEvent;
+  taskArtifactUpdate?: TaskArtifactUpdateEvent;
+}
 
 // ─── Agent Card ───────────────────────────────────────────────
 
@@ -118,21 +156,56 @@ export interface A2ASkill {
   outputModes?: string[];
 }
 
+export interface A2AAgentInterface {
+  url: string;
+  protocolBinding: 'JSONRPC' | 'HTTP+JSON' | string;
+  protocolVersion: string;
+  tenant?: string;
+}
+
 export interface A2AAgentCapabilities {
   streaming?: boolean;
   pushNotifications?: boolean;
-  stateTransitionHistory?: boolean;
+  extendedAgentCard?: boolean;
+  extensions?: Array<Record<string, unknown>>;
+}
+
+export type A2ASecurityScheme =
+  | {
+      httpAuthSecurityScheme: {
+        description?: string;
+        scheme: string;
+        bearerFormat?: string;
+      };
+    }
+  | {
+      apiKeySecurityScheme: {
+        description?: string;
+        location: 'query' | 'header' | 'cookie' | string;
+        name: string;
+      };
+    }
+  | Record<string, unknown>;
+
+export interface A2ASecurityRequirement {
+  schemes: Record<string, { list: string[] }>;
 }
 
 export interface A2AAgentCard {
   name: string;
   description?: string;
-  url: string;
   version: string;
+  supportedInterfaces: A2AAgentInterface[];
   capabilities: A2AAgentCapabilities;
   defaultInputModes: string[];
   defaultOutputModes: string[];
   skills: A2ASkill[];
+  provider?: {
+    organization?: string;
+    url?: string;
+  };
+  securitySchemes?: Record<string, A2ASecurityScheme>;
+  securityRequirements?: A2ASecurityRequirement[];
   iconUrl?: string;
   documentationUrl?: string;
 }

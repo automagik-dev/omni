@@ -17,6 +17,9 @@ export interface OutgoingContent {
   /** Media URL (for media types) */
   mediaUrl?: string;
 
+  /** Local media path (for media types when available) */
+  localPath?: string;
+
   /** MIME type for media */
   mimeType?: string;
 

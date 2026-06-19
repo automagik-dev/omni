@@ -24,7 +24,7 @@ import { isLidFormat, isValidE164Phone, validateContactPhone } from '../../utils
 function makePerson(overrides: Partial<Person> = {}): Person {
   return {
     id: 'person-1',
-    displayName: 'Felipe Rosa',
+    displayName: 'Example User',
     primaryPhone: null,
     primaryEmail: null,
     avatarUrl: null,
@@ -43,7 +43,7 @@ function makeIdentity(overrides: Partial<PlatformIdentity> = {}): PlatformIdenti
     channel: 'whatsapp-baileys',
     instanceId: 'instance-A',
     platformUserId: '5512982298888@s.whatsapp.net',
-    platformUsername: 'Felipe Rosa',
+    platformUsername: 'Example User',
     profilePicUrl: null,
     profileData: null,
     messageCount: 0,
@@ -186,7 +186,7 @@ describe('Person deduplication', () => {
     test('links to existing person matched by phone', async () => {
       const existingPerson = makePerson({
         id: 'person-felipe',
-        displayName: 'Felipe Rosa',
+        displayName: 'Example User',
         primaryPhone: '+5512982298888',
       });
 
@@ -205,11 +205,11 @@ describe('Person deduplication', () => {
           channel: 'whatsapp-baileys',
           instanceId: 'instance-A',
           platformUserId: '54958418317348@lid',
-          platformUsername: 'Felipe Rosa',
+          platformUsername: 'Example User',
         },
         {
           createPerson: true,
-          displayName: 'Felipe Rosa',
+          displayName: 'Example User',
           matchByPhone: '+5512982298888', // from resolvedSenderPhone
           matchByPlatformUserId: '54958418317348@lid',
           matchByChannel: 'whatsapp-baileys',
@@ -268,7 +268,7 @@ describe('Person deduplication', () => {
 
   describe('Cross-instance same platformUserId', () => {
     test('links to same person across instances', async () => {
-      const sharedPerson = makePerson({ id: 'person-shared', displayName: 'Felipe Rosa' });
+      const sharedPerson = makePerson({ id: 'person-shared', displayName: 'Example User' });
 
       const db = createMockDb({
         existingIdentity: null,
@@ -285,11 +285,11 @@ describe('Person deduplication', () => {
           channel: 'whatsapp-baileys',
           instanceId: 'instance-B',
           platformUserId: '54958418317348@s.whatsapp.net',
-          platformUsername: 'Felipe Rosa',
+          platformUsername: 'Example User',
         },
         {
           createPerson: true,
-          displayName: 'Felipe Rosa',
+          displayName: 'Example User',
           matchByPlatformUserId: '54958418317348@s.whatsapp.net',
           matchByChannel: 'whatsapp-baileys',
         },

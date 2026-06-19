@@ -13,6 +13,8 @@
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { resolveAgentId } from '../resolve.js';
+import { maybeNudgeForGenieBackedAgent } from '../utils/genie-wiring-nudge.js';
 
 const VALID_PROVIDERS = ['claude', 'agno', 'openai', 'gemini', 'custom', 'omni-internal'] as const;
 type AgentProvider = (typeof VALID_PROVIDERS)[number];
@@ -210,10 +212,11 @@ export function createAgentsCommand(): Command {
     .command('get <id>')
     .description('Get agent details')
     .action(async (id: string) => {
+      const resolvedId = await resolveAgentId(id);
       const client = getClient();
 
       try {
-        const agent = await client.agents.get(id);
+        const agent = await client.agents.get(resolvedId);
         output.data(agent);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -243,9 +246,20 @@ export function createAgentsCommand(): Command {
       const body = buildCreateAgentBody(options);
 
       try {
-        const agent = await getClient().agents.create(body);
+        const client = getClient();
+        const agent = await client.agents.create(body);
         output.success(`Agent created: ${agent.id}`);
         output.data(agent);
+
+        // Deprecation nudge — when the agent is bound to a nats-genie
+        // provider, the operator is recreating step 2 of the legacy
+        // 5-command wiring chain. `omni connect <instance> <agent>` does
+        // the same thing in one step, plus binds the instance. Stderr-only
+        // so CI stdout grep stays stable. The fetch is best-effort: if the
+        // provider lookup fails, we silently skip the nudge.
+        if (options.agentProvider) {
+          await maybeNudgeForGenieBackedAgent(client, options.agentProvider, agent.name);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to create agent: ${message}`);
@@ -279,6 +293,7 @@ export function createAgentsCommand(): Command {
 
       // Validate --metadata JSON up front (fails fast before any network call).
       const parsedMetadata = parseMetadataJson(options.metadata);
+      const resolvedId = await resolveAgentId(id);
       const client = getClient();
 
       try {
@@ -286,7 +301,7 @@ export function createAgentsCommand(): Command {
         // clobbering keys the user didn't pass, fetch-then-merge whenever
         // --metadata or --provider-agent-id is supplied.
         if (parsedMetadata !== undefined || options.providerAgentId !== undefined) {
-          const existing = await client.agents.get(id);
+          const existing = await client.agents.get(resolvedId);
           const existingMetadata = (existing.metadata ?? {}) as Record<string, unknown>;
           const merged: Record<string, unknown> = { ...existingMetadata, ...(parsedMetadata ?? {}) };
           if (options.providerAgentId !== undefined) merged.providerAgentId = options.providerAgentId;
@@ -299,7 +314,7 @@ export function createAgentsCommand(): Command {
           );
         }
 
-        const agent = await client.agents.update(id, body);
+        const agent = await client.agents.update(resolvedId, body);
         output.data(agent);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -312,11 +327,12 @@ export function createAgentsCommand(): Command {
     .command('delete <id>')
     .description('Delete an agent (soft-delete, sets inactive)')
     .action(async (id: string) => {
+      const resolvedId = await resolveAgentId(id);
       const client = getClient();
 
       try {
-        await client.agents.delete(id);
-        output.success(`Agent ${id} deleted.`);
+        await client.agents.delete(resolvedId);
+        output.success(`Agent ${resolvedId} deleted.`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to delete agent: ${message}`, undefined, 3);

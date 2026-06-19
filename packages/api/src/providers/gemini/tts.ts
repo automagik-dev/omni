@@ -68,7 +68,10 @@ const GEMINI_VOICES: TtsVoice[] = [
   { id: 'Sulafat', name: 'Sulafat', provider: 'gemini', gender: 'female' },
 ];
 
-const DEFAULT_VOICE = 'Kore';
+const DEFAULT_VOICE = 'Orus';
+const DEFAULT_LANGUAGE = 'pt-BR';
+const DEFAULT_STYLE =
+  'Fale em português brasileiro, como uma nota de WhatsApp natural: direto, quente, sem voz de locutor, com pausas curtas quando fizer sentido.';
 
 /** Extended TTS options — Gemini supports style prompts */
 export interface GeminiTtsOptions extends TtsOptions {
@@ -89,21 +92,38 @@ export class GeminiTtsProvider implements ITtsProvider {
     const apiKey = await resolveGeminiApiKey(this.settings);
     const client = getGeminiClient(apiKey);
 
-    const voice = options?.voice || DEFAULT_VOICE;
-    const prompt = options?.style ? `${options.style}: ${text}` : text;
+    const model =
+      options?.model ??
+      (await this.settings.getString('tts.gemini.model', 'GEMINI_TTS_MODEL', GEMINI_MODELS.TTS)) ??
+      GEMINI_MODELS.TTS;
+    const voice =
+      options?.voice ??
+      (await this.settings.getString('tts.gemini.default_voice', 'GEMINI_TTS_DEFAULT_VOICE', DEFAULT_VOICE)) ??
+      DEFAULT_VOICE;
+    const language =
+      options?.language ??
+      (await this.settings.getString('tts.gemini.default_language', 'GEMINI_TTS_DEFAULT_LANGUAGE', DEFAULT_LANGUAGE)) ??
+      DEFAULT_LANGUAGE;
+    const defaultStyle =
+      (await this.settings.getString('tts.gemini.default_style', 'GEMINI_TTS_DEFAULT_STYLE', DEFAULT_STYLE)) ??
+      DEFAULT_STYLE;
+    const prompt = buildPrompt(text, { ...options, language }, defaultStyle);
+    const speechConfig = buildSpeechConfig(voice, options);
 
-    log.debug('Generating speech', { voice, textLen: text.length, hasStyle: !!options?.style });
+    log.debug('Generating speech', {
+      model,
+      voice,
+      textLen: text.length,
+      hasStyle: !!options?.style,
+      multiSpeaker: options?.multiSpeaker?.length ?? 0,
+    });
 
     const response = await client.models.generateContent({
-      model: GEMINI_MODELS.TTS,
+      model,
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: {
         responseModalities: ['AUDIO'],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: voice },
-          },
-        },
+        speechConfig,
       },
     });
 
@@ -155,6 +175,44 @@ export class GeminiTtsProvider implements ITtsProvider {
   async listVoices(): Promise<TtsVoice[]> {
     return GEMINI_VOICES;
   }
+}
+
+function buildPrompt(text: string, options: GeminiTtsOptions, defaultStyle: string): string {
+  if (options.instructions?.trim()) {
+    return `${options.instructions.trim()}\n\n${text}`;
+  }
+  const parts = [defaultStyle];
+  if (options.voiceNoteProfile) parts.push(`Voice-note profile: ${options.voiceNoteProfile}.`);
+  if (options.language) parts.push(`Idioma/language: ${options.language}.`);
+  if (options.style) parts.push(`Style: ${options.style}.`);
+  if (options.tone) parts.push(`Tone: ${options.tone}.`);
+  if (options.accent) parts.push(`Accent: ${options.accent}.`);
+  if (options.pace) parts.push(`Pace: ${options.pace}.`);
+  if (options.emotion) parts.push(`Emotion: ${options.emotion}.`);
+  if (options.speed) parts.push(`Speaking speed intent: ${options.speed}x.`);
+  return `${parts.filter(Boolean).join('\n')}\n\nTexto/transcript:\n${text}`;
+}
+
+function buildSpeechConfig(voice: string, options?: GeminiTtsOptions): Record<string, unknown> {
+  const multiSpeaker = options?.multiSpeaker?.filter((speaker) => speaker.speaker.trim() && speaker.voice.trim()) ?? [];
+  if (multiSpeaker.length > 2) {
+    throw new Error('Gemini TTS multiSpeaker supports at most 2 speakers');
+  }
+  if (multiSpeaker.length > 0) {
+    return {
+      multiSpeakerVoiceConfig: {
+        speakerVoiceConfigs: multiSpeaker.map((speaker) => ({
+          speaker: speaker.speaker,
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: speaker.voice } },
+        })),
+      },
+    };
+  }
+  return {
+    voiceConfig: {
+      prebuiltVoiceConfig: { voiceName: voice },
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

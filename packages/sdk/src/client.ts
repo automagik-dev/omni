@@ -93,6 +93,7 @@ export type Channel =
   | 'telegram'
   | 'a2a'
   | 'gupshup'
+  | 'twilio-whatsapp'
   | 'internal';
 
 // Paginated response helper
@@ -135,6 +136,28 @@ export interface TurnStats {
   totalCount: number;
   avgDurationMs: number;
   timeoutRate: number;
+}
+
+export interface A2ADiscoverableAgent {
+  agentId: string;
+  name: string;
+  description?: string | null;
+  provider?: string | null;
+  providerSchema?: string | null;
+  model?: string | null;
+  capabilities?: string[];
+  configured: boolean;
+  instanceId?: string | null;
+  endpointUrl?: string | null;
+  parameters?: Record<string, unknown>;
+  card?: Record<string, unknown> | null;
+}
+
+export interface A2AJsonRpcResponse<T = unknown> {
+  jsonrpc: '2.0';
+  id: string | number | null;
+  result?: T;
+  error?: { code: number | string; message: string; data?: unknown };
 }
 
 // ============================================================================
@@ -230,10 +253,29 @@ export interface CostEstimate {
 export interface OmniClientConfig {
   /** Base URL of the API (e.g., 'http://localhost:8882') */
   baseUrl: string;
-  /** API key for authentication */
+  /** API key or bearer token for authentication */
   apiKey: string;
+  /** Header style for auth. Defaults to x-api-key for backward compatibility. */
+  authHeader?: 'x-api-key' | 'bearer';
   /** Optional CLI version for request handshake header */
   cliVersion?: string;
+  /**
+   * Optional ed25519 signer (omni-host-fingerprint-trust P0b). When set,
+   * every request gets the three X-Genie-* headers attached so the omni
+   * server can recognize the calling host (per-host scopes / per-instance
+   * lockdown). The CLI populates this from `~/.omni/keys/` when the
+   * operator has run `omni trust handshake`. Bearer-only callers leave
+   * this undefined and behave as before — fully backward-compatible.
+   */
+  signRequest?: (
+    method: string,
+    path: string,
+    body: string,
+  ) => {
+    'X-Genie-Host-Id': string;
+    'X-Genie-Timestamp': string;
+    'X-Genie-Signature': string;
+  };
 }
 
 /**
@@ -254,6 +296,13 @@ export interface CreateInstanceBody {
   channel: Channel;
   agentProviderId?: string;
   agentId?: string;
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+  twilioFrom?: string;
+  twilioMessagingServiceSid?: string;
+  twilioStatusCallbackUrl?: string;
+  twilioWebhookUrl?: string;
+  twilioValidateSignature?: boolean;
 }
 
 /**
@@ -408,9 +457,14 @@ export interface ProviderHealthResult {
 
 /**
  * Agno agent entity
+ *
+ * agno 2.5+ returns `id` at the top level. `agent_id` is kept optional for
+ * backward compatibility with pre-2.5 deployments.
  */
 export interface AgnoAgent {
-  agent_id: string;
+  id: string;
+  /** @deprecated pre-agno-2.5 field; use `id` */
+  agent_id?: string;
   name: string;
   model?: { provider?: string; name?: string };
   description?: string;
@@ -419,20 +473,30 @@ export interface AgnoAgent {
 
 /**
  * Agno team entity
+ *
+ * agno 2.5+ returns `id` at the top level. `team_id` is kept optional for
+ * backward compatibility with pre-2.5 deployments.
  */
 export interface AgnoTeam {
-  team_id: string;
+  id: string;
+  /** @deprecated pre-agno-2.5 field; use `id` */
+  team_id?: string;
   name: string;
   description?: string;
   mode?: string;
-  members?: Array<{ agent_id: string; role?: string }>;
+  members?: Array<{ agent_id: string; id?: string; role?: string }>;
 }
 
 /**
  * Agno workflow entity
+ *
+ * agno 2.5+ returns `id` at the top level. `workflow_id` is kept optional for
+ * backward compatibility with pre-2.5 deployments.
  */
 export interface AgnoWorkflow {
-  workflow_id: string;
+  id: string;
+  /** @deprecated pre-agno-2.5 field; use `id` */
+  workflow_id?: string;
   name: string;
   description?: string;
 }
@@ -815,6 +879,13 @@ export interface SendEmbedBody {
 export interface ConnectInstanceBody {
   token?: string;
   forceNewQr?: boolean;
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+  twilioFrom?: string;
+  twilioMessagingServiceSid?: string;
+  twilioStatusCallbackUrl?: string;
+  twilioWebhookUrl?: string;
+  twilioValidateSignature?: boolean;
   /** WhatsApp-specific connection options */
   whatsapp?: {
     /** Sync full message history on connect (default: true) */
@@ -1127,15 +1198,43 @@ export function createOmniClient(config: OmniClientConfig) {
 
   // Normalize base URL
   const baseUrl = config.baseUrl.replace(/\/$/, '');
+  const authHeader = config.authHeader ?? 'x-api-key';
+
+  const applyAuthHeaders = (headers: Headers) => {
+    if (authHeader === 'bearer') {
+      headers.set('Authorization', `Bearer ${config.apiKey}`);
+      headers.delete('x-api-key');
+    } else {
+      headers.set('x-api-key', config.apiKey);
+      headers.delete('Authorization');
+    }
+    headers.set('Accept-Encoding', 'identity');
+    if (config.cliVersion) {
+      headers.set('x-omni-cli-version', config.cliVersion);
+    }
+  };
 
   // Auth middleware
   // Note: Accept-Encoding: identity disables compression to avoid Bun/Hono gzip compatibility issues
   const authMiddleware: Middleware = {
     async onRequest({ request }) {
-      request.headers.set('x-api-key', config.apiKey);
-      request.headers.set('Accept-Encoding', 'identity');
-      if (config.cliVersion) {
-        request.headers.set('x-omni-cli-version', config.cliVersion);
+      applyAuthHeaders(request.headers);
+      // Per-host signing (P0b). Compute the signature using the same
+      // canonical input the omni verifier reconstructs: timestamp, method,
+      // pathname+search, sha256(body). We clone() the request so reading
+      // the body here doesn't consume it before the actual fetch.
+      if (config.signRequest) {
+        const url = new URL(request.url);
+        const path = `${url.pathname}${url.search}`;
+        const method = request.method;
+        let body = '';
+        if (method !== 'GET' && method !== 'HEAD') {
+          body = await request.clone().text();
+        }
+        const sigHeaders = config.signRequest(method, path, body);
+        for (const [k, v] of Object.entries(sigHeaders)) {
+          request.headers.set(k, v);
+        }
       }
       return request;
     },
@@ -1144,10 +1243,26 @@ export function createOmniClient(config: OmniClientConfig) {
   // Helper for direct fetch calls with consistent headers
   const apiFetch = (url: string, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    headers.set('x-api-key', config.apiKey);
-    headers.set('Accept-Encoding', 'identity');
-    if (config.cliVersion) {
-      headers.set('x-omni-cli-version', config.cliVersion);
+    applyAuthHeaders(headers);
+    // Per-host signing (P0b) for the apiFetch escape hatch (used by SDK
+    // surfaces that bypass openapi-fetch). Body is best-effort: when init
+    // carries a non-string body we don't attempt to canonicalize it here
+    // — those callers are rare, and adding a clone path for every body
+    // shape would be a bigger refactor than this PR's scope.
+    if (config.signRequest) {
+      const u = new URL(url);
+      const path = `${u.pathname}${u.search}`;
+      const method = (init?.method ?? 'GET').toUpperCase();
+      const bodyStr =
+        method === 'GET' || method === 'HEAD' || init?.body === undefined
+          ? ''
+          : typeof init.body === 'string'
+            ? init.body
+            : '';
+      const sigHeaders = config.signRequest(method, path, bodyStr);
+      for (const [k, v] of Object.entries(sigHeaders)) {
+        headers.set(k, v);
+      }
     }
 
     return fetch(url, {
@@ -3205,6 +3320,14 @@ export function createOmniClient(config: OmniClientConfig) {
         speed?: number;
         format?: 'mp3' | 'ogg' | 'opus' | 'wav' | 'pcm' | 'flac' | 'aac';
         style?: string;
+        model?: string;
+        instructions?: string;
+        tone?: string;
+        accent?: string;
+        pace?: string;
+        emotion?: string;
+        voiceNoteProfile?: string;
+        multiSpeaker?: Array<{ speaker: string; voice: string }>;
       }): Promise<{ provider: string; mimeType: string; durationMs: number; sizeBytes: number; audio: Buffer }> {
         const resp = await apiFetch(`${baseUrl}/api/v2/media/tts`, {
           method: 'POST',
@@ -3245,6 +3368,9 @@ export function createOmniClient(config: OmniClientConfig) {
         language?: string;
         timestamps?: boolean;
         model?: string;
+        prompt?: string;
+        context?: string;
+        glossary?: string[];
       }): Promise<{
         provider: string;
         text: string;
@@ -3262,6 +3388,9 @@ export function createOmniClient(config: OmniClientConfig) {
             language: body.language,
             timestamps: body.timestamps,
             model: body.model,
+            prompt: body.prompt,
+            context: body.context,
+            glossary: body.glossary,
           }),
         });
         const json = (await resp.json()) as {
@@ -3307,6 +3436,10 @@ export function createOmniClient(config: OmniClientConfig) {
         model?: string;
         negativePrompt?: string;
         seed?: number;
+        quality?: string;
+        background?: string;
+        outputFormat?: 'png' | 'jpeg' | 'webp';
+        compression?: number;
       }): Promise<{
         provider: string;
         processingMs: number;
@@ -3411,6 +3544,14 @@ export function createOmniClient(config: OmniClientConfig) {
         aspectRatio?: string;
         seed?: number;
         audio?: boolean;
+        imageBase64?: string;
+        imageMimeType?: string;
+        dialogue?: string;
+        camera?: string;
+        shotList?: string[];
+        audioDirection?: string;
+        music?: string;
+        style?: string;
       }): Promise<{
         provider: string;
         operationId: string;
@@ -3438,6 +3579,57 @@ export function createOmniClient(config: OmniClientConfig) {
         const data = json?.data;
         if (!data) {
           throw new OmniApiError('Film response missing data', 'INVALID_RESPONSE', undefined, 500);
+        }
+        return data;
+      },
+
+      /** Generate music/audio via the registered music-generation provider. */
+      async music(body: {
+        prompt: string;
+        provider?: string;
+        model?: string;
+        mode?: 'clip' | 'pro';
+        durationSec?: number;
+        instrumental?: boolean;
+        lyrics?: string;
+        timedSections?: Array<{ start: string; end: string; instruction: string }>;
+        genre?: string;
+        mood?: string;
+        bpm?: number;
+        instruments?: string[];
+        singerProfile?: string;
+        imageBase64?: string;
+        imageMimeType?: string;
+        style?: string;
+      }): Promise<{
+        provider: string;
+        model: string;
+        mimeType: string;
+        sizeBytes: number;
+        durationMs?: number;
+        processingMs: number;
+        audioBase64: string;
+      }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/media/music`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as {
+          data?: {
+            provider: string;
+            model: string;
+            mimeType: string;
+            sizeBytes: number;
+            durationMs?: number;
+            processingMs: number;
+            audioBase64: string;
+          };
+        };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const data = json?.data;
+        if (!data) {
+          throw new OmniApiError('Music response missing data', 'INVALID_RESPONSE', undefined, 500);
         }
         return data;
       },
@@ -3566,6 +3758,84 @@ export function createOmniClient(config: OmniClientConfig) {
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
         if (!json?.data) throw new OmniApiError('Stats unavailable', 'INTERNAL_ERROR', undefined, 500);
         return json.data;
+      },
+    },
+
+    // ========================================================================
+    // A2A
+    // ========================================================================
+
+    /**
+     * Agent-to-Agent registry and JSON-RPC helpers.
+     */
+    a2a: {
+      /**
+       * List agents discoverable through Omni's A2A registry.
+       */
+      async listAgents(params?: { includeUnconfigured?: boolean }): Promise<A2ADiscoverableAgent[]> {
+        const search = new URLSearchParams();
+        if (params?.includeUnconfigured !== undefined) {
+          search.set('includeUnconfigured', String(params.includeUnconfigured));
+        }
+
+        const suffix = search.toString() ? `?${search.toString()}` : '';
+        const resp = await apiFetch(`${baseUrl}/api/v2/a2a/agents${suffix}`);
+        const json = (await resp.json()) as { items?: A2ADiscoverableAgent[] };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json.items ?? [];
+      },
+
+      /**
+       * Return the extended A2A Agent Card for one Omni agent.
+       */
+      async getAgentCard(agentId: string): Promise<Record<string, unknown>> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/a2a/agents/${agentId}/card`);
+        const json = (await resp.json()) as { data?: Record<string, unknown> };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json.data) throw new OmniApiError('Agent Card not found', 'NOT_FOUND', undefined, resp.status);
+        return json.data;
+      },
+
+      /**
+       * Send a text message to an A2A instance using the v1 JSON-RPC method.
+       */
+      async sendMessage(
+        instanceId: string,
+        text: string,
+        options?: { contextId?: string; taskId?: string; returnImmediately?: boolean },
+      ): Promise<unknown> {
+        const body = {
+          jsonrpc: '2.0',
+          id: `sdk-${Date.now()}`,
+          method: 'SendMessage',
+          params: {
+            ...(options?.taskId ? { taskId: options.taskId } : {}),
+            ...(options?.contextId ? { contextId: options.contextId } : {}),
+            message: {
+              role: 'ROLE_USER',
+              parts: [{ text, mediaType: 'text/plain' }],
+            },
+            configuration: {
+              returnImmediately: options?.returnImmediately ?? true,
+            },
+          },
+        };
+
+        const resp = await apiFetch(`${baseUrl}/a2a/${instanceId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'A2A-Version': '1.0' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as A2AJsonRpcResponse;
+        if (!resp.ok || json.error) {
+          throw new OmniApiError(
+            json.error?.message ?? 'A2A request failed',
+            String(json.error?.code ?? 'A2A_ERROR'),
+            { data: json.error?.data },
+            resp.status,
+          );
+        }
+        return json.result;
       },
     },
 

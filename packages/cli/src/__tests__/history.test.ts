@@ -117,6 +117,10 @@ mock.module('../output.js', () => ({
   keyValue: mock(),
   header: mock(),
   dim: mock(),
+  tip: (msg: string) => {
+    // biome-ignore lint/suspicious/noConsole: matches real output.tip — writes to stderr via console.error
+    console.error(msg);
+  },
   disableColors: mock(),
   areColorsEnabled: () => true,
   setMaxCellWidth: mockSetMaxCellWidth,

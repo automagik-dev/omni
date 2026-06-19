@@ -7,6 +7,7 @@
  * - Error handling and dead letter routing
  */
 
+import { ROOT_CONTEXT, type SpanContext, TraceFlags, context as otelContext, trace } from '@opentelemetry/api';
 import type { ConsumerMessages, JsMsg } from 'nats';
 import type { ZodSchema, z } from 'zod';
 import { createLogger } from '../../logger';
@@ -16,6 +17,51 @@ import { DEFAULT_CONSUMER_CONFIG, calculateBackoffDelay } from './consumer';
 import { eventRegistry } from './registry';
 
 const log = createLogger('nats:subscription');
+
+/**
+ * Extract a span context from inbound NATS message headers.
+ *
+ * Honors W3C `traceparent` first, falls back to khal-os custom headers
+ * (`x-trace-id`, `x-span-id`) when present. Returns `null` when neither is
+ * available — the handler will then run in whatever context is current.
+ *
+ * Backend-neutral: only depends on `@opentelemetry/api`.
+ */
+function extractSpanContextFromMessage(msg: JsMsg): SpanContext | null {
+  try {
+    const h = msg.headers;
+    if (!h) return null;
+
+    // W3C `traceparent` — format: "00-<32hex traceId>-<16hex spanId>-<2hex flags>"
+    const tp = h.get('traceparent');
+    if (tp) {
+      const [version, traceId, spanId, flags] = tp.split('-');
+      if (version === '00' && traceId?.length === 32 && spanId?.length === 16) {
+        return {
+          traceId,
+          spanId,
+          traceFlags: Number.parseInt(flags ?? '01', 16) as TraceFlags,
+          isRemote: true,
+        };
+      }
+    }
+
+    // khal-os custom shape (forward-compat with khal-os o11y)
+    const xTrace = h.get('x-trace-id');
+    const xSpan = h.get('x-span-id');
+    if (xTrace && xSpan && xTrace.length === 32 && xSpan.length === 16) {
+      return {
+        traceId: xTrace,
+        spanId: xSpan,
+        traceFlags: TraceFlags.SAMPLED,
+        isRemote: true,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Options for creating a subscription wrapper
@@ -126,8 +172,17 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
       // Inject NATS stream sequence into event metadata for offset tracking
       event.metadata.streamSequence = msg.info.streamSequence;
 
-      // Call handler
-      await handler(event);
+      // Hydrate trace context from inbound message headers (group 2.2 of
+      // observability-hub) so any spans created by the handler attach as
+      // children of the producer-side trace. No-op when no header / no
+      // OTel SDK initialized — handler runs in current context.
+      const remoteCtx = extractSpanContextFromMessage(msg);
+      if (remoteCtx) {
+        const ctxWithRemote = trace.setSpanContext(ROOT_CONTEXT, remoteCtx);
+        await otelContext.with(ctxWithRemote, () => handler(event));
+      } else {
+        await handler(event);
+      }
 
       // Acknowledge successful processing
       msg.ack();
@@ -169,6 +224,9 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
   return {
     id: subscriptionId,
     pattern,
+    isAlive(): boolean {
+      return isActive;
+    },
     async unsubscribe(): Promise<void> {
       isActive = false;
       abortController.abort();

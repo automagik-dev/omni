@@ -14,7 +14,14 @@
 import { describe, expect, test } from 'bun:test';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { PM2_HARDENED_DEFAULTS, PM2_PROCESSES, buildPm2StartArgs, getPm2LogDir, getPm2LogPaths } from '../pm2.js';
+import {
+  PM2_HARDENED_DEFAULTS,
+  PM2_PROCESSES,
+  buildPm2StartArgs,
+  getPm2AnchorCwd,
+  getPm2LogDir,
+  getPm2LogPaths,
+} from '../pm2.js';
 
 describe('PM2_HARDENED_DEFAULTS', () => {
   test('maxRestarts is in the hardened range', () => {
@@ -32,6 +39,26 @@ describe('PM2_HARDENED_DEFAULTS', () => {
 
   test('nats memory limit is set', () => {
     expect(PM2_HARDENED_DEFAULTS.natsMaxMemory).toMatch(/^\d+[MG]$/);
+  });
+
+  test('killTimeoutMs covers the 15 s graceful shutdown', () => {
+    // The api graceful-shutdown handler has a 15 000 ms forceExitTimer
+    // (packages/api/src/index.ts:327). pm2 must wait at least that long
+    // before SIGKILL or it kills the process mid-drain.
+    expect(PM2_HARDENED_DEFAULTS.killTimeoutMs).toBeGreaterThanOrEqual(15000);
+  });
+});
+
+describe('getPm2AnchorCwd', () => {
+  test('returns $HOME so pm2 chdir cannot ENOENT on a transient cwd', () => {
+    // Regression: 2026-05-07 incident — `omni update --next` ran from a
+    // shell whose cwd was `repos/pgserve` (later removed), and pm2 baked
+    // that path as the omni-api entry's cwd. Subsequent pm2 restarts
+    // failed with `Error: spawn bash ENOENT` because pm2 chdir'd into
+    // the missing directory before exec. Anchoring to $HOME — which
+    // exists for the lifetime of the user account — eliminates that
+    // class of failure entirely.
+    expect(getPm2AnchorCwd()).toBe(homedir());
   });
 });
 
@@ -103,6 +130,23 @@ describe('buildPm2StartArgs — api launch', () => {
     expect(apiArgs[errIdx + 1]).toContain('omni-api-error.log');
   });
 
+  test('includes --kill-timeout 20000', () => {
+    expect(apiArgs).toContain('--kill-timeout');
+    const idx = apiArgs.indexOf('--kill-timeout');
+    expect(apiArgs[idx + 1]).toBe('20000');
+  });
+
+  test('includes --cwd anchored to $HOME so pm2 chdir cannot ENOENT', () => {
+    // Regression: pm2 inherits the calling shell's cwd unless `--cwd` is
+    // passed explicitly. If the inherited cwd is later removed, every
+    // restart fails silently with `Error: spawn bash ENOENT`. Pinning
+    // to `$HOME` keeps pm2's chdir target stable for the life of the
+    // user account.
+    expect(apiArgs).toContain('--cwd');
+    const idx = apiArgs.indexOf('--cwd');
+    expect(apiArgs[idx + 1]).toBe(homedir());
+  });
+
   test('includes --interpreter bash when provided', () => {
     expect(apiArgs).toContain('--interpreter');
     const idx = apiArgs.indexOf('--interpreter');
@@ -130,6 +174,18 @@ describe('buildPm2StartArgs — nats launch', () => {
   test('includes the hardened restart flags', () => {
     expect(natsArgs).toContain('--max-restarts');
     expect(natsArgs).toContain('--restart-delay');
+  });
+
+  test('includes --kill-timeout 20000 for nats too', () => {
+    expect(natsArgs).toContain('--kill-timeout');
+    const idx = natsArgs.indexOf('--kill-timeout');
+    expect(natsArgs[idx + 1]).toBe('20000');
+  });
+
+  test('includes --cwd anchored to $HOME for nats too', () => {
+    expect(natsArgs).toContain('--cwd');
+    const idx = natsArgs.indexOf('--cwd');
+    expect(natsArgs[idx + 1]).toBe(homedir());
   });
 
   test('forwards scriptArgs after a "--" separator', () => {

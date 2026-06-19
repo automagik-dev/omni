@@ -6,7 +6,7 @@
  */
 
 import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni/core';
-import { JOURNEY_STAGES, createLogger, getJourneyTracker } from '@omni/core';
+import { JOURNEY_STAGES, createLogger, getJourneyTracker, isValidUuid } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
 import { type ChannelType, type ContentType, channelTypes, chats, contentTypes, omniEvents } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
@@ -35,6 +35,10 @@ function mapContentType(contentType: string | undefined): ContentType | null {
   }
   // Return null for unsupported types (poll, poll_update, etc.)
   return null;
+}
+
+function eventIdInsert(eventId: string | undefined): Partial<Pick<NewOmniEvent, 'id'>> {
+  return eventId && isValidUuid(eventId) ? { id: eventId } : {};
 }
 
 /**
@@ -92,6 +96,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
           const chatUuid = await resolveChatUuid(db, metadata.instanceId, payload.chatId);
 
           const newEvent: NewOmniEvent = {
+            ...eventIdInsert(event.id),
             externalId: payload.externalId,
             channel: mapChannelType(metadata.channelType),
             instanceId: metadata.instanceId,
@@ -117,7 +122,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
             chatUuid,
           };
 
-          await db.insert(omniEvents).values(newEvent);
+          await db.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
 
           // T4: Message stored in database — record journey checkpoint
           if (metadata.timings && metadata.correlationId) {
@@ -150,6 +155,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
           const chatUuid = await resolveChatUuid(db, metadata.instanceId, payload.chatId);
 
           const newEvent: NewOmniEvent = {
+            ...eventIdInsert(event.id),
             externalId: payload.externalId,
             channel: mapChannelType(metadata.channelType),
             instanceId: metadata.instanceId,
@@ -158,23 +164,27 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
             eventType: 'message.sent',
             direction: 'outbound',
             contentType: mapContentType(payload.content.type),
-            textContent: sanitizeText(payload.content.text),
+            textContent: sanitizeText(payload.content.text ?? payload.content.caption),
             mediaUrl: payload.content.mediaUrl,
+            mediaMimeType: payload.content.mimeType,
             chatId: payload.chatId,
             replyToExternalId: payload.replyToId,
             status: 'completed',
             receivedAt: new Date(event.timestamp),
             processedAt: new Date(),
+            rawPayload: payload.rawPayload ? deepSanitize(payload.rawPayload) : undefined,
             metadata: {
               correlationId: metadata.correlationId,
               to: payload.to,
+              filename: payload.content.filename,
+              voiceNote: payload.content.isVoiceNote,
             },
             agentId: metadata.agentId ?? null,
             conversationId: null,
             chatUuid,
           };
 
-          await db.insert(omniEvents).values(newEvent);
+          await db.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
           log.debug('Persisted message.sent', {
             externalId: payload.externalId,
             instanceId: metadata.instanceId,
@@ -211,6 +221,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
             // No existing event found, create a new record
             const chatUuid = await resolveChatUuid(db, metadata.instanceId, payload.chatId);
             const newEvent: NewOmniEvent = {
+              ...eventIdInsert(event.id),
               externalId: payload.externalId,
               channel: mapChannelType(metadata.channelType),
               instanceId: metadata.instanceId,
@@ -224,7 +235,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               conversationId: null,
               chatUuid,
             };
-            await db.insert(omniEvents).values(newEvent);
+            await db.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
           }
 
           log.debug('Persisted message.delivered', {
@@ -260,6 +271,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
             // No existing event found, create a new record
             const chatUuid = await resolveChatUuid(db, metadata.instanceId, payload.chatId);
             const newEvent: NewOmniEvent = {
+              ...eventIdInsert(event.id),
               externalId: payload.externalId,
               channel: mapChannelType(metadata.channelType),
               instanceId: metadata.instanceId,
@@ -273,7 +285,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               conversationId: null,
               chatUuid,
             };
-            await db.insert(omniEvents).values(newEvent);
+            await db.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
           }
 
           log.debug('Persisted message.read', {
@@ -303,32 +315,63 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         const metadata = event.metadata;
 
         try {
-          const chatUuid = await resolveChatUuid(db, metadata.instanceId, payload.chatId);
+          // Async failures (e.g. WhatsApp PreKeyError surfaced minutes after a
+          // server-ACKed send) arrive AFTER the original message.sent row was
+          // already persisted with status='completed'. Flip the existing row
+          // to 'failed' instead of inserting a parallel record so the audit
+          // trail stays unambiguous. Match on instance+externalId; fall back
+          // to insert when no original row exists (synchronous failures).
+          let updated: { id: string }[] = [];
+          if (payload.externalId && metadata.instanceId) {
+            updated = await db
+              .update(omniEvents)
+              .set({
+                status: 'failed',
+                errorMessage: payload.error,
+                errorStage: payload.errorCode,
+                metadata: {
+                  correlationId: metadata.correlationId,
+                  retryable: payload.retryable,
+                },
+              })
+              .where(and(eq(omniEvents.instanceId, metadata.instanceId), eq(omniEvents.externalId, payload.externalId)))
+              .returning({ id: omniEvents.id });
+          }
 
-          const newEvent: NewOmniEvent = {
-            externalId: payload.externalId,
-            channel: mapChannelType(metadata.channelType),
-            instanceId: metadata.instanceId,
-            personId: metadata.personId,
-            eventType: 'message.failed',
-            direction: 'outbound',
-            chatId: payload.chatId,
-            status: 'failed',
-            errorMessage: payload.error,
-            errorStage: payload.errorCode,
-            receivedAt: new Date(event.timestamp),
-            metadata: {
-              correlationId: metadata.correlationId,
-              retryable: payload.retryable,
-            },
-            agentId: metadata.agentId ?? null,
-            conversationId: null,
-            chatUuid,
-          };
+          if (updated.length === 0) {
+            // No existing message.sent row to flip — synchronous failure path.
+            // Insert a fresh failed row, mirroring the message.read subscriber
+            // pattern (eventIdInsert for replay-safe deterministic id +
+            // onConflictDoNothing on id for idempotency).
+            const chatUuid = await resolveChatUuid(db, metadata.instanceId, payload.chatId);
+            const newEvent: NewOmniEvent = {
+              ...eventIdInsert(event.id),
+              externalId: payload.externalId,
+              channel: mapChannelType(metadata.channelType),
+              instanceId: metadata.instanceId,
+              personId: metadata.personId,
+              eventType: 'message.failed',
+              direction: 'outbound',
+              chatId: payload.chatId,
+              status: 'failed',
+              errorMessage: payload.error,
+              errorStage: payload.errorCode,
+              receivedAt: new Date(event.timestamp),
+              metadata: {
+                correlationId: metadata.correlationId,
+                retryable: payload.retryable,
+              },
+              agentId: metadata.agentId ?? null,
+              conversationId: null,
+              chatUuid,
+            };
+            await db.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
+          }
 
-          await db.insert(omniEvents).values(newEvent);
           log.debug('Persisted message.failed', {
             chatId: payload.chatId,
+            externalId: payload.externalId,
+            updatedRows: updated.length,
             error: payload.error,
           });
         } catch (error) {

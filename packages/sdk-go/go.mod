@@ -1,3 +1,3 @@
-module github.com/anthropics/omni-v2/packages/sdk-go
+module github.com/automagik-dev/omni/packages/sdk-go
 
 go 1.21

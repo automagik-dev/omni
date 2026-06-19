@@ -18,9 +18,9 @@
 
 import { join } from 'node:path';
 import type { ChannelType, EventBus, MessageReceivedPayload } from '@omni/core';
-import { createLogger } from '@omni/core';
+import { createLogger, isValidUuid } from '@omni/core';
 import type { Database } from '@omni/db';
-import { mediaContent, messages } from '@omni/db';
+import { mediaContent, messages, omniEvents } from '@omni/db';
 import {
   type MediaProcessingService,
   createMediaProcessingService,
@@ -82,6 +82,10 @@ function shouldProcess(contentType: string | undefined): boolean {
   return PROCESSABLE_MEDIA_TYPES.has(contentType);
 }
 
+function isUuid(value: string | undefined): value is string {
+  return typeof value === 'string' && isValidUuid(value);
+}
+
 /**
  * Get MIME type from content or infer from type
  */
@@ -112,7 +116,9 @@ interface MediaProcessorContext {
   services: Services;
   mediaService: MediaProcessingService;
   mediaStorage: MediaStorageService;
+  defaultLanguage: string;
   promptOverrides: {
+    audio?: string;
     image?: string;
     video?: string;
     document?: string;
@@ -250,6 +256,41 @@ async function resolveMediaPath(
   };
 }
 
+async function resolveSafeMediaContentEventId(
+  ctx: MediaProcessorContext,
+  eventId: string | undefined,
+): Promise<string | null> {
+  if (!isUuid(eventId)) return null;
+
+  // media_content is audit/replay metadata, so do not block media.processed for long.
+  // Event persistence runs concurrently with this processor and should normally win within milliseconds.
+  const maxWaitMs = 250;
+  const pollMs = 50;
+  const deadline = Date.now() + maxWaitMs;
+
+  while (true) {
+    try {
+      const [event] = await ctx.db
+        .select({ id: omniEvents.id })
+        .from(omniEvents)
+        .where(eq(omniEvents.id, eventId))
+        .limit(1);
+
+      if (event) return event.id;
+    } catch (error) {
+      log.debug('Failed to validate media_content event FK', { eventId, error: String(error) });
+      return null;
+    }
+
+    if (Date.now() >= deadline) {
+      log.debug('Skipping media_content event FK; omni_event not found', { eventId });
+      return null;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
 /**
  * Store processing result in database and update message
  */
@@ -273,8 +314,10 @@ async function persistProcessingResult(
 
   // Store result in media_content table (non-critical analytics/audit record)
   try {
+    const safeEventId = await resolveSafeMediaContentEventId(ctx, eventId);
+
     await ctx.db.insert(mediaContent).values({
-      eventId: eventId ?? undefined,
+      eventId: safeEventId,
       mediaId: messageId,
       processingType: result.processingType,
       content: result.content ?? '',
@@ -298,6 +341,7 @@ async function persistProcessingResult(
  * Resolve the prompt override for a given content type
  */
 function getPromptOverride(ctx: MediaProcessorContext, contentType: string | undefined): string | undefined {
+  if (contentType === 'audio') return ctx.promptOverrides.audio;
   if (contentType === 'image') return ctx.promptOverrides.image;
   if (contentType === 'video') return ctx.promptOverrides.video;
   if (contentType === 'document') return ctx.promptOverrides.document;
@@ -335,7 +379,7 @@ async function processMessageMedia(
   log.info('Processing media', { messageId: media.messageId, mimeType, filePath: media.fullPath });
 
   const result = await ctx.mediaService.process(media.fullPath, mimeType, {
-    language: 'pt',
+    language: ctx.defaultLanguage,
     caption: content.text,
     prompt: getPromptOverride(ctx, content.type),
   });
@@ -486,22 +530,38 @@ async function resolveMediaIdForCrash(
  */
 export async function setupMediaProcessor(eventBus: EventBus, db: Database, services: Services): Promise<void> {
   // Read API keys and prompt overrides from settings DB with env var fallback
-  const [groqApiKey, openaiApiKey, geminiApiKey, defaultLanguage, imagePrompt, videoPrompt, documentPrompt] =
-    await Promise.all([
-      services.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
-      services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
-      services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
-      services.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
-      services.settings.getString('prompt.image_description'),
-      services.settings.getString('prompt.video_description'),
-      services.settings.getString('prompt.document_ocr'),
-    ]);
+  const [
+    groqApiKey,
+    openaiApiKey,
+    geminiApiKey,
+    defaultLanguage,
+    audioProvider,
+    audioModel,
+    audioPrompt,
+    imagePrompt,
+    videoPrompt,
+    documentPrompt,
+  ] = await Promise.all([
+    services.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
+    services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
+    services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
+    services.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
+    services.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
+    services.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
+    services.settings.getString('prompt.audio_transcription'),
+    services.settings.getString('prompt.image_description'),
+    services.settings.getString('prompt.video_description'),
+    services.settings.getString('prompt.document_ocr'),
+  ]);
 
   const mediaService = createMediaProcessingService({
     groqApiKey,
     openaiApiKey,
     geminiApiKey,
     defaultLanguage,
+    audioProvider: audioProvider ?? 'openai',
+    audioModel: audioModel ?? 'gpt-audio-mini',
+    audioPrompt: audioPrompt ?? undefined,
   });
   const mediaStorage = new MediaStorageService(db);
 
@@ -511,7 +571,9 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     services,
     mediaService,
     mediaStorage,
+    defaultLanguage: defaultLanguage ?? 'pt',
     promptOverrides: {
+      audio: audioPrompt,
       image: imagePrompt,
       video: videoPrompt,
       document: documentPrompt,
@@ -585,3 +647,8 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
 
   log.info('Media processor initialized');
 }
+
+export const __test__ = {
+  persistProcessingResult,
+  resolveSafeMediaContentEventId,
+};

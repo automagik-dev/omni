@@ -1,72 +1,141 @@
 name: Release
 
+# v3-prerelease-trust-loop G2 — orchestrator that chains the signed-tarball
+# pipeline (build → sign-attest → publish) AND preserves the legacy npm OIDC
+# Trusted Publishing path. Single workflow run, sequenced jobs via
+# workflow_call. No workflow_run chaining (anti-recursion guard).
+#
+# Trigger contract — refs/tags/v* push (or operator-invoked workflow_dispatch).
+#
+# The cosign keyless OIDC SAN URI binds to .github/workflows/sign-attest.yml@<ref>
+# because the cosign step physically lives inside sign-attest.yml. pgserve's
+# trust-list (src/cosign/trust-list.js) anchors `pgserve verify --slug omni`
+# on this filename literally — renaming or relocating sign-attest.yml breaks
+# the consumer trust loop.
+#
+# Job topology:
+#   1. build           — workflow_call into build-tarballs.yml (matrix × 4 platforms)
+#   2. sign-attest     — workflow_call into sign-attest.yml (cosign keyless + SLSA L3)
+#   3. publish         — workflow_call into release-publish.yml (GH release + assets)
+#   4. release-notes   — git-cliff changelog appended to the GH release body.
+#
+# npm publishing happens in version.yml inline (branch-derived dist-tag:
+# main → @latest, dev → @next). Single source of truth — no duplicate
+# publish step here. Codex P1 on PR #633 caught the gap when a previous
+# revision of this file ran an unconditional `npm publish --tag latest`
+# alongside version.yml's @next publish, promoting dev cuts to @latest.
+
 on:
-  workflow_run:
-    workflows: ["Version"]
-    types: [completed]
+  push:
+    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 2.260512.1 — no v prefix)'
+        required: true
+        type: string
+      channel:
+        description: 'Release channel — stable publishes to @latest, dev/beta/canary are prereleases with their own .well-known/<channel>.json pointer'
+        required: false
+        type: choice
+        default: stable
+        # Canonical channel taxonomy (release taxonomy 2026-05-12,
+        # unified across pgserve/omni/genie):
+        #   stable  → main branch  → .well-known/latest.json
+        #   homolog → homolog branch → .well-known/homolog.json
+        #   dev     → dev branch   → .well-known/dev.json
+        # beta + canary have been retired.
+        options:
+          - stable
+          - homolog
+          - dev
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  release:
-    name: Create Release
-    # Run when Version succeeded (automatic) or on manual dispatch
-    if: >-
-      (github.event_name == 'workflow_dispatch') ||
-      (github.event.workflow_run.conclusion == 'success')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 15
+  # ---------------------------------------------------------------------------
+  # Signed-tarball pipeline (mirror of genie pattern)
+  # ---------------------------------------------------------------------------
+  build:
+    uses: ./.github/workflows/build-tarballs.yml
+    permissions:
+      contents: read
+    secrets: inherit
+
+  sign-attest:
+    needs: build
+    uses: ./.github/workflows/sign-attest.yml
+    permissions:
+      contents: write       # SLSA reusable nested upload-assets static check
+      id-token: write       # cosign keyless + attest-build-provenance OIDC
+      attestations: write   # GitHub Attestations API registration
+      actions: read         # cross-run artifact metadata
+    secrets: inherit
+
+  publish:
+    needs: sign-attest
+    uses: ./.github/workflows/release-publish.yml
+    permissions:
+      contents: write       # gh release create/upload + push latest.json
+      id-token: write       # reserved for any OIDC-using publish-time verifiers
+    secrets: inherit
+    with:
+      version: ${{ needs.sign-attest.outputs.version }}
+      # workflow_dispatch supplies the channel (version.yml passes 'dev' for
+      # dev-branch dispatches, 'stable' for main-branch dispatches). Bare
+      # tag pushes fall through to stable. Mirrors genie wish
+      # release-channel-dev (PR #2419).
+      channel: ${{ inputs.channel || 'stable' }}
+      draft: false
+
+  # ---------------------------------------------------------------------------
+  # Release notes (git-cliff) — runs after publish so the GH release exists.
+  # Updates the release body with the generated changelog.
+  #
+  # NOTE: npm publish is NOT performed by this workflow. version.yml runs
+  # `npm publish --tag <next|latest>` inline using a branch-derived dist-tag
+  # (main → @latest, dev → @next). A duplicate publish step here would race
+  # version.yml's inline path AND, before this drop, the missing channel
+  # gate meant dev dispatches were attempting `npm publish --tag latest`
+  # against a version version.yml had already pushed as @next — promoting
+  # dev cuts to the @latest dist-tag. Codex P1 on PR #633 surfaced this;
+  # the publish-npm job has been removed to keep a single source of truth.
+  # ---------------------------------------------------------------------------
+  release-notes:
+    needs: publish
+    name: Generate release notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Resolve release tag
         id: pkg
-        run: |
-          # Ensure all tags are fetched (actions/checkout may skip them)
-          git fetch --tags --force
-
-          # Latest v* tag — the one the Version workflow just created
-          # Use creatordate sort (not version:refname) because the calver format
-          # changed from v2.YYYYMMDD.N to v2.YYMMDD.N — old tags sort higher
-          # numerically but are older chronologically.
-          TAG=$(git tag --list 'v*' --sort=-creatordate | head -1)
-          if [ -z "$TAG" ]; then
-            echo "::error::No v* tags found — cannot release."
-            exit 1
-          fi
-
-          VERSION="${TAG#v}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Resolved release tag: ${TAG} (version: ${VERSION})"
-
-      - name: Check if release already exists
-        id: exists
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          TAG="${{ steps.pkg.outputs.tag }}"
-
-          if gh release view "${TAG}" > /dev/null 2>&1; then
-            echo "Release ${TAG} already exists — skipping."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+          git fetch --tags --force
+          if [[ -n "${INPUT_VERSION}" ]]; then
+            TAG="v${INPUT_VERSION}"
           else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            TAG="${REF_NAME}"
           fi
-
-      - name: Checkout release tag
-        if: steps.exists.outputs.skip != 'true'
-        run: git checkout "${{ steps.pkg.outputs.tag }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Find previous release tag
         id: prev
-        if: steps.exists.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.pkg.outputs.tag }}"
           PREV=$(gh release list --limit 50 --json tagName -q '.[].tagName' | grep -v "^${TAG}$" | head -1)
@@ -77,11 +146,11 @@ jobs:
         # git-cliff-action can fail after writing the requested file when the
         # generated multi-line changelog trips GitHub output delimiter parsing
         # ("Invalid value. Matching delimiter not found 'EOF'"). The release
-        # artifact should not go red for that wrapper-output bug; use the file
-        # when present and otherwise fall back to a small release note.
+        # artifact should not go red for that wrapper-output bug; the next step
+        # uses /tmp/release-notes.md if it exists and otherwise leaves the
+        # generated release body in place.
         continue-on-error: true
         uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
-        if: steps.exists.outputs.skip != 'true'
         with:
           config: cliff.toml
           args: >-
@@ -90,51 +159,14 @@ jobs:
         env:
           GITHUB_REPO: ${{ github.repository }}
 
-      - name: Ensure release notes file exists
-        if: steps.exists.outputs.skip != 'true'
-        run: |
-          if [[ ! -s /tmp/release-notes.md ]]; then
-            TAG="${{ steps.pkg.outputs.tag }}"
-            printf 'Release %s\n' "${TAG}" > /tmp/release-notes.md
-            echo "::warning::git-cliff produced no notes file; using fallback release body"
-          fi
-
-      - name: Create release
-        if: steps.exists.outputs.skip != 'true'
+      - name: Update release body with changelog
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.pkg.outputs.tag }}"
-          gh release create "${TAG}" \
-            --title "${TAG}" \
-            --notes-file /tmp/release-notes.md
-
-      - name: Setup Bun
-        if: steps.exists.outputs.skip != 'true'
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
-        with:
-          bun-version: "latest"
-
-      - name: Install dependencies
-        if: steps.exists.outputs.skip != 'true'
-        run: bun install --frozen-lockfile
-
-      - name: Build CLI
-        if: steps.exists.outputs.skip != 'true'
-        run: bunx turbo run build --filter=@automagik/omni
-
-      - name: Publish to npm
-        if: steps.exists.outputs.skip != 'true'
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "ERROR: NPM_TOKEN secret is not set. Cannot publish to npm." >&2
-            exit 1
+          if [[ -s /tmp/release-notes.md ]]; then
+            gh release edit "${TAG}" --notes-file /tmp/release-notes.md
+            echo "Updated release body for ${TAG}"
+          else
+            echo "::warning::git-cliff produced empty notes; leaving auto-generated body in place"
           fi
-          cd packages/cli && bun publish --access public
-
-      # Note: CHANGELOG.md is intentionally not committed back to main.
-      # main is a protected branch requiring PRs. The changelog is already
-      # captured in the GitHub Release body above via git-cliff.

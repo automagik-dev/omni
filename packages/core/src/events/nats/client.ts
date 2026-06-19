@@ -10,6 +10,7 @@
  * - Graceful shutdown with drain
  */
 
+import { trace } from '@opentelemetry/api';
 import {
   type ConnectionOptions,
   type ConsumerConfig,
@@ -19,10 +20,42 @@ import {
   type NatsConnection,
   StringCodec,
   connect,
+  headers as natsHeaders,
 } from 'nats';
 import { createLogger } from '../../logger';
 
 const log = createLogger('nats');
+
+/**
+ * Build trace-propagation NATS headers from the active OTel span context.
+ *
+ * Returns a NATS MsgHdrs with both shapes:
+ *   - W3C `traceparent` (industry standard; 4 dash-separated parts)
+ *   - khal-os custom (`x-trace-id`, `x-span-id`) for forward-compat with
+ *     khal-os's o11y consumer convention
+ *
+ * Returns `null` when no OTel SDK is initialized or no span is active.
+ * Backend-neutral: only depends on `@opentelemetry/api` (lightweight).
+ */
+function buildTraceHeaders(): ReturnType<typeof natsHeaders> | null {
+  try {
+    const span = trace.getActiveSpan();
+    if (!span) return null;
+    const ctx = span.spanContext();
+    if (!ctx.traceId || !ctx.spanId) return null;
+
+    const flags = (ctx.traceFlags ?? 0).toString(16).padStart(2, '0');
+    const traceparent = `00-${ctx.traceId}-${ctx.spanId}-${flags}`;
+
+    const h = natsHeaders();
+    h.set('traceparent', traceparent);
+    h.set('x-trace-id', ctx.traceId);
+    h.set('x-span-id', ctx.spanId);
+    return h;
+  } catch {
+    return null;
+  }
+}
 import type {
   EventBus,
   EventBusConfig,
@@ -223,10 +256,18 @@ export class NatsEventBus implements EventBus {
       subject = `${type}.internal.global`;
     }
 
-    // Encode and publish
+    // Encode and publish.
+    //
+    // Trace context propagation (group 2.2 of observability-hub):
+    // when an OTel span is active, attach W3C `traceparent` AND khal-os
+    // custom headers (`x-trace-id`, `x-span-id`) to the NATS message so
+    // downstream consumers can stitch the cross-process trace. Falls
+    // through to a header-less publish when no span is active or when
+    // OTel SDK is not initialized.
     const js = this.requireJetStream();
     const data = this.sc.encode(JSON.stringify(event));
-    const ack = await js.publish(subject, data);
+    const headers = buildTraceHeaders();
+    const ack = headers ? await js.publish(subject, data, { headers }) : await js.publish(subject, data);
 
     return {
       id: eventId,

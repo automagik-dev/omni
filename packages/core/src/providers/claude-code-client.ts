@@ -7,6 +7,7 @@
  */
 
 import { createLogger } from '../logger';
+import { describeClaudeCodeStartupError, resolveClaudeCodeExecutable } from './claude-code-executable';
 import type {
   AgentHealthResult,
   IAgentClient,
@@ -53,6 +54,18 @@ export interface ClaudeCodeConfig {
 
   /** Max turns per query (safety limit, default: 10) */
   maxTurns?: number;
+
+  /**
+   * Explicit path to the Claude Code native binary.
+   *
+   * Forwarded to the SDK's `pathToClaudeCodeExecutable` option. Use this to
+   * override the SDK's built-in binary resolver when auto-detection picks
+   * the wrong libc ABI (see automagik-dev/omni#501). When omitted, the
+   * provider auto-detects glibc vs musl on Linux and resolves the matching
+   * optional subpackage; if detection is inconclusive, the SDK's default
+   * resolver is used.
+   */
+  pathToClaudeCodeExecutable?: string;
 }
 
 /**
@@ -606,6 +619,15 @@ function buildQueryOptions(
   if (config.model) options.model = config.model;
   if (config.systemPrompt) options.systemPrompt = config.systemPrompt;
 
+  // Pin the native binary path when available.
+  // Explicit config wins; otherwise auto-detect on Linux to avoid the SDK's
+  // musl-first resolver crashing on glibc hosts (#501). When detection is
+  // inconclusive we leave the option unset and let the SDK resolve.
+  const executablePath = config.pathToClaudeCodeExecutable ?? resolveClaudeCodeExecutable();
+  if (executablePath) {
+    options.pathToClaudeCodeExecutable = executablePath;
+  }
+
   if (config.mcpServers) {
     options.mcpServers = resolveMcpServers(config.mcpServers, request.mcpUrlParams);
   }
@@ -724,8 +746,11 @@ async function* generateStream(
       yield { phase: 'error', error: 'Aborted' };
       return;
     }
-    log.error('streamRun: threw', { error: String(error), sessionId: state.sessionId });
-    yield { phase: 'error', error: `Agent error: ${String(error)}` };
+    const annotated = describeClaudeCodeStartupError(error, {
+      explicitExecutablePath: config.pathToClaudeCodeExecutable,
+    });
+    log.error('streamRun: threw', { error: annotated, sessionId: state.sessionId });
+    yield { phase: 'error', error: `Agent error: ${annotated}` };
   }
 }
 
@@ -763,9 +788,12 @@ export class ClaudeCodeClient implements IAgentClient {
         if (earlyReturn) return earlyReturn;
       }
     } catch (error) {
-      log.error('Claude Code agent threw', { error: String(error), sessionId: acc.sessionId });
+      const annotated = describeClaudeCodeStartupError(error, {
+        explicitExecutablePath: this.config.pathToClaudeCodeExecutable,
+      });
+      log.error('Claude Code agent threw', { error: annotated, sessionId: acc.sessionId });
       return {
-        content: `Agent error: ${String(error)}`,
+        content: `Agent error: ${annotated}`,
         runId: crypto.randomUUID(),
         sessionId: acc.sessionId,
         status: 'failed',

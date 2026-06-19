@@ -46,7 +46,14 @@ const SHARED = {
   cwd: __dirname,
   autorestart: true,
   watch: false,
-  max_restarts: 0, // 0 = unlimited restarts (never give up)
+  // 10 matches PM2_HARDENED_DEFAULTS.maxRestarts — bounded so a port-squatter
+  // crash storm self-arrests instead of incinerating CPU + log space forever
+  // (2026-05-07 incident: omni-nats hit 75 restarts in tight backoff while an
+  // orphan nats-server held 4222). doctor's `pm2-max-restarts` check FAILs on
+  // 0 or >= 1000, so 0 was a guaranteed FAIL that trained operators to ignore
+  // the report. Pair with the new `port-canonical-owner` check which detects
+  // and repairs the squatter cause directly.
+  max_restarts: 10,
   exp_backoff_restart_delay: 100, // exponential backoff starting at 100ms, caps at 15s
   kill_timeout: 8000, // 8s graceful shutdown before SIGKILL
   listen_timeout: 60000, // 60s — DB readiness probe + migrations can take 30s+
@@ -101,6 +108,11 @@ if (apiManaged) {
       OMNI_PACKAGES_DIR: path.join(__dirname, 'packages'),
       // Absolute path — see PGSERVE_DATA_DEFAULT block above for rationale.
       PGSERVE_DATA: pgserveData,
+      // OpenTelemetry — configured via .env (OTEL_EXPORTER_OTLP_ENDPOINT,
+      // OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES). The `set -a && . ./.env`
+      // step in `make dev-services` overwrites any conflicting OTEL_* the
+      // launching shell may have inherited (e.g. outer Genie/Claude-Code
+      // agent context), so no hardcoded defaults are needed here.
     },
     max_memory_restart: '2G',
     // Dependency: wait 1s to let nats bind its port first

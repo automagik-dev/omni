@@ -15,7 +15,10 @@ jobs:
     name: Secrets Scan (GitGuardian)
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # PRs are already covered by the GitGuardian GitHub App check. Keep this
+    # action for push-time coverage only; running both on PRs can exhaust the
+    # action API quota and produce false red CI despite the app passing.
+    if: ${{ github.event_name == 'push' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -65,13 +68,27 @@ jobs:
         run: bun scripts/verify-versions.ts
 
       - name: Setup environment
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          sed -i 's/localhost:8432/localhost:5432/g; s/PGSERVE_PORT=8432/PGSERVE_PORT=5432/' .env
 
       - name: Download NATS
         run: ./scripts/ensure-nats.sh
 
-      - name: Start pgserve
-        run: bunx pgserve postmaster --port 8432 --data .pgserve-data &
+      - name: Install autopg v3
+        # Use the current canonical pgserve distribution. `bunx pgserve@...`
+        # installs the legacy npm wrapper; Omni's runtime resolver prefers
+        # `autopg` v3 and only falls back to `pgserve` for old hosts.
+        # The installer verifies release attestations via gh/cosign; gh needs
+        # GH_TOKEN in Actions to make the verification API call. It also starts
+        # an autopg-server PM2 process on the default port. Reuse that server
+        # in CI instead of racing a second `autopg serve` against the same
+        # embedded Postgres binary cache (ETXTBSY).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bun add -g pm2
+          curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
@@ -79,14 +96,17 @@ jobs:
       - name: Wait for database
         run: |
           for i in $(seq 1 30); do
-            pg_isready -h localhost -p 8432 >/dev/null 2>&1 && \
-              echo "Database server ready" && break || sleep 1
+            pg_isready -h localhost -p 5432 >/dev/null 2>&1 && \
+              echo "Database ready" && exit 0 || sleep 1
           done
-          pg_isready -h localhost -p 8432 >/dev/null 2>&1 || \
-            (echo "Database failed to start" && exit 1)
-          createdb -h localhost -p 8432 -U postgres omni 2>/dev/null || true
-          pg_isready -h localhost -p 8432 -d omni >/dev/null 2>&1 && \
-            echo "Database ready" || (echo "Database omni failed readiness" && exit 1)
+          echo "Database failed to start" && exit 1
+
+      - name: Create omni database
+        # autopg v3 is consumer-only: it starts postgres/template DBs, not
+        # per-app databases. Create the `omni` DB explicitly for tests.
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -p 5432 -U postgres -c "CREATE DATABASE omni"
 
       - name: Build
         run: bun run build
@@ -144,13 +164,27 @@ jobs:
         run: bun install
 
       - name: Setup environment
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          sed -i 's/localhost:8432/localhost:5432/g; s/PGSERVE_PORT=8432/PGSERVE_PORT=5432/' .env
 
       - name: Download NATS
         run: ./scripts/ensure-nats.sh
 
-      - name: Start pgserve
-        run: bunx pgserve postmaster --port 8432 --data .pgserve-data &
+      - name: Install autopg v3
+        # Use the current canonical pgserve distribution. `bunx pgserve@...`
+        # installs the legacy npm wrapper; Omni's runtime resolver prefers
+        # `autopg` v3 and only falls back to `pgserve` for old hosts.
+        # The installer verifies release attestations via gh/cosign; gh needs
+        # GH_TOKEN in Actions to make the verification API call. It also starts
+        # an autopg-server PM2 process on the default port. Reuse that server
+        # in CI instead of racing a second `autopg serve` against the same
+        # embedded Postgres binary cache (ETXTBSY).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bun add -g pm2
+          curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
@@ -158,14 +192,19 @@ jobs:
       - name: Wait for database
         run: |
           for i in $(seq 1 30); do
-            pg_isready -h localhost -p 8432 >/dev/null 2>&1 && \
-              echo "Database server ready" && break || sleep 1
+            pg_isready -h localhost -p 5432 >/dev/null 2>&1 && \
+              echo "Database ready" && exit 0 || sleep 1
           done
-          pg_isready -h localhost -p 8432 >/dev/null 2>&1 || \
-            (echo "Database failed to start" && exit 1)
-          createdb -h localhost -p 8432 -U postgres omni 2>/dev/null || true
-          pg_isready -h localhost -p 8432 -d omni >/dev/null 2>&1 && \
-            echo "Database ready" || (echo "Database omni failed readiness" && exit 1)
+          echo "Database failed to start" && exit 1
+
+      - name: Create omni database
+        # autopg v3 is consumer-only: it starts postgres/template DBs, not
+        # per-app databases. omni-api connects to `…/omni`, so create it
+        # explicitly here. In production this is owned by `autopg install`
+        # / `omni doctor --fix`.
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -p 5432 -U postgres -c "CREATE DATABASE omni"
 
       - name: Build all packages
         run: bun run build

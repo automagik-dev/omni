@@ -17,6 +17,7 @@
  * - Preserves existing debouncing for message events
  */
 
+import { createHash } from 'node:crypto';
 import { unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -45,6 +46,7 @@ import {
   type MediaProcessedPayload,
   type MessageReceivedPayload,
   NatsGenieProvider,
+  type OmniCustomerContext,
   OpenClawAgentProvider,
   OpenClawClient,
   type OpenClawClientConfig,
@@ -63,11 +65,13 @@ import {
   getJourneyTracker,
 } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
-import { agentSessions, agents } from '@omni/db';
+import { agentSessions, agents, instances } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
 import { createMediaProcessingService } from '@omni/media-processing';
+import { SpanStatusCode, trace } from '@opentelemetry/api';
 import * as Sentry from '@sentry/bun';
 import { and, eq } from 'drizzle-orm';
+import { withIdempotency } from '../lib/idempotency';
 import { sentryEnabled } from '../lib/sentry-scrub';
 import type { Services } from '../services';
 import {
@@ -78,6 +82,7 @@ import {
   getSplitDelayConfig,
   shouldAgentReply,
 } from '../services/agent-runner';
+import { resolveKhalSessionId } from '../services/agent-session-identity';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import type { ResolvedRoute } from '../services/route-resolver';
 import { publishTurnOpen } from '../services/turn-events';
@@ -106,6 +111,173 @@ const QUOTED_MESSAGE_MAX_CHARS = 4000;
 
 /** Hard cap on history messages fetched for DM conversations. */
 const DM_HISTORY_LIMIT = 20;
+
+const LIFECYCLE_PREVIEW_MAX_CHARS = 160;
+const LIFECYCLE_SENSITIVE_KEY_PARTS = ['authorization', 'bearer', 'password', 'secret', 'token', 'api_key', 'apikey'];
+
+type LifecycleAttributeValue = string | number | boolean;
+
+interface LifecycleSpanAttributeInput {
+  stage: 'provider_inbound' | 'dispatch_to_agno' | 'provider_outbound' | 'turn';
+  eventType: string;
+  channel: string;
+  provider?: string;
+  instanceId?: string;
+  chatId?: string;
+  sessionId?: string;
+  traceId?: string;
+  messageId?: string;
+  agentId?: string;
+  inputText?: string;
+  outputText?: string;
+  extra?: Record<string, unknown>;
+}
+
+function sha256Digest(value: string): string {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+}
+
+function redactLifecycleText(value: string): string {
+  return value
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[EMAIL]')
+    .replace(/\b\+?\d[\d\s().-]{5,}\d\b/g, '[PHONE]')
+    .replace(/\b\d{6,}\b/g, '[NUMBER]')
+    .replace(/\b[^\s@]+@(s\.whatsapp\.net|g\.us|lid|newsletter)\b/gi, '[JID]');
+}
+
+function previewLifecycleText(value: string): string {
+  const redacted = redactLifecycleText(value).replace(/\s+/g, ' ').trim();
+  if (redacted.length <= LIFECYCLE_PREVIEW_MAX_CHARS) return redacted;
+  return `${redacted.slice(0, LIFECYCLE_PREVIEW_MAX_CHARS - 1)}…`;
+}
+
+function isLifecycleSafeExtraKey(key: string): boolean {
+  const lowered = key.toLowerCase();
+  return !LIFECYCLE_SENSITIVE_KEY_PARTS.some((part) => lowered.includes(part));
+}
+
+function setTextLifecycleAttributes(
+  attributes: Record<string, LifecycleAttributeValue>,
+  prefix: 'input' | 'output',
+  value: string | undefined,
+): void {
+  if (value === undefined) return;
+  attributes[`khal.${prefix}_chars`] = value.length;
+  attributes[`khal.${prefix}_sha256`] = sha256Digest(value);
+  attributes[`khal.${prefix}_preview_redacted`] = previewLifecycleText(value);
+}
+
+function setOptionalLifecycleAttributes(
+  attributes: Record<string, LifecycleAttributeValue>,
+  pairs: Array<[string, string | undefined]>,
+): void {
+  for (const [key, value] of pairs) {
+    if (value) attributes[key] = value;
+  }
+}
+
+function setChatLifecycleAttributes(
+  attributes: Record<string, LifecycleAttributeValue>,
+  chatId: string | undefined,
+): void {
+  if (!chatId) return;
+  attributes['omni.chat_id_sha256'] = sha256Digest(chatId);
+  attributes['omni.chat_id_preview_redacted'] = previewLifecycleText(chatId);
+}
+
+function setSessionLifecycleAttributes(
+  attributes: Record<string, LifecycleAttributeValue>,
+  sessionId: string | undefined,
+): void {
+  if (!sessionId) return;
+  attributes['khal.session_id'] = sessionId;
+  attributes['langfuse.session.id'] = sessionId;
+  attributes['session.id'] = sessionId;
+}
+
+function setExtraLifecycleAttributes(
+  attributes: Record<string, LifecycleAttributeValue>,
+  extra: Record<string, unknown> | undefined,
+): void {
+  if (!extra) return;
+  for (const [key, value] of Object.entries(extra)) {
+    if (!isLifecycleSafeExtraKey(key) || value === undefined || value === null) continue;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      attributes[`khal.${key}`] = typeof value === 'string' ? previewLifecycleText(value) : value;
+    }
+  }
+}
+
+function buildLifecycleSpanAttributes(input: LifecycleSpanAttributeInput): Record<string, LifecycleAttributeValue> {
+  const attributes: Record<string, LifecycleAttributeValue> = {
+    'khal.lifecycle.stage': input.stage,
+    'khal.event_type': input.eventType,
+    'khal.channel': input.channel,
+  };
+
+  setOptionalLifecycleAttributes(attributes, [
+    ['khal.provider', input.provider],
+    ['omni.instance_id', input.instanceId],
+    ['khal.trace_id', input.traceId],
+    ['khal.turn.message_id', input.messageId],
+    ['khal.agent_id', input.agentId],
+  ]);
+  setChatLifecycleAttributes(attributes, input.chatId);
+  setSessionLifecycleAttributes(attributes, input.sessionId);
+  setTextLifecycleAttributes(attributes, 'input', input.inputText);
+  setTextLifecycleAttributes(attributes, 'output', input.outputText);
+  setExtraLifecycleAttributes(attributes, input.extra);
+
+  return attributes;
+}
+
+async function withLifecycleSpan<T>(
+  name: string,
+  attributes: Record<string, LifecycleAttributeValue>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  let callbackStarted = false;
+  try {
+    const tracer = trace.getTracer('omni.agent-dispatcher');
+    return await tracer.startActiveSpan(name, { attributes }, async (span) => {
+      callbackStarted = true;
+      try {
+        const result = await fn();
+        span.setStatus({ code: SpanStatusCode.OK });
+        return result;
+      } catch (error) {
+        span.recordException(error instanceof Error ? error : new Error(String(error)));
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
+        throw error;
+      } finally {
+        span.end();
+      }
+    });
+  } catch (error) {
+    if (callbackStarted) throw error;
+    log.warn('Lifecycle span wrapper failed before dispatch; continuing without span', { spanName: name });
+    return fn();
+  }
+}
+
+function emitLifecycleSpan(name: string, attributes: Record<string, LifecycleAttributeValue>): void {
+  withLifecycleSpan(name, attributes, async () => undefined).catch(() => {
+    // best-effort — never throw from instrumentation path
+  });
+}
+
+function activeProviderTraceContext(): AgentTrigger['traceContext'] {
+  const activeSpan = trace.getActiveSpan();
+  const spanContext = activeSpan?.spanContext();
+  if (!spanContext?.traceId || !spanContext?.spanId) return undefined;
+
+  return {
+    traceId: spanContext.traceId,
+    spanId: spanContext.spanId,
+    traceFlags: spanContext.traceFlags,
+    traceState: spanContext.traceState?.serialize(),
+  };
+}
 
 // ============================================================================
 // Plugin → AckProvider adapter
@@ -149,62 +321,6 @@ interface DispatchFields {
 
 /** Instance extended with transient dispatch fields for in-process agent resolution. */
 type DispatchInstance = Instance & DispatchFields;
-
-// ============================================================================
-// Rate Limiter
-// ============================================================================
-
-/** Default rate limit: 5 triggers per 60-second window */
-const DEFAULT_RATE_LIMIT = 5;
-const DEFAULT_RATE_WINDOW_MS = 60_000;
-
-class RateLimiter {
-  /** Map of "userId:channelType:instanceId" → timestamps[] */
-  private counters: Map<string, number[]> = new Map();
-  private readonly windowMs: number;
-
-  constructor(windowMs = DEFAULT_RATE_WINDOW_MS) {
-    this.windowMs = windowMs;
-  }
-
-  /**
-   * Check if a trigger is allowed (under rate limit)
-   */
-  isAllowed(userId: string, channelType: string, instanceId: string, maxPerMinute: number): boolean {
-    const key = `${userId}:${channelType}:${instanceId}`;
-    const now = Date.now();
-
-    // Get or create counter
-    let timestamps = this.counters.get(key) ?? [];
-
-    // Remove expired entries
-    timestamps = timestamps.filter((ts) => now - ts < this.windowMs);
-
-    if (timestamps.length >= maxPerMinute) {
-      log.debug('Rate limit exceeded', { key, count: timestamps.length, limit: maxPerMinute });
-      return false;
-    }
-
-    timestamps.push(now);
-    this.counters.set(key, timestamps);
-    return true;
-  }
-
-  /**
-   * Clean up expired entries periodically
-   */
-  cleanup(): void {
-    const now = Date.now();
-    for (const [key, timestamps] of this.counters.entries()) {
-      const active = timestamps.filter((ts) => now - ts < this.windowMs);
-      if (active.length === 0) {
-        this.counters.delete(key);
-      } else {
-        this.counters.set(key, active);
-      }
-    }
-  }
-}
 
 // ============================================================================
 // Reaction Dedup
@@ -343,7 +459,12 @@ function determineChatType(
   channel: string,
   rawPayload?: Record<string, unknown>,
 ): 'dm' | 'group' | 'channel' {
-  if (channel === 'whatsapp' || channel === 'whatsapp-baileys' || channel === 'whatsapp-cloud') {
+  if (
+    channel === 'whatsapp' ||
+    channel === 'whatsapp-baileys' ||
+    channel === 'whatsapp-cloud' ||
+    channel === 'twilio-whatsapp'
+  ) {
     return whatsappChatType(chatId);
   }
   if (channel === 'telegram') {
@@ -423,10 +544,112 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Retry-with-backoff for transient agent-provider failures (issue #540)
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Patterns that classify an error as a transient infrastructure failure
+ * (network glitch, provider restart, upstream 5xx, socket reset). These are
+ * the cases where waiting a few seconds and retrying is likely to succeed
+ * — typically a `pm2 restart` of the agent backend or a fleeting blip.
+ *
+ * Anything that does NOT match these is treated as terminal (4xx, validation,
+ * configuration, "agent not found", etc.) and bubbles out immediately so the
+ * user sees an error instead of waiting through retries we know will fail.
+ */
+export const TRANSIENT_DISPATCH_ERROR_PATTERNS: readonly RegExp[] = [
+  /ECONNREFUSED/i,
+  /ECONNRESET/i,
+  /ETIMEDOUT/i,
+  /EAI_AGAIN/i,
+  /fetch failed/i,
+  /socket hang up/i,
+  /network request failed/i,
+  /\b5\d{2}\b/, // 5xx HTTP status codes embedded in error messages
+];
+
+/** Backoff schedule. 3 retries → 4 attempts total, ~7.5s worst-case latency. */
+export const TRANSIENT_DISPATCH_RETRY_DELAYS_MS: readonly number[] = [500, 2000, 5000];
+
+/** Best-effort extraction of common transport-layer fields from arbitrary error shapes. */
+function extractErrorFields(error: unknown): { msg: string; code?: string; status?: number } {
+  const msg = error instanceof Error ? error.message : String(error);
+  if (typeof error !== 'object' || error === null) return { msg };
+  const obj = error as Record<string, unknown>;
+  const code = typeof obj.code === 'string' ? obj.code : undefined;
+  const status =
+    typeof obj.status === 'number' ? obj.status : typeof obj.statusCode === 'number' ? obj.statusCode : undefined;
+  return { msg, code, status };
+}
+
+export function isTransientDispatchError(error: unknown): boolean {
+  const { msg, code, status } = extractErrorFields(error);
+  // 5xx via numeric status (HTTP clients that surface it as a property).
+  if (typeof status === 'number' && status >= 500 && status < 600) return true;
+  // Pattern match against both the message and any error.code (some libs put
+  // ECONNREFUSED / ETIMEDOUT in `code` only, not in `message`).
+  return TRANSIENT_DISPATCH_ERROR_PATTERNS.some((p) => p.test(msg) || (typeof code === 'string' && p.test(code)));
+}
+
+/**
+ * Run an agent-dispatch operation with retry on transient errors.
+ *
+ * Returns when the operation succeeds. Re-throws after the final attempt or
+ * immediately on a terminal (non-transient) error. Each retry attempt logs
+ * `agent_dispatch_transient_retry` at WARN with `attempt` (1-indexed) and
+ * the underlying error string, so format drift / new transient signatures
+ * surface in logs.
+ */
+export async function runWithTransientDispatchRetry<T>(
+  fn: () => Promise<T>,
+  context: { instanceId: string; chatId: string; traceId?: string },
+  options: {
+    delaysMs?: readonly number[];
+    isTransient?: (error: unknown) => boolean;
+    sleeper?: (ms: number) => Promise<void>;
+    logger?: { warn: (msg: string, fields: Record<string, unknown>) => void };
+  } = {},
+): Promise<T> {
+  const delays = options.delaysMs ?? TRANSIENT_DISPATCH_RETRY_DELAYS_MS;
+  const transient = options.isTransient ?? isTransientDispatchError;
+  const sleeper = options.sleeper ?? sleep;
+  const logger = options.logger ?? log;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const isLast = attempt === delays.length;
+      if (isLast || !transient(error)) {
+        throw error;
+      }
+      const { msg, code, status } = extractErrorFields(error);
+      logger.warn('agent_dispatch_transient_retry', {
+        instanceId: context.instanceId,
+        chatId: context.chatId,
+        traceId: context.traceId,
+        attempt: attempt + 1,
+        nextDelayMs: delays[attempt],
+        error: msg,
+        code,
+        status,
+      });
+      await sleeper(delays[attempt] ?? 0);
+    }
+  }
+  // Unreachable — the loop always either returns or throws — but keeps TS
+  // happy without a non-null assertion.
+  throw lastError;
+}
+
 const CHANNEL_MESSAGE_LIMITS: Record<string, number> = {
   discord: 2000,
   'whatsapp-baileys': 65536,
   'whatsapp-cloud': 65536,
+  'twilio-whatsapp': 1600,
   slack: 40000,
   telegram: 4096,
 };
@@ -601,6 +824,33 @@ async function waitForRecord<T>(
   return null;
 }
 
+const MEDIA_WAIT_TIMEOUT_MS = 30_000;
+
+function awaitMediaCompletion(msgId: string): Promise<{ content: string; error?: string }> {
+  return new Promise<{ content: string; error?: string }>((resolvePromise, rejectPromise) => {
+    mediaCompletions.set(msgId, { resolve: resolvePromise, reject: rejectPromise, createdAt: Date.now() });
+    setTimeout(() => {
+      if (mediaCompletions.has(msgId)) {
+        mediaCompletions.delete(msgId);
+        rejectPromise(new Error(`media wait timeout (${MEDIA_WAIT_TIMEOUT_MS}ms)`));
+      }
+    }, MEDIA_WAIT_TIMEOUT_MS);
+  });
+}
+
+async function recoverProcessedMediaAfterTimeout(
+  services: Services,
+  chatRecordId: string,
+  externalId: string,
+  column: string,
+): Promise<{ content: string; localPath: string | null } | null> {
+  const refreshed = await services.messages.getByExternalId(chatRecordId, externalId);
+  if (!refreshed) return null;
+  const recovered = checkProcessedColumn(refreshed, column);
+  if (recovered === 'pending' || recovered === 'error') return null;
+  return recovered;
+}
+
 /**
  * Await media processing via NATS event instead of DB polling.
  * Checks: DB first (already done) → event cache (arrived early) → await promise (NATS delivery).
@@ -647,10 +897,24 @@ async function awaitMediaProcessing(
     return { content: cached.content, localPath };
   }
 
-  // 3. Await NATS event — guaranteed delivery via durable consumer
-  const result = await new Promise<{ content: string; error?: string }>((resolvePromise, rejectPromise) => {
-    mediaCompletions.set(msg.id, { resolve: resolvePromise, reject: rejectPromise, createdAt: Date.now() });
-  });
+  // 3. Await NATS event — guaranteed delivery via durable consumer (with 30s timeout fallback).
+  // If the event is delayed/lost (e.g. host overload), we re-read the DB before giving up so a
+  // successful processing whose event was dropped is still recovered.
+  let result: { content: string; error?: string };
+  try {
+    result = await awaitMediaCompletion(msg.id);
+  } catch (error) {
+    log.warn('Media wait timed out, retrying DB read', {
+      instanceId,
+      chatId,
+      externalId,
+      msgId: msg.id,
+      error: String(error),
+    });
+    const recovered = await recoverProcessedMediaAfterTimeout(services, chat.id, externalId, column);
+    if (recovered) return recovered;
+    return MEDIA_WAIT_NULL;
+  }
 
   if (!result.content || result.error) return MEDIA_WAIT_NULL;
 
@@ -717,17 +981,68 @@ function getMessageContentText(msg: {
  * Resolve a quoted message into formatted text for the agent.
  * Looks up the referenced message and formats its content.
  */
+type MessageAliasLookup = Services['messages'] & {
+  findByProviderAlias?: (chatId: string, aliases: string[]) => ReturnType<Services['messages']['getByExternalId']>;
+  findRecentOutboundBefore?: (
+    chatId: string,
+    before: Date,
+    inboundText?: string,
+  ) => ReturnType<Services['messages']['getByExternalId']>;
+};
+
+interface QuotedLookupOptions {
+  inboundAt?: Date;
+  inboundText?: string;
+}
+
+function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0))];
+}
+
+async function lookupQuotedMessage(
+  messages: Services['messages'],
+  chatDbId: string,
+  replyToId: string,
+  aliases: string[],
+  options: QuotedLookupOptions = {},
+): ReturnType<Services['messages']['getByExternalId']> {
+  const quoted = await messages.getByExternalId(chatDbId, replyToId);
+  if (quoted) return quoted;
+
+  const candidates = uniqueNonEmpty([replyToId, ...aliases]);
+  const aliasLookup = messages as MessageAliasLookup;
+  if (aliasLookup.findByProviderAlias && candidates.length > 0) {
+    const byAlias = await aliasLookup.findByProviderAlias(chatDbId, candidates);
+    if (byAlias) return byAlias;
+  }
+
+  for (const candidate of candidates) {
+    if (candidate === replyToId) continue;
+    const byExternalId = await messages.getByExternalId(chatDbId, candidate);
+    if (byExternalId) return byExternalId;
+  }
+
+  if (options.inboundAt && aliasLookup.findRecentOutboundBefore) {
+    const fallback = await aliasLookup.findRecentOutboundBefore(chatDbId, options.inboundAt, options.inboundText);
+    if (fallback) return fallback;
+  }
+
+  return null;
+}
+
 export async function resolveQuotedMessage(
   services: Services,
   instanceId: string,
   chatId: string,
   replyToId: string,
+  providerAliases: string[] = [],
+  options: QuotedLookupOptions = {},
 ): Promise<string | null> {
   try {
     const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
     if (!chat) return null;
 
-    const quoted = await services.messages.getByExternalId(chat.id, replyToId);
+    const quoted = await lookupQuotedMessage(services.messages, chat.id, replyToId, providerAliases, options);
     if (!quoted) return null;
 
     const sender = quoted.senderDisplayName ?? quoted.senderPlatformUserId ?? (quoted.isFromMe ? 'You' : 'unknown');
@@ -865,6 +1180,34 @@ async function collectProcessedMedia(
 /**
  * Resolve quoted messages and prepend context to message texts.
  */
+function extractQuotedProviderAliases(rawPayload: Record<string, unknown> | undefined): string[] {
+  if (!rawPayload) return [];
+
+  const messageObj = isRecord(rawPayload.messageobj) ? rawPayload.messageobj : undefined;
+  const replyContext = isRecord(messageObj?.replyContext) ? messageObj.replyContext : undefined;
+  const rawMessage = isRecord(messageObj?.raw) ? messageObj.raw : undefined;
+  const rawContext = isRecord(rawMessage?.context) ? rawMessage.context : undefined;
+  const topContext = isRecord(rawPayload.context) ? rawPayload.context : undefined;
+
+  return uniqueNonEmpty([
+    replyContext?.internalId as string | undefined,
+    rawContext?.gsId as string | undefined,
+    rawContext?.id as string | undefined,
+    topContext?.gsId as string | undefined,
+    topContext?.id as string | undefined,
+  ]);
+}
+
+function extractInboundPlatformDate(rawPayload: Record<string, unknown> | undefined): Date | undefined {
+  if (!rawPayload) return undefined;
+  const messageObj = isRecord(rawPayload.messageobj) ? rawPayload.messageobj : undefined;
+  const timestamp = messageObj?.timestamp;
+  if (typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 0) {
+    return new Date(timestamp * 1000);
+  }
+  return undefined;
+}
+
 async function prependQuotedContext(
   services: Services,
   instanceId: string,
@@ -877,7 +1220,12 @@ async function prependQuotedContext(
     const replyToId = m.payload.replyToId;
     if (!replyToId) continue;
 
-    const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId);
+    const rawPayload = m.payload.rawPayload as Record<string, unknown> | undefined;
+    const providerAliases = extractQuotedProviderAliases(rawPayload);
+    const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId, providerAliases, {
+      inboundAt: extractInboundPlatformDate(rawPayload),
+      inboundText: m.payload.content?.text,
+    });
     if (!quotedText) continue;
 
     const messageKey = messageKeyByIndex.get(index);
@@ -1079,6 +1427,75 @@ async function resolvePersonId(
   return undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function pickString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function compactCustomerContext(context: OmniCustomerContext): OmniCustomerContext | undefined {
+  const compacted = Object.fromEntries(Object.entries(context).filter(([, value]) => value !== undefined));
+  return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
+
+function customerContextFromRecord(record: Record<string, unknown>): OmniCustomerContext | undefined {
+  return compactCustomerContext({
+    externalUserId: pickString(record, 'externalUserId', 'external_user_id'),
+    customerId: pickString(record, 'customerId', 'customer_id'),
+    organizationId: pickString(record, 'organizationId', 'organization_id', 'orgId', 'org_id'),
+    tenantId: pickString(record, 'tenantId', 'tenant_id'),
+  });
+}
+
+function extractA2ACustomerContext(messages: BufferedMessage[], channel: ChannelType): OmniCustomerContext | undefined {
+  if (channel !== 'a2a') return undefined;
+
+  const rawPayload = messages[0]?.payload.rawPayload;
+  if (!isRecord(rawPayload)) return undefined;
+
+  const executionContext = rawPayload.omniExecutionContext;
+  if (!isRecord(executionContext)) return undefined;
+
+  const customer = isRecord(executionContext.customer) ? executionContext.customer : {};
+  const identity = isRecord(executionContext.identity) ? executionContext.identity : {};
+
+  return compactCustomerContext({
+    ...customerContextFromRecord(customer),
+    externalUserId:
+      pickString(customer, 'externalUserId', 'external_user_id') ?? pickString(identity, 'platformUserId', 'userId'),
+  });
+}
+
+async function resolveCustomerContext(
+  services: Services,
+  personId: string | undefined,
+  externalContext?: OmniCustomerContext,
+): Promise<OmniCustomerContext | undefined> {
+  let storedContext: OmniCustomerContext | undefined;
+
+  if (personId) {
+    try {
+      const person = await services.persons.getById(personId);
+      if (person && isRecord(person.metadata)) {
+        storedContext = customerContextFromRecord(person.metadata);
+      }
+    } catch (error) {
+      log.debug('Failed to resolve customer context', { personId, error: String(error) });
+    }
+  }
+
+  return compactCustomerContext({
+    ...(externalContext ?? {}),
+    ...(storedContext ?? {}),
+  });
+}
+
 /**
  * Fetch sender identity metadata (avatar URL, username)
  */
@@ -1255,6 +1672,26 @@ function extractThreadId(messages: BufferedMessage[]): string | undefined {
   return ((messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>).threadId as string | undefined;
 }
 
+function extractKhalSessionId(messages: BufferedMessage[]): string | undefined {
+  for (const message of messages) {
+    const rawPayload = (message.payload.rawPayload ?? {}) as Record<string, unknown>;
+    const direct = rawPayload.khalSessionId;
+    if (typeof direct === 'string' && direct.trim()) return direct.trim();
+
+    const headers = rawPayload.headers;
+    if (headers && typeof headers === 'object') {
+      const headerMap = headers as Record<string, unknown>;
+      const value = headerMap['x-khal-session-id'] ?? headerMap['X-Khal-Session-Id'] ?? headerMap['X-KHAL-SESSION-ID'];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function buildTriggerHeaders(khalSessionId: string | undefined): Record<string, string> | undefined {
+  return khalSessionId ? { 'x-khal-session-id': khalSessionId } : undefined;
+}
+
 /** Merge per-thread history context with DB-fetched context messages (extra comes first) */
 function mergeContextMessages(extra: string[] | undefined, db: string[]): string[] {
   return extra?.length ? [...extra, ...db] : db;
@@ -1354,9 +1791,19 @@ function buildMessageTrigger(
   messageTexts: string[],
   triggerFiles: ProviderFile[] | undefined,
   sessionId: string,
+  customerContext: OmniCustomerContext | undefined,
   allContextMessages: string[],
+  khalSessionId?: string,
 ): AgentTrigger {
   const threadId = extractThreadId(messages);
+  // Instance-scoped env that any provider/bridge path should see, regardless
+  // of turn-based vs fire-and-forget. The turn-based helper layers
+  // OMNI_TURN_ID on top after opening the turn; that extension merges with
+  // whatever we set here, never replaces it.
+  const env: Record<string, string> = {};
+  if (instance.bridgeTmuxSession) {
+    env.GENIE_TMUX_SESSION = instance.bridgeTmuxSession;
+  }
   return {
     traceId,
     type: triggerType,
@@ -1379,7 +1826,11 @@ function buildMessageTrigger(
       referencedMessageId: messages[0]?.payload.replyToId || undefined,
     },
     sessionId,
+    headers: buildTriggerHeaders(khalSessionId),
+    sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
+    customer: customerContext,
     contextMessages: allContextMessages.length > 0 ? allContextMessages : undefined,
+    env: Object.keys(env).length > 0 ? env : undefined,
   };
 }
 
@@ -1410,8 +1861,20 @@ async function dispatchViaStreamingProvider(
   if (!messageTexts.length && mediaFiles.length) messageTexts.push('[Media message]');
 
   const rawThreadId = extractThreadId(messages);
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
   const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
+  const sessionIdentity = resolveKhalSessionId({
+    providerSchema: resolved.provider.schema,
+    sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
+    from: senderId,
+    chatId,
+    channel,
+    instanceId: instance.id,
+    personId,
+    rawPayload: rawPl,
+    threadId: rawThreadId,
+  });
+  const sessionId = sessionIdentity.sessionId;
+  const explicitKhalSessionId = sessionIdentity.canonicalSessionId;
   const replyToId = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
 
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
@@ -1435,6 +1898,11 @@ async function dispatchViaStreamingProvider(
   // TODO: before_message_write for streaming — batch after stream completes
   // (per-segment hooks would add latency; batch transform is the right approach)
 
+  const customerContext = await resolveCustomerContext(
+    services,
+    personId,
+    extractA2ACustomerContext(messages, channel),
+  );
   const trigger = buildMessageTrigger(
     traceId,
     triggerType,
@@ -1449,7 +1917,9 @@ async function dispatchViaStreamingProvider(
     messageTexts,
     triggerFiles,
     sessionId,
+    customerContext,
     allContextMessages,
+    explicitKhalSessionId,
   );
 
   const chatType = determineChatType(chatId, channel, rawPl);
@@ -1738,9 +2208,13 @@ async function dispatchViaTurnBasedProvider(
     timestamp: new Date().toISOString(),
   });
 
-  // Inject env vars into trigger for the agent bridge.
-  // OMNI_TURN_ID allows the agent to close the correct turn via POST /v2/turns/close.
+  // Inject turn-based env vars. OMNI_TURN_ID lets the agent close the correct
+  // turn via POST /v2/turns/close. Instance-scoped env keys (e.g.
+  // GENIE_TMUX_SESSION for per-instance tmux routing) are populated by
+  // buildMessageTrigger already — merge instead of replace so both layers
+  // reach the bridge.
   trigger.env = {
+    ...(trigger.env ?? {}),
     OMNI_INSTANCE: instance.id,
     OMNI_CHAT: chatId,
     OMNI_MESSAGE: messageId,
@@ -1749,7 +2223,24 @@ async function dispatchViaTurnBasedProvider(
 
   // Dispatch (fire-and-forget — agent uses verb commands + omni done)
   const dispatchStart = Date.now();
-  await provider.trigger(trigger);
+  await withLifecycleSpan(
+    'omni.dispatch_to_agno',
+    buildLifecycleSpanAttributes({
+      stage: 'dispatch_to_agno',
+      eventType: 'user_message_turn',
+      channel: instance.channel,
+      provider: provider.schema,
+      instanceId: instance.id,
+      chatId,
+      sessionId: trigger.sessionId,
+      traceId,
+      messageId,
+      agentId: agentRecord.id,
+      inputText: trigger.content.text,
+      extra: { mode: 'turn-based', provider_id: provider.id, provider_schema: provider.schema },
+    }),
+    () => provider.trigger(trigger),
+  );
   const dispatchDurationMs = Date.now() - dispatchStart;
 
   if (sentryEnabled()) {
@@ -1808,7 +2299,20 @@ async function dispatchViaProvider(
   }
 
   const rawThreadId = extractThreadId(messages);
-  const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadId);
+  const rawPl = (messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>;
+  const sessionIdentity = resolveKhalSessionId({
+    providerSchema: provider.schema,
+    sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
+    from: senderId,
+    chatId,
+    channel,
+    instanceId: instance.id,
+    personId,
+    rawPayload: rawPl,
+    threadId: rawThreadId,
+  });
+  const sessionId = sessionIdentity.sessionId;
+  const explicitKhalSessionId = sessionIdentity.canonicalSessionId;
 
   // Build context messages for group and DM conversations (messages since last bot response)
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
@@ -1829,6 +2333,11 @@ async function dispatchViaProvider(
     triggerFiles,
   );
 
+  const customerContext = await resolveCustomerContext(
+    services,
+    personId,
+    extractA2ACustomerContext(messages, channel),
+  );
   const trigger = buildMessageTrigger(
     traceId,
     triggerType,
@@ -1843,80 +2352,140 @@ async function dispatchViaProvider(
     messageTexts,
     triggerFiles,
     sessionId,
+    customerContext,
     allContextMessages,
+    explicitKhalSessionId,
   );
 
-  // ── Turn-based mode: delegate to extracted helper ──
-  if (provider.mode === 'turn-based') {
-    return dispatchViaTurnBasedProvider(services, instance, provider, trigger, messages, chatId, traceId, db);
-  }
-
-  // ── Standard (round-trip / fire-and-forget) dispatch ──
-  const correlationId = messages[0]?.metadata.correlationId;
-  const dispatchStart = Date.now();
-  const result = await provider.trigger(trigger);
-  const dispatchDurationMs = Date.now() - dispatchStart;
-
-  // Sentry metrics: agent dispatch count and latency
-  if (sentryEnabled()) {
-    Sentry.metrics.count('agent.dispatch', 1, { attributes: { provider_type: provider.schema } });
-    Sentry.metrics.distribution('agent.dispatch.latency', dispatchDurationMs, {
-      unit: 'millisecond',
-      attributes: { provider_type: provider.schema },
-    });
-  }
-
-  // If the agent triggered a handoff during this run (agentPaused: true),
-  // suppress the response — the handoff message already notified the user.
-  const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
-  const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
-
-  if (result && result.parts.length > 0 && !handoffTriggered) {
-    const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
-    const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
-    // Apply before_message_write hooks to each response part before sending
-    const parts = await Promise.all(rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)));
-    const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
-    const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
-
-    // T8: Processing send request
-    recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
-
-    await sendResponseParts(
-      channel,
-      instance.id,
-      chatId,
-      parts,
-      getSplitDelayConfig(instance),
-      _fmtMode,
-      replyTo,
-      correlationId,
-      senderAgentId,
-    );
-
-    // T9: Outbound sent via plugin
-    recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
-
-    // T10: Agent chaining — forward response to chained instance if configured
-    await forwardToChainedInstance(instance, parts, correlationId, messages);
-  } else if (handoffTriggered) {
-    log.info('Agent response suppressed — handoff triggered during run', {
-      instanceId: instance.id,
-      chatId,
-    });
-  }
-
-  log.info('Agent response via IAgentProvider', {
+  const lifecycleBase = {
+    eventType: 'user_message_turn',
+    channel,
+    provider: provider.schema,
     instanceId: instance.id,
     chatId,
-    parts: result?.parts.length ?? 0,
-    providerId: result?.metadata.providerId,
-    durationMs: result?.metadata.durationMs,
-    triggerType,
+    sessionId,
     traceId,
-  });
+    messageId: messages[0]?.payload.externalId,
+    agentId: instance.agentInternalId ?? instance.agentId ?? undefined,
+    inputText: messageTexts.join('\n'),
+  };
 
-  return true;
+  return withLifecycleSpan(
+    'omni.turn',
+    buildLifecycleSpanAttributes({
+      ...lifecycleBase,
+      stage: 'turn',
+      extra: {
+        trigger_type: triggerType,
+        message_count: messages.length,
+        provider_id: provider.id,
+        provider_schema: provider.schema,
+      },
+    }),
+    async () => {
+      await withLifecycleSpan(
+        'omni.provider_inbound',
+        buildLifecycleSpanAttributes({
+          ...lifecycleBase,
+          stage: 'provider_inbound',
+          extra: { trigger_type: triggerType, message_count: messages.length },
+        }),
+        async () => undefined,
+      );
+
+      // ── Turn-based mode: delegate to extracted helper ──
+      if (provider.mode === 'turn-based') {
+        return dispatchViaTurnBasedProvider(services, instance, provider, trigger, messages, chatId, traceId, db);
+      }
+
+      // ── Standard (round-trip / fire-and-forget) dispatch ──
+      const correlationId = messages[0]?.metadata.correlationId;
+      const dispatchStart = Date.now();
+      const result = await withLifecycleSpan(
+        'omni.dispatch_to_agno',
+        buildLifecycleSpanAttributes({
+          ...lifecycleBase,
+          stage: 'dispatch_to_agno',
+          extra: { trigger_type: triggerType, provider_id: provider.id, provider_schema: provider.schema },
+        }),
+        () => provider.trigger({ ...trigger, traceContext: activeProviderTraceContext() ?? trigger.traceContext }),
+      );
+      const dispatchDurationMs = Date.now() - dispatchStart;
+
+      // Sentry metrics: agent dispatch count and latency
+      if (sentryEnabled()) {
+        Sentry.metrics.count('agent.dispatch', 1, { attributes: { provider_type: provider.schema } });
+        Sentry.metrics.distribution('agent.dispatch.latency', dispatchDurationMs, {
+          unit: 'millisecond',
+          attributes: { provider_type: provider.schema },
+        });
+      }
+
+      // If the agent triggered a handoff during this run (agentPaused: true),
+      // suppress the response — the handoff message already notified the user.
+      const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
+      const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+
+      if (result && result.parts.length > 0 && !handoffTriggered) {
+        const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
+        const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
+        // Apply before_message_write hooks to each response part before sending
+        const parts = await Promise.all(
+          rawParts.map((part) => executeBeforeMessageWriteHooks(instance.id, chatId, part)),
+        );
+        const _fmtMode = (instance.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+        const replyTo = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
+
+        // T8: Processing send request
+        recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+
+        await withLifecycleSpan(
+          'omni.provider_outbound',
+          buildLifecycleSpanAttributes({
+            ...lifecycleBase,
+            stage: 'provider_outbound',
+            outputText: parts.join('\n'),
+            extra: { parts_count: parts.length, provider_id: provider.id, provider_schema: provider.schema },
+          }),
+          () =>
+            sendResponseParts(
+              channel,
+              instance.id,
+              chatId,
+              parts,
+              getSplitDelayConfig(instance),
+              _fmtMode,
+              replyTo,
+              correlationId,
+              senderAgentId,
+            ),
+        );
+
+        // T9: Outbound sent via plugin
+        recordJourneyCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
+
+        // T10: Agent chaining — forward response to chained instance if configured
+        await forwardToChainedInstance(instance, parts, correlationId, messages);
+      } else if (handoffTriggered) {
+        log.info('Agent response suppressed — handoff triggered during run', {
+          instanceId: instance.id,
+          chatId,
+        });
+      }
+
+      log.info('Agent response via IAgentProvider', {
+        instanceId: instance.id,
+        chatId,
+        parts: result?.parts.length ?? 0,
+        providerId: result?.metadata.providerId,
+        durationMs: result?.metadata.durationMs,
+        triggerType,
+        traceId,
+      });
+
+      return true;
+    },
+  );
 }
 
 /**
@@ -1979,20 +2548,57 @@ async function dispatchViaLegacy(
     mediaFiles.length > 0 ? (mediaFiles as unknown as ProviderFile[]) : undefined,
   );
 
-  const result = await services.agentRunner.run({
-    instance,
-    chatId,
-    personId,
+  const lifecycleSessionId = computeSessionId(
+    instance.agentSessionStrategy ?? 'per_chat',
     senderId,
-    senderName,
-    senderAvatarUrl,
-    senderPlatformUsername,
-    chatType,
-    chatName,
-    participantCount,
-    messages: messageTexts,
-    files: mediaFiles.length > 0 ? mediaFiles : undefined,
-  });
+    chatId,
+    (rawPl as Record<string, unknown>).threadId as string | undefined,
+  );
+  const lifecycleBase = {
+    eventType: 'user_message_turn',
+    channel,
+    provider: 'legacy-agent-runner',
+    instanceId: instance.id,
+    chatId,
+    sessionId: lifecycleSessionId,
+    traceId,
+    messageId: messages[0]?.payload.externalId,
+    agentId: instance.agentInternalId ?? instance.agentId ?? undefined,
+    inputText: messageTexts.join('\n'),
+  };
+
+  emitLifecycleSpan(
+    'omni.provider_inbound',
+    buildLifecycleSpanAttributes({
+      ...lifecycleBase,
+      stage: 'provider_inbound',
+      extra: { trigger_type: triggerType, message_count: messages.length },
+    }),
+  );
+
+  const result = await withLifecycleSpan(
+    'omni.dispatch_to_agno',
+    buildLifecycleSpanAttributes({
+      ...lifecycleBase,
+      stage: 'dispatch_to_agno',
+      extra: { trigger_type: triggerType, provider_schema: 'legacy-agent-runner' },
+    }),
+    () =>
+      services.agentRunner.run({
+        instance,
+        chatId,
+        personId,
+        senderId,
+        senderName,
+        senderAvatarUrl,
+        senderPlatformUsername,
+        chatType,
+        chatName,
+        participantCount,
+        messages: messageTexts,
+        files: mediaFiles.length > 0 ? mediaFiles : undefined,
+      }),
+  );
 
   const correlationId = messages[0]?.metadata.correlationId;
   const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
@@ -2007,16 +2613,26 @@ async function dispatchViaLegacy(
   // T8: Processing send request
   recordJourneyCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
 
-  await sendResponseParts(
-    channel,
-    instance.id,
-    chatId,
-    parts,
-    getSplitDelayConfig(instance),
-    _fmtMode,
-    replyTo,
-    correlationId,
-    senderAgentId,
+  await withLifecycleSpan(
+    'omni.provider_outbound',
+    buildLifecycleSpanAttributes({
+      ...lifecycleBase,
+      stage: 'provider_outbound',
+      outputText: parts.join('\n'),
+      extra: { parts_count: parts.length, provider_schema: 'legacy-agent-runner' },
+    }),
+    () =>
+      sendResponseParts(
+        channel,
+        instance.id,
+        chatId,
+        parts,
+        getSplitDelayConfig(instance),
+        _fmtMode,
+        replyTo,
+        correlationId,
+        senderAgentId,
+      ),
   );
 
   // T9: Outbound sent via plugin
@@ -2124,12 +2740,9 @@ async function handleSessionReset(
       : resolvedChatType;
 
   const rawThreadIdForReset = (msgRawPayload as Record<string, unknown>).threadId as string | undefined;
-  const sessionId = computeSessionId(
-    instance.agentSessionStrategy ?? 'per_chat',
-    senderId,
-    chatId,
-    rawThreadIdForReset,
-  );
+  const sessionId =
+    extractKhalSessionId([firstMessage]) ??
+    computeSessionId(instance.agentSessionStrategy ?? 'per_chat', senderId, chatId, rawThreadIdForReset);
   const sessionResetConfig = inst.sessionReset as SessionResetConfig | null;
   const activity = sessionActivityStore.getActivity(instance.id, sessionId);
   const resetResult = checkSessionReset(sessionResetConfig, resetChatType, activity);
@@ -2560,6 +3173,103 @@ async function dispatchToAgent(
   );
 }
 
+/** Settings shape consumed by the close-contact + handoff gates below. */
+interface ChatSettingsForGate {
+  agentPaused?: boolean;
+  agentResumedAt?: string;
+  closed?: boolean;
+  closeUntil?: string | null;
+  closeOutcome?: string | null;
+}
+
+/**
+ * Close-contact gate. Returns:
+ *   - `skip`        → caller must `ackHandle.remove()` and return.
+ *   - `reopened`    → soft cooldown expired; state cleaned up. Fall through
+ *                     to dispatch normally; the handoff gate after this
+ *                     should NOT also block on a stale `agentPaused`.
+ *   - `pass`        → no terminal state and no agent-pause requirement;
+ *                     defer to subsequent gates.
+ *
+ * Two distinct mechanisms — keep them decoupled (matching the write side
+ * in `POST /messages/send/close-contact`):
+ *
+ *   - `closed === true` is a HARD terminal (`won`/`lost` outcomes): skip
+ *     permanently. Only `/chats/:id/reopen-contact` clears it.
+ *   - `closeUntil` set + future timestamp is a SOFT cooldown
+ *     (`redirected_sac`, `unqualified`, `no_response`, `other`). The
+ *     follow-up Haiku is disarmed for that window, but the reactive agent
+ *     stays available for inbound replies — a customer asking "I couldn't
+ *     reach the SAC number" deserves a reply, not silence. Pass through.
+ *   - `closeUntil` set + past timestamp: cooldown expired, clean it up
+ *     and report `reopened` so the handoff gate ignores any residual
+ *     `agentPaused` flag.
+ *
+ * Single-writer principle: the dispatcher is the only path that mutates
+ * state on cooldown expiry, and it's also the only consumer that needs to
+ * read it — see design.md §6.3.
+ */
+async function applyCloseContactGate(
+  services: Services,
+  chatRecordId: string | null,
+  instanceId: string,
+  chatId: string,
+  chatSettings: ChatSettingsForGate | null,
+): Promise<'skip' | 'reopened' | 'pass'> {
+  if (chatSettings?.closed === true) {
+    log.debug('Chat closed (terminal), skipping dispatch', {
+      instanceId,
+      chatId,
+      outcome: chatSettings.closeOutcome ?? null,
+    });
+    return 'skip';
+  }
+  if (!chatSettings?.closeUntil) return 'pass';
+
+  const closeUntilMs = new Date(chatSettings.closeUntil).getTime();
+  if (!Number.isFinite(closeUntilMs)) return 'pass';
+  if (Date.now() < closeUntilMs) {
+    // Soft cooldown active: follow-up disarmed, reactive agent stays open.
+    log.debug('Chat in soft close cooldown, follow-up disarmed but agent reactive', {
+      instanceId,
+      chatId,
+      closeUntil: chatSettings.closeUntil,
+      outcome: chatSettings.closeOutcome ?? null,
+    });
+    return 'pass';
+  }
+  if (!chatRecordId) return 'pass';
+
+  // Cooldown expired — clear closeUntil so the gate stops firing and any
+  // residual `agentPaused` (legacy chats from before the decoupling, or
+  // chats where a real human handoff happened on top of a close) gets
+  // explicitly cleared. Report `reopened` so the handoff gate ignores any
+  // stale flag.
+  try {
+    await services.chats.update(chatRecordId, {
+      settings: {
+        ...(chatSettings as Record<string, unknown>),
+        agentPaused: false,
+        closeUntil: null,
+        agentResumedAt: new Date().toISOString(),
+      } as Record<string, unknown>,
+    });
+    log.info('Close cooldown expired, state cleaned', {
+      instanceId,
+      chatId,
+      closeOutcome: chatSettings.closeOutcome ?? null,
+    });
+    return 'reopened';
+  } catch (err) {
+    log.warn('Failed to flip close cooldown state, deferring dispatch', {
+      instanceId,
+      chatId,
+      error: String(err),
+    });
+    return 'skip';
+  }
+}
+
 async function processAgentResponse(
   services: Services,
   instance: DispatchInstance,
@@ -2598,12 +3308,23 @@ async function processAgentResponse(
     return;
   }
 
+  // ── Close-contact gate — runs BEFORE the handoff/agentPaused gate ──
+  // See applyCloseContactGate() for the full semantics.
+  const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const chatSettings = chatRecord?.settings as ChatSettingsForGate | null;
+
+  const gateResult = await applyCloseContactGate(services, chatRecord?.id ?? null, instance.id, chatId, chatSettings);
+  if (gateResult === 'skip') {
+    ackHandle.remove();
+    return;
+  }
+
   // ── Handoff gate — skip dispatch if agent is paused (human takeover active) ──
   // Also drop messages received before the agent was last resumed (NATS redelivery
   // of pre-handoff messages that queue up while agentPaused=true).
-  const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
-  const chatSettings = chatRecord?.settings as { agentPaused?: boolean; agentResumedAt?: string } | null;
-  const isAgentPaused = chatSettings?.agentPaused === true;
+  // After the close-contact gate above, a residual `agentPaused: true` here is a
+  // genuine handoff pause (not a close-contact terminal/cooldown).
+  const isAgentPaused = chatSettings?.agentPaused === true && gateResult !== 'reopened';
   if (isAgentPaused) {
     log.debug('Agent paused (handoff active), skipping dispatch', { instanceId: instance.id, chatId });
     ackHandle.remove();
@@ -2671,23 +3392,27 @@ async function processAgentResponse(
   );
 
   try {
-    await dispatchToAgent(
-      services,
-      instance,
-      messages,
-      triggerType,
-      channel,
-      chatId,
-      senderId,
-      personId,
-      senderName,
-      traceId,
-      senderAgentId,
-      perThreadExtraContext,
-      db,
+    await runWithTransientDispatchRetry(
+      () =>
+        dispatchToAgent(
+          services,
+          instance,
+          messages,
+          triggerType,
+          channel,
+          chatId,
+          senderId,
+          personId,
+          senderName,
+          traceId,
+          senderAgentId,
+          perThreadExtraContext,
+          db,
+        ),
+      { instanceId: instance.id, chatId, traceId },
     );
   } catch (error) {
-    log.error('Failed to process agent response', {
+    log.error('agent_dispatch_failed_after_retries', {
       instanceId: instance.id,
       chatId,
       error: String(error),
@@ -2786,7 +3511,7 @@ function createAgnoProvider(provider: AgentProvider, instance: DispatchInstance)
     schema: provider.schema,
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
@@ -2794,7 +3519,7 @@ function createAgnoProvider(provider: AgentProvider, instance: DispatchInstance)
   return new AgnoAgentProvider(provider.id, provider.name, client, {
     agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
     agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
-    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 600) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
   });
@@ -2833,6 +3558,7 @@ function createClaudeCodeProviderInstance(
         | Record<string, { command: string; args?: string[]; env?: Record<string, string> }>
         | undefined,
       maxTurns: schemaConfig.maxTurns as number | undefined,
+      pathToClaudeCodeExecutable: schemaConfig.pathToClaudeCodeExecutable as string | undefined,
     },
     createSessionStorage(db, provider.id),
     {
@@ -2876,12 +3602,12 @@ function createAgUiProviderInstance(provider: AgentProvider, instance: DispatchI
     schema: provider.schema,
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   return new AgUiAgentProvider(provider.id, provider.name, client, {
     agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
-    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 600) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
   });
@@ -2899,12 +3625,12 @@ function createA2AProviderInstance(provider: AgentProvider, instance: DispatchIn
     schema: provider.schema,
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   return new A2AAgentProvider(provider.id, provider.name, client, {
     agentId: resolveRequiredAgentId(instance, schemaConfig, provider.id),
-    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 60) * 1000,
+    timeoutMs: (instance.agentTimeout ?? provider.defaultTimeout ?? 600) * 1000,
     enableAutoSplit: instance.enableAutoSplit ?? true,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
   });
@@ -3036,6 +3762,45 @@ export function resolveProvider(
 }
 
 /**
+ * Invalidate cached IAgentProvider instances for a specific provider.
+ *
+ * Call after provider schemaConfig / baseUrl / apiKey updates so the next
+ * dispatch rebuilds from fresh DB state instead of returning the stale
+ * cached instance. Also stops and removes the shared OpenClaw WS client
+ * for this provider since connection-level config may have changed.
+ */
+export function invalidateProviderCache(providerId: string): void {
+  const prefix = `${providerId}:`;
+  let removed = 0;
+
+  for (const [key, provider] of providerCache.entries()) {
+    if (!key.startsWith(prefix)) continue;
+    providerCache.delete(key);
+    removed++;
+    if (provider.dispose) {
+      provider.dispose().catch((err) => {
+        log.warn('Error disposing provider on cache invalidation', { key, error: String(err) });
+      });
+    }
+  }
+
+  const openclawClient = openclawClientPool.get(providerId);
+  if (openclawClient) {
+    try {
+      openclawClient.stop();
+    } catch (err) {
+      log.warn('Error stopping OpenClaw client on cache invalidation', {
+        providerId,
+        error: String(err),
+      });
+    }
+    openclawClientPool.delete(providerId);
+  }
+
+  log.debug('Provider cache invalidated', { providerId, removed });
+}
+
+/**
  * Look up provider from DB and resolve to IAgentProvider.
  * Accepts DispatchInstance which carries the transient agentProviderId stamped by applyAgentFkOverrides.
  */
@@ -3067,7 +3832,7 @@ async function getAgentProvider(
  * Mutates effectiveInstance in-place with values from the Agent entity row.
  * Stamps transient dispatch fields (agentProviderId, agentType, agentInternalId) onto the copy.
  */
-async function applyAgentFkOverrides(
+export async function applyAgentFkOverrides(
   db: Database,
   agentFkId: string,
   effectiveInstance: DispatchInstance,
@@ -3256,7 +4021,17 @@ async function processReactionTrigger(
       // Build AgentTrigger for the provider
       const effectivePersonId = reactionPersonId ?? metadata.personId;
       const senderName = await services.agentRunner.getSenderName(effectivePersonId, undefined);
-      const sessionId = computeSessionId(instance.agentSessionStrategy ?? 'per_chat', payload.from, externalChatId);
+      const sessionId = resolveKhalSessionId({
+        providerSchema: provider.schema,
+        sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
+        from: payload.from,
+        chatId: externalChatId,
+        channel,
+        instanceId: instance.id,
+        personId: effectivePersonId,
+        rawPayload: payload.rawPayload as Record<string, unknown> | undefined,
+      }).sessionId;
+      const customerContext = await resolveCustomerContext(services, effectivePersonId);
 
       const trigger: AgentTrigger = {
         traceId: metadata.traceId,
@@ -3278,6 +4053,8 @@ async function processReactionTrigger(
           referencedMessageId: payload.messageId,
         },
         sessionId,
+        sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
+        customer: customerContext,
       };
 
       const result = await provider.trigger(trigger);
@@ -3555,13 +4332,87 @@ export function isInboundTooStale(
   return { stale: ageMs > maxAgeMs, ageMs, maxAgeMs };
 }
 
+type FirstPartySenderInput = {
+  from?: string;
+  rawPayload?: unknown;
+};
+
+function normalizePhoneIdentity(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const jidPhone = extractPhoneFromJid(value);
+  const digits = jidPhone || value.replace(/@.*$/, '').replace(/:\d+$/, '').replace(/\D/g, '');
+  return digits.length >= 7 ? digits : undefined;
+}
+
+function collectSenderPhones(input: FirstPartySenderInput): Set<string> {
+  const phones = new Set<string>();
+  const raw = (input.rawPayload ?? {}) as Record<string, unknown>;
+  const key = (raw.key ?? {}) as Record<string, unknown>;
+  for (const candidate of [
+    input.from,
+    raw.resolvedSenderPhone,
+    raw.resolvedPhoneJid,
+    key.remoteJidAlt,
+    key.participantAlt,
+    key.participant,
+    key.remoteJid,
+  ]) {
+    const phone = normalizePhoneIdentity(candidate);
+    if (phone) phones.add(phone);
+  }
+  return phones;
+}
+
+export function isFirstPartyInstanceSender(
+  sender: FirstPartySenderInput,
+  currentOwnerIdentifier: string | null | undefined,
+  activeOwnerIdentifiers: Array<string | null | undefined>,
+): boolean {
+  const senderPhones = collectSenderPhones(sender);
+  if (senderPhones.size === 0) return false;
+
+  const currentOwnerPhone = normalizePhoneIdentity(currentOwnerIdentifier);
+  for (const ownerIdentifier of activeOwnerIdentifiers) {
+    const ownerPhone = normalizePhoneIdentity(ownerIdentifier);
+    if (!ownerPhone || ownerPhone === currentOwnerPhone) continue;
+    if (senderPhones.has(ownerPhone)) return true;
+  }
+  return false;
+}
+
+const ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS = 10_000;
+let cachedActiveOwnerIdentifiers: Array<string | null> | null = null;
+let cachedActiveOwnerIdentifiersAt = 0;
+
+async function listActiveOwnerIdentifiers(db: Database): Promise<Array<string | null>> {
+  const now = Date.now();
+  if (cachedActiveOwnerIdentifiers && now - cachedActiveOwnerIdentifiersAt < ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS) {
+    return cachedActiveOwnerIdentifiers;
+  }
+
+  const rows = await db
+    .select({ ownerIdentifier: instances.ownerIdentifier })
+    .from(instances)
+    .where(eq(instances.isActive, true));
+
+  // Unit tests often provide partial chain mocks for Database. Production Drizzle
+  // returns an array here; if a mock/non-standard adapter does not, fail open so
+  // message dispatch still works and only the cross-instance self-send guard is
+  // skipped for that call.
+  if (!Array.isArray(rows)) return [];
+
+  cachedActiveOwnerIdentifiers = rows.map((row) => row.ownerIdentifier);
+  cachedActiveOwnerIdentifiersAt = now;
+  return cachedActiveOwnerIdentifiers;
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
   chatsService: Services['chats'],
   messagesService: Services['messages'],
   routeResolver: Services['routeResolver'],
-  rateLimiter: RateLimiter,
+  db: Database,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
 ): Promise<Instance | null> {
@@ -3593,6 +4444,14 @@ async function shouldProcessMessage(
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentId) {
     log.debug('Instance has no agentId', { instanceId: metadata.instanceId });
+    return null;
+  }
+
+  const activeOwnerIdentifiers = await listActiveOwnerIdentifiers(db);
+  if (isFirstPartyInstanceSender(payload, instance.ownerIdentifier, activeOwnerIdentifiers)) {
+    log.info('Skipping first-party cross-instance message', {
+      instanceId: instance.id,
+    });
     return null;
   }
 
@@ -3681,11 +4540,10 @@ async function shouldProcessMessage(
   }
 
   const channel = (metadata.channelType ?? instance.channel) as ChannelType;
-  const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
-  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
-    log.info('Rate limited', { instanceId: instance.id, from: payload.from, channel });
-    return null;
-  }
+
+  // #384: Rate limiting is deferred to the debounced flush so fast-typed
+  // messages still reach the debounce buffer. Counting per-inbound-message
+  // silently dropped mid-thought messages and corrupted the agent context.
 
   const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
   if (accessDenied) return null;
@@ -3771,7 +4629,6 @@ async function checkAccessWithFallback(
 async function shouldProcessReaction(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
-  rateLimiter: RateLimiter,
   reactionDedup: ReactionDedup,
   payload: ReactionReceivedPayload,
   metadata: { instanceId?: string; channelType?: string },
@@ -3790,11 +4647,6 @@ async function shouldProcessReaction(
   }
 
   const channel = (metadata.channelType ?? instance.channel) as ChannelType;
-  const rateLimit = (instance as Record<string, unknown>).triggerRateLimit as number | undefined;
-  if (!rateLimiter.isAllowed(payload.from, channel, instance.id, rateLimit ?? DEFAULT_RATE_LIMIT)) {
-    log.info('Rate limited reaction trigger', { instanceId: instance.id, from: payload.from });
-    return null;
-  }
 
   // Access check for reactions (reuses LID fallback logic)
   const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
@@ -3974,11 +4826,7 @@ export async function setupAgentDispatcher(
 ): Promise<DispatcherCleanup> {
   const agentRunner = services.agentRunner;
   const accessService = services.access;
-  const rateLimiter = new RateLimiter();
   const reactionDedup = new ReactionDedup();
-
-  // Periodic cleanup of rate limiter counters
-  const cleanupInterval = setInterval(() => rateLimiter.cleanup(), 60_000);
 
   // Periodic cleanup of leaked media promises (10min circuit breaker)
   const mediaCleanupInterval = setInterval(() => {
@@ -4024,6 +4872,11 @@ export async function setupAgentDispatcher(
 
     if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) return;
 
+    // #384: No inbound rate limiter. The debouncer already collapses conversational
+    // bursts into a single trigger — capping inbound volume on top of that silently
+    // dropped real user messages and corrupted agent context. Accept any burst size;
+    // the debouncer is the single source of burst control for message triggers.
+
     // T5: Agent notified — record journey checkpoint
     if (firstMsg.metadata.journeyTracked && firstMsg.metadata.correlationId) {
       const tracker = getJourneyTracker();
@@ -4043,86 +4896,100 @@ export async function setupAgentDispatcher(
         const payload = event.payload as MessageReceivedPayload;
         const metadata = event.metadata;
 
-        try {
-          const instance = await shouldProcessMessage(
-            agentRunner,
-            accessService,
-            services.chats,
-            services.messages,
-            services.routeResolver,
-            rateLimiter,
-            payload,
-            metadata,
-          );
-          if (!instance) return;
-
-          const traceId = metadata.traceId ?? generateCorrelationId('trc');
-
-          // Early route resolution: resolve route BEFORE debounce so per-user
-          // debounce overrides (e.g. messageDebounceMode: 'disabled') take effect.
-          const chat = await services.chats.findByExternalIdSmart(instance.id, payload.chatId);
-
-          // Resolve person ID for route matching. metadata.personId may not be set yet
-          // (message-persistence runs in parallel), so fall back to identity lookup.
-          const channel = (metadata.channelType ?? instance.channel) as ChannelType;
-          const earlyPersonId = await resolvePersonId(services, channel, instance.id, payload.from, metadata.personId);
-
-          const { instance: resolved, routeId } = await resolveEffectiveInstance(
-            services,
-            db,
-            instance,
-            chat?.id,
-            earlyPersonId,
-          );
-
-          const debounceConfig = getDebounceConfig(resolved);
-
-          // Group chats (WhatsApp: @g.us) can use a different debounce window.
-          // If configured, use groupMs instead of minMs for the timer delay.
-          const isGroupChat = payload.chatId.includes('@g.us');
-          const effectiveDebounceConfig: DebounceConfig =
-            isGroupChat && debounceConfig.groupMs != null
-              ? {
-                  ...debounceConfig,
-                  minMs: debounceConfig.groupMs,
-                  // Safety: keep randomized ranges non-negative if maxMs < groupMs
-                  maxMs: Math.max(debounceConfig.maxMs, debounceConfig.groupMs),
-                }
-              : debounceConfig;
-
-          debouncer.buffer(
-            instance.id,
-            payload.chatId,
-            {
+        // Idempotency guard (#411): NATS at-least-once + PM2 SIGKILL caused
+        // the same message.received to be re-buffered, producing duplicate
+        // agent dispatches on the customer side.
+        await withIdempotency(db, event.id, 'agent-dispatcher-msg', async () => {
+          try {
+            const instance = await shouldProcessMessage(
+              agentRunner,
+              accessService,
+              services.chats,
+              services.messages,
+              services.routeResolver,
+              db,
               payload,
-              metadata: {
-                instanceId: instance.id,
-                channelType: metadata.channelType,
-                personId: metadata.personId,
-                platformIdentityId: metadata.platformIdentityId,
-                traceId,
-                correlationId: metadata.correlationId,
-                journeyTracked: metadata.timings != null,
-                resolvedInstance: resolved,
-                routeId,
+              metadata,
+            );
+            if (!instance) return;
+
+            const traceId = metadata.traceId ?? generateCorrelationId('trc');
+
+            // Early route resolution: resolve route BEFORE debounce so per-user
+            // debounce overrides (e.g. messageDebounceMode: 'disabled') take effect.
+            const chat = await services.chats.findByExternalIdSmart(instance.id, payload.chatId);
+
+            // Resolve person ID for route matching. metadata.personId may not be set yet
+            // (message-persistence runs in parallel), so fall back to identity lookup.
+            const channel = (metadata.channelType ?? instance.channel) as ChannelType;
+            const earlyPersonId = await resolvePersonId(
+              services,
+              channel,
+              instance.id,
+              payload.from,
+              metadata.personId,
+            );
+
+            const { instance: resolved, routeId } = await resolveEffectiveInstance(
+              services,
+              db,
+              instance,
+              chat?.id,
+              earlyPersonId,
+            );
+
+            const debounceConfig = getDebounceConfig(resolved);
+
+            // Group chats (WhatsApp: @g.us) can use a different debounce window.
+            // If configured, use groupMs instead of minMs for the timer delay.
+            const isGroupChat = payload.chatId.includes('@g.us');
+            const effectiveDebounceConfig: DebounceConfig =
+              isGroupChat && debounceConfig.groupMs != null
+                ? {
+                    ...debounceConfig,
+                    minMs: debounceConfig.groupMs,
+                    // Safety: keep randomized ranges non-negative if maxMs < groupMs
+                    maxMs: Math.max(debounceConfig.maxMs, debounceConfig.groupMs),
+                  }
+                : debounceConfig;
+
+            debouncer.buffer(
+              instance.id,
+              payload.chatId,
+              {
+                payload,
+                metadata: {
+                  instanceId: instance.id,
+                  channelType: metadata.channelType,
+                  personId: metadata.personId,
+                  platformIdentityId: metadata.platformIdentityId,
+                  traceId,
+                  correlationId: metadata.correlationId,
+                  journeyTracked: metadata.timings != null,
+                  resolvedInstance: resolved,
+                  routeId,
+                },
+                timestamp: event.timestamp,
               },
-              timestamp: event.timestamp,
-            },
-            effectiveDebounceConfig,
-          );
-        } catch (error) {
-          log.error('Error processing message for dispatch', {
-            instanceId: metadata.instanceId,
-            error: String(error),
-          });
-        }
+              effectiveDebounceConfig,
+            );
+          } catch (error) {
+            log.error('Error processing message for dispatch', {
+              instanceId: metadata.instanceId,
+              error: String(error),
+            });
+          }
+        });
       },
       {
         durable: 'agent-dispatcher-msg',
         queue: 'agent-dispatcher',
         maxRetries: 2,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411. For an existing durable this is
+        // ignored (last-ack position wins); for a recreated durable it
+        // prevents arbitrary-time replay of an old event.
+        startFrom: 'new',
         concurrency: 5,
       },
     );
@@ -4136,46 +5003,44 @@ export async function setupAgentDispatcher(
         const payload = event.payload as ReactionReceivedPayload;
         const metadata = event.metadata;
 
-        try {
-          const instance = await shouldProcessReaction(
-            agentRunner,
-            accessService,
-            rateLimiter,
-            reactionDedup,
-            payload,
-            metadata,
-          );
-          if (!instance) return;
+        // Idempotency guard (#411): replay would re-dispatch the agent turn
+        // for the same reaction event.
+        await withIdempotency(db, event.id, 'agent-dispatcher-reaction', async () => {
+          try {
+            const instance = await shouldProcessReaction(agentRunner, accessService, reactionDedup, payload, metadata);
+            if (!instance) return;
 
-          const traceId = metadata.traceId ?? generateCorrelationId('trc');
+            const traceId = metadata.traceId ?? generateCorrelationId('trc');
 
-          await processReactionTrigger(
-            services,
-            instance,
-            payload,
-            {
-              instanceId: instance.id,
-              channelType: metadata.channelType,
-              personId: metadata.personId,
-              platformIdentityId: metadata.platformIdentityId,
-              traceId,
-            },
-            event,
-            db,
-          );
-        } catch (error) {
-          log.error('Error processing reaction for dispatch', {
-            instanceId: metadata.instanceId,
-            error: String(error),
-          });
-        }
+            await processReactionTrigger(
+              services,
+              instance,
+              payload,
+              {
+                instanceId: instance.id,
+                channelType: metadata.channelType,
+                personId: metadata.personId,
+                platformIdentityId: metadata.platformIdentityId,
+                traceId,
+              },
+              event,
+              db,
+            );
+          } catch (error) {
+            log.error('Error processing reaction for dispatch', {
+              instanceId: metadata.instanceId,
+              error: String(error),
+            });
+          }
+        });
       },
       {
         durable: 'agent-dispatcher-reaction',
         queue: 'agent-dispatcher',
         maxRetries: 2,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411 startFrom rationale.
+        startFrom: 'new',
         concurrency: 5,
       },
     );
@@ -4189,47 +5054,50 @@ export async function setupAgentDispatcher(
         const payload = event.payload as ReactionReceivedPayload;
         const metadata = event.metadata;
 
-        try {
-          const instance = await shouldProcessReaction(
-            agentRunner,
-            accessService,
-            rateLimiter,
-            reactionDedup,
-            payload,
-            metadata,
-            'reaction.removed',
-          );
-          if (!instance) return;
+        // Idempotency guard (#411).
+        await withIdempotency(db, event.id, 'agent-dispatcher-reaction-removed', async () => {
+          try {
+            const instance = await shouldProcessReaction(
+              agentRunner,
+              accessService,
+              reactionDedup,
+              payload,
+              metadata,
+              'reaction.removed',
+            );
+            if (!instance) return;
 
-          const traceId = metadata.traceId ?? generateCorrelationId('trc');
+            const traceId = metadata.traceId ?? generateCorrelationId('trc');
 
-          await processReactionTrigger(
-            services,
-            instance,
-            payload,
-            {
-              instanceId: instance.id,
-              channelType: metadata.channelType,
-              personId: metadata.personId,
-              platformIdentityId: metadata.platformIdentityId,
-              traceId,
-            },
-            event,
-            db,
-          );
-        } catch (error) {
-          log.error('Error processing reaction removal for dispatch', {
-            instanceId: metadata.instanceId,
-            error: String(error),
-          });
-        }
+            await processReactionTrigger(
+              services,
+              instance,
+              payload,
+              {
+                instanceId: instance.id,
+                channelType: metadata.channelType,
+                personId: metadata.personId,
+                platformIdentityId: metadata.platformIdentityId,
+                traceId,
+              },
+              event,
+              db,
+            );
+          } catch (error) {
+            log.error('Error processing reaction removal for dispatch', {
+              instanceId: metadata.instanceId,
+              error: String(error),
+            });
+          }
+        });
       },
       {
         durable: 'agent-dispatcher-reaction-removed',
         queue: 'agent-dispatcher',
         maxRetries: 2,
         retryDelayMs: 1000,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411 startFrom rationale.
+        startFrom: 'new',
         concurrency: 5,
       },
     );
@@ -4245,35 +5113,40 @@ export async function setupAgentDispatcher(
 
         if (!metadata.instanceId) return;
 
-        try {
-          const baseInstance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-          if (!baseInstance?.agentId) return;
+        // Idempotency guard (#411): replay would re-restart the debounce
+        // timer on a stale typing event.
+        await withIdempotency(db, event.id, 'agent-dispatcher-typing', async () => {
+          try {
+            const baseInstance = await agentRunner.getInstanceWithProvider(metadata.instanceId as string);
+            if (!baseInstance?.agentId) return;
 
-          // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
-          // Use metadata personId directly — don't poll for identity here (typing is latency-sensitive).
-          const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
-          const typingPersonId = metadata.personId;
-          const { instance: resolved } = await resolveEffectiveInstance(
-            services,
-            db,
-            baseInstance,
-            chat?.id,
-            typingPersonId,
-          );
+            // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
+            // Use metadata personId directly — don't poll for identity here (typing is latency-sensitive).
+            const chat = await services.chats.findByExternalIdSmart(metadata.instanceId as string, payload.chatId);
+            const typingPersonId = metadata.personId;
+            const { instance: resolved } = await resolveEffectiveInstance(
+              services,
+              db,
+              baseInstance,
+              chat?.id,
+              typingPersonId,
+            );
 
-          const debounceConfig = getDebounceConfig(resolved);
-          if (debounceConfig.restartOnTyping) {
-            debouncer.onUserTyping(metadata.instanceId, payload.chatId, debounceConfig);
+            const debounceConfig = getDebounceConfig(resolved);
+            if (debounceConfig.restartOnTyping) {
+              debouncer.onUserTyping(metadata.instanceId as string, payload.chatId, debounceConfig);
+            }
+          } catch (error) {
+            log.debug('Error handling typing event', { error: String(error) });
           }
-        } catch (error) {
-          log.debug('Error handling typing event', { error: String(error) });
-        }
+        });
       },
       {
         durable: 'agent-dispatcher-typing',
         queue: 'agent-dispatcher',
         maxRetries: 1,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411 startFrom rationale.
+        startFrom: 'new',
         concurrency: 10,
       },
     );
@@ -4284,20 +5157,25 @@ export async function setupAgentDispatcher(
     await eventBus.subscribe(
       'media.processed',
       async (event) => {
-        const payload = event.payload as MediaProcessedPayload;
-        const { mediaId, content, error } = payload;
+        // Idempotency guard (#411): replay would re-cache stale media or
+        // resolve a stale promise. The in-memory state already TTLs cleanly
+        // but the durable replay still pollutes the cache for 5min.
+        await withIdempotency(db, event.id, 'agent-dispatcher-media', async () => {
+          const payload = event.payload as MediaProcessedPayload;
+          const { mediaId, content, error } = payload;
 
-        // If dispatcher is already waiting → resolve the promise
-        const pending = mediaCompletions.get(mediaId);
-        if (pending) {
-          pending.resolve({ content, error });
-          mediaCompletions.delete(mediaId);
-          return;
-        }
+          // If dispatcher is already waiting → resolve the promise
+          const pending = mediaCompletions.get(mediaId);
+          if (pending) {
+            pending.resolve({ content, error });
+            mediaCompletions.delete(mediaId);
+            return;
+          }
 
-        // If dispatcher hasn't asked yet → cache the result (TTL 5min)
-        mediaResultCache.set(mediaId, { content, error });
-        setTimeout(() => mediaResultCache.delete(mediaId), 300_000);
+          // If dispatcher hasn't asked yet → cache the result (TTL 5min)
+          mediaResultCache.set(mediaId, { content, error });
+          setTimeout(() => mediaResultCache.delete(mediaId), 300_000);
+        });
       },
       {
         durable: 'agent-dispatcher-media',
@@ -4309,7 +5187,6 @@ export async function setupAgentDispatcher(
     log.info('Agent dispatcher initialized (message + reaction + reaction-removed + media triggers)');
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
-    clearInterval(cleanupInterval);
     clearInterval(mediaCleanupInterval);
     debouncer.clear();
     throw error;
@@ -4318,7 +5195,6 @@ export async function setupAgentDispatcher(
   // Return cleanup function for graceful shutdown
   return async () => {
     log.info('Shutting down agent dispatcher');
-    clearInterval(cleanupInterval);
     clearInterval(mediaCleanupInterval);
     debouncer.clear();
 
@@ -4396,8 +5272,13 @@ export const __test__ = {
   checkProcessedColumn,
   getProcessedColumn,
   MEDIA_WAIT_NULL,
+  extractA2ACustomerContext,
+  resolveCustomerContext,
   mergeRouteOverrides,
   getDebounceConfig,
+  extractKhalSessionId,
+  buildTriggerHeaders,
+  buildLifecycleSpanAttributes,
   createNatsGenieProviderInstance,
   /** Override the NatsGenieProvider constructor for tests (avoids barrel mock contamination). */
   set NatsGenieProviderClass(cls: typeof NatsGenieProvider) {

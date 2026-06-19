@@ -34,28 +34,65 @@
  */
 
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 
 import { zValidator } from '@hono/zod-validator';
 import { sanitizeOutboundText } from '@omni/channel-sdk';
 import type { ChannelRegistry, OutgoingContent, OutgoingMessage } from '@omni/channel-sdk';
-import { ERROR_CODES, JOURNEY_STAGES, OmniError, createLogger, getJourneyTracker } from '@omni/core';
+import { ERROR_CODES, JOURNEY_STAGES, NotFoundError, OmniError, createLogger, getJourneyTracker } from '@omni/core';
+import type { ChatClosedPayload, CloseContactOutcome } from '@omni/core/events';
 import type { ChannelType } from '@omni/core/types';
 import type { Database } from '@omni/db';
-import { handoffLogs } from '@omni/db';
+import { closeContactLogs, handoffLogs } from '@omni/db';
 import * as Sentry from '@sentry/bun';
+import { and, eq, gte, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { sentryEnabled } from '../../lib/sentry-scrub';
+import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { MediaStorageService } from '../../services/media-storage';
 import type { ApiKeyData, AppVariables } from '../../types';
+import { isHardTerminalOutcome, resolveCloseContactConfig } from './_close-contact-config';
 
 const log = createLogger('routes:messages');
 const mediaDownloadLog = createLogger('routes:messages:media-download');
 
 const messagesRoutes = new Hono<{ Variables: AppVariables }>();
+
+const MIME_BY_EXTENSION: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.opus': 'audio/opus',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.avi': 'video/x-msvideo',
+  '.pdf': 'application/pdf',
+};
+
+const DEFAULT_MIME_BY_MEDIA_TYPE: Record<'image' | 'audio' | 'video' | 'document', string> = {
+  image: 'image/jpeg',
+  audio: 'audio/ogg',
+  video: 'video/mp4',
+  document: 'application/octet-stream',
+};
+
+function inferMediaMimeType(type: 'image' | 'audio' | 'video' | 'document', filename?: string): string {
+  if (filename) {
+    const fromExtension = MIME_BY_EXTENSION[extname(filename).toLowerCase()];
+    if (fromExtension) return fromExtension;
+  }
+  return DEFAULT_MIME_BY_MEDIA_TYPE[type];
+}
 
 // ============================================================================
 // Helper Functions
@@ -71,6 +108,98 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
  */
 function isUUID(value: string): boolean {
   return UUID_REGEX.test(value);
+}
+
+function extractReactionTargetParticipant(rawPayload: Record<string, unknown> | null | undefined): string | undefined {
+  const key = rawPayload?.key as Record<string, unknown> | undefined;
+  const participant = key?.participant;
+  return typeof participant === 'string' && participant.length > 0 ? participant : undefined;
+}
+
+async function resolveReactionTarget(
+  services: Services,
+  instanceId: string,
+  resolvedTo: string,
+  messageId: string,
+): Promise<{ targetMessageId: string; metadata: Record<string, unknown> }> {
+  const metadata: Record<string, unknown> = {};
+  const chat = await services.chats.findByExternalIdSmart(instanceId, resolvedTo);
+
+  if (!chat) {
+    if (isUUID(messageId)) {
+      throw new OmniError({
+        code: ERROR_CODES.NOT_FOUND,
+        message: `Reaction target message not found: ${messageId}`,
+        context: { instanceId, resolvedTo, messageId },
+        recoverable: false,
+      });
+    }
+
+    log.warn('Reaction target chat not found in DB; deferring fromMe to channel plugin fallback (#386)', {
+      instanceId,
+      resolvedTo,
+      messageId,
+      fallback: 'plugin-heuristic',
+    });
+    return { targetMessageId: messageId, metadata };
+  }
+
+  const target = isUUID(messageId)
+    ? await getReactionTargetByOmniId(services, instanceId, chat.id, messageId)
+    : await services.messages.getByExternalId(chat.id, messageId);
+
+  if (!target) {
+    log.warn('Reaction target message not found in DB; deferring fromMe to channel plugin fallback (#386)', {
+      instanceId,
+      chatId: chat.id,
+      messageId,
+      fallback: 'plugin-heuristic',
+    });
+    return { targetMessageId: messageId, metadata };
+  }
+
+  metadata.fromMe = target.isFromMe === true;
+  if (target.isFromMe !== true) {
+    const participant = extractReactionTargetParticipant(
+      target.rawPayload as Record<string, unknown> | null | undefined,
+    );
+    if (participant) metadata.targetParticipant = participant;
+  }
+
+  return { targetMessageId: target.externalId, metadata };
+}
+
+async function getReactionTargetByOmniId(
+  services: Services,
+  instanceId: string,
+  chatId: string,
+  messageId: string,
+): Promise<Awaited<ReturnType<Services['messages']['getByExternalId']>>> {
+  let target: Awaited<ReturnType<Services['messages']['getById']>>;
+
+  try {
+    target = await services.messages.getById(messageId);
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      throw reactionTargetNotFound(instanceId, chatId, messageId);
+    }
+    throw error;
+  }
+
+  if (target.chatId !== chatId) {
+    throw reactionTargetNotFound(instanceId, chatId, messageId);
+  }
+
+  return target;
+}
+
+function reactionTargetNotFound(instanceId: string, chatId: string, messageId: string): OmniError {
+  return new OmniError({
+    code: ERROR_CODES.NOT_FOUND,
+    message: `Reaction target message not found: ${messageId}`,
+    context: { instanceId, chatId, messageId },
+    recoverable: false,
+  });
 }
 
 /**
@@ -280,16 +409,9 @@ const listQuerySchema = z.object({
     .transform((v) => v?.split(',') as z.infer<typeof MessageStatusSchema>[] | undefined),
   hasMedia: z.coerce.boolean().optional(),
   senderPersonId: z.string().uuid().optional(),
-  since: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
-  until: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
+  externalId: z.string().min(1).optional(),
+  since: optionalDateParam('since'),
+  until: optionalDateParam('until'),
   search: z.string().optional(),
   includeHidden: z.coerce.boolean().default(false),
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -411,6 +533,21 @@ const sendMediaSchema = z.object({
   threadId: z.string().optional().describe('Thread/topic ID (e.g. Telegram forum topic)'),
 });
 
+function normalizeSendMediaMimeType(data: z.infer<typeof sendMediaSchema>): string {
+  const inferred = data.mimeType ?? inferMediaMimeType(data.type, data.filename);
+  if (data.type === 'audio' && data.voiceNote === true && inferred === 'audio/ogg') {
+    return 'audio/ogg; codecs=opus';
+  }
+  return inferred;
+}
+
+function buildSendMediaMetadata(data: z.infer<typeof sendMediaSchema>): Record<string, unknown> {
+  if (data.type === 'audio' && data.voiceNote === true && data.base64) {
+    return { audioBuffer: Buffer.from(data.base64, 'base64'), ptt: true };
+  }
+  return { base64: data.base64, ptt: data.voiceNote };
+}
+
 // Send reaction schema
 const sendReactionSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID'),
@@ -464,6 +601,25 @@ const sendHandoffSchema = z.object({
     .record(z.unknown())
     .optional()
     .describe('Structured fields for Gupshup flow variables (e.g. nome, cidade, temperatura_lead)'),
+});
+
+// Close-contact schema — terminal close primitive parallel to handoff.
+// Hard outcomes (won/lost) flip `chats.settings.closed=true` permanently.
+// Soft outcomes set `closeUntil` and reopen passively in the dispatcher.
+// Auto-escalation via close_contact_logs history bounds the loop.
+const sendCloseContactSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID — close-contact native send is Gupshup-only in v1'),
+  chatId: z.string().min(1).describe('Chat DB UUID to mark as closed'),
+  to: z.string().min(1).describe('Recipient phone or platform ID'),
+  text: z.string().min(1).describe('Farewell message shown to the lead'),
+  outcome: z
+    .enum(['won', 'lost', 'redirected_sac', 'unqualified', 'no_response', 'other'])
+    .describe('Drives terminal/cooldown/escalation logic and BI/audit trail'),
+  reason: z.string().optional().describe('Free-text rationale persisted in close_contact_logs'),
+  closeFields: z
+    .record(z.unknown())
+    .optional()
+    .describe('Structured BI/CRM payload — forwarded to Gupshup native send when supported'),
 });
 
 // ============================================================================
@@ -1006,6 +1162,8 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   // Resolve recipient (handles person ID to platform ID resolution)
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
+  const mediaMimeType = normalizeSendMediaMimeType(data);
+
   // Build outgoing message
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -1015,13 +1173,9 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
       mediaUrl: data.url,
       caption: data.caption,
       filename: data.filename,
-      mimeType: data.mimeType,
+      mimeType: mediaMimeType,
     } as OutgoingContent,
-    metadata: {
-      base64: data.base64,
-      // WhatsApp uses 'ptt' (push-to-talk) flag for voice notes
-      ptt: data.voiceNote,
-    },
+    metadata: buildSendMediaMetadata(data),
   };
 
   // T8: API processed the send request
@@ -1118,44 +1272,27 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
   // Note: For reactions, 'to' is typically a chat ID, but we support person ID resolution too
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
 
-  // Look up the target message to determine fromMe (critical for WhatsApp reactions).
-  // Baileys needs key.fromMe to locate the correct message — if wrong, the reaction
-  // is silently dropped by WhatsApp. When the target isn't in our DB (history gap
-  // or unsynced chat), we leave fromMe undefined and let the channel plugin's
-  // heuristic decide — forcing false here breaks bot-to-own-message reactions (#386).
-  let fromMe: boolean | undefined;
-  const chat = await services.chats.findByExternalIdSmart(instanceId, resolvedTo);
-  if (chat) {
-    const target = await services.messages.getByExternalId(chat.id, messageId);
-    if (target) {
-      fromMe = target.isFromMe === true;
-    } else {
-      log.warn('Reaction target message not found in DB; deferring fromMe to channel plugin fallback (#386)', {
-        instanceId,
-        chatId: chat.id,
-        messageId,
-        fallback: 'plugin-heuristic',
-      });
-    }
-  } else {
-    log.warn('Reaction target chat not found in DB; deferring fromMe to channel plugin fallback (#386)', {
-      instanceId,
-      resolvedTo,
-      messageId,
-      fallback: 'plugin-heuristic',
-    });
-  }
+  // Look up the target message to determine the provider-native ID and fromMe
+  // (critical for WhatsApp reactions). CLI/history surfaces Omni message UUIDs,
+  // but Baileys needs the WhatsApp externalId in key.id; sending an Omni UUID can
+  // return command-level success while WhatsApp silently ignores the reaction.
+  const { targetMessageId, metadata: reactionMetadata } = await resolveReactionTarget(
+    services,
+    instanceId,
+    resolvedTo,
+    messageId,
+  );
 
-  // Build outgoing message for reaction. When fromMe is undefined, omit it from
+  // Build outgoing message for reaction. When the target is unknown, omit
   // metadata so the plugin applies its own fallback (defaults to true for Baileys).
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     content: {
       type: 'reaction',
       emoji,
-      targetMessageId: messageId,
+      targetMessageId,
     } as OutgoingContent,
-    metadata: fromMe === undefined ? {} : { fromMe },
+    metadata: reactionMetadata,
   };
 
   // Send via channel plugin
@@ -1461,9 +1598,199 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
 
   const instance = await services.instances.getById(data.instanceId);
 
-  if (instance.channel !== 'gupshup') {
-    return c.json({ error: 'Handoff is only supported on Gupshup instances' }, 400);
+  if (!channelRegistry) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: 'Channel registry not available',
+      recoverable: false,
+    });
   }
+
+  const plugin = channelRegistry.get(instance.channel as ChannelType);
+  if (!plugin) {
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message: `No plugin found for channel: ${instance.channel}`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  // Resolve the recipient for every channel — even when we won't push a
+  // native payload we still want the audit row to record a real platform
+  // identifier (phone/JID) rather than the caller's input, which may be
+  // an Omni Person UUID. See issue #537 + gemini review on #538.
+  const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
+
+  // Channels that declare `canHandoff: true` receive a channel-specific
+  // HANDOFF payload (currently only Gupshup). For every other channel the
+  // route still runs the channel-agnostic side effects below — agentPaused,
+  // follow-up disarm, audit row — so agents can pause themselves on any
+  // channel. The user-facing farewell is the agent's responsibility on
+  // channels without native handoff. See issue #537.
+  const hasNativeHandoff = plugin.capabilities?.canHandoff === true;
+
+  let channelSendResult: Awaited<ReturnType<typeof plugin.sendMessage>> | null = null;
+  if (hasNativeHandoff) {
+    const outgoingMessage: OutgoingMessage = {
+      to: resolvedTo,
+      content: { type: 'text', text: data.text } as OutgoingContent,
+      metadata: {
+        isHandoff: true,
+        dadosLead: data.dadosLead ?? data.extraInfo,
+        motivoHandoff: data.motivoHandoff,
+        handoffFields: data.handoffFields,
+      },
+    };
+    channelSendResult = await plugin.sendMessage(data.instanceId, outgoingMessage);
+    handleSendResult(channelSendResult, {
+      channelType: instance.channel,
+      instanceId: data.instanceId,
+      operation: 'send handoff',
+    });
+  }
+
+  // Set agentPaused — chains: chat.handoff_activated → follow-up disarm + agent stop.
+  // Merge into existing settings so unrelated keys (followUpConfig, close*, …)
+  // survive — a bare `{ agentPaused: true }` replaces the whole JSONB column.
+  const handoffChat = await services.chats.getById(data.chatId);
+  await services.chats.update(data.chatId, {
+    settings: { ...((handoffChat?.settings as Record<string, unknown>) ?? {}), agentPaused: true },
+  });
+
+  // Close the race between chat.handoff_activated (two NATS hops away) and the
+  // next sweeper tick (every 15s). Idempotent with the event-driven disarm in
+  // follow-up-hooks.ts — disarmActive is a no-op on already-disarmed rows.
+  // See issue #528.
+  await services.followUpLifecycle.disarm({
+    chatId: data.chatId,
+    instanceId: data.instanceId,
+    reason: 'handoff',
+  });
+
+  // Persist full handoff payload for auditing and traceability
+  db.insert(handoffLogs)
+    .values({
+      instanceId: data.instanceId,
+      chatUuid: data.chatId, // chatId in this route is the DB UUID of the chat
+      chatId: resolvedTo, // resolved platform identifier (phone/JID)
+      toPhone: resolvedTo,
+      text: data.text,
+      extraInfo: data.dadosLead ?? data.extraInfo ?? null,
+      agentId: instance.agentId ?? null,
+      externalMessageId: channelSendResult?.messageId ?? null,
+      handoffFields: data.handoffFields ?? null,
+      sentAt: new Date(),
+      metadata: {
+        instanceChannel: instance.channel,
+        channelHandoffSupported: hasNativeHandoff,
+        ...(data.motivoHandoff ? { motivoHandoff: data.motivoHandoff } : {}),
+      },
+    })
+    .catch((err: unknown) => log.warn('Failed to persist handoff log', { error: String(err) }));
+
+  return c.json(
+    {
+      data: {
+        messageId: channelSendResult?.messageId ?? null,
+        status: hasNativeHandoff ? 'sent' : 'paused',
+        timestamp: channelSendResult?.timestamp ?? Date.now(),
+      },
+    },
+    201,
+  );
+});
+
+/**
+ * Compute the terminal state for a close-contact event.
+ *
+ * v1 uses hardcoded defaults from `_close-contact-config.ts`. The
+ * `resolveCloseContactConfig` helper already accepts an overrides bag, so
+ * a future per-instance column can wire through without touching this
+ * site — flagged as a tunable post-launch follow-up in design.md §8.
+ *
+ * Behaviour:
+ *   - won/lost  → terminal:true, no cooldown.
+ *   - soft outcomes → if recent_count >= threshold within the window:
+ *       terminal:true (escalated), and the audit row is patched
+ *       `escalated: true`. Otherwise terminal:false with `closeUntil`
+ *       at now + cooldown.
+ */
+async function computeCloseContactTerminalState(
+  db: Database,
+  chatUuid: string,
+  outcome: CloseContactOutcome,
+  auditRowId: string | null,
+): Promise<{ terminal: boolean; escalated: boolean; closeUntil: Date | null }> {
+  const cfg = resolveCloseContactConfig(outcome, null);
+  if (isHardTerminalOutcome(outcome)) {
+    return { terminal: true, escalated: false, closeUntil: null };
+  }
+  if (cfg.escalationThreshold === null || cfg.escalationWindowMs === null) {
+    const closeUntil = cfg.cooldownMs !== null ? new Date(Date.now() + cfg.cooldownMs) : null;
+    return { terminal: false, escalated: false, closeUntil };
+  }
+
+  const windowStart = new Date(Date.now() - cfg.escalationWindowMs);
+  const recent = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(closeContactLogs)
+    .where(
+      and(
+        eq(closeContactLogs.chatUuid, chatUuid),
+        eq(closeContactLogs.outcome, outcome),
+        gte(closeContactLogs.sentAt, windowStart),
+      ),
+    );
+  const recentCount = Number(recent[0]?.count ?? 0);
+
+  if (recentCount >= cfg.escalationThreshold) {
+    if (auditRowId) {
+      await db.update(closeContactLogs).set({ escalated: true }).where(eq(closeContactLogs.id, auditRowId));
+    }
+    return { terminal: true, escalated: true, closeUntil: null };
+  }
+
+  const closeUntil = cfg.cooldownMs !== null ? new Date(Date.now() + cfg.cooldownMs) : null;
+  return { terminal: false, escalated: false, closeUntil };
+}
+
+/**
+ * POST /messages/send/close-contact - Terminal close
+ *
+ * Counterpart to /send/handoff: handoff pauses for a human; close terminates
+ * the conversation cleanly. The route:
+ *
+ *   1. Sends a native CLOSING payload on channels that declare
+ *      `canCloseContact: true` (Gupshup in v1). Other channels still run
+ *      the channel-agnostic side effects below — agents can self-close on
+ *      any channel.
+ *   2. Inserts a row into close_contact_logs FIRST (the table is the
+ *      source of truth for the escalation history query).
+ *   3. Computes the terminal state from outcome + recent history:
+ *        - `won` / `lost`        → hard terminal (`closed: true`).
+ *        - `redirected_sac` etc. → soft close (`closeUntil` cooldown),
+ *          unless the same outcome has fired ≥ threshold times within
+ *          the configured window for this chat — then auto-promote to
+ *          hard terminal and stamp `escalated: true` on the new row.
+ *   4. Patches `chats.settings` with `agentPaused: true` plus the close
+ *      fields. The chats service detects this and emits `chat.closed`
+ *      (parallel to `chat.handoff_activated` for the handoff path).
+ *   5. Disarms any active follow-up sequence inline with reason
+ *      `contact_closed` to close the race against the event-driven
+ *      follow-up-hooks subscriber. Idempotent.
+ *
+ * See `genie-hapvida/brain/Designs/design-eugenia-close-contact.md` for the
+ * full state machine, defaults rationale, and finite-loop proof.
+ */
+messagesRoutes.post('/send/close-contact', zValidator('json', sendCloseContactSchema), async (c) => {
+  const data = c.req.valid('json');
+  const services = c.get('services');
+  const db = c.get('db');
+  const channelRegistry = c.get('channelRegistry');
+  checkInstanceAccess(c.get('apiKey'), data.instanceId);
+
+  const instance = await services.instances.getById(data.instanceId);
 
   if (!channelRegistry) {
     throw new OmniError({
@@ -1484,52 +1811,134 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
   }
 
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
+  const hasNativeClose = plugin.capabilities?.canCloseContact === true;
+  const outcome = data.outcome as CloseContactOutcome;
 
-  const outgoingMessage: OutgoingMessage = {
-    to: resolvedTo,
-    content: { type: 'text', text: data.text } as OutgoingContent,
-    metadata: {
-      isHandoff: true,
-      dadosLead: data.dadosLead ?? data.extraInfo,
-      motivoHandoff: data.motivoHandoff,
-      handoffFields: data.handoffFields,
-    },
-  };
+  // ── 1. Native channel send (Gupshup CLOSING msg_type) ────────────────────
+  let channelSendResult: Awaited<ReturnType<typeof plugin.sendMessage>> | null = null;
+  if (hasNativeClose) {
+    const outgoingMessage: OutgoingMessage = {
+      to: resolvedTo,
+      content: { type: 'text', text: data.text } as OutgoingContent,
+      metadata: {
+        isCloseContact: true,
+        closeReason: data.reason,
+        closeOutcome: outcome,
+        closeFields: data.closeFields,
+      },
+    };
+    channelSendResult = await plugin.sendMessage(data.instanceId, outgoingMessage);
+    handleSendResult(channelSendResult, {
+      channelType: instance.channel,
+      instanceId: data.instanceId,
+      operation: 'send close-contact',
+    });
+  }
 
-  const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
-  handleSendResult(result, { channelType: instance.channel, instanceId: data.instanceId, operation: 'send handoff' });
-
-  // Set agentPaused — chains: chat.handoff_activated → follow-up disarm + agent stop
-  await services.chats.update(data.chatId, {
-    settings: { agentPaused: true },
-  });
-
-  // Persist full handoff payload for auditing and traceability
-  db.insert(handoffLogs)
+  // ── 2. Insert audit row (with escalated:false; updated below if needed) ──
+  const [auditRow] = await db
+    .insert(closeContactLogs)
     .values({
       instanceId: data.instanceId,
-      chatUuid: data.chatId, // chatId in this route is the DB UUID of the chat
-      chatId: data.to, // raw phone/JID used as chat identifier on the channel
-      toPhone: data.to,
+      chatUuid: data.chatId,
+      chatId: resolvedTo,
+      toPhone: resolvedTo,
       text: data.text,
-      extraInfo: data.dadosLead ?? data.extraInfo ?? null,
+      outcome,
+      reason: data.reason ?? null,
+      closeFields: data.closeFields ?? null,
       agentId: instance.agentId ?? null,
-      externalMessageId: result.messageId ?? null,
-      handoffFields: data.handoffFields ?? null,
+      externalMessageId: channelSendResult?.messageId ?? null,
+      escalated: false,
       sentAt: new Date(),
       metadata: {
         instanceChannel: instance.channel,
-        ...(data.motivoHandoff ? { motivoHandoff: data.motivoHandoff } : {}),
+        channelCloseSupported: hasNativeClose,
       },
     })
-    .catch((err: unknown) => log.warn('Failed to persist handoff log', { error: String(err) }));
+    .returning();
+
+  // ── 3. Compute terminal state from outcome + recent history ──────────────
+  const { terminal, escalated, closeUntil } = await computeCloseContactTerminalState(
+    db,
+    data.chatId,
+    outcome,
+    auditRow?.id ?? null,
+  );
+
+  // ── 4. Update chat settings — emits chat.closed via chats service ────────
+  //
+  // Two distinct mechanisms — keep them decoupled:
+  //
+  //   - Follow-up disarm (always): the proactive Haiku follow-up is killed
+  //     for every close-contact outcome. That's the whole point of this
+  //     endpoint and is handled by the explicit `followUpLifecycle.disarm`
+  //     call right below + the `chat.closed` event subscriber.
+  //
+  //   - Agent pause (only when the customer asked for silence): blocks the
+  //     reactive agent from replying to inbound messages. We only set this
+  //     on `lost` (lead explicitly told us to stop). For soft cooldowns
+  //     (redirected_sac, unqualified, no_response, other) and the won
+  //     terminal, the customer can still come back and reach the agent —
+  //     a customer asking "I couldn't reach the SAC number" deserves a
+  //     reply, not 24h of silence.
+  //
+  // The dispatcher's close-contact gate honours `closed === true` (hard
+  // terminal) for skip and treats a pure soft cooldown as pass.
+  const shouldPauseAgent = outcome === 'lost';
+  const closedAt = new Date();
+  // Merge into existing settings — replacing the whole JSONB column here would
+  // drop unrelated keys such as followUpConfig.
+  const closeChat = await services.chats.getById(data.chatId);
+  await services.chats.update(data.chatId, {
+    settings: {
+      ...((closeChat?.settings as Record<string, unknown>) ?? {}),
+      ...(shouldPauseAgent ? { agentPaused: true } : {}),
+      closed: terminal,
+      closeUntil: closeUntil?.toISOString() ?? null,
+      closeOutcome: outcome,
+    } as Record<string, unknown>,
+  });
+
+  // ── 5. Disarm inline (idempotent with the chat.closed → follow-up-hooks chain) ──
+  await services.followUpLifecycle.disarm({
+    chatId: data.chatId,
+    instanceId: data.instanceId,
+    reason: 'contact_closed',
+  });
+
+  // Emit chat.closed explicitly. For `lost` (the only outcome that flips
+  // agentPaused: false → true here) the chats service also emits
+  // chat.handoff_activated, which is fine — both subscribers disarm the
+  // row idempotently and the explicit `followUpLifecycle.disarm` call above
+  // already covered it. For all other outcomes only chat.closed fires, which
+  // is what BI/audit consumers want anyway.
+  if (services.eventBus) {
+    const payload: ChatClosedPayload = {
+      chatId: data.chatId,
+      instanceId: data.instanceId,
+      agentId: instance.agentId ?? null,
+      outcome,
+      reason: data.reason ?? null,
+      escalated,
+      closedFields: data.closeFields ?? null,
+      closedAt: closedAt.toISOString(),
+    };
+    services.eventBus
+      .publish('chat.closed', payload, { instanceId: data.instanceId })
+      .catch((err) => log.debug('Failed to publish chat.closed', { error: String(err) }));
+  }
 
   return c.json(
     {
       data: {
-        messageId: result.messageId,
-        status: 'sent',
-        timestamp: result.timestamp,
+        messageId: channelSendResult?.messageId ?? null,
+        status: 'closed',
+        terminal,
+        closeUntil: closeUntil?.toISOString() ?? null,
+        escalated,
+        outcome,
+        timestamp: channelSendResult?.timestamp ?? closedAt.getTime(),
       },
     },
     201,
@@ -2277,7 +2686,7 @@ messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c
  * Throws FORBIDDEN if the message's chat is owned by a different instance.
  */
 async function verifyMessageInstanceOwnership(
-  services: Services,
+  services: Pick<Services, 'chats'>,
   message: { chatId: string; externalId: string },
   instanceId: string,
 ): Promise<void> {
@@ -2291,6 +2700,27 @@ async function verifyMessageInstanceOwnership(
       recoverable: false,
     });
   }
+}
+
+/**
+ * Resolve a message ID for channel plugin calls.
+ *
+ * Channel plugins need platform-native IDs (e.g. Baileys message key IDs), not
+ * Omni internal UUIDs. If the caller passes an internal UUID, resolve it to the
+ * stored externalId and enforce instance ownership before returning it.
+ */
+export async function resolveChannelMessageId(
+  services: Pick<Services, 'messages' | 'chats'>,
+  messageId: string,
+  instanceId: string,
+): Promise<string> {
+  if (!isUUID(messageId)) return messageId;
+
+  const message = await services.messages.getById(messageId);
+  await verifyMessageInstanceOwnership(services, message, instanceId);
+
+  log.debug('Resolved internal UUID to external ID', { messageId, externalId: message.externalId });
+  return message.externalId;
 }
 
 /**
@@ -2344,15 +2774,7 @@ messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema
     });
   }
 
-  // Resolve messageId: if it's an internal UUID, look up the external ID from the database.
-  // Channel plugins (e.g. Baileys) need the platform-native message ID, not the Omni UUID.
-  let resolvedMessageId = messageId;
-  if (isUUID(messageId)) {
-    const message = await services.messages.getById(messageId);
-    await verifyMessageInstanceOwnership(services, message, instanceId);
-    resolvedMessageId = message.externalId;
-    log.debug('Resolved internal UUID to external ID', { messageId, externalId: resolvedMessageId });
-  }
+  const resolvedMessageId = await resolveChannelMessageId(services, messageId, instanceId);
 
   // Edit via channel plugin — catch and surface plugin errors
   try {
@@ -2430,16 +2852,18 @@ messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSc
     });
   }
 
+  const resolvedMessageId = await resolveChannelMessageId(services, messageId, instanceId);
+
   // Delete via channel plugin
   await (
     plugin as {
       deleteMessage: (instanceId: string, channelId: string, messageId: string, fromMe?: boolean) => Promise<void>;
     }
-  ).deleteMessage(instanceId, channelId, messageId, fromMe);
+  ).deleteMessage(instanceId, channelId, resolvedMessageId, fromMe);
 
   return c.json({
     success: true,
-    data: { messageId, deleted: true },
+    data: { messageId, externalId: resolvedMessageId, deleted: true },
   });
 });
 

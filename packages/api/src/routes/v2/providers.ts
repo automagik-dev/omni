@@ -6,6 +6,7 @@ import { zValidator } from '@hono/zod-validator';
 import { ProviderSchemaEnum, createAgnoClient } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { invalidateProviderCache } from '../../plugins/agent-dispatcher';
 import type { AppVariables } from '../../types';
 
 const providersRoutes = new Hono<{ Variables: AppVariables }>();
@@ -42,12 +43,12 @@ const providerBaseSchema = z.object({
     .describe(
       'Schema-specific config. Required fields by schema: ' +
         'agno: { agentId }, openclaw: { defaultAgentId }, ' +
-        'claude-code: { projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }, ' +
+        'claude-code: { projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers?, pathToClaudeCodeExecutable? }, ' +
         'webhook: { mode?, retries? }. ' +
         'Note: apiKey in schemaConfig overrides the provider-level apiKey.',
     ),
   defaultStream: z.boolean().default(true).describe('Default streaming setting'),
-  defaultTimeout: z.number().int().positive().default(60).describe('Default timeout in seconds'),
+  defaultTimeout: z.number().int().positive().default(600).describe('Default timeout in seconds'),
   supportsStreaming: z.boolean().default(true).describe('Provider supports streaming'),
   supportsImages: z
     .boolean()
@@ -149,6 +150,8 @@ providersRoutes.patch('/:id', zValidator('json', updateProviderSchema), async (c
 
   const provider = await services.providers.update(id, data);
 
+  invalidateProviderCache(id);
+
   return c.json({
     data: {
       ...provider,
@@ -166,6 +169,8 @@ providersRoutes.delete('/:id', async (c) => {
   const services = c.get('services');
 
   await services.providers.delete(id);
+
+  invalidateProviderCache(id);
 
   return c.json({ success: true });
 });
@@ -206,7 +211,7 @@ providersRoutes.get('/:id/agents', async (c) => {
   const client = createAgnoClient({
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   const allEntries = (await client.discover?.()) ?? [];
@@ -235,7 +240,7 @@ providersRoutes.get('/:id/teams', async (c) => {
   const client = createAgnoClient({
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   const allEntries = (await client.discover?.()) ?? [];
@@ -264,7 +269,7 @@ providersRoutes.get('/:id/workflows', async (c) => {
   const client = createAgnoClient({
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
-    defaultTimeoutMs: (provider.defaultTimeout ?? 60) * 1000,
+    defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
   });
 
   const allEntries = (await client.discover?.()) ?? [];

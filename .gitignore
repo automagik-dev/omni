@@ -58,6 +58,9 @@ TOOLS.md
 HEARTBEAT.md
 BOOTSTRAP.md
 memory/
+.genie/
+docs/reports/
+docs/reports/tmp/
 
 # Claude Code local settings
 .claude/settings.local.json

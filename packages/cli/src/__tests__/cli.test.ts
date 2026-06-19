@@ -11,14 +11,68 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawn } from 'bun';
+import { spawn, spawnSync } from 'bun';
 import { MOCK_API_KEY, startMockApi, stopMockApi } from './mock-api';
+
+/**
+ * Pre-suite guard (#413): fail fast if a prior test run leaked a PM2 god
+ * daemon attached to a `.omni-test` PM2_HOME. Leaving these around pollutes
+ * the host and can confuse a subsequent suite that rebinds the same PM2
+ * socket path.
+ */
+function assertNoLeakedTestDaemons(): void {
+  const ps = spawnSync({ cmd: ['ps', '-eo', 'pid,args'], stdout: 'pipe', stderr: 'pipe' });
+  if (ps.exitCode !== 0) return; // non-fatal — if ps is unavailable, skip the guard
+  const output = new TextDecoder().decode(ps.stdout);
+  // Anchored to args start to avoid matching processes that merely mention
+  // the string (e.g. this source file itself, grep commands, transcripts).
+  const pattern = /^PM2\s+[^:]*:\s*God Daemon\s+\([^)]*\.omni-test[^)]*\)/;
+  const leaked: string[] = [];
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const pidMatch = trimmed.match(/^\d+\s+(.*)$/);
+    const args = pidMatch?.[1] ?? '';
+    if (!pattern.test(args)) continue;
+    leaked.push(trimmed);
+  }
+  if (leaked.length > 0) {
+    const pids = leaked
+      .map((l) => l.match(/^(\d+)\s/)?.[1])
+      .filter((p): p is string => p !== undefined)
+      .join(' ');
+    const hint = pids ? `  # or: kill ${pids}\n` : '';
+    throw new Error(
+      `Pre-suite leak guard (#413): ${leaked.length} stale PM2 god daemon(s) detected:\n${leaked.join('\n')}\n\nKill them before re-running this suite:\n  make kill-stale-test-daemons\n${hint}`,
+    );
+  }
+}
 
 // Use source entry point directly — avoids stale dist/index.js issues
 const CLI_PATH = join(import.meta.dir, '../index.ts');
 
 // Temp config dir for tests
 const TEST_CONFIG_DIR = join(tmpdir(), `.omni-test-${Date.now()}`);
+// Explicit PM2_HOME under the test config dir. Without this, pm2 derives its
+// home from `HOME/.pm2`, and any CLI command that talks to pm2 (e.g. `omni
+// status` → `pm2 jlist`) will fork a god daemon there. The teardown then
+// rm-rf's TEST_CONFIG_DIR but the daemon survives, leaving an orphan attached
+// to a deleted PM2_HOME (issue #413).
+const TEST_PM2_HOME = join(TEST_CONFIG_DIR, '.pm2');
+
+/**
+ * Stop the test-mode PM2 god daemon (if any) before its home gets removed.
+ * Synchronous so it can run from non-async afterAll hooks.
+ */
+function killTestPm2Daemon(): void {
+  if (!existsSync(TEST_PM2_HOME)) return;
+  spawnSync({
+    cmd: ['pm2', 'kill'],
+    env: { ...process.env, HOME: TEST_CONFIG_DIR, PM2_HOME: TEST_PM2_HOME },
+    stdout: 'ignore',
+    stderr: 'ignore',
+  });
+}
 
 /** Mock API URL — set in beforeAll */
 let MOCK_URL = '';
@@ -38,6 +92,7 @@ async function runCli(args: string[], env: Record<string, string> = {}): Promise
     env: {
       ...process.env,
       HOME: TEST_CONFIG_DIR, // Use test config dir
+      PM2_HOME: TEST_PM2_HOME, // Isolate pm2 daemon from the host (issue #413)
       ...env,
     },
     stdout: 'pipe',
@@ -77,6 +132,9 @@ function assertSuccess(result: CliResult, context: string): void {
 
 describe('CLI Basic Tests', () => {
   beforeAll(() => {
+    // Fail fast if a prior run left a god daemon around (#413). Runs before
+    // any other setup so the error surfaces cleanly at suite startup.
+    assertNoLeakedTestDaemons();
     // Create test config directory
     if (!existsSync(TEST_CONFIG_DIR)) {
       mkdirSync(TEST_CONFIG_DIR, { recursive: true });
@@ -89,6 +147,9 @@ describe('CLI Basic Tests', () => {
   });
 
   afterAll(() => {
+    // Stop the test-mode pm2 god daemon BEFORE removing its home, otherwise
+    // the daemon survives and re-parents to init with a deleted PM2_HOME.
+    killTestPm2Daemon();
     // Cleanup test config directory
     if (existsSync(TEST_CONFIG_DIR)) {
       rmSync(TEST_CONFIG_DIR, { recursive: true, force: true });
@@ -293,6 +354,8 @@ describe('CLI Integration Tests', () => {
 
   afterAll(() => {
     stopMockApi();
+    // Stop the test-mode pm2 god daemon BEFORE removing its home (issue #413).
+    killTestPm2Daemon();
     if (existsSync(TEST_CONFIG_DIR)) {
       rmSync(TEST_CONFIG_DIR, { recursive: true, force: true });
     }
@@ -486,7 +549,7 @@ describe('CLI Integration Tests', () => {
       // keeps the loop tight so the test completes quickly.
       const proc = spawn({
         cmd: ['bun', CLI_PATH, 'events', 'stream', '--since', '1h', '--poll-ms', '200', '--ndjson'],
-        env: { ...process.env, HOME: TEST_CONFIG_DIR },
+        env: { ...process.env, HOME: TEST_CONFIG_DIR, PM2_HOME: TEST_PM2_HOME },
         stdout: 'pipe',
         stderr: 'pipe',
       });

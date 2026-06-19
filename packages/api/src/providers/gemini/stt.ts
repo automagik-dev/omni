@@ -17,6 +17,7 @@ const log = createLogger('provider:gemini:stt');
 /** Settings reader interface — avoids circular dep on SettingsService */
 export interface GeminiSttSettingsReader {
   getSecret(key: string, envFallback?: string): Promise<string | undefined>;
+  getString(key: string, envFallback?: string, defaultValue?: string): Promise<string | undefined>;
 }
 
 /**
@@ -36,17 +37,38 @@ export class GeminiSttProvider implements ISttProvider {
     const apiKey = await resolveGeminiApiKey(this.settings);
     const client = getGeminiClient(apiKey);
 
-    const model = options?.model ?? GEMINI_MODELS.STT;
+    const model =
+      options?.model ??
+      (await this.settings.getString('stt.gemini.model', 'GEMINI_STT_MODEL', GEMINI_MODELS.STT)) ??
+      GEMINI_MODELS.STT;
     const wantTimestamps = options?.timestamps ?? false;
     const language = options?.language;
 
     // Build the prompt. With timestamps we ask for a structured JSON response.
-    const promptParts: string[] = [
-      'Transcribe the following audio verbatim.',
-      'Return ONLY the transcript text — no preamble, no analysis, no translation.',
-    ];
+    const promptParts: string[] = [];
+    if (options?.prompt) {
+      promptParts.push(options.prompt);
+    } else if ((language ?? '').toLowerCase().startsWith('pt')) {
+      promptParts.push(
+        'Transcreva o áudio literalmente em pt-BR informal. Pode haver code-switching.',
+        'Retorne APENAS a transcrição — sem preâmbulo, análise, resumo ou tradução.',
+        'Use contexto/glossário só para desambiguar nomes, acrônimos, comandos e produtos; não invente termos se não forem acusticamente plausíveis.',
+      );
+    } else {
+      promptParts.push(
+        'Transcribe the following audio verbatim.',
+        'Return ONLY the transcript text — no preamble, no analysis, no translation.',
+        'Use context/glossary only to disambiguate names, acronyms, commands, and product terms.',
+      );
+    }
     if (language) {
       promptParts.push(`The audio is in ${language}. Preserve the original language.`);
+    }
+    if (options?.context) {
+      promptParts.push(`Context: ${options.context}`);
+    }
+    if (options?.glossary?.length) {
+      promptParts.push(`Glossary: ${options.glossary.join(', ')}`);
     }
     if (wantTimestamps) {
       promptParts.push(
@@ -121,7 +143,8 @@ function normalizeAudioMimeType(mimeType: string): string {
   const lower = mimeType.toLowerCase().split(';')[0]?.trim() ?? 'audio/ogg';
   // Gemini accepts audio/mpeg as audio/mp3
   if (lower === 'audio/mpeg') return 'audio/mp3';
-  if (lower === 'audio/x-m4a' || lower === 'audio/m4a' || lower === 'audio/mp4') return 'audio/mp3';
-  if (lower === 'audio/opus' || lower === 'audio/webm') return 'audio/ogg';
+  if (lower === 'audio/x-m4a' || lower === 'audio/m4a' || lower === 'audio/mp4') return 'audio/mp4';
+  if (lower === 'audio/opus') return 'audio/ogg';
+  if (lower === 'audio/webm') return 'audio/webm';
   return lower;
 }

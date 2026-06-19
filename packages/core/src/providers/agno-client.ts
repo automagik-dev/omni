@@ -5,6 +5,7 @@
  * with both sync and streaming support.
  */
 
+import { buildTraceHeaders } from './trace-context';
 import {
   type AgentDiscoveryEntry,
   type AgentHealthResult,
@@ -16,6 +17,7 @@ import {
   ProviderError,
   type ProviderRequest,
   type ProviderResponse,
+  type SessionDeleteResult,
   type StreamChunk,
 } from './types';
 
@@ -99,21 +101,21 @@ export class AgnoClient implements IAgentClient {
 
     const entries: AgentDiscoveryEntry[] = [
       ...agents.map((a) => ({
-        id: a.agent_id,
+        id: a.id ?? a.agent_id,
         name: a.name,
         type: 'agent' as const,
         description: a.description,
         metadata: a.model ? { model: a.model } : undefined,
       })),
       ...teams.map((t) => ({
-        id: t.team_id,
+        id: t.id ?? t.team_id,
         name: t.name,
         type: 'team' as const,
         description: t.description,
         metadata: t.mode ? { mode: t.mode, memberCount: t.members?.length } : undefined,
       })),
       ...workflows.map((w) => ({
-        id: w.workflow_id,
+        id: w.id ?? w.workflow_id,
         name: w.name,
         type: 'workflow' as const,
         description: w.description,
@@ -191,12 +193,15 @@ export class AgnoClient implements IAgentClient {
     formData.append('message', request.message);
     formData.append('stream', String(stream));
 
-    if (request.sessionId) {
-      formData.append('session_id', request.sessionId);
+    const sessionId = request.khalSessionId ?? request.sessionId;
+    if (sessionId) {
+      formData.append('session_id', sessionId);
     }
     if (request.userId) {
       formData.append('user_id', request.userId);
     }
+
+    this.appendStructuredMetadata(formData, request);
 
     if (request.files?.length) {
       for (const file of request.files) {
@@ -217,6 +222,31 @@ export class AgnoClient implements IAgentClient {
     }
 
     return formData;
+  }
+
+  private appendStructuredMetadata(formData: FormData, request: ProviderRequest): void {
+    const appendJson = (key: string, value: unknown) => {
+      if (value !== undefined) {
+        formData.append(key, JSON.stringify(value));
+      }
+    };
+
+    if (request.khalSessionId) {
+      formData.append('khal_session_id', request.khalSessionId);
+    }
+    if (request.messageId) {
+      formData.append('message_id', request.messageId);
+    }
+    if (request.replyToMessageId) {
+      formData.append('reply_to_message_id', request.replyToMessageId);
+    }
+
+    appendJson('platform', request.platform);
+    appendJson('sender', request.sender);
+    appendJson('chat', request.chat);
+    appendJson('mcp_url_params', request.mcpUrlParams);
+    appendJson('env', request.env);
+    appendJson('omni', request.omni);
   }
 
   async runAgent(agentId: string, request: ProviderRequest): Promise<ProviderResponse> {
@@ -244,7 +274,15 @@ export class AgnoClient implements IAgentClient {
       url,
       {
         method: 'POST',
-        headers: this.getHeaders(),
+        headers: {
+          ...this.getHeaders(),
+          ...buildTraceHeaders(request.traceContext, {
+            khalSessionId: request.khalSessionId ?? request.sessionId,
+            userId: request.userId,
+            messageId: request.omni?.messageId,
+            omni: request.omni,
+          }),
+        },
         body: formData,
       },
       timeoutMs,
@@ -311,7 +349,15 @@ export class AgnoClient implements IAgentClient {
       url,
       {
         method: 'POST',
-        headers: this.getHeaders(),
+        headers: {
+          ...this.getHeaders(),
+          ...buildTraceHeaders(request.traceContext, {
+            khalSessionId: request.khalSessionId ?? request.sessionId,
+            userId: request.userId,
+            messageId: request.omni?.messageId,
+            omni: request.omni,
+          }),
+        },
         body: formData,
       },
       timeoutMs,
@@ -474,7 +520,7 @@ export class AgnoClient implements IAgentClient {
 
   // --- Session Management ---
 
-  async deleteSession(sessionId: string): Promise<void> {
+  async deleteSession(sessionId: string): Promise<SessionDeleteResult> {
     const url = `${this.baseUrl}/sessions/${encodeURIComponent(sessionId)}`;
     const response = await this.fetchWithTimeout(
       url,
@@ -482,9 +528,15 @@ export class AgnoClient implements IAgentClient {
       this.defaultTimeoutMs,
     );
 
+    if (response.status === 404) {
+      return { ok: true, status: response.status, sessionId, existed: false };
+    }
+
     if (!response.ok) {
       this.handleErrorResponse(response, `deleting session ${sessionId}`);
     }
+
+    return { ok: true, status: response.status, sessionId, existed: true };
   }
 }
 

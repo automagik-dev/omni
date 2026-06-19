@@ -1,0 +1,61 @@
+{
+  "source": "channel",
+  "sender": "5511900000003",
+  "channel": "whatsapp",
+  "isGroup": false,
+  "destination": 558007779070,
+  "botname": "wFXLdg7dVyO1H9eKL9l9fSL5",
+  "event_type": "click_to_chat_advertise",
+  "message": "Oi, vi o anúncio",
+  "postbackText": null,
+  "senderobj": {
+    "channelid": "5511900000003",
+    "display": "Test Ad Click",
+    "channeltype": "whatsapp"
+  },
+  "contextobj": {
+    "senderName": "Test Ad Click",
+    "botname": "wFXLdg7dVyO1H9eKL9l9fSL5",
+    "channeltype": "whatsapp",
+    "contexttype": "p2p",
+    "contextid": "5511900000003",
+    "cc": "55",
+    "dc": "11900000003"
+  },
+  "messageobj": {
+    "id": "wamid.TEST_CTCA_001",
+    "type": "text",
+    "from": "5511900000003",
+    "timestamp": 1776300000,
+    "text": "Oi, vi o anúncio",
+    "raw": {
+      "payload": {
+        "text": "Oi, vi o anúncio",
+        "referral": {
+          "source_url": "https://fb.me/TEST_AD",
+          "source_id": "1234567890",
+          "source_type": "ad",
+          "headline": "Planos de Saúde",
+          "body": "Conheça nossos planos",
+          "media_type": "image"
+        }
+      },
+      "sender": { "phone": "5511900000003", "name": "Test Ad Click" },
+      "id": "wamid.TEST_CTCA_001",
+      "source": "5511900000003",
+      "type": "text",
+      "referral": {
+        "source_url": "https://fb.me/TEST_AD",
+        "source_id": "1234567890",
+        "source_type": "ad"
+      }
+    }
+  },
+  "messageHeader": {
+    "event_type": "click_to_chat_advertise",
+    "nsTraceId": "AD001CAFEBABE-00000000000000AD",
+    "project_id": "31569577",
+    "x-gs-priority": 4
+  },
+  "metadata": {}
+}

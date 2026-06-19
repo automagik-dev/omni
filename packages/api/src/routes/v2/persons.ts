@@ -6,6 +6,7 @@ import { zValidator } from '@hono/zod-validator';
 import type { ChannelTypeSchema } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { optionalDateParam } from '../../schemas/date-query';
 import type { AppVariables } from '../../types';
 
 const personsRoutes = new Hono<{ Variables: AppVariables }>();
@@ -23,16 +24,8 @@ const timelineQuerySchema = z.object({
     .string()
     .optional()
     .transform((v) => v?.split(',') as z.infer<typeof ChannelTypeSchema>[] | undefined),
-  since: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
-  until: z
-    .string()
-    .datetime()
-    .optional()
-    .transform((v) => (v ? new Date(v) : undefined)),
+  since: optionalDateParam('since'),
+  until: optionalDateParam('until'),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().optional(),
 });

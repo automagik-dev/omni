@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { AckPolicy, DeliverPolicy } from 'nats';
 import {
   DEFAULT_CONSUMER_CONFIG,
   buildConsumerConfig,
@@ -14,8 +13,8 @@ describe('consumer', () => {
       const config = buildConsumerConfig('message.received.>');
 
       expect(config.filter_subject).toBe('message.received.>');
-      expect(config.ack_policy).toBe(AckPolicy.Explicit);
-      expect(config.deliver_policy).toBe(DeliverPolicy.New);
+      expect(config.ack_policy as string | undefined).toBe('explicit');
+      expect(config.deliver_policy as string | undefined).toBe('new');
       expect(config.max_deliver).toBe(DEFAULT_CONSUMER_CONFIG.maxRetries + 1);
     });
 
@@ -53,14 +52,14 @@ describe('consumer', () => {
     });
 
     test('maps startFrom to deliver policy', () => {
-      expect(buildConsumerConfig('test', { startFrom: 'new' }).deliver_policy).toBe(DeliverPolicy.New);
-      expect(buildConsumerConfig('test', { startFrom: 'first' }).deliver_policy).toBe(DeliverPolicy.All);
-      expect(buildConsumerConfig('test', { startFrom: 'last' }).deliver_policy).toBe(DeliverPolicy.Last);
+      expect(buildConsumerConfig('test', { startFrom: 'new' }).deliver_policy as string | undefined).toBe('new');
+      expect(buildConsumerConfig('test', { startFrom: 'first' }).deliver_policy as string | undefined).toBe('all');
+      expect(buildConsumerConfig('test', { startFrom: 'last' }).deliver_policy as string | undefined).toBe('last');
     });
 
     test('uses StartTime for Date startFrom', () => {
       const config = buildConsumerConfig('test', { startFrom: new Date() });
-      expect(config.deliver_policy).toBe(DeliverPolicy.StartTime);
+      expect(config.deliver_policy as string | undefined).toBe('by_start_time');
     });
 
     test('respects custom maxRetries', () => {
@@ -135,6 +134,25 @@ describe('consumer', () => {
       const delay = calculateBackoffDelay(0);
       expect(delay).toBeGreaterThan(0);
       expect(delay).toBeLessThanOrEqual(DEFAULT_CONSUMER_CONFIG.retryDelayMs * 1.1);
+    });
+
+    test('always returns an integer', () => {
+      // nats.js multiplies the returned ms by 1e6 to encode nanos; NATS server
+      // unmarshals into Go int64, so fractional values get rejected with
+      // `bad NAK delay value`. Guard the contract at the source.
+      for (let retry = 0; retry <= 5; retry++) {
+        for (let i = 0; i < 50; i++) {
+          const delay = calculateBackoffDelay(retry, 1000);
+          expect(Number.isInteger(delay)).toBe(true);
+        }
+      }
+
+      // Also cover the maxDelay clamp branch.
+      for (let i = 0; i < 50; i++) {
+        const clamped = calculateBackoffDelay(20, 1000, 5000);
+        expect(Number.isInteger(clamped)).toBe(true);
+        expect(clamped).toBeLessThanOrEqual(5000);
+      }
     });
   });
 

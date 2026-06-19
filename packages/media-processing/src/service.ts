@@ -164,6 +164,10 @@ export function createMediaProcessingService(config?: Partial<ProcessorConfig>):
     groqApiKey: config?.groqApiKey ?? process.env.GROQ_API_KEY,
     openaiApiKey: config?.openaiApiKey ?? process.env.OPENAI_API_KEY,
     geminiApiKey: config?.geminiApiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY,
+    audioProvider: config?.audioProvider ?? process.env.STT_PROVIDER,
+    audioModel: config?.audioModel ?? process.env.OPENAI_STT_MODEL,
+    audioPrompt: config?.audioPrompt,
+    audioGlossary: config?.audioGlossary,
     defaultLanguage: config?.defaultLanguage ?? process.env.DEFAULT_LANGUAGE ?? 'pt',
     maxFileSizeMb: config?.maxFileSizeMb ?? 25,
   };

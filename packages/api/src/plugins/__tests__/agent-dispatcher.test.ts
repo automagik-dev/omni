@@ -2,13 +2,15 @@
  * Agent Dispatcher Plugin Tests
  *
  * Tests for:
- * - RateLimiter: per-user-per-channel-per-instance rate limiting
  * - ReactionDedup: LRU dedup for emoji+messageId+userId
  * - MessageDebouncer: tested separately in message-debouncer.test.ts
  * - resolveProvider / getAgentProvider: provider resolution from DB
  * - setupAgentDispatcher: integration with EventBus subscriptions + cleanup
  * - Text chunking and split point logic
  * - Helper functions: instanceTriggersOnEvent, isReactionTrigger, classifyMessageTrigger
+ *
+ * #384: Inbound rate limiter removed. The debouncer is the single source of
+ * burst control for message triggers — no cap on inbound volume.
  */
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
@@ -18,9 +20,9 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 // Strategy: re-export internals via a test-only module, or inline-test the
 // exported setupAgentDispatcher by capturing EventBus handler callbacks.
 //
-// RateLimiter and ReactionDedup are still internal to agent-dispatcher.
-// MessageDebouncer is now exported from message-debouncer.ts and tested
-// separately in message-debouncer.test.ts.
+// ReactionDedup is still internal to agent-dispatcher. MessageDebouncer is now
+// exported from message-debouncer.ts and tested separately in
+// message-debouncer.test.ts.
 // ---------------------------------------------------------------------------
 
 // Import exported symbols
@@ -117,8 +119,22 @@ function createMockDb(agentRowOverrides: Record<string, unknown> = {}) {
     limit: mock(() => Promise.resolve([agentRow])),
   };
 
+  // Idempotency claims (#411) — db.insert(processedEvents).values(...).onConflictDoNothing().returning(...)
+  // Stateless mock: always claims (returns one row) so existing dispatcher tests
+  // that re-use static event ids across multiple `fire(...)` calls don't get
+  // skipped. Real PG semantics + the at-most-once contract are covered by the
+  // `withIdempotency` unit tests in src/lib/__tests__/idempotency.test.ts.
+  const insertChain = (row: { eventId?: string; handler?: string }) => ({
+    onConflictDoNothing: () => ({
+      returning: async () => [{ eventId: row.eventId ?? 'mock-evt' }],
+    }),
+  });
+
   return {
     select: mock(() => chain),
+    insert: mock(() => ({
+      values: (row: { eventId?: string; handler?: string }) => insertChain(row),
+    })),
   } as unknown as import('@omni/db').Database;
 }
 
@@ -150,7 +166,6 @@ function createMockInstance(overrides: Record<string, unknown> = {}) {
     triggerReactions: null,
     triggerMentionPatterns: null,
     triggerMode: 'round-trip',
-    triggerRateLimit: 5,
     ownerIdentifier: 'bot-jid@s.whatsapp.net',
     enableAutoSplit: true,
     messageDebounceMode: 'disabled',
@@ -309,6 +324,45 @@ function createReactionEvent(overrides: Record<string, unknown> = {}) {
 // ============================================================================
 
 describe('agent-dispatcher', () => {
+  describe('human lifecycle observability helpers', () => {
+    it('builds redacted-readable lifecycle attributes without raw PII or secrets', () => {
+      const attributes = __test__.buildLifecycleSpanAttributes({
+        stage: 'provider_inbound',
+        eventType: 'user_message_turn',
+        channel: 'whatsapp-baileys',
+        provider: 'gupshup',
+        instanceId: 'inst-1',
+        chatId: '5511999887766@s.whatsapp.net',
+        sessionId: 'p0r-hml-20260531T204449Z',
+        traceId: 'trc-test-123',
+        messageId: 'wamid.123',
+        agentId: 'eugenia-seller',
+        inputText: 'Olá, meu telefone é 5511999887766 e email felipe@example.com. Quero cotar plano.',
+        outputText: 'Claro, posso ajudar com a cotação.',
+        extra: {
+          authorization: 'Bearer super-secret-token',
+          token: 'abc123',
+        },
+      });
+
+      expect(attributes['khal.lifecycle.stage']).toBe('provider_inbound');
+      expect(attributes['khal.event_type']).toBe('user_message_turn');
+      expect(attributes['khal.channel']).toBe('whatsapp-baileys');
+      expect(attributes['khal.provider']).toBe('gupshup');
+      expect(attributes['langfuse.session.id']).toBe('p0r-hml-20260531T204449Z');
+      expect(attributes['session.id']).toBe('p0r-hml-20260531T204449Z');
+      expect(attributes['khal.input_chars']).toBeGreaterThan(0);
+      expect(String(attributes['khal.input_sha256'])).toStartWith('sha256:');
+      expect(String(attributes['khal.output_sha256'])).toStartWith('sha256:');
+      expect(String(attributes['khal.input_preview_redacted'])).toContain('[PHONE]');
+      expect(String(attributes['khal.input_preview_redacted'])).toContain('[EMAIL]');
+      expect(JSON.stringify(attributes)).not.toContain('felipe@example.com');
+      expect(JSON.stringify(attributes)).not.toContain('5511999887766');
+      expect(JSON.stringify(attributes)).not.toContain('super-secret-token');
+      expect(JSON.stringify(attributes)).not.toContain('abc123');
+    });
+  });
+
   // ======================================================================
   // setupAgentDispatcher — subscribes to correct NATS subjects
   // ======================================================================
@@ -597,11 +651,17 @@ describe('agent-dispatcher', () => {
       expect(services.agentRunner.getSenderName).toHaveBeenCalled();
     });
 
-    it('rate limits when too many messages from same user', async () => {
+    // ======================================================================
+    // #384: inbound rate limiter REMOVED. Debouncer is the only burst gate.
+    // Acceptance criteria:
+    //   - 10-msg burst → exactly 1 dispatch carrying all 10
+    //   - 50-msg burst → exactly 1 dispatch, zero drops
+    //   - No "Rate limited" log line ever emitted for inbound messages
+    // ======================================================================
+    it('#384: 10-message burst produces exactly 1 dispatch with all messages', async () => {
       const eventBus = createMockEventBus();
-      // Instance with rate limit of 2
       const agentRunner = {
-        getInstanceWithProvider: mock(async () => createMockInstance({ triggerRateLimit: 2 })),
+        getInstanceWithProvider: mock(async () => createMockInstance()),
         getSenderName: mock(async () => 'User'),
         run: mock(async () => ({
           parts: ['resp'],
@@ -612,17 +672,61 @@ describe('agent-dispatcher', () => {
 
       cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
 
-      // Send 3 messages — the 3rd should be rate limited
-      for (let i = 0; i < 3; i++) {
-        await eventBus.fire('message.received', createMessageEvent());
+      const events = Array.from({ length: 10 }, (_, i) =>
+        createMessageEvent({
+          payload: {
+            externalId: `ext-${i}`,
+            chatId: '5511999000384@s.whatsapp.net',
+            from: '5511999000384',
+            content: { type: 'text', text: `msg ${i}` },
+          },
+        }),
+      );
+      for (const event of events) {
+        await eventBus.fire('message.received', event);
       }
 
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // B-1: IAgentProvider handles dispatch; getSenderName proves message reached processAgentResponse.
-      // Rate limiter blocks the 3rd message. Debouncer merges same-chatKey, so 1 flush = 1 call.
-      const senderNameCalls = agentRunner.getSenderName.mock.calls.length;
-      expect(senderNameCalls).toBeGreaterThanOrEqual(1);
+      // Exactly one dispatched trigger (debounced batch). Pre-fix: the rate
+      // limiter would have capped at 5 and dropped the 5 tail messages.
+      expect(agentRunner.getSenderName.mock.calls.length).toBe(1);
+    });
+
+    it('#384: 50-message burst produces exactly 1 dispatch, zero drops', async () => {
+      const eventBus = createMockEventBus();
+      const agentRunner = {
+        getInstanceWithProvider: mock(async () => createMockInstance()),
+        getSenderName: mock(async () => 'User'),
+        run: mock(async () => ({
+          parts: ['resp'],
+          metadata: { runId: 'r', sessionId: 's', status: 'completed' },
+        })),
+      };
+      const services = createMockServices({ agentRunner });
+
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+
+      const events = Array.from({ length: 50 }, (_, i) =>
+        createMessageEvent({
+          payload: {
+            externalId: `burst-${i}`,
+            chatId: '5511999000050@s.whatsapp.net',
+            from: '5511999000050',
+            content: { type: 'text', text: `chunk ${i}` },
+          },
+        }),
+      );
+      for (const event of events) {
+        await eventBus.fire('message.received', event);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Any number > 1 here would indicate the rate limiter silently dropped
+      // a subset — agent would see fewer events than the user typed. The
+      // fix removes that gate entirely, so exactly one debounced trigger fires.
+      expect(agentRunner.getSenderName.mock.calls.length).toBe(1);
     });
   });
 
@@ -1481,6 +1585,98 @@ describe('agent-dispatcher', () => {
       } as unknown as import('../../services').Services;
     }
 
+    it('resolves gupshup native reply aliases when replyContext.id is not the outbound external id', async () => {
+      const chatRow = { id: 'chat-db-1', externalId: 'chat-ext-1', chatType: 'dm' };
+      const quotedRow = {
+        externalId: 'omni-outbound-uuid',
+        senderDisplayName: 'You',
+        senderPlatformUserId: 'bot-123',
+        isFromMe: true,
+        platformTimestamp: new Date('2026-06-09T05:49:16Z').getTime(),
+        messageType: 'text',
+        textContent: '*Notrelife SP* com coparticipação parcial',
+        transcription: null,
+        imageDescription: null,
+        videoDescription: null,
+        documentExtraction: null,
+        rawPayload: {
+          gupshupResponse: {
+            messageId: '033ve4XFB8ikDjlsH9KcOI',
+            gsId: 'f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b',
+          },
+        },
+      };
+      const getByExternalId = mock(async (_chatId: string, externalId: string) =>
+        externalId === 'omni-outbound-uuid' ? quotedRow : null,
+      );
+      const findByProviderAlias = mock(async (_chatId: string, aliases: string[]) =>
+        aliases.includes('033ve4XFB8ikDjlsH9KcOI') || aliases.includes('f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b')
+          ? quotedRow
+          : null,
+      );
+      const services = {
+        chats: { findByExternalIdSmart: mock(async () => chatRow) },
+        messages: { getByExternalId, findByProviderAlias },
+      } as unknown as import('../../services').Services;
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', '033ve4XFB8ikDjlsH9KcOI', [
+        'f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b',
+      ]);
+
+      expect(result).not.toBeNull();
+      expect(result).toContain('*Notrelife SP*');
+      expect(getByExternalId).toHaveBeenCalledWith('chat-db-1', '033ve4XFB8ikDjlsH9KcOI');
+      expect(findByProviderAlias).toHaveBeenCalledWith('chat-db-1', [
+        '033ve4XFB8ikDjlsH9KcOI',
+        'f5d6cdc1-3b1d-4c8d-a1fa-089b43c7105b',
+      ]);
+    });
+
+    it('falls back to the latest outbound bot message before the inbound native reply when Gupshup returns no provider aliases', async () => {
+      const chatRow = { id: 'chat-db-1', externalId: 'chat-ext-1', chatType: 'dm' };
+      const quotedRow = {
+        externalId: 'omni-outbound-uuid',
+        senderDisplayName: 'Eugenia',
+        senderPlatformUserId: 'bot-123',
+        isFromMe: true,
+        platformTimestamp: new Date('2026-06-09T13:13:22Z').getTime(),
+        messageType: 'text',
+        textContent: '**Opção 2, Nosso Plano Completo Enfermaria** R$ 182,47/mês',
+        transcription: null,
+        imageDescription: null,
+        videoDescription: null,
+        documentExtraction: null,
+      };
+      const findRecentOutboundBefore = mock(async (_chatId: string, before: Date, _hint?: string) =>
+        before.toISOString() === '2026-06-09T13:13:55.000Z' ? quotedRow : null,
+      );
+      const services = {
+        chats: { findByExternalIdSmart: mock(async () => chatRow) },
+        messages: {
+          getByExternalId: mock(async () => null),
+          findByProviderAlias: mock(async () => null),
+          findRecentOutboundBefore,
+        },
+      } as unknown as import('../../services').Services;
+
+      const result = await resolveQuotedMessage(
+        services,
+        'inst-1',
+        'chat-ext-1',
+        '033voYFyV6Txceb45MFW7k',
+        ['ddbf1157-be24-4176-a1f8-9f679a26a39c'],
+        { inboundAt: new Date('2026-06-09T13:13:55Z'), inboundText: 'quero esse' },
+      );
+
+      expect(result).not.toBeNull();
+      expect(result).toContain('Opção 2');
+      expect(findRecentOutboundBefore).toHaveBeenCalledWith(
+        'chat-db-1',
+        new Date('2026-06-09T13:13:55Z'),
+        'quero esse',
+      );
+    });
+
     it('returns full text when content is under 4000 chars', async () => {
       const content = 'A'.repeat(3999);
       const services = createQuotedMessageServices(content);
@@ -1552,6 +1748,117 @@ describe('agent-dispatcher', () => {
 
       const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', 'quoted-ext-1');
       expect(result).toBeNull();
+    });
+  });
+
+  // ======================================================================
+  // A2A customer context — remote identity is external-only
+  // ======================================================================
+  describe('A2A customer context', () => {
+    const { extractA2ACustomerContext, resolveCustomerContext } = __test__;
+
+    it('extracts external customer context from A2A raw payload without internal IDs', () => {
+      const messages = [
+        {
+          payload: {
+            externalId: 'a2a-msg-1',
+            chatId: 'a2a-task-1',
+            from: 'workos-user-1',
+            content: { type: 'text', text: 'hello' },
+            rawPayload: {
+              omniExecutionContext: {
+                identity: {
+                  userId: 'remote-person-should-not-be-trusted',
+                  personId: 'remote-internal-person',
+                  platformUserId: 'workos-user-1',
+                },
+                customer: {
+                  customerId: 'cust-1',
+                  organizationId: 'org-1',
+                  tenantId: 'tenant-1',
+                },
+              },
+            },
+          },
+          metadata: {
+            instanceId: 'inst-1',
+            traceId: 'trace-1',
+          },
+          timestamp: Date.now(),
+        },
+      ] as Parameters<typeof extractA2ACustomerContext>[0];
+
+      expect(extractA2ACustomerContext(messages, 'a2a')).toEqual({
+        externalUserId: 'workos-user-1',
+        customerId: 'cust-1',
+        organizationId: 'org-1',
+        tenantId: 'tenant-1',
+      });
+    });
+
+    it('merges remote customer context with stored person metadata, preferring stored values', async () => {
+      const services = {
+        persons: {
+          getById: mock(async () => ({
+            metadata: {
+              externalUserId: 'stored-user-1',
+              customerId: 'stored-cust-1',
+            },
+          })),
+        },
+      } as unknown as import('../../services').Services;
+
+      const context = await resolveCustomerContext(services, 'person-1', {
+        externalUserId: 'remote-user-1',
+        customerId: 'remote-cust-1',
+        organizationId: 'remote-org-1',
+      });
+
+      expect(context).toEqual({
+        externalUserId: 'stored-user-1',
+        customerId: 'stored-cust-1',
+        organizationId: 'remote-org-1',
+      });
+    });
+  });
+
+  // ======================================================================
+  // KHAL session correlation
+  // ======================================================================
+  describe('KHAL session correlation', () => {
+    it('extracts an explicit KHAL session id from rawPayload and mirrors it into trigger headers', () => {
+      const messages = [
+        {
+          payload: {
+            rawPayload: {
+              khalSessionId: ' khal-session-123 ',
+            },
+          },
+        },
+      ] as any;
+
+      const sessionId = __test__.extractKhalSessionId(messages);
+
+      expect(sessionId).toBe('khal-session-123');
+      expect(__test__.buildTriggerHeaders(sessionId!)).toEqual({ 'x-khal-session-id': 'khal-session-123' });
+    });
+
+    it('extracts KHAL session id from inbound rawPayload headers', () => {
+      const messages = [
+        {
+          payload: {
+            rawPayload: {
+              headers: { 'x-khal-session-id': 'khal-header-session' },
+            },
+          },
+        },
+      ] as any;
+
+      expect(__test__.extractKhalSessionId(messages)).toBe('khal-header-session');
+    });
+
+    it('does not build a KHAL header for computed fallback sessions', () => {
+      expect(__test__.buildTriggerHeaders(undefined)).toBeUndefined();
     });
   });
 
@@ -1764,6 +2071,133 @@ describe('agent-dispatcher', () => {
       const result = await buildContextMessages(services, instance, 'chat-ext-1', []);
 
       expect(result).toEqual([]);
+    });
+  });
+
+  // ======================================================================
+  // Idempotency on replay (#411)
+  //
+  // Acceptance criterion from the issue: "5 inflight `message.received`
+  // events + SIGTERM at T+100ms → on next boot, zero duplicate `send_message`
+  // or Agno calls observed."
+  //
+  // We can't kill PM2 in a unit test, so we simulate the moral equivalent:
+  // capture the registered handler, fire the same OmniEvent.id N times (which
+  // is exactly what NATS does after redelivery), and assert the side-effect
+  // — `services.messages.list` here standing in for any per-event work the
+  // dispatcher performs — runs at most once.
+  // ======================================================================
+  describe('idempotency (#411)', () => {
+    /**
+     * Build a stateful db that mimics PG's ON CONFLICT DO NOTHING semantics.
+     * Use this only for replay tests — `mockDb` above is intentionally
+     * stateless so it doesn't break tests that re-use static event ids.
+     */
+    function createStatefulIdempotencyDb() {
+      const claimed = new Set<string>();
+      const agentRow = {
+        id: 'agent-uuid-1',
+        agentProviderId: 'provider-1',
+        agentType: 'assistant',
+        metadata: { providerAgentId: 'default-agent' },
+        configPath: null,
+      };
+      const chain = {
+        from: mock(() => chain),
+        where: mock(() => chain),
+        limit: mock(() => Promise.resolve([agentRow])),
+      };
+      return {
+        claimed,
+        db: {
+          select: mock(() => chain),
+          insert: mock(() => ({
+            values: (row: { eventId?: string; handler?: string }) => ({
+              onConflictDoNothing: () => ({
+                returning: async () => {
+                  const key = `${row.eventId ?? ''}::${row.handler ?? ''}`;
+                  if (claimed.has(key)) return [];
+                  claimed.add(key);
+                  return [{ eventId: row.eventId }];
+                },
+              }),
+            }),
+          })),
+        } as unknown as import('@omni/db').Database,
+      };
+    }
+
+    it('agent-dispatcher-msg: 5 redeliveries of the same event id → handler-side work runs exactly once', async () => {
+      const eventBus = createMockEventBus();
+      const { db } = createStatefulIdempotencyDb();
+
+      // Spy on a side-effect-ish service the dispatcher's message handler
+      // touches on every non-skipped delivery (chats lookup happens before
+      // the debouncer.buffer side-effect).
+      const findChatSpy = mock(async () => null);
+      const services = createMockServices({
+        chats: {
+          findByExternalIdSmart: findChatSpy,
+          findByExternalId: mock(async () => null),
+          findById: mock(async () => null),
+          update: mock(async () => undefined),
+        },
+      });
+
+      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, db);
+
+      // Fire the same event 5x — exactly the incident shape (#411).
+      const event = createMessageEvent();
+      for (let i = 0; i < 5; i++) {
+        await eventBus.fire('message.received', event);
+      }
+
+      // The handler body calls findByExternalIdSmart twice per real delivery
+      // (once explicitly, once inside resolveEffectiveInstance). With the
+      // idempotency guard, only the FIRST delivery enters the body — the next
+      // 4 are skipped at the claim. So we observe the first-delivery
+      // call-count and assert no replay amplification.
+      const firstDeliveryCalls = findChatSpy.mock.calls.length;
+      expect(firstDeliveryCalls).toBeGreaterThan(0);
+
+      // Fire 4 more times — call count must stay flat.
+      for (let i = 0; i < 4; i++) {
+        await eventBus.fire('message.received', event);
+      }
+      expect(findChatSpy.mock.calls.length).toBe(firstDeliveryCalls);
+
+      cleanup();
+    });
+
+    it('different event ids are independent — N distinct events fire N times', async () => {
+      const eventBus = createMockEventBus();
+      const { db } = createStatefulIdempotencyDb();
+
+      const findChatSpy = mock(async () => null);
+      const services = createMockServices({
+        chats: {
+          findByExternalIdSmart: findChatSpy,
+          findByExternalId: mock(async () => null),
+          findById: mock(async () => null),
+          update: mock(async () => undefined),
+        },
+      });
+
+      const cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, db);
+
+      // First fire one event, capture the per-delivery call count.
+      await eventBus.fire('message.received', createMessageEvent({ id: 'evt-msg-0' }));
+      const perDeliveryCalls = findChatSpy.mock.calls.length;
+      expect(perDeliveryCalls).toBeGreaterThan(0);
+
+      // Fire 2 more DISTINCT events. Each must run the full handler body.
+      for (let i = 1; i < 3; i++) {
+        await eventBus.fire('message.received', createMessageEvent({ id: `evt-msg-${i}` }));
+      }
+      // Linear growth — 3 distinct events × per-delivery cost.
+      expect(findChatSpy.mock.calls.length).toBe(perDeliveryCalls * 3);
+
+      cleanup();
     });
   });
 });

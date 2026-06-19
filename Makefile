@@ -6,7 +6,7 @@
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
-        kill-ghosts reset sdk-generate \
+        kill-ghosts kill-stale-test-daemons reset sdk-generate \
         cli cli-build cli-build-full cli-link \
         migrate-messages migrate-messages-dry \
         _init-db-wait _sync-db
@@ -39,9 +39,10 @@ help:
 	@echo "  make test-api      Run API package tests only"
 	@echo "  make test-db       Run DB package tests only"
 	@echo "  make test-file F=<path>  Run a specific test file"
+	@echo "  make kill-stale-test-daemons  Sweep leaked PM2 god daemons from CLI tests (#413)"
 	@echo ""
 	@echo "Database:"
-	@echo "  make db-push       Push schema changes (dev)"
+	@echo "  make db-push       Push schema changes (dev-only; requires I_KNOW_WHAT_IM_DOING=1)"
 	@echo "  make db-migrate    Run migrations (prod)"
 	@echo "  make db-studio     Open Drizzle Studio"
 	@echo "  make db-reset      Reset database (DESTRUCTIVE)"
@@ -254,6 +255,21 @@ check: typecheck lint dead-code test
 # ============================================================================
 
 db-push:
+	@if [ "$$I_KNOW_WHAT_IM_DOING" != "1" ]; then \
+		echo "drizzle-kit push is DISABLED by default (issue #407)."; \
+		echo ""; \
+		echo "drizzle-kit push and migrateDb() are INCOMPATIBLE. Push creates"; \
+		echo "tables without migration journal entries; the API's auto-migrate"; \
+		echo "then crashes with 'relation already exists' or leaves columns in"; \
+		echo "a drifted state (see CLAUDE.md: 'Database & Migrations')."; \
+		echo ""; \
+		echo "For dev-only schema exploration, rerun with I_KNOW_WHAT_IM_DOING=1:"; \
+		echo "  I_KNOW_WHAT_IM_DOING=1 make db-push"; \
+		echo ""; \
+		echo "For any shared / staging / production DB, use migrations instead:"; \
+		echo "  cd packages/db && bunx drizzle-kit generate"; \
+		exit 1; \
+	fi
 	@set -a && . ./.env && set +a && cd packages/db && bunx drizzle-kit push --force
 
 db-migrate:
@@ -350,6 +366,11 @@ kill-ghosts:
 	-lsof -ti :4222 | xargs kill -9 2>/dev/null || true
 	-lsof -ti :8432 | xargs kill -9 2>/dev/null || true
 	@echo "Ghost cleanup complete"
+
+# Sweep up leaked PM2 god daemons spawned by CLI tests (issue #413).
+# Stale daemons have a PM2_HOME under /tmp/.omni-test-* that no longer exists.
+kill-stale-test-daemons:
+	@bun scripts/kill-stale-test-daemons.ts
 
 # ============================================================================
 # Utilities

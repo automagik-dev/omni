@@ -165,5 +165,20 @@ describe('MediaProcessingService', () => {
       });
       expect(service).toBeInstanceOf(MediaProcessingService);
     });
+
+    it('preserves audio provider/model/prompt config for event-driven processors', () => {
+      const service = createMediaProcessingService({
+        audioProvider: 'groq',
+        audioModel: 'whisper-large-v3-turbo',
+        audioPrompt: 'Use the project glossary.',
+        audioGlossary: ['ProjectTerm', 'ExampleTerm'],
+      });
+
+      const config = (service as unknown as { config: Record<string, unknown> }).config;
+      expect(config.audioProvider).toBe('groq');
+      expect(config.audioModel).toBe('whisper-large-v3-turbo');
+      expect(config.audioPrompt).toBe('Use the project glossary.');
+      expect(config.audioGlossary).toEqual(['ProjectTerm', 'ExampleTerm']);
+    });
   });
 });

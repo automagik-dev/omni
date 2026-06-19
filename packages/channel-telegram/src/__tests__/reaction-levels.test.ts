@@ -15,7 +15,7 @@ function createMockBot() {
     catch: mock(() => {}),
     init: mock(() => Promise.resolve()),
     stop: mock(() => {}),
-    start: mock(() => {}),
+    start: mock(() => Promise.resolve()),
     api: {
       answerCallbackQuery: mock(() => Promise.resolve({})),
       sendChatAction: mock(() => Promise.resolve({})),

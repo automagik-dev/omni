@@ -24,8 +24,18 @@ import qrcode from 'qrcode-terminal';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId } from '../resolve.js';
+import { maybeNudgeForGenieBackedAgent } from '../utils/genie-wiring-nudge.js';
 
-const VALID_CHANNELS: Channel[] = ['whatsapp-baileys', 'whatsapp-cloud', 'discord', 'slack', 'telegram', 'gupshup'];
+const VALID_CHANNELS: Channel[] = [
+  'whatsapp-baileys',
+  'whatsapp-cloud',
+  'discord',
+  'slack',
+  'telegram',
+  'a2a',
+  'gupshup',
+  'twilio-whatsapp',
+];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 
 /** Set value on body, resolving "null" string to actual null */
@@ -107,6 +117,7 @@ function applyGateFields(body: Record<string, unknown>, opts: Record<string, unk
 function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
   setVal(body, 'ttsVoiceId', opts.ttsVoice);
   setVal(body, 'ttsModelId', opts.ttsModel);
+  setVal(body, 'readReceipts', opts.readReceipts);
   setVal(body, 'accessMode', opts.accessMode);
   setVal(body, 'token', opts.token);
   setVal(body, 'telegramBotToken', opts.telegramToken);
@@ -117,6 +128,19 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'gupshupAuthToken', opts.gupshupAuthToken);
   setVal(body, 'gupshupEventId', opts.gupshupEventId);
   setVal(body, 'webhookVerifyToken', opts.gupshupWebhookVerifyToken);
+  setVal(body, 'twilioAccountSid', opts.twilioAccountSid);
+  setVal(body, 'twilioAuthToken', opts.twilioAuthToken);
+  setVal(body, 'twilioFrom', opts.twilioFrom);
+  setVal(body, 'twilioMessagingServiceSid', opts.twilioMessagingServiceSid);
+  setVal(body, 'twilioStatusCallbackUrl', opts.twilioStatusCallbackUrl);
+  setVal(body, 'twilioWebhookUrl', opts.twilioWebhookUrl);
+  setBool(body, 'twilioValidateSignature', opts.twilioValidateSignature);
+  setVal(body, 'bridgeTmuxSession', opts.bridgeTmuxSession);
+  // Per-instance signature requirement (omni-host-fingerprint-trust group 6).
+  // Commander pairs `--require-genie-signature` (true) and
+  // `--no-require-genie-signature` (false) automatically when the option is
+  // declared with `--require-genie-signature` syntax.
+  setBool(body, 'requireGenieSignature', opts.requireGenieSignature);
   if (opts.triggerEvents !== undefined) {
     const raw = opts.triggerEvents as string;
     body.triggerEvents = raw === 'null' ? null : raw.split(',').map((s) => s.trim());
@@ -268,7 +292,10 @@ export function createInstancesCommand(): Command {
     .requiredOption('--name <name>', 'Instance name')
     .requiredOption('--channel <type>', `Channel type (${VALID_CHANNELS.join(', ')})`)
     // Agent routing
-    .option('--agent-fk-id <uuid>', 'Agent FK UUID (references agents table, use "null" to clear)')
+    .option(
+      '--agent-fk-id <uuid>',
+      'Agent FK UUID (references agents table, use "null" to clear). When set without --reply-filter-mode, reply filter defaults to {mode:"all", onDm:true} so messages are dispatched instead of silently dropped (omni#443).',
+    )
     .option('--agent-provider <id>', 'Agent provider ID')
     .option('--agent <id>', 'Agent ID')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
@@ -318,6 +345,7 @@ export function createInstancesCommand(): Command {
     // TTS
     .option('--tts-voice <id>', 'ElevenLabs voice ID')
     .option('--tts-model <id>', 'ElevenLabs model ID')
+    .option('--read-receipts <mode>', 'Read receipts mode: on, off, or exclude-self')
     // Access control
     .option('--access-mode <mode>', 'Access mode: disabled, blocklist, or allowlist')
     // Reaction ack
@@ -340,6 +368,26 @@ export function createInstancesCommand(): Command {
     .option('--gupshup-auth-token <token>', 'Gupshup Custom Integration auth token')
     .option('--gupshup-event-id <id>', 'Gupshup event ID (default: nx_omni_agent_reply)')
     .option('--gupshup-webhook-verify-token <token>', 'Gupshup webhook verify token')
+    // Twilio WhatsApp
+    .option('--twilio-account-sid <sid>', 'Twilio Account SID')
+    .option('--twilio-auth-token <token>', 'Twilio Auth Token')
+    .option('--twilio-from <address>', 'Twilio WhatsApp sender address (whatsapp:+E164)')
+    .option('--twilio-messaging-service-sid <sid>', 'Twilio Messaging Service SID')
+    .option('--twilio-status-callback-url <url>', 'Twilio outbound status callback URL')
+    .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation')
+    .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
+    .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
+    // Bridge tmux session override (parity with `update`; propagated via NATS env)
+    .option(
+      '--bridge-tmux-session <name>',
+      'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
+    )
+    // Per-instance signature requirement (omni-host-fingerprint-trust group 6)
+    .option(
+      '--require-genie-signature',
+      'Require a verified X-Genie-Signature on requests targeting this instance. Bearer-only requests will be rejected with 401.',
+    )
+    .option('--no-require-genie-signature', 'Allow bearer-only requests targeting this instance (default).')
     // Default
     .option('--is-default', 'Set as default instance for channel')
     .action(async (options: Record<string, unknown>) => {
@@ -565,24 +613,54 @@ export function createInstancesCommand(): Command {
     .description('Connect an instance')
     .option('--force-new-qr', 'Force generation of new QR code')
     .option('--token <token>', 'Discord bot token (for Discord instances)')
-    .action(async (rawId: string, options: { forceNewQr?: boolean; token?: string }) => {
-      const client = getClient();
+    .option('--twilio-account-sid <sid>', 'Twilio Account SID')
+    .option('--twilio-auth-token <token>', 'Twilio Auth Token')
+    .option('--twilio-from <address>', 'Twilio WhatsApp sender address (whatsapp:+E164)')
+    .option('--twilio-messaging-service-sid <sid>', 'Twilio Messaging Service SID')
+    .option('--twilio-status-callback-url <url>', 'Twilio outbound status callback URL')
+    .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation')
+    .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
+    .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
+    .action(
+      async (
+        rawId: string,
+        options: {
+          forceNewQr?: boolean;
+          token?: string;
+          twilioAccountSid?: string;
+          twilioAuthToken?: string;
+          twilioFrom?: string;
+          twilioMessagingServiceSid?: string;
+          twilioStatusCallbackUrl?: string;
+          twilioWebhookUrl?: string;
+          twilioValidateSignature?: boolean;
+        },
+      ) => {
+        const client = getClient();
 
-      try {
-        const id = await resolveInstanceId(rawId);
-        const result = await client.instances.connect(id, {
-          forceNewQr: options.forceNewQr,
-          token: options.token,
-        });
+        try {
+          const id = await resolveInstanceId(rawId);
+          const result = await client.instances.connect(id, {
+            forceNewQr: options.forceNewQr,
+            token: options.token,
+            twilioAccountSid: options.twilioAccountSid,
+            twilioAuthToken: options.twilioAuthToken,
+            twilioFrom: options.twilioFrom,
+            twilioMessagingServiceSid: options.twilioMessagingServiceSid,
+            twilioStatusCallbackUrl: options.twilioStatusCallbackUrl,
+            twilioWebhookUrl: options.twilioWebhookUrl,
+            twilioValidateSignature: options.twilioValidateSignature,
+          });
 
-        output.success(result.message, {
-          status: result.status,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to connect: ${message}`);
-      }
-    });
+          output.success(result.message, {
+            status: result.status,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to connect: ${message}`);
+        }
+      },
+    );
 
   // omni instances disconnect <id>
   instances
@@ -741,7 +819,10 @@ export function createInstancesCommand(): Command {
     .option('--is-default', 'Set as default instance for channel')
     .option('--no-is-default', 'Unset as default instance for channel')
     // Agent routing
-    .option('--agent-fk-id <uuid>', 'Agent FK UUID (references agents table, use "null" to clear)')
+    .option(
+      '--agent-fk-id <uuid>',
+      'Agent FK UUID (references agents table, use "null" to clear). When assigning an agent on an instance with no reply filter, the filter defaults to {mode:"all", onDm:true} so messages are dispatched instead of silently dropped (omni#443).',
+    )
     .option('--agent-provider <id>', 'Agent provider ID (use "null" to clear)')
     .option('--agent <id>', 'Agent ID (use "null" to clear)')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
@@ -797,6 +878,7 @@ export function createInstancesCommand(): Command {
     // TTS
     .option('--tts-voice <id>', 'ElevenLabs voice ID (use "null" to clear)')
     .option('--tts-model <id>', 'ElevenLabs model ID (use "null" to clear)')
+    .option('--read-receipts <mode>', 'Read receipts mode: on, off, or exclude-self')
     // Access control
     .option('--access-mode <mode>', 'Access mode: disabled, blocklist, or allowlist')
     // Reaction ack
@@ -814,10 +896,29 @@ export function createInstancesCommand(): Command {
     .option('--discord-token <token>', 'Discord bot token (use "null" to clear)')
     .option('--slack-bot-token <token>', 'Slack bot token (use "null" to clear)')
     .option('--slack-app-token <token>', 'Slack app token (use "null" to clear)')
+    .option('--twilio-account-sid <sid>', 'Twilio Account SID (use "null" to clear)')
+    .option('--twilio-auth-token <token>', 'Twilio Auth Token (use "null" to clear)')
+    .option('--twilio-from <address>', 'Twilio WhatsApp sender address (use "null" to clear)')
+    .option('--twilio-messaging-service-sid <sid>', 'Twilio Messaging Service SID (use "null" to clear)')
+    .option('--twilio-status-callback-url <url>', 'Twilio outbound status callback URL (use "null" to clear)')
+    .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation (use "null" to clear)')
+    .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
+    .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
     // Trigger events
     .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')
     // WhatsApp profile name (separate endpoint)
     .option('--profile-name <name>', 'Update WhatsApp display name (push name)')
+    // Bridge tmux session override (per-instance routing for genie nats-genie provider)
+    .option(
+      '--bridge-tmux-session <name>',
+      'Tmux session name the genie bridge spawns into for this instance (propagated as GENIE_TMUX_SESSION via NATS). Use "null" to clear.',
+    )
+    // Per-instance signature requirement (omni-host-fingerprint-trust group 6)
+    .option(
+      '--require-genie-signature',
+      'Require a verified X-Genie-Signature on requests targeting this instance. Bearer-only requests will be rejected with 401.',
+    )
+    .option('--no-require-genie-signature', 'Allow bearer-only requests targeting this instance (default).')
     .action(async (rawId: string, options: Record<string, unknown>) => {
       const client = getClient();
 
@@ -839,6 +940,17 @@ export function createInstancesCommand(): Command {
         if (Object.keys(body).length > 0) {
           await client.instances.update(id, body);
           output.success(`Instance updated: ${id}`, body);
+
+          // Deprecation nudge — when an operator binds an instance to a
+          // genie-backed agent via `--agent-provider <id>`, they're
+          // recreating step 3 of the legacy 5-command wiring chain.
+          // `omni connect <instance> <agent>` does the same thing in one
+          // step (and creates the provider if it doesn't exist yet).
+          // Best-effort lookup; nudge is stderr-only.
+          const agentProviderId = options.agentProvider as string | undefined;
+          if (agentProviderId && agentProviderId !== 'null') {
+            await maybeNudgeForGenieBackedAgent(client, agentProviderId);
+          }
         } else if (!options.profileName) {
           output.error('No update options provided. Use --help to see all available options.');
         }

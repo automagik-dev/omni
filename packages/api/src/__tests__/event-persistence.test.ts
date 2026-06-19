@@ -6,6 +6,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { randomUUID } from 'node:crypto';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { omniEvents } from '@omni/db';
@@ -118,6 +119,80 @@ describeWithDb('Event Persistence Handler', () => {
       expect(persisted?.rawPayload).toEqual({ foo: 'bar' });
     });
 
+    test('uses UUID event id as persisted omni_events primary key', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const eventId = randomUUID();
+      const testEvent = {
+        id: eventId,
+        type: 'message.received',
+        timestamp: Date.now(),
+        payload: {
+          externalId: 'ext-recv-uuid-id',
+          chatId: 'chat-123',
+          from: 'user-456',
+          content: {
+            type: 'audio',
+            mediaUrl: 'file:///tmp/test.ogg',
+            mimeType: 'audio/ogg',
+          },
+          rawPayload: { id: 'raw-audio' },
+        },
+        metadata: {
+          correlationId: 'corr-uuid-id',
+          instanceId: null,
+          channelType: 'whatsapp-baileys',
+        },
+      };
+
+      await emitEvent('message.received', testEvent);
+
+      const [persisted] = await db
+        .select()
+        .from(omniEvents)
+        .where(eq(omniEvents.externalId, 'ext-recv-uuid-id'))
+        .limit(1);
+
+      expect(persisted).toBeDefined();
+      expect(persisted?.id).toBe(eventId);
+      expect(persisted?.contentType).toBe('audio');
+      expect(persisted?.mediaMimeType).toBe('audio/ogg');
+    });
+
+    test('is idempotent when the same UUID event is redelivered', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const eventId = randomUUID();
+      const testEvent = {
+        id: eventId,
+        type: 'message.received',
+        timestamp: Date.now(),
+        payload: {
+          externalId: 'ext-recv-redelivery',
+          chatId: 'chat-123',
+          from: 'user-456',
+          content: {
+            type: 'audio',
+            mediaUrl: 'file:///tmp/test-redelivery.ogg',
+            mimeType: 'audio/ogg',
+          },
+        },
+        metadata: {
+          correlationId: 'corr-redelivery',
+          instanceId: null,
+          channelType: 'whatsapp-baileys',
+        },
+      };
+
+      await emitEvent('message.received', testEvent);
+      await emitEvent('message.received', testEvent);
+
+      const persisted = await db.select().from(omniEvents).where(eq(omniEvents.id, eventId));
+
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0]?.externalId).toBe('ext-recv-redelivery');
+    });
+
     test('handles image content type', async () => {
       await setupEventPersistence(mockEventBus, db);
 
@@ -216,6 +291,64 @@ describeWithDb('Event Persistence Handler', () => {
       expect(persisted?.status).toBe('completed');
       expect(persisted?.textContent).toBe('Outbound message');
       expect(persisted?.channel).toBe('whatsapp-baileys');
+    });
+
+    test('persists outbound media caption, MIME, and sanitized raw payload', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const testEvent = {
+        id: 'test-event-sent-media',
+        type: 'message.sent',
+        timestamp: Date.now(),
+        payload: {
+          externalId: 'ext-sent-media-001',
+          chatId: 'chat-123',
+          to: 'user-789',
+          content: {
+            type: 'image',
+            caption: 'caption test',
+            mimeType: 'image/png',
+            filename: 'test.png',
+            isVoiceNote: true,
+          },
+          rawPayload: {
+            isFromMe: true,
+            mediaSource: 'base64',
+            filename: 'test.png',
+          },
+        },
+        metadata: {
+          correlationId: 'corr-sent-media',
+          instanceId: null,
+          channelType: 'whatsapp-baileys',
+        },
+      };
+
+      await emitEvent('message.sent', testEvent);
+
+      const [persisted] = await db
+        .select()
+        .from(omniEvents)
+        .where(eq(omniEvents.externalId, 'ext-sent-media-001'))
+        .limit(1);
+
+      expect(persisted).toBeDefined();
+      expect(persisted?.eventType).toBe('message.sent');
+      expect(persisted?.direction).toBe('outbound');
+      expect(persisted?.contentType).toBe('image');
+      expect(persisted?.textContent).toBe('caption test');
+      expect(persisted?.mediaMimeType).toBe('image/png');
+      expect(persisted?.rawPayload).toEqual({
+        isFromMe: true,
+        mediaSource: 'base64',
+        filename: 'test.png',
+      });
+      expect(persisted?.metadata).toEqual({
+        correlationId: 'corr-sent-media',
+        to: 'user-789',
+        filename: 'test.png',
+        voiceNote: true,
+      });
     });
   });
 

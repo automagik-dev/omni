@@ -15,7 +15,7 @@ export interface GupshupConfig {
 
 // Outbound message shape (internal)
 export interface GupshupOutboundMessage {
-  type: 'TEXT' | 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER' | 'LOCATION' | 'HANDOFF';
+  type: 'TEXT' | 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER' | 'LOCATION' | 'HANDOFF' | 'CLOSING';
   text?: string;
   url?: string;
   caption?: string;
@@ -27,6 +27,12 @@ export interface GupshupOutboundMessage {
   dados_lead?: string;
   motivo_handoff?: string;
   handoff_fields?: Record<string, unknown>;
+  // Close-contact fields — present only on type === 'CLOSING' (the wire
+  // literal Gupshup's Journey routes on; the Omni-side concept is "close
+  // contact" but the partner contract uses 'CLOSING').
+  close_reason?: string;
+  close_outcome?: string;
+  close_fields?: Record<string, unknown>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -96,7 +102,7 @@ export interface GupshupNativeInboundWebhook {
   isGroup?: boolean;
   destination: string | number;
   botname: string; // instance identifier
-  event_type: string; // "user_input" for inbound messages
+  event_type: string; // "user_input" / "async_response" / "click_to_chat_advertise" for inbound messages; non-message events (message_event, billing_event, etc.) are dropped upstream
   message?: string; // redundant — prefer messageobj
   postbackText?: string | null;
   senderobj: GupshupNativeSenderObj;

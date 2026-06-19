@@ -11,6 +11,9 @@ import type {
   DedupeCache,
   FetchHistoryOptions,
   FetchHistoryResult,
+  GroupParticipantAction,
+  GroupParticipantUpdateResult,
+  GroupSetting,
   HistorySyncMessage,
   InstanceConfig,
   OutgoingMessage,
@@ -23,6 +26,7 @@ import type { GroupMetadata, WAMessage, WASocket, proto } from 'baileys';
 
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
+import { getWhatsAppOutboundTimingConfig, getWhatsAppRateLimitConfig } from './env';
 import { setupAllEventHandlers } from './handlers/all-events';
 import {
   cancelPendingReconnect,
@@ -31,7 +35,7 @@ import {
   setupConnectionHandlers,
 } from './handlers/connection';
 import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
-import { fromJid, isGroupJid, isLidJid, isUserJid, toJid } from './jid';
+import { fromJid, isGroupJid, isLidJid, isUserJid, toGroupJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { computeWaid } from './senders/contact';
 import { removeReaction, sendReaction } from './senders/reaction';
@@ -40,10 +44,20 @@ import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } f
 import { DecryptFailureTracker } from './utils/decrypt-failure-tracker';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 import { type MentionResolution, resolveMentions } from './utils/mention-resolver';
+import { getDocumentMessage, getMessageContextInfo } from './utils/message';
 import { type RateLimitManager, createRateLimitManager, isRateLimitError } from './utils/rate-limit';
 
 // Re-export for external consumers that previously imported from this module
 export type { FetchHistoryResult, HistorySyncMessage };
+
+export function isTransientConnectionClosedError(error: unknown): boolean {
+  if (!error) return false;
+  const message =
+    typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+      ? error.message
+      : String(error instanceof Error ? error.message : error);
+  return /\bConnection Closed\b/i.test(message);
+}
 
 /**
  * Anchor point for fetching older messages in a chat
@@ -252,6 +266,16 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private sentMessageIds = new Map<string, Set<string>>();
   private static readonly SENT_ID_TTL_MS = 5 * 60 * 1000;
 
+  /**
+   * Per-instance cache of recently-sent outgoing message bodies, keyed by
+   * platform message ID. Baileys' `getMessage` config callback reads from
+   * this so it can replay the original message when the recipient sends a
+   * retry-receipt (e.g. after a PreKey error). Without it the resend silently
+   * drops and the caller never learns the message was lost. Entries
+   * auto-expire after SENT_ID_TTL_MS.
+   */
+  private recentSentMessages = new Map<string, Map<string, proto.IMessage>>();
+
   /** Rate limit managers per instance — handles Baileys 429 backoff */
   private rateLimitManagers = new Map<string, RateLimitManager>();
 
@@ -269,7 +293,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private getRateLimitManager(instanceId: string): RateLimitManager {
     let manager = this.rateLimitManagers.get(instanceId);
     if (!manager) {
-      manager = createRateLimitManager(instanceId, this.logger);
+      manager = createRateLimitManager(instanceId, this.logger, getWhatsAppRateLimitConfig());
       this.rateLimitManagers.set(instanceId, manager);
     }
     return manager;
@@ -283,10 +307,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * enough time has passed since the previous action.
    */
   private async humanDelay(instanceId: string): Promise<void> {
+    const timing = getWhatsAppOutboundTimingConfig();
+    if (!timing.humanDelayEnabled) return;
+
     const now = Date.now();
     const last = this.lastActionTime.get(instanceId) || 0;
-    const minDelay = 1500;
-    const maxDelay = 3500;
+    const minDelay = timing.humanDelayMinMs;
+    const maxDelay = timing.humanDelayMaxMs;
     const randomDelay = minDelay + Math.random() * (maxDelay - minDelay);
     const elapsed = now - last;
 
@@ -302,9 +329,17 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Duration scales with text length to look natural.
    */
   private async simulateTyping(instanceId: string, jid: string, text: string): Promise<void> {
+    const timing = getWhatsAppOutboundTimingConfig();
+    if (!timing.typingSimulationEnabled) return;
+
     try {
       const sock = this.getSocket(instanceId);
-      const typingMs = Math.min(800 + text.length * 30, 4000);
+      const typingMs = Math.min(
+        timing.typingDelayBaseMs + text.length * timing.typingDelayPerCharMs,
+        timing.typingDelayMaxMs,
+      );
+      if (typingMs <= 0) return;
+
       await sock.sendPresenceUpdate('composing', jid);
       await new Promise<void>((r) => setTimeout(r, typingMs));
       await sock.sendPresenceUpdate('paused', jid);
@@ -337,6 +372,27 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   isBotSentMessage(instanceId: string, messageId: string): boolean {
     return this.sentMessageIds.get(instanceId)?.has(messageId) ?? false;
+  }
+
+  /**
+   * Cache an outgoing message body so Baileys can replay it on a retry-receipt.
+   * Falls under the same TTL as sentMessageIds.
+   */
+  private trackRecentSentMessage(instanceId: string, messageId: string, body: proto.IMessage): void {
+    let bodies = this.recentSentMessages.get(instanceId);
+    if (!bodies) {
+      bodies = new Map();
+      this.recentSentMessages.set(instanceId, bodies);
+    }
+    bodies.set(messageId, body);
+    setTimeout(() => {
+      bodies?.delete(messageId);
+    }, WhatsAppPlugin.SENT_ID_TTL_MS);
+  }
+
+  /** Resolver for Baileys' `getMessage` callback. Returns undefined when no body cached. */
+  private getRecentSentMessage(instanceId: string, messageId: string): proto.IMessage | undefined {
+    return this.recentSentMessages.get(instanceId)?.get(messageId);
   }
 
   /** Cached chat display names per instance (for DMs from chats.upsert) */
@@ -891,6 +947,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // Blocks JIDs with repeated decrypt failures to prevent transaction
       // mutex starvation from retry storms.
       shouldIgnoreJid: decryptTracker.shouldIgnore,
+      // Replay outgoing message bodies on retry-receipts. Without this,
+      // Baileys' resend path no-ops with "message not available" and the
+      // caller silently never learns the message was lost.
+      getMessage: async (key) => {
+        const id = key.id;
+        return id ? this.getRecentSentMessage(instanceId, id) : undefined;
+      },
     });
 
     // Save credentials on update
@@ -975,6 +1038,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.chatNamesCache.delete(instanceId);
     this.chatUnreadCache.delete(instanceId);
     this.sentMessageIds.delete(instanceId);
+    this.recentSentMessages.delete(instanceId);
     this.rateLimitManagers.delete(instanceId);
     this.decryptTrackers.delete(instanceId);
     this.lidFirstEnabledMap.delete(instanceId);
@@ -1229,6 +1293,55 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /**
    * Send a message through WhatsApp
    */
+  private getSentMediaSource(message: OutgoingMessage): string | undefined {
+    if (message.content.mediaUrl) return 'url';
+    if (message.content.localPath) return 'localPath';
+    if (message.metadata?.base64) return 'base64';
+    return undefined;
+  }
+
+  private buildSentRawPayload(externalId: string, originalMessage: OutgoingMessage, processedMessage: OutgoingMessage) {
+    const mediaSource = this.getSentMediaSource(processedMessage);
+    return {
+      externalId,
+      isFromMe: true,
+      to: originalMessage.to,
+      ...(processedMessage.content.caption ? { caption: processedMessage.content.caption } : {}),
+      ...(processedMessage.content.filename ? { filename: processedMessage.content.filename } : {}),
+      ...(processedMessage.content.mimeType ? { mimeType: processedMessage.content.mimeType } : {}),
+      ...(processedMessage.metadata?.ptt === true ? { voiceNote: true } : {}),
+      ...(mediaSource ? { mediaSource } : {}),
+    };
+  }
+
+  private buildSentEventPayload(
+    instanceId: string,
+    externalId: string,
+    chatId: string,
+    originalMessage: OutgoingMessage,
+    processedMessage: OutgoingMessage,
+  ) {
+    return {
+      instanceId,
+      externalId,
+      chatId,
+      to: originalMessage.to,
+      content: {
+        type: processedMessage.content.type,
+        text: processedMessage.content.text ?? processedMessage.content.caption,
+        caption: processedMessage.content.caption,
+        mediaUrl: processedMessage.content.mediaUrl,
+        localPath: processedMessage.content.localPath,
+        mimeType: processedMessage.content.mimeType,
+        filename: processedMessage.content.filename,
+        isVoiceNote: processedMessage.metadata?.ptt === true,
+      },
+      replyToId: originalMessage.replyTo,
+      rawPayload: this.buildSentRawPayload(externalId, originalMessage, processedMessage),
+      senderAgentId: originalMessage.metadata?.senderAgentId as string | undefined,
+    };
+  }
+
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const sock = this.getSocket(instanceId);
     const jid = await this.resolveSendTarget(sock, instanceId, message.to);
@@ -1269,21 +1382,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // Track this message ID so we can detect the echo when Baileys receives it back
       if (externalId) {
         this.trackSentMessageId(instanceId, externalId);
+        // Cache the proto body so getMessage can replay on retry-receipts.
+        if (result?.message) {
+          this.trackRecentSentMessage(instanceId, externalId, result.message);
+        }
       }
 
       // Emit sent event
-      await this.emitMessageSent({
-        instanceId,
-        externalId,
-        chatId: jid,
-        to: message.to,
-        content: {
-          type: message.content.type,
-          text: message.content.text,
-        },
-        replyToId: message.replyTo,
-        senderAgentId: message.metadata?.senderAgentId as string | undefined,
-      });
+      await this.emitMessageSent(this.buildSentEventPayload(instanceId, externalId, jid, message, processedMessage));
 
       // Reset rate limit state on successful send
       rateLimiter.reset();
@@ -1359,8 +1465,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       };
     }
 
-    // Determine fromMe: metadata can override, default true
+    // Determine target key fields: metadata comes from the persisted target message.
     const fromMe = (message.metadata?.fromMe as boolean) ?? true;
+    const targetParticipant =
+      typeof message.metadata?.targetParticipant === 'string' ? message.metadata.targetParticipant : undefined;
 
     // Minimal delay for reactions (shorter than full humanDelay)
     await this.humanDelay(instanceId);
@@ -1370,12 +1478,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       targetMessageId,
       emoji: reactionEmoji || '(remove)',
       fromMe,
+      targetParticipant,
     });
 
     const correlationId = message.metadata?.correlationId as string | undefined;
     correlationId && this.captureT10(correlationId);
 
-    const reactionMsgId = await sendReaction(sock, jid, targetMessageId, reactionEmoji, fromMe);
+    const reactionMsgId = await sendReaction(sock, jid, targetMessageId, reactionEmoji, fromMe, targetParticipant);
 
     // Track sent reaction ID so shouldProcessMessage can filter the echo (#336)
     if (reactionMsgId) {
@@ -1515,7 +1624,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /**
    * Send typing indicator
    */
-  async sendTyping(instanceId: string, chatId: string, duration = 3000): Promise<void> {
+  async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
+    const resolvedDuration = duration ?? getWhatsAppOutboundTimingConfig().typingDefaultMs;
     const sock = this.getSocket(instanceId);
     const jid = toJid(chatId);
 
@@ -1529,7 +1639,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       } catch {
         // Ignore errors when pausing typing
       }
-    }, duration);
+    }, resolvedDuration);
   }
 
   /**
@@ -2349,6 +2459,116 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
   }
 
+  /**
+   * Add, remove, promote, or demote group participants.
+   */
+  async updateGroupParticipants(
+    instanceId: string,
+    groupJid: string,
+    participants: string[],
+    action: GroupParticipantAction,
+  ): Promise<GroupParticipantUpdateResult> {
+    await this.humanDelay(instanceId);
+    const sock = this.getSocket(instanceId);
+    const jid = toGroupJid(groupJid);
+    const participantJids = participants.map((participant) => toJid(participant));
+
+    try {
+      const result = await sock.groupParticipantsUpdate(jid, participantJids, action);
+      this.invalidateGroupMetadataCache(instanceId, jid);
+      this.logger.info('Group participants updated', {
+        instanceId,
+        groupJid: jid,
+        action,
+        participantCount: participantJids.length,
+      });
+
+      return {
+        groupJid: jid,
+        action,
+        participants: result.map((participant) => ({
+          jid: participant.jid,
+          status: participant.status,
+        })),
+      };
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
+    }
+  }
+
+  /**
+   * Rename a group.
+   */
+  async updateGroupSubject(instanceId: string, groupJid: string, subject: string): Promise<void> {
+    await this.humanDelay(instanceId);
+    const sock = this.getSocket(instanceId);
+    const jid = toGroupJid(groupJid);
+
+    try {
+      await sock.groupUpdateSubject(jid, subject);
+      this.invalidateGroupMetadataCache(instanceId, jid);
+      this.logger.info('Group subject updated', { instanceId, groupJid: jid });
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
+    }
+  }
+
+  /**
+   * Set or clear a group description.
+   */
+  async updateGroupDescription(instanceId: string, groupJid: string, description?: string): Promise<void> {
+    await this.humanDelay(instanceId);
+    const sock = this.getSocket(instanceId);
+    const jid = toGroupJid(groupJid);
+
+    try {
+      await sock.groupUpdateDescription(jid, description);
+      this.invalidateGroupMetadataCache(instanceId, jid);
+      this.logger.info('Group description updated', { instanceId, groupJid: jid, cleared: !description });
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
+    }
+  }
+
+  /**
+   * Update group settings.
+   */
+  async updateGroupSettings(instanceId: string, groupJid: string, setting: GroupSetting): Promise<void> {
+    await this.humanDelay(instanceId);
+    const sock = this.getSocket(instanceId);
+    const jid = toGroupJid(groupJid);
+
+    try {
+      await sock.groupSettingUpdate(jid, setting);
+      this.invalidateGroupMetadataCache(instanceId, jid);
+      this.logger.info('Group settings updated', { instanceId, groupJid: jid, setting });
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
+    }
+  }
+
+  /**
+   * Leave a group.
+   */
+  async leaveGroup(instanceId: string, groupJid: string): Promise<void> {
+    await this.humanDelay(instanceId);
+    const sock = this.getSocket(instanceId);
+    const jid = toGroupJid(groupJid);
+
+    try {
+      await sock.groupLeave(jid);
+      this.invalidateGroupMetadataCache(instanceId, jid);
+      this.logger.info('Left group', { instanceId, groupJid: jid });
+    } catch (error) {
+      const waError = mapBaileysError(error);
+      throw waError;
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Internal handlers called by connection/message handlers
   // ─────────────────────────────────────────────────────────────
@@ -2448,6 +2668,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       // keys.transaction mutex while fetching devices/sessions over the network.
       await this.prewarmAllGroupCaches(instanceId, sock, groups);
     } catch (err) {
+      if (isTransientConnectionClosedError(err)) {
+        this.logger.debug('Group metadata prefetch skipped; socket closed during reconnect', {
+          instanceId,
+          error: String(err),
+        });
+        return;
+      }
       this.logger.warn('groupFetchAllParticipating failed', { instanceId, error: String(err) });
     }
   }
@@ -2567,6 +2794,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         devices: deviceJids.length,
       });
     } catch (err) {
+      if (isTransientConnectionClosedError(err)) {
+        this.logger.debug('Bulk group cache pre-warm skipped; socket closed during reconnect', {
+          instanceId,
+          error: String(err),
+        });
+        return;
+      }
       this.logger.warn('Bulk group cache pre-warm failed (non-fatal)', {
         instanceId,
         error: String(err),
@@ -2623,19 +2857,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   handleConnectionError(instanceId: string, error: string, willRetry: boolean): void {
     this.logger.error('Connection error', { instanceId, error, willRetry });
-  }
 
-  /**
-   * Resolve contextInfo from text and caption-bearing message types.
-   */
-  private getMessageContextInfo(rawMessage: WAMessage): proto.IContextInfo | null | undefined {
-    const message = rawMessage.message;
-    return (
-      message?.extendedTextMessage?.contextInfo ??
-      message?.imageMessage?.contextInfo ??
-      message?.videoMessage?.contextInfo ??
-      message?.documentMessage?.contextInfo
-    );
+    if (!willRetry) {
+      // Baileys gave up its internal retry loop — transition to 'disconnected'
+      // so InstanceMonitor.needsReconnect() re-arms the API-level backoff.
+      // Otherwise the socket lingers in 'reconnecting' forever (issue #408).
+      const config = this.instances.get(instanceId)?.config;
+      if (config) {
+        void this.updateInstanceStatus(instanceId, config, {
+          state: 'disconnected',
+          since: new Date(),
+          message: error,
+        });
+      }
+    }
   }
 
   /**
@@ -2716,7 +2951,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     };
 
     // Extract mentionedJids from contextInfo (WhatsApp mentions)
-    const contextInfo = this.getMessageContextInfo(rawMessage);
+    const contextInfo = getMessageContextInfo(rawMessage);
     if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
       extendedPayload.mentionedJids = contextInfo.mentionedJid;
 
@@ -2783,6 +3018,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       externalId,
       chatId,
       from,
+      senderName: senderPushName,
+      chatName: typeof extendedPayload.chatName === 'string' ? extendedPayload.chatName : undefined,
       content: {
         type: content.type,
         text: content.text || content.caption,
@@ -2880,6 +3117,24 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Handle a delivery failure surfaced by Baileys after the original send was
+   * already server-ACKed. Triggered when `messages.update` carries
+   * `status === WAMessageStatus.ERROR (0)` — typically a recipient-side retry
+   * receipt that Baileys couldn't honor (e.g. PreKeyError).
+   * @internal
+   */
+  async handleMessageFailed(instanceId: string, externalId: string, chatId: string): Promise<void> {
+    await this.emitMessageFailed({
+      instanceId,
+      externalId,
+      chatId,
+      error: 'Delivery failed: recipient retry receipt not honored',
+      errorCode: 'WA_DELIVERY_FAILED',
+      retryable: false,
+    });
+  }
+
+  /**
    * Handle message edited
    * @internal
    */
@@ -2949,6 +3204,126 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   // ALL EVENT HANDLERS (for comprehensive Baileys coverage)
   // ─────────────────────────────────────────────────────────────
 
+  private whatsappEventMeta(instanceId: string, suffix: string): Record<string, unknown> {
+    return {
+      instanceId,
+      channelType: this.id,
+      source: `channel:${this.id}`,
+      correlationId: `${suffix}-${instanceId}`,
+    };
+  }
+
+  /**
+   * Handle Baileys messaging-history.status events.
+   * Read-only observability event: no WhatsApp side effects.
+   * @internal
+   */
+  handleMessagingHistoryStatus(
+    instanceId: string,
+    status: { syncType?: unknown; status?: string; explicit?: boolean },
+  ): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.whatsapp.messaging-history-status',
+        {
+          instanceId,
+          syncType: status.syncType,
+          status: status.status ?? 'unknown',
+          explicit: status.explicit,
+          timestamp: Date.now(),
+        },
+        this.whatsappEventMeta(instanceId, 'history-status'),
+      )
+      .catch((err) => this.logger.warn('Failed to publish messaging history status', { error: String(err) }));
+  }
+
+  /**
+   * Handle Baileys message-capping.update events.
+   * Read-only observability event: no WhatsApp side effects.
+   * @internal
+   */
+  handleMessageCappingUpdate(instanceId: string, info: unknown): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.whatsapp.message-capping-updated',
+        { instanceId, info, timestamp: Date.now() },
+        this.whatsappEventMeta(instanceId, 'message-capping'),
+      )
+      .catch((err) => this.logger.warn('Failed to publish message capping update', { error: String(err) }));
+  }
+
+  /**
+   * Handle Baileys settings.update events.
+   * Read-only observability event: no WhatsApp side effects.
+   * @internal
+   */
+  handleSettingsUpdate(instanceId: string, update: { setting?: string; value?: unknown }): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.whatsapp.settings-updated',
+        {
+          instanceId,
+          setting: update.setting ?? 'unknown',
+          value: update.value,
+          timestamp: Date.now(),
+        },
+        this.whatsappEventMeta(instanceId, `settings-${update.setting ?? 'unknown'}`),
+      )
+      .catch((err) => this.logger.warn('Failed to publish settings update', { error: String(err) }));
+  }
+
+  /**
+   * Handle Baileys chats.lock events.
+   * Read-only observability event: no WhatsApp side effects.
+   * @internal
+   */
+  handleChatLockUpdate(instanceId: string, update: { id?: string; locked?: boolean }): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.whatsapp.chat-lock-updated',
+        {
+          instanceId,
+          chatId: update.id ?? '',
+          locked: update.locked ?? false,
+          timestamp: Date.now(),
+        },
+        this.whatsappEventMeta(instanceId, `chat-lock-${update.id ?? 'unknown'}`),
+      )
+      .catch((err) => this.logger.warn('Failed to publish chat lock update', { error: String(err) }));
+  }
+
+  /**
+   * Handle Baileys group.member-tag.update events.
+   * Read-only observability event: no WhatsApp side effects.
+   * @internal
+   */
+  handleGroupMemberTagUpdate(
+    instanceId: string,
+    update: {
+      groupId?: string;
+      participant?: string;
+      participantAlt?: string;
+      label?: string;
+      messageTimestamp?: number;
+    },
+  ): void {
+    this.eventBus
+      .publishGeneric(
+        'custom.whatsapp.group-member-tag-updated',
+        {
+          instanceId,
+          groupId: update.groupId ?? '',
+          participant: update.participant ?? '',
+          participantAlt: update.participantAlt,
+          label: update.label ?? '',
+          messageTimestamp: update.messageTimestamp,
+          timestamp: Date.now(),
+        },
+        this.whatsappEventMeta(instanceId, `group-member-tag-${update.groupId ?? 'unknown'}`),
+      )
+      .catch((err) => this.logger.warn('Failed to publish group member tag update', { error: String(err) }));
+  }
+
   /**
    * Handle incoming call (voice/video)
    * @internal
@@ -3006,7 +3381,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
 
     for (const chat of chats) {
-      const c = chat as { id?: string; displayName?: string; name?: string; unreadCount?: number };
+      const c = chat as { id?: string; displayName?: string; name?: string; unreadCount?: number | null };
       if (!c.id) continue;
 
       // Always cache the JID — even without a name — so getKnownChatJids() discovers all chats
@@ -3014,9 +3389,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       cache.set(c.id, name ?? c.id);
 
       // Sync unread count from WhatsApp and cache for periodic refresh
-      if (c.unreadCount !== undefined) {
-        unreadCache.set(c.id, c.unreadCount);
-        this.emitChatUnreadUpdate(instanceId, c.id, c.unreadCount);
+      const unreadCount = c.unreadCount;
+      if (typeof unreadCount === 'number' && Number.isFinite(unreadCount)) {
+        unreadCache.set(c.id, unreadCount);
+        this.emitChatUnreadUpdate(instanceId, c.id, unreadCount);
       }
     }
 
@@ -3046,7 +3422,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
 
     for (const update of updates) {
-      const u = update as { id?: string; displayName?: string; name?: string; unreadCount?: number };
+      const u = update as { id?: string; displayName?: string; name?: string; unreadCount?: number | null };
       if (!u.id) continue;
 
       // Always ensure the JID is in the cache for discovery
@@ -3056,9 +3432,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       }
 
       // Sync unread count from WhatsApp (fires when user reads on phone or new messages arrive)
-      if (u.unreadCount !== undefined) {
-        unreadCache.set(u.id, u.unreadCount);
-        this.emitChatUnreadUpdate(instanceId, u.id, u.unreadCount);
+      const unreadCount = u.unreadCount;
+      if (typeof unreadCount === 'number' && Number.isFinite(unreadCount)) {
+        unreadCache.set(u.id, unreadCount);
+        this.emitChatUnreadUpdate(instanceId, u.id, unreadCount);
       }
     }
   }
@@ -3503,7 +3880,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const mediaResult = await tryDownloadMedia(msg, instanceId, msg.key.id, this.config.apiBaseUrl);
     if (mediaResult) {
       content.mediaUrl = mediaResult.mediaUrl;
-      // Note: content doesn't have mediaLocalPath field, but mediaUrl is enough for storage
+      content.localPath = mediaResult.mediaLocalPath;
+      content.mimeType = mediaResult.mimeType;
     }
 
     const chatId = msg.key.remoteJid;
@@ -3542,13 +3920,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const rawPayload: Record<string, unknown> = {
         ...(msg as unknown as Record<string, unknown>),
       };
+      if (content.localPath) rawPayload.mediaLocalPath = content.localPath;
       this.enrichPayloadWithChatName(rawPayload, instanceId, chatId);
+
+      const historySenderName = (msg as { pushName?: string | null }).pushName ?? undefined;
 
       await this.emitMessageReceived({
         instanceId,
         externalId: msg.key.id,
         chatId,
         from: senderId,
+        senderName: historySenderName,
+        chatName: typeof rawPayload.chatName === 'string' ? rawPayload.chatName : undefined,
         content: {
           type: content.type as ContentType,
           text: content.text || content.caption,
@@ -3620,13 +4003,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
       const meta = { instanceId, channelType: this.id };
 
-      // Publish sync.progress event
+      // Publish sync.progress event — omit `progress` when Baileys didn't report one
+      // so downstream can distinguish "unknown denominator" from "0%".
+      const payload: { instanceId: string; jobType: 'history-push'; fetched: number; progress?: number } = {
+        instanceId,
+        jobType: 'history-push',
+        fetched: totalFetched,
+      };
+      if (typeof progress === 'number') {
+        payload.progress = progress;
+      }
       this.eventBus
-        .publishGeneric(
-          'sync.progress' as const,
-          { instanceId, jobType: 'history-push', fetched: totalFetched, progress: progress ?? 0 },
-          meta,
-        )
+        .publishGeneric('sync.progress' as const, payload, meta)
         .catch((err) => this.logger.warn('Failed to publish sync.progress for history-push', { error: String(err) }));
 
       // Publish sync.completed when Baileys signals completion
@@ -3655,9 +4043,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Simplified version for history sync processing
    * @internal
    */
-  private extractHistoryMessageContent(
-    msg: WAMessage,
-  ): { type: string; text?: string; mediaUrl?: string; mimeType?: string; caption?: string } | null {
+  private extractHistoryMessageContent(msg: WAMessage): {
+    type: string;
+    text?: string;
+    mediaUrl?: string;
+    localPath?: string;
+    mimeType?: string;
+    caption?: string;
+  } | null {
     const message = msg.message;
     if (!message) return null;
 
@@ -3686,6 +4079,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private extractMediaContent(
     message: NonNullable<WAMessage['message']>,
   ): { type: string; mimeType?: string; caption?: string } | null {
+    const documentMessage = getDocumentMessage(message);
     if (message.imageMessage) {
       return {
         type: 'image',
@@ -3703,11 +4097,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         caption: message.videoMessage.caption ?? undefined,
       };
     }
-    if (message.documentMessage) {
+    if (documentMessage) {
       return {
         type: 'document',
-        mimeType: message.documentMessage.mimetype ?? 'application/octet-stream',
-        caption: message.documentMessage.caption ?? undefined,
+        mimeType: documentMessage.mimetype ?? 'application/octet-stream',
+        caption: documentMessage.caption ?? undefined,
       };
     }
     if (message.stickerMessage) {

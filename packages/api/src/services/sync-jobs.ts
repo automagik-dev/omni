@@ -189,6 +189,7 @@ export class SyncJobService {
     const updatedProgress: SyncJobProgress = {
       ...currentProgress,
       ...progress,
+      lastProgressAt: new Date().toISOString(),
     };
 
     const [updated] = await this.db

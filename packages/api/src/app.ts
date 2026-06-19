@@ -6,8 +6,9 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { type EventBus, createLogger } from '@omni/core';
-import type { Database } from '@omni/db';
+import type { Database, Instance } from '@omni/db';
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { serveStatic } from 'hono/bun';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
@@ -41,8 +42,32 @@ function getAllowedOrigins(): string[] | '*' {
   return envOrigins.split(',').map((origin) => origin.trim());
 }
 
-import { authMiddleware, requireInstanceAccess } from './middleware/auth';
+type A2AInstanceValidationError = {
+  body: { error: string };
+  status: 400 | 403 | 404 | 409;
+};
+
+function validateA2AInstance(instance: Instance | null): A2AInstanceValidationError | null {
+  if (!instance) {
+    return { body: { error: 'Instance not found' }, status: 404 };
+  }
+  if (instance.channel !== 'a2a') {
+    return { body: { error: 'Instance is not an A2A channel instance' }, status: 400 };
+  }
+  if (!instance.isActive) {
+    return { body: { error: 'A2A instance is inactive' }, status: 403 };
+  }
+  if (!instance.agentId) {
+    return { body: { error: 'A2A instance has no linked agent' }, status: 409 };
+  }
+  return null;
+}
+
+import { authMiddleware, requireAnyScope, requireInstanceAccess } from './middleware/auth';
 import { defaultBodyLimitMiddleware } from './middleware/body-limit';
+import { genieSignatureMiddleware } from './middleware/genie-signature';
+import { outputRedactorMiddleware } from './middleware/output-redactor';
+import { requireSignedInstanceMiddleware } from './middleware/require-signed-instance';
 import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
 
 import { createContextMiddleware } from './middleware/context';
@@ -51,10 +76,11 @@ import { rateLimitMiddleware } from './middleware/rate-limit';
 import { defaultTimeoutMiddleware } from './middleware/timeout';
 import { versionHeadersMiddleware } from './middleware/version-headers';
 import { createWebhookAuthMiddleware } from './middleware/webhook-auth';
-import { healthRoutes } from './routes/health';
+import { getHealth, healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
 import type { Services } from './services';
+import { resolveA2AAgentCard } from './services/a2a-discovery';
 import type { AppVariables } from './types';
 
 /**
@@ -109,7 +135,7 @@ export function createApp(
     '*',
     cors({
       origin: allowedOrigins === '*' ? '*' : allowedOrigins,
-      allowHeaders: ['Content-Type', 'x-api-key', 'x-request-id'],
+      allowHeaders: ['Authorization', 'Content-Type', 'x-api-key', 'x-request-id', 'A2A-Version', 'A2A-Extensions'],
       allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       exposeHeaders: ['x-request-id', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
       maxAge: 86400,
@@ -123,7 +149,7 @@ export function createApp(
   app.onError(errorHandler);
 
   // Root-level health redirect for external checkers (k8s probes, genie providers)
-  app.get('/health', (c) => c.redirect('/api/v2/health', 307));
+  app.get('/health', getHealth);
 
   // Health routes (no auth required)
   app.route('/api/v2', healthRoutes);
@@ -133,38 +159,71 @@ export function createApp(
 
   // ── A2A protocol endpoints — feature-flagged, disabled by default ───────────
   if (process.env.A2A_ENABLED === 'true') {
-    // Agent Card: GET /.well-known/agent.json?instanceId={id}
-    app.get('/.well-known/agent.json', async (c) => {
-      const channelRegistry = c.get('channelRegistry');
-      const plugin = channelRegistry?.get('a2a');
-      if (!plugin?.handleWebhook) {
-        return c.json({ error: 'A2A channel not available' }, 503);
+    // Agent Card: GET /.well-known/agent-card.json?instanceId={id}
+    const handleWellKnownAgentCard = async (c: Context<{ Variables: AppVariables }>) => {
+      const url = new URL(c.req.url);
+      const baseUrl = `${url.protocol}//${url.host}`;
+      const resolved = await resolveA2AAgentCard({
+        services: c.get('services'),
+        baseUrl,
+        instanceId: url.searchParams.get('instanceId'),
+        agentId: url.searchParams.get('agentId'),
+      });
+
+      if (!resolved) {
+        return c.json(
+          {
+            error: {
+              code: 'A2A_AGENT_CARD_NOT_FOUND',
+              message:
+                'No active A2A agent card matched the request. Pass instanceId or agentId when multiple agents exist.',
+            },
+          },
+          404,
+        );
       }
-      return plugin.handleWebhook(c.req.raw);
-    });
+
+      return c.json(resolved.card);
+    };
+
+    app.get('/.well-known/agent-card.json', handleWellKnownAgentCard);
+    app.get('/.well-known/agent.json', handleWellKnownAgentCard);
 
     // A2A JSON-RPC: POST /a2a/:instanceId (requires auth + instance-level access)
     const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     app.post(
       '/a2a/:instanceId',
       authMiddleware,
-      requireInstanceAccess((c) => c.req.param('instanceId')),
+      requireInstanceAccess((c) => c.req.param('instanceId') ?? ''),
+      requireAnyScope(['a2a:invoke', 'messages:send']),
       rateLimitMiddleware,
       async (c) => {
-        const instanceId = c.req.param('instanceId');
+        const instanceId = c.req.param('instanceId') ?? '';
         if (!UUID_REGEX.test(instanceId)) {
           return c.json({ error: 'Invalid instance ID format' }, 400);
+        }
+        const services = c.get('services');
+        const instance = await services.instances.getById(instanceId);
+        const validationError = validateA2AInstance(instance);
+        if (validationError) {
+          return c.json(validationError.body, validationError.status);
         }
         const channelRegistry = c.get('channelRegistry');
         const plugin = channelRegistry?.get('a2a');
         if (!plugin?.handleWebhook) {
           return c.json({ error: 'A2A channel not available' }, 503);
         }
-        return plugin.handleWebhook(c.req.raw);
+        const headers = new Headers(c.req.raw.headers);
+        const apiKey = c.get('apiKey');
+        if (apiKey?.id) {
+          headers.set('x-omni-api-key-id', apiKey.id);
+        }
+        return plugin.handleWebhook(new Request(c.req.raw, { headers }));
       },
     );
   } else {
     app.all('/a2a/*', (c) => c.json({ error: 'A2A channel not enabled. Set A2A_ENABLED=true.' }, 503));
+    app.get('/.well-known/agent-card.json', (c) => c.json({ error: 'A2A not enabled' }, 503));
     app.get('/.well-known/agent.json', (c) => c.json({ error: 'A2A not enabled' }, 503));
   }
 
@@ -229,10 +288,38 @@ export function createApp(
     return plugin.handleWebhook(c.req.raw);
   });
 
+  // Public Twilio WhatsApp webhook endpoint - auth-exempt, verified by X-Twilio-Signature in the plugin.
+  // Must be mounted before protectedApp so Twilio's servers (no x-api-key) can reach it.
+  app.post('/api/v2/channels/twilio-whatsapp/:instanceId/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('twilio-whatsapp');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Twilio WhatsApp plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Protected routes
   const protectedApp = new Hono<{ Variables: AppVariables }>();
   protectedApp.use('*', authMiddleware);
+  // Genie host signature verification (omni-host-fingerprint-trust group 4).
+  // Runs BEFORE scope-enforcer so `signedBy`/`signedByScopes` are populated
+  // on the context when scope-enforcer reads them for the per-host scope
+  // intersection added in group 5. Bearer-only requests fall through unchanged.
+  protectedApp.use('*', genieSignatureMiddleware);
+  // Per-instance signature requirement (omni-host-fingerprint-trust group 6).
+  // When `instance.requireGenieSignature = true` is set on the targeted
+  // instance, requests without a verified `signedBy` are rejected with 401.
+  // Default: false (additive rollout).
+  protectedApp.use('*', requireSignedInstanceMiddleware);
   protectedApp.use('*', scopeEnforcerMiddleware);
+  protectedApp.use('*', outputRedactorMiddleware);
   protectedApp.use('*', rateLimitMiddleware);
 
   // Mount v2 routes

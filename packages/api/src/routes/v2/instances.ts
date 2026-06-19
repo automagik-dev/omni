@@ -3,7 +3,7 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
+import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
 import type { SyncJobType } from '@omni/db';
 import { Hono } from 'hono';
@@ -22,16 +22,14 @@ const log = createLogger('api:instances');
 const instancesRoutes = new Hono<{ Variables: AppVariables }>();
 
 // Instance access middleware for :id routes
-const instanceAccess = requireInstanceAccess((c) => c.req.param('id'));
+const instanceAccess = requireInstanceAccess((c) => c.req.param('id') ?? '');
 
 // Query params schema for list
 const listQuerySchema = z.object({
   channel: z
     .string()
     .optional()
-    .transform(
-      (v) => v?.split(',') as ('whatsapp-baileys' | 'whatsapp-cloud' | 'discord' | 'slack' | 'telegram')[] | undefined,
-    ),
+    .transform((v) => v?.split(',') as z.infer<typeof ChannelTypeSchema>[] | undefined),
   status: z
     .string()
     .optional()
@@ -59,7 +57,7 @@ const createInstanceSchema = z.object({
   name: z.string().min(1).max(255).describe('Unique name for the instance'),
   channel: ChannelTypeSchema.describe('Channel type (e.g., whatsapp-baileys, discord)'),
   agentId: z.string().uuid().nullable().optional().describe('Agent UUID referencing agents table'),
-  agentTimeout: z.number().int().positive().default(60).describe('Agent timeout in seconds'),
+  agentTimeout: z.number().int().positive().default(600).describe('Agent timeout in seconds'),
   agentStreamMode: z.boolean().default(false).describe('Enable streaming responses'),
   agentReplyFilter: agentReplyFilterSchema.optional().nullable().describe('When agent should reply'),
   agentSessionStrategy: z
@@ -146,6 +144,17 @@ const createInstanceSchema = z.object({
   gupshupAuthToken: z.string().optional().nullable().describe('Gupshup Custom Integration auth token'),
   gupshupEventId: z.string().optional().nullable().describe('Gupshup event ID (default: nx_omni_agent_reply)'),
   webhookVerifyToken: z.string().optional().nullable().describe('Gupshup webhook verify token'),
+  twilioAccountSid: z.string().optional().nullable().describe('Twilio Account SID'),
+  twilioAuthToken: z.string().optional().nullable().describe('Twilio Auth Token'),
+  twilioFrom: z.string().optional().nullable().describe('Twilio WhatsApp sender address (whatsapp:+E164)'),
+  twilioMessagingServiceSid: z.string().optional().nullable().describe('Twilio Messaging Service SID'),
+  twilioStatusCallbackUrl: z.string().optional().nullable().describe('Twilio outbound status callback URL'),
+  twilioWebhookUrl: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('Public Twilio inbound webhook URL for signature validation'),
+  twilioValidateSignature: z.boolean().default(true).describe('Validate X-Twilio-Signature on webhooks'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
     .default('on')
@@ -187,6 +196,33 @@ const createInstanceSchema = z.object({
     .min(0)
     .default(600_000)
     .describe('Idle threshold in ms before the internal turn.stalled event fires (no channel message is ever sent)'),
+  bridgeTmuxSession: z
+    .string()
+    .min(1)
+    .max(64)
+    // Allow tmux-safe chars only: alphanumerics, `_`, `-`, `.`. Tmux reserves
+    // `/` and `:` as target separators; other punctuation can break shell
+    // quoting in downstream invocations. The consumer genie bridge also
+    // normalises `/` and `:` to `-`, but we reject them at the API boundary
+    // so users see the error early instead of surprise mutation.
+    .regex(
+      /^[a-zA-Z0-9_.-]+$/,
+      'Tmux session name must be alphanumeric with `_`, `-`, or `.` (no `/`, `:`, or whitespace).',
+    )
+    .optional()
+    .nullable()
+    .describe(
+      'Tmux session name the genie bridge will spawn into for this instance. Propagated via NATS env as GENIE_TMUX_SESSION. Null clears the override (genie falls back to its agent-level or name-based default). Max 64 chars, `[A-Za-z0-9_.-]` only.',
+    ),
+  // Per-instance signature enforcement (omni-host-fingerprint-trust group 6).
+  // Optional + default(false) — additive rollout: existing bearer flows keep
+  // working until an operator explicitly opts in.
+  requireGenieSignature: z
+    .boolean()
+    .default(false)
+    .describe(
+      'When true, requests targeting this instance MUST carry a verified X-Genie-Signature. Bearer-only requests get 401. Default: false (additive rollout).',
+    ),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
@@ -206,9 +242,15 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   gupshupAuthToken: z.string().nullable().optional(),
   gupshupEventId: z.string().nullable().optional(),
   webhookVerifyToken: z.string().nullable().optional(),
+  twilioAccountSid: z.string().nullable().optional(),
+  twilioAuthToken: z.string().nullable().optional(),
+  twilioFrom: z.string().nullable().optional(),
+  twilioMessagingServiceSid: z.string().nullable().optional(),
+  twilioStatusCallbackUrl: z.string().nullable().optional(),
+  twilioWebhookUrl: z.string().nullable().optional(),
   // NOT NULL fields in DB - cannot be set to null
   // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
-  // triggerMode, triggerRateLimit, messageDebounce* all have NOT NULL constraints
+  // triggerMode, messageDebounce* all have NOT NULL constraints
 
   // Override fields with .default() to strip the default — omitted keys must stay undefined
   // so PATCH only updates what is explicitly sent (not reset to defaults)
@@ -225,7 +267,57 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   messageSplitDelayFixedMs: z.number().int().min(0).optional(),
   messageSplitDelayMinMs: z.number().int().min(0).optional(),
   messageSplitDelayMaxMs: z.number().int().min(0).optional(),
+  twilioValidateSignature: z.boolean().optional(),
+  // Strip the .default(false) from the create-time schema so a PATCH that
+  // omits this key doesn't silently flip the stored value back to false.
+  requireGenieSignature: z.boolean().optional(),
 });
+
+/**
+ * Default reply filter applied when an agent is assigned without an explicit filter.
+ *
+ * Matches omni#443 acceptance criteria: assigning an agent implies the user wants
+ * responses, so an unset filter shouldn't silently drop messages. `mode: 'all'` +
+ * `onDm: true` makes the DM-first intent explicit on the stored row.
+ */
+export const DEFAULT_AGENT_REPLY_FILTER = {
+  mode: 'all' as const,
+  conditions: { onDm: true },
+};
+
+/**
+ * Decide whether to auto-set a default `agentReplyFilter` for an instance
+ * create/update request.
+ *
+ * Applies when:
+ *   - the request leaves the instance with an agent assigned
+ *     (`newAgentId` non-null, OR unchanged `currentAgentId` non-null), AND
+ *   - the caller did NOT explicitly send `agentReplyFilter` in this request
+ *     (`explicitReplyFilter === undefined`), AND
+ *   - the instance does not already have a reply filter stored
+ *     (`currentReplyFilter` is null/undefined).
+ *
+ * An explicit `null` in the request (user clearing the filter) is respected and
+ * returns `false`. Exported for unit testing.
+ *
+ * The trigger for update is "this request touches agentId" — bare field updates
+ * on an already-agent-assigned instance don't auto-populate. This matches the
+ * acceptance criteria in omni#443.
+ */
+export function shouldApplyDefaultReplyFilter(args: {
+  newAgentId: string | null | undefined;
+  currentAgentId: string | null | undefined;
+  explicitReplyFilter: unknown;
+  currentReplyFilter: unknown;
+  agentIdTouched: boolean;
+}): boolean {
+  if (!args.agentIdTouched) return false;
+  if (args.explicitReplyFilter !== undefined) return false;
+  const effectiveAgentId = args.newAgentId !== undefined ? args.newAgentId : args.currentAgentId;
+  if (!effectiveAgentId) return false;
+  if (args.currentReplyFilter != null) return false;
+  return true;
+}
 
 /**
  * Map the generic `token` field to the correct channel-specific DB column.
@@ -237,14 +329,23 @@ function resolveChannelToken(data: {
   telegramBotToken?: string | null;
   discordBotToken?: string | null;
   slackBotToken?: string | null;
+  twilioAuthToken?: string | null;
 }): string | undefined {
   // If a generic `token` was provided but no channel-specific field, persist it
-  if (data.token && !data.telegramBotToken && !data.discordBotToken && !data.slackBotToken) {
+  if (data.token && !data.telegramBotToken && !data.discordBotToken && !data.slackBotToken && !data.twilioAuthToken) {
     if (data.channel === 'telegram') data.telegramBotToken = data.token;
     else if (data.channel === 'discord') data.discordBotToken = data.token;
     else if (data.channel === 'slack') data.slackBotToken = data.token;
+    else if (data.channel === 'twilio-whatsapp') data.twilioAuthToken = data.token;
   }
-  return data.token ?? data.telegramBotToken ?? data.discordBotToken ?? data.slackBotToken ?? undefined;
+  return (
+    data.token ??
+    data.telegramBotToken ??
+    data.discordBotToken ??
+    data.slackBotToken ??
+    data.twilioAuthToken ??
+    undefined
+  );
 }
 
 function persistedTokenForChannel(instance: {
@@ -252,6 +353,7 @@ function persistedTokenForChannel(instance: {
   telegramBotToken?: string | null;
   discordBotToken?: string | null;
   slackBotToken?: string | null;
+  twilioAuthToken?: string | null;
 }): string | undefined {
   switch (instance.channel) {
     case 'telegram':
@@ -260,6 +362,8 @@ function persistedTokenForChannel(instance: {
       return instance.discordBotToken ?? undefined;
     case 'slack':
       return instance.slackBotToken ?? undefined;
+    case 'twilio-whatsapp':
+      return instance.twilioAuthToken ?? undefined;
     default:
       return undefined;
   }
@@ -274,6 +378,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'slackSigningSecret',
   'gupshupAuthToken',
   'webhookVerifyToken',
+  'twilioAuthToken',
 ] as const;
 
 /** Strip secret tokens from an instance before returning it in API responses */
@@ -348,28 +453,64 @@ type InstanceConnectionOptionsInput = {
   gupshupAuthToken?: string | null;
   gupshupEventId?: string | null;
   webhookVerifyToken?: string | null;
+  twilioAccountSid?: string | null;
+  twilioAuthToken?: string | null;
+  twilioFrom?: string | null;
+  twilioMessagingServiceSid?: string | null;
+  twilioStatusCallbackUrl?: string | null;
+  twilioWebhookUrl?: string | null;
+  twilioValidateSignature?: boolean | null;
 };
+
+function applyTelegramConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
+  options.telegramReactionLevel = input.telegramReactionLevel;
+}
+
+function applySlackConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
+  if (input.token) options.botToken = input.token;
+  if (input.slackAppToken) options.appToken = input.slackAppToken;
+  if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
+}
+
+function applyGupshupConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
+  if (input.gupshupCallbackUrl) options.gupshupCallbackUrl = input.gupshupCallbackUrl;
+  if (input.gupshupAuthToken) options.gupshupAuthToken = input.gupshupAuthToken;
+  if (input.gupshupEventId) options.gupshupEventId = input.gupshupEventId;
+  if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
+}
+
+function applyTwilioWhatsAppConnectionOptions(
+  options: Record<string, unknown>,
+  input: InstanceConnectionOptionsInput,
+): void {
+  if (input.twilioAccountSid) options.twilioAccountSid = input.twilioAccountSid;
+  if (input.twilioAuthToken) options.twilioAuthToken = input.twilioAuthToken;
+  if (input.twilioFrom) options.twilioFrom = input.twilioFrom;
+  if (input.twilioMessagingServiceSid) options.twilioMessagingServiceSid = input.twilioMessagingServiceSid;
+  if (input.twilioStatusCallbackUrl) options.twilioStatusCallbackUrl = input.twilioStatusCallbackUrl;
+  if (input.twilioWebhookUrl) options.twilioWebhookUrl = input.twilioWebhookUrl;
+  if (input.twilioValidateSignature !== undefined && input.twilioValidateSignature !== null) {
+    options.twilioValidateSignature = input.twilioValidateSignature;
+  }
+}
 
 function applyChannelSpecificConnectionOptions(
   options: Record<string, unknown>,
   input: InstanceConnectionOptionsInput,
 ): void {
-  if (input.channel === 'telegram') {
-    options.telegramReactionLevel = input.telegramReactionLevel;
-    return;
-  }
-
-  if (input.channel === 'slack') {
-    if (input.token) options.botToken = input.token;
-    if (input.slackAppToken) options.appToken = input.slackAppToken;
-    if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
-  }
-
-  if (input.channel === 'gupshup') {
-    if (input.gupshupCallbackUrl) options.gupshupCallbackUrl = input.gupshupCallbackUrl;
-    if (input.gupshupAuthToken) options.gupshupAuthToken = input.gupshupAuthToken;
-    if (input.gupshupEventId) options.gupshupEventId = input.gupshupEventId;
-    if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
+  switch (input.channel) {
+    case 'telegram':
+      applyTelegramConnectionOptions(options, input);
+      return;
+    case 'slack':
+      applySlackConnectionOptions(options, input);
+      return;
+    case 'gupshup':
+      applyGupshupConnectionOptions(options, input);
+      return;
+    case 'twilio-whatsapp':
+      applyTwilioWhatsAppConnectionOptions(options, input);
+      return;
   }
 }
 
@@ -433,7 +574,13 @@ async function triggerCreateConnection(
 /** Build DB update payload to persist tokens provided in a connect request */
 function buildTokenPersistUpdates(
   channel: string,
-  body: { token?: string; slackBotToken?: string; slackAppToken?: string; slackSigningSecret?: string },
+  body: {
+    token?: string;
+    slackBotToken?: string;
+    slackAppToken?: string;
+    slackSigningSecret?: string;
+    twilioAuthToken?: string;
+  },
 ): Record<string, string> {
   const updates: Record<string, string> = {};
   const tokenField = body.token ? channelTokenField(channel) : undefined;
@@ -442,6 +589,10 @@ function buildTokenPersistUpdates(
     if (body.slackBotToken) updates.slackBotToken = body.slackBotToken;
     if (body.slackAppToken) updates.slackAppToken = body.slackAppToken;
     if (body.slackSigningSecret) updates.slackSigningSecret = body.slackSigningSecret;
+  }
+  if (channel === 'twilio-whatsapp') {
+    if (body.twilioAuthToken) updates.twilioAuthToken = body.twilioAuthToken;
+    else if (body.token) updates.twilioAuthToken = body.token;
   }
   return updates;
 }
@@ -499,9 +650,21 @@ instancesRoutes.get('/supported-channels', async (c) => {
       description: 'Official WhatsApp Business API',
       loaded: false as const,
     },
+    {
+      id: 'twilio-whatsapp' as const,
+      name: 'Twilio WhatsApp',
+      description: 'WhatsApp via Twilio Programmable Messaging',
+      loaded: false as const,
+    },
     { id: 'discord' as const, name: 'Discord', description: 'Discord bot integration', loaded: false as const },
     { id: 'slack' as const, name: 'Slack', description: 'Slack bot integration', loaded: false as const },
     { id: 'telegram' as const, name: 'Telegram', description: 'Telegram bot integration', loaded: false as const },
+    {
+      id: 'a2a' as const,
+      name: 'A2A Protocol Server',
+      description: 'Agent-to-Agent protocol endpoint',
+      loaded: false as const,
+    },
   ];
 
   const unloadedChannels = staticChannels.filter((ch) => !loadedIds.has(ch.id));
@@ -531,6 +694,25 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
+  // omni#443: Auto-set reply filter when agent is assigned but no filter is set.
+  // Prevents the silent-drop bug where a newly created instance with `agentId`
+  // but `agentReplyFilter: null` receives messages but never dispatches.
+  if (
+    shouldApplyDefaultReplyFilter({
+      newAgentId: data.agentId,
+      currentAgentId: null,
+      explicitReplyFilter: data.agentReplyFilter,
+      currentReplyFilter: null,
+      agentIdTouched: data.agentId !== undefined,
+    })
+  ) {
+    (data as { agentReplyFilter?: typeof DEFAULT_AGENT_REPLY_FILTER }).agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
+    log.info('Agent assigned without reply filter — defaulting to mode:all onDm:true (omni#443)', {
+      agentId: data.agentId,
+      defaultFilter: DEFAULT_AGENT_REPLY_FILTER,
+    });
+  }
+
   // Map generic `token` → channel-specific DB column + resolve connect token
   const connectToken = resolveChannelToken(data);
 
@@ -548,6 +730,13 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     gupshupAuthToken: instance.gupshupAuthToken,
     gupshupEventId: instance.gupshupEventId,
     webhookVerifyToken: instance.webhookVerifyToken,
+    twilioAccountSid: instance.twilioAccountSid,
+    twilioAuthToken: instance.twilioAuthToken,
+    twilioFrom: instance.twilioFrom,
+    twilioMessagingServiceSid: instance.twilioMessagingServiceSid,
+    twilioStatusCallbackUrl: instance.twilioStatusCallbackUrl,
+    twilioWebhookUrl: instance.twilioWebhookUrl,
+    twilioValidateSignature: instance.twilioValidateSignature,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -572,15 +761,36 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const data = c.req.valid('json');
   const services = c.get('services');
 
-  // Detect agent assignment changes for auto-key provisioning
+  // Detect agent assignment changes for auto-key provisioning + auto reply-filter (omni#443)
   let oldAgentId: string | null | undefined;
+  let currentReplyFilter: unknown = null;
   if (data.agentId !== undefined) {
     try {
       const current = await services.instances.getById(id);
       oldAgentId = current.agentId;
+      currentReplyFilter = current.agentReplyFilter;
     } catch {
       // Instance not found — update will throw
     }
+  }
+
+  // omni#443: Auto-set reply filter when an agent is being assigned to this instance
+  // and neither the request nor the existing row provides one. Prevents silent drops.
+  if (
+    shouldApplyDefaultReplyFilter({
+      newAgentId: data.agentId,
+      currentAgentId: oldAgentId,
+      explicitReplyFilter: data.agentReplyFilter,
+      currentReplyFilter,
+      agentIdTouched: data.agentId !== undefined,
+    })
+  ) {
+    (data as { agentReplyFilter?: typeof DEFAULT_AGENT_REPLY_FILTER }).agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
+    log.info('Agent assigned without reply filter — defaulting to mode:all onDm:true (omni#443)', {
+      instanceId: id,
+      agentId: data.agentId,
+      defaultFilter: DEFAULT_AGENT_REPLY_FILTER,
+    });
   }
 
   const instance = await services.instances.update(id, data);
@@ -851,6 +1061,13 @@ const connectInstanceSchema = z.object({
   slackSigningSecret: z.string().optional().describe('Slack signing secret'),
   forceNewQr: z.boolean().optional().describe('Force new QR code for WhatsApp (re-authentication)'),
   gupshupCallbackUrl: z.string().optional().describe('Gupshup webhook callback URL (persisted for reconnection)'),
+  twilioAccountSid: z.string().optional().describe('Twilio Account SID'),
+  twilioAuthToken: z.string().optional().describe('Twilio Auth Token'),
+  twilioFrom: z.string().optional().describe('Twilio WhatsApp sender address (whatsapp:+E164)'),
+  twilioMessagingServiceSid: z.string().optional().describe('Twilio Messaging Service SID'),
+  twilioStatusCallbackUrl: z.string().optional().describe('Twilio outbound status callback URL'),
+  twilioWebhookUrl: z.string().optional().describe('Public Twilio inbound webhook URL for signature validation'),
+  twilioValidateSignature: z.boolean().optional().describe('Validate X-Twilio-Signature on webhooks'),
   whatsapp: z
     .object({
       syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
@@ -858,6 +1075,80 @@ const connectInstanceSchema = z.object({
     .optional()
     .describe('WhatsApp-specific connection options'),
 });
+
+type ConnectInstanceBody = z.infer<typeof connectInstanceSchema>;
+type InstanceRecord = Awaited<ReturnType<Services['instances']['getById']>>;
+
+function buildConnectConnectionOptions(
+  instance: InstanceRecord,
+  body: ConnectInstanceBody,
+  forceNewQr: boolean,
+): Record<string, unknown> {
+  const connectToken = body.token ?? persistedTokenForChannel(instance);
+  return buildInstanceConnectionOptions({
+    channel: instance.channel,
+    forceNewQr,
+    token: connectToken,
+    telegramReactionLevel: instance.telegramReactionLevel,
+    slackAppToken: body.slackAppToken ?? instance.slackAppToken,
+    slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
+    whatsapp: body.whatsapp,
+    gupshupCallbackUrl: instance.gupshupCallbackUrl,
+    gupshupAuthToken: instance.gupshupAuthToken,
+    gupshupEventId: instance.gupshupEventId,
+    webhookVerifyToken: instance.webhookVerifyToken,
+    twilioAccountSid: body.twilioAccountSid ?? instance.twilioAccountSid,
+    twilioAuthToken: body.twilioAuthToken ?? body.token ?? instance.twilioAuthToken,
+    twilioFrom: body.twilioFrom ?? instance.twilioFrom,
+    twilioMessagingServiceSid: body.twilioMessagingServiceSid ?? instance.twilioMessagingServiceSid,
+    twilioStatusCallbackUrl: body.twilioStatusCallbackUrl ?? instance.twilioStatusCallbackUrl,
+    twilioWebhookUrl: body.twilioWebhookUrl ?? instance.twilioWebhookUrl,
+    twilioValidateSignature: body.twilioValidateSignature ?? instance.twilioValidateSignature,
+  });
+}
+
+function hydrateConnectionOptionsForInstance(
+  plugin: ChannelPlugin,
+  instance: InstanceRecord,
+  options: Record<string, unknown>,
+): void {
+  if ('loadGuildConfigs' in plugin && instance.guildConfigOverrides) {
+    (plugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
+      instance.id,
+      instance.guildConfigOverrides as Record<string, unknown>,
+    );
+  }
+
+  if (instance.discordPresence) {
+    options.presence = instance.discordPresence;
+  }
+
+  if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
+    options.whatsapp = {
+      ...(options.whatsapp as Record<string, unknown> | undefined),
+      markOnlineOnConnect: instance.markOnlineOnConnect,
+    };
+  }
+}
+
+function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInstanceBody): Record<string, unknown> {
+  const updates: Record<string, unknown> = {
+    isActive: true,
+    ...buildTokenPersistUpdates(instance.channel, body),
+  };
+
+  if (instance.channel !== 'twilio-whatsapp') return updates;
+
+  return {
+    ...updates,
+    twilioAccountSid: body.twilioAccountSid ?? instance.twilioAccountSid,
+    twilioFrom: body.twilioFrom ?? instance.twilioFrom,
+    twilioMessagingServiceSid: body.twilioMessagingServiceSid ?? instance.twilioMessagingServiceSid,
+    twilioStatusCallbackUrl: body.twilioStatusCallbackUrl ?? instance.twilioStatusCallbackUrl,
+    twilioWebhookUrl: body.twilioWebhookUrl ?? instance.twilioWebhookUrl,
+    twilioValidateSignature: body.twilioValidateSignature ?? instance.twilioValidateSignature,
+  };
+}
 
 /**
  * POST /instances/:id/connect - Connect instance
@@ -882,20 +1173,7 @@ instancesRoutes.post(
 
     const instance = await services.instances.getById(id);
 
-    const connectToken = body.token ?? persistedTokenForChannel(instance);
-    const connectionOptions = buildInstanceConnectionOptions({
-      channel: instance.channel,
-      forceNewQr,
-      token: connectToken,
-      telegramReactionLevel: instance.telegramReactionLevel,
-      slackAppToken: body.slackAppToken ?? instance.slackAppToken,
-      slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
-      whatsapp: body.whatsapp,
-      gupshupCallbackUrl: instance.gupshupCallbackUrl,
-      gupshupAuthToken: instance.gupshupAuthToken,
-      gupshupEventId: instance.gupshupEventId,
-      webhookVerifyToken: instance.webhookVerifyToken,
-    });
+    const connectionOptions = buildConnectConnectionOptions(instance, body, forceNewQr);
 
     // Trigger connection via channel plugin
     if (!channelRegistry) {
@@ -910,26 +1188,7 @@ instancesRoutes.post(
       );
     }
 
-    // Wire: load guild config overrides into plugin before connection
-    if ('loadGuildConfigs' in plugin && instance.guildConfigOverrides) {
-      (plugin as { loadGuildConfigs: (iId: string, cfg: Record<string, unknown>) => void }).loadGuildConfigs(
-        id,
-        instance.guildConfigOverrides as Record<string, unknown>,
-      );
-    }
-
-    // Re-apply persisted presence on reconnect (plugin reads options.presence in handleConnected)
-    if (instance.discordPresence) {
-      connectionOptions.presence = instance.discordPresence;
-    }
-
-    // Pass per-instance markOnlineOnConnect to WhatsApp plugin (GH #310)
-    if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
-      connectionOptions.whatsapp = {
-        ...(connectionOptions.whatsapp as Record<string, unknown> | undefined),
-        markOnlineOnConnect: instance.markOnlineOnConnect,
-      };
-    }
+    hydrateConnectionOptionsForInstance(plugin, instance, connectionOptions);
 
     const errorMessage = await connectInstanceWithPlugin(plugin, id, connectionOptions);
     if (errorMessage) {
@@ -944,11 +1203,8 @@ instancesRoutes.post(
       );
     }
 
-    // Update database — persist tokens if new ones were provided
-    const updated = await services.instances.update(id, {
-      isActive: true,
-      ...buildTokenPersistUpdates(instance.channel, body),
-    });
+    // Update database - persist tokens if new ones were provided
+    const updated = await services.instances.update(id, buildConnectPersistUpdates(instance, body));
 
     return c.json({
       data: {
@@ -1025,6 +1281,15 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     if (instance.channel === 'slack') {
       applySlackConnectOptions(restartOptions, instance);
+    }
+    if (instance.channel === 'twilio-whatsapp') {
+      restartOptions.twilioAccountSid = instance.twilioAccountSid;
+      restartOptions.twilioAuthToken = instance.twilioAuthToken;
+      restartOptions.twilioFrom = instance.twilioFrom;
+      restartOptions.twilioMessagingServiceSid = instance.twilioMessagingServiceSid;
+      restartOptions.twilioStatusCallbackUrl = instance.twilioStatusCallbackUrl;
+      restartOptions.twilioWebhookUrl = instance.twilioWebhookUrl;
+      restartOptions.twilioValidateSignature = instance.twilioValidateSignature;
     }
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
@@ -2092,6 +2357,71 @@ instancesRoutes.delete('/:id/profile/picture', instanceAccess, async (c) => {
   }
 });
 
+const groupParticipantActionSchema = z.enum(['add', 'remove', 'promote', 'demote']);
+const groupSettingSchema = z.enum(['announcement', 'not_announcement', 'locked', 'unlocked']);
+
+const groupParticipantsSchema = z.object({
+  participants: z.array(z.string().min(1)).min(1).describe('Phone numbers or JIDs to mutate'),
+});
+
+const groupParticipantsPatchSchema = groupParticipantsSchema.extend({
+  action: groupParticipantActionSchema.describe('Participant mutation action'),
+});
+
+const updateGroupSubjectSchema = z.object({
+  subject: z.string().min(1).max(100).describe('New group name/subject'),
+});
+
+const updateGroupDescriptionSchema = z.object({
+  description: z.string().max(2048).describe('New group description. Empty string clears the description.'),
+});
+
+const updateGroupSettingsSchema = z.object({
+  setting: groupSettingSchema.describe('Group setting to apply'),
+});
+
+const patchGroupSchema = z
+  .object({
+    subject: z.string().min(1).max(100).optional(),
+    description: z.string().max(2048).optional(),
+    setting: groupSettingSchema.optional(),
+  })
+  .refine((value) => value.subject !== undefined || value.description !== undefined || value.setting !== undefined, {
+    message: 'At least one of subject, description, or setting is required',
+  });
+
+async function resolveInstancePlugin(
+  services: Services,
+  channelRegistry: ChannelRegistry | null | undefined,
+  instanceId: string,
+): Promise<
+  { ok: true; plugin: ChannelPlugin } | { ok: false; status: 400 | 503; error: { code: string; message: string } }
+> {
+  const instance = await services.instances.getById(instanceId);
+
+  if (!channelRegistry) {
+    return { ok: false, status: 503, error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } };
+  }
+
+  const plugin = channelRegistry.get(instance.channel as Parameters<typeof channelRegistry.get>[0]);
+  if (!plugin) {
+    return {
+      ok: false,
+      status: 400,
+      error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` },
+    };
+  }
+
+  return { ok: true, plugin };
+}
+
+function participantUpdateResponse(result: GroupParticipantUpdateResult) {
+  return {
+    ...result,
+    changedCount: result.participants.length,
+  };
+}
+
 // ============================================================================
 // Group Create
 // ============================================================================
@@ -2145,6 +2475,342 @@ instancesRoutes.post(
     return c.json({ data: result }, 201);
   },
 );
+
+// ============================================================================
+// Group Participant Mutations
+// ============================================================================
+
+/**
+ * POST /instances/:id/groups/:groupJid/participants - Add participants to a group
+ */
+instancesRoutes.post(
+  '/:id/groups/:groupJid/participants',
+  instanceAccess,
+  zValidator('json', groupParticipantsSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { participants } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupParticipants !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group participant updates' } },
+        400,
+      );
+    }
+
+    try {
+      const result = await resolved.plugin.updateGroupParticipants(id, groupJid, participants, 'add');
+      return c.json({ success: true, data: participantUpdateResponse(result) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_PARTICIPANTS_UPDATE_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * POST /instances/:id/groups/:groupJid/participants/:action - Remove/promote/demote participants
+ */
+instancesRoutes.post(
+  '/:id/groups/:groupJid/participants/:action',
+  instanceAccess,
+  zValidator('json', groupParticipantsSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const parsedAction = groupParticipantActionSchema.safeParse(c.req.param('action'));
+    const { participants } = c.req.valid('json');
+
+    if (!parsedAction.success) {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Invalid group participant action. Expected add, remove, promote, or demote.',
+          },
+        },
+        400,
+      );
+    }
+
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupParticipants !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group participant updates' } },
+        400,
+      );
+    }
+
+    try {
+      const result = await resolved.plugin.updateGroupParticipants(id, groupJid, participants, parsedAction.data);
+      return c.json({ success: true, data: participantUpdateResponse(result) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_PARTICIPANTS_UPDATE_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * PATCH /instances/:id/groups/:groupJid/participants - Mutate participants with body.action
+ */
+instancesRoutes.patch(
+  '/:id/groups/:groupJid/participants',
+  instanceAccess,
+  zValidator('json', groupParticipantsPatchSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { action, participants } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupParticipants !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group participant updates' } },
+        400,
+      );
+    }
+
+    try {
+      const result = await resolved.plugin.updateGroupParticipants(id, groupJid, participants, action);
+      return c.json({ success: true, data: participantUpdateResponse(result) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_PARTICIPANTS_UPDATE_FAILED', message } }, 500);
+    }
+  },
+);
+
+// ============================================================================
+// Group Metadata Mutations
+// ============================================================================
+
+/**
+ * PATCH /instances/:id/groups/:groupJid - Update group subject, description, or settings
+ */
+instancesRoutes.patch('/:id/groups/:groupJid', instanceAccess, zValidator('json', patchGroupSchema), async (c) => {
+  const id = c.req.param('id');
+  const groupJid = c.req.param('groupJid');
+  const body = c.req.valid('json');
+  const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+  if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+  if (body.subject !== undefined && typeof resolved.plugin.updateGroupSubject !== 'function') {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group rename' } }, 400);
+  }
+  if (body.description !== undefined && typeof resolved.plugin.updateGroupDescription !== 'function') {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group description updates' } },
+      400,
+    );
+  }
+  if (body.setting !== undefined && typeof resolved.plugin.updateGroupSettings !== 'function') {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group settings updates' } }, 400);
+  }
+
+  try {
+    const updated: string[] = [];
+    if (body.subject !== undefined) {
+      await resolved.plugin.updateGroupSubject?.(id, groupJid, body.subject);
+      updated.push('subject');
+    }
+    if (body.description !== undefined) {
+      await resolved.plugin.updateGroupDescription?.(id, groupJid, body.description);
+      updated.push('description');
+    }
+    if (body.setting !== undefined) {
+      await resolved.plugin.updateGroupSettings?.(id, groupJid, body.setting);
+      updated.push('settings');
+    }
+
+    return c.json({ success: true, data: { instanceId: id, groupJid, updated, ...body } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: { code: 'GROUP_UPDATE_FAILED', message } }, 500);
+  }
+});
+
+/**
+ * PUT /instances/:id/groups/:groupJid/subject - Rename a group
+ */
+instancesRoutes.put(
+  '/:id/groups/:groupJid/subject',
+  instanceAccess,
+  zValidator('json', updateGroupSubjectSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { subject } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupSubject !== 'function') {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group rename' } }, 400);
+    }
+
+    try {
+      await resolved.plugin.updateGroupSubject(id, groupJid, subject);
+      return c.json({ success: true, data: { instanceId: id, groupJid, subject, action: 'group_subject_updated' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_RENAME_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * POST /instances/:id/groups/:groupJid/subject - Rename a group
+ */
+instancesRoutes.post(
+  '/:id/groups/:groupJid/subject',
+  instanceAccess,
+  zValidator('json', updateGroupSubjectSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { subject } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupSubject !== 'function') {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group rename' } }, 400);
+    }
+
+    try {
+      await resolved.plugin.updateGroupSubject(id, groupJid, subject);
+      return c.json({ success: true, data: { instanceId: id, groupJid, subject, action: 'group_subject_updated' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_RENAME_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * PUT /instances/:id/groups/:groupJid/description - Set or clear group description
+ */
+instancesRoutes.put(
+  '/:id/groups/:groupJid/description',
+  instanceAccess,
+  zValidator('json', updateGroupDescriptionSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { description } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupDescription !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group description updates' } },
+        400,
+      );
+    }
+
+    try {
+      await resolved.plugin.updateGroupDescription(id, groupJid, description);
+      return c.json({
+        success: true,
+        data: { instanceId: id, groupJid, description, action: 'group_description_updated' },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_DESCRIPTION_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * POST /instances/:id/groups/:groupJid/description - Set or clear group description
+ */
+instancesRoutes.post(
+  '/:id/groups/:groupJid/description',
+  instanceAccess,
+  zValidator('json', updateGroupDescriptionSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { description } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupDescription !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group description updates' } },
+        400,
+      );
+    }
+
+    try {
+      await resolved.plugin.updateGroupDescription(id, groupJid, description);
+      return c.json({
+        success: true,
+        data: { instanceId: id, groupJid, description, action: 'group_description_updated' },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_DESCRIPTION_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * POST /instances/:id/groups/:groupJid/settings - Update group settings
+ */
+instancesRoutes.post(
+  '/:id/groups/:groupJid/settings',
+  instanceAccess,
+  zValidator('json', updateGroupSettingsSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const groupJid = c.req.param('groupJid');
+    const { setting } = c.req.valid('json');
+    const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+    if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+    if (typeof resolved.plugin.updateGroupSettings !== 'function') {
+      return c.json(
+        { error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support group settings updates' } },
+        400,
+      );
+    }
+
+    try {
+      await resolved.plugin.updateGroupSettings(id, groupJid, setting);
+      return c.json({ success: true, data: { instanceId: id, groupJid, setting, action: 'group_settings_updated' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return c.json({ error: { code: 'GROUP_SETTINGS_FAILED', message } }, 500);
+    }
+  },
+);
+
+/**
+ * POST /instances/:id/groups/:groupJid/leave - Leave a group
+ */
+instancesRoutes.post('/:id/groups/:groupJid/leave', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const groupJid = c.req.param('groupJid');
+  const resolved = await resolveInstancePlugin(c.get('services'), c.get('channelRegistry'), id);
+
+  if (!resolved.ok) return c.json({ error: resolved.error }, resolved.status);
+  if (typeof resolved.plugin.leaveGroup !== 'function') {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Plugin does not support leaving groups' } }, 400);
+  }
+
+  try {
+    await resolved.plugin.leaveGroup(id, groupJid);
+    return c.json({ success: true, data: { instanceId: id, groupJid, left: true } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: { code: 'GROUP_LEAVE_FAILED', message } }, 500);
+  }
+});
 
 // ============================================================================
 // C3: Group Invite Links

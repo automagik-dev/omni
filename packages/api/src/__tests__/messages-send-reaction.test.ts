@@ -59,8 +59,11 @@ describeWithDb('POST /messages/send/reaction — fromMe resolution (#386)', () =
   let db: Database;
   let testInstance: Instance;
   let testChat: { id: string; externalId: string };
+  let groupChat: { id: string; externalId: string };
   let inboundMessage: { id: string; externalId: string };
   let outboundMessage: { id: string; externalId: string };
+  let groupInboundMessage: { id: string; externalId: string };
+  const groupParticipant = '178035101794451@lid';
   const insertedInstanceIds: string[] = [];
   const insertedChatIds: string[] = [];
   const insertedMessageIds: string[] = [];
@@ -93,6 +96,20 @@ describeWithDb('POST /messages/send/reaction — fromMe resolution (#386)', () =
     testChat = { id: chat.id, externalId: chat.externalId };
     insertedChatIds.push(chat.id);
 
+    const [group] = await db
+      .insert(chats)
+      .values({
+        instanceId: testInstance.id,
+        externalId: '120363424772797713@g.us',
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+        name: 'React Test Group',
+      })
+      .returning();
+    if (!group) throw new Error('Failed to create test group chat');
+    groupChat = { id: group.id, externalId: group.externalId };
+    insertedChatIds.push(group.id);
+
     const [inbound] = await db
       .insert(messages)
       .values({
@@ -109,21 +126,56 @@ describeWithDb('POST /messages/send/reaction — fromMe resolution (#386)', () =
     inboundMessage = { id: inbound.id, externalId: inbound.externalId };
     insertedMessageIds.push(inbound.id);
 
+    const outboundExternalId = `OUTBOUND-${Date.now()}`;
     const [outbound] = await db
       .insert(messages)
       .values({
         chatId: testChat.id,
-        externalId: `OUTBOUND-${Date.now()}`,
+        externalId: outboundExternalId,
         source: 'realtime',
         messageType: 'text',
         textContent: 'Outbound message',
         platformTimestamp: new Date(),
         isFromMe: true,
+        rawPayload: {
+          key: {
+            id: outboundExternalId,
+            fromMe: true,
+            remoteJid: testChat.externalId,
+            participant: '5511999999999@s.whatsapp.net',
+          },
+        },
       })
       .returning();
     if (!outbound) throw new Error('Failed to create outbound message');
     outboundMessage = { id: outbound.id, externalId: outbound.externalId };
     insertedMessageIds.push(outbound.id);
+
+    const [groupInbound] = await db
+      .insert(messages)
+      .values({
+        chatId: groupChat.id,
+        externalId: '3AAFEE9E6DB2E7864DE2',
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Inbound group message',
+        platformTimestamp: new Date(),
+        isFromMe: false,
+        rawPayload: {
+          key: {
+            id: '3AAFEE9E6DB2E7864DE2',
+            fromMe: false,
+            remoteJid: groupChat.externalId,
+            participant: groupParticipant,
+            participantAlt: '5511947879044@s.whatsapp.net',
+            addressingMode: 'lid',
+          },
+        },
+      })
+      .returning();
+    if (!groupInbound) throw new Error('Failed to create group inbound message');
+    groupInboundMessage = { id: groupInbound.id, externalId: groupInbound.externalId };
+    insertedMessageIds.push(groupInbound.id);
   });
 
   afterAll(async () => {
@@ -186,6 +238,30 @@ describeWithDb('POST /messages/send/reaction — fromMe resolution (#386)', () =
     expect(outgoing.metadata?.fromMe).toBe(false);
   });
 
+  test('target group message from another participant includes participant key metadata', async () => {
+    const sendMessageMock = mock(async () => ({ success: true, messageId: 'REACT-GROUP-1', timestamp: Date.now() }));
+    const { app } = createTestApp(sendMessageMock);
+
+    const res = await app.request('/messages/send/reaction', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instanceId: testInstance.id,
+        to: groupChat.externalId,
+        messageId: groupInboundMessage.externalId,
+        emoji: '👍',
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    const outgoing = (sendMessageMock.mock.calls[0] as unknown[])[1] as {
+      metadata?: { fromMe?: boolean; targetParticipant?: string };
+    };
+    expect(outgoing.metadata?.fromMe).toBe(false);
+    expect(outgoing.metadata?.targetParticipant).toBe(groupParticipant);
+  });
+
   test('target message found and outbound → fromMe=true (sourced from DB)', async () => {
     const sendMessageMock = mock(async () => ({ success: true, messageId: 'REACT-2', timestamp: Date.now() }));
     const { app } = createTestApp(sendMessageMock);
@@ -203,9 +279,10 @@ describeWithDb('POST /messages/send/reaction — fromMe resolution (#386)', () =
 
     expect(res.status).toBe(200);
     const outgoing = (sendMessageMock.mock.calls[0] as unknown[])[1] as {
-      metadata?: { fromMe?: boolean };
+      metadata?: { fromMe?: boolean; targetParticipant?: string };
     };
     expect(outgoing.metadata?.fromMe).toBe(true);
+    expect(outgoing.metadata?.targetParticipant).toBeUndefined();
   });
 
   test('target message NOT in DB → fromMe is undefined so plugin heuristic decides (#386)', async () => {

@@ -4,8 +4,38 @@
  * Tracks message lifecycle checkpoints (T0→T11) for latency measurement.
  * Singleton service with configurable TTL, sampling rate, and LRU eviction.
  *
+ * Augmented (group 2.2 of observability-hub): each `recordCheckpoint`
+ * also emits an OTel span event on the active span when tracing is
+ * initialized via `@opentelemetry/api`. No-op when not initialized — the
+ * in-memory journey remains the authoritative local store.
+ *
  * @see .wishes/message-journey-tracing/message-journey-tracing-wish.md
  */
+
+import { trace } from '@opentelemetry/api';
+
+/**
+ * Emit a span event on the active OTel span for a given checkpoint.
+ *
+ * Backend-neutral: relies only on the lightweight `@opentelemetry/api`
+ * package. The actual SDK / exporter is configured by the host (see
+ * `packages/api/src/tracing.ts`). When no SDK is initialized, the
+ * default no-op tracer returns a no-op span — no events fire, zero cost.
+ */
+function emitCheckpointSpanEvent(stage: string, name: string, correlationId: string, timestamp: number): void {
+  try {
+    const span = trace.getActiveSpan();
+    if (!span) return;
+    span.addEvent(`journey.${stage}`, {
+      'journey.stage': stage,
+      'journey.stage_name': name,
+      'journey.correlation_id': correlationId,
+      'journey.timestamp_ms': timestamp,
+    });
+  } catch {
+    // best-effort — never throw from instrumentation path
+  }
+}
 
 /** Stage definitions for the message journey */
 export const JOURNEY_STAGES = {
@@ -194,6 +224,13 @@ export class JourneyTracker {
     if (stage === 'T11') {
       entry.journey.completedAt = timestamp;
     }
+
+    // Mirror checkpoint as an OTel span event on the active span when
+    // tracing is initialized. No-op when @opentelemetry/api is not loaded
+    // or no span is active. The in-memory journey above is the authoritative
+    // store; this is fan-out for cross-service correlation in the configured
+    // OTel backend.
+    emitCheckpointSpanEvent(stage, name, correlationId, timestamp);
   }
 
   /** Get a journey by correlation ID, or null if not found */

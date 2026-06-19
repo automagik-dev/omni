@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omni-sdk"
-version = "2.0.0"
+version = "2.260530.1"
 description = "Python SDK for Omni v2 API"
 readme = "README.md"
 license = {text = "MIT"}
@@ -33,9 +33,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/anthropics/omni-v2"
-Documentation = "https://github.com/anthropics/omni-v2#readme"
-Repository = "https://github.com/anthropics/omni-v2"
+Homepage = "https://github.com/automagik-dev/omni"
+Documentation = "https://github.com/automagik-dev/omni#readme"
+Repository = "https://github.com/automagik-dev/omni"
 
 [tool.setuptools.packages.find]
 where = ["."]

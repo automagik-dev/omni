@@ -169,7 +169,7 @@ Source: `packages/api/src/routes/v2/messages.ts`
 ```yaml
 GET    /api/v2/messages                       # List messages
   Query: chatId?, source?, messageType?, status?, hasMedia?,
-         senderPersonId?, since?, until?, search?, limit (1-100), cursor?
+         senderPersonId?, externalId?, since?, until?, search?, limit (1-100), cursor?
 
 GET    /api/v2/messages/by-external           # Find by external ID
   Query: chatId, externalId

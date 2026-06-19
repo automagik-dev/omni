@@ -183,6 +183,83 @@
       "when": 1776528200000,
       "tag": "0025_panoramic_sinister_six",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1776744000000,
+      "tag": "0026_agent_key_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1776766900000,
+      "tag": "0027_bridge_tmux_session",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1777000000000,
+      "tag": "0028_drop_trigger_rate_limit",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1777200000000,
+      "tag": "0029_processed_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1777300000000,
+      "tag": "0030_twilio_whatsapp_channel",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1777400000000,
+      "tag": "0031_reconcile_gupshup_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1777500000000,
+      "tag": "0032_genie_hosts",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1777590000000,
+      "tag": "0033_close_contact_logs",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1777680000000,
+      "tag": "0034_instances_require_genie_signature",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1777770000000,
+      "tag": "0035_unstick_redirected_sac_terminals",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1777860000000,
+      "tag": "0036_timestamptz_migration",
+      "breakpoints": true
     }
   ]
 }

@@ -16,14 +16,14 @@ import { beforeEach, describe, expect, it, mock } from 'bun:test';
 // Mock the nats module before importing the provider
 // ---------------------------------------------------------------------------
 
-type CapturedPublish = { subject: string; data: string };
+type CapturedPublish = { subject: string; data: string; options?: { headers?: Map<string, string> } };
 
 const publishCalls: CapturedPublish[] = [];
 let lastSubscribedSubject: string | null = null;
 const pendingReplies: Array<{ subject: string; data: string }> = [];
 
-const publishSpy = mock((subject: string, data: Uint8Array) => {
-  publishCalls.push({ subject, data: new TextDecoder().decode(data) });
+const publishSpy = mock((subject: string, data: Uint8Array, options?: { headers?: Map<string, string> }) => {
+  publishCalls.push({ subject, data: new TextDecoder().decode(data), options });
 });
 
 // A minimal async iterable subscription that yields any pending replies
@@ -66,10 +66,22 @@ function createSubscription(subject: string) {
 }
 
 mock.module('nats', () => ({
+  AckPolicy: { Explicit: 'explicit' },
+  DeliverPolicy: { All: 'all', Last: 'last', New: 'new', StartTime: 'by_start_time' },
+  RetentionPolicy: { Limits: 'limits' },
   StringCodec: () => ({
     encode: (s: string) => new TextEncoder().encode(s),
     decode: (b: Uint8Array) => new TextDecoder().decode(b),
   }),
+  StorageType: { File: 'file' },
+  headers: () => {
+    const values = new Map<string, string>();
+    return {
+      set: (key: string, value: string) => values.set(key, value),
+      get: (key: string) => values.get(key),
+      values,
+    };
+  },
   connect: mock(async () => ({
     publish: publishSpy,
     subscribe: (subject: string) => createSubscription(subject),
@@ -129,6 +141,7 @@ function makeTrigger(): AgentTrigger {
     content: {
       text: 'hello',
     },
+    sessionId: '5511999999999',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }
@@ -273,5 +286,148 @@ describe('NatsGenieProvider.trigger() — parts: [] regression guard', () => {
     (trigger as any).content = {};
     const result = await provider.trigger(trigger);
     expect(result.parts).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// trigger.env → NATS payload.env pass-through (GENIE_TMUX_SESSION plumbing)
+// ---------------------------------------------------------------------------
+
+describe('NatsGenieProvider.trigger() — env pass-through', () => {
+  it('propagates GENIE_TMUX_SESSION from trigger.env into the published NATS payload', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.env = {
+      OMNI_INSTANCE: 'inst-1',
+      OMNI_CHAT: 'chat-42',
+      OMNI_MESSAGE: 'msg-1',
+      OMNI_TURN_ID: 'turn-xyz',
+      GENIE_TMUX_SESSION: 'whatsapp-scout-12',
+    };
+    await provider.trigger(trigger);
+    expect(publishCalls.length).toBeGreaterThan(0);
+    const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
+    expect(payload.env).toMatchObject({
+      OMNI_INSTANCE: 'inst-1',
+      OMNI_CHAT: '5511999999999@s.whatsapp.net',
+      OMNI_MESSAGE: 'msg-1',
+      OMNI_TURN_ID: 'turn-xyz',
+      GENIE_TMUX_SESSION: 'whatsapp-scout-12',
+      OMNI_USER_ID: '5511999999999',
+      OMNI_PLATFORM_USER_ID: '5511999999999',
+      OMNI_SENDER: '5511999999999',
+      OMNI_SESSION: '5511999999999',
+      OMNI_TRACE_ID: 'trace-1',
+    });
+    expect(payload.executionContext.identity.platformUserId).toBe('5511999999999');
+  });
+
+  it('omits GENIE_TMUX_SESSION from payload.env when the dispatcher did not set it', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.env = {
+      OMNI_INSTANCE: 'inst-1',
+      OMNI_CHAT: 'chat-42',
+      OMNI_MESSAGE: 'msg-1',
+      OMNI_TURN_ID: 'turn-xyz',
+    };
+    await provider.trigger(trigger);
+    const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
+    expect(payload.env).not.toHaveProperty('GENIE_TMUX_SESSION');
+    expect(payload.env.OMNI_INSTANCE).toBe('inst-1');
+    expect(payload.env.OMNI_USER_ID).toBe('5511999999999');
+  });
+
+  it('merges trigger.env with canonical Omni execution env', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.env = { OMNI_INSTANCE: 'inst-1', OMNI_CHAT: 'chat-42' };
+    await provider.trigger(trigger);
+    const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
+    expect(payload.env).toMatchObject({
+      OMNI_INSTANCE: 'inst-1',
+      OMNI_CHAT: '5511999999999@s.whatsapp.net',
+      OMNI_USER_ID: '5511999999999',
+      OMNI_PLATFORM_USER_ID: '5511999999999',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Langfuse/HML trace propagation
+// ---------------------------------------------------------------------------
+
+describe('NatsGenieProvider.trigger() — trace context propagation', () => {
+  it('publishes W3C and khal-os trace headers and mirrors trace context in the payload', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.sessionId = 'session-abc';
+    trigger.traceContext = {
+      traceId: '0123456789abcdef0123456789abcdef',
+      spanId: 'fedcba9876543210',
+      parentSpanId: '0011223344556677',
+      traceFlags: 1,
+      tracestate: 'vendor=value',
+    };
+
+    await provider.trigger(trigger);
+
+    const call = publishCalls[publishCalls.length - 1]!;
+    const headers = call.options?.headers;
+    expect(headers?.get('traceparent')).toBe('00-0123456789abcdef0123456789abcdef-fedcba9876543210-01');
+    expect(headers?.get('tracestate')).toBe('vendor=value');
+    expect(headers?.get('x-khal-session-id')).toBe('session-abc');
+    expect(headers?.get('x-trace-id')).toBe('0123456789abcdef0123456789abcdef');
+    expect(headers?.get('x-span-id')).toBe('fedcba9876543210');
+    expect(headers?.get('x-parent-span-id')).toBe('0011223344556677');
+
+    const payload = JSON.parse(call.data);
+    expect(payload.traceContext).toEqual(trigger.traceContext);
+    expect(payload.metadata.traceparent).toBe('00-0123456789abcdef0123456789abcdef-fedcba9876543210-01');
+    expect(payload.metadata['x-khal-session-id']).toBe('session-abc');
+  });
+
+  it('keeps raw user and chat identifiers out of mirrored payload metadata', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.sessionId = 'session-abc';
+    trigger.traceContext = {
+      traceId: '0123456789abcdef0123456789abcdef',
+      spanId: 'fedcba9876543210',
+      traceFlags: 1,
+    };
+
+    await provider.trigger(trigger);
+
+    const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
+    expect(payload.metadata['x-khal-user-id']).toBeUndefined();
+    expect(payload.metadata['x-omni-chat-id']).toBeUndefined();
+    expect(JSON.stringify(payload.metadata)).not.toContain('5511999999999');
+    expect(JSON.stringify(payload.metadata)).not.toContain('s.whatsapp.net');
+    expect(payload.metadata['x-khal-user-hash']).toMatch(/^[a-f0-9]{12}$/);
+    expect(payload.metadata['x-omni-chat-hash']).toMatch(/^[a-f0-9]{12}$/);
+  });
+
+  it('derives W3C trace headers and payload trace context from dispatcher traceId when traceContext is omitted', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.traceId = 'LEGACY-TRACE-ID';
+    trigger.traceContext = undefined;
+
+    await provider.trigger(trigger);
+
+    const call = publishCalls[publishCalls.length - 1]!;
+    const headers = call.options?.headers;
+    expect(headers?.get('traceparent')).toMatch(/^00-[a-f0-9]{32}-[a-f0-9]{16}-01$/);
+    expect(headers?.get('x-trace-id')).toMatch(/^[a-f0-9]{32}$/);
+    expect(headers?.get('x-span-id')).toMatch(/^[a-f0-9]{16}$/);
+
+    const payload = JSON.parse(call.data);
+    expect(payload.traceContext).toEqual({
+      traceId: headers?.get('x-trace-id'),
+      spanId: headers?.get('x-span-id'),
+      traceFlags: 1,
+    });
+    expect(payload.metadata.traceparent).toBe(headers?.get('traceparent'));
   });
 });

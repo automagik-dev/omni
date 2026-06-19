@@ -15,6 +15,7 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId, resolveRouteId } from '../resolve.js';
+import { maybeNudgeForGenieBackedAgent } from '../utils/genie-wiring-nudge.js';
 
 type ReplyFilter =
   | { mode: string; conditions?: { onDm?: boolean; onMention?: boolean; onReply?: boolean } }
@@ -102,6 +103,25 @@ async function createAgentRouteAction(options: {
     });
 
     output.success(`Route created: ${route.id}`);
+
+    // Deprecation nudge — when the route's agent is bound to a nats-genie
+    // provider, the operator is recreating step 4 of the legacy 5-command
+    // wiring chain. The route create takes an agentId, so we have to do a
+    // 2-hop lookup (agent → provider) before checking the schema. All
+    // failures are silently swallowed: the nudge is a UX hint, not a
+    // contract.
+    if (options.agent) {
+      try {
+        const agent = await client.agents.get(options.agent);
+        const providerId = (agent as { agentProviderId?: string }).agentProviderId;
+        const agentName = (agent as { name?: string }).name;
+        if (providerId) {
+          await maybeNudgeForGenieBackedAgent(client, providerId, agentName);
+        }
+      } catch {
+        // best-effort; skip silently
+      }
+    }
     output.data(route);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

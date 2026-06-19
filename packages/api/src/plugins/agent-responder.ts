@@ -20,7 +20,8 @@
 
 import type { EventBus, MessageReceivedPayload } from '@omni/core';
 import { ProviderError, createLogger } from '@omni/core';
-import type { ChannelType, Instance } from '@omni/db';
+import type { ChannelType, Database, Instance } from '@omni/db';
+import { withIdempotency } from '../lib/idempotency';
 import type { AccessService, AgentRunnerService, Services } from '../services';
 import {
   type MessageContext,
@@ -295,6 +296,7 @@ const CHANNEL_MESSAGE_LIMITS: Record<string, number> = {
   discord: 2000,
   'whatsapp-baileys': 65536,
   'whatsapp-cloud': 65536,
+  'twilio-whatsapp': 1600,
   slack: 40000,
   telegram: 4096,
 };
@@ -605,8 +607,12 @@ async function processIncomingMessage(
 
 /**
  * Set up agent responder - subscribes to message events and triggers agent responses
+ *
+ * @deprecated Superseded by `setupAgentDispatcher`. Kept for reference only.
+ *   The `db` parameter is required for the idempotency guard (#411) so that
+ *   if this code path is ever revived the durable subscribers are safe.
  */
-export async function setupAgentResponder(eventBus: EventBus, services: Services): Promise<void> {
+export async function setupAgentResponder(eventBus: EventBus, services: Services, db: Database): Promise<void> {
   const agentRunner = services.agentRunner;
   const accessService = services.access;
 
@@ -638,28 +644,34 @@ export async function setupAgentResponder(eventBus: EventBus, services: Services
         if (!metadata.instanceId) return;
         if (payload.from === metadata.platformIdentityId) return;
 
-        try {
-          await processIncomingMessage(
-            payload,
-            metadata as Parameters<typeof processIncomingMessage>[1],
-            event.timestamp,
-            agentRunner,
-            accessService,
-            debouncer,
-          );
-        } catch (error) {
-          log.error('Error processing message for agent response', {
-            instanceId: metadata.instanceId,
-            error: String(error),
-          });
-        }
+        // Idempotency guard (#411): replay would re-buffer → duplicate auto-response.
+        await withIdempotency(db, event.id, 'agent-responder', async () => {
+          try {
+            await processIncomingMessage(
+              payload,
+              metadata as Parameters<typeof processIncomingMessage>[1],
+              event.timestamp,
+              agentRunner,
+              accessService,
+              debouncer,
+            );
+          } catch (error) {
+            log.error('Error processing message for agent response', {
+              instanceId: metadata.instanceId,
+              error: String(error),
+            });
+          }
+        });
       },
       {
         durable: 'agent-responder',
         queue: 'agent-responder',
         maxRetries: 2,
         retryDelayMs: 1000,
-        startFrom: 'first',
+        // 'new' (was 'first') — 'first' replays ALL historical messages on a
+        // recreated durable, which is catastrophic for a side-effect handler.
+        // See #411.
+        startFrom: 'new',
         concurrency: 5,
       },
     );
@@ -674,24 +686,28 @@ export async function setupAgentResponder(eventBus: EventBus, services: Services
 
         if (!metadata.instanceId) return;
 
-        try {
-          const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
-          if (!instance?.agentId) return;
+        // Idempotency guard (#411).
+        await withIdempotency(db, event.id, 'agent-responder-typing', async () => {
+          try {
+            const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId as string);
+            if (!instance?.agentId) return;
 
-          const debounceConfig = getDebounceConfig(instance);
-          if (debounceConfig.restartOnTyping) {
-            debouncer.onUserTyping(metadata.instanceId, payload.chatId, debounceConfig);
+            const debounceConfig = getDebounceConfig(instance);
+            if (debounceConfig.restartOnTyping) {
+              debouncer.onUserTyping(metadata.instanceId as string, payload.chatId, debounceConfig);
+            }
+          } catch (error) {
+            // Non-critical
+            log.debug('Error handling typing event', { error: String(error) });
           }
-        } catch (error) {
-          // Non-critical
-          log.debug('Error handling typing event', { error: String(error) });
-        }
+        });
       },
       {
         durable: 'agent-responder-typing',
         queue: 'agent-responder',
         maxRetries: 1,
-        startFrom: 'last',
+        // 'new' (was 'last') — see #411 startFrom rationale.
+        startFrom: 'new',
         concurrency: 10,
       },
     );

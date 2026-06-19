@@ -3,13 +3,34 @@
  *
  * Verifies:
  * - Gupshup native payload shapes (all 8 message types)
- * - event_type filtering (non-user_input ignored)
+ * - event_type routing (user_input / async_response / click_to_chat_advertise
+ *   → processInboundMessage; known non-message events dropped; unknown
+ *   event_types fail-open with WARN — incident #503)
  * - Deduplication (second identical webhook is dropped)
  * - Location lat/lng string-to-float conversion
  * - Reply context extraction
  */
 
 import { describe, expect, it } from 'bun:test';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { GupshupSimplifiedWebhookSchema, handleGupshupWebhook, parseSimplifiedWebhook } from '../handlers/webhooks';
+import { GUPSHUP_WEBHOOK_METRIC } from '../observability';
+import type { GupshupPlugin } from '../plugin';
+
+// ─────────────────────────────────────────────────────────────
+// Real-payload fixture loader (#505)
+// ─────────────────────────────────────────────────────────────
+//
+// Fixtures live in ./fixtures/*.json and mirror the shape of raw Gupshup
+// webhook bodies observed in production, with PII (phones, wamids, names)
+// scrubbed to deterministic placeholders.
+
+const FIXTURES_DIR = path.join(__dirname, 'fixtures');
+
+function loadFixtureText(name: string): string {
+  return fs.readFileSync(path.join(FIXTURES_DIR, name), 'utf8');
+}
 
 // ─────────────────────────────────────────────────────────────
 // Native payload fixtures (from real Gupshup webhooks)
@@ -161,7 +182,7 @@ describe('Gupshup native inbound payload shapes', () => {
   it('contacts message has raw.payload.contacts array', () => {
     const contacts = [
       {
-        name: { formatted_name: 'Cezar Namastex Vasconcelos', first_name: 'Cezar Namastex', last_name: 'Vasconcelos' },
+        name: { formatted_name: 'Example Contact', first_name: 'Example', last_name: 'Contact' },
         phones: [{ phone: '5551997285829', wa_id: '555197285829' }],
       },
     ];
@@ -182,7 +203,7 @@ describe('Gupshup native inbound payload shapes', () => {
 
     expect(payload.messageobj.type).toBe('contacts');
     const raw = (payload.messageobj as { raw: { payload: { contacts: typeof contacts } } }).raw;
-    expect(raw.payload.contacts[0]?.name.formatted_name).toBe('Cezar Namastex Vasconcelos');
+    expect(raw.payload.contacts[0]?.name.formatted_name).toBe('Example Contact');
     expect(raw.payload.contacts[0]?.phones[0]?.phone).toBe('5551997285829');
   });
 
@@ -242,12 +263,14 @@ describe('Gupshup native inbound payload shapes', () => {
     expect(rc.id).toBe('03309zQxh2vOdjjUI6ly3y');
   });
 
-  it('non-user_input event_type is not a message', () => {
+  it('known non-message event_type (message_event) is not processed as a message', () => {
     const payload = makePayload(
       { type: 'text', text: 'x', from: '551196', timestamp: 1, id: 'wamid.x' },
       { event_type: 'message_event' },
     );
-    expect(payload.event_type).not.toBe('user_input');
+    // Semantic shift post-2026-04-22: async_response is now a message event,
+    // so the denylist-based check uses a known non-message type instead.
+    expect(payload.event_type).toBe('message_event');
   });
 
   it('sender name resolved from senderobj.display', () => {
@@ -317,5 +340,493 @@ describe('Gupshup inbound dedup — cache behavior', () => {
 
     cache.dispose();
     expect(cache.size).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// handleGupshupWebhook — event_type routing (incident #503)
+// ─────────────────────────────────────────────────────────────
+
+interface HandlerLogCall {
+  level: 'debug' | 'info' | 'warn' | 'error';
+  message: string;
+  data?: Record<string, unknown>;
+}
+
+function makeHandlerHarness() {
+  const logs: HandlerLogCall[] = [];
+  const received: Array<{
+    instanceId: string;
+    externalId: string;
+    from: string;
+    content: { type: string; text?: string };
+    rawPayload?: Record<string, unknown>;
+  }> = [];
+
+  const logger = {
+    debug: (message: string, data?: Record<string, unknown>) => {
+      logs.push({ level: 'debug', message, data });
+    },
+    info: (message: string, data?: Record<string, unknown>) => {
+      logs.push({ level: 'info', message, data });
+    },
+    warn: (message: string, data?: Record<string, unknown>) => {
+      logs.push({ level: 'warn', message, data });
+    },
+    error: (message: string, data?: Record<string, unknown>) => {
+      logs.push({ level: 'error', message, data });
+    },
+    child: () => logger,
+  };
+
+  const plugin = {
+    getLogger: () => logger,
+    handleMessageReceived: async (params: {
+      instanceId: string;
+      externalId: string;
+      from: string;
+      content: { type: string; text?: string };
+      rawPayload?: Record<string, unknown>;
+    }) => {
+      received.push({
+        instanceId: params.instanceId,
+        externalId: params.externalId,
+        from: params.from,
+        content: params.content,
+        rawPayload: params.rawPayload,
+      });
+    },
+  } as unknown as GupshupPlugin;
+
+  return { plugin, logs, received };
+}
+
+function makeWebhookRequest(payload: Record<string, unknown> | string, headers: Record<string, string> = {}): Request {
+  const body = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  return new Request('https://example.com/api/v2/channels/gupshup/inst-gs-handler/webhook', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
+    body,
+  });
+}
+
+function findMetricLogs(logs: HandlerLogCall[]) {
+  return logs.filter((l) => l.data?.metric === GUPSHUP_WEBHOOK_METRIC);
+}
+
+describe('handleGupshupWebhook — event_type routing against real fixtures (#503, #505)', () => {
+  it('processes async_response text message end-to-end (post-2026-04-22 cutover)', async () => {
+    const { plugin, logs, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(loadFixtureText('async_response-text.json')),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('wamid.TEST_ASYNC_RESPONSE_TEXT_001');
+    expect(received[0]?.content.text).toBe('Boa noite, gostaria de contratar um plano');
+    expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unknown event_type'))).toHaveLength(0);
+  });
+
+  it('maps inbound KHAL session headers and Gupshup context into rawPayload', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(loadFixtureText('async_response-text.json'), { 'x-khal-session-id': 'khal-session-abc' }),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.rawPayload?.khalSessionId).toBe('khal-session-abc');
+    expect((received[0]?.rawPayload?.headers as Record<string, string> | undefined)?.['x-khal-session-id']).toBe(
+      'khal-session-abc',
+    );
+    expect(received[0]?.rawPayload?.threadId).toBe('5521900000002');
+  });
+
+  it('processes user_input text message (legacy format regression guard)', async () => {
+    const { plugin, logs, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(loadFixtureText('user_input-text.json')),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('wamid.TEST_USER_INPUT_TEXT_001');
+    expect(received[0]?.content.text).toBe('Oi');
+    expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unknown event_type'))).toHaveLength(0);
+  });
+
+  it('processes click_to_chat_advertise text message from paid ads', async () => {
+    const { plugin, logs, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(loadFixtureText('click_to_chat_advertise.json')),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('wamid.TEST_CTCA_001');
+    expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unknown event_type'))).toHaveLength(0);
+  });
+
+  it('processes async_response audio message (current format media)', async () => {
+    const { plugin, logs, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(loadFixtureText('async_response-audio.json')),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('wamid.TEST_ASYNC_RESPONSE_AUDIO_001');
+    expect(received[0]?.content.type).toBe('audio');
+    expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unknown event_type'))).toHaveLength(0);
+  });
+
+  it('ignores message_event delivery receipt (no processInboundMessage call)', async () => {
+    const { plugin, logs, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(loadFixtureText('message_event-delivery.json')),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(0);
+    const debugDrop = logs.find((l) => l.level === 'debug' && l.message.includes('known non-message event'));
+    expect(debugDrop).toBeDefined();
+    expect(debugDrop?.data?.event_type).toBe('message_event');
+  });
+
+  it('ignores billing_event (no processInboundMessage call)', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(loadFixtureText('billing_event.json')),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(0);
+  });
+
+  it('processes + WARNs on unknown event_type (fail-open for format drift)', async () => {
+    const { plugin, logs, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    // Mutate async_response fixture to an unseen event_type to simulate a future Gupshup format.
+    const mutated = loadFixtureText('async_response-text.json').replace(/"async_response"/g, '"v3_future_format"');
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(mutated),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    const warn = logs.find((l) => l.level === 'warn' && l.message.includes('unknown event_type'));
+    expect(warn).toBeDefined();
+    expect(warn?.data?.event_type).toBe('v3_future_format');
+    expect(warn?.data?.messageType).toBe('text');
+  });
+
+  it('handles Gupshup Request Builder double-encoding envelope (unescaped inner quotes)', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    // Gupshup Request Builder produces an outer body whose "gupshupPayload" value
+    // is raw (not JSON-escaped), so the full string is not valid JSON. The handler
+    // strips the wrapper by string match instead of JSON.parse.
+    const inner = loadFixtureText('async_response-text.json').trim();
+    const wrapped = `{"gupshupPayload":"${inner}"}`;
+
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(wrapped),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('wamid.TEST_ASYNC_RESPONSE_TEXT_001');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Observability — metric emission + first-seen WARN (#504)
+// ─────────────────────────────────────────────────────────────
+
+describe('handleGupshupWebhook — observability signals (#504)', () => {
+  it('emits gupshup.webhook.received{handled=processed} on happy path', async () => {
+    const { plugin, logs } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    await handleGupshupWebhook(
+      makeWebhookRequest(loadFixtureText('async_response-text.json')),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    const metrics = findMetricLogs(logs);
+    expect(metrics).toHaveLength(1);
+    const dims = metrics[0]?.data?.dimensions as Record<string, unknown>;
+    expect(dims.handled).toBe('processed');
+    expect(dims.event_type).toBe('async_response');
+    expect(dims.instanceId).toBe('inst-gs-handler');
+  });
+
+  it('emits gupshup.webhook.received{handled=dropped_known_non_message} for denylisted events', async () => {
+    const { plugin, logs } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    await handleGupshupWebhook(
+      makeWebhookRequest(loadFixtureText('message_event-delivery.json')),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      dedupeCache,
+    );
+
+    const metrics = findMetricLogs(logs);
+    expect(metrics).toHaveLength(1);
+    const dims = metrics[0]?.data?.dimensions as Record<string, unknown>;
+    expect(dims.handled).toBe('dropped_known_non_message');
+    expect(dims.event_type).toBe('message_event');
+  });
+
+  it('emits gupshup.webhook.received{handled=dropped_unknown_fail_open} for unknown event_types', async () => {
+    const { plugin, logs } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    const mutated = loadFixtureText('async_response-text.json').replace(/"async_response"/g, '"v3_future_format"');
+
+    await handleGupshupWebhook(makeWebhookRequest(mutated), plugin, 'inst-gs-handler', undefined, dedupeCache);
+
+    const metrics = findMetricLogs(logs);
+    expect(metrics).toHaveLength(1);
+    const dims = metrics[0]?.data?.dimensions as Record<string, unknown>;
+    expect(dims.handled).toBe('dropped_unknown_fail_open');
+    expect(dims.event_type).toBe('v3_future_format');
+  });
+
+  it('emits gupshup.webhook.received{handled=dropped_unrecognized_shape} for schema failures', async () => {
+    const { plugin, logs } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    const broken = JSON.stringify({ event_type: 'user_input', missing_everything: true });
+
+    await handleGupshupWebhook(makeWebhookRequest(broken), plugin, 'inst-gs-handler', undefined, dedupeCache);
+
+    const metrics = findMetricLogs(logs);
+    expect(metrics).toHaveLength(1);
+    const dims = metrics[0]?.data?.dimensions as Record<string, unknown>;
+    expect(dims.handled).toBe('dropped_unrecognized_shape');
+  });
+
+  it('first-seen event_type WARN fires once per process per value', async () => {
+    const { plugin, logs } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    // Use a sentinel value unlikely to collide with other tests in the same process.
+    const sentinel = `first_seen_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const mutated = loadFixtureText('async_response-text.json').replace(/"async_response"/g, `"${sentinel}"`);
+
+    await handleGupshupWebhook(makeWebhookRequest(mutated), plugin, 'inst-gs-handler', undefined, dedupeCache);
+    // Re-run with a different wamid so dedupe doesn't fire, but same event_type.
+    const second = mutated.replace(/TEST_ASYNC_RESPONSE_TEXT_001/g, 'TEST_ASYNC_RESPONSE_TEXT_002');
+    await handleGupshupWebhook(makeWebhookRequest(second), plugin, 'inst-gs-handler', undefined, dedupeCache);
+
+    const firstSeenWarns = logs.filter(
+      (l) =>
+        l.level === 'warn' &&
+        l.message.includes('first time seeing this event_type') &&
+        l.data?.event_type === sentinel,
+    );
+    expect(firstSeenWarns).toHaveLength(1);
+    expect(firstSeenWarns[0]?.data?.knownMessage).toBe(false);
+    expect(firstSeenWarns[0]?.data?.knownNonMessage).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Simplified HV-Entry-Flow payload (2026-06 "Payload Data Clean-up")
+// ─────────────────────────────────────────────────────────────
+
+describe('Gupshup simplified Entry-Flow payload', () => {
+  const SIMPLIFIED = {
+    sender: { id: '5535984370828', name: 'Henrique GupShup' },
+    message: { text: 'Mensagem', timestamp: '1776273477' },
+    event: { project_id: '15646' },
+  };
+
+  it('schema accepts the simplified shape', () => {
+    expect(GupshupSimplifiedWebhookSchema.safeParse(SIMPLIFIED).success).toBe(true);
+  });
+
+  it('normalizes onto the native inbound shape', () => {
+    const w = parseSimplifiedWebhook(SIMPLIFIED);
+    expect(w).not.toBeNull();
+    expect(w?.sender).toBe('5535984370828');
+    expect(w?.event_type).toBe('user_input');
+    expect(w?.channel).toBe('whatsapp');
+    expect(w?.messageobj.type).toBe('text');
+    expect(w?.messageobj.text).toBe('Mensagem');
+    expect(w?.messageobj.from).toBe('5535984370828');
+    expect(w?.messageobj.timestamp).toBe(1776273477);
+    expect(w?.senderobj.display).toBe('Henrique GupShup');
+    expect(w?.messageHeader?.project_id).toBe('15646');
+  });
+
+  it('synthesizes a dedupe-stable id when none is provided (retries dedupe)', () => {
+    const a = parseSimplifiedWebhook(SIMPLIFIED);
+    const b = parseSimplifiedWebhook(SIMPLIFIED);
+    expect(a?.messageobj.id).toBe(b?.messageobj.id);
+    expect(a?.messageobj.id).toContain('5535984370828');
+  });
+
+  it('prefers an explicit message.id when present', () => {
+    const w = parseSimplifiedWebhook({ ...SIMPLIFIED, message: { ...SIMPLIFIED.message, id: 'wamid.X1' } });
+    expect(w?.messageobj.id).toBe('wamid.X1');
+  });
+
+  it('accepts millisecond timestamps and returns an integer unix-seconds value', () => {
+    const w = parseSimplifiedWebhook({ ...SIMPLIFIED, message: { text: 'oi', timestamp: 1776273477000 } });
+    expect(w?.messageobj.timestamp).toBe(1776273477);
+    expect(Number.isInteger(w?.messageobj.timestamp)).toBe(true);
+  });
+
+  it('floors a fractional timestamp to an integer (native schema requires int)', () => {
+    const w = parseSimplifiedWebhook({ ...SIMPLIFIED, message: { text: 'oi', timestamp: 1776273477.9 } });
+    expect(w?.messageobj.timestamp).toBe(1776273477);
+  });
+
+  it('returns null for the native (old) format — not its job', () => {
+    const native = { sender: '5511960008976', messageobj: { type: 'text', text: 'Oi' } };
+    expect(parseSimplifiedWebhook(native)).toBeNull();
+  });
+
+  it('returns null for the routing envelope (mensagem.tipo=route, conteudo null)', () => {
+    const route = {
+      event: 'message',
+      mensagem: { tipo: 'route', conteudo: null },
+      destino_previsto: 'eugenia-2',
+      context: { 'contact.phone': '5511984420290' },
+    };
+    expect(parseSimplifiedWebhook(route)).toBeNull();
+  });
+
+  it('returns null when there is no text (does not dispatch an empty inbound)', () => {
+    expect(parseSimplifiedWebhook({ sender: { id: '5535984370828' }, event: { project_id: '1' } })).toBeNull();
+    expect(parseSimplifiedWebhook({ ...SIMPLIFIED, message: { timestamp: '1776273477' } })).toBeNull();
+  });
+
+  it('gives distinct ids to distinct same-second messages of equal length (no dedupe collision)', () => {
+    const a = parseSimplifiedWebhook({ ...SIMPLIFIED, message: { text: 'Oi', timestamp: '1776273477' } });
+    const b = parseSimplifiedWebhook({ ...SIMPLIFIED, message: { text: 'Ok', timestamp: '1776273477' } });
+    expect(a?.messageobj.id).not.toBe(b?.messageobj.id);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// End-to-end: simplified payload dispatches identically to native
+// ─────────────────────────────────────────────────────────────
+
+describe('handleGupshupWebhook — simplified payload dispatches like native', () => {
+  it('native and simplified payloads reach the agent with the same phone + text', async () => {
+    // Native (legacy) payload
+    const nativeH = makeHandlerHarness();
+    const nativeRes = await handleGupshupWebhook(
+      makeWebhookRequest(
+        makePayload({ type: 'text', text: 'Oi', from: '5511960008976', timestamp: 1776273477, id: 'wamid.NATIVE1' }),
+      ),
+      nativeH.plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    // Simplified (HV-Entry-Flow) payload — same lead, same text
+    const simpleH = makeHandlerHarness();
+    const simpleRes = await handleGupshupWebhook(
+      makeWebhookRequest({
+        sender: { id: '5511960008976', name: 'Tuane' },
+        message: { text: 'Oi', timestamp: 1776273477 },
+        event: { project_id: '31569198' },
+      }),
+      simpleH.plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    // Both ack and both dispatch exactly one inbound message…
+    expect(nativeRes.status).toBe(200);
+    expect(simpleRes.status).toBe(200);
+    expect(nativeH.received).toHaveLength(1);
+    expect(simpleH.received).toHaveLength(1);
+
+    // …with the same phone + text, so the rest of the pipeline behaves identically.
+    expect(nativeH.received[0]?.from).toBe('5511960008976');
+    expect(nativeH.received[0]?.content.text).toBe('Oi');
+    expect(simpleH.received[0]?.from).toBe(nativeH.received[0]?.from);
+    expect(simpleH.received[0]?.content.text).toBe(nativeH.received[0]?.content.text);
+  });
+
+  it('simplified payload is processed, not dropped (no unrecognized-shape warn)', async () => {
+    const { plugin, logs, received } = makeHandlerHarness();
+    const res = await handleGupshupWebhook(
+      makeWebhookRequest({
+        sender: { id: '5535984370828', name: 'Henrique' },
+        message: { text: 'oi quero plano' },
+        event: { project_id: '15646' },
+      }),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.content.text).toBe('oi quero plano');
+    expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unrecognized shape'))).toHaveLength(0);
   });
 });

@@ -105,6 +105,27 @@ export interface ChannelCapabilities {
   /** Can stream partial response updates (thinking/content/final/error) */
   canStreamResponse?: boolean;
 
+  /**
+   * Whether the channel exposes a native handoff protocol (e.g. a dedicated
+   * `HANDOFF` message type that pops a ticket in an operator UI). Only
+   * channels with `canHandoff: true` receive a channel-specific payload from
+   * `POST /messages/send/handoff`; for every other channel the route still
+   * runs the channel-agnostic side effects (`agentPaused=true`, follow-up
+   * disarm, audit log). See issue #537.
+   */
+  canHandoff?: boolean;
+
+  /**
+   * Whether the channel exposes a native terminal-close protocol (e.g. a
+   * dedicated `CLOSING` message type that closes the journey on the
+   * provider side). Only channels with `canCloseContact: true` receive a
+   * channel-specific payload from `POST /messages/send/close-contact`; for
+   * every other channel the route still runs the channel-agnostic side
+   * effects (`agentPaused=true`, optional `closed=true`, follow-up disarm,
+   * audit log).
+   */
+  canCloseContact?: boolean;
+
   // ─────────────────────────────────────────────────────────────
   // Messaging-window constraints (issue #404)
   // ─────────────────────────────────────────────────────────────

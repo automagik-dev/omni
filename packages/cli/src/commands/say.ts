@@ -12,6 +12,7 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { resolveContext, resolveReplyTo } from '../context.js';
 import * as output from '../output.js';
+import { resolveInstanceId, resolveRecipient } from '../resolve.js';
 
 interface SayOptions {
   reply?: string | true;
@@ -42,6 +43,9 @@ export function createSayCommand(): Command {
         return output.error('No chat in context. Set OMNI_CHAT, use --chat, or run: omni open <contact>');
       }
 
+      const instanceId = await resolveInstanceId(ctx.instanceId);
+      const chatId = await resolveRecipient(ctx.chatId, instanceId);
+
       // Resolve --reply
       let replyTo: string | undefined;
       if (options.reply !== undefined) {
@@ -57,8 +61,8 @@ export function createSayCommand(): Command {
 
       try {
         const result = await client.messages.send({
-          instanceId: ctx.instanceId,
-          to: ctx.chatId,
+          instanceId,
+          to: chatId,
           text,
           replyTo,
         });

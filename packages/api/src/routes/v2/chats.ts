@@ -8,14 +8,25 @@ import { zValidator } from '@hono/zod-validator';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { ChannelTypeSchema, ERROR_CODES, OmniError } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
+import { apiKeys } from '@omni/db/schema';
+import { eq } from 'drizzle-orm';
+import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { clearAgentSession } from '../../plugins/session-cleaner';
+import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../../types';
 
 const chatsRoutes = new Hono<{ Variables: AppVariables }>();
+
+/**
+ * Standard UUID v1-v5 pattern. Mirrors the regex used in app.ts:148 and the
+ * service-layer test suites — kept as a private const here so the route file
+ * doesn't need a new shared util.
+ */
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * Verify API key has access to the given instance.
@@ -29,6 +40,96 @@ function checkInstanceAccess(apiKey: ApiKeyData | undefined, instanceId: string)
       recoverable: false,
     });
   }
+}
+
+/**
+ * Resolve the active instance for an API key. Reads `contextInstanceId` first
+ * (set via POST /context) then falls back to `activeInstanceId` (set via
+ * POST /context/use). Returns null when neither is set — callers MUST 400
+ * the request rather than guess across the API key's authorized instances.
+ */
+async function getActiveInstanceId(c: Context<{ Variables: AppVariables }>): Promise<string | null> {
+  const keyData = c.get('apiKey');
+  if (!keyData) return null;
+  const db = c.get('db');
+  const [row] = await db
+    .select({
+      activeInstanceId: apiKeys.activeInstanceId,
+      contextInstanceId: apiKeys.contextInstanceId,
+    })
+    .from(apiKeys)
+    .where(eq(apiKeys.id, keyData.id))
+    .limit(1);
+  return row?.contextInstanceId ?? row?.activeInstanceId ?? null;
+}
+
+/**
+ * Resolve a `:id` URL param to a chat's internal UUID.
+ *
+ * - If the param already looks like a UUID, return it unchanged. The caller's
+ *   service layer will 404 if no chat exists with that UUID.
+ * - Otherwise treat it as a platform-native id (WhatsApp JID like
+ *   `120363...@g.us`, Telegram numeric id, Discord channel id, ...) and look
+ *   it up via `findByExternalIdSmart`. Requires the API key to have an
+ *   active instance set (via POST /context or POST /context/use), or an
+ *   explicit `instanceId` to use for the lookup.
+ *
+ * Returns null when:
+ *   - The param is not a UUID and no instance context is available.
+ *   - The param is not a UUID and no chat with that external id exists in
+ *     the resolved instance.
+ *
+ * History
+ * -------
+ * Before this helper, every `chatsRoutes.<verb>('/:id*')` passed the raw URL
+ * param straight to a service method that called `eq(<uuid_col>, raw)`. When
+ * a client (omni CLI's `omni history`, omni-mcp tools, custom integrations)
+ * called with the platform-native id, postgres-js rejected with
+ *   PostgresError: invalid input syntax for type uuid: "120363...@g.us"
+ * → 500 Server error. Same shape as the LID fix in b5929040 — we just missed
+ * the routes that didn't go through `getByExternalId`.
+ */
+async function resolveChatIdParam(
+  c: Context<{ Variables: AppVariables }>,
+  raw: string,
+  explicitInstanceId?: string,
+): Promise<string | null> {
+  if (UUID_REGEX.test(raw)) return raw;
+  const instanceId = explicitInstanceId ?? (await getActiveInstanceId(c));
+  if (!instanceId) return null;
+
+  // Authorize BEFORE looking up the chat. Without this gate, a caller who
+  // can't access `instanceId` would observe two distinct responses:
+  //   - chat exists  → checkInstanceAccess later in the handler throws 403
+  //   - chat absent  → resolver returns null, route returns 404
+  // That's a cross-instance existence oracle. Throwing here makes both
+  // states return the same 403 (VALIDATION) before any DB lookup happens.
+  // The check is a no-op for API keys with no `instanceIds` restriction,
+  // and idempotent — handlers that ALSO call `checkInstanceAccess`
+  // afterward still work; the second call simply matches the same allow
+  // list and returns.
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+
+  const services = c.get('services');
+  const chat = await services.chats.findByExternalIdSmart(instanceId, raw);
+  return chat?.id ?? null;
+}
+
+/**
+ * Common 404 response for routes that couldn't resolve a `:id` to a chat —
+ * either a non-UUID param without instance context, or a UUID that doesn't
+ * map to any chat we know about.
+ */
+function chatNotFoundResponse(c: Context<{ Variables: AppVariables }>, raw: string) {
+  return c.json(
+    {
+      error: {
+        code: ERROR_CODES.NOT_FOUND,
+        message: `Chat not found: ${raw}. Pass either a chat UUID or set the API key's active instance via POST /api/v2/context/use first.`,
+      },
+    },
+    404,
+  );
 }
 
 /**
@@ -189,9 +290,15 @@ chatsRoutes.post('/', zValidator('json', createChatSchema), async (c) => {
 
 /**
  * GET /chats/:id - Get chat by ID
+ *
+ * Accepts either a chat UUID or a platform-native id (WhatsApp JID, Telegram
+ * numeric id, etc.) — the latter is resolved to the internal UUID via the
+ * API key's active-instance context. See `resolveChatIdParam`.
  */
 chatsRoutes.get('/:id', async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
 
   const chat = await services.chats.getById(id);
@@ -203,7 +310,9 @@ chatsRoutes.get('/:id', async (c) => {
  * PATCH /chats/:id - Update a chat
  */
 chatsRoutes.patch('/:id', zValidator('json', updateChatSchema), async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const body = c.req.valid('json');
   const services = c.get('services');
 
@@ -216,7 +325,9 @@ chatsRoutes.patch('/:id', zValidator('json', updateChatSchema), async (c) => {
  * DELETE /chats/:id - Delete a chat (soft delete)
  */
 chatsRoutes.delete('/:id', async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
 
   await services.chats.delete(id);
@@ -303,8 +414,10 @@ async function applyChatModifyOnChannel(
  * POST /chats/:id/archive - Archive a chat
  */
 chatsRoutes.post('/:id/archive', zValidator('json', chatChannelActionSchema), async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
   const body = c.req.valid('json');
+  const id = await resolveChatIdParam(c, raw, body?.instanceId);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -337,8 +450,10 @@ chatsRoutes.post('/:id/archive', zValidator('json', chatChannelActionSchema), as
  * POST /chats/:id/unarchive - Unarchive a chat
  */
 chatsRoutes.post('/:id/unarchive', zValidator('json', chatChannelActionSchema), async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
   const body = c.req.valid('json');
+  const id = await resolveChatIdParam(c, raw, body?.instanceId);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -375,7 +490,9 @@ const labelBodySchema = z.object({
  * POST /chats/:id/hide - Hide a chat
  */
 chatsRoutes.post('/:id/hide', async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
 
   await services.chats.hide(id);
@@ -388,7 +505,9 @@ chatsRoutes.post('/:id/hide', async (c) => {
  * POST /chats/:id/unhide - Unhide a chat
  */
 chatsRoutes.post('/:id/unhide', async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
 
   await services.chats.unhide(id);
@@ -401,7 +520,9 @@ chatsRoutes.post('/:id/unhide', async (c) => {
  * POST /chats/:id/label - Add a label to a chat
  */
 chatsRoutes.post('/:id/label', zValidator('json', labelBodySchema), async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const { label } = c.req.valid('json');
   const services = c.get('services');
 
@@ -415,7 +536,9 @@ chatsRoutes.post('/:id/label', zValidator('json', labelBodySchema), async (c) =>
  * DELETE /chats/:id/label - Remove a label from a chat
  */
 chatsRoutes.delete('/:id/label', zValidator('json', labelBodySchema), async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const { label } = c.req.valid('json');
   const services = c.get('services');
 
@@ -429,8 +552,10 @@ chatsRoutes.delete('/:id/label', zValidator('json', labelBodySchema), async (c) 
  * POST /chats/:id/pin - Pin a chat on the channel
  */
 chatsRoutes.post('/:id/pin', zValidator('json', z.object({ instanceId: z.string().uuid() })), async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
   const { instanceId } = c.req.valid('json');
+  const id = await resolveChatIdParam(c, raw, instanceId);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -446,8 +571,10 @@ chatsRoutes.post('/:id/pin', zValidator('json', z.object({ instanceId: z.string(
  * POST /chats/:id/unpin - Unpin a chat on the channel
  */
 chatsRoutes.post('/:id/unpin', zValidator('json', z.object({ instanceId: z.string().uuid() })), async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
   const { instanceId } = c.req.valid('json');
+  const id = await resolveChatIdParam(c, raw, instanceId);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -463,8 +590,10 @@ chatsRoutes.post('/:id/unpin', zValidator('json', z.object({ instanceId: z.strin
  * POST /chats/:id/mute - Mute a chat on the channel
  */
 chatsRoutes.post('/:id/mute', zValidator('json', muteActionSchema), async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
   const { instanceId, duration } = c.req.valid('json');
+  const id = await resolveChatIdParam(c, raw, instanceId);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -480,8 +609,10 @@ chatsRoutes.post('/:id/mute', zValidator('json', muteActionSchema), async (c) =>
  * POST /chats/:id/unmute - Unmute a chat on the channel
  */
 chatsRoutes.post('/:id/unmute', zValidator('json', z.object({ instanceId: z.string().uuid() })), async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
   const { instanceId } = c.req.valid('json');
+  const id = await resolveChatIdParam(c, raw, instanceId);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -497,7 +628,9 @@ chatsRoutes.post('/:id/unmute', zValidator('json', z.object({ instanceId: z.stri
  * GET /chats/:id/participants - Get chat participants
  */
 chatsRoutes.get('/:id/participants', async (c) => {
-  const id = c.req.param('id');
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
 
   const participants = await services.chats.getParticipants(id);
@@ -509,7 +642,9 @@ chatsRoutes.get('/:id/participants', async (c) => {
  * POST /chats/:id/participants - Add a participant
  */
 chatsRoutes.post('/:id/participants', zValidator('json', addParticipantSchema), async (c) => {
-  const chatId = c.req.param('id');
+  const raw = c.req.param('id');
+  const chatId = await resolveChatIdParam(c, raw);
+  if (chatId === null) return chatNotFoundResponse(c, raw);
   const body = c.req.valid('json');
   const services = c.get('services');
 
@@ -525,7 +660,9 @@ chatsRoutes.post('/:id/participants', zValidator('json', addParticipantSchema), 
  * DELETE /chats/:id/participants/:platformUserId - Remove a participant
  */
 chatsRoutes.delete('/:id/participants/:platformUserId', async (c) => {
-  const chatId = c.req.param('id');
+  const raw = c.req.param('id');
+  const chatId = await resolveChatIdParam(c, raw);
+  if (chatId === null) return chatNotFoundResponse(c, raw);
   const platformUserId = c.req.param('platformUserId');
   const services = c.get('services');
 
@@ -541,7 +678,9 @@ chatsRoutes.patch(
   '/:id/participants/:platformUserId/role',
   zValidator('json', updateParticipantRoleSchema),
   async (c) => {
-    const chatId = c.req.param('id');
+    const raw = c.req.param('id');
+    const chatId = await resolveChatIdParam(c, raw);
+    if (chatId === null) return chatNotFoundResponse(c, raw);
     const platformUserId = c.req.param('platformUserId');
     const { role } = c.req.valid('json');
     const services = c.get('services');
@@ -552,21 +691,30 @@ chatsRoutes.patch(
   },
 );
 
+const listMessagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
+  before: optionalDateParam('before'),
+  after: optionalDateParam('after'),
+  mediaOnly: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
+});
+
 /**
  * GET /chats/:id/messages - Get messages for a chat
  */
-chatsRoutes.get('/:id/messages', async (c) => {
-  const chatId = c.req.param('id');
-  const limit = Number.parseInt(c.req.query('limit') ?? '100', 10);
-  const before = c.req.query('before');
-  const after = c.req.query('after');
-  const mediaOnly = c.req.query('mediaOnly') === 'true';
+chatsRoutes.get('/:id/messages', zValidator('query', listMessagesQuerySchema), async (c) => {
+  const raw = c.req.param('id');
+  const chatId = await resolveChatIdParam(c, raw);
+  if (chatId === null) return chatNotFoundResponse(c, raw);
+  const { limit, before, after, mediaOnly } = c.req.valid('query');
   const services = c.get('services');
 
   const messages = await services.messages.getChatMessages(chatId, {
     limit,
-    before: before ? new Date(before) : undefined,
-    after: after ? new Date(after) : undefined,
+    before,
+    after,
     mediaOnly,
   });
 
@@ -609,8 +757,10 @@ const markChatReadSchema = z.object({
  * For channels that don't support this, returns an error.
  */
 chatsRoutes.post('/:id/read', zValidator('json', markChatReadSchema), async (c) => {
-  const chatId = c.req.param('id');
+  const raw = c.req.param('id');
   const { instanceId } = c.req.valid('json');
+  const chatId = await resolveChatIdParam(c, raw, instanceId);
+  if (chatId === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -704,8 +854,10 @@ const DISAPPEARING_DURATIONS: Record<string, number | false> = {
  * POST /chats/:id/disappearing - Toggle disappearing messages
  */
 chatsRoutes.post('/:id/disappearing', zValidator('json', disappearingSchema), async (c) => {
-  const chatId = c.req.param('id');
+  const raw = c.req.param('id');
   const { instanceId, duration } = c.req.valid('json');
+  const chatId = await resolveChatIdParam(c, raw, instanceId);
+  if (chatId === null) return chatNotFoundResponse(c, raw);
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
@@ -898,8 +1050,13 @@ chatsRoutes.post('/clear-session', async (c) => {
 
       const isAgentPaused = (dbChat.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
       if (isAgentPaused) {
+        // Merge — a bare replace would drop unrelated settings keys.
         await services.chats.update(dbChat.id, {
-          settings: { agentPaused: false, agentResumedAt: new Date().toISOString() },
+          settings: {
+            ...((dbChat.settings as Record<string, unknown>) ?? {}),
+            agentPaused: false,
+            agentResumedAt: new Date().toISOString(),
+          },
         });
       }
     }
@@ -908,6 +1065,56 @@ chatsRoutes.post('/clear-session', async (c) => {
   }
 
   return c.json({ success: true, sessionId, sessionStrategy });
+});
+
+/**
+ * POST /chats/:id/reopen-contact - Manual ops escape hatch.
+ *
+ * Reverses a close-contact terminal state. Clears `closed`, `closeUntil`,
+ * `closeOutcome`, `agentPaused`, and stamps `agentResumedAt` atomically.
+ * The dispatcher's close-contact gate then yields and the next inbound
+ * message resumes normal agent dispatch.
+ *
+ * Use case: ops realises the LLM picked the wrong outcome (e.g. flagged
+ * a winning sale as `lost`) and needs to bring the agent back. Should be
+ * rare — repeated use is a signal that the LLM prompt or outcome
+ * taxonomy needs work.
+ *
+ * Auth: instance-access check (same model as every other write here). When
+ * the broader admin-vs-operator scope work lands (#558 D5), this endpoint
+ * should be tightened to admin-only.
+ */
+chatsRoutes.post('/:id/reopen-contact', async (c) => {
+  const raw = c.req.param('id');
+  const id = await resolveChatIdParam(c, raw);
+  if (id === null) return chatNotFoundResponse(c, raw);
+  const services = c.get('services');
+
+  const chat = await services.chats.getById(id);
+  if (!chat) return c.json({ error: 'Chat not found' }, 404);
+  if (chat.instanceId) checkInstanceAccess(c.get('apiKey'), chat.instanceId);
+
+  const priorSettings = (chat.settings ?? {}) as Record<string, unknown>;
+  const wasClosed = priorSettings.closed === true || priorSettings.closeUntil != null;
+
+  await services.chats.update(id, {
+    settings: {
+      ...priorSettings,
+      agentPaused: false,
+      closed: false,
+      closeUntil: null,
+      closeOutcome: null,
+      agentResumedAt: new Date().toISOString(),
+    } as Record<string, unknown>,
+  });
+
+  return c.json({
+    data: {
+      chatId: id,
+      reopened: true,
+      wasClosed,
+    },
+  });
 });
 
 export { chatsRoutes };

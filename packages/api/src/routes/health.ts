@@ -4,8 +4,9 @@
 
 import { consumerOffsets, instances } from '@omni/db';
 import { sql } from 'drizzle-orm';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import packageJson from '../../package.json';
+import { arePluginsDegraded, getPluginsDegradedReason } from '../plugin-state';
 import type { AppVariables, HealthCheck, HealthResponse } from '../types';
 
 const VERSION = packageJson.version;
@@ -16,9 +17,10 @@ export const healthRoutes = new Hono<{ Variables: AppVariables }>();
 /**
  * GET /health - Basic health check (no auth required)
  */
-healthRoutes.get('/health', async (c) => {
+export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
   const db = c.get('db');
   const eventBus = c.get('eventBus');
+  const channelRegistry = c.get('channelRegistry');
 
   // Check database
   let dbCheck: HealthCheck;
@@ -57,21 +59,37 @@ healthRoutes.get('/health', async (c) => {
 
     const byChannel: Record<string, number> = {};
     let total = 0;
-    let connected = 0;
+    let active = 0;
 
     for (const row of instanceCounts) {
       byChannel[row.channel] = row.total;
       total += row.total;
-      connected += row.active;
+      active += row.active;
     }
 
-    instanceStats = { total, connected, byChannel };
+    // `connected` must reflect live channel-plugin state, not the `isActive`
+    // row flag. Active rows that failed to reconnect would otherwise be
+    // counted as connected and mask the bug in issue #408.
+    let connected = 0;
+    if (channelRegistry) {
+      for (const plugin of channelRegistry.getAll()) {
+        connected += plugin.getConnectedInstances().length;
+      }
+    }
+
+    instanceStats = { total, active, connected, byChannel };
   } catch {
     // Ignore instance stats errors
   }
 
+  // Channel plugin initialization check (issue #408)
+  const pluginsFailed = arePluginsDegraded();
+  const pluginsCheck: HealthCheck = pluginsFailed
+    ? { status: 'error', error: getPluginsDegradedReason() ?? 'Plugin initialization failed' }
+    : { status: 'ok' };
+
   // Determine overall status
-  const hasErrors = dbCheck.status === 'error' || natsCheck.status === 'error';
+  const hasErrors = dbCheck.status === 'error' || natsCheck.status === 'error' || pluginsFailed;
   const status: HealthResponse['status'] = hasErrors ? 'degraded' : 'healthy';
 
   const response: HealthResponse = {
@@ -82,22 +100,26 @@ healthRoutes.get('/health', async (c) => {
     checks: {
       database: dbCheck,
       nats: natsCheck,
+      plugins: pluginsCheck,
     },
     instances: instanceStats,
   };
 
   return c.json(response, status === 'healthy' ? 200 : 503);
-});
+};
+
+healthRoutes.get('/health', getHealth);
 
 /**
  * GET /info - System info (no auth required)
  */
 healthRoutes.get('/info', async (c) => {
   const db = c.get('db');
+  const channelRegistry = c.get('channelRegistry');
 
   // Get basic stats
   let instancesTotal = 0;
-  let instancesConnected = 0;
+  let instancesActive = 0;
   const eventsToday = 0;
   const eventsTotal = 0;
 
@@ -105,14 +127,22 @@ healthRoutes.get('/info', async (c) => {
     const [instanceStats] = await db
       .select({
         total: sql<number>`count(*)::int`,
-        connected: sql<number>`count(*) filter (where ${instances.isActive})::int`,
+        active: sql<number>`count(*) filter (where ${instances.isActive})::int`,
       })
       .from(instances);
 
     instancesTotal = instanceStats?.total ?? 0;
-    instancesConnected = instanceStats?.connected ?? 0;
+    instancesActive = instanceStats?.active ?? 0;
   } catch {
     // Ignore errors
+  }
+
+  // Real connected count from channel registry (see /health rationale).
+  let instancesConnected = 0;
+  if (channelRegistry) {
+    for (const plugin of channelRegistry.getAll()) {
+      instancesConnected += plugin.getConnectedInstances().length;
+    }
   }
 
   return c.json({
@@ -121,6 +151,7 @@ healthRoutes.get('/info', async (c) => {
     uptime: Math.floor((Date.now() - startTime) / 1000),
     instances: {
       total: instancesTotal,
+      active: instancesActive,
       connected: instancesConnected,
     },
     events: {

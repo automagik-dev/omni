@@ -9,6 +9,9 @@
  *   omni.turn.done.{instanceId}.{chatId}
  *   omni.turn.nudge.{instanceId}.{chatId}
  *   omni.turn.timeout.{instanceId}.{chatId}
+ *
+ * Inbound events (consumed elsewhere, see agent-heartbeat.ts):
+ *   omni.agent.heartbeat.{instanceId}.{chatId}
  */
 
 import { createLogger } from '@omni/core';
@@ -18,6 +21,14 @@ const log = createLogger('turn-events');
 const sc = StringCodec();
 
 let nc: NatsConnection | null = null;
+
+/**
+ * Get the shared turn-events NATS connection (initialised by initTurnEvents).
+ * Returns null when NATS is unavailable.
+ */
+export function getTurnEventsConnection(): NatsConnection | null {
+  return nc && !nc.isClosed() ? nc : null;
+}
 
 /**
  * Initialize the turn events NATS connection.
@@ -129,4 +140,21 @@ export function publishTurnTimeout(instanceId: string, chatId: string, event: Tu
   const topic = `omni.turn.timeout.${instanceId}.${chatId}`;
   publish(topic, event);
   log.debug('Published turn.timeout', { turnId: event.turnId, instanceId });
+}
+
+// ============================================================================
+// Inbound event types
+// ============================================================================
+
+/**
+ * Inbound event published by genie executors while a Claude Code session is
+ * actively working. Consumed by `agent-heartbeat.ts` to reset
+ * `turns.lastActivityAt`, which suppresses the 120s idle nudge for genuinely
+ * busy sessions. Topic: `omni.agent.heartbeat.{instanceId}.{chatId}`.
+ */
+export interface AgentHeartbeatEvent {
+  turnId: string;
+  instanceId: string;
+  chatId: string;
+  timestamp: string;
 }

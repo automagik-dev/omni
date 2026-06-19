@@ -22,6 +22,7 @@ import type { ChannelType } from '@omni/core/types';
 import { GUPSHUP_CAPABILITIES } from './capabilities';
 import { GupshupClient } from './client';
 import { handleGupshupWebhook } from './handlers/webhooks';
+import { sendCloseContact } from './senders/close-contact';
 import { sendHandoff } from './senders/handoff';
 import { sendLocation } from './senders/location';
 import { sendMedia } from './senders/media';
@@ -47,6 +48,13 @@ async function dispatchContent(
     return sendHandoff(client, dest, content.text ?? '', dadosLead, motivoHandoff, handoffFields);
   }
 
+  if (meta?.isCloseContact === true) {
+    const closeReason = meta.closeReason as string | undefined;
+    const closeOutcome = meta.closeOutcome as string | undefined;
+    const closeFields = meta.closeFields as Record<string, unknown> | undefined;
+    return sendCloseContact(client, dest, content.text ?? '', closeReason, closeOutcome, closeFields);
+  }
+
   if (content.type === 'text') {
     return sendText(client, dest, content.text ?? '');
   }
@@ -65,6 +73,38 @@ interface GupshupInstanceState {
   client: GupshupClient;
   config: GupshupConfig;
   dedupeCache: DedupeCache;
+}
+
+function extractResponseString(response: GupshupSendResponse, key: string): string | undefined {
+  const value = response[key];
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  return value.slice(0, 255);
+}
+
+function extractGupshupMessageIds(response: GupshupSendResponse): string[] {
+  if (!Array.isArray(response.messageIds)) return [];
+  return response.messageIds
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .map((value) => value.slice(0, 255));
+}
+
+function extractGupshupProviderAliases(response: GupshupSendResponse): string[] {
+  return [
+    extractResponseString(response, 'messageId'),
+    extractResponseString(response, 'gsId'),
+    extractResponseString(response, 'id'),
+    ...extractGupshupMessageIds(response),
+  ].filter((value, index, values): value is string => typeof value === 'string' && values.indexOf(value) === index);
+}
+
+function buildGupshupResponseMetadata(response: GupshupSendResponse): Record<string, unknown> {
+  return {
+    status: extractResponseString(response, 'status'),
+    messageId: extractResponseString(response, 'messageId'),
+    gsId: extractResponseString(response, 'gsId'),
+    id: extractResponseString(response, 'id'),
+    messageIds: extractGupshupMessageIds(response),
+  };
 }
 
 export class GupshupPlugin extends BaseChannelPlugin {
@@ -182,9 +222,11 @@ export class GupshupPlugin extends BaseChannelPlugin {
 
     try {
       const response = await dispatchContent(client, dest, message);
-      // Gupshup doesn't reliably return a messageId — fall back to a UUID so each
-      // sent message gets a unique externalId and is stored as its own DB row.
-      const messageId = typeof response.messageId === 'string' ? response.messageId : crypto.randomUUID();
+      const providerAliases = extractGupshupProviderAliases(response);
+      // Preserve existing externalId semantics: use Gupshup's canonical
+      // messageId when present, otherwise keep Omni's UUID fallback. Other
+      // provider ids remain searchable through rawPayload aliases.
+      const messageId = extractResponseString(response, 'messageId') ?? crypto.randomUUID();
 
       // Journey timing: T11 (platformDeliveredAt) after API responds
       if (correlationId) this.captureT11(correlationId);
@@ -200,6 +242,10 @@ export class GupshupPlugin extends BaseChannelPlugin {
           mediaUrl: content.mediaUrl,
         },
         replyToId: message.replyTo,
+        rawPayload: {
+          gupshupResponse: buildGupshupResponseMetadata(response),
+          gupshupProviderAliases: providerAliases,
+        },
         senderAgentId: message.metadata?.senderAgentId as string | undefined,
       });
 

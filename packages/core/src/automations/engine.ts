@@ -62,6 +62,16 @@ export interface EngineConfig {
   instanceConcurrencyOverrides?: Record<string, number>;
   /** Maximum pending items per queue before applying backpressure (default: 100) */
   maxQueueDepth?: number;
+  /**
+   * Interval in milliseconds for the subscription reconciler to verify each
+   * enabled trigger has a live subscription and re-subscribe if missing or
+   * dead. Default: 30_000ms. Set to 0 to disable (tests).
+   *
+   * The reconciler closes the gap diagnosed in #546 where a disable→enable
+   * toggle (or NATS server reset) leaves the engine without a working
+   * subscription even though the API reports the automation as enabled.
+   */
+  reconcileIntervalMs?: number;
 }
 
 /**
@@ -82,13 +92,16 @@ export class QueueFullError extends Error {
  * Automation Engine
  */
 export class AutomationEngine {
-  private subscriptions: Subscription[] = [];
+  private subscriptions = new Map<string, Subscription>();
   private instanceQueues = new Map<string, InstanceQueue>();
   private debounceManagers = new Map<string, DebounceManager>(); // automationId -> manager
   private automations: Automation[] = [];
   private eventBus: EventBus | null = null;
   private deps: ActionDependencies;
   private logger: ExecutionLogger | null = null;
+  private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconcileEnabled = false;
+  private reconcilePromise: Promise<void> | null = null;
 
   constructor(private config: EngineConfig) {
     this.deps = {
@@ -107,40 +120,13 @@ export class AutomationEngine {
       eventBus,
       sendMessage: deps.sendMessage,
       callAgent: deps.callAgent,
+      staleIdleTimeoutGate: deps.staleIdleTimeoutGate,
     };
     this.automations = automations.filter((a) => a.enabled);
 
-    // Subscribe to all unique trigger event types
-    const triggerTypes = new Set(this.automations.map((a) => a.triggerEventType));
-
-    for (const eventType of triggerTypes) {
-      // Durable consumer name — ephemeral consumers are GC'd by NATS after 5s
-      // idle, which silently stops automations with low-frequency triggers
-      // (chat.idle_timeout, chat.archived, handoff, etc.). See #445.
-      const durable = `automation-engine-${eventType.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
-      const subscription = await eventBus.subscribePattern(
-        `${eventType}.>`,
-        async (event) => {
-          await this.handleEvent(event);
-        },
-        {
-          durable,
-          queue: 'automation-engine',
-          startFrom: 'new',
-          maxRetries: 3,
-          retryDelayMs: 1000,
-        },
-      );
-      this.subscriptions.push(subscription);
-      logger.info(`Subscribed to ${eventType}.*`, { durable });
-    }
-
-    // Set up debounce managers for automations that have debounce config
-    for (const automation of this.automations) {
-      if (automation.debounce && automation.debounce.mode !== 'none') {
-        this.setupDebounceManager(automation);
-      }
-    }
+    await this.reconcileSubscriptions();
+    this.rebuildDebounceManagers();
+    this.startReconcileTimer();
 
     logger.info(`Automation engine started with ${this.automations.length} automations`);
   }
@@ -149,11 +135,13 @@ export class AutomationEngine {
    * Stop the engine
    */
   async stop(): Promise<void> {
+    this.stopReconcileTimer();
+
     // Unsubscribe from all events
-    for (const subscription of this.subscriptions) {
+    for (const subscription of this.subscriptions.values()) {
       await subscription.unsubscribe();
     }
-    this.subscriptions = [];
+    this.subscriptions.clear();
 
     // Flush all debounce windows
     for (const manager of this.debounceManagers.values()) {
@@ -173,12 +161,226 @@ export class AutomationEngine {
 
   /**
    * Reload automations (e.g., when CRUD changes)
+   *
+   * Reconciles subscriptions in place rather than tearing down and rebuilding,
+   * so the durable consumer's iterator is preserved when the trigger set is
+   * unchanged. The reconciler is also responsible for re-creating subscriptions
+   * for triggers that became enabled (toggle false→true) and dropping
+   * subscriptions for triggers that became orphaned (last automation disabled).
+   * See #546.
    */
   async reload(automations: Automation[]): Promise<void> {
-    await this.stop();
-    if (this.eventBus) {
-      await this.start(this.eventBus, automations, this.deps);
+    if (!this.eventBus) {
+      // Engine never started — nothing to do.
+      this.automations = automations.filter((a) => a.enabled);
+      return;
     }
+    this.automations = automations.filter((a) => a.enabled);
+    await this.reconcileSubscriptions();
+    this.rebuildDebounceManagers();
+  }
+
+  /**
+   * Run the subscription reconciler on demand.
+   *
+   * Public so operators / health checks can force a sync. Idempotent.
+   */
+  async reconcile(): Promise<void> {
+    if (!this.eventBus) return;
+    await this.reconcileSubscriptions();
+  }
+
+  /**
+   * Diff expected (from current automations) vs active subscriptions and
+   * subscribe / unsubscribe to converge. Also re-subscribes any subscription
+   * whose underlying iterator has died (e.g., NATS server reset).
+   *
+   * Single-flight: concurrent callers (periodic timer, manual reconcile(),
+   * reload()) await the same in-flight pass instead of mutating the
+   * subscriptions Map in parallel — without this guard a timer tick that
+   * overlaps a reload could double-subscribe a trigger and leak the second
+   * handle. See gemini review on PR #587.
+   */
+  private async reconcileSubscriptions(): Promise<void> {
+    if (!this.eventBus) return;
+    if (this.reconcilePromise) return this.reconcilePromise;
+    this.reconcilePromise = this.doReconcileSubscriptions().finally(() => {
+      this.reconcilePromise = null;
+    });
+    return this.reconcilePromise;
+  }
+
+  private async doReconcileSubscriptions(): Promise<void> {
+    if (!this.eventBus) return;
+
+    const expectedTriggers = new Set(this.automations.map((a) => a.triggerEventType));
+
+    // Drop subscriptions whose trigger is no longer enabled.
+    for (const [eventType, subscription] of this.subscriptions) {
+      if (!expectedTriggers.has(eventType)) {
+        await subscription.unsubscribe().catch((err) => {
+          logger.warn('Failed to unsubscribe orphan trigger', { eventType, error: String(err) });
+        });
+        this.subscriptions.delete(eventType);
+        logger.info(`Unsubscribed from ${eventType}.* (no enabled automations)`);
+      }
+    }
+
+    // Subscribe (or re-subscribe if dead) for each expected trigger.
+    for (const eventType of expectedTriggers) {
+      const existing = this.subscriptions.get(eventType);
+      if (existing && this.isSubscriptionAlive(existing)) {
+        continue;
+      }
+      if (existing) {
+        // Stale handle — best-effort unsubscribe before replacing.
+        await existing.unsubscribe().catch(() => {});
+        this.subscriptions.delete(eventType);
+        logger.warn('Replacing dead subscription', { eventType });
+      }
+      const subscription = await this.subscribeForTrigger(eventType);
+      this.subscriptions.set(eventType, subscription);
+    }
+  }
+
+  /**
+   * Create one durable subscription for a trigger event type.
+   */
+  private async subscribeForTrigger(eventType: string): Promise<Subscription> {
+    if (!this.eventBus) {
+      throw new Error('Event bus not initialized');
+    }
+    // Durable consumer name — ephemeral consumers are GC'd by NATS after 5s
+    // idle, which silently stops automations with low-frequency triggers
+    // (chat.idle_timeout, chat.archived, handoff, etc.). See #445.
+    const durable = `automation-engine-${eventType.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+    const subscription = await this.eventBus.subscribePattern(
+      `${eventType}.>`,
+      async (event) => {
+        await this.handleEvent(event);
+      },
+      {
+        durable,
+        queue: 'automation-engine',
+        startFrom: 'new',
+        maxRetries: 3,
+        retryDelayMs: 1000,
+      },
+    );
+    logger.info(`Subscribed to ${eventType}.*`, { durable });
+    return subscription;
+  }
+
+  private isSubscriptionAlive(subscription: Subscription): boolean {
+    // Default to alive when the bus implementation does not expose liveness.
+    return subscription.isAlive ? subscription.isAlive() : true;
+  }
+
+  private rebuildDebounceManagers(): void {
+    // Drop debounce managers whose automation is no longer enabled.
+    const enabledIds = new Set(this.automations.map((a) => a.id));
+    for (const id of this.debounceManagers.keys()) {
+      if (!enabledIds.has(id)) {
+        this.debounceManagers.get(id)?.flushAll();
+        this.debounceManagers.delete(id);
+      }
+    }
+    for (const automation of this.automations) {
+      if (automation.debounce && automation.debounce.mode !== 'none' && !this.debounceManagers.has(automation.id)) {
+        this.setupDebounceManager(automation);
+      }
+    }
+  }
+
+  /**
+   * Start the periodic reconciler.
+   *
+   * Recursive setTimeout pattern (not setInterval) so a slow reconcile cannot
+   * stack ticks — the next tick is only scheduled after the current pass
+   * resolves. Combined with the single-flight guard in reconcileSubscriptions,
+   * this gives at-most-one in-flight reconcile across all callers. See gemini
+   * review on PR #587.
+   */
+  private startReconcileTimer(): void {
+    this.stopReconcileTimer();
+    const intervalMs = this.config.reconcileIntervalMs ?? 30_000;
+    if (intervalMs <= 0) return;
+    this.reconcileEnabled = true;
+    this.scheduleNextReconcile(intervalMs);
+  }
+
+  private scheduleNextReconcile(intervalMs: number): void {
+    if (!this.reconcileEnabled) return;
+    this.reconcileTimer = setTimeout(() => {
+      // Run the reconcile then schedule the next tick. We chain in finally so
+      // a thrown error doesn't stop the loop — only stopReconcileTimer does.
+      this.reconcileSubscriptions()
+        .catch((err) => {
+          logger.error('Reconciler tick failed', { error: String(err) });
+        })
+        .finally(() => {
+          this.scheduleNextReconcile(intervalMs);
+        });
+    }, intervalMs);
+    // Don't keep the process alive just for the reconciler.
+    if (typeof this.reconcileTimer === 'object' && this.reconcileTimer && 'unref' in this.reconcileTimer) {
+      (this.reconcileTimer as { unref: () => void }).unref();
+    }
+  }
+
+  private stopReconcileTimer(): void {
+    this.reconcileEnabled = false;
+    if (this.reconcileTimer) {
+      clearTimeout(this.reconcileTimer);
+      this.reconcileTimer = null;
+    }
+  }
+
+  /**
+   * Consumer-side stale-event gate for `chat.idle_timeout` — defense in depth
+   * against NATS replay of historical idle-timeout events whose chat state
+   * has since changed (sequence completed, customer replied, handoff,
+   * close-contact). The sweeper already filters these at publish time, but a
+   * durable-consumer reset (e.g. config-incompat delete+recreate on toggle
+   * or restart — see #546 follow-on) replays anything still in the SYSTEM
+   * stream's retention window. Without this gate the engine fires
+   * call_agent + send_message for every replayed event regardless of the
+   * chat's current state — the spam pattern reported on 2026-05-01.
+   *
+   * Returns `true` when the event should be dropped (gate said skip).
+   * Returns `false` when the event should proceed (no gate, missing payload
+   * fields, gate said proceed, or gate threw — fail-open by design).
+   */
+  private async shouldSkipStaleIdleTimeout(event: OmniEvent): Promise<boolean> {
+    if (event.type !== 'chat.idle_timeout' || !this.deps.staleIdleTimeoutGate) return false;
+    const payload = event.payload as { chatId?: string; instanceId?: string; sequenceIndex?: number };
+    const chatId = payload?.chatId;
+    const payloadInstanceId = payload?.instanceId ?? event.metadata.instanceId;
+    if (!chatId || !payloadInstanceId) return false;
+    const eventSequenceIndex = typeof payload?.sequenceIndex === 'number' ? payload.sequenceIndex : null;
+
+    try {
+      const verdict = await this.deps.staleIdleTimeoutGate(chatId, payloadInstanceId, eventSequenceIndex);
+      if (verdict.skip) {
+        logger.info('Skipping stale chat.idle_timeout event', {
+          eventId: event.id,
+          chatId,
+          instanceId: payloadInstanceId,
+          eventSequenceIndex,
+          reason: verdict.reason ?? 'unknown',
+        });
+        return true;
+      }
+    } catch (err) {
+      // Fail-open — better to fire a redundant follow-up than to silently
+      // drop legitimate events when the DB is flaky.
+      logger.warn('staleIdleTimeoutGate threw, proceeding without skip', {
+        eventId: event.id,
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return false;
   }
 
   /**
@@ -192,6 +394,10 @@ export class AutomationEngine {
     const matchingAutomations = this.automations.filter((a) => a.triggerEventType === eventType);
 
     if (matchingAutomations.length === 0) {
+      return;
+    }
+
+    if (await this.shouldSkipStaleIdleTimeout(event)) {
       return;
     }
 

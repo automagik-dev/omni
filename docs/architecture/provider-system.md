@@ -284,7 +284,7 @@ export const agentProviders = pgTable('agent_providers', {
 
   // Default settings
   defaultStream: boolean('default_stream').notNull().default(true),
-  defaultTimeout: integer('default_timeout').notNull().default(60),
+  defaultTimeout: integer('default_timeout').notNull().default(600),
 
   // Capabilities (auto-detected or manually set)
   supportsStreaming: boolean('supports_streaming').notNull().default(true),

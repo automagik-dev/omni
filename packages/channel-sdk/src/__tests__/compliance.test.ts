@@ -38,6 +38,12 @@ import {
   TelegramPlugin,
 } from '../../../channel-telegram/src/index';
 import {
+  TWILIO_WHATSAPP_CAPABILITIES,
+  TwilioWhatsAppError,
+  TwilioWhatsAppErrorCode,
+  TwilioWhatsAppPlugin,
+} from '../../../channel-twilio-whatsapp/src/index';
+import {
   WHATSAPP_CAPABILITIES,
   WhatsAppError,
   ErrorCode as WhatsAppErrorCode,
@@ -112,6 +118,16 @@ const channels: ChannelDescriptor[] = [
     handlerSourcePaths: [channelPath('slack', 'handlers', 'messages.ts'), channelPath('slack', 'handlers', 'files.ts')],
     errorSourcePath: channelPath('slack', 'types.ts'),
   },
+  {
+    name: 'twilio-whatsapp',
+    packageName: '@omni/channel-twilio-whatsapp',
+    pluginClass: TwilioWhatsAppPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: TwilioWhatsAppError,
+    capabilities: TWILIO_WHATSAPP_CAPABILITIES,
+    pluginSourcePath: channelPath('twilio-whatsapp', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('twilio-whatsapp', 'handlers', 'webhooks.ts')],
+    errorSourcePath: channelPath('twilio-whatsapp', 'utils', 'errors.ts'),
+  },
 ];
 
 function readSource(path: string): string {
@@ -175,14 +191,15 @@ const errorConstructorArgs: Record<string, unknown[]> = {
   telegram: [TelegramErrorCode.SEND_FAILED, 'compliance test'],
   discord: [DiscordErrorCode.SEND_FAILED, 'compliance test'],
   slack: [SlackErrorCode.SEND_FAILED, 'compliance test'],
+  'twilio-whatsapp': [TwilioWhatsAppErrorCode.SEND_FAILED, 'compliance test'],
 };
 
 // Group 1: Infrastructure
 
 describe('SDK compliance test infrastructure', () => {
-  it('has descriptors for all 4 channels', () => {
+  it('has descriptors for all 5 channels', () => {
     const names = channels.map((c) => c.name).sort();
-    expect(names).toEqual(['discord', 'slack', 'telegram', 'whatsapp']);
+    expect(names).toEqual(['discord', 'slack', 'telegram', 'twilio-whatsapp', 'whatsapp']);
   });
 
   for (const channel of channels) {
@@ -417,6 +434,7 @@ describe('channel coverage', () => {
       .filter(
         (e) =>
           e.isDirectory() &&
+          existsSync(resolve(packagesRoot, e.name, 'package.json')) &&
           e.name.startsWith('channel-') &&
           e.name !== 'channel-sdk' &&
           e.name !== 'channel-a2a' &&

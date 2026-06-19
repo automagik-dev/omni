@@ -109,6 +109,144 @@ describe('AgnoClient', () => {
       expect(mockImpl).toHaveBeenCalledTimes(1);
     });
 
+    it('propagates W3C trace context in headers for Langfuse session stitching', async () => {
+      const response = {
+        run_id: 'run-123',
+        agent_id: 'agent-1',
+        session_id: 'session-456',
+        content: 'Hello from agent!',
+        status: 'COMPLETED',
+      };
+
+      mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }));
+
+      const client = new AgnoClient(config);
+      await client.run({
+        message: 'Hello!',
+        agentId: 'agent-1',
+        agentType: 'agent',
+        sessionId: 'chat-123',
+        userId: 'user-456',
+        traceContext: {
+          traceId: '0123456789ABCDEF0123456789ABCDEF',
+          spanId: 'FEDCBA9876543210',
+          parentSpanId: '0011223344556677',
+          traceFlags: 1,
+          tracestate: 'vendor=value',
+        },
+        khalSessionId: 'khal-session-123',
+        omni: {
+          instanceId: 'inst-1',
+          chatId: 'chat-123',
+          messageId: 'msg-789',
+          channel: 'whatsapp-cloud',
+        },
+      });
+
+      const init = mockImpl.mock.calls[0]?.[1] as RequestInit;
+      const headers = init.headers as Record<string, string>;
+      const formData = init.body as FormData;
+      expect(headers.traceparent).toBe('00-0123456789abcdef0123456789abcdef-fedcba9876543210-01');
+      expect(headers.tracestate).toBe('vendor=value');
+      expect(headers['x-trace-id']).toBe('0123456789abcdef0123456789abcdef');
+      expect(headers['x-span-id']).toBe('fedcba9876543210');
+      expect(headers['x-parent-span-id']).toBe('0011223344556677');
+      expect(headers['x-khal-session-id']).toBe('khal-session-123');
+      expect(headers['x-khal-user-id']).toBe('user-456');
+      expect(headers['x-khal-message-id']).toBe('msg-789');
+      expect(headers['x-omni-instance-id']).toBe('inst-1');
+      expect(headers['x-omni-chat-id']).toBe('chat-123');
+      expect(headers['x-omni-channel']).toBe('whatsapp-cloud');
+      expect(formData.get('session_id')).toBe('khal-session-123');
+    });
+
+    it('includes structured Omni metadata in Agno run form payloads', async () => {
+      const response = {
+        run_id: 'run-123',
+        agent_id: 'agent-1',
+        session_id: 'session-456',
+        content: 'Hello from agent!',
+        status: 'COMPLETED',
+      };
+
+      mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }));
+
+      const client = new AgnoClient(config);
+      await client.run({
+        message: 'Hello!',
+        agentId: 'agent-1',
+        agentType: 'agent',
+        sessionId: 'chat-123',
+        khalSessionId: 'khal-session-123',
+        userId: 'person-uuid',
+        platform: {
+          id: '5511999999999',
+          channel: 'whatsapp-cloud',
+          instanceId: 'inst-1',
+        },
+        sender: { displayName: 'Example User' },
+        chat: { type: 'group', id: 'group-1', threadId: 'topic-1' },
+        messageId: 'msg-789',
+        replyToMessageId: 'msg-456',
+        mcpUrlParams: { chat_id: 'group-1' },
+        env: { OMNI_CHAT: 'group-1' },
+        omni: {
+          instanceId: 'inst-1',
+          chatId: 'group-1',
+          messageId: 'msg-789',
+          channel: 'whatsapp-cloud',
+        },
+      });
+
+      const init = mockImpl.mock.calls[0]?.[1] as RequestInit;
+      const formData = init.body as FormData;
+      expect(formData.get('user_id')).toBe('person-uuid');
+      expect(formData.get('khal_session_id')).toBe('khal-session-123');
+      expect(formData.get('message_id')).toBe('msg-789');
+      expect(formData.get('reply_to_message_id')).toBe('msg-456');
+      expect(JSON.parse(String(formData.get('platform')))).toEqual({
+        id: '5511999999999',
+        channel: 'whatsapp-cloud',
+        instanceId: 'inst-1',
+      });
+      expect(JSON.parse(String(formData.get('sender')))).toEqual({ displayName: 'Example User' });
+      expect(JSON.parse(String(formData.get('chat')))).toEqual({ type: 'group', id: 'group-1', threadId: 'topic-1' });
+      expect(JSON.parse(String(formData.get('mcp_url_params')))).toEqual({ chat_id: 'group-1' });
+      expect(JSON.parse(String(formData.get('env')))).toEqual({ OMNI_CHAT: 'group-1' });
+      expect(JSON.parse(String(formData.get('omni')))).toEqual({
+        instanceId: 'inst-1',
+        chatId: 'group-1',
+        messageId: 'msg-789',
+        channel: 'whatsapp-cloud',
+      });
+    });
+
+    it('uses sessionId as x-khal-session-id when khalSessionId is omitted', async () => {
+      const response = {
+        run_id: 'run-123',
+        agent_id: 'agent-1',
+        session_id: 'session-456',
+        content: 'Hello response',
+        status: 'COMPLETED',
+      };
+
+      mockImpl.mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }));
+
+      const client = new AgnoClient(config);
+      await client.run({
+        message: 'Hello!',
+        agentId: 'agent-1',
+        userId: 'test-user-id',
+        sessionId: 'legacy-session-123',
+      });
+
+      const init = mockImpl.mock.calls[0]?.[1] as RequestInit;
+      const headers = init.headers as Record<string, string>;
+      const formData = init.body as FormData;
+      expect(headers['x-khal-session-id']).toBe('legacy-session-123');
+      expect(formData.get('session_id')).toBe('legacy-session-123');
+    });
+
     it('routes to teams endpoint for team agentType', async () => {
       const response = {
         run_id: 'run-123',
@@ -226,6 +364,53 @@ describe('AgnoClient', () => {
       expect(chunks[3]).toMatchObject({ event: 'RunCompleted', isComplete: true, fullContent: 'Hello World!' });
     });
 
+    it('propagates W3C trace context and Khal session headers for streaming runs', async () => {
+      const sseData = 'event: RunCompleted\ndata: {"run_id": "run-1", "content": "done"}\n\n';
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(sseData));
+          controller.close();
+        },
+      });
+
+      mockImpl.mockResolvedValueOnce(
+        new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+      );
+
+      const client = new AgnoClient(config);
+      for await (const _chunk of client.stream({
+        message: 'Hi!',
+        agentId: 'agent-1',
+        userId: 'user-456',
+        khalSessionId: 'khal-session-stream',
+        traceContext: {
+          traceId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          spanId: 'bbbbbbbbbbbbbbbb',
+          traceFlags: 1,
+        },
+        omni: {
+          instanceId: 'inst-1',
+          chatId: 'chat-123',
+          messageId: 'msg-stream-1',
+          channel: 'gupshup',
+        },
+      })) {
+        // exhaust stream so the request is issued
+      }
+
+      const init = mockImpl.mock.calls[0]?.[1] as RequestInit;
+      const headers = init.headers as Record<string, string>;
+      const formData = init.body as FormData;
+      expect(headers.traceparent).toBe('00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01');
+      expect(headers['x-khal-session-id']).toBe('khal-session-stream');
+      expect(headers['x-khal-message-id']).toBe('msg-stream-1');
+      expect(headers['x-omni-instance-id']).toBe('inst-1');
+      expect(headers['x-omni-chat-id']).toBe('chat-123');
+      expect(headers['x-omni-channel']).toBe('gupshup');
+      expect(formData.get('session_id')).toBe('khal-session-stream');
+    });
+
     it('handles stream errors', async () => {
       const sseData = 'event: RunFailed\ndata: {"error": "Agent crashed"}\n\n';
 
@@ -272,8 +457,28 @@ describe('AgnoClient', () => {
   // --- IAgentClient interface: discover() ---
 
   describe('discover', () => {
-    it('returns combined agents, teams, and workflows', async () => {
-      // Three sequential fetches: agents, teams, workflows
+    it('returns combined agents, teams, and workflows (agno 2.5 shape)', async () => {
+      // agno 2.5+ exposes `id` at the top level of each entity — regression for #509.
+      mockImpl
+        .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 'a1', name: 'Agent 1' }]), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 't1', name: 'Team 1' }]), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 'w1', name: 'Workflow 1' }]), { status: 200 }));
+
+      const client = new AgnoClient(config);
+      const entries = await client.discover();
+
+      expect(entries).toHaveLength(3);
+      expect(entries[0]).toMatchObject({ id: 'a1', name: 'Agent 1', type: 'agent' });
+      expect(entries[1]).toMatchObject({ id: 't1', name: 'Team 1', type: 'team' });
+      expect(entries[2]).toMatchObject({ id: 'w1', name: 'Workflow 1', type: 'workflow' });
+      // Every entry must have a defined id — guards against the #509 regression.
+      for (const entry of entries) {
+        expect(entry.id).toBeDefined();
+        expect(entry.id).not.toBe(undefined);
+      }
+    });
+
+    it('falls back to legacy agent_id/team_id/workflow_id fields (pre-agno-2.5)', async () => {
       mockImpl
         .mockResolvedValueOnce(new Response(JSON.stringify([{ agent_id: 'a1', name: 'Agent 1' }]), { status: 200 }))
         .mockResolvedValueOnce(new Response(JSON.stringify([{ team_id: 't1', name: 'Team 1' }]), { status: 200 }))
@@ -285,14 +490,14 @@ describe('AgnoClient', () => {
       const entries = await client.discover();
 
       expect(entries).toHaveLength(3);
-      expect(entries[0]).toMatchObject({ id: 'a1', name: 'Agent 1', type: 'agent' });
-      expect(entries[1]).toMatchObject({ id: 't1', name: 'Team 1', type: 'team' });
-      expect(entries[2]).toMatchObject({ id: 'w1', name: 'Workflow 1', type: 'workflow' });
+      expect(entries[0]).toMatchObject({ id: 'a1', type: 'agent' });
+      expect(entries[1]).toMatchObject({ id: 't1', type: 'team' });
+      expect(entries[2]).toMatchObject({ id: 'w1', type: 'workflow' });
     });
 
     it('returns partial results when some endpoints fail', async () => {
       mockImpl
-        .mockResolvedValueOnce(new Response(JSON.stringify([{ agent_id: 'a1', name: 'Agent 1' }]), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 'a1', name: 'Agent 1' }]), { status: 200 }))
         .mockRejectedValueOnce(new Error('Teams endpoint down'))
         .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }));
 
@@ -309,8 +514,8 @@ describe('AgnoClient', () => {
   describe('listAgents', () => {
     it('returns list of agents on success', async () => {
       const agents = [
-        { agent_id: 'agent-1', name: 'Test Agent' },
-        { agent_id: 'agent-2', name: 'Another Agent' },
+        { id: 'agent-1', name: 'Test Agent' },
+        { id: 'agent-2', name: 'Another Agent' },
       ];
 
       mockImpl.mockResolvedValueOnce(
@@ -363,7 +568,7 @@ describe('AgnoClient', () => {
 
   describe('listTeams', () => {
     it('returns list of teams on success', async () => {
-      const teams = [{ team_id: 'team-1', name: 'Test Team' }];
+      const teams = [{ id: 'team-1', name: 'Test Team' }];
 
       mockImpl.mockResolvedValueOnce(
         new Response(JSON.stringify(teams), {
@@ -381,7 +586,7 @@ describe('AgnoClient', () => {
 
   describe('listWorkflows', () => {
     it('returns list of workflows on success', async () => {
-      const workflows = [{ workflow_id: 'wf-1', name: 'Test Workflow' }];
+      const workflows = [{ id: 'wf-1', name: 'Test Workflow' }];
 
       mockImpl.mockResolvedValueOnce(
         new Response(JSON.stringify(workflows), {
@@ -429,6 +634,33 @@ describe('AgnoClient', () => {
 
       expect(result.healthy).toBe(false);
       expect(result.error).toContain('Connection refused');
+    });
+  });
+
+  // --- IAgentClient interface: deleteSession() ---
+
+  describe('deleteSession', () => {
+    it('returns a verified delete result on success', async () => {
+      mockImpl.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+      const client = new AgnoClient(config);
+      const result = await client.deleteSession('khal:hml:omni:inst:gupshup:person');
+
+      expect(result).toEqual({
+        ok: true,
+        status: 204,
+        sessionId: 'khal:hml:omni:inst:gupshup:person',
+        existed: true,
+      });
+    });
+
+    it('treats a missing session as a verified no-op instead of throwing', async () => {
+      mockImpl.mockResolvedValueOnce(new Response('missing', { status: 404 }));
+
+      const client = new AgnoClient(config);
+      const result = await client.deleteSession('legacy-phone-session');
+
+      expect(result).toEqual({ ok: true, status: 404, sessionId: 'legacy-phone-session', existed: false });
     });
   });
 

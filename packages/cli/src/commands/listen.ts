@@ -2,6 +2,7 @@
  * Listen Command — Speech-to-text verb
  *
  * omni listen audio.ogg                       — print transcription to stdout
+ * omni listen audio.ogg --provider openai     — force OpenAI STT (quality default)
  * omni listen audio.ogg --provider gemini     — force Gemini STT (handles >19.5MB)
  * omni listen audio.ogg --provider groq       — force Groq Whisper (fast, 19.5MB cap)
  * omni listen audio.ogg --language pt         — language hint
@@ -27,6 +28,9 @@ interface ListenOptions {
   timestamps?: boolean;
   format?: string;
   model?: string;
+  prompt?: string;
+  context?: string;
+  glossary?: string;
   reply?: string | true;
   instance?: string;
   chat?: string;
@@ -80,11 +84,14 @@ export function createListenCommand(): Command {
     new Command('listen')
       .description('Transcribe an audio file to text and print (or send as reply)')
       .argument('<file>', 'Path to the audio file to transcribe')
-      .option('--provider <name>', 'STT provider (gemini, groq). Default: server config.')
+      .option('--provider <name>', 'STT provider (openai, gemini, groq). Default: server config.')
       .option('--language <code>', 'BCP-47 language hint (e.g. en, pt-BR)')
       .option('--timestamps', 'Include per-segment timestamps')
       .option('--format <fmt>', `Output format: ${ALLOWED_FORMATS.join(', ')} (default: text)`)
       .option('--model <name>', 'Model override (provider-specific)')
+      .option('--prompt <text>', 'Provider transcription prompt/instructions')
+      .option('--context <text>', 'Domain context for acoustic disambiguation')
+      .option('--glossary <terms>', 'Comma-separated likely names/acronyms/products')
       .option('--reply [message-id]', 'Send transcript as a quote-reply to the trigger or a specific message')
       .option('--instance <id>', 'Override instance (default: from context, only with --reply)')
       .option('--chat <id>', 'Override chat (default: from context, only with --reply)')
@@ -109,6 +116,13 @@ export function createListenCommand(): Command {
 
         const mimeType = guessAudioMimeType(file);
 
+        const glossary = options.glossary
+          ? options.glossary
+              .split(',')
+              .map((term) => term.trim())
+              .filter(Boolean)
+          : undefined;
+
         // Transcribe via server-side provider registry
         let result: {
           provider: string;
@@ -125,6 +139,9 @@ export function createListenCommand(): Command {
             language: options.language,
             timestamps: wantTimestamps,
             model: options.model,
+            prompt: options.prompt,
+            context: options.context,
+            glossary,
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';

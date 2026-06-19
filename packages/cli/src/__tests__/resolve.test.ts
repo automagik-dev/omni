@@ -27,6 +27,10 @@ mock.module('../output.js', () => ({
   keyValue: mock(),
   header: mock(),
   dim: mock(),
+  tip: (msg: string) => {
+    // biome-ignore lint/suspicious/noConsole: matches real output.tip — writes to stderr via console.error
+    console.error(msg);
+  },
   disableColors: mock(),
   areColorsEnabled: () => true,
   setMaxCellWidth: mock(),
@@ -36,21 +40,26 @@ mock.module('../output.js', () => ({
 
 // Mock getClient
 const mockGetMessages = mock();
+const mockListChats = mock();
+const mockGetChat = mock();
 mock.module('../client.js', () => ({
   getClient: () => ({
     chats: {
+      get: mockGetChat,
       getMessages: mockGetMessages,
+      list: mockListChats,
     },
   }),
 }));
 
 // Import after mocks are set up
-const { resolveMessageId } = await import('../resolve.js');
+const { resolveChatId, resolveMessageId } = await import('../resolve.js');
 
 describe('resolveMessageId', () => {
   beforeEach(() => {
     mockError.mockClear();
     mockGetMessages.mockClear();
+    mockListChats.mockClear();
   });
 
   test('full UUID passes through without API call', async () => {
@@ -121,5 +130,53 @@ describe('resolveMessageId', () => {
 
   test('non-hex non-UUID string with chat context errors', async () => {
     await expect(resolveMessageId('not-a-valid-id!', 'some-chat-id')).rejects.toThrow('No message found matching');
+  });
+});
+
+describe('resolveChatId', () => {
+  beforeEach(() => {
+    mockError.mockClear();
+    mockListChats.mockClear();
+    mockGetChat.mockClear();
+  });
+
+  test('validates full UUID chat belongs to provided instance', async () => {
+    const chatId = '11111111-1111-4111-8111-111111111111';
+    mockGetChat.mockResolvedValue({ id: chatId, instanceId: 'instance-b', name: 'Example Contact' });
+
+    const result = await resolveChatId(chatId, 'instance-b');
+
+    expect(result).toBe(chatId);
+    expect(mockGetChat).toHaveBeenCalledWith(chatId);
+    expect(mockListChats).not.toHaveBeenCalled();
+  });
+
+  test('rejects full UUID chat from a different instance', async () => {
+    const chatId = '11111111-1111-4111-8111-111111111111';
+    mockGetChat.mockResolvedValue({ id: chatId, instanceId: 'instance-a', name: 'Example Contact' });
+
+    await expect(resolveChatId(chatId, 'instance-b')).rejects.toThrow(
+      `Chat ${chatId.slice(0, 8)} belongs to instance instance-a, not instance-b`,
+    );
+    expect(mockListChats).not.toHaveBeenCalled();
+  });
+
+  test('rejects full UUID chat when API returns null', async () => {
+    const chatId = '11111111-1111-4111-8111-111111111111';
+    mockGetChat.mockResolvedValue(null);
+
+    await expect(resolveChatId(chatId, 'instance-b')).rejects.toThrow(`No chat found matching "${chatId}"`);
+    expect(mockListChats).not.toHaveBeenCalled();
+  });
+
+  test('scopes chat lookup by instance when provided', async () => {
+    mockListChats.mockResolvedValue({
+      items: [{ id: '22222222-2222-2222-2222-222222222222', name: 'Example Contact' }],
+    });
+
+    const result = await resolveChatId('example contact', 'instance-b');
+
+    expect(result).toBe('22222222-2222-2222-2222-222222222222');
+    expect(mockListChats).toHaveBeenCalledWith({ limit: 100, instanceId: 'instance-b' });
   });
 });

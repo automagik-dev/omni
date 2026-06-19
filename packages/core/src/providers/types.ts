@@ -83,6 +83,20 @@ export interface ProviderRequest {
 
   /** Environment variables to expose to provider subprocesses/SDK runtimes. */
   env?: Record<string, string>;
+
+  /** Canonical Omni execution context propagated across local CLIs and remote protocols. */
+  executionContext?: OmniExecutionContext;
+  /** Distributed trace context to propagate on outbound provider calls. */
+  traceContext?: TraceContext;
+  /** Khal session id for cross-service session stitching. Falls back to sessionId when unset. */
+  khalSessionId?: string;
+  /** Omni source metadata propagated to provider transports. */
+  omni?: {
+    instanceId?: string;
+    chatId?: string;
+    messageId?: string;
+    channel?: ChannelType;
+  };
 }
 
 export interface ProviderFile {
@@ -145,9 +159,14 @@ export type StreamDelta =
 
 /**
  * Agent entity from Agno
+ *
+ * agno 2.5+ returns `id` at the top level. `agent_id` is kept optional for
+ * backward compatibility with pre-2.5 deployments.
  */
 export interface AgnoAgent {
-  agent_id: string;
+  id: string;
+  /** @deprecated pre-agno-2.5 field; use `id` */
+  agent_id?: string;
   name: string;
   model?: {
     provider?: string;
@@ -159,25 +178,43 @@ export interface AgnoAgent {
 
 /**
  * Team entity from Agno
+ *
+ * agno 2.5+ returns `id` at the top level. `team_id` is kept optional for
+ * backward compatibility with pre-2.5 deployments.
  */
 export interface AgnoTeam {
-  team_id: string;
+  id: string;
+  /** @deprecated pre-agno-2.5 field; use `id` */
+  team_id?: string;
   name: string;
   description?: string;
   mode?: string;
   members?: Array<{
     agent_id: string;
+    id?: string;
     role?: string;
   }>;
 }
 
 /**
  * Workflow entity from Agno
+ *
+ * agno 2.5+ returns `id` at the top level. `workflow_id` is kept optional for
+ * backward compatibility with pre-2.5 deployments.
  */
 export interface AgnoWorkflow {
-  workflow_id: string;
+  id: string;
+  /** @deprecated pre-agno-2.5 field; use `id` */
+  workflow_id?: string;
   name: string;
   description?: string;
+}
+
+export interface SessionDeleteResult {
+  ok: boolean;
+  status: number;
+  sessionId: string;
+  existed: boolean | undefined;
 }
 
 /**
@@ -200,7 +237,7 @@ export interface IAgentClient {
   checkHealth(): Promise<AgentHealthResult>;
 
   /** Optional: delete a session (clear conversation history) */
-  deleteSession?(sessionId: string): Promise<void>;
+  deleteSession?(sessionId: string): Promise<SessionDeleteResult>;
 }
 
 /**
@@ -269,6 +306,105 @@ export type ProviderErrorCode =
 export type AgentTriggerType = 'mention' | 'reaction' | 'dm' | 'reply' | 'name_match' | 'command';
 
 /**
+ * Distributed trace context for cross-process propagation.
+ *
+ * Aligns with W3C Trace Context (`traceparent` HTTP header) so providers can
+ * propagate trace identity across HTTP/NATS/gRPC boundaries without coupling
+ * to any specific OpenTelemetry SDK. Producers receive this from the dispatcher
+ * and inject it on outbound calls so cross-process traces stitch correctly.
+ *
+ * Backend-agnostic: the trace identifier itself is a 16-byte hex string per
+ * W3C; how it's exported (OTLP, Zipkin, vendor-native) is the host's concern,
+ * configured via standard `OTEL_*` env vars.
+ */
+export interface TraceContext {
+  /** W3C trace-id — 32 hex chars (16 bytes). */
+  traceId: string;
+  /** W3C span-id of the current span — 16 hex chars (8 bytes). */
+  spanId: string;
+  /** Optional parent span-id for nested propagation. */
+  parentSpanId?: string;
+  /** W3C trace flags (1 = sampled, 0 = not). Default 1 when unset. */
+  traceFlags?: number;
+  /** W3C tracestate header value. */
+  tracestate?: string;
+  /** Backward-compatible camelCase alias for tracestate. */
+  traceState?: string;
+}
+
+/**
+ * Optional observability hooks on a provider.
+ *
+ * Providers that want to participate in distributed tracing (propagate the
+ * W3C `traceparent` on outbound HTTP/NATS calls, emit OTel spans for internal
+ * operations, expose a health probe for silent-failure detection) implement
+ * this interface. Providers without an `observability` field fall back to
+ * default no-op behavior — no behavior change for legacy providers.
+ *
+ * **Backend-neutral by design.** Emitted spans flow through whatever OTel SDK
+ * the host configured via standard `OTEL_EXPORTER_OTLP_ENDPOINT` /
+ * `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES`. No vendor SDK is coupled
+ * here.
+ */
+export interface ProviderObservability {
+  /**
+   * Receive a trace context from the dispatcher when triggering this provider.
+   *
+   * The provider SHOULD propagate it on any outbound calls it makes:
+   * - HTTP requests: inject `traceparent` header
+   * - NATS publishes: inject `traceparent` AND custom
+   *   `x-trace-id`/`x-span-id`/`x-parent-span-id` headers (forward-compat
+   *   with khal-os o11y consumer)
+   * - Subprocess spawns: pass through env vars if the child reads them
+   */
+  propagateTrace(ctx: TraceContext): void;
+
+  /**
+   * Health probe — does the provider currently process inbound work?
+   *
+   * Used by silent-failure detection: e.g. a NATS bridge that has lost its
+   * consumer subscription should report `{ healthy: false }` even if the
+   * outer process is alive. Optional `lastProcessedAt` and `backlog` enrich
+   * alerting context.
+   */
+  heartbeat(): Promise<{ healthy: boolean; lastProcessedAt?: Date; backlog?: number }>;
+}
+
+export interface OmniCustomerContext {
+  externalUserId?: string;
+  customerId?: string;
+  organizationId?: string;
+  tenantId?: string;
+}
+
+export interface OmniExecutionContext {
+  identity: {
+    /** Canonical requester ID: internal person UUID when available, otherwise platform user ID. */
+    userId: string;
+    /** Omni internal person UUID, when identity graph resolution succeeded. */
+    personId?: string;
+    /** Platform-specific sender ID, such as WhatsApp JID, Discord user ID, Telegram user ID. */
+    platformUserId: string;
+    displayName?: string;
+  };
+  source: {
+    channel: ChannelType;
+    instanceId: string;
+    chatId: string;
+    threadId?: string;
+    messageId: string;
+  };
+  session: {
+    id: string;
+    strategy?: 'per_user' | 'per_chat' | 'per_thread' | string;
+  };
+  trace: {
+    id: string;
+  };
+  customer?: OmniCustomerContext;
+}
+
+/**
  * Unified agent provider interface
  *
  * All agent providers (Agno, OpenClaw webhook, Claude SDK, etc.)
@@ -279,6 +415,15 @@ export interface IAgentProvider {
   readonly name: string;
   readonly schema: ProviderSchema;
   readonly mode: 'round-trip' | 'fire-and-forget' | 'turn-based';
+  /**
+   * Optional observability hooks. See {@link ProviderObservability}.
+   *
+   * Providers that don't implement this fall back to no-op tracing — the
+   * dispatcher checks for the field's presence and skips propagation calls
+   * when absent. Backend-neutral: emitted spans use whatever OTel SDK the
+   * host configured via OTEL_* env vars; no vendor coupling here.
+   */
+  readonly observability?: ProviderObservability;
 
   /** Check if this provider can handle a given trigger */
   canHandle(trigger: AgentTrigger): boolean;
@@ -340,6 +485,10 @@ export interface AgentTrigger {
   };
   /** Session ID computed from instance's session strategy */
   sessionId: string;
+  /** Session strategy used to compute sessionId. */
+  sessionStrategy?: 'per_user' | 'per_chat' | 'per_thread' | string;
+  /** Optional customer/account identifiers resolved from person metadata. */
+  customer?: OmniCustomerContext;
   /** Recent message history for context (optional, formatted as "[Name - time] message") */
   contextMessages?: string[];
   /**
@@ -353,6 +502,10 @@ export interface AgentTrigger {
    * Includes OMNI_INSTANCE, OMNI_CHAT, OMNI_MESSAGE, OMNI_TURN_ID.
    */
   env?: Record<string, string>;
+  /** Headers providers should propagate on outbound trigger requests. */
+  headers?: Record<string, string>;
+  /** Distributed trace context to propagate on outbound provider calls. */
+  traceContext?: TraceContext;
 }
 
 /**
@@ -414,6 +567,9 @@ export interface WebhookPayload {
     emoji?: string;
   };
   traceId: string;
+  /** Headers propagated from the AgentTrigger; webhook providers also send these as HTTP headers. */
+  headers?: Record<string, string>;
+  executionContext?: OmniExecutionContext;
   /** The endpoint to call back for sending responses */
   replyEndpoint: string;
 }

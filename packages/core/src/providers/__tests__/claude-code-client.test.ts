@@ -153,12 +153,22 @@ describe('ClaudeCodeClient', () => {
     });
 
     it('always sets CLAUDECODE=0 in env even without apiKey', () => {
-      const client = new ClaudeCodeClient({ projectPath: '/test' });
-      const options = getBuildOptions(client)(baseRequest);
+      // buildOptions intentionally inherits process.env, so an ANTHROPIC_API_KEY
+      // present on the host (e.g. when running these tests from inside Claude Code)
+      // would leak into options.env and break the assertion below. Scrub it just
+      // for this case so we're really testing "no config.apiKey ⇒ no key injected".
+      const originalKey = process.env.ANTHROPIC_API_KEY;
+      Reflect.deleteProperty(process.env, 'ANTHROPIC_API_KEY');
+      try {
+        const client = new ClaudeCodeClient({ projectPath: '/test' });
+        const options = getBuildOptions(client)(baseRequest);
 
-      expect(options.env).toBeDefined();
-      expect(options.env.CLAUDECODE).toBe('0');
-      expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
+        expect(options.env).toBeDefined();
+        expect(options.env.CLAUDECODE).toBe('0');
+        expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
+      } finally {
+        if (originalKey !== undefined) process.env.ANTHROPIC_API_KEY = originalKey;
+      }
     });
 
     it('passes request env into Claude Code SDK options', () => {
@@ -266,6 +276,16 @@ describe('ClaudeCodeClient', () => {
       // Original config must not be mutated
       expect(mcpServers.gateway.url).toBe(originalUrl);
       expect(mcpServers.gateway.url).toBe('https://mcp.example.com/v1');
+    });
+
+    it('forwards explicit pathToClaudeCodeExecutable to SDK options', () => {
+      const client = new ClaudeCodeClient({
+        ...baseConfig,
+        pathToClaudeCodeExecutable: '/opt/claude/claude',
+      });
+      const options = getBuildOptions(client)(baseRequest);
+
+      expect(options.pathToClaudeCodeExecutable).toBe('/opt/claude/claude');
     });
 
     it('URL-encodes param values safely', () => {
@@ -440,7 +460,11 @@ describe('ClaudeCodeAgentProvider', () => {
     expect(capturedRequest?.env.OMNI_CHAT).toBe('chat-456');
     expect(capturedRequest?.env.OMNI_MESSAGE).toBe('message-789');
     expect(capturedRequest?.env.OMNI_SESSION).toBe('session-chat-456');
+    expect(capturedRequest?.env.OMNI_USER_ID).toBe('person-111');
+    expect(capturedRequest?.env.OMNI_PERSON_ID).toBe('person-111');
+    expect(capturedRequest?.env.OMNI_PLATFORM_USER_ID).toBe('sender-999');
     expect(capturedRequest?.env.OMNI_SENDER).toBe('sender-999');
+    expect(capturedRequest?.executionContext.identity.userId).toBe('person-111');
     expect(capturedRequest?.mcpUrlParams).toEqual({ chat_id: 'chat-456' });
   });
 
