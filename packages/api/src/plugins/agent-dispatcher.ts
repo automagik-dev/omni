@@ -86,6 +86,7 @@ import { resolveKhalSessionId } from '../services/agent-session-identity';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import type { ResolvedRoute } from '../services/route-resolver';
 import { publishTurnOpen } from '../services/turn-events';
+import { AgentDispatchLimiter, loadAgentDispatchLimiterConfig } from './agent-dispatch-limiter';
 import { getPlugin } from './loader';
 import {
   type BufferedMessage,
@@ -97,6 +98,7 @@ import { extractPlatformTimestamp } from './message-persistence';
 import { createSessionStorage } from './session-storage';
 
 const log = createLogger('agent-dispatcher');
+const agentDispatchLimiter = new AgentDispatchLimiter(loadAgentDispatchLimiterConfig(process.env, log), log);
 
 /**
  * Test-only DI hook for NatsGenieProvider constructor. In production this is
@@ -3369,48 +3371,54 @@ async function processAgentResponse(
     senderAgentId,
   });
 
-  await sendTypingPresence(channel, instance.id, chatId, 'composing');
-
   // ── Auto-ack text message (pre-dispatch, fire-and-forget) ──
   const inst = instance as unknown as Record<string, unknown>;
   const agentAckMessage = (inst.agentAckMessage as string) ?? null;
-  if (agentAckMessage) {
-    sendTextMessage(channel, instance.id, chatId, agentAckMessage).catch((err) => {
-      log.warn('Failed to send agent ack message', { instanceId: instance.id, chatId, error: String(err) });
-    });
-  }
-
-  // ── Per-thread lazy init ──
-  const perThreadExtraContext = await resolvePerThreadExtraContext(
-    db,
-    services,
-    instance,
-    channel,
-    chatId,
-    senderId,
-    firstMessage,
-  );
 
   try {
-    await runWithTransientDispatchRetry(
-      () =>
-        dispatchToAgent(
+    await agentDispatchLimiter.run({ instanceId: instance.id, chatId, traceId }, async () => {
+      await sendTypingPresence(channel, instance.id, chatId, 'composing');
+      try {
+        if (agentAckMessage) {
+          sendTextMessage(channel, instance.id, chatId, agentAckMessage).catch((err) => {
+            log.warn('Failed to send agent ack message', { instanceId: instance.id, chatId, error: String(err) });
+          });
+        }
+
+        // ── Per-thread lazy init ──
+        const perThreadExtraContext = await resolvePerThreadExtraContext(
+          db,
           services,
           instance,
-          messages,
-          triggerType,
           channel,
           chatId,
           senderId,
-          personId,
-          senderName,
-          traceId,
-          senderAgentId,
-          perThreadExtraContext,
-          db,
-        ),
-      { instanceId: instance.id, chatId, traceId },
-    );
+          firstMessage,
+        );
+
+        await runWithTransientDispatchRetry(
+          () =>
+            dispatchToAgent(
+              services,
+              instance,
+              messages,
+              triggerType,
+              channel,
+              chatId,
+              senderId,
+              personId,
+              senderName,
+              traceId,
+              senderAgentId,
+              perThreadExtraContext,
+              db,
+            ),
+          { instanceId: instance.id, chatId, traceId },
+        );
+      } finally {
+        await sendTypingPresence(channel, instance.id, chatId, 'paused');
+      }
+    });
   } catch (error) {
     log.error('agent_dispatch_failed_after_retries', {
       instanceId: instance.id,
@@ -3421,7 +3429,6 @@ async function processAgentResponse(
     sendErrorFeedback(channel, instance.id, chatId, error).catch(() => {});
   } finally {
     ackHandle.remove();
-    await sendTypingPresence(channel, instance.id, chatId, 'paused');
   }
 }
 
