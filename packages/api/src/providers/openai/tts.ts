@@ -6,7 +6,7 @@
  * OpenAI when possible; OGG/Opus voice notes are converted locally with ffmpeg.
  */
 
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,10 +18,15 @@ const SPEECH_URL = 'https://api.openai.com/v1/audio/speech';
 const DEFAULT_MODEL = 'gpt-4o-mini-tts';
 const DEFAULT_VOICE = 'cedar';
 
-interface ChildProcessWithEvents extends ChildProcessWithoutNullStreams {
-  on(event: 'close', listener: (code: number | null) => void): this;
+interface SpawnedProcessWithEvents {
+  stdout: NodeJS.ReadableStream;
+  stderr: NodeJS.ReadableStream;
+  on(event: 'close', listener: (code: number | null, signal?: string | null) => void): this;
   on(event: 'error', listener: (err: Error) => void): this;
-  on(event: string, listener: (...args: unknown[]) => void): this;
+}
+
+function spawnWithEvents(command: string, args: string[]): SpawnedProcessWithEvents {
+  return spawn(command, args) as unknown as SpawnedProcessWithEvents;
 }
 
 export interface OpenAiTtsSettingsReader {
@@ -169,7 +174,7 @@ async function convertAudio(input: Buffer<ArrayBufferLike>, from: string, to: 'o
   try {
     await fs.writeFile(inputPath, input);
     await new Promise<void>((resolve, reject) => {
-      const ffmpeg = spawn('ffmpeg', [
+      const ffmpeg = spawnWithEvents('ffmpeg', [
         '-hide_banner',
         '-loglevel',
         'error',
@@ -187,7 +192,7 @@ async function convertAudio(input: Buffer<ArrayBufferLike>, from: string, to: 'o
         '1',
         '-y',
         outputPath,
-      ]) as ChildProcessWithEvents;
+      ]);
       let stderr = '';
       ffmpeg.stderr.on('data', (data: Buffer) => {
         stderr += data.toString();

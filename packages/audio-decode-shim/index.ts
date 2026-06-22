@@ -10,15 +10,20 @@
  *   const samples = audioBuffer.getChannelData(0); // Float32Array
  */
 
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-interface ChildProcessWithEvents extends ChildProcessWithoutNullStreams {
-  on(event: 'close', listener: (code: number | null) => void): this;
+interface SpawnedProcessWithEvents {
+  stdout: NodeJS.ReadableStream;
+  stderr: NodeJS.ReadableStream;
+  on(event: 'close', listener: (code: number | null, signal?: string | null) => void): this;
   on(event: 'error', listener: (err: Error) => void): this;
-  on(event: string, listener: (...args: unknown[]) => void): this;
+}
+
+function spawnWithEvents(command: string, args: string[]): SpawnedProcessWithEvents {
+  return spawn(command, args) as unknown as SpawnedProcessWithEvents;
 }
 
 interface AudioBuffer {
@@ -103,7 +108,7 @@ async function decode(input: Buffer | string | ReadableStream): Promise<AudioBuf
 function ffmpegDecode(inputPath: string, sampleRate: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    const ffmpeg = spawn('ffmpeg', [
+    const ffmpeg = spawnWithEvents('ffmpeg', [
       '-i',
       inputPath,
       '-f',
@@ -117,7 +122,7 @@ function ffmpegDecode(inputPath: string, sampleRate: number): Promise<Buffer> {
       '-v',
       'quiet',
       'pipe:1', // output to stdout
-    ]) as ChildProcessWithEvents;
+    ]);
 
     ffmpeg.stdout.on('data', (chunk: Buffer) => {
       chunks.push(chunk);
