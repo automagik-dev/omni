@@ -9,7 +9,7 @@
  * Docs: https://ai.google.dev/gemini-api/docs/speech-generation
  */
 
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,10 +19,15 @@ import { GEMINI_MODELS, getGeminiClient, resolveGeminiApiKey } from './client';
 
 const log = createLogger('gemini-tts');
 
-interface ChildProcessWithEvents extends ChildProcessWithoutNullStreams {
-  on(event: 'close', listener: (code: number | null) => void): this;
+interface SpawnedProcessWithEvents {
+  stdout: NodeJS.ReadableStream;
+  stderr: NodeJS.ReadableStream;
+  on(event: 'close', listener: (code: number | null, signal?: string | null) => void): this;
   on(event: 'error', listener: (err: Error) => void): this;
-  on(event: string, listener: (...args: unknown[]) => void): this;
+}
+
+function spawnWithEvents(command: string, args: string[]): SpawnedProcessWithEvents {
+  return spawn(command, args) as unknown as SpawnedProcessWithEvents;
 }
 
 /** Settings reader interface — avoids circular dep on SettingsService */
@@ -287,7 +292,7 @@ async function convertWavToOggOpus(wavBuffer: Buffer): Promise<Buffer> {
     await fs.writeFile(inputPath, wavBuffer);
 
     await new Promise<void>((resolve, reject) => {
-      const ffmpeg = spawn('ffmpeg', [
+      const ffmpeg = spawnWithEvents('ffmpeg', [
         '-i',
         inputPath,
         '-c:a',
@@ -306,7 +311,7 @@ async function convertWavToOggOpus(wavBuffer: Buffer): Promise<Buffer> {
         '1',
         '-y',
         outputPath,
-      ]) as ChildProcessWithEvents;
+      ]);
 
       let stderr = '';
       ffmpeg.stderr.on('data', (data: Buffer) => {
@@ -339,7 +344,7 @@ async function getAudioDurationMs(audioBuffer: Buffer): Promise<number> {
     await fs.writeFile(tempPath, audioBuffer);
 
     return await new Promise<number>((resolve) => {
-      const ffprobe = spawn('ffprobe', [
+      const ffprobe = spawnWithEvents('ffprobe', [
         '-i',
         tempPath,
         '-show_entries',
@@ -348,7 +353,7 @@ async function getAudioDurationMs(audioBuffer: Buffer): Promise<number> {
         'quiet',
         '-of',
         'csv=p=0',
-      ]) as ChildProcessWithEvents;
+      ]);
 
       let stdout = '';
       ffprobe.stdout.on('data', (data: Buffer) => {

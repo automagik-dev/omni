@@ -5,20 +5,21 @@
  * for sending as voice notes via channel plugins.
  */
 
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ERROR_CODES, OmniError } from '@omni/core';
 
-/**
- * Extended ChildProcess type with EventEmitter methods
- * Workaround for bun-types missing EventEmitter interface on ChildProcess
- */
-interface ChildProcessWithEvents extends ChildProcessWithoutNullStreams {
-  on(event: 'close', listener: (code: number | null) => void): this;
+interface SpawnedProcessWithEvents {
+  stdout: NodeJS.ReadableStream;
+  stderr: NodeJS.ReadableStream;
+  on(event: 'close', listener: (code: number | null, signal?: string | null) => void): this;
   on(event: 'error', listener: (err: Error) => void): this;
-  on(event: string, listener: (...args: unknown[]) => void): this;
+}
+
+function spawnWithEvents(command: string, args: string[]): SpawnedProcessWithEvents {
+  return spawn(command, args) as unknown as SpawnedProcessWithEvents;
 }
 
 export interface TTSOptions {
@@ -228,7 +229,7 @@ export class TTSService {
       await fs.writeFile(inputPath, mp3Buffer);
 
       await new Promise<void>((resolve, reject) => {
-        const ffmpeg = spawn('ffmpeg', [
+        const ffmpeg = spawnWithEvents('ffmpeg', [
           '-i',
           inputPath,
           '-c:a',
@@ -247,7 +248,7 @@ export class TTSService {
           '1',
           '-y',
           outputPath,
-        ]) as ChildProcessWithEvents;
+        ]);
 
         let stderr = '';
         ffmpeg.stderr.on('data', (data: Buffer) => {
@@ -284,7 +285,7 @@ export class TTSService {
       await fs.writeFile(tempPath, audioBuffer);
 
       return await new Promise<number>((resolve) => {
-        const ffprobe = spawn('ffprobe', [
+        const ffprobe = spawnWithEvents('ffprobe', [
           '-i',
           tempPath,
           '-show_entries',
@@ -293,7 +294,7 @@ export class TTSService {
           'quiet',
           '-of',
           'csv=p=0',
-        ]) as ChildProcessWithEvents;
+        ]);
 
         let stdout = '';
         ffprobe.stdout.on('data', (data: Buffer) => {
