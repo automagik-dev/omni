@@ -19,6 +19,20 @@ function createMockPlugin(
   overrides: Partial<{
     canSendTyping: boolean;
     sendTyping: (instanceId: string, chatId: string, duration?: number) => Promise<void>;
+    sendPresenceStatus: (
+      instanceId: string,
+      chatId: string,
+      type: 'typing' | 'recording' | 'paused',
+      duration?: number,
+      options?: { threadId?: string; status?: string; loadingMessages?: string[] },
+    ) => Promise<{
+      delivered: boolean;
+      method: string;
+      threadId?: string;
+      status?: string;
+      loadingMessages?: string[];
+      reason?: string;
+    }>;
   }> = {},
 ) {
   return {
@@ -43,6 +57,7 @@ function createMockPlugin(
       maxFileSize: 100 * 1024 * 1024,
     },
     sendTyping: overrides.sendTyping ?? mock(async () => {}),
+    ...(overrides.sendPresenceStatus ? { sendPresenceStatus: overrides.sendPresenceStatus } : {}),
   };
 }
 
@@ -58,6 +73,7 @@ function createMockChannelRegistry(plugin: ReturnType<typeof createMockPlugin> |
 describeWithDb('POST /messages/send/presence', () => {
   let db: Database;
   let testInstance: Instance;
+  let testSlackInstance: Instance;
   const insertedInstanceIds: string[] = [];
 
   beforeAll(async () => {
@@ -76,6 +92,19 @@ describeWithDb('POST /messages/send/presence', () => {
     }
     testInstance = instance;
     insertedInstanceIds.push(instance.id);
+
+    const [slackInstance] = await db
+      .insert(instances)
+      .values({
+        name: `test-slack-presence-${Date.now()}`,
+        channel: 'slack' as const,
+      })
+      .returning();
+    if (!slackInstance) {
+      throw new Error('Failed to create Slack test instance');
+    }
+    testSlackInstance = slackInstance;
+    insertedInstanceIds.push(slackInstance.id);
   });
 
   afterAll(async () => {
@@ -200,7 +229,64 @@ describeWithDb('POST /messages/send/presence', () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe('CAPABILITY_NOT_SUPPORTED');
-    expect(body.error.message).toContain('typing indicators');
+    expect(body.error.message).toContain('typing indicators or thread status');
+  });
+
+  test('uses Slack thread status sender when native typing capability is false', async () => {
+    const sendPresenceStatusMock = mock(
+      async (
+        _instanceId: string,
+        _chatId: string,
+        _type: 'typing' | 'recording' | 'paused',
+        _duration?: number,
+        options?: { threadId?: string; status?: string; loadingMessages?: string[] },
+      ) => ({
+        delivered: true,
+        method: 'assistant.threads.setStatus',
+        threadId: options?.threadId,
+        status: options?.status ?? 'is typing...',
+        loadingMessages: options?.loadingMessages,
+      }),
+    );
+    const mockPlugin = createMockPlugin({ canSendTyping: false, sendPresenceStatus: sendPresenceStatusMock });
+    const { app } = createTestApp(mockPlugin);
+
+    const res = await app.request('/messages/send/presence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instanceId: testSlackInstance.id,
+        to: 'C12345',
+        type: 'typing',
+        threadId: '1234567890.001',
+        status: 'analisando contexto...',
+        loadingMessages: ['Lendo contexto...', 'Chamando ferramentas...'],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      success: boolean;
+      data: { delivered: boolean; method: string; threadId?: string; status?: string; loadingMessages?: string[] };
+    };
+    expect(body.success).toBe(true);
+    expect(body.data.delivered).toBe(true);
+    expect(body.data.method).toBe('assistant.threads.setStatus');
+    expect(body.data.threadId).toBe('1234567890.001');
+    expect(body.data.status).toBe('analisando contexto...');
+    expect(body.data.loadingMessages).toEqual(['Lendo contexto...', 'Chamando ferramentas...']);
+    expect(sendPresenceStatusMock).toHaveBeenCalledTimes(1);
+    expect(sendPresenceStatusMock.mock.calls[0]).toEqual([
+      testSlackInstance.id,
+      'C12345',
+      'typing',
+      0,
+      {
+        threadId: '1234567890.001',
+        status: 'analisando contexto...',
+        loadingMessages: ['Lendo contexto...', 'Chamando ferramentas...'],
+      },
+    ]);
   });
 
   test('validates duration bounds (max 30000)', async () => {
