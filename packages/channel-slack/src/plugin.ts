@@ -40,7 +40,7 @@ import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './ha
 import { setupInteractionHandlers } from './handlers/interactions';
 import { type SlackDebouncedArgs, setupMessageHandlers } from './handlers/messages';
 import { setupReactionHandlers } from './handlers/reactions';
-import { clearTypingStatus, setTypingStatus } from './handlers/typing';
+import { clearTypingStatus, setSlackThreadStatus } from './handlers/typing';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
 import { createNativeStreamSender } from './senders/native-stream';
 import { createSlackStreamSender } from './senders/stream';
@@ -50,6 +50,17 @@ import { SlackError, SlackErrorCode } from './types';
 
 /** Download size guard — 50MB default; applied to inbound file metadata before dispatching */
 const downloadGuard = createDownloadGuard();
+
+type SlackPresenceType = 'typing' | 'recording' | 'paused';
+
+type SlackPresenceStatusResult = {
+  delivered: boolean;
+  method: 'assistant.threads.setStatus';
+  threadId?: string;
+  status?: string;
+  loadingMessages?: string[];
+  reason?: 'not_connected' | 'no_active_thread' | 'slack_status_failed';
+};
 
 /**
  * Resolve Slack credentials from config, options, and credentials sources.
@@ -130,6 +141,12 @@ export class SlackPlugin extends BaseChannelPlugin {
   private activeThreads = new Map<string, string>();
 
   /**
+   * Pending auto-clear timers per active status thread.
+   * Key: `${instanceId}:${channelId}:${threadTs}`
+   */
+  private presenceStatusTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /**
    * Pending ack reactions awaiting removal after reply.
    * Key: `${instanceId}:${channelId}:${messageTs}`, Value: emoji name
    */
@@ -168,6 +185,10 @@ export class SlackPlugin extends BaseChannelPlugin {
       cache.dispose();
     }
     this.threadCaches.clear();
+    for (const timer of this.presenceStatusTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.presenceStatusTimers.clear();
     this.activeThreads.clear();
     this.pendingAckReactions.clear();
   }
@@ -303,6 +324,11 @@ export class SlackPlugin extends BaseChannelPlugin {
     }
     for (const key of this.activeThreads.keys()) {
       if (key.startsWith(`${instanceId}:`)) this.activeThreads.delete(key);
+    }
+    for (const [key, timer] of this.presenceStatusTimers) {
+      if (!key.startsWith(`${instanceId}:`)) continue;
+      clearTimeout(timer);
+      this.presenceStatusTimers.delete(key);
     }
     for (const key of this.pendingAckReactions.keys()) {
       if (key.startsWith(`${instanceId}:`)) this.pendingAckReactions.delete(key);
@@ -456,31 +482,103 @@ export class SlackPlugin extends BaseChannelPlugin {
    * hence `canSendTyping: false` in capabilities. This method exists for the
    * thread context but silently no-ops when no active thread is tracked.
    *
-   * No auto-refresh needed: the status persists until explicitly cleared
-   * (duration === 0) or the assistant replies.
+   * Slack clears status when the assistant replies, when status is set to an
+   * empty string, or after Slack's own timeout. Omni can also clear earlier
+   * when callers pass an explicit duration.
    */
   async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
+    await this.sendPresenceStatus(instanceId, chatId, duration === 0 ? 'paused' : 'typing', duration);
+  }
+
+  /**
+   * Send Slack's official AI Assistant thread status.
+   *
+   * This is intentionally separate from `canSendTyping`: Slack does not expose
+   * generic channel typing for bots, but `assistant.threads.setStatus` is the
+   * official status surface for AI assistant threads.
+   */
+  async sendPresenceStatus(
+    instanceId: string,
+    chatId: string,
+    type: SlackPresenceType,
+    duration?: number,
+    options?: { threadId?: string; status?: string; loadingMessages?: string[] },
+  ): Promise<SlackPresenceStatusResult> {
+    const method = 'assistant.threads.setStatus' as const;
     const connection = this.connections.get(instanceId);
-    if (!connection) return;
+    if (!connection) return { delivered: false, method, reason: 'not_connected' };
 
-    const threadTs = this.activeThreads.get(`${instanceId}:${chatId}`);
-    if (!threadTs) return; // Thread-only guard
+    const threadTs = options?.threadId ?? this.activeThreads.get(`${instanceId}:${chatId}`);
+    if (!threadTs) return { delivered: false, method, reason: 'no_active_thread' };
 
-    if (duration === 0) {
-      await clearTypingStatus({
-        client: connection.client,
-        channelId: chatId,
-        threadTs,
-        logger: this.logger,
-      });
-    } else {
-      await setTypingStatus({
-        client: connection.client,
-        channelId: chatId,
-        threadTs,
-        logger: this.logger,
-      });
+    const shouldClear = type === 'paused';
+    const status = shouldClear ? '' : (options?.status ?? (type === 'recording' ? 'is recording...' : 'is typing...'));
+    const timerKey = this.presenceStatusTimerKey(instanceId, chatId, threadTs);
+
+    const delivered =
+      status === ''
+        ? await clearTypingStatus({
+            client: connection.client,
+            channelId: chatId,
+            threadTs,
+            logger: this.logger,
+          })
+        : await setSlackThreadStatus({
+            client: connection.client,
+            channelId: chatId,
+            threadTs,
+            status,
+            loadingMessages: options?.loadingMessages,
+            logger: this.logger,
+          });
+
+    if (delivered) {
+      this.clearPresenceStatusTimer(timerKey);
     }
+
+    if (delivered && status !== '' && duration && duration > 0) {
+      const timer = setTimeout(() => {
+        if (this.presenceStatusTimers.get(timerKey) !== timer) return;
+        this.presenceStatusTimers.delete(timerKey);
+        clearTypingStatus({
+          client: connection.client,
+          channelId: chatId,
+          threadTs,
+          logger: this.logger,
+        }).catch((err) => {
+          this.logger.warn('Slack presence status auto-clear failed', {
+            instanceId,
+            channelId: chatId,
+            threadTs,
+            error: String(err),
+          });
+        });
+      }, duration);
+      this.presenceStatusTimers.set(timerKey, timer);
+      timer.unref?.();
+    }
+
+    return delivered
+      ? { delivered: true, method, threadId: threadTs, status, loadingMessages: options?.loadingMessages }
+      : {
+          delivered: false,
+          method,
+          threadId: threadTs,
+          status,
+          loadingMessages: options?.loadingMessages,
+          reason: 'slack_status_failed',
+        };
+  }
+
+  private presenceStatusTimerKey(instanceId: string, channelId: string, threadTs: string): string {
+    return `${instanceId}:${channelId}:${threadTs}`;
+  }
+
+  private clearPresenceStatusTimer(timerKey: string): void {
+    const timer = this.presenceStatusTimers.get(timerKey);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.presenceStatusTimers.delete(timerKey);
   }
 
   /**
@@ -891,6 +989,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       threadTs: resolvedThread,
       logger: this.logger,
     });
+    this.clearPresenceStatusTimer(this.presenceStatusTimerKey(instanceId, channelId, resolvedThread));
   }
 
   /**

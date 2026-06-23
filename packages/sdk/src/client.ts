@@ -1062,6 +1062,9 @@ export interface SendPresenceBody {
   instanceId: string;
   to: string;
   type: 'typing' | 'recording' | 'paused';
+  threadId?: string;
+  status?: string;
+  loadingMessages?: string[];
   duration?: number;
 }
 
@@ -1073,6 +1076,12 @@ export interface SendPresenceResult {
   chatId: string;
   type: string;
   duration: number;
+  threadId?: string;
+  delivered?: boolean;
+  method?: string;
+  reason?: string;
+  status?: string;
+  loadingMessages?: string[];
 }
 
 /**
@@ -1937,12 +1946,17 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         const json = (await resp.json()) as { data?: SendPresenceResult };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        const inferredDuration =
+          body.duration ?? (body.threadId || body.status || body.loadingMessages?.length ? 0 : 5000);
         return (
           json?.data ?? {
             instanceId: body.instanceId,
             chatId: body.to,
             type: body.type,
-            duration: body.duration ?? 5000,
+            duration: inferredDuration,
+            threadId: body.threadId,
+            status: body.status,
+            loadingMessages: body.loadingMessages,
           }
         );
       },
