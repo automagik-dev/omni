@@ -5,7 +5,8 @@
  * This is the bridge between the event-based system and the unified message model.
  *
  * Flow:
- * - message.received → find/create chat → create message (source: 'realtime')
+ * - message.received (realtime)     → find/create chat → create message (source: 'realtime')
+ * - message.received (history-sync) → find/create chat → create message (source: 'sync')
  * - message.sent → find/create chat → create message (source: 'realtime', isFromMe: true)
  * - message.delivered/read → update message delivery status
  *
@@ -150,10 +151,14 @@ function findLongStrings(obj: unknown, prefix = '', minLength = 200): Record<str
 }
 
 /**
- * Extract platform timestamp from raw payload
+ * Extract platform timestamp from raw payload.
+ * Returns null when no timestamp can be extracted (caller decides what to do).
  */
-export function extractPlatformTimestamp(rawPayload: Record<string, unknown> | undefined, fallback: number): Date {
-  if (!rawPayload?.messageTimestamp) return new Date(fallback);
+export function extractPlatformTimestamp(
+  rawPayload: Record<string, unknown> | undefined,
+  _fallback: number,
+): Date | null {
+  if (!rawPayload?.messageTimestamp) return null;
 
   const ts = rawPayload.messageTimestamp;
   let tsNum: number | null = null;
@@ -164,10 +169,14 @@ export function extractPlatformTimestamp(rawPayload: Record<string, unknown> | u
     tsNum = Number(ts);
   } else if (typeof ts === 'object' && ts !== null && 'low' in ts) {
     // Protobuf Long format: { low: number, high: number, unsigned: boolean }
-    tsNum = (ts as { low: number }).low;
+    // Use unsigned right-shift (>>> 0) to treat both halves as uint32 before combining,
+    // so timestamps after 2038 (where low bit 31 is set) reconstruct correctly.
+    const lo = (ts as { low: number; high?: number }).low >>> 0;
+    const hi = ((ts as { low: number; high?: number }).high ?? 0) >>> 0;
+    tsNum = hi * 0x100000000 + lo;
   }
 
-  if (!tsNum || Number.isNaN(tsNum)) return new Date(fallback);
+  if (!tsNum || Number.isNaN(tsNum)) return null;
 
   // WhatsApp timestamps are in seconds, convert to milliseconds
   return new Date(tsNum < 1e12 ? tsNum * 1000 : tsNum);
@@ -390,6 +399,7 @@ interface MessageMetadata {
   personId?: string;
   platformIdentityId?: string;
   channelType?: string;
+  ingestMode?: 'realtime' | 'history-sync';
 }
 
 /** Check if a chat name should be updated given a new incoming name */
@@ -631,6 +641,7 @@ async function handleMessageReceived(
   eventTimestamp: number,
 ): Promise<void> {
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
+  const isHistorySync = metadata.ingestMode === 'history-sync';
 
   const chatExternalId = truncate(payload.chatId, 255) ?? payload.chatId;
   const messageExternalId = truncate(payload.externalId, 255) ?? payload.externalId;
@@ -698,11 +709,25 @@ async function handleMessageReceived(
   const quotedMessage = rawPayload?.quotedMessage as Record<string, unknown> | undefined;
   const platformTimestamp = extractPlatformTimestamp(rawPayload, eventTimestamp);
 
+  // For history-sync messages, messageTimestamp is the source of truth.
+  // If it's missing (null), we have no reliable timestamp to preserve — skip rather than
+  // storing with event.timestamp (= Date.now()), which would be misleading.
+  if (isHistorySync && platformTimestamp === null) {
+    log.debug('Skipping history-sync message without messageTimestamp', {
+      externalId: payload.externalId,
+      chatId: payload.chatId,
+    });
+    return;
+  }
+
   const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
-    source: 'realtime',
+    source: isHistorySync ? 'sync' : 'realtime',
     messageType: mapContentType(payload.content.type),
     textContent: sanitizeText(payload.content.text),
-    platformTimestamp,
+    // platformTimestamp is null only for realtime messages without messageTimestamp;
+    // fall back to event.timestamp (≈ now) — acceptable for realtime, not for history-sync
+    // (history-sync null case is already handled above with early return).
+    platformTimestamp: platformTimestamp ?? new Date(eventTimestamp),
     senderPlatformUserId: truncate(payload.from, 255),
     senderDisplayName,
     senderPersonId: personId,
@@ -727,7 +752,7 @@ async function handleMessageReceived(
     rawPayload,
     message.id,
     sanitizeText(payload.content.text) ?? undefined,
-    platformTimestamp,
+    platformTimestamp ?? new Date(eventTimestamp),
     payload.from,
   );
 
@@ -739,7 +764,14 @@ async function handleMessageReceived(
   await maybeRecordParticipantActivity(services, chat.id, payload.from);
 
   // Step 7/8: Update chat + instance recency (edits should not bump recency)
-  maybeUpdateRecency(services, metadata.instanceId, chat.id, rawPayload, payload, platformTimestamp);
+  maybeUpdateRecency(
+    services,
+    metadata.instanceId,
+    chat.id,
+    rawPayload,
+    payload,
+    platformTimestamp ?? new Date(eventTimestamp),
+  );
 }
 
 /**
