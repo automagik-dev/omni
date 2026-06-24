@@ -61,7 +61,7 @@ describe('toGupshupPhone', () => {
   });
 
   it('returns empty string for non-string input (contract violation, no crash)', () => {
-    expect(toGupshupPhone(undefined as any)).toBe('');
-    expect(toGupshupPhone(null as any)).toBe('');
+    expect(toGupshupPhone(undefined as unknown as string)).toBe('');
+    expect(toGupshupPhone(null as unknown as string)).toBe('');
   });
 });
