@@ -603,7 +603,7 @@ export function resolveErrorHandoffMessage(env: Record<string, string | undefine
  * plain error message when this returns `false` (non-handoff channel, missing
  * plugin, or a delivery failure).
  */
-async function triggerErrorHandoff(
+export async function triggerErrorHandoff(
   services: Services,
   db: Database,
   channel: ChannelType,
@@ -614,44 +614,53 @@ async function triggerErrorHandoff(
   const plugin = await getPlugin(channel);
   if (plugin?.capabilities?.canHandoff !== true) return false;
 
+  // Step 1 — deliver the HANDOFF payload. ONLY a delivery failure may return
+  // false (the user got nothing, so the caller's plain-error fallback is safe).
+  let sendResult: Awaited<ReturnType<typeof plugin.sendMessage>>;
   try {
-    const sendResult = await plugin.sendMessage(instance.id, {
+    sendResult = await plugin.sendMessage(instance.id, {
       to: chatId,
       content: { type: 'text', text: message },
       metadata: { isHandoff: true, motivoHandoff: 'agent_dispatch_error' },
     });
+  } catch (err) {
+    log.error('agent_dispatch_error_handoff_failed', { instanceId: instance.id, chatId, error: String(err) });
+    return false;
+  }
 
-    // Pause the agent + disarm follow-ups + audit. The HANDOFF payload already
-    // reached the user, so even if the chat row can't be resolved we report the
-    // handoff as done (true) — we just can't persist the side-effects.
+  // Step 2 — persist side-effects (pause + disarm + audit) best-effort. The
+  // message already reached the user, so a failure here must NOT flip the result
+  // to false — that would make the caller send a SECOND (plain error) message.
+  try {
     const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
     if (chat) {
       const settings = (chat.settings as Record<string, unknown> | null) ?? {};
       await services.chats.update(chat.id, { settings: { ...settings, agentPaused: true } });
       await services.followUpLifecycle.disarm({ chatId: chat.id, instanceId: instance.id, reason: 'handoff' });
-      db.insert(handoffLogs)
-        .values({
-          instanceId: instance.id,
-          chatUuid: chat.id,
-          chatId,
-          toPhone: chatId,
-          text: message,
-          extraInfo: null,
-          agentId: instance.agentId ?? null,
-          externalMessageId: sendResult?.messageId ?? null,
-          handoffFields: null,
-          sentAt: new Date(),
-          metadata: { instanceChannel: channel, channelHandoffSupported: true, motivoHandoff: 'agent_dispatch_error' },
-        })
-        .catch((err: unknown) => log.warn('Failed to persist error-handoff log', { error: String(err) }));
+      await db.insert(handoffLogs).values({
+        instanceId: instance.id,
+        chatUuid: chat.id,
+        chatId,
+        toPhone: chatId,
+        text: message,
+        extraInfo: null,
+        agentId: instance.agentId ?? null,
+        externalMessageId: sendResult?.messageId ?? null,
+        handoffFields: null,
+        sentAt: new Date(),
+        metadata: { instanceChannel: channel, channelHandoffSupported: true, motivoHandoff: 'agent_dispatch_error' },
+      });
     }
-
-    log.info('agent_dispatch_error_handoff', { instanceId: instance.id, chatId, channel });
-    return true;
   } catch (err) {
-    log.error('agent_dispatch_error_handoff_failed', { instanceId: instance.id, chatId, error: String(err) });
-    return false;
+    log.warn('agent_dispatch_error_handoff_side_effects_failed', {
+      instanceId: instance.id,
+      chatId,
+      error: String(err),
+    });
   }
+
+  log.info('agent_dispatch_error_handoff', { instanceId: instance.id, chatId, channel });
+  return true;
 }
 
 /**
