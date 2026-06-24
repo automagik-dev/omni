@@ -527,19 +527,54 @@ async function sendTextMessage(
 }
 
 /**
+ * Built-in dispatch-failure message (#737). Kept in English for backwards
+ * compatibility — non-English deployments override it globally via the
+ * `OMNI_AGENT_DISPATCH_ERROR_MESSAGE` env var (a per-instance override tier is
+ * a planned follow-up; see {@link resolveDispatchErrorMessage}).
+ */
+export const DEFAULT_DISPATCH_ERROR_MESSAGE = '⚠️ Sorry, I ran into an issue processing your message. Please try again.';
+
+/**
+ * Resolve the customer-facing dispatch-failure message (#737). Precedence:
+ *   1. per-instance override (localized per deployment),
+ *   2. `OMNI_AGENT_DISPATCH_ERROR_MESSAGE` env (global override),
+ *   3. {@link DEFAULT_DISPATCH_ERROR_MESSAGE}.
+ * Blank/whitespace-only values are ignored so they fall through to the next tier.
+ *
+ * NOTE: the per-instance tier is wired through the first argument but no
+ * `instances` column exists yet — callers pass `null` today and rely on the
+ * env override. The column is a follow-up, deferred until the Drizzle snapshot
+ * drift in `packages/db` is reconciled (re-adding it now would re-propose
+ * already-migrated columns and crash auto-migrate). The tier is kept here +
+ * tested so dropping the column in is a one-line call-site change.
+ */
+export function resolveDispatchErrorMessage(
+  instanceErrorMessage: string | null | undefined,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const instanceMsg = instanceErrorMessage?.trim();
+  if (instanceMsg) return instanceMsg;
+  const envMsg = env.OMNI_AGENT_DISPATCH_ERROR_MESSAGE?.trim();
+  if (envMsg) return envMsg;
+  return DEFAULT_DISPATCH_ERROR_MESSAGE;
+}
+
+/**
  * Send error feedback to user when agent dispatch fails.
  * Fire-and-forget — errors during feedback delivery are silently swallowed.
+ * `message` is the already-resolved customer-facing text (see
+ * {@link resolveDispatchErrorMessage}).
  */
 async function sendErrorFeedback(
   channel: ChannelType,
   instanceId: string,
   chatId: string,
   error: unknown,
+  message: string,
 ): Promise<void> {
   const errorMsg = error instanceof Error ? error.message : String(error);
   log.error('agent_dispatch_error', { channel, instanceId, chatId, error: errorMsg });
-  const text = '⚠️ Sorry, I ran into an issue processing your message. Please try again.';
-  await sendTextMessage(channel, instanceId, chatId, text);
+  await sendTextMessage(channel, instanceId, chatId, message);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -3336,7 +3371,9 @@ async function processAgentResponse(
   // messages that arrived during the handoff window and should not be processed.
   if (chatSettings?.agentResumedAt) {
     const resumedAt = new Date(chatSettings.agentResumedAt).getTime();
-    const msgTimestamp = (extractPlatformTimestamp(firstMessage.payload.rawPayload, Date.now()) ?? new Date()).getTime();
+    const msgTimestamp = (
+      extractPlatformTimestamp(firstMessage.payload.rawPayload, Date.now()) ?? new Date()
+    ).getTime();
     if (msgTimestamp < resumedAt) {
       log.debug('Dropping pre-resume message (arrived during handoff window)', {
         instanceId: instance.id,
@@ -3426,7 +3463,15 @@ async function processAgentResponse(
       error: String(error),
       traceId,
     });
-    sendErrorFeedback(channel, instance.id, chatId, error).catch(() => {});
+    sendErrorFeedback(
+      channel,
+      instance.id,
+      chatId,
+      error,
+      // Per-instance override tier is null until the `agentErrorMessage` column
+      // lands (see resolveDispatchErrorMessage note) — env + default for now.
+      resolveDispatchErrorMessage(null),
+    ).catch(() => {});
   } finally {
     ackHandle.remove();
   }
@@ -3499,7 +3544,7 @@ function createOpenClawProviderInstance(provider: AgentProvider, instance: Dispa
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
   const providerConfig: OpenClawProviderConfig = {
     defaultAgentId: resolveRequiredAgentId(instance, schemaConfig, provider.id, 'defaultAgentId'),
-    agentTimeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
+    agentTimeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 600) as number) * 1000,
     sendAckTimeoutMs: 10_000,
     prefixSenderName: instance.agentPrefixSenderName ?? true,
   };
@@ -3569,7 +3614,7 @@ function createClaudeCodeProviderInstance(
     },
     createSessionStorage(db, provider.id),
     {
-      timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 120) as number) * 1000,
+      timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 600) as number) * 1000,
       enableAutoSplit: instance.enableAutoSplit ?? true,
       prefixSenderName: instance.agentPrefixSenderName ?? true,
       streamConfig: schemaConfig.streamConfig as
@@ -3592,7 +3637,9 @@ function createWebhookProvider(provider: AgentProvider): IAgentProvider {
     webhookUrl: provider.baseUrl,
     apiKey: provider.apiKey ?? undefined,
     mode: (schemaConfig.mode as 'round-trip' | 'fire-and-forget') ?? 'round-trip',
-    timeoutMs: (provider.defaultTimeout ?? 30) * 1000,
+    // #738 — aligned to the 600s provider default (was 30s) so webhook agents
+    // get the same budget as every other provider when no explicit timeout set.
+    timeoutMs: (provider.defaultTimeout ?? 600) * 1000,
     retries: (schemaConfig.retries as number) ?? 1,
   });
 }

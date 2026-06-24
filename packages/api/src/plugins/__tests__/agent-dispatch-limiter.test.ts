@@ -35,7 +35,7 @@ describe('loadAgentDispatchLimiterConfig', () => {
     expect(loadAgentDispatchLimiterConfig({})).toEqual({
       defaultConcurrency: 8,
       maxQueueDepth: 100,
-      maxQueueWaitMs: 60_000,
+      maxQueueWaitMs: 600_000,
       perChatConcurrency: 1,
     });
   });
