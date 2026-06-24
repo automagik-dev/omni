@@ -3336,7 +3336,9 @@ async function processAgentResponse(
   // messages that arrived during the handoff window and should not be processed.
   if (chatSettings?.agentResumedAt) {
     const resumedAt = new Date(chatSettings.agentResumedAt).getTime();
-    const msgTimestamp = (extractPlatformTimestamp(firstMessage.payload.rawPayload, Date.now()) ?? new Date()).getTime();
+    const msgTimestamp = (
+      extractPlatformTimestamp(firstMessage.payload.rawPayload, Date.now()) ?? new Date()
+    ).getTime();
     if (msgTimestamp < resumedAt) {
       log.debug('Dropping pre-resume message (arrived during handoff window)', {
         instanceId: instance.id,

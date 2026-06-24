@@ -198,6 +198,26 @@ describe('downloadSlackFile', () => {
       ),
     ).rejects.toThrow('Slack returned HTML');
   });
+
+  it('does not reject text files that mention HTML snippets', async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response('Markdown docs can mention <html> tags without being HTML.', {
+          status: 200,
+          headers: { 'content-type': 'text/plain; charset=utf-8', 'content-length': '57' },
+        }),
+    ) as unknown as typeof fetch;
+
+    const result = await downloadSlackFile(
+      'https://files.slack.com/download/readme.txt',
+      'xoxb-test-token',
+      noopLogger as never,
+      'text/plain',
+    );
+
+    expect(result.mimeType).toBe('text/plain; charset=utf-8');
+    expect(result.buffer.toString('utf8')).toContain('<html>');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────

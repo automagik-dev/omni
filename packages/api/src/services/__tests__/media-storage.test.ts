@@ -83,6 +83,28 @@ describe('MediaStorageService.storeFromUrl (omni#500)', () => {
     ).rejects.toThrow('Downloaded media content mismatch');
   });
 
+  it('does not reject plain text that mentions HTML snippets', async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response('Slack note: use <html> only in documentation snippets.', {
+          status: 200,
+          headers: { 'content-type': 'text/plain; charset=utf-8' },
+        }),
+    ) as unknown as typeof fetch;
+    const service = new MediaStorageService(fakeDb, tmpDir);
+
+    const result = await service.storeFromUrl(
+      'inst-1',
+      'msg-1',
+      'https://files.slack.com/private/note.txt',
+      'text/plain',
+      new Date('2026-04-23T00:00:00Z'),
+    );
+
+    expect(result.localPath).toBe(join('inst-1', '2026-04', 'msg-1.txt'));
+    expect(result.mimeType).toBe('text/plain');
+  });
+
   it('preserves Authorization across allowed private-media redirects', async () => {
     const calls: Array<{ url: string; authorization: string | null }> = [];
     globalThis.fetch = mock(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {

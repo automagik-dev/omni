@@ -26,7 +26,7 @@ function isHtmlMime(value: string | null | undefined): boolean {
 
 function looksLikeHtml(buffer: Buffer): boolean {
   const preview = buffer.subarray(0, 512).toString('utf8').trimStart().toLowerCase();
-  return preview.startsWith('<!doctype html') || preview.startsWith('<html') || preview.includes('<html');
+  return preview.startsWith('<!doctype html') || preview.startsWith('<html>') || preview.startsWith('<html ');
 }
 
 function hostMatchesSuffix(hostname: string, suffix: string): boolean {

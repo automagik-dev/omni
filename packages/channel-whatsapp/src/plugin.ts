@@ -3853,27 +3853,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       return;
     }
 
-    // Filter by date range if specified
-    if (syncState?.since && timestamp < syncState.since) {
-      this.logger.debug('Skipping history message - before since', {
-        instanceId,
-        messageId: msg.key.id,
-        chatId: msg.key.remoteJid,
-        timestamp: timestamp.toISOString(),
-        since: new Date(syncState.since).toISOString(),
-      });
-      return;
-    }
-    if (syncState?.until && timestamp > syncState.until) {
-      this.logger.debug('Skipping history message - after until', {
-        instanceId,
-        messageId: msg.key.id,
-        chatId: msg.key.remoteJid,
-        timestamp: timestamp.toISOString(),
-        until: new Date(syncState.until).toISOString(),
-      });
-      return;
-    }
+    if (this.shouldSkipHistoryMessageByTimestamp(instanceId, msg, timestamp, syncState)) return;
 
     // Extract basic content info
     const content = this.extractHistoryMessageContent(msg);
@@ -3953,6 +3933,35 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         isHistorySync: true,
       });
     }
+  }
+
+  private shouldSkipHistoryMessageByTimestamp(
+    instanceId: string,
+    msg: WAMessage,
+    timestamp: Date,
+    syncState: typeof this.historySyncCallbacks extends Map<string, infer V> ? V | undefined : never,
+  ): boolean {
+    if (syncState?.since && timestamp < syncState.since) {
+      this.logger.debug('Skipping history message - before since', {
+        instanceId,
+        messageId: msg.key.id,
+        chatId: msg.key.remoteJid,
+        timestamp: timestamp.toISOString(),
+        since: new Date(syncState.since).toISOString(),
+      });
+      return true;
+    }
+    if (syncState?.until && timestamp > syncState.until) {
+      this.logger.debug('Skipping history message - after until', {
+        instanceId,
+        messageId: msg.key.id,
+        chatId: msg.key.remoteJid,
+        timestamp: timestamp.toISOString(),
+        until: new Date(syncState.until).toISOString(),
+      });
+      return true;
+    }
+    return false;
   }
 
   /**
