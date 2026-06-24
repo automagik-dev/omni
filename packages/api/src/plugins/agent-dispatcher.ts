@@ -65,7 +65,7 @@ import {
   getJourneyTracker,
 } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
-import { agentSessions, agents, instances } from '@omni/db';
+import { agentSessions, agents, handoffLogs, instances } from '@omni/db';
 import type { ChannelType, Instance } from '@omni/db';
 import { createMediaProcessingService } from '@omni/media-processing';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
@@ -575,6 +575,103 @@ async function sendErrorFeedback(
   const errorMsg = error instanceof Error ? error.message : String(error);
   log.error('agent_dispatch_error', { channel, instanceId, chatId, error: errorMsg });
   await sendTextMessage(channel, instanceId, chatId, message);
+}
+
+/**
+ * Default message sent to the customer when an agent error triggers a human
+ * handoff on a native-handoff channel (Gupshup). Distinct from
+ * {@link DEFAULT_DISPATCH_ERROR_MESSAGE}: this one promises a human follow-up
+ * (the chat is routed to an attendant) instead of asking the user to retry.
+ * Override globally with `OMNI_AGENT_ERROR_HANDOFF_MESSAGE`.
+ */
+export const DEFAULT_ERROR_HANDOFF_MESSAGE =
+  'Tô com um probleminha técnico aqui agora. Logo alguém do time vai entrar em contato com você.';
+
+/** Resolve the error-handoff message: env override → built-in default. */
+export function resolveErrorHandoffMessage(env: Record<string, string | undefined> = process.env): string {
+  return env.OMNI_AGENT_ERROR_HANDOFF_MESSAGE?.trim() || DEFAULT_ERROR_HANDOFF_MESSAGE;
+}
+
+/**
+ * System-initiated handoff when a customer-facing agent error occurs on a
+ * channel with native handoff (Gupshup). Mirrors the side-effects of
+ * `POST /messages/send/handoff` (routes/v2/messages.ts): deliver `message` AS
+ * the native HANDOFF payload (which both shows the text and routes the chat to
+ * a human queue), pause the agent, disarm follow-ups, and write an audit row.
+ *
+ * Returns `true` when the handoff was dispatched; the caller falls back to the
+ * plain error message when this returns `false` (non-handoff channel, missing
+ * plugin, or a delivery failure).
+ */
+async function triggerErrorHandoff(
+  services: Services,
+  db: Database,
+  channel: ChannelType,
+  instance: DispatchInstance,
+  chatId: string,
+  message: string,
+): Promise<boolean> {
+  const plugin = await getPlugin(channel);
+  if (plugin?.capabilities?.canHandoff !== true) return false;
+
+  try {
+    const sendResult = await plugin.sendMessage(instance.id, {
+      to: chatId,
+      content: { type: 'text', text: message },
+      metadata: { isHandoff: true, motivoHandoff: 'agent_dispatch_error' },
+    });
+
+    // Pause the agent + disarm follow-ups + audit. The HANDOFF payload already
+    // reached the user, so even if the chat row can't be resolved we report the
+    // handoff as done (true) — we just can't persist the side-effects.
+    const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
+    if (chat) {
+      const settings = (chat.settings as Record<string, unknown> | null) ?? {};
+      await services.chats.update(chat.id, { settings: { ...settings, agentPaused: true } });
+      await services.followUpLifecycle.disarm({ chatId: chat.id, instanceId: instance.id, reason: 'handoff' });
+      db.insert(handoffLogs)
+        .values({
+          instanceId: instance.id,
+          chatUuid: chat.id,
+          chatId,
+          toPhone: chatId,
+          text: message,
+          extraInfo: null,
+          agentId: instance.agentId ?? null,
+          externalMessageId: sendResult?.messageId ?? null,
+          handoffFields: null,
+          sentAt: new Date(),
+          metadata: { instanceChannel: channel, channelHandoffSupported: true, motivoHandoff: 'agent_dispatch_error' },
+        })
+        .catch((err: unknown) => log.warn('Failed to persist error-handoff log', { error: String(err) }));
+    }
+
+    log.info('agent_dispatch_error_handoff', { instanceId: instance.id, chatId, channel });
+    return true;
+  } catch (err) {
+    log.error('agent_dispatch_error_handoff_failed', { instanceId: instance.id, chatId, error: String(err) });
+    return false;
+  }
+}
+
+/**
+ * Customer-facing handling of a fatal dispatch failure: a human handoff on
+ * native-handoff channels (Gupshup — special message + agent pause), otherwise
+ * the plain {@link resolveDispatchErrorMessage} reply.
+ */
+async function handleDispatchFailure(
+  services: Services,
+  db: Database,
+  channel: ChannelType,
+  instance: DispatchInstance,
+  chatId: string,
+  error: unknown,
+): Promise<void> {
+  const handedOff = await triggerErrorHandoff(services, db, channel, instance, chatId, resolveErrorHandoffMessage());
+  if (handedOff) return;
+  // Per-instance override tier is null until the `agentErrorMessage` column
+  // lands (see resolveDispatchErrorMessage note) — env + default for now.
+  await sendErrorFeedback(channel, instance.id, chatId, error, resolveDispatchErrorMessage(null)).catch(() => {});
 }
 
 function sleep(ms: number): Promise<void> {
@@ -2463,7 +2560,23 @@ async function dispatchViaProvider(
       const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
       const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
 
-      if (result && result.parts.length > 0 && !handoffTriggered) {
+      // When the provider blocked a leaked error and substituted the customer-safe
+      // fallback, route to a human on native-handoff channels (Gupshup) instead of
+      // forwarding the generic fallback text. Non-handoff channels fall through and
+      // send the fallback parts as before.
+      let errorHandoffDone = false;
+      if (result?.metadata.customerErrorBlocked === true && !handoffTriggered) {
+        errorHandoffDone = await triggerErrorHandoff(
+          services,
+          db,
+          channel,
+          instance,
+          chatId,
+          resolveErrorHandoffMessage(),
+        );
+      }
+
+      if (result && result.parts.length > 0 && !handoffTriggered && !errorHandoffDone) {
         const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
         const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
         // Apply before_message_write hooks to each response part before sending
@@ -3463,15 +3576,7 @@ async function processAgentResponse(
       error: String(error),
       traceId,
     });
-    sendErrorFeedback(
-      channel,
-      instance.id,
-      chatId,
-      error,
-      // Per-instance override tier is null until the `agentErrorMessage` column
-      // lands (see resolveDispatchErrorMessage note) — env + default for now.
-      resolveDispatchErrorMessage(null),
-    ).catch(() => {});
+    await handleDispatchFailure(services, db, channel, instance, chatId, error);
   } finally {
     ackHandle.remove();
   }

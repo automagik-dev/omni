@@ -219,6 +219,21 @@ describe('AgnoAgentProvider', () => {
     expect(result.parts).toEqual([SAFE_PROVIDER_ERROR_MESSAGE]);
     expect(result.parts.join(' ')).not.toContain('Anthropic');
     expect(result.parts.join(' ')).not.toContain('credit balance');
+    // Signals the dispatcher to hand off to a human on native-handoff channels.
+    expect(result.metadata.customerErrorBlocked).toBe(true);
+  });
+
+  it('does not flag a normal response as a blocked customer error', async () => {
+    const client = createClientReturning('Sure! Your order ships tomorrow.');
+    const provider = new AgnoAgentProvider('agno-1', 'Agno', client, {
+      agentId: 'agent-1',
+      agentType: 'agent',
+    });
+
+    const result = await provider.trigger(createTrigger());
+
+    expect(result.parts).toEqual(['Sure! Your order ships tomorrow.']);
+    expect(result.metadata.customerErrorBlocked).toBe(false);
   });
 
   it('replaces raw API key errors before building outbound message parts', async () => {
