@@ -1,6 +1,9 @@
 const DEFAULT_AGENT_DISPATCH_CONCURRENCY = 8;
 const DEFAULT_AGENT_DISPATCH_QUEUE_MAX_DEPTH = 100;
-const DEFAULT_AGENT_DISPATCH_QUEUE_MAX_WAIT_MS = 60_000;
+// #738 — raised 60s → 600s so legitimately long agent runs (multi-tool loops,
+// slow upstream LLM/gateway) are not failed at the queue-wait gate. Override
+// via OMNI_AGENT_DISPATCH_QUEUE_MAX_WAIT_MS.
+const DEFAULT_AGENT_DISPATCH_QUEUE_MAX_WAIT_MS = 600_000;
 const DEFAULT_AGENT_DISPATCH_PER_CHAT_CONCURRENCY = 1;
 
 interface LoggerLike {

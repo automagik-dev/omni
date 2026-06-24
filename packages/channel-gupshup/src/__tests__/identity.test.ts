@@ -61,9 +61,7 @@ describe('toGupshupPhone', () => {
   });
 
   it('returns empty string for non-string input (contract violation, no crash)', () => {
-    // biome-ignore lint/suspicious/noExplicitAny: simulating a runtime contract violation
-    expect(toGupshupPhone(undefined as any)).toBe('');
-    // biome-ignore lint/suspicious/noExplicitAny: simulating a runtime contract violation
-    expect(toGupshupPhone(null as any)).toBe('');
+    expect(toGupshupPhone(undefined as unknown as string)).toBe('');
+    expect(toGupshupPhone(null as unknown as string)).toBe('');
   });
 });
