@@ -3830,6 +3830,41 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    *
    * @internal
    */
+  /**
+   * Date-range gate for a history message. Returns false (and logs the reason)
+   * when the message falls outside the active sync window. Extracted from
+   * {@link processHistoryMessage} to keep that method within the biome
+   * cognitive-complexity budget.
+   */
+  private isHistoryMessageWithinSyncRange(
+    msg: WAMessage,
+    timestamp: Date,
+    syncState: { since?: Date; until?: Date } | undefined,
+    instanceId: string,
+  ): boolean {
+    if (syncState?.since && timestamp < syncState.since) {
+      this.logger.debug('Skipping history message - before since', {
+        instanceId,
+        messageId: msg.key?.id,
+        chatId: msg.key?.remoteJid,
+        timestamp: timestamp.toISOString(),
+        since: new Date(syncState.since).toISOString(),
+      });
+      return false;
+    }
+    if (syncState?.until && timestamp > syncState.until) {
+      this.logger.debug('Skipping history message - after until', {
+        instanceId,
+        messageId: msg.key?.id,
+        chatId: msg.key?.remoteJid,
+        timestamp: timestamp.toISOString(),
+        until: new Date(syncState.until).toISOString(),
+      });
+      return false;
+    }
+    return true;
+  }
+
   private async processHistoryMessage(
     instanceId: string,
     msg: WAMessage,
@@ -3854,24 +3889,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     }
 
     // Filter by date range if specified
-    if (syncState?.since && timestamp < syncState.since) {
-      this.logger.debug('Skipping history message - before since', {
-        instanceId,
-        messageId: msg.key.id,
-        chatId: msg.key.remoteJid,
-        timestamp: timestamp.toISOString(),
-        since: new Date(syncState.since).toISOString(),
-      });
-      return;
-    }
-    if (syncState?.until && timestamp > syncState.until) {
-      this.logger.debug('Skipping history message - after until', {
-        instanceId,
-        messageId: msg.key.id,
-        chatId: msg.key.remoteJid,
-        timestamp: timestamp.toISOString(),
-        until: new Date(syncState.until).toISOString(),
-      });
+    if (!this.isHistoryMessageWithinSyncRange(msg, timestamp, syncState, instanceId)) {
       return;
     }
 

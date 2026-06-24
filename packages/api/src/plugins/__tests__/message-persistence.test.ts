@@ -37,10 +37,7 @@ describe('extractPlatformTimestamp', () => {
   test('handles Long object (protobuf uint64) with non-zero low, zero high', () => {
     // Baileys emits messageTimestamp as { low, high, unsigned } after deepSanitize
     const ts = 1746665253; // 2025-05-08
-    const result = extractPlatformTimestamp(
-      { messageTimestamp: { low: ts, high: 0, unsigned: false } },
-      FALLBACK,
-    );
+    const result = extractPlatformTimestamp({ messageTimestamp: { low: ts, high: 0, unsigned: false } }, FALLBACK);
     expect(result).not.toBeNull();
     expect(result!.getTime()).toBe(ts * 1000);
   });
@@ -51,10 +48,7 @@ describe('extractPlatformTimestamp', () => {
     const hi = 1;
     const lo = 1;
     const expectedTs = hi * 0x100000000 + lo; // 4294967297 seconds
-    const result = extractPlatformTimestamp(
-      { messageTimestamp: { low: lo, high: hi, unsigned: false } },
-      FALLBACK,
-    );
+    const result = extractPlatformTimestamp({ messageTimestamp: { low: lo, high: hi, unsigned: false } }, FALLBACK);
     expect(result).not.toBeNull();
     expect(result!.getTime()).toBe(expectedTs * 1000);
   });
