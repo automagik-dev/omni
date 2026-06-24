@@ -6,7 +6,7 @@
  */
 
 import { createLogger } from '../logger';
-import { SAFE_PROVIDER_ERROR_MESSAGE, toSafeCustomerFallback } from './customer-safe-errors';
+import { resolveSafeProviderErrorMessage, toSafeCustomerFallback } from './customer-safe-errors';
 import { buildProviderRequestContext } from './execution-context';
 import { createTraceContextFromTraceId } from './trace-context';
 import type {
@@ -160,7 +160,7 @@ export class AgnoAgentProvider implements IAgentProvider {
         traceId: context.traceId,
         error: message,
       });
-      yield { phase: 'error', error: SAFE_PROVIDER_ERROR_MESSAGE };
+      yield { phase: 'error', error: resolveSafeProviderErrorMessage() };
     }
   }
 
