@@ -12,10 +12,10 @@ import { describe, expect, it, mock } from 'bun:test';
 // Configurable plugin mock for `getPlugin`. Tests mutate `pluginState` per case.
 const pluginState: {
   canHandoff: boolean;
-  sendMessage: (...args: unknown[]) => Promise<{ messageId: string }>;
+  sendMessage: (...args: unknown[]) => Promise<{ success: boolean; messageId?: string; error?: string }>;
 } = {
   canHandoff: true,
-  sendMessage: mock(() => Promise.resolve({ messageId: 'msg-1' })),
+  sendMessage: mock(() => Promise.resolve({ success: true, messageId: 'msg-1' })),
 };
 
 mock.module('../loader', () => ({
@@ -55,11 +55,20 @@ describe('triggerErrorHandoff', () => {
     pluginState.canHandoff = true;
   });
 
-  it('returns false when the HANDOFF message delivery fails (safe to fall back)', async () => {
+  it('returns false when the HANDOFF message delivery throws (safe to fall back)', async () => {
     pluginState.sendMessage = mock(() => Promise.reject(new Error('network down')));
     const ok = await triggerErrorHandoff(makeServices(), makeDb(), 'gupshup' as never, instance, '5511999', 'oi');
     expect(ok).toBe(false);
-    pluginState.sendMessage = mock(() => Promise.resolve({ messageId: 'msg-1' }));
+    pluginState.sendMessage = mock(() => Promise.resolve({ success: true, messageId: 'msg-1' }));
+  });
+
+  it('returns false when sendMessage reports success:false (not connected / rejected)', async () => {
+    // Gupshup returns { success:false } without throwing — must still fall back,
+    // not pause the agent and swallow the message.
+    pluginState.sendMessage = mock(() => Promise.resolve({ success: false, error: 'not connected' }));
+    const ok = await triggerErrorHandoff(makeServices(), makeDb(), 'gupshup' as never, instance, '5511999', 'oi');
+    expect(ok).toBe(false);
+    pluginState.sendMessage = mock(() => Promise.resolve({ success: true, messageId: 'msg-1' }));
   });
 
   it('returns true even when a side-effect fails — no double message', async () => {

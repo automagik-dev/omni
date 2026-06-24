@@ -616,6 +616,11 @@ export async function triggerErrorHandoff(
 
   // Step 1 — deliver the HANDOFF payload. ONLY a delivery failure may return
   // false (the user got nothing, so the caller's plain-error fallback is safe).
+  // Channel sendMessage signals failure two ways: a thrown error OR a falsy
+  // `success` flag (e.g. Gupshup returns { success:false } when the instance
+  // isn't connected or the provider rejects) — both must short-circuit here,
+  // else we'd pause the agent and suppress the fallback while the user got
+  // nothing.
   let sendResult: Awaited<ReturnType<typeof plugin.sendMessage>>;
   try {
     sendResult = await plugin.sendMessage(instance.id, {
@@ -625,6 +630,14 @@ export async function triggerErrorHandoff(
     });
   } catch (err) {
     log.error('agent_dispatch_error_handoff_failed', { instanceId: instance.id, chatId, error: String(err) });
+    return false;
+  }
+  if (!sendResult?.success) {
+    log.error('agent_dispatch_error_handoff_delivery_failed', {
+      instanceId: instance.id,
+      chatId,
+      error: sendResult?.error,
+    });
     return false;
   }
 
