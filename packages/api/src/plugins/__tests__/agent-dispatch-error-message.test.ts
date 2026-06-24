@@ -14,7 +14,12 @@ mock.module('../loader', () => ({
   getPlugin: mock(() => Promise.resolve(undefined)),
 }));
 
-import { DEFAULT_DISPATCH_ERROR_MESSAGE, resolveDispatchErrorMessage } from '../agent-dispatcher';
+import {
+  DEFAULT_DISPATCH_ERROR_MESSAGE,
+  DEFAULT_ERROR_HANDOFF_MESSAGE,
+  resolveDispatchErrorMessage,
+  resolveErrorHandoffMessage,
+} from '../agent-dispatcher';
 
 describe('resolveDispatchErrorMessage', () => {
   it('falls back to the built-in default when nothing is configured', () => {
@@ -42,5 +47,22 @@ describe('resolveDispatchErrorMessage', () => {
 
   it('trims surrounding whitespace from the resolved value', () => {
     expect(resolveDispatchErrorMessage('  hi there  ', {})).toBe('hi there');
+  });
+});
+
+describe('resolveErrorHandoffMessage', () => {
+  it('defaults to the built-in handoff message (promises a human, not a retry)', () => {
+    expect(resolveErrorHandoffMessage({})).toBe(DEFAULT_ERROR_HANDOFF_MESSAGE);
+    expect(DEFAULT_ERROR_HANDOFF_MESSAGE).toContain('entrar em contato');
+  });
+
+  it('honors OMNI_AGENT_ERROR_HANDOFF_MESSAGE', () => {
+    expect(resolveErrorHandoffMessage({ OMNI_AGENT_ERROR_HANDOFF_MESSAGE: 'A human will reach out shortly.' })).toBe(
+      'A human will reach out shortly.',
+    );
+  });
+
+  it('ignores a blank override and falls back to default', () => {
+    expect(resolveErrorHandoffMessage({ OMNI_AGENT_ERROR_HANDOFF_MESSAGE: '   ' })).toBe(DEFAULT_ERROR_HANDOFF_MESSAGE);
   });
 });

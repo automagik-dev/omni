@@ -72,8 +72,9 @@ export class AgnoAgentProvider implements IAgentProvider {
     const response = await this.client.run(request);
 
     const customerContent = toSafeCustomerFallback(response.content);
+    const customerErrorBlocked = customerContent !== response.content;
 
-    if (customerContent !== response.content) {
+    if (customerErrorBlocked) {
       log.error('Blocked provider error from customer-facing Agno response', {
         agentId: this.config.agentId,
         runId: response.runId,
@@ -112,6 +113,7 @@ export class AgnoAgentProvider implements IAgentProvider {
               outputTokens: response.metrics.outputTokens,
             }
           : undefined,
+        customerErrorBlocked,
       },
     };
   }
