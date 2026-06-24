@@ -15,6 +15,60 @@ import type { SlackFileInfo } from '../types';
 const downloadGuard = createDownloadGuard();
 import { SlackError, SlackErrorCode } from '../types';
 
+function normalizeMimeType(value: string | null | undefined): string | undefined {
+  return value?.split(';')[0]?.trim().toLowerCase() || undefined;
+}
+
+function isHtmlMime(value: string | null | undefined): boolean {
+  const mimeType = normalizeMimeType(value);
+  return mimeType === 'text/html' || mimeType === 'application/xhtml+xml';
+}
+
+function looksLikeHtml(buffer: Buffer): boolean {
+  const preview = buffer.subarray(0, 512).toString('utf8').trimStart().toLowerCase();
+  return preview.startsWith('<!doctype html') || preview.startsWith('<html') || preview.includes('<html');
+}
+
+function hostMatchesSuffix(hostname: string, suffix: string): boolean {
+  const normalizedHost = hostname.toLowerCase();
+  const normalizedSuffix = suffix.toLowerCase();
+  return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
+}
+
+function isSlackHost(url: URL): boolean {
+  return hostMatchesSuffix(url.hostname, 'slack.com');
+}
+
+function headersWithOptionalAuthorization(botToken: string, preserveAuthorization: boolean): Headers {
+  const headers = new Headers();
+  if (preserveAuthorization) headers.set('Authorization', `Bearer ${botToken}`);
+  headers.set('Accept', 'application/octet-stream');
+  return headers;
+}
+
+async function fetchSlackPrivateUrl(url: string, botToken: string): Promise<Response> {
+  let currentUrl = new URL(url);
+  let preserveAuthorization = true;
+
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    const response: Response = await fetch(currentUrl.toString(), {
+      headers: headersWithOptionalAuthorization(botToken, preserveAuthorization),
+      redirect: 'manual',
+    });
+
+    if (response.status < 300 || response.status >= 400) return response;
+
+    const location: string | null = response.headers.get('location');
+    if (!location) return response;
+
+    const nextUrl: URL = new URL(location, currentUrl);
+    preserveAuthorization = isSlackHost(currentUrl) && isSlackHost(nextUrl);
+    currentUrl = nextUrl;
+  }
+
+  throw new SlackError(SlackErrorCode.FILE_DOWNLOAD_FAILED, 'Failed to download file: too many redirects');
+}
+
 /**
  * Extract file info from a Slack message event
  */
@@ -42,15 +96,12 @@ export async function downloadSlackFile(
   url: string,
   botToken: string,
   logger: Logger,
+  expectedMimeType?: string,
 ): Promise<{ buffer: Buffer; mimeType: string }> {
   logger.debug('Downloading file from Slack CDN', { url: url.substring(0, 50) });
 
   try {
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${botToken}`,
-      },
-    });
+    const response = await fetchSlackPrivateUrl(url, botToken);
 
     if (!response.ok) {
       throw new SlackError(
@@ -64,6 +115,12 @@ export async function downloadSlackFile(
 
     const buffer = Buffer.from(await response.arrayBuffer());
     const mimeType = response.headers.get('content-type') ?? 'application/octet-stream';
+    if (!isHtmlMime(expectedMimeType) && (isHtmlMime(mimeType) || looksLikeHtml(buffer))) {
+      throw new SlackError(
+        SlackErrorCode.FILE_DOWNLOAD_FAILED,
+        `Failed to download file bytes: Slack returned HTML instead of ${expectedMimeType ?? 'media'}`,
+      );
+    }
 
     logger.debug('File downloaded successfully', { size: buffer.length, mimeType });
 
