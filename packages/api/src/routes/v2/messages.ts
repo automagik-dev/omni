@@ -52,7 +52,7 @@ import { sentryEnabled } from '../../lib/sentry-scrub';
 import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
-import { MediaStorageService } from '../../services/media-storage';
+import { type MediaFetchOptions, MediaStorageService } from '../../services/media-storage';
 import type { ApiKeyData, AppVariables } from '../../types';
 import { isHardTerminalOutcome, resolveCloseContactConfig } from './_close-contact-config';
 
@@ -683,6 +683,7 @@ messagesRoutes.get('/by-external', async (c) => {
 const messageRefSchema = z.union([
   z.object({ messageId: z.string().uuid() }),
   z.object({ chatId: z.string().uuid(), externalId: z.string().min(1) }),
+  z.object({ instanceId: z.string().uuid(), chatExternalId: z.string().min(1), externalId: z.string().min(1) }),
 ]);
 
 // Lazy singleton for MediaStorageService (same pattern as media.ts)
@@ -706,6 +707,27 @@ async function resolveMessageFromRef(
     // getById throws NotFoundError (→ 404) if missing
     return services.messages.getById(ref.messageId);
   }
+  if ('chatExternalId' in ref) {
+    const chat = await services.chats.findByExternalIdSmart(ref.instanceId, ref.chatExternalId);
+    if (!chat) {
+      throw new OmniError({
+        code: ERROR_CODES.NOT_FOUND,
+        message: `Chat not found for instanceId=${ref.instanceId}, chatExternalId=${ref.chatExternalId}`,
+        context: { instanceId: ref.instanceId, chatExternalId: ref.chatExternalId },
+        recoverable: false,
+      });
+    }
+    const found = await services.messages.getByExternalId(chat.id, ref.externalId);
+    if (!found) {
+      throw new OmniError({
+        code: ERROR_CODES.NOT_FOUND,
+        message: `Message not found for chatExternalId=${ref.chatExternalId}, externalId=${ref.externalId}`,
+        context: { instanceId: ref.instanceId, chatExternalId: ref.chatExternalId, externalId: ref.externalId },
+        recoverable: false,
+      });
+    }
+    return found;
+  }
   const found = await services.messages.getByExternalId(ref.chatId, ref.externalId);
   if (!found) {
     throw new OmniError({
@@ -716,6 +738,16 @@ async function resolveMessageFromRef(
     });
   }
   return found;
+}
+
+function buildMediaDownloadFetchOptions(instance: Record<string, unknown>): MediaFetchOptions | undefined {
+  if (instance.channel !== 'slack') return undefined;
+  const slackBotToken = typeof instance.slackBotToken === 'string' ? instance.slackBotToken : undefined;
+  if (!slackBotToken) return undefined;
+  return {
+    headers: { Authorization: `Bearer ${slackBotToken}` },
+    preserveAuthRedirectHostSuffixes: ['slack.com'],
+  };
 }
 
 /**
@@ -747,6 +779,7 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
       recoverable: false,
     });
   }
+  const instance = await services.instances.getById(instanceId);
   checkInstanceAccess(apiKey, instanceId);
 
   // 3. Validate message has media
@@ -791,6 +824,7 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
         mediaUrl,
         message.mediaMimeType ?? undefined,
         message.platformTimestamp ?? undefined,
+        buildMediaDownloadFetchOptions(instance as Record<string, unknown>),
       );
       mediaLocalPath = result.localPath;
       await mediaStorage.updateMessageLocalPath(message.id, result.localPath);
@@ -814,7 +848,7 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
   }
 
   // 6. Build download URL — mediaLocalPath is guaranteed non-null here (either cached or just downloaded)
-  const downloadUrl = `/api/v2/media/${instanceId}/${mediaLocalPath as string}`;
+  const downloadUrl = `/api/v2/media/${mediaLocalPath as string}`;
 
   return c.json({
     data: {

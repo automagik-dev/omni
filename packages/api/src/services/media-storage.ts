@@ -28,6 +28,95 @@ export interface StoredMediaResult {
   mimeType?: string;
 }
 
+export interface MediaFetchOptions extends RequestInit {
+  /**
+   * Host suffixes where Authorization should be preserved across manual
+   * redirects. Fetch strips Authorization on cross-origin redirects; some
+   * private media URLs redirect inside the platform-owned domain and still
+   * require the same token.
+   */
+  preserveAuthRedirectHostSuffixes?: string[];
+}
+
+function normalizeMimeType(value: string | null | undefined): string | undefined {
+  return value?.split(';')[0]?.trim().toLowerCase() || undefined;
+}
+
+function isHtmlMime(value: string | null | undefined): boolean {
+  const mimeType = normalizeMimeType(value);
+  return mimeType === 'text/html' || mimeType === 'application/xhtml+xml';
+}
+
+function looksLikeHtml(buffer: Buffer): boolean {
+  const preview = buffer.subarray(0, 512).toString('utf8').trimStart().toLowerCase();
+  return preview.startsWith('<!doctype html') || preview.startsWith('<html>') || preview.startsWith('<html ');
+}
+
+function shouldRejectHtmlMedia(
+  expectedMimeType: string | undefined,
+  responseMimeType: string | undefined,
+  buffer: Buffer,
+): boolean {
+  const expected = normalizeMimeType(expectedMimeType);
+  if (!expected || isHtmlMime(expected)) return false;
+  return isHtmlMime(responseMimeType) || looksLikeHtml(buffer);
+}
+
+function hostMatchesSuffix(hostname: string, suffix: string): boolean {
+  const normalizedHost = hostname.toLowerCase();
+  const normalizedSuffix = suffix.toLowerCase();
+  return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
+}
+
+function shouldPreserveAuthForRedirect(url: URL, suffixes: string[] | undefined): boolean {
+  return Boolean(suffixes?.some((suffix) => hostMatchesSuffix(url.hostname, suffix)));
+}
+
+function headersWithOptionalAuthorization(
+  headers: RequestInit['headers'] | undefined,
+  preserveAuthorization: boolean,
+): Headers {
+  const nextHeaders = new Headers(headers);
+  if (!preserveAuthorization) nextHeaders.delete('authorization');
+  return nextHeaders;
+}
+
+async function fetchWithOptionalAuthenticatedRedirects(
+  url: string,
+  fetchOptions?: MediaFetchOptions,
+): Promise<Response> {
+  const { preserveAuthRedirectHostSuffixes, ...init } = fetchOptions ?? {};
+  if (!preserveAuthRedirectHostSuffixes?.length) {
+    return fetch(url, init);
+  }
+
+  let currentUrl = new URL(url);
+  let currentHeaders = new Headers(init.headers);
+
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    const response: Response = await fetch(currentUrl.toString(), {
+      ...init,
+      headers: currentHeaders,
+      redirect: 'manual',
+    });
+
+    if (response.status < 300 || response.status >= 400) return response;
+
+    const location: string | null = response.headers.get('location');
+    if (!location) return response;
+
+    const nextUrl: URL = new URL(location, currentUrl);
+    const preserveAuthorization =
+      shouldPreserveAuthForRedirect(currentUrl, preserveAuthRedirectHostSuffixes) &&
+      shouldPreserveAuthForRedirect(nextUrl, preserveAuthRedirectHostSuffixes);
+
+    currentHeaders = headersWithOptionalAuthorization(init.headers, preserveAuthorization);
+    currentUrl = nextUrl;
+  }
+
+  throw new Error('Failed to download media: too many redirects');
+}
+
 /**
  * Get file extension from mime type
  */
@@ -175,16 +264,23 @@ export class MediaStorageService {
     url: string,
     mimeType?: string,
     timestamp?: Date,
-    fetchOptions?: RequestInit,
+    fetchOptions?: MediaFetchOptions,
   ): Promise<StoredMediaResult> {
     // Fetch the media (fetchOptions allows callers to supply auth headers, e.g. Slack bot token)
-    const response = await fetch(url, fetchOptions);
+    const response = await fetchWithOptionalAuthenticatedRedirects(url, fetchOptions);
     if (!response.ok) {
       throw new Error(`Failed to download media: ${response.status}`);
     }
 
+    const responseContentType = response.headers.get('content-type') ?? undefined;
     const buffer = Buffer.from(await response.arrayBuffer());
-    const contentType = mimeType ?? response.headers.get('content-type') ?? undefined;
+    if (shouldRejectHtmlMedia(mimeType, responseContentType, buffer)) {
+      throw new Error(
+        `Downloaded media content mismatch: expected ${mimeType}, received ${responseContentType ?? 'unknown content type'}`,
+      );
+    }
+
+    const contentType = mimeType ?? responseContentType;
 
     return this.storeFromBuffer(instanceId, messageId, buffer, contentType, timestamp);
   }
