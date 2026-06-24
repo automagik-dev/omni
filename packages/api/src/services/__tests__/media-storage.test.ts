@@ -67,4 +67,77 @@ describe('MediaStorageService.storeFromUrl (omni#500)', () => {
     expect(result.mimeType).toBe('audio/mpeg');
     expect(result.localPath).toBe(join('inst-1', '2026-04', 'msg-1.mp3'));
   });
+
+  it('rejects HTML bodies when a non-HTML media type is expected', async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response('<!DOCTYPE html><html><body>login required</body></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        }),
+    ) as unknown as typeof fetch;
+    const service = new MediaStorageService(fakeDb, tmpDir);
+
+    await expect(
+      service.storeFromUrl('inst-1', 'msg-1', 'https://files.slack.com/private/photo.png', 'image/png'),
+    ).rejects.toThrow('Downloaded media content mismatch');
+  });
+
+  it('does not reject plain text that mentions HTML snippets', async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response('Slack note: use <html> only in documentation snippets.', {
+          status: 200,
+          headers: { 'content-type': 'text/plain; charset=utf-8' },
+        }),
+    ) as unknown as typeof fetch;
+    const service = new MediaStorageService(fakeDb, tmpDir);
+
+    const result = await service.storeFromUrl(
+      'inst-1',
+      'msg-1',
+      'https://files.slack.com/private/note.txt',
+      'text/plain',
+      new Date('2026-04-23T00:00:00Z'),
+    );
+
+    expect(result.localPath).toBe(join('inst-1', '2026-04', 'msg-1.txt'));
+    expect(result.mimeType).toBe('text/plain');
+  });
+
+  it('preserves Authorization across allowed private-media redirects', async () => {
+    const calls: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      calls.push({ url: String(input), authorization: headers.get('authorization') });
+      if (calls.length === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://files-pri.slack.com/files-pri/photo.png' },
+        });
+      }
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      });
+    }) as unknown as typeof fetch;
+
+    const service = new MediaStorageService(fakeDb, tmpDir);
+    const result = await service.storeFromUrl(
+      'inst-1',
+      'msg-1',
+      'https://files.slack.com/download/photo.png',
+      'image/png',
+      new Date('2026-04-23T00:00:00Z'),
+      {
+        headers: { Authorization: 'Bearer test-token' },
+        preserveAuthRedirectHostSuffixes: ['slack.com'],
+      },
+    );
+
+    expect(result.localPath).toBe(join('inst-1', '2026-04', 'msg-1.png'));
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.authorization).toBe('Bearer test-token');
+    expect(calls[1]?.authorization).toBe('Bearer test-token');
+  });
 });
