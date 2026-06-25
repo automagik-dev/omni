@@ -1,3 +1,4 @@
+<!-- ci: trigger @homolog publish (sync 2.260624.5 from main) -->
 <!-- ci: re-trigger @latest publish for v2.260624.4 (rolling promotion #730 rebased a [skip ci] head, skipping the main CI → version.yml @latest publish) -->
 <p align="center">
   <picture>
