@@ -26,7 +26,8 @@
  * --------
  * Spawn a matching-major `postgres` reader against the unmounted embedded
  * data dir on a free TCP port, copy the shared public-schema tables over to
- * canonical via psql `\copy`, then shut the temp postmaster down.
+ * canonical via postgres.js `COPY` streams (over the wire — NO host
+ * `psql`/`pg_dump`), then shut the temp postmaster down.
  *
  * Cross-major + cross-schema seamless: a PostgreSQL server can only open a
  * data dir of its OWN major, so the reader major MUST match the embedded
@@ -60,9 +61,34 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkS
 import { createServer } from 'node:net';
 import { arch, homedir, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
+import postgres, { type Sql } from 'postgres';
 
 const EMBEDDED_DIR = join(homedir(), '.omni', 'data', 'pgserve');
+
+/**
+ * Open a postgres.js client to a local postmaster (temp embedded reader or
+ * canonical). We talk to Postgres over the wire — text-format `COPY` streams
+ * preserve every type byte-for-byte across major versions — so the migration
+ * needs NO host client tools (`psql`/`pg_dump`); the only postgres binary
+ * required is the matching-major server reader, which we already auto-fetch.
+ */
+function pgConnect(port: number): Sql {
+  return postgres({
+    host: '127.0.0.1',
+    port,
+    user: 'postgres',
+    password: 'postgres',
+    database: 'omni',
+    max: 4,
+    idle_timeout: 10,
+    connect_timeout: 30,
+    // Migration runs against a one-off cluster; keep it quiet + simple.
+    onnotice: () => {},
+    prepare: false,
+  });
+}
 
 export type MigrationResult =
   | { status: 'migrated'; tables: number; durationMs: number }
@@ -395,11 +421,10 @@ async function spawnTempPostmaster(
 }
 
 /** List public tables on a server. */
-function listTables(args: string[]): string[] {
-  return psqlCapture([...args, '-tAc', `SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename`])
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean);
+async function listTables(sql: Sql): Promise<string[]> {
+  const rows = await sql<{ tablename: string }[]>`
+    SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`;
+  return rows.map((r) => r.tablename);
 }
 
 /**
@@ -408,63 +433,45 @@ function listTables(args: string[]): string[] {
  * kept (the migrate path runs under `session_replication_role='replica'`,
  * which permits explicit identity values so PKs/FKs stay intact).
  */
-function listColumns(args: string[], table: string, insertableOnly = false): string[] {
-  const filter = insertableOnly ? `AND is_generated <> 'ALWAYS'` : '';
-  return psqlCapture([
-    ...args,
-    '-tAc',
-    `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='${table}' ${filter} ORDER BY ordinal_position`,
-  ])
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-/** psql wrapper. Returns stdout on success; throws on non-zero exit. */
-function psqlCapture(args: string[]): string {
-  const result = spawnSync('psql', args, {
-    encoding: 'utf-8',
-    env: { ...process.env, PGPASSWORD: 'postgres' },
-    timeout: 60_000,
-  });
-  if (result.status !== 0) {
-    throw new Error(`psql exited ${result.status}: ${result.stderr?.trim() ?? ''}`);
-  }
-  return result.stdout ?? '';
+async function listColumns(sql: Sql, table: string, insertableOnly = false): Promise<string[]> {
+  const rows = insertableOnly
+    ? await sql<{ column_name: string }[]>`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = ${table} AND is_generated <> 'ALWAYS'
+        ORDER BY ordinal_position`
+    : await sql<{ column_name: string }[]>`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = ${table}
+        ORDER BY ordinal_position`;
+  return rows.map((r) => r.column_name);
 }
 
 /**
- * COPY one table source → file → dest. Two phases:
- *   1. psql `\copy table TO file WITH BINARY` (src) — writes to disk
- *   2. psql `\copy table FROM file WITH BINARY` (dst) — reads from disk
+ * COPY one table source → dest by streaming `COPY ... TO STDOUT` into
+ * `COPY ... FROM STDIN` over the wire (postgres.js), text format.
  *
- * Why not stream the pipe directly: Node's child_process pipe between two
- * spawned processes hits EPIPE / "unexpected EOF in COPY data" on rows
- * whose serialized binary payload exceeds the OS pipe buffer (observed
- * on a dogfood host with media_content blobs and messages.raw_payload
- * Buffer-serialized JSON at rows 60822 + 53288). The OS-level pipe has
- * no flow control beyond its 64KB buffer; once full, the writer EAGAINs
- * and Node's stream.pipe() either silently drops or aborts depending on
- * how the libuv handle was wired. File buffering is bulletproof: each
- * stage is sequential, disk has no buffer-size cliff, and on failure the
- * file is preserved at `/tmp/omni-migrate-<table>.copy` for inspection.
+ * `pipeline()` applies backpressure end-to-end, so large rows (media blobs,
+ * Buffer-serialized `messages.raw_payload`) can't overflow a buffer — the
+ * EPIPE / "unexpected EOF in COPY data" class of failure the old psql→file
+ * approach worked around simply can't occur with a flow-controlled stream.
  *
  * Format is TEXT (not BINARY) and the column list is the INTERSECTION of the
- * columns present on both sides. This makes the copy correct across a major
+ * columns present on both sides. This keeps the copy correct across a major
  * gap (binary wire format is not guaranteed identical 17↔18) AND across schema
  * drift (a legacy embedded schema rarely matches the current canonical one):
  * we copy only the columns both sides share, in an explicit order, so added /
  * dropped / reordered columns can't corrupt or abort the load. Columns only on
  * the destination take their defaults; columns only on the source are dropped.
  *
- * The temp file gets cleaned up in `finally`. Caller is expected to have
- * stopped omni-api so the table isn't being written to mid-COPY.
+ * `dstSql` MUST be a connection on which `session_replication_role='replica'`
+ * is already set (so FK/identity constraints don't block the load) — the
+ * caller reserves one connection for the whole copy and sets it once.
  */
 async function copyTable(
   table: string,
   columns: string[],
-  srcArgs: string[],
-  dstArgs: string[],
+  srcSql: Sql,
+  dstSql: Sql,
   log: (line: string) => void,
 ): Promise<void> {
   if (columns.length === 0) {
@@ -472,82 +479,90 @@ async function copyTable(
     return;
   }
   const colList = columns.map((c) => `"${c}"`).join(', ');
-  const tmpFile = join(tmpdir(), `omni-migrate-${table}-${process.pid}.copy`);
-  try {
-    // Phase 1: source → file. `\copy ... TO '<file>'` is psql's
-    // client-side variant (vs server-side `COPY TO '<file>'` which would
-    // require the postgres process to have FS write perms on that path).
-    const srcResult = spawnSync(
-      'psql',
-      [...srcArgs, '-c', `\\copy public."${table}" (${colList}) TO '${tmpFile}' WITH (FORMAT text)`],
-      {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, PGPASSWORD: 'postgres' },
-        timeout: 600_000,
-        maxBuffer: 16 * 1024 * 1024, // 16 MB — only the COPY summary line lands in stdout
-      },
-    );
-    if (srcResult.status !== 0) {
-      throw new Error(
-        `dump ${table} failed (psql exit ${srcResult.status}): ${srcResult.stderr?.toString().trim() ?? ''}`,
-      );
-    }
-    // Phase 2: file → dest. Same client-side `\copy ... FROM '<file>'`.
-    const dstResult = spawnSync(
-      'psql',
-      [
-        ...dstArgs,
-        '-c',
-        `SET session_replication_role='replica';`,
-        '-c',
-        `\\copy public."${table}" (${colList}) FROM '${tmpFile}' WITH (FORMAT text)`,
-      ],
-      {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, PGPASSWORD: 'postgres' },
-        timeout: 600_000,
-        maxBuffer: 16 * 1024 * 1024,
-      },
-    );
-    if (dstResult.status !== 0) {
-      throw new Error(
-        `restore ${table} failed (psql exit ${dstResult.status}): ${dstResult.stderr?.toString().trim() ?? ''}`,
-      );
-    }
-    log(`  copied ${table}`);
-  } finally {
-    try {
-      const { unlinkSync } = await import('node:fs');
-      unlinkSync(tmpFile);
-    } catch {
-      // Best-effort cleanup; leave the file for inspection if unlink fails.
-    }
-  }
+  const readable = await srcSql.unsafe(`COPY public."${table}" (${colList}) TO STDOUT (FORMAT text)`).readable();
+  const writable = await dstSql.unsafe(`COPY public."${table}" (${colList}) FROM STDIN (FORMAT text)`).writable();
+  await pipeline(readable, writable);
+  log(`  copied ${table}`);
 }
 
 /**
- * Reset sequences on the canonical DB after a bulk INSERT (COPY does not
- * advance sequences). Computes setval per (table, sequence) pair via
+ * Reset sequences on the canonical DB after a bulk COPY (COPY does not advance
+ * sequences). Computes setval per (table, sequence) pair via
  * pg_get_serial_sequence. Idempotent.
  */
-function resetSequences(dstArgs: string[], log: (line: string) => void): void {
-  const script = `
-SELECT format(
-  'SELECT setval(%L::regclass, GREATEST(COALESCE((SELECT max(%I) FROM %I.%I), 1), 1));',
-  pg_get_serial_sequence(c.table_schema || '.' || c.table_name, c.column_name),
-  c.column_name, c.table_schema, c.table_name
-)
-FROM information_schema.columns c
-WHERE pg_get_serial_sequence(c.table_schema || '.' || c.table_name, c.column_name) IS NOT NULL
-  AND c.table_schema = 'public';
-`.trim();
-  const lines = psqlCapture([...dstArgs, '-tAc', script])
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (lines.length === 0) return;
-  log(`  resetting ${lines.length} sequence(s)`);
-  psqlCapture([...dstArgs, '-c', lines.join('\n')]);
+async function resetSequences(dstSql: Sql, log: (line: string) => void): Promise<void> {
+  const rows = await dstSql.unsafe<{ stmt: string }[]>(`
+    SELECT format(
+      'SELECT setval(%L::regclass, GREATEST(COALESCE((SELECT max(%I) FROM %I.%I), 1), 1));',
+      pg_get_serial_sequence(c.table_schema || '.' || c.table_name, c.column_name),
+      c.column_name, c.table_schema, c.table_name
+    ) AS stmt
+    FROM information_schema.columns c
+    WHERE pg_get_serial_sequence(c.table_schema || '.' || c.table_name, c.column_name) IS NOT NULL
+      AND c.table_schema = 'public'`);
+  const stmts = rows.map((r) => r.stmt).filter(Boolean);
+  if (stmts.length === 0) return;
+  log(`  resetting ${stmts.length} sequence(s)`);
+  for (const stmt of stmts) await dstSql.unsafe(stmt);
+}
+
+/**
+ * Enumerate tables on BOTH sides and return the ones to migrate (the
+ * intersection, minus MIGRATION_SKIP_TABLES), or a `{ skip }` reason. The
+ * canonical (dst) schema is authoritative for what omni-api needs; tables only
+ * in the legacy embedded dir are obsolete and dropped, tables only in canonical
+ * stay empty.
+ */
+async function resolveTablesToMigrate(
+  srcSql: Sql,
+  dstSql: Sql,
+  log: (line: string) => void,
+): Promise<string[] | { skip: string }> {
+  const srcTables = new Set(await listTables(srcSql));
+  if (srcTables.size === 0) return { skip: 'embedded omni has no public tables' };
+  const dstTables = await listTables(dstSql);
+  const tables = dstTables.filter((t) => srcTables.has(t));
+  const onlyEmbedded = [...srcTables].filter((t) => !dstTables.includes(t));
+  if (onlyEmbedded.length > 0) {
+    log(`  ${onlyEmbedded.length} obsolete embedded-only table(s) skipped: ${onlyEmbedded.join(', ')}`);
+  }
+  if (tables.length === 0) return { skip: 'no tables shared between embedded and canonical schemas' };
+  // media_content holds large binary blobs; omni-api re-syncs media from the
+  // source channel. See MIGRATION_SKIP_TABLES for why each table is skipped.
+  const filteredTables = tables.filter((t) => !MIGRATION_SKIP_TABLES.has(t));
+  const skipped = tables.filter((t) => MIGRATION_SKIP_TABLES.has(t));
+  if (skipped.length > 0) log(`  skipping ${skipped.length} table(s) (rebuilt at runtime): ${skipped.join(', ')}`);
+  log(`  ${filteredTables.length} tables to migrate`);
+  return filteredTables;
+}
+
+/**
+ * Load every filtered table from source → dest on a single reserved dst
+ * connection. `session_replication_role='replica'` is a session GUC (not
+ * transactional), so the SET, the TRUNCATE, every COPY, and the sequence
+ * resets must all run on the same connection — hence one reserved `dst`.
+ * `srcSql` is the pooled source handle (opens a COPY-TO per table).
+ */
+async function copyAllTables(
+  srcSql: Sql,
+  dst: Sql,
+  filteredTables: string[],
+  log: (line: string) => void,
+): Promise<void> {
+  await dst`SET session_replication_role = 'replica'`;
+  const truncateList = filteredTables.map((t) => `public."${t}"`).join(',');
+  await dst.unsafe(`TRUNCATE ${truncateList} RESTART IDENTITY CASCADE`);
+  log('  truncated canonical (CASCADE)');
+
+  // COPY each table using the intersection of its columns on both sides
+  // (text format) — robust to cross-major wire differences and schema drift.
+  for (const t of filteredTables) {
+    const srcCols = new Set(await listColumns(srcSql, t));
+    const sharedCols = (await listColumns(dst, t, true)).filter((c) => srcCols.has(c));
+    await copyTable(t, sharedCols, srcSql, dst, log);
+  }
+
+  await resetSequences(dst, log);
 }
 
 /**
@@ -581,6 +596,33 @@ export interface CompareOptions {
  * runs two count queries, shuts it down. Best-effort: any spawn / query
  * failure returns `{ kind: 'skipped' }`.
  */
+/**
+ * For each table, compare row counts on embedded (src) vs canonical (dst);
+ * return which tables have MORE rows on embedded plus the total extra. A
+ * per-table count failure (schema mismatch) marks the table divergent.
+ */
+async function countRowDivergence(
+  srcSql: Sql,
+  dstSql: Sql,
+  tables: string[],
+): Promise<{ divergent: string[]; totalExtra: number }> {
+  const divergent: string[] = [];
+  let totalExtra = 0;
+  for (const t of tables) {
+    try {
+      const [{ n: em }] = await srcSql<{ n: number }[]>`SELECT count(*)::int AS n FROM public.${srcSql(t)}`;
+      const [{ n: ca }] = await dstSql<{ n: number }[]>`SELECT count(*)::int AS n FROM public.${dstSql(t)}`;
+      if (Number.isFinite(em) && Number.isFinite(ca) && em > ca) {
+        divergent.push(t);
+        totalExtra += em - ca;
+      }
+    } catch {
+      divergent.push(t);
+    }
+  }
+  return { divergent, totalExtra };
+}
+
 export async function compareEmbeddedVsCanonicalCounts(opts: CompareOptions = {}): Promise<CompareResult> {
   const canonicalPort = opts.canonicalPort ?? 5432;
   if (!existsSync(EMBEDDED_DIR) || !existsSync(join(EMBEDDED_DIR, 'PG_VERSION'))) {
@@ -598,44 +640,24 @@ export async function compareEmbeddedVsCanonicalCounts(opts: CompareOptions = {}
   }
   const tempPort = await findFreePort();
   let temp: { stop: () => Promise<void> } | null = null;
+  let srcSql: Sql | null = null;
+  let dstSql: Sql | null = null;
   try {
     temp = await spawnTempPostmaster(reader, EMBEDDED_DIR, tempPort, () => {});
-    const srcArgs = ['-h', '127.0.0.1', '-p', String(tempPort), '-U', 'postgres', '-d', 'omni'];
-    const dstArgs = ['-h', '127.0.0.1', '-p', String(canonicalPort), '-U', 'postgres', '-d', 'omni'];
-    // Enumerate then count per-table in a loop (simpler + portable across
-    // schema variations than a one-shot aggregate).
-    const tablesRaw = psqlCapture([
-      ...srcArgs,
-      '-tAc',
-      `SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename`,
-    ]);
-    const tables = tablesRaw
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    srcSql = pgConnect(tempPort);
+    dstSql = pgConnect(canonicalPort);
+    // Enumerate then count per-table (simpler + portable across schema
+    // variations than a one-shot aggregate).
+    const tables = await listTables(srcSql);
     if (tables.length === 0) return { kind: 'skipped', reason: 'embedded has no public tables' };
-    const divergent: string[] = [];
-    let totalExtra = 0;
-    for (const t of tables) {
-      try {
-        const em = Number.parseInt(psqlCapture([...srcArgs, '-tAc', `SELECT count(*) FROM public."${t}"`]).trim(), 10);
-        const ca = Number.parseInt(psqlCapture([...dstArgs, '-tAc', `SELECT count(*) FROM public."${t}"`]).trim(), 10);
-        if (Number.isFinite(em) && Number.isFinite(ca) && em > ca) {
-          divergent.push(t);
-          totalExtra += em - ca;
-        }
-      } catch {
-        // Schema mismatch — table on embedded missing on canonical or vice
-        // versa. Treat as "needs migration" by adding to divergent if it
-        // came from embedded enumeration.
-        divergent.push(t);
-      }
-    }
+    const { divergent, totalExtra } = await countRowDivergence(srcSql, dstSql, tables);
     if (divergent.length === 0) return { kind: 'in-sync' };
     return { kind: 'embedded-has-more', divergentTables: divergent, embeddedRows: totalExtra };
   } catch (err) {
     return { kind: 'skipped', reason: err instanceof Error ? err.message : String(err) };
   } finally {
+    if (srcSql) await srcSql.end({ timeout: 5 });
+    if (dstSql) await dstSql.end({ timeout: 5 });
     if (temp) await temp.stop();
   }
 }
@@ -676,73 +698,32 @@ export async function migrateUnmountedEmbeddedToCanonical(opts: MigrateOptions =
   const tempPort = await findFreePort();
   const t0 = Date.now();
   const temp = await spawnTempPostmaster(reader, EMBEDDED_DIR, tempPort, log);
-  let apiRestarted = false;
+  // Talk to both postmasters over the wire via postgres.js — no host psql.
+  const srcSql = pgConnect(tempPort);
+  const dstSql = pgConnect(canonicalPort);
   try {
-    // Verify the temp instance has the `omni` database.
-    const srcBaseArgs = ['-h', '127.0.0.1', '-p', String(tempPort), '-U', 'postgres', '-d', 'omni'];
-    const dstBaseArgs = ['-h', '127.0.0.1', '-p', String(canonicalPort), '-U', 'postgres', '-d', 'omni'];
+    const plan = await resolveTablesToMigrate(srcSql, dstSql, log);
+    if (!Array.isArray(plan)) return { status: 'skipped', reason: plan.skip };
 
-    // Enumerate tables on BOTH sides and copy only the intersection. The
-    // canonical (dst) schema is authoritative for what omni-api needs; tables
-    // that exist in the legacy embedded dir but not in canonical are obsolete
-    // and skipped, tables only in canonical stay empty (no source data).
-    const srcTables = new Set(listTables(srcBaseArgs));
-    if (srcTables.size === 0) {
-      return { status: 'skipped', reason: 'embedded omni has no public tables' };
-    }
-    const dstTables = listTables(dstBaseArgs);
-    const tables = dstTables.filter((t) => srcTables.has(t));
-    const onlyEmbedded = [...srcTables].filter((t) => !dstTables.includes(t));
-    if (onlyEmbedded.length > 0) {
-      log(`  ${onlyEmbedded.length} obsolete embedded-only table(s) skipped: ${onlyEmbedded.join(', ')}`);
-    }
-    if (tables.length === 0) {
-      return { status: 'skipped', reason: 'no tables shared between embedded and canonical schemas' };
-    }
-    // Tables to skip during migration.
-    //
-    // media_content holds large binary blobs (image / video / audio
-    // attachments) that frequently exceed Node's child_process pipe buffer
-    // limits and abort the COPY stream with "unexpected EOF in COPY data".
-    // Skipping is safe because omni-api re-syncs media from the source channel
-    // (WhatsApp Baileys restores media on next message arrival per chat).
-    // Operators who need the blobs preserved can re-run with
-    // OMNI_MIGRATE_INCLUDE_MEDIA=1 (TODO: wire flag).
-    //
-    // See MIGRATION_SKIP_TABLES for why each table is preserved/skipped.
-    const filteredTables = tables.filter((t) => !MIGRATION_SKIP_TABLES.has(t));
-    const skipped = tables.filter((t) => MIGRATION_SKIP_TABLES.has(t));
-    if (skipped.length > 0) log(`  skipping ${skipped.length} table(s) (rebuilt at runtime): ${skipped.join(', ')}`);
-    log(`  ${filteredTables.length} tables to migrate`);
-
-    // TRUNCATE canonical with replica role so FKs don't block.
-    const truncateList = filteredTables.map((t) => `public."${t}"`).join(',');
-    psqlCapture([
-      ...dstBaseArgs,
-      '-c',
-      `SET session_replication_role='replica'; TRUNCATE ${truncateList} RESTART IDENTITY CASCADE;`,
-    ]);
-    log('  truncated canonical (CASCADE)');
-
-    // COPY each table using the intersection of its columns on both sides
-    // (text format) — robust to cross-major wire differences and schema drift.
-    for (const t of filteredTables) {
-      const srcCols = new Set(listColumns(srcBaseArgs, t));
-      const sharedCols = listColumns(dstBaseArgs, t, true).filter((c) => srcCols.has(c));
-      await copyTable(t, sharedCols, srcBaseArgs, dstBaseArgs, log);
+    // Reserve ONE dst connection for the whole load: session_replication_role
+    // must stay 'replica' across the TRUNCATE, every COPY, and the sequence
+    // resets (it's a session GUC, not transactional), so all of it has to run
+    // on the same connection.
+    const dst = await dstSql.reserve();
+    try {
+      await copyAllTables(srcSql, dst, plan, log);
+    } finally {
+      await dst.release();
     }
 
-    // Reset sequences.
-    resetSequences(dstBaseArgs, log);
-
-    return { status: 'migrated', tables: filteredTables.length, durationMs: Date.now() - t0 };
+    return { status: 'migrated', tables: plan.length, durationMs: Date.now() - t0 };
   } finally {
+    await srcSql.end({ timeout: 5 });
+    await dstSql.end({ timeout: 5 });
     await temp.stop();
     // Restart omni-api on the now-populated canonical DB.
     log('  restarting omni-api');
     spawnSync('pm2', ['start', 'omni-api'], { stdio: 'inherit' });
-    apiRestarted = true;
-    void apiRestarted; // satisfy ts no-unused while keeping the variable for future logging
   }
 }
 

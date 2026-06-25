@@ -10,6 +10,8 @@ import type { AgentTrigger, IAgentClient, ProviderRequest, ProviderResponse, Str
 // provider test when the entire monorepo suite runs in one process.
 // @ts-expect-error Bun test supports query-suffixed imports; TypeScript does not resolve them.
 const { AgnoAgentProvider } = await import('../agno-provider.ts?real-agno-provider-test');
+// @ts-expect-error Bun test supports query-suffixed imports; TypeScript does not resolve them.
+const { SAFE_PROVIDER_ERROR_MESSAGE } = await import('../customer-safe-errors.ts?real-agno-provider-test');
 
 function createTrigger(overrides: Partial<AgentTrigger> = {}): AgentTrigger {
   return {
@@ -60,6 +62,30 @@ function createClient(chunks: StreamChunk[] = []): IAgentClient & { lastRequest?
       client.lastRequest = request;
       for (const chunk of chunks) {
         yield chunk;
+      }
+    }),
+    discover: mock(async () => []),
+    checkHealth: mock(async () => ({ healthy: true, latencyMs: 1 })),
+  };
+
+  return client;
+}
+
+function createClientReturning(content: string): IAgentClient & { lastRequest?: ProviderRequest } {
+  const client: IAgentClient & { lastRequest?: ProviderRequest } = {
+    run: mock(async (request: ProviderRequest): Promise<ProviderResponse> => {
+      client.lastRequest = request;
+      return {
+        content,
+        runId: 'run-1',
+        sessionId: 'session-1',
+        status: 'completed',
+      };
+    }),
+    stream: mock(async function* (request: ProviderRequest): AsyncGenerator<StreamChunk> {
+      client.lastRequest = request;
+      if (request.agentId === '__never__') {
+        yield { event: 'noop', isComplete: true };
       }
     }),
     discover: mock(async () => []),
@@ -179,6 +205,52 @@ describe('AgnoAgentProvider', () => {
     });
   });
 
+  it('replaces raw LiteLLM balance errors before building outbound message parts', async () => {
+    const raw =
+      'litellm.BadRequestError: AnthropicException - Your credit balance is too low to access the Anthropic API. Available Model Group Fallbacks=None';
+    const client = createClientReturning(raw);
+    const provider = new AgnoAgentProvider('agno-1', 'Agno', client, {
+      agentId: 'agent-1',
+      agentType: 'agent',
+    });
+
+    const result = await provider.trigger(createTrigger());
+
+    expect(result.parts).toEqual([SAFE_PROVIDER_ERROR_MESSAGE]);
+    expect(result.parts.join(' ')).not.toContain('Anthropic');
+    expect(result.parts.join(' ')).not.toContain('credit balance');
+    // Signals the dispatcher to hand off to a human on native-handoff channels.
+    expect(result.metadata.customerErrorBlocked).toBe(true);
+  });
+
+  it('does not flag a normal response as a blocked customer error', async () => {
+    const client = createClientReturning('Sure! Your order ships tomorrow.');
+    const provider = new AgnoAgentProvider('agno-1', 'Agno', client, {
+      agentId: 'agent-1',
+      agentType: 'agent',
+    });
+
+    const result = await provider.trigger(createTrigger());
+
+    expect(result.parts).toEqual(['Sure! Your order ships tomorrow.']);
+    expect(result.metadata.customerErrorBlocked).toBe(false);
+  });
+
+  it('replaces raw API key errors before building outbound message parts', async () => {
+    const raw = 'Authentication Error, Invalid proxy server token passed. Received API Key = ***';
+    const client = createClientReturning(raw);
+    const provider = new AgnoAgentProvider('agno-1', 'Agno', client, {
+      agentId: 'agent-1',
+      agentType: 'agent',
+    });
+
+    const result = await provider.trigger(createTrigger());
+
+    expect(result.parts).toEqual([SAFE_PROVIDER_ERROR_MESSAGE]);
+    expect(result.parts.join(' ')).not.toContain('API Key');
+    expect(result.parts.join(' ')).not.toContain('sk-');
+  });
+
   it('derives a W3C trace context from Omni traceId when dispatcher did not provide one', async () => {
     const client = createClient();
     const provider = new AgnoAgentProvider('agno-1', 'Agno', client, {
@@ -198,7 +270,7 @@ describe('AgnoAgentProvider', () => {
     expect(client.lastRequest?.traceContext?.traceFlags).toBe(1);
   });
 
-  it('converts Agno stream exceptions into error deltas instead of throwing', async () => {
+  it('converts Agno stream exceptions into safe error deltas instead of throwing raw errors', async () => {
     const client = createThrowingStreamClient();
     const provider = new AgnoAgentProvider('agno-1', 'Agno', client, {
       agentId: 'agent-1',
@@ -207,8 +279,27 @@ describe('AgnoAgentProvider', () => {
 
     const deltas = await collect(provider.triggerStream(createTrigger()));
 
-    expect(deltas).toEqual([{ phase: 'error', error: 'stream exploded' }]);
+    expect(deltas).toEqual([{ phase: 'error', error: SAFE_PROVIDER_ERROR_MESSAGE }]);
     expect(client.stream).toHaveBeenCalledTimes(1);
     expect(client.run).not.toHaveBeenCalled();
+  });
+
+  it('replaces raw provider errors in stream chunks and final content', async () => {
+    const raw = 'Authentication Error, Invalid proxy server token passed. Received API Key = ***';
+    const client = createClient([
+      { event: 'delta', content: raw, isComplete: false },
+      { event: 'complete', fullContent: raw, isComplete: true },
+    ]);
+    const provider = new AgnoAgentProvider('agno-1', 'Agno', client, {
+      agentId: 'agent-1',
+      agentType: 'agent',
+    });
+
+    const deltas = await collect(provider.triggerStream(createTrigger()));
+
+    expect(deltas).toEqual([
+      { phase: 'content', content: SAFE_PROVIDER_ERROR_MESSAGE },
+      { phase: 'final', content: SAFE_PROVIDER_ERROR_MESSAGE },
+    ]);
   });
 });

@@ -19,6 +19,14 @@ jobs:
     # action for push-time coverage only; running both on PRs can exhaust the
     # action API quota and produce false red CI despite the app passing.
     if: ${{ github.event_name == 'push' }}
+    # NON-BLOCKING: a GitGuardian failure/cancellation (e.g. a missing/invalid
+    # GITGUARDIAN_API_KEY or quota exhaustion) must NOT poison the overall CI
+    # run conclusion. The `version.yml` auto-release gates on the main-push CI
+    # run concluding `success`; before this guard, a cancelled secrets-scan job
+    # flipped the whole run to `cancelled`, so `version.yml` skipped and the
+    # dev→main promotion never published `@latest` (stuck since ~2026-05-31).
+    # The PR-time GitGuardian App check remains the enforcing gate.
+    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +34,7 @@ jobs:
           fetch-depth: 0
 
       - uses: GitGuardian/ggshield-action@v1
+        continue-on-error: true
         env:
           GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
           GITHUB_PUSH_BASE_SHA: ${{ github.event.pull_request.base.sha }}

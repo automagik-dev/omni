@@ -21,13 +21,16 @@ function makeLogger(): Logger {
 }
 
 function makeClientWithAssistant() {
-  const setStatusCalls: Array<{ channel_id: string; thread_ts: string; status: string }> = [];
+  const setStatusCalls: Array<{ channel_id: string; thread_ts: string; status: string; loading_messages?: string[] }> =
+    [];
   const client = {
     assistant: {
       threads: {
-        setStatus: mock(async (args: { channel_id: string; thread_ts: string; status: string }) => {
-          setStatusCalls.push(args);
-        }),
+        setStatus: mock(
+          async (args: { channel_id: string; thread_ts: string; status: string; loading_messages?: string[] }) => {
+            setStatusCalls.push(args);
+          },
+        ),
       },
     },
   };
@@ -57,7 +60,7 @@ describe('setSlackThreadStatus', () => {
     const { client, setStatusCalls } = makeClientWithAssistant();
     const logger = makeLogger();
 
-    await setSlackThreadStatus({
+    const result = await setSlackThreadStatus({
       client: client as never,
       channelId: 'C12345',
       threadTs: undefined,
@@ -65,6 +68,7 @@ describe('setSlackThreadStatus', () => {
       logger,
     });
 
+    expect(result).toBe(false);
     expect(setStatusCalls.length).toBe(0);
   });
 
@@ -72,19 +76,22 @@ describe('setSlackThreadStatus', () => {
     const { client, setStatusCalls } = makeClientWithAssistant();
     const logger = makeLogger();
 
-    await setSlackThreadStatus({
+    const result = await setSlackThreadStatus({
       client: client as never,
       channelId: 'C12345',
       threadTs: '1234567890.001',
       status: 'is typing...',
+      loadingMessages: ['Checking context...', 'Calling tools...'],
       logger,
     });
 
+    expect(result).toBe(true);
     expect(setStatusCalls.length).toBe(1);
     expect(setStatusCalls[0]).toEqual({
       channel_id: 'C12345',
       thread_ts: '1234567890.001',
       status: 'is typing...',
+      loading_messages: ['Checking context...', 'Calling tools...'],
     });
   });
 
@@ -92,7 +99,7 @@ describe('setSlackThreadStatus', () => {
     const { client, apiCalls } = makeClientWithApiCall();
     const logger = makeLogger();
 
-    await setSlackThreadStatus({
+    const result = await setSlackThreadStatus({
       client: client as never,
       channelId: 'C12345',
       threadTs: '1234567890.001',
@@ -100,6 +107,7 @@ describe('setSlackThreadStatus', () => {
       logger,
     });
 
+    expect(result).toBe(true);
     expect(apiCalls.length).toBe(1);
     expect(apiCalls[0]?.method).toBe('assistant.threads.setStatus');
     expect(apiCalls[0]?.args).toEqual({
@@ -113,15 +121,15 @@ describe('setSlackThreadStatus', () => {
     const { client } = makeClientWithoutAssistant();
     const logger = makeLogger();
 
-    await expect(
-      setSlackThreadStatus({
-        client: client as never,
-        channelId: 'C12345',
-        threadTs: '1234567890.001',
-        status: 'is typing...',
-        logger,
-      }),
-    ).resolves.toBeUndefined();
+    const result = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+    });
+
+    expect(result).toBe(false);
   });
 
   it('does not throw when API call fails', async () => {
@@ -131,25 +139,28 @@ describe('setSlackThreadStatus', () => {
     });
     const logger = makeLogger();
 
-    await expect(
-      setSlackThreadStatus({
-        client: client as never,
-        channelId: 'C12345',
-        threadTs: '1234567890.001',
-        status: 'is typing...',
-        logger,
-      }),
-    ).resolves.toBeUndefined();
+    const result = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+    });
+
+    expect(result).toBe(false);
 
     // Should have logged the failure
-    expect((logger.warn as ReturnType<typeof mock>).mock.calls.length).toBeGreaterThan(0);
+    const warnCalls = (logger.warn as ReturnType<typeof mock>).mock.calls;
+    expect(warnCalls.length).toBeGreaterThan(0);
+    expect(warnCalls[0]?.[1]).toMatchObject({ clearing: false, statusLength: 'is typing...'.length });
+    expect(warnCalls[0]?.[1]).not.toHaveProperty('status');
   });
 
   it('can clear typing status with empty string', async () => {
     const { client, setStatusCalls } = makeClientWithAssistant();
     const logger = makeLogger();
 
-    await setSlackThreadStatus({
+    const result = await setSlackThreadStatus({
       client: client as never,
       channelId: 'C12345',
       threadTs: '1234567890.001',
@@ -157,6 +168,7 @@ describe('setSlackThreadStatus', () => {
       logger,
     });
 
+    expect(result).toBe(true);
     expect(setStatusCalls[0]?.status).toBe('');
   });
 });
@@ -170,13 +182,14 @@ describe('setTypingStatus', () => {
     const { client, setStatusCalls } = makeClientWithAssistant();
     const logger = makeLogger();
 
-    await setTypingStatus({
+    const result = await setTypingStatus({
       client: client as never,
       channelId: 'C12345',
       threadTs: '1234567890.001',
       logger,
     });
 
+    expect(result).toBe(true);
     expect(setStatusCalls[0]?.status).toBe('is typing...');
   });
 
@@ -184,12 +197,13 @@ describe('setTypingStatus', () => {
     const { client, setStatusCalls } = makeClientWithAssistant();
     const logger = makeLogger();
 
-    await setTypingStatus({
+    const result = await setTypingStatus({
       client: client as never,
       channelId: 'C12345',
       logger,
     });
 
+    expect(result).toBe(false);
     expect(setStatusCalls.length).toBe(0);
   });
 });
@@ -199,13 +213,14 @@ describe('clearTypingStatus', () => {
     const { client, setStatusCalls } = makeClientWithAssistant();
     const logger = makeLogger();
 
-    await clearTypingStatus({
+    const result = await clearTypingStatus({
       client: client as never,
       channelId: 'C12345',
       threadTs: '1234567890.001',
       logger,
     });
 
+    expect(result).toBe(true);
     expect(setStatusCalls[0]?.status).toBe('');
   });
 });

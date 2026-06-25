@@ -28,6 +28,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
+import postgres from 'postgres';
 
 import { loadServerConfig } from '../config.js';
 import * as output from '../output.js';
@@ -218,45 +219,73 @@ function buildOmniDatabaseUrl(port: number): string {
  * attempts` because omni-api can connect to the postmaster but the
  * `omni` DB simply doesn't exist there yet. This helper closes the gap.
  *
- * Idempotent via Postgres's "IF NOT EXISTS"-equivalent: catch the
- * `42P04` (duplicate_database) error code and treat as success. Uses
- * `psql` because the CLI already has it on PATH whenever autopg / pgserve
- * is installed (it's bundled with the postmaster).
+ * Idempotent: a `42P04` (duplicate_database) error means it already exists →
+ * success. Uses postgres.js over the wire (NOT `psql`) — the autopg/pgserve
+ * postmaster ships only the server trio (initdb/pg_ctl/postgres), so `psql`
+ * is frequently absent on a fresh host; shelling to it aborted the migration.
  *
- * Best-effort: any non-fatal failure (binary missing, transient timeout)
- * returns false so the caller can warn without aborting the install.
+ * Best-effort: any non-fatal failure returns false so the caller can warn
+ * without aborting the install.
  */
+/**
+ * Poll the canonical postmaster until it accepts a connection (or give up after
+ * ~30s). Closes the post-`pgserve install` startup race so db/role provisioning
+ * doesn't connect before the server is listening.
+ */
+async function waitForCanonicalReady(port: number, attempts = 30): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    const sql = postgres({
+      host: '127.0.0.1',
+      port,
+      user: 'postgres',
+      password: 'postgres',
+      database: 'postgres',
+      max: 1,
+      idle_timeout: 2,
+      connect_timeout: 5,
+      onnotice: () => {},
+      prepare: false,
+    });
+    try {
+      await sql`SELECT 1`;
+      return true;
+    } catch {
+      await new Promise((r) => setTimeout(r, 1000));
+    } finally {
+      await sql.end({ timeout: 2 }).catch(() => {});
+    }
+  }
+  return false;
+}
+
 async function ensureOmniDatabaseExists(port: number): Promise<boolean> {
-  const psqlArgs = [
-    '-h',
-    '127.0.0.1',
-    '-p',
-    String(port),
-    '-U',
-    'postgres',
-    '-d',
-    'postgres',
-    '-tAc',
-    `CREATE DATABASE ${OMNI_DATABASE_NAME}`,
-  ];
-  const proc = Bun.spawn({
-    cmd: ['psql', ...psqlArgs],
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: { ...process.env, PGPASSWORD: 'postgres' },
+  const sql = postgres({
+    host: '127.0.0.1',
+    port,
+    user: 'postgres',
+    password: 'postgres',
+    database: 'postgres',
+    max: 1,
+    idle_timeout: 5,
+    connect_timeout: 30,
+    onnotice: () => {},
+    prepare: false,
   });
-  const stderr = await new Response(proc.stderr).text();
-  const code = await proc.exited;
-  if (code === 0) {
+  try {
+    // CREATE DATABASE cannot run inside a transaction; .unsafe() simple-queries it.
+    await sql.unsafe(`CREATE DATABASE ${OMNI_DATABASE_NAME}`);
     output.raw(`  Created \`${OMNI_DATABASE_NAME}\` database on canonical postmaster.`);
     return true;
+  } catch (err) {
+    // 42P04 duplicate_database → already exists → success (idempotent).
+    const code = (err as { code?: string })?.code;
+    const msg = err instanceof Error ? err.message : String(err);
+    if (code === '42P04' || msg.includes('already exists')) return true;
+    output.warn(`Could not ensure \`${OMNI_DATABASE_NAME}\` database exists: ${msg}`);
+    return false;
+  } finally {
+    await sql.end({ timeout: 5 });
   }
-  // Already-exists is success. Postgres surfaces 42P04 in the error text.
-  if (stderr.includes('42P04') || stderr.includes('already exists')) {
-    return true;
-  }
-  output.warn(`Could not ensure \`${OMNI_DATABASE_NAME}\` database exists (psql exit ${code}): ${stderr.trim()}`);
-  return false;
 }
 
 /**
@@ -286,6 +315,12 @@ export async function setupCanonicalPgserve(): Promise<string | null> {
   if (!(await runPgserveInstall())) return null;
   const port = await readPgservePort();
   if (port === null) return null;
+  // A freshly-`pgserve install`ed postmaster may not accept connections for a
+  // second or two. Wait for readiness BEFORE provisioning — otherwise the
+  // db-create + role connect races startup, silently no-ops (best-effort), and
+  // the operator is left with omni-api crash-looping on a missing `omni` db
+  // until they re-run `omni doctor --fix`.
+  await waitForCanonicalReady(port);
   // Best-effort: db-create failure does not abort the install; operator
   // can rerun `omni doctor --fix` later. The URL is still returned so
   // the caller persists the correct port even when DB creation lags.
@@ -409,6 +444,28 @@ function getEmbeddedPgserveDataDir(): string {
   return OMNI_EMBEDDED_PGSERVE_DATA_DIR;
 }
 
+/** Read the embedded cluster's PG major from its PG_VERSION file (null if absent). */
+function embeddedServerMajor(): number | null {
+  try {
+    const v = Number.parseInt(readFileSync(join(getEmbeddedPgserveDataDir(), 'PG_VERSION'), 'utf8').trim(), 10);
+    return Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build a client-tool remediation hint that names the REQUIRED major.
+ * The distro default `postgresql-client` is frequently older than the embedded
+ * server (e.g. Ubuntu 24.04 ships PG16) and a `pg_dump`/`psql` older than the
+ * server refuses to run — so never suggest the bare package.
+ */
+function clientToolHint(tool: 'pg_dump' | 'psql'): string {
+  const major = embeddedServerMajor();
+  const v = major ?? '<server-major>';
+  return `${tool} not found in PATH (or older than the embedded server). The embedded cluster is PostgreSQL ${v}; you need a ${tool} of major >= ${v}. Debian/Ubuntu (PGDG): \`apt install postgresql-client-${v}\` — NOT the bare \`postgresql-client\`, which may be older and will fail with "server version is newer". macOS: \`brew install postgresql@${v}\`. Then re-run \`omni doctor --fix\`.`;
+}
+
 /**
  * Resolve the canonical pgserve data dir from `~/.pgserve/config.json`.
  * pgserve writes `{dataDir, port, registeredAt}` during `pgserve install`.
@@ -504,9 +561,7 @@ export async function dumpEmbeddedDb(currentDatabaseUrl: string): Promise<Embedd
   }
 
   if (!commandIsAvailable('pg_dump')) {
-    throw new Error(
-      'pg_dump not found in PATH — install postgresql-client (apt install postgresql-client / brew install postgresql) and retry',
-    );
+    throw new Error(clientToolHint('pg_dump'));
   }
 
   const snapshotPath = getSnapshotPath();
@@ -571,9 +626,7 @@ export async function restoreSnapshotToCanonical(
   }
 
   if (!commandIsAvailable('psql')) {
-    throw new Error(
-      'psql not found in PATH — install postgresql-client (apt install postgresql-client / brew install postgresql) and retry',
-    );
+    throw new Error(clientToolHint('psql'));
   }
 
   output.raw('  Restoring snapshot into canonical pgserve via psql...');

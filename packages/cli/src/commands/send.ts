@@ -40,6 +40,14 @@ function readFileAsBase64(path: string): string {
   return buffer.toString('base64');
 }
 
+function parseLoadingMessages(value?: string): string[] | undefined {
+  const messages = value
+    ?.split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return messages?.length ? messages : undefined;
+}
+
 /** Send options type */
 interface SendOptions {
   instance?: string;
@@ -71,6 +79,8 @@ interface SendOptions {
   color?: number;
   url?: string;
   presence?: string;
+  status?: string;
+  loadingMessages?: string;
   tts?: string;
   voiceId?: string;
   presenceDelay?: number;
@@ -225,6 +235,9 @@ const messageSenders = {
       instanceId,
       to,
       type: presence as 'typing' | 'recording' | 'paused',
+      threadId: options.threadId,
+      status: options.status,
+      loadingMessages: parseLoadingMessages(options.loadingMessages),
     });
     output.success('Presence sent', result);
   },
@@ -389,6 +402,8 @@ function buildGroupedSendHelp(): string {
 
   const presenceOptions: OptionDef[] = [
     { flags: '--presence <type>', description: 'Send typing/recording/paused indicator' },
+    { flags: '--status <text>', description: 'Custom status text for channels that support it' },
+    { flags: '--loading-messages <items>', description: 'Comma-separated rotating loading messages' },
   ];
 
   const ttsOptions: OptionDef[] = [
@@ -493,6 +508,8 @@ export function createSendCommand(): Command {
     .option('--url <url>', 'Embed URL')
     // Presence
     .option('--presence <type>', 'Send presence indicator (typing, recording, paused)')
+    .option('--status <text>', 'Custom status text for channels that support it')
+    .option('--loading-messages <items>', 'Comma-separated rotating loading messages')
     // TTS
     .option('--tts <text>', 'Send TTS voice note (text-to-speech)')
     .option('--voice-id <id>', 'ElevenLabs voice ID for TTS')

@@ -3830,6 +3830,41 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    *
    * @internal
    */
+  /**
+   * Date-range gate for a history message. Returns false (and logs the reason)
+   * when the message falls outside the active sync window. Extracted from
+   * {@link processHistoryMessage} to keep that method within the biome
+   * cognitive-complexity budget.
+   */
+  private isHistoryMessageWithinSyncRange(
+    msg: WAMessage,
+    timestamp: Date,
+    syncState: { since?: Date; until?: Date } | undefined,
+    instanceId: string,
+  ): boolean {
+    if (syncState?.since && timestamp < syncState.since) {
+      this.logger.debug('Skipping history message - before since', {
+        instanceId,
+        messageId: msg.key?.id,
+        chatId: msg.key?.remoteJid,
+        timestamp: timestamp.toISOString(),
+        since: new Date(syncState.since).toISOString(),
+      });
+      return false;
+    }
+    if (syncState?.until && timestamp > syncState.until) {
+      this.logger.debug('Skipping history message - after until', {
+        instanceId,
+        messageId: msg.key?.id,
+        chatId: msg.key?.remoteJid,
+        timestamp: timestamp.toISOString(),
+        until: new Date(syncState.until).toISOString(),
+      });
+      return false;
+    }
+    return true;
+  }
+
   private async processHistoryMessage(
     instanceId: string,
     msg: WAMessage,
@@ -3842,25 +3877,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     const timestamp = this.getMessageTimestamp(msg);
 
-    // Filter by date range if specified
-    if (syncState?.since && timestamp < syncState.since) {
-      this.logger.debug('Skipping history message - before since', {
+    // Messages without a timestamp cannot be reliably ordered or filtered.
+    // Skip them instead of fabricating a misleading ingest-time timestamp.
+    if (!timestamp) {
+      this.logger.debug('Skipping history message without timestamp', {
         instanceId,
         messageId: msg.key.id,
         chatId: msg.key.remoteJid,
-        timestamp: new Date(timestamp).toISOString(),
-        since: new Date(syncState.since).toISOString(),
       });
       return;
     }
-    if (syncState?.until && timestamp > syncState.until) {
-      this.logger.debug('Skipping history message - after until', {
-        instanceId,
-        messageId: msg.key.id,
-        chatId: msg.key.remoteJid,
-        timestamp: new Date(timestamp).toISOString(),
-        until: new Date(syncState.until).toISOString(),
-      });
+
+    // Filter by date range if specified
+    if (!this.isHistoryMessageWithinSyncRange(msg, timestamp, syncState, instanceId)) {
       return;
     }
 
@@ -3970,12 +3999,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Get timestamp from a message
+   * Get timestamp from a message.
+   * Returns null when messageTimestamp is absent or zero — callers must handle this
+   * explicitly rather than silently falling back to the current time.
    * @internal
    */
-  private getMessageTimestamp(msg: WAMessage): Date {
-    if (!msg.messageTimestamp) return new Date();
+  private getMessageTimestamp(msg: WAMessage): Date | null {
+    if (!msg.messageTimestamp) return null;
     const ts = typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp);
+    if (!ts || Number.isNaN(ts)) return null;
     return new Date(ts * 1000);
   }
 
