@@ -37,6 +37,16 @@ const VALID_CHANNELS: Channel[] = [
   'twilio-whatsapp',
 ];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
+const PAIR_RETRY_DELAYS_MS = [500, 1000, 2000, 3000, 5000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryablePairingError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(Connection Closed|not connected|Call connect\(\) first)\b/i.test(message);
+}
 
 /** Set value on body, resolving "null" string to actual null */
 function setVal(body: Record<string, unknown>, key: string, val: unknown): void {
@@ -587,14 +597,36 @@ export function createInstancesCommand(): Command {
   // omni instances pair <id> --phone <number>
   instances
     .command('pair <id>')
-    .description('Request pairing code (alternative to QR)')
+    .description('Connect if needed and request a pairing code (alternative to QR)')
     .requiredOption('--phone <number>', 'Phone number with country code (e.g., +5511999999999)')
     .action(async (rawId: string, options: { phone: string }) => {
       const client = getClient();
 
       try {
         const id = await resolveInstanceId(rawId);
-        const result = await client.instances.pair(id, { phoneNumber: options.phone });
+        const status = await client.instances.status(id);
+        if (status.isConnected) {
+          output.success('Already connected', {
+            status: status.state,
+            profileName: status.profileName ?? null,
+          });
+          return;
+        }
+
+        await client.instances.connect(id);
+        let result: Awaited<ReturnType<typeof client.instances.pair>> | null = null;
+        for (let attempt = 0; attempt <= PAIR_RETRY_DELAYS_MS.length; attempt += 1) {
+          try {
+            result = await client.instances.pair(id, { phoneNumber: options.phone });
+            break;
+          } catch (error) {
+            if (!isRetryablePairingError(error) || attempt === PAIR_RETRY_DELAYS_MS.length) {
+              throw error;
+            }
+            await sleep(PAIR_RETRY_DELAYS_MS[attempt]);
+          }
+        }
+        if (!result) throw new Error('Pairing code was not returned');
         output.success(`Pairing code: ${result.code}`, {
           code: result.code,
           phoneNumber: result.phoneNumber,

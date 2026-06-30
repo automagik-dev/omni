@@ -12,7 +12,15 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'bun';
-import { MOCK_API_KEY, startMockApi, stopMockApi } from './mock-api';
+import {
+  MOCK_API_KEY,
+  clearMockRequestLog,
+  getMockRequestLog,
+  setMockInstanceStatus,
+  setMockPairFailuresBeforeSuccess,
+  startMockApi,
+  stopMockApi,
+} from './mock-api';
 
 /**
  * Pre-suite guard (#413): fail fast if a prior test run leaked a PM2 god
@@ -444,6 +452,86 @@ describe('CLI Integration Tests', () => {
       assertSuccess(result, 'instances status');
       const status = JSON.parse(result.stdout);
       expect(status.instanceId).toBe(testInstanceId);
+    });
+
+    test('instances pair is a no-op when already connected', async () => {
+      const instanceId = '00000000-0000-0000-0000-000000000001';
+      clearMockRequestLog();
+      setMockInstanceStatus(instanceId, {
+        state: 'connected',
+        isConnected: true,
+        profileName: 'Test Profile',
+      });
+
+      const result = await runCli(['instances', 'pair', instanceId, '--phone', '+15551234567'], {
+        OMNI_FORMAT: 'json',
+      });
+
+      assertSuccess(result, 'instances pair already connected');
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.message).toBe('Already connected');
+      expect(parsed.data).toMatchObject({
+        status: 'connected',
+        profileName: 'Test Profile',
+      });
+      const requests = getMockRequestLog().map((entry) => `${entry.method} ${entry.path}`);
+      expect(requests).toContain(`GET /api/v2/instances/${instanceId}/status`);
+      expect(requests).not.toContain(`POST /api/v2/instances/${instanceId}/connect`);
+      expect(requests).not.toContain(`POST /api/v2/instances/${instanceId}/pair`);
+    });
+
+    test('instances pair connects before requesting a code', async () => {
+      const instanceId = '00000000-0000-0000-0000-000000000001';
+      clearMockRequestLog();
+      setMockInstanceStatus(instanceId, {
+        state: 'disconnected',
+        isConnected: false,
+        profileName: null,
+      });
+
+      const result = await runCli(['instances', 'pair', instanceId, '--phone', '+15551234567'], {
+        OMNI_FORMAT: 'json',
+      });
+
+      assertSuccess(result, 'instances pair');
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.message).toBe('Pairing code: ABCD-1234');
+      expect(parsed.data).toMatchObject({
+        code: 'ABCD-1234',
+        expiresIn: 60,
+      });
+      const requests = getMockRequestLog().map((entry) => `${entry.method} ${entry.path}`);
+      expect(requests).toEqual([
+        `GET /api/v2/instances/${instanceId}/status`,
+        `POST /api/v2/instances/${instanceId}/connect`,
+        `POST /api/v2/instances/${instanceId}/pair`,
+      ]);
+    });
+
+    test('instances pair retries transient socket close after connect', async () => {
+      const instanceId = '00000000-0000-0000-0000-000000000001';
+      clearMockRequestLog();
+      setMockInstanceStatus(instanceId, {
+        state: 'disconnected',
+        isConnected: false,
+        profileName: null,
+      });
+      setMockPairFailuresBeforeSuccess(instanceId, 1);
+
+      const result = await runCli(['instances', 'pair', instanceId, '--phone', '+15551234567'], {
+        OMNI_FORMAT: 'json',
+      });
+
+      assertSuccess(result, 'instances pair retry');
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.message).toBe('Pairing code: ABCD-1234');
+      const requests = getMockRequestLog().map((entry) => `${entry.method} ${entry.path}`);
+      expect(requests).toEqual([
+        `GET /api/v2/instances/${instanceId}/status`,
+        `POST /api/v2/instances/${instanceId}/connect`,
+        `POST /api/v2/instances/${instanceId}/pair`,
+        `POST /api/v2/instances/${instanceId}/pair`,
+      ]);
     });
 
     test('instances delete removes instance', async () => {

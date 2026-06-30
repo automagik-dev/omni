@@ -15,6 +15,37 @@
 
 export const MOCK_API_KEY = 'test-mock-api-key-12345';
 
+type MockConnectionStatus = {
+  state: string;
+  isConnected: boolean;
+  profileName?: string | null;
+};
+
+type MockRequestLogEntry = {
+  method: string;
+  path: string;
+};
+
+let mockConnectionStatuses = new Map<string, MockConnectionStatus>();
+let mockPairFailuresBeforeSuccess = new Map<string, number>();
+let requestLog: MockRequestLogEntry[] = [];
+
+export function setMockInstanceStatus(instanceId: string, status: MockConnectionStatus): void {
+  mockConnectionStatuses.set(instanceId, status);
+}
+
+export function setMockPairFailuresBeforeSuccess(instanceId: string, count: number): void {
+  mockPairFailuresBeforeSuccess.set(instanceId, count);
+}
+
+export function getMockRequestLog(): MockRequestLogEntry[] {
+  return [...requestLog];
+}
+
+export function clearMockRequestLog(): void {
+  requestLog = [];
+}
+
 /** Providers created during test run (mutable state for create/delete/update cycle) */
 let dynamicProviders: Array<{
   id: string;
@@ -277,8 +308,13 @@ function handleAuthValidate(): Response {
 function handleInstanceStatus(path: string): Response {
   const match = path.match(/^\/api\/v2\/instances\/([^/]+)\/status$/);
   const id = match?.[1] ?? 'unknown';
+  const status = mockConnectionStatuses.get(id) ?? {
+    state: 'connected',
+    isConnected: true,
+    profileName: 'Test Profile',
+  };
   return json({
-    data: { state: 'connected', isConnected: true, profileName: 'Test Profile', instanceId: id },
+    data: { ...status, instanceId: id },
   });
 }
 
@@ -307,6 +343,55 @@ function handleDeleteInstance(path: string): Response {
   const id = match?.[1] ?? '';
   dynamicInstances = dynamicInstances.filter((i) => i.id !== id);
   return json({ success: true });
+}
+
+function handleConnectInstance(path: string): Response {
+  const match = path.match(/^\/api\/v2\/instances\/([^/]+)\/connect$/);
+  const id = match?.[1] ?? '';
+  mockConnectionStatuses.set(id, {
+    state: 'connecting',
+    isConnected: false,
+    profileName: null,
+  });
+  return json({ data: { status: 'connecting', message: 'Connection initiated' } });
+}
+
+function handlePairInstance(path: string): Response {
+  const match = path.match(/^\/api\/v2\/instances\/([^/]+)\/pair$/);
+  const id = match?.[1] ?? '';
+  const status = mockConnectionStatuses.get(id);
+  if (!status || status.state === 'disconnected') {
+    return json(
+      {
+        error: {
+          code: 'PAIRING_FAILED',
+          message: `Instance ${id} not connected. Call connect() first.`,
+        },
+      },
+      500,
+    );
+  }
+  const failuresRemaining = mockPairFailuresBeforeSuccess.get(id) ?? 0;
+  if (failuresRemaining > 0) {
+    mockPairFailuresBeforeSuccess.set(id, failuresRemaining - 1);
+    return json(
+      {
+        error: {
+          code: 'PAIRING_FAILED',
+          message: 'Failed to request pairing code: Connection Closed',
+        },
+      },
+      500,
+    );
+  }
+  return json({
+    data: {
+      code: 'ABCD-1234',
+      phoneNumber: '+1555****67',
+      message: 'Enter this code on your WhatsApp mobile app: Settings > Linked Devices > Link with phone number',
+      expiresIn: 60,
+    },
+  });
 }
 
 // ── Event fixtures ──
@@ -518,6 +603,16 @@ const patternRoutes: Array<{
     pattern: /^\/api\/v2\/instances\/[^/]+\/status$/,
     handler: (_req, path) => handleInstanceStatus(path),
   },
+  {
+    method: 'POST',
+    pattern: /^\/api\/v2\/instances\/[^/]+\/connect$/,
+    handler: (_req, path) => handleConnectInstance(path),
+  },
+  {
+    method: 'POST',
+    pattern: /^\/api\/v2\/instances\/[^/]+\/pair$/,
+    handler: (_req, path) => handlePairInstance(path),
+  },
   { method: 'GET', pattern: /^\/api\/v2\/instances\/[^/]+$/, handler: (_req, path) => handleGetInstance(path) },
   { method: 'DELETE', pattern: /^\/api\/v2\/instances\/[^/]+$/, handler: (_req, path) => handleDeleteInstance(path) },
   // Provider routes
@@ -554,6 +649,7 @@ async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
   const method = req.method;
+  requestLog.push({ method, path });
 
   // Auth check
   const authError = checkAuth(req, path);
@@ -596,6 +692,9 @@ export async function startMockApi(): Promise<MockApiHandle> {
   dynamicProviders = [];
   dynamicAgents = [];
   streamedEvents = [];
+  mockConnectionStatuses = new Map();
+  mockPairFailuresBeforeSuccess = new Map();
+  requestLog = [];
 
   const server = Bun.serve({
     port: 0, // OS-assigned random port
@@ -614,6 +713,9 @@ export async function startMockApi(): Promise<MockApiHandle> {
       dynamicProviders = [];
       dynamicAgents = [];
       streamedEvents = [];
+      mockConnectionStatuses = new Map();
+      mockPairFailuresBeforeSuccess = new Map();
+      requestLog = [];
     },
   };
 
