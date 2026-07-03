@@ -1,0 +1,77 @@
+# =============================================================================
+# Production overlay — registry image, HPA on, real ingress + TLS.
+#   helm upgrade --install omni deploy/helm/omni -n omni \
+#     -f deploy/helm/omni/values-prod.yaml \
+#     --set-string secret.omniApiKey=... \
+#     --set-string database.password=...   (or use existingSecret)
+# =============================================================================
+
+image:
+  repository: ghcr.io/automagik-dev/omni-api   # set to your registry/path
+  tag: "2.260703"                              # pin a released tag
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# NOTE: minReplicas stays 1 — omni-api owns a live WhatsApp/Baileys socket that
+# is not shareable across pods. HPA is enabled so CPU spikes can burst api-side
+# work, but scaling past 1 requires moving session/socket ownership off-node
+# (follow-up). Until then treat maxReplicas as headroom, not multi-connection.
+replicaCount: 1
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 75
+
+config:
+  LOG_LEVEL: "info"
+  NODE_ENV: "production"
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: omni.example.com
+  path: /
+  pathType: Prefix
+  tls:
+    - secretName: omni-tls
+      hosts:
+        - omni.example.com
+
+# Prefer an existing Secret published by autopg (full DATABASE_URL) in prod.
+database:
+  existingSecret: "omni-autopg-app"   # Secret holding DATABASE_URL
+  urlKey: "DATABASE_URL"
+
+secret:
+  # Provide OMNI_API_KEY via an existing Secret or --set-string; do NOT commit.
+  existingSecret: ""
+  omniApiKey: ""        # set at deploy time
+
+persistence:
+  enabled: true
+  size: 5Gi
+  # storageClass: fast-ssd
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+nats:
+  enabled: true
+  jetstream:
+    enabled: true
+    memStore: 512Mi
+    fileStore: 4Gi
+  persistence:
+    size: 8Gi
+    # storageClass: fast-ssd
+
+autopg:
+  enabled: true

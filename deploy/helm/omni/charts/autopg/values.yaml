@@ -1,0 +1,7 @@
+# Placeholder autopg values. The real chart's values replace this file.
+# `enabled` is honored by the umbrella's Chart.yaml `condition: autopg.enabled`.
+enabled: true
+
+# Marker rendered by the placeholder so `helm template` shows autopg is stubbed.
+# The real chart ignores this.
+placeholder: true

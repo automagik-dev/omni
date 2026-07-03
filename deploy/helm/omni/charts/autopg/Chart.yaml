@@ -1,0 +1,11 @@
+apiVersion: v2
+# PLACEHOLDER autopg subchart.
+# Replaced at integration by the real chart from
+# scratchpad/autopg/deploy/helm/autopg (the lead vendors it). It exists only so
+# the omni umbrella resolves + renders + lints standalone. Keep the chart name
+# `autopg` and the top-level `autopg:` values key so the swap is drop-in.
+name: autopg
+description: Placeholder for the autopg Postgres subchart (replaced at integration)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
