@@ -1,0 +1,200 @@
+# =============================================================================
+# omni umbrella chart — default values
+# =============================================================================
+# Override with values-dev.yaml (OrbStack) or values-prod.yaml (registry+HPA).
+# =============================================================================
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ---- omni-api image ---------------------------------------------------------
+image:
+  repository: omni-api
+  tag: dev
+  # OrbStack shares its image store with k8s, so a locally-built image needs
+  # no registry. Use Never (dev) / IfNotPresent or Always (prod).
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# ---- replicas + scaling -----------------------------------------------------
+# omni-api is STATELESS: WhatsApp/Baileys auth state is persisted in Postgres
+# via the storage abstraction (createStorageAuthState / clearAuthState), not on
+# local disk — so there is no per-pod session file to anchor. Replicas share
+# session state through the DB, so the HPA is ON by default.
+#
+# NOTE for integration: a single WhatsApp *credential* still maps to one live
+# Baileys socket at the protocol level — validate concurrent-replica behaviour
+# for WhatsApp instances (key-ratchet races) at integration. The horizontal
+# win is unconditional for HTTP/API traffic and non-WhatsApp channels.
+replicaCount: 2
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: ""
+
+# Stateless → RollingUpdate for zero-downtime rollouts.
+strategy:
+  type: RollingUpdate
+
+# ---- service ----------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 8882
+
+# ---- ingress ----------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: omni.local
+  path: /
+  pathType: Prefix
+  tls: []
+
+# ---- app config (non-secret → ConfigMap / plain env) ------------------------
+config:
+  API_HOST: "0.0.0.0"
+  API_PORT: "8882"
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+  # Split-out infra: use the external autopg pod + nats StatefulSet, NOT omni's
+  # in-process embedded pgserve / self-managed nats. Without these the api tries
+  # to boot its own pg/nats and ignores DATABASE_URL / NATS_URL.
+  PGSERVE_EMBEDDED: "false"
+  NATS_MANAGED: "false"
+
+# Free-form extra non-secret env (key: value) merged into the ConfigMap.
+extraConfig: {}
+
+# ---- env wiring: NATS_URL ---------------------------------------------------
+env:
+  # NATS_URL — leave empty to derive from the bundled NATS Service (see nats.*),
+  # or set explicitly (e.g. nats://my-nats:4222) to point at external NATS.
+  natsUrl: ""
+
+# ---- database (autopg) contract ---------------------------------------------
+# omni-api needs DATABASE_URL=postgresql://<role>:<pw>@<host>:5432/omni, where
+# <role> OWNS the omni tables (migrations ALTER them on boot).
+#
+# INTEGRATION (lead): the autopg subchart provisions db `omni` + a scoped owner
+# role and (ideally) publishes a Secret containing a ready DATABASE_URL. Point
+# omni at it via database.existingSecret / database.urlKey. Otherwise the chart
+# assembles DATABASE_URL from the fields below and stores it in the omni Secret.
+database:
+  # Option A (preferred at integration): consume a Secret that already holds a
+  # full DATABASE_URL (e.g. the one autopg emits). When set, host/user/password
+  # below are ignored.
+  existingSecret: ""      # e.g. "<release>-autopg-app"
+  urlKey: "DATABASE_URL"  # key within existingSecret holding the URL
+
+  # Option B (chart-assembled URL, stored in the omni Secret):
+  host: ""                # REQUIRED if existingSecret empty → autopg Service DNS
+  port: 5432
+  name: omni
+  user: omni              # scoped role that OWNS the omni tables
+  password: ""            # set via -f / --set-string
+  sslmode: ""             # e.g. "disable" / "require"; empty → omit
+
+# ---- secret (DB creds + optional provider keys) -----------------------------
+# There is NO OMNI_API_KEY: omni auth is DB-backed bearer keys (+ optional
+# per-instance ed25519 X-Genie-Signature) — API keys live in Postgres rows, not
+# env. This Secret carries the assembled DATABASE_URL (Option B above) plus any
+# optional third-party credentials, injected via envFrom.
+secret:
+  # Optional existing Secret to envFrom for extra app env (provider keys, etc.).
+  existingSecret: ""
+  # Optional key/values minted into the omni Secret and envFrom'd. Leave empty
+  # to omit. Common: OPENAI_API_KEY, ANTHROPIC_API_KEY, SENTRY_DSN,
+  # OTEL_EXPORTER_OTLP_ENDPOINT.
+  env: {}
+
+# ---- probes -----------------------------------------------------------------
+# GET /health → 200 {"status":"healthy",...} once DB + NATS are up (5s-cached).
+probes:
+  readiness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
+  liveness:
+    path: /health
+    initialDelaySeconds: 45
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 6
+  # Migrations + DB readiness can take 30s+; startupProbe guards slow boots.
+  startup:
+    path: /health
+    periodSeconds: 5
+    failureThreshold: 30
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  # oven/bun image runs as uid 1000 (bun).
+  fsGroup: 1000
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+extraEnv: []          # raw env entries (list of {name,value}/{name,valueFrom})
+extraVolumes: []
+extraVolumeMounts: []
+
+# =============================================================================
+# Subchart / bundled-dependency values
+# =============================================================================
+
+# ---- autopg (placeholder subchart; lead vendors the real chart) -------------
+autopg:
+  enabled: true
+  # The lead's real autopg values go here. The placeholder chart at
+  # charts/autopg/ only needs `enabled`. Document the Service name it exposes
+  # and set `database.host` (above) to it, e.g. "<release>-autopg".
+
+# ---- bundled NATS + JetStream ----------------------------------------------
+nats:
+  enabled: true
+  image: nats:2.10-alpine
+  port: 4222
+  monitorPort: 8222
+  externalHost: ""    # used only when nats.enabled=false
+  jetstream:
+    enabled: true
+    memStore: 256Mi
+    fileStore: 1Gi
+  persistence:
+    storageClass: ""
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi

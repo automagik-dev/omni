@@ -1,0 +1,74 @@
+# =============================================================================
+# Production overlay — registry image, HPA on, real ingress + TLS.
+#   helm upgrade --install omni deploy/helm/omni -n omni \
+#     -f deploy/helm/omni/values-prod.yaml
+#   DB creds come from the autopg-published Secret (database.existingSecret).
+# =============================================================================
+
+image:
+  repository: ghcr.io/automagik-dev/omni-api   # set to your registry/path
+  tag: "2.260703"                              # pin a released tag
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# omni-api is stateless (session state in Postgres) → HPA on, min 2 for HA.
+# Integration note: validate concurrent replicas for WhatsApp *credentials*
+# (one live Baileys socket per credential at the protocol level).
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 75
+
+config:
+  LOG_LEVEL: "info"
+  NODE_ENV: "production"
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: omni.example.com
+  path: /
+  pathType: Prefix
+  tls:
+    - secretName: omni-tls
+      hosts:
+        - omni.example.com
+
+# Prefer an existing Secret published by autopg (full DATABASE_URL) in prod.
+database:
+  existingSecret: "omni-autopg-app"   # Secret holding DATABASE_URL
+  urlKey: "DATABASE_URL"
+
+secret:
+  # No OMNI_API_KEY — omni auth keys live in Postgres. Optionally supply
+  # provider creds here (or reference an existing Secret via existingSecret):
+  existingSecret: ""
+  env: {}
+    # OPENAI_API_KEY: ""
+    # ANTHROPIC_API_KEY: ""
+    # SENTRY_DSN: ""
+    # OTEL_EXPORTER_OTLP_ENDPOINT: ""
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+nats:
+  enabled: true
+  jetstream:
+    enabled: true
+    memStore: 512Mi
+    fileStore: 4Gi
+  persistence:
+    size: 8Gi
+    # storageClass: fast-ssd
+
+autopg:
+  enabled: true

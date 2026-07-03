@@ -1,0 +1,66 @@
+# =============================================================================
+# OrbStack / local dev overlay
+#   helm upgrade --install omni deploy/helm/omni -n omni --create-namespace \
+#     -f deploy/helm/omni/values-dev.yaml
+# =============================================================================
+
+image:
+  repository: omni-api
+  tag: dev
+  # Image is built locally into OrbStack's shared store — never pull.
+  pullPolicy: Never
+
+# Keep dev light: one replica, HPA off. omni-api is stateless either way.
+replicaCount: 1
+autoscaling:
+  enabled: false
+
+config:
+  LOG_LEVEL: "debug"
+  NODE_ENV: "development"
+
+ingress:
+  enabled: true
+  className: ""          # OrbStack ships a default ingress controller
+  host: omni.k8s.orb.local
+  path: /
+  pathType: Prefix
+
+# Dev DB wiring — the lead sets database.host to the autopg Service once the
+# real subchart is vendored (e.g. "omni-autopg"). Password via --set-string or
+# an existingSecret. Placeholder below keeps `helm template` honest.
+database:
+  host: omni-autopg      # autopg Service name (release "omni" + "-autopg")
+  port: 5432
+  name: omni
+  user: omni
+  password: "omni-dev-password"   # dev only — override in real use
+  sslmode: disable
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 768Mi
+
+nats:
+  enabled: true
+  persistence:
+    size: 512Mi
+
+autopg:
+  enabled: true
+  image:
+    repository: autopg
+    tag: dev
+    pullPolicy: Never
+  # Provision the omni DB + schema-owning role with the SAME password omni-api
+  # uses in database.password above, so the assembled DATABASE_URL authenticates.
+  provisionedApps:
+    - db: omni
+      role: omni
+      password: "omni-dev-password"
+  persistence:
+    size: 2Gi
