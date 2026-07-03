@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { createMediaBackend } from '../index';
 import { LocalMediaBackend } from '../local-backend';
 import { S3MediaBackend } from '../s3-backend';
@@ -103,5 +104,29 @@ describe('LocalMediaBackend', () => {
   it('throws for presignedUrl (local mode has no presigning)', async () => {
     const backend = new LocalMediaBackend(tmpDir);
     await expect(backend.presignedUrl('inst-1/2026-07/msg-1.png')).rejects.toThrow(/remote mode/);
+  });
+
+  it('rejects keys that escape the storage root (store, storeStream, read)', async () => {
+    const backend = new LocalMediaBackend(tmpDir);
+    const escapingKey = join('..', 'omni-escape-test.txt');
+    const buffer = Buffer.from([1]);
+
+    await expect(backend.store({ key: escapingKey, buffer, mimeType: 'text/plain' })).rejects.toThrow(/storage root/);
+    await expect(backend.read(escapingKey)).rejects.toThrow(/storage root/);
+    const stream = Readable.from([buffer]);
+    await expect(backend.storeStream({ key: escapingKey, stream, mimeType: 'text/plain' })).rejects.toThrow(
+      /storage root/,
+    );
+
+    // Nothing escaped the root.
+    expect(existsSync(join(tmpDir, '..', 'omni-escape-test.txt'))).toBe(false);
+  });
+
+  it('still reads back a legitimate nested key after the traversal guard', async () => {
+    const backend = new LocalMediaBackend(tmpDir);
+    const key = join('inst-1', '2026-07', 'msg-2.bin');
+    await backend.store({ key, buffer: Buffer.from([9, 9]), mimeType: 'application/octet-stream' });
+    const bytes = await backend.read(key);
+    expect(Array.from(bytes)).toEqual([9, 9]);
   });
 });

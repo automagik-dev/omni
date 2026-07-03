@@ -316,6 +316,21 @@ export class MediaStorageService {
   }
 
   /**
+   * Backend-aware variant of readMedia: serves stored media in BOTH modes
+   * (local disk read or S3 GET). In remote mode the stored reference is an S3
+   * key with no file under basePath, so readMedia's disk lookup would 404 —
+   * the GET /media route must use this instead. Returns null when missing.
+   */
+  async readMediaViaBackend(relativePath: string): Promise<{ buffer: Buffer; size: number } | null> {
+    try {
+      const buffer = await this.backend.read(relativePath);
+      return { buffer, size: buffer.length };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Get mime type from file extension
    */
   getMimeType(filePath: string): string {

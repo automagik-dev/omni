@@ -290,7 +290,13 @@ async function materializeForProcessing(ctx: MediaProcessorContext, filePath: st
   const buffer = await ctx.mediaStorage.read(filePath);
   const ext = extname(filePath) || '.bin';
   const tempPath = join(tmpdir(), `omni-media-${randomUUID()}${ext}`);
-  await writeFile(tempPath, buffer);
+  try {
+    await writeFile(tempPath, buffer);
+  } catch (error) {
+    // A failed write (ENOSPC, permissions) can leave a partial file behind.
+    await rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
 
   return {
     path: tempPath,

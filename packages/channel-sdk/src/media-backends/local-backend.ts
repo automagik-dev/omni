@@ -8,7 +8,7 @@
 
 import { createWriteStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { DownloadTooLargeError } from '../download-guard';
@@ -19,8 +19,22 @@ export class LocalMediaBackend implements MediaStorageBackend {
 
   constructor(private basePath: string) {}
 
+  /**
+   * Resolve `key` under basePath and reject any key that escapes it.
+   * Keys are server-generated today, but the backend is an exported
+   * channel-sdk contract — its safety must not depend on caller discipline.
+   */
+  private getSafePath(key: string): string {
+    const fullPath = resolve(this.basePath, key);
+    const base = resolve(this.basePath);
+    if (fullPath !== base && !fullPath.startsWith(base + sep)) {
+      throw new Error(`Media key escapes the storage root: ${key}`);
+    }
+    return fullPath;
+  }
+
   async store({ key, buffer, mimeType }: StoreMediaInput): Promise<StoreMediaResult> {
-    const fullPath = join(this.basePath, key);
+    const fullPath = this.getSafePath(key);
 
     const dir = dirname(fullPath);
     if (!existsSync(dir)) {
@@ -38,7 +52,7 @@ export class LocalMediaBackend implements MediaStorageBackend {
    * bytes, abort past `maxSizeBytes`, remove a partial/empty file on failure.
    */
   async storeStream({ key, stream, mimeType, maxSizeBytes }: StoreStreamInput): Promise<StoreMediaResult> {
-    const fullPath = join(this.basePath, key);
+    const fullPath = this.getSafePath(key);
 
     let size = 0;
     const sizeGuard = new Transform({
@@ -68,7 +82,7 @@ export class LocalMediaBackend implements MediaStorageBackend {
   }
 
   async read(key: string): Promise<Buffer> {
-    return readFile(join(this.basePath, key));
+    return readFile(this.getSafePath(key));
   }
 
   async presignedUrl(_key?: string, _ttlSeconds?: number): Promise<string> {

@@ -116,6 +116,27 @@ describe.skipIf(!hasDocker)('remote media e2e: stored media → presigned Provid
     const downloaded = new Uint8Array(await download.arrayBuffer());
     expect(Array.from(downloaded)).toEqual(Array.from(imageBytes));
   });
+
+  it('serves remote-stored media through the backend-aware route read (GET /media path)', async () => {
+    // The persisted mediaUrl points at GET /api/v2/media/<key>, which serves via
+    // readMediaViaBackend — in remote mode that must S3-GET the key, not 404 on
+    // a local-disk lookup (PR #761 review finding).
+    const stored = await remoteService.storeFromBuffer(
+      'inst-1',
+      'msg-e2e-route',
+      imageBytes,
+      'image/png',
+      new Date('2026-07-03T00:00:00Z'),
+    );
+
+    const served = await remoteService.readMediaViaBackend(stored.localPath);
+    expect(served).not.toBeNull();
+    expect(served?.size).toBe(imageBytes.length);
+    expect(Array.from(new Uint8Array(served!.buffer))).toEqual(Array.from(imageBytes));
+
+    // Missing keys still resolve to null (the route's 404 path).
+    expect(await remoteService.readMediaViaBackend('inst-1/2026-07/does-not-exist.png')).toBeNull();
+  });
 });
 
 describe.skipIf(hasDocker)('remote media e2e (MinIO) (skipped)', () => {
