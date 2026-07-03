@@ -69,6 +69,18 @@ export interface MediaStorageBackend {
   storeStream(input: StoreStreamInput): Promise<StoreMediaResult>;
 
   /**
+   * Read the full bytes of a previously stored `key` back into a Buffer.
+   *
+   * - `local` reads `{basePath}/{key}` from disk.
+   * - `remote` performs an S3 GET (`Bun.S3Client`).
+   *
+   * This is what the media processor uses in remote mode to obtain bytes for
+   * transcription/vision, since the processing service only accepts a local
+   * filesystem path and cannot read an S3 key directly.
+   */
+  read(key: string): Promise<Buffer>;
+
+  /**
    * Presign a time-limited GET URL for a previously stored `key`.
    * Only meaningful in `remote` mode; the local backend throws.
    */

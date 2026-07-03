@@ -41,6 +41,9 @@ class RecordingRemoteBackend implements MediaStorageBackend {
     this.streamCalls.push({ key, size, guarded: maxSizeBytes !== undefined });
     return { reference: key, size, mimeType };
   }
+  async read(_key: string): Promise<Buffer> {
+    return Buffer.alloc(0);
+  }
   async presignedUrl(key: string): Promise<string> {
     return `https://s3.example/${key}?X-Amz-Signature=deadbeef`;
   }

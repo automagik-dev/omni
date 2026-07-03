@@ -382,6 +382,16 @@ export class MediaStorageService {
   }
 
   /**
+   * Read the full bytes of a stored reference back into a Buffer, delegating to
+   * the active backend (local disk read or S3 GET). Used by the media processor
+   * in remote mode to obtain bytes for transcription/vision, since the stored
+   * reference is an S3 key rather than a readable local path.
+   */
+  async read(reference: string): Promise<Buffer> {
+    return this.backend.read(reference);
+  }
+
+  /**
    * Presign a time-limited GET URL for a stored reference (remote mode only).
    * Throws in local mode. Consumed by remote-mode URL emission (Group 2).
    */

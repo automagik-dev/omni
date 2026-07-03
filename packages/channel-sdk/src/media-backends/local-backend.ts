@@ -7,7 +7,7 @@
  */
 
 import { createWriteStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -65,6 +65,10 @@ export class LocalMediaBackend implements MediaStorageBackend {
     }
 
     return { reference: key, size, mimeType };
+  }
+
+  async read(key: string): Promise<Buffer> {
+    return readFile(join(this.basePath, key));
   }
 
   async presignedUrl(_key?: string, _ttlSeconds?: number): Promise<string> {

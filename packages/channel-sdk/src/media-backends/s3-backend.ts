@@ -74,6 +74,12 @@ export class S3MediaBackend implements MediaStorageBackend {
     return { reference: key, size, mimeType };
   }
 
+  async read(key: string): Promise<Buffer> {
+    const bytes = await this.client.file(key).arrayBuffer();
+    log.debug('Read media from S3', { key, size: bytes.byteLength });
+    return Buffer.from(bytes);
+  }
+
   async presignedUrl(key: string, ttlSeconds: number = this.presignTtlSeconds): Promise<string> {
     return this.client.presign(key, { expiresIn: ttlSeconds, method: 'GET' });
   }
