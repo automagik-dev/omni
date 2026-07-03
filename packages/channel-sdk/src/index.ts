@@ -93,6 +93,21 @@ export type { SanitizeOptions, SanitizeResult } from './sanitize';
 export { createDownloadGuard, DownloadTooLargeError } from './download-guard';
 export type { DownloadGuard, DownloadGuardConfig, DownloadGuardContext } from './download-guard';
 
+// ─────────────────────────────────────────────────────────────
+// Media storage backends (shared by @omni/api and channel plugins)
+// ─────────────────────────────────────────────────────────────
+
+export { createMediaBackend, LocalMediaBackend, resolveMediaBackendConfig, S3MediaBackend } from './media-backends';
+export type {
+  MediaBackendConfig,
+  MediaStorageBackend,
+  MediaStorageMode,
+  S3BackendConfig,
+  StoreMediaInput,
+  StoreMediaResult,
+  StoreStreamInput,
+} from './media-backends';
+
 // Explicit streaming type export for package root access
 export type { StreamSender } from './types/streaming';
 

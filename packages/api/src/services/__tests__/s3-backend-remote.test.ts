@@ -14,10 +14,9 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { createHash, createHmac } from 'node:crypto';
+import { type S3BackendConfig, S3MediaBackend } from '@omni/channel-sdk';
 import type { Database } from '@omni/db';
-import { MediaStorageService } from '../../media-storage';
-import type { S3BackendConfig } from '../config';
-import { S3MediaBackend } from '../s3-backend';
+import { MediaStorageService } from '../media-storage';
 
 const BUCKET = 'omni-media-test';
 const ACCESS_KEY = 'minioadmin';
