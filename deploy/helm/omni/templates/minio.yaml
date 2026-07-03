@@ -1,0 +1,162 @@
+{{- if .Values.minio.enabled }}
+{{- /*
+First-party bundled MinIO (S3-compatible object store) for the "remote" media
+backend. Kept small and offline (no subchart download) for OrbStack/dev, mirroring
+templates/nats.yaml. Swap for the official minio chart or an external S3 bucket
+(minio.enabled=false + media.s3.existingSecret) in prod.
+
+The bucket-bootstrap is guaranteed idempotent (mc mb --ignore-existing) and
+ordered-before-serving two ways:
+  1. a Helm post-install/post-upgrade hook Job (release-level bootstrap), and
+  2. an initContainer on the omni-api Deployment (per-pod hard gate) — see
+     templates/deployment.yaml. omni-api's api container cannot start until the
+     bucket exists.
+*/ -}}
+{{- if not .Values.media.s3.existingSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "omni.minio.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+type: Opaque
+stringData:
+  # MinIO server root creds — also serve as the S3 access/secret keys consumed
+  # by omni-api (OMNI_MEDIA_S3_ACCESS_KEY / _SECRET_KEY) via secretKeyRef.
+  MINIO_ROOT_USER: {{ .Values.minio.rootUser | quote }}
+  MINIO_ROOT_PASSWORD: {{ .Values.minio.rootPassword | quote }}
+  OMNI_MEDIA_S3_ACCESS_KEY: {{ .Values.minio.rootUser | quote }}
+  OMNI_MEDIA_S3_SECRET_KEY: {{ .Values.minio.rootPassword | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "omni.minio.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "omni.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+  ports:
+    - name: api
+      port: {{ .Values.minio.service.port }}
+      targetPort: api
+    - name: console
+      port: {{ .Values.minio.service.consolePort }}
+      targetPort: console
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "omni.minio.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  serviceName: {{ include "omni.minio.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "omni.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "omni.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      containers:
+        - name: minio
+          image: {{ .Values.minio.image | quote }}
+          imagePullPolicy: {{ .Values.minio.pullPolicy }}
+          args:
+            - "server"
+            - "/data"
+            - "--console-address"
+            - ":{{ .Values.minio.service.consolePort }}"
+          envFrom:
+            - secretRef:
+                name: {{ include "omni.media.secretName" . }}
+          ports:
+            - name: api
+              containerPort: {{ .Values.minio.service.port }}
+            - name: console
+              containerPort: {{ .Values.minio.service.consolePort }}
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.minio.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.minio.persistence.storageClass }}
+        storageClassName: {{ .Values.minio.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.minio.persistence.size | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "omni.minio.fullname" . }}-bootstrap
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio-bootstrap
+  annotations:
+    # Run after the MinIO StatefulSet + Service are applied, on every
+    # install/upgrade. Idempotent, so re-running on upgrade is safe.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.minio.bootstrap.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "omni.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-bucket
+          image: {{ .Values.minio.mc.image | quote }}
+          imagePullPolicy: {{ .Values.minio.mc.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ include "omni.media.secretName" . }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              # Wait for MinIO to accept connections, then create the bucket
+              # idempotently. `mc mb --ignore-existing` is a no-op if the bucket
+              # already exists, so install/upgrade re-runs are safe.
+              until mc alias set omni "http://{{ include "omni.minio.fullname" . }}:{{ .Values.minio.service.port }}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+                echo "waiting for minio to become reachable..."
+                sleep 2
+              done
+              mc mb --ignore-existing "omni/{{ .Values.media.s3.bucket }}"
+              echo "bucket omni/{{ .Values.media.s3.bucket }} is ready"
+{{- end }}

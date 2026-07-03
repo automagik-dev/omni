@@ -35,6 +35,30 @@ spec:
       serviceAccountName: {{ include "omni.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if and (include "omni.media.remote" .) .Values.minio.enabled }}
+      # Hard per-pod ordering gate: block omni-api's container until the media
+      # bucket exists. `mc mb --ignore-existing` is idempotent, so this both
+      # creates-if-missing and verifies, and never fails on a pre-existing
+      # bucket. Complements the release-level bootstrap Job in minio.yaml.
+      initContainers:
+        - name: wait-for-media-bucket
+          image: {{ .Values.minio.mc.image | quote }}
+          imagePullPolicy: {{ .Values.minio.mc.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ include "omni.media.secretName" . }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              until mc alias set omni "{{ include "omni.media.s3Endpoint" . }}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+                echo "waiting for minio to become reachable..."
+                sleep 2
+              done
+              mc mb --ignore-existing "omni/{{ .Values.media.s3.bucket }}"
+              echo "media bucket omni/{{ .Values.media.s3.bucket }} is ready"
+      {{- end }}
       containers:
         - name: omni-api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -67,6 +91,19 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.database.existingSecret }}
                   key: {{ .Values.database.urlKey }}
+            {{- end }}
+            {{- if include "omni.media.remote" . }}
+            # --- S3 creds by reference only (never plaintext in rendered env) ---
+            - name: OMNI_MEDIA_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "omni.media.secretName" . }}
+                  key: {{ .Values.media.s3.accessKeyKey }}
+            - name: OMNI_MEDIA_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "omni.media.secretName" . }}
+                  key: {{ .Values.media.s3.secretKeyKey }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
