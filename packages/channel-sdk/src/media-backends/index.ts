@@ -13,7 +13,15 @@ import type { MediaStorageBackend } from './types';
 
 export type { MediaBackendConfig, S3BackendConfig } from './config';
 export { resolveMediaBackendConfig } from './config';
-export type { MediaStorageBackend, MediaStorageMode, StoreMediaInput, StoreMediaResult } from './types';
+export { LocalMediaBackend } from './local-backend';
+export { S3MediaBackend } from './s3-backend';
+export type {
+  MediaStorageBackend,
+  MediaStorageMode,
+  StoreMediaInput,
+  StoreMediaResult,
+  StoreStreamInput,
+} from './types';
 
 /**
  * Build the media backend selected by `config` (defaults to the environment).

@@ -22,6 +22,23 @@ export interface StoreMediaInput {
   mimeType?: string;
 }
 
+export interface StoreStreamInput {
+  /** Stable relative key in the layout `{instanceId}/{YYYY-MM}/{messageId}.{ext}`. */
+  key: string;
+  /**
+   * Source stream (e.g. Baileys media stream). Consumed once, never buffered
+   * whole in the heap — this is why streaming ingest exists for large video.
+   */
+  stream: NodeJS.ReadableStream;
+  mimeType?: string;
+  /**
+   * Hard byte ceiling enforced while streaming. When exceeded the write is
+   * aborted (multipart upload cancelled / partial file removed) and a
+   * `DownloadTooLargeError` is thrown — matching the local size-guard behavior.
+   */
+  maxSizeBytes?: number;
+}
+
 export interface StoreMediaResult {
   /**
    * Stable reference to persist on the message row. It is the same relative key
@@ -38,6 +55,18 @@ export interface MediaStorageBackend {
 
   /** Persist bytes under `key` and return the stable reference to record. */
   store(input: StoreMediaInput): Promise<StoreMediaResult>;
+
+  /**
+   * Stream bytes to `key` without buffering the whole payload in the heap.
+   * Preserves the size-guard behavior: exceeding `maxSizeBytes` aborts the
+   * write and throws. Returns a `size: 0` result when the source produced no
+   * bytes (the caller treats that as a failed download, same as before).
+   *
+   * - `local` pipes through a size-guarded `createWriteStream` (the exact
+   *   behavior the WhatsApp handler had before the backend abstraction).
+   * - `remote` performs a streaming/multipart `Bun.S3Client` upload.
+   */
+  storeStream(input: StoreStreamInput): Promise<StoreMediaResult>;
 
   /**
    * Presign a time-limited GET URL for a previously stored `key`.

@@ -7,11 +7,11 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join } from 'node:path';
 
+import { type MediaStorageBackend, createMediaBackend } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { messages } from '@omni/db';
 import { eq } from 'drizzle-orm';
-import { type MediaStorageBackend, createMediaBackend } from './media-backends';
 
 const log = createLogger('services:media-storage');
 
