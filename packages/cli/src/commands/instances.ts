@@ -96,6 +96,7 @@ function applyDebounceFields(body: Record<string, unknown>, opts: Record<string,
   if (opts.debounceMax !== undefined) body.messageDebounceMaxMs = opts.debounceMax;
   setBool(body, 'messageDebounceRestartOnTyping', opts.debounceRestartOnTyping);
   if (opts.debounceGroup !== undefined) body.messageDebounceGroupMs = opts.debounceGroup;
+  if (opts.debounceMaxWait !== undefined) body.messageDebounceMaxWaitMs = opts.debounceMaxWait;
 }
 
 /** Extract split-delay fields from CLI options into body */
@@ -328,11 +329,14 @@ export function createInstancesCommand(): Command {
     .option('--no-enable-auto-split', 'Disable auto-split')
     .option('--message-format-mode <mode>', 'Format mode: convert or passthrough')
     // Debounce
-    .option('--debounce-mode <mode>', 'Debounce mode: disabled, fixed, or randomized')
+    .option('--debounce-mode <mode>', 'Debounce mode: disabled, fixed, randomized, or presence')
     .option('--debounce-min <ms>', 'Minimum debounce delay in ms', (v) => Number.parseInt(v, 10))
     .option('--debounce-max <ms>', 'Maximum debounce delay in ms', (v) => Number.parseInt(v, 10))
     .option('--debounce-restart-on-typing', 'Restart debounce timer on typing')
     .option('--debounce-group <ms>', 'Group chat debounce in ms', (v) => Number.parseInt(v, 10))
+    .option('--debounce-max-wait <ms>', 'Presence-mode hard cap in ms (flush even under continuous typing)', (v) =>
+      Number.parseInt(v, 10),
+    )
     // Split delay (between agent-reply chunks)
     .option('--split-delay-mode <mode>', 'Split delay mode: disabled, fixed, or randomized')
     .option('--split-delay-fixed <ms>', 'Fixed delay between split chunks in ms', (v) => Number.parseInt(v, 10))
@@ -857,12 +861,15 @@ export function createInstancesCommand(): Command {
     .option('--no-enable-auto-split', 'Disable auto-split')
     .option('--message-format-mode <mode>', 'Format mode: convert or passthrough')
     // Debounce
-    .option('--debounce-mode <mode>', 'Debounce mode: disabled, fixed, or randomized')
+    .option('--debounce-mode <mode>', 'Debounce mode: disabled, fixed, randomized, or presence')
     .option('--debounce-min <ms>', 'Minimum debounce delay in ms', (v) => Number.parseInt(v, 10))
     .option('--debounce-max <ms>', 'Maximum debounce delay in ms', (v) => Number.parseInt(v, 10))
     .option('--debounce-restart-on-typing', 'Restart debounce timer on typing')
     .option('--no-debounce-restart-on-typing', 'Do not restart debounce on typing')
     .option('--debounce-group <ms>', 'Group chat debounce in ms (use "null" to inherit)', (v) =>
+      v === 'null' ? null : Number.parseInt(v, 10),
+    )
+    .option('--debounce-max-wait <ms>', 'Presence-mode hard cap in ms (use "null" to inherit)', (v) =>
       v === 'null' ? null : Number.parseInt(v, 10),
     )
     // Split delay (between agent-reply chunks)

@@ -83,9 +83,9 @@ const createInstanceSchema = z.object({
     .nullable()
     .describe('Content types that receive file path (e.g. image, video, document). Default: all except audio'),
   messageDebounceMode: z
-    .enum(['disabled', 'fixed', 'randomized'])
+    .enum(['disabled', 'fixed', 'randomized', 'presence'])
     .default('randomized')
-    .describe('Message debounce mode: disabled, fixed delay, or randomized delay'),
+    .describe('Message debounce mode: disabled, fixed delay, randomized delay, or presence (typing-aware)'),
   messageDebounceMinMs: z
     .number()
     .int()
@@ -106,6 +106,15 @@ const createInstanceSchema = z.object({
     .nullable()
     .default(null)
     .describe('Debounce delay for group chats in milliseconds (null = use messageDebounceMinMs)'),
+  messageDebounceMaxWaitMs: z
+    .number()
+    .int()
+    .min(0)
+    .nullable()
+    .default(null)
+    .describe(
+      'Presence-mode hard cap in milliseconds — flush at firstBuffered + this even under continuous typing (null = no cap)',
+    ),
   messageSplitDelayMode: z
     .enum(['disabled', 'fixed', 'randomized'])
     .default('randomized')

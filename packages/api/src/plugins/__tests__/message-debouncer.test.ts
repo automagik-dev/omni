@@ -30,6 +30,7 @@ const fixedConfig: DebounceConfig = {
   maxMs: 100,
   restartOnTyping: false,
   groupMs: null,
+  maxWaitMs: null,
 };
 
 const disabledConfig: DebounceConfig = {
@@ -38,6 +39,7 @@ const disabledConfig: DebounceConfig = {
   maxMs: 0,
   restartOnTyping: false,
   groupMs: null,
+  maxWaitMs: null,
 };
 
 function wait(ms: number): Promise<void> {
@@ -188,6 +190,7 @@ describe('MessageDebouncer', () => {
         maxMs: 120,
         restartOnTyping: false,
         groupMs: null,
+        maxWaitMs: null,
       };
 
       debouncer = new MessageDebouncer(async (_chatKey, messages) => {
@@ -219,6 +222,7 @@ describe('MessageDebouncer', () => {
         maxMs: 100,
         restartOnTyping: true,
         groupMs: null,
+        maxWaitMs: null,
       };
 
       debouncer = new MessageDebouncer(async (_chatKey, messages) => {
@@ -261,6 +265,7 @@ describe('MessageDebouncer', () => {
         maxMs: 100,
         restartOnTyping: true,
         groupMs: null,
+        maxWaitMs: null,
       };
 
       debouncer = new MessageDebouncer(async (_chatKey, messages) => {
@@ -294,6 +299,7 @@ describe('MessageDebouncer', () => {
         maxMs: 100,
         restartOnTyping: false,
         groupMs: null,
+        maxWaitMs: null,
       };
 
       debouncer = new MessageDebouncer(async (_chatKey, messages) => {
@@ -429,6 +435,148 @@ describe('MessageDebouncer', () => {
       // Second batch should flush automatically
       expect(flushCalls.length).toBe(2);
       expect(flushCalls[1]!.messages.length).toBe(2);
+    });
+  });
+
+  describe('presence mode — maxWaitMs hard cap', () => {
+    it('caps at maxWaitMs even under continuous typing', async () => {
+      const flushCalls: BufferedMessage[][] = [];
+      const start = Date.now();
+      let flushedAt = 0;
+
+      debouncer = new MessageDebouncer(async (_chatKey, messages) => {
+        flushCalls.push([...messages]);
+        flushedAt = Date.now() - start;
+      });
+
+      const presenceConfig: DebounceConfig = {
+        mode: 'presence',
+        minMs: 100, // quiet window after typing stops
+        maxMs: 100,
+        restartOnTyping: true,
+        groupMs: null,
+        maxWaitMs: 500, // hard cap from the first buffered message
+      };
+
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('m1'), presenceConfig);
+
+      // Type every 80ms (< minMs) so the quiet-window timer keeps restarting.
+      // Without the cap this batch would never flush; the cap forces it at ~500ms.
+      for (let i = 0; i < 8; i++) {
+        await wait(80);
+        debouncer.onUserTyping('inst-1', 'chat-1', presenceConfig);
+      }
+
+      expect(flushCalls.length).toBe(1);
+      expect(flushCalls[0]!.length).toBe(1);
+      // Flushed around the 500ms cap, not extended by the ongoing typing.
+      expect(flushedAt).toBeGreaterThanOrEqual(450);
+      expect(flushedAt).toBeLessThan(680);
+    });
+
+    it('flushes minMs after typing stops when still under the cap', async () => {
+      const flushCalls: BufferedMessage[][] = [];
+      debouncer = new MessageDebouncer(async (_chatKey, messages) => {
+        flushCalls.push([...messages]);
+      });
+
+      const presenceConfig: DebounceConfig = {
+        mode: 'presence',
+        minMs: 100,
+        maxMs: 100,
+        restartOnTyping: true,
+        groupMs: null,
+        maxWaitMs: 5000,
+      };
+
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('m1'), presenceConfig);
+      // One typing burst at 60ms restarts the 100ms quiet window.
+      await wait(60);
+      debouncer.onUserTyping('inst-1', 'chat-1', presenceConfig);
+      // At 110ms the original window would have fired; the restart holds it back.
+      await wait(50);
+      expect(flushCalls.length).toBe(0);
+      // 100ms after the typing event → flush.
+      await wait(80);
+      expect(flushCalls.length).toBe(1);
+    });
+  });
+
+  describe('flushAll() — shutdown drains instead of dropping', () => {
+    const longConfig: DebounceConfig = {
+      mode: 'fixed',
+      minMs: 10_000, // window never fires on its own during the test
+      maxMs: 10_000,
+      restartOnTyping: false,
+      groupMs: null,
+      maxWaitMs: null,
+    };
+
+    it('delivers pending buffers instead of dropping them', async () => {
+      const flushCalls: BufferedMessage[][] = [];
+      debouncer = new MessageDebouncer(async (_chatKey, messages) => {
+        flushCalls.push([...messages]);
+      });
+
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('a'), longConfig);
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('b'), longConfig);
+      expect(flushCalls.length).toBe(0);
+
+      await debouncer.flushAll();
+
+      expect(flushCalls.length).toBe(1);
+      expect(flushCalls[0]!.length).toBe(2);
+    });
+
+    it('flushes every buffered chat across keys', async () => {
+      const byKey: Record<string, number> = {};
+      debouncer = new MessageDebouncer(async (chatKey, messages) => {
+        byKey[chatKey] = (byKey[chatKey] ?? 0) + messages.length;
+      });
+
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('a'), longConfig);
+      debouncer.buffer('inst-1', 'chat-2', makeMessage('b'), longConfig);
+      debouncer.buffer('inst-2', 'chat-1', makeMessage('c'), longConfig);
+
+      await debouncer.flushAll();
+
+      expect(byKey['inst-1:chat-1']).toBe(1);
+      expect(byKey['inst-1:chat-2']).toBe(1);
+      expect(byKey['inst-2:chat-1']).toBe(1);
+    });
+
+    it('clear() drops pending buffers — the shutdown gap flushAll closes', async () => {
+      const flushCalls: BufferedMessage[][] = [];
+      debouncer = new MessageDebouncer(async (_chatKey, messages) => {
+        flushCalls.push([...messages]);
+      });
+
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('a'), longConfig);
+      debouncer.clear();
+      await wait(50);
+
+      // Regression contrast: clear() is the lossy path; flushAll() is not.
+      expect(flushCalls.length).toBe(0);
+    });
+  });
+
+  describe('per-instanceId:chatId isolation', () => {
+    it('keeps buffers separate across instances and chats', async () => {
+      const byKey: Record<string, number> = {};
+      debouncer = new MessageDebouncer(async (chatKey, messages) => {
+        byKey[chatKey] = (byKey[chatKey] ?? 0) + messages.length;
+      });
+
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('a1'), fixedConfig);
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('a2'), fixedConfig);
+      debouncer.buffer('inst-1', 'chat-2', makeMessage('b1'), fixedConfig);
+      debouncer.buffer('inst-2', 'chat-1', makeMessage('c1'), fixedConfig);
+
+      await wait(150);
+
+      expect(byKey['inst-1:chat-1']).toBe(2);
+      expect(byKey['inst-1:chat-2']).toBe(1);
+      expect(byKey['inst-2:chat-1']).toBe(1);
     });
   });
 });
