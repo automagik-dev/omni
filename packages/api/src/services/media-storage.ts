@@ -4,13 +4,14 @@
  * @see history-sync wish
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join, relative } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { extname, join } from 'node:path';
 
 import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { messages } from '@omni/db';
 import { eq } from 'drizzle-orm';
+import { type MediaStorageBackend, createMediaBackend } from './media-backends';
 
 const log = createLogger('services:media-storage');
 
@@ -169,30 +170,45 @@ function getExtensionFromMime(mimeType: string): string {
 
 export class MediaStorageService {
   private basePath: string;
+  private backend: MediaStorageBackend;
 
   constructor(
     private db: Database,
     basePath?: string,
+    backend?: MediaStorageBackend,
   ) {
     this.basePath = basePath ?? process.env.MEDIA_STORAGE_PATH ?? DEFAULT_MEDIA_PATH;
+    this.backend = backend ?? createMediaBackend(this.basePath);
 
-    // Ensure base directory exists
-    if (!existsSync(this.basePath)) {
+    // Ensure base directory exists (only meaningful for the local backend;
+    // remote deployments should not create a spurious ./data/media directory).
+    if (this.backend.mode === 'local' && !existsSync(this.basePath)) {
       mkdirSync(this.basePath, { recursive: true });
       log.info('Created media storage directory', { path: this.basePath });
     }
   }
 
   /**
-   * Build storage path for media
-   * Format: {basePath}/{instanceId}/{YYYY-MM}/{messageId}.{ext}
+   * Build the stable relative storage key for media.
+   * Format: {instanceId}/{YYYY-MM}/{messageId}.{ext}
+   *
+   * This key is both the local relative path and the S3 object key — it is what
+   * gets recorded on the message row and never an expiring URL.
    */
-  buildPath(instanceId: string, messageId: string, mimeType?: string, timestamp?: Date): string {
+  buildKey(instanceId: string, messageId: string, mimeType?: string, timestamp?: Date): string {
     const date = timestamp ?? new Date();
     const yearMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
     const ext = mimeType ? getExtensionFromMime(mimeType) : '.bin';
 
-    return join(this.basePath, instanceId, yearMonth, `${messageId}${ext}`);
+    return join(instanceId, yearMonth, `${messageId}${ext}`);
+  }
+
+  /**
+   * Build the absolute local storage path for media (local backend only).
+   * Format: {basePath}/{instanceId}/{YYYY-MM}/{messageId}.{ext}
+   */
+  buildPath(instanceId: string, messageId: string, mimeType?: string, timestamp?: Date): string {
+    return join(this.basePath, this.buildKey(instanceId, messageId, mimeType, timestamp));
   }
 
   /**
@@ -205,24 +221,16 @@ export class MediaStorageService {
     mimeType?: string,
     timestamp?: Date,
   ): Promise<StoredMediaResult> {
-    const localPath = this.buildPath(instanceId, messageId, mimeType, timestamp);
-
-    // Ensure directory exists
-    const dir = dirname(localPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-
-    // Decode and write
     const buffer = Buffer.from(base64Data, 'base64');
-    writeFileSync(localPath, buffer);
+    const key = this.buildKey(instanceId, messageId, mimeType, timestamp);
+    const result = await this.backend.store({ key, buffer, mimeType });
 
-    log.debug('Stored media from base64', { messageId, localPath, size: buffer.length });
+    log.debug('Stored media from base64', { messageId, reference: result.reference, size: result.size });
 
     return {
-      localPath: relative(this.basePath, localPath),
-      size: buffer.length,
-      mimeType,
+      localPath: result.reference,
+      size: result.size,
+      mimeType: result.mimeType,
     };
   }
 
@@ -236,22 +244,15 @@ export class MediaStorageService {
     mimeType?: string,
     timestamp?: Date,
   ): Promise<StoredMediaResult> {
-    const localPath = this.buildPath(instanceId, messageId, mimeType, timestamp);
+    const key = this.buildKey(instanceId, messageId, mimeType, timestamp);
+    const result = await this.backend.store({ key, buffer, mimeType });
 
-    // Ensure directory exists
-    const dir = dirname(localPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-
-    writeFileSync(localPath, buffer);
-
-    log.debug('Stored media from buffer', { messageId, localPath, size: buffer.length });
+    log.debug('Stored media from buffer', { messageId, reference: result.reference, size: result.size });
 
     return {
-      localPath: relative(this.basePath, localPath),
-      size: buffer.length,
-      mimeType,
+      localPath: result.reference,
+      size: result.size,
+      mimeType: result.mimeType,
     };
   }
 
@@ -371,5 +372,20 @@ export class MediaStorageService {
    */
   getBasePath(): string {
     return this.basePath;
+  }
+
+  /**
+   * The active storage mode (`local` | `remote`).
+   */
+  getStorageMode(): MediaStorageBackend['mode'] {
+    return this.backend.mode;
+  }
+
+  /**
+   * Presign a time-limited GET URL for a stored reference (remote mode only).
+   * Throws in local mode. Consumed by remote-mode URL emission (Group 2).
+   */
+  async presignedUrl(reference: string, ttlSeconds?: number): Promise<string> {
+    return this.backend.presignedUrl(reference, ttlSeconds);
   }
 }
