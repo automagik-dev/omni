@@ -58,16 +58,21 @@ Service account name.
 {{- end }}
 
 {{/*
-Secret name that holds OMNI_API_KEY + DB/NATS credentials. If the operator
-supplies an existing secret, reference it verbatim; otherwise the chart mints
-one named "<fullname>-secret".
+Name of the chart-minted Secret (assembled DATABASE_URL + optional secret.env).
 */}}
 {{- define "omni.secretName" -}}
-{{- if .Values.secret.existingSecret }}
-{{- .Values.secret.existingSecret }}
-{{- else }}
 {{- printf "%s-secret" (include "omni.fullname" .) }}
 {{- end }}
+
+{{/*
+Whether the chart-minted Secret renders at all: it does when DATABASE_URL is
+assembled here (no external DB secret) OR when secret.env has entries.
+Returns "true" / "".
+*/}}
+{{- define "omni.mintsSecret" -}}
+{{- if or (not .Values.database.existingSecret) (gt (len (default (dict) .Values.secret.env)) 0) -}}
+true
+{{- end -}}
 {{- end }}
 
 {{/*

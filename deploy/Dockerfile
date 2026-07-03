@@ -58,10 +58,16 @@ RUN bun -e 'const p = await Bun.file("orig-package.json").json(); await Bun.writ
 
 # ---- runtime: slim, non-root ------------------------------------------------
 FROM oven/bun:${BUN_VERSION}-slim AS runtime
+# omni-api is stateless: creds/session live in Postgres, not on disk.
+# PGSERVE_EMBEDDED/NATS_MANAGED=false → use external DATABASE_URL / NATS_URL
+# instead of the in-process embedded pgserve / self-managed nats. HOME is an
+# ephemeral writable dir (no PVC needed) for any home-relative scratch writes.
 ENV NODE_ENV=production \
     API_HOST=0.0.0.0 \
     API_PORT=8882 \
-    HOME=/data
+    PGSERVE_EMBEDDED=false \
+    NATS_MANAGED=false \
+    HOME=/home/bun
 WORKDIR /app
 
 # Production deps + the server bundle + migrations.
@@ -70,11 +76,18 @@ COPY --from=prod-deps /prod/package.json ./package.json
 COPY --from=builder   /src/packages/cli/dist/server ./dist/server
 COPY --from=builder   /src/packages/cli/db/drizzle ./db/drizzle
 
-# `bun` user (uid 1000) ships with the oven/bun image. /data is the writable
-# HOME + PVC mount point (media cache, ~/.omni/*, any home-relative state).
-RUN mkdir -p /data && chown -R bun:bun /app /data
+# `bun` user (uid 1000) ships with the oven/bun image.
+RUN mkdir -p /home/bun && chown -R bun:bun /app /home/bun
 USER bun
+
+# OCI metadata (org house style).
+LABEL org.opencontainers.image.title="omni-api" \
+      org.opencontainers.image.description="Omni multi-channel messaging API (Bun/Hono)" \
+      org.opencontainers.image.source="https://github.com/automagik-dev/omni" \
+      org.opencontainers.image.licenses="MIT"
 
 EXPOSE 8882
 # Health: GET /health → {"status":"healthy",...} once DB + NATS are reachable.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD bun -e "fetch('http://127.0.0.1:8882/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 ENTRYPOINT ["bun", "dist/server/index.js"]

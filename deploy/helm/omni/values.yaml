@@ -17,30 +17,32 @@ image:
 imagePullSecrets: []
 
 # ---- replicas + scaling -----------------------------------------------------
-# SINGLE replica by default: omni-api holds a live in-memory WhatsApp/Baileys
-# socket (WhatsApp permits ONE active connection per credential). Baileys creds
-# are DB-backed (DatabasePluginStorage), but the live socket is not shareable,
-# so true horizontal scaling needs session/socket ownership moved off-node
-# (follow-up). Keep replicaCount: 1 and HPA disabled until then.
-replicaCount: 1
+# omni-api is STATELESS: WhatsApp/Baileys auth state is persisted in Postgres
+# via the storage abstraction (createStorageAuthState / clearAuthState), not on
+# local disk — so there is no per-pod session file to anchor. Replicas share
+# session state through the DB, so the HPA is ON by default.
+#
+# NOTE for integration: a single WhatsApp *credential* still maps to one live
+# Baileys socket at the protocol level — validate concurrent-replica behaviour
+# for WhatsApp instances (key-ratchet races) at integration. The horizontal
+# win is unconditional for HTTP/API traffic and non-WhatsApp channels.
+replicaCount: 2
 
 autoscaling:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 3
-  targetCPUUtilizationPercentage: 80
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
   targetMemoryUtilizationPercentage: ""
 
-# RollingUpdate would briefly run 2 pods (2 WhatsApp sockets). Recreate keeps
-# exactly one api pod live across rollouts.
+# Stateless → RollingUpdate for zero-downtime rollouts.
 strategy:
-  type: Recreate
+  type: RollingUpdate
 
 # ---- service ----------------------------------------------------------------
 service:
   type: ClusterIP
   port: 8882
-  # api listens on API_PORT (8882) — see containerPort below.
 
 # ---- ingress ----------------------------------------------------------------
 ingress:
@@ -58,27 +60,29 @@ config:
   API_PORT: "8882"
   NODE_ENV: "production"
   LOG_LEVEL: "info"
-  # HOME → PVC mount so any home-relative state (~/.omni, media cache) persists.
-  HOME: "/data"
+  # Split-out infra: use the external autopg pod + nats StatefulSet, NOT omni's
+  # in-process embedded pgserve / self-managed nats. Without these the api tries
+  # to boot its own pg/nats and ignores DATABASE_URL / NATS_URL.
+  PGSERVE_EMBEDDED: "false"
+  NATS_MANAGED: "false"
 
 # Free-form extra non-secret env (key: value) merged into the ConfigMap.
 extraConfig: {}
 
-# ---- env wiring: DATABASE_URL + NATS_URL ------------------------------------
+# ---- env wiring: NATS_URL ---------------------------------------------------
 env:
   # NATS_URL — leave empty to derive from the bundled NATS Service (see nats.*),
   # or set explicitly (e.g. nats://my-nats:4222) to point at external NATS.
   natsUrl: ""
 
 # ---- database (autopg) contract ---------------------------------------------
-# The omni-api needs DATABASE_URL=postgresql://<role>:<pw>@<host>:5432/omni,
-# where <role> OWNS the omni tables (migrations ALTER them on boot).
+# omni-api needs DATABASE_URL=postgresql://<role>:<pw>@<host>:5432/omni, where
+# <role> OWNS the omni tables (migrations ALTER them on boot).
 #
-# INTEGRATION (lead): the autopg subchart provisions db `omni` + a scoped
-# owner role and (ideally) publishes a Secret containing a ready DATABASE_URL.
-# Point omni at it via database.existingSecret / database.urlKey. Otherwise the
-# chart assembles DATABASE_URL from the fields below and stores it in the omni
-# Secret.
+# INTEGRATION (lead): the autopg subchart provisions db `omni` + a scoped owner
+# role and (ideally) publishes a Secret containing a ready DATABASE_URL. Point
+# omni at it via database.existingSecret / database.urlKey. Otherwise the chart
+# assembles DATABASE_URL from the fields below and stores it in the omni Secret.
 database:
   # Option A (preferred at integration): consume a Secret that already holds a
   # full DATABASE_URL (e.g. the one autopg emits). When set, host/user/password
@@ -91,36 +95,24 @@ database:
   port: 5432
   name: omni
   user: omni              # scoped role that OWNS the omni tables
-  password: ""            # set via -f / --set-string, or use passwordSecret*
-  # Or source the password from an existing secret (kept out of the URL string):
-  passwordExistingSecret: ""
-  passwordSecretKey: "password"
+  password: ""            # set via -f / --set-string
   sslmode: ""             # e.g. "disable" / "require"; empty → omit
 
-# ---- secret (OMNI_API_KEY + assembled DATABASE_URL) -------------------------
+# ---- secret (DB creds + optional provider keys) -----------------------------
+# There is NO OMNI_API_KEY: omni auth is DB-backed bearer keys (+ optional
+# per-instance ed25519 X-Genie-Signature) — API keys live in Postgres rows, not
+# env. This Secret carries the assembled DATABASE_URL (Option B above) plus any
+# optional third-party credentials, injected via envFrom.
 secret:
-  # Reuse an existing Secret instead of minting one. Must contain OMNI_API_KEY
-  # (and DATABASE_URL if database.existingSecret is not used).
+  # Optional existing Secret to envFrom for extra app env (provider keys, etc.).
   existingSecret: ""
-  apiKeyKey: "OMNI_API_KEY"
-  # OMNI_API_KEY value — generate a strong key. Leave empty to let omni-api
-  # auto-generate one at boot (printed masked in logs; not reproducible).
-  omniApiKey: ""
-
-# ---- Baileys / session PVC --------------------------------------------------
-# HOME (/data) lives on this PVC so home-relative runtime state survives pod
-# restarts. Required while replicaCount stays 1.
-persistence:
-  enabled: true
-  existingClaim: ""
-  storageClass: ""
-  accessModes:
-    - ReadWriteOnce
-  size: 2Gi
-  mountPath: /data
+  # Optional key/values minted into the omni Secret and envFrom'd. Leave empty
+  # to omit. Common: OPENAI_API_KEY, ANTHROPIC_API_KEY, SENTRY_DSN,
+  # OTEL_EXPORTER_OTLP_ENDPOINT.
+  env: {}
 
 # ---- probes -----------------------------------------------------------------
-# GET /health → 200 {"status":"healthy",...} once DB + NATS are up.
+# GET /health → 200 {"status":"healthy",...} once DB + NATS are up (5s-cached).
 probes:
   readiness:
     path: /health
@@ -156,7 +148,7 @@ serviceAccount:
 podAnnotations: {}
 podLabels: {}
 podSecurityContext:
-  # oven/bun image runs as uid 1000 (bun). fsGroup makes the PVC group-writable.
+  # oven/bun image runs as uid 1000 (bun).
   fsGroup: 1000
 securityContext:
   runAsNonRoot: true

@@ -18,6 +18,7 @@ spec:
       annotations:
         # Roll pods when config/secret content changes.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -45,35 +46,27 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           envFrom:
+            # Non-secret config (API_PORT, PGSERVE_EMBEDDED=false, NATS_MANAGED=false, NATS_URL, ...)
             - configMapRef:
                 name: {{ include "omni.fullname" . }}-config
+            {{- if include "omni.mintsSecret" . }}
+            # Assembled DATABASE_URL (Option B) + optional provider keys
+            - secretRef:
+                name: {{ include "omni.secretName" . }}
+            {{- end }}
+            {{- if .Values.secret.existingSecret }}
+            # Extra app secrets provided by the operator
+            - secretRef:
+                name: {{ .Values.secret.existingSecret }}
+            {{- end }}
           env:
-            # --- DATABASE_URL: autopg Service (db `omni`, scoped owner role) ---
+            {{- if .Values.database.existingSecret }}
+            # --- DATABASE_URL from the autopg-published Secret (Option A) ---
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  {{- if .Values.database.existingSecret }}
                   name: {{ .Values.database.existingSecret }}
                   key: {{ .Values.database.urlKey }}
-                  {{- else }}
-                  name: {{ include "omni.secretName" . }}
-                  key: DATABASE_URL
-                  {{- end }}
-            {{- /* OMNI_API_KEY: from a provided secret, else the minted one;
-                   omitted entirely when no key is supplied so the api
-                   auto-generates one at boot. */}}
-            {{- if .Values.secret.existingSecret }}
-            - name: OMNI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secret.existingSecret }}
-                  key: {{ .Values.secret.apiKeyKey }}
-            {{- else if .Values.secret.omniApiKey }}
-            - name: OMNI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "omni.secretName" . }}
-                  key: {{ .Values.secret.apiKeyKey }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -102,23 +95,14 @@ spec:
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.extraVolumeMounts }}
           volumeMounts:
-            {{- if .Values.persistence.enabled }}
-            - name: data
-              mountPath: {{ .Values.persistence.mountPath }}
-            {{- end }}
-            {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
-            {{- end }}
+          {{- end }}
+      {{- with .Values.extraVolumes }}
       volumes:
-        {{- if .Values.persistence.enabled }}
-        - name: data
-          persistentVolumeClaim:
-            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "omni.fullname" .)) }}
-        {{- end }}
-        {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
-        {{- end }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

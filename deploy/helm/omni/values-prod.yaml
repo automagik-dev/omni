@@ -1,9 +1,8 @@
 # =============================================================================
 # Production overlay — registry image, HPA on, real ingress + TLS.
 #   helm upgrade --install omni deploy/helm/omni -n omni \
-#     -f deploy/helm/omni/values-prod.yaml \
-#     --set-string secret.omniApiKey=... \
-#     --set-string database.password=...   (or use existingSecret)
+#     -f deploy/helm/omni/values-prod.yaml
+#   DB creds come from the autopg-published Secret (database.existingSecret).
 # =============================================================================
 
 image:
@@ -12,15 +11,13 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# NOTE: minReplicas stays 1 — omni-api owns a live WhatsApp/Baileys socket that
-# is not shareable across pods. HPA is enabled so CPU spikes can burst api-side
-# work, but scaling past 1 requires moving session/socket ownership off-node
-# (follow-up). Until then treat maxReplicas as headroom, not multi-connection.
-replicaCount: 1
+# omni-api is stateless (session state in Postgres) → HPA on, min 2 for HA.
+# Integration note: validate concurrent replicas for WhatsApp *credentials*
+# (one live Baileys socket per credential at the protocol level).
 autoscaling:
   enabled: true
-  minReplicas: 1
-  maxReplicas: 3
+  minReplicas: 2
+  maxReplicas: 6
   targetCPUUtilizationPercentage: 75
 
 config:
@@ -46,14 +43,14 @@ database:
   urlKey: "DATABASE_URL"
 
 secret:
-  # Provide OMNI_API_KEY via an existing Secret or --set-string; do NOT commit.
+  # No OMNI_API_KEY — omni auth keys live in Postgres. Optionally supply
+  # provider creds here (or reference an existing Secret via existingSecret):
   existingSecret: ""
-  omniApiKey: ""        # set at deploy time
-
-persistence:
-  enabled: true
-  size: 5Gi
-  # storageClass: fast-ssd
+  env: {}
+    # OPENAI_API_KEY: ""
+    # ANTHROPIC_API_KEY: ""
+    # SENTRY_DSN: ""
+    # OTEL_EXPORTER_OTLP_ENDPOINT: ""
 
 resources:
   requests:

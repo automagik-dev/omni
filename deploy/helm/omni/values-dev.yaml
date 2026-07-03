@@ -10,6 +10,7 @@ image:
   # Image is built locally into OrbStack's shared store — never pull.
   pullPolicy: Never
 
+# Keep dev light: one replica, HPA off. omni-api is stateless either way.
 replicaCount: 1
 autoscaling:
   enabled: false
@@ -35,14 +36,6 @@ database:
   user: omni
   password: "omni-dev-password"   # dev only — override in real use
   sslmode: disable
-
-secret:
-  # Deterministic dev key so you can call the API without scraping logs.
-  omniApiKey: "omni-dev-apikey-change-me"
-
-persistence:
-  enabled: true
-  size: 1Gi
 
 resources:
   requests:
