@@ -156,7 +156,9 @@ into omni-api's env — they are always pulled by secretKeyRef.
 {{- define "omni.media.secretName" -}}
 {{- if .Values.media.s3.existingSecret -}}
 {{- .Values.media.s3.existingSecret -}}
-{{- else -}}
+{{- else if .Values.minio.enabled -}}
 {{- include "omni.minio.fullname" . -}}
+{{- else -}}
+{{- fail "media.mode=remote requires either minio.enabled=true (bundled MinIO) or media.s3.existingSecret (external S3 creds) — neither is set, so omni-api's S3 secretKeyRef would point at a Secret that is never created" -}}
 {{- end -}}
 {{- end }}
