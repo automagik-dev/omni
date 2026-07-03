@@ -82,10 +82,20 @@ spec:
               # operator-supplied passwords must not contain a single quote.
               psqlx() { psql -v ON_ERROR_STOP=1 -h "$PGHOST" -p "$PGPORT" -U postgres "$@"; }
 
-              # ---- rotate the superuser password to the managed value -------
-              psqlx -d postgres -c "ALTER USER postgres PASSWORD '$SUPERUSER_PASSWORD';"
-              export PGPASSWORD="$SUPERUSER_PASSWORD"
-              echo "superuser password synced to managed secret"
+              # ---- pin the superuser password to the postmaster default -----
+              # DO NOT rotate: autopg's postmaster hardcodes 'postgres' for its
+              # in-process admin pool (bin/postgres-server.js passes no password
+              # option; AUTOPG_PG_PASSWORD is ignored on this code path), so a
+              # rotated password crash-loops the pod on every RECREATION — the
+              # pool authenticates fresh at each start (verified in the wild on
+              # a node restart, 2026-07-03). Pin to the default until upstream
+              # autopg lets the postmaster consume a managed password. This
+              # also self-heals clusters that a previous chart version rotated.
+              # Network exposure is bounded: apps use scoped roles, and the
+              # Service is ClusterIP-only.
+              psqlx -d postgres -c "ALTER USER postgres PASSWORD 'postgres';"
+              export PGPASSWORD=postgres
+              echo "superuser password pinned to postmaster default"
 
               # ---- provision a scoped app: role + db + schema ownership ------
               provision_app() {

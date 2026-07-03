@@ -6,7 +6,8 @@ In-cluster connection endpoint (ClusterIP Service):
 
 Superuser:
   user: postgres
-  password: kubectl -n {{ .Release.Namespace }} get secret {{ include "autopg.secretName" . }} -o jsonpath='{.data.superuser-password}' | base64 -d
+  password: postgres (pinned — autopg's postmaster cannot consume a managed
+  password; apps must use their scoped role below, never the superuser)
 
 Provisioned apps (scoped role owns schema public in its db):
 {{- range .Values.provisionedApps }}
