@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "autopg.fullname" . }}-settings
+  labels:
+    {{- include "autopg.labels" . | nindent 4 }}
+data:
+  # Mounted (subPath) at $AUTOPG_CONFIG_DIR/settings.json. GUCs are boot-time,
+  # so a change here requires a pod restart to take effect.
+  settings.json: |
+    {{- include "autopg.settingsJson" . | nindent 4 }}

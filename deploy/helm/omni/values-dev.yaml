@@ -52,3 +52,15 @@ nats:
 
 autopg:
   enabled: true
+  image:
+    repository: autopg
+    tag: dev
+    pullPolicy: Never
+  # Provision the omni DB + schema-owning role with the SAME password omni-api
+  # uses in database.password above, so the assembled DATABASE_URL authenticates.
+  provisionedApps:
+    - db: omni
+      role: omni
+      password: "omni-dev-password"
+  persistence:
+    size: 2Gi

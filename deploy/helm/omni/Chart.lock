@@ -1,0 +1,6 @@
+dependencies:
+- name: autopg
+  repository: file://./charts/autopg
+  version: 0.1.0
+digest: sha256:bafe7aeab2f29ea15d01fe9201542bb57a9f8c79baddcf50b2f4a0a63dadb738
+generated: "2026-07-03T13:39:06.857511-03:00"

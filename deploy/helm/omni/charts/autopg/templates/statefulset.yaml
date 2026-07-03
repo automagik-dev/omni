@@ -1,0 +1,142 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "autopg.fullname" . }}
+  labels:
+    {{- include "autopg.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ include "autopg.headlessServiceName" . }}
+  selector:
+    matchLabels:
+      {{- include "autopg.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "autopg.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Roll the pod when settings.json changes (GUCs are boot-time only).
+        checksum/settings: {{ include "autopg.settingsJson" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: autopg
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["autopg", "postmaster"]
+          args:
+            - "--port"
+            - {{ .Values.port | quote }}
+            # PGDATA is a SUBDIR of the mount. The PVC root is owned root:fsGroup,
+            # so a non-root process cannot chmod it (initdb needs 0700). autopg
+            # creates + owns this subdir (uid 1000), so initdb's chmod succeeds.
+            - "--data"
+            - "/var/lib/autopg/data/pgdata"
+            - "--socket-dir"
+            - "/var/run/autopg"
+            - "--log"
+            - {{ .Values.logLevel | quote }}
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.port }}
+              protocol: TCP
+          {{- if .Values.hostAuth.enabled }}
+          lifecycle:
+            # autopg's initdb writes a localhost-only pg_hba.conf and exposes no
+            # knob to change it. Append a pod-network rule via the local trust
+            # socket + reload, idempotently. postStart completes before the
+            # container is marked started, so the pod is not Ready (and the
+            # ClusterIP Service does not route to it) until the rule is live.
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -ec
+                  - |
+                    HBA=/var/lib/autopg/data/pgdata/pg_hba.conf
+                    {{- if eq .Values.hostAuth.cidr "all" }}
+                    RULE="host all all all {{ .Values.hostAuth.method }}"
+                    {{- else }}
+                    RULE="host all all {{ .Values.hostAuth.cidr }} {{ .Values.hostAuth.method }}"
+                    {{- end }}
+                    for i in $(seq 1 90); do
+                      pg_isready -h /var/run/autopg -p {{ .Values.port }} -q && break
+                      sleep 2
+                    done
+                    if ! grep -qxF "$RULE" "$HBA" 2>/dev/null; then
+                      printf '# added by autopg chart (in-cluster peer access)\n%s\n' "$RULE" >> "$HBA"
+                      psql -h /var/run/autopg -p {{ .Values.port }} -U postgres -d postgres \
+                        -c 'SELECT pg_reload_conf();'
+                    fi
+          {{- end }}
+          # First-boot initdb can take a while on a cold PVC; the startupProbe
+          # gates readiness/liveness until the server first accepts connections.
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", {{ .Values.port | quote }}]
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", {{ .Values.port | quote }}]
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", {{ .Values.port | quote }}]
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/autopg/data
+            - name: settings
+              mountPath: /var/lib/autopg/settings.json
+              subPath: settings.json
+              readOnly: true
+      volumes:
+        - name: settings
+          configMap:
+            name: {{ include "autopg.fullname" . }}-settings
+        {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "autopg.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | quote }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+  {{- end }}

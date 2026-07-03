@@ -1,0 +1,19 @@
+autopg (embedded PostgreSQL 18) is installed as release "{{ .Release.Name }}".
+
+In-cluster connection endpoint (ClusterIP Service):
+  host: {{ include "autopg.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  port: {{ .Values.port }}
+
+Superuser:
+  user: postgres
+  password: kubectl -n {{ .Release.Namespace }} get secret {{ include "autopg.secretName" . }} -o jsonpath='{.data.superuser-password}' | base64 -d
+
+Provisioned apps (scoped role owns schema public in its db):
+{{- range .Values.provisionedApps }}
+  - db: {{ .db }}   role: {{ .role }}
+    password: kubectl -n {{ $.Release.Namespace }} get secret {{ include "autopg.secretName" $ }} -o jsonpath='{.data.{{ .role }}-password}' | base64 -d
+    URL: postgresql://{{ .role }}:$PASSWORD@{{ include "autopg.fullname" $ }}.{{ $.Release.Namespace }}.svc.cluster.local:{{ $.Values.port }}/{{ .db }}
+{{- end }}
+
+Quick check:
+  kubectl -n {{ .Release.Namespace }} exec -it {{ include "autopg.fullname" . }}-0 -- pg_isready -h 127.0.0.1 -p {{ .Values.port }}
