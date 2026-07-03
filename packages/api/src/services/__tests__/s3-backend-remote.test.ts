@@ -45,7 +45,7 @@ describe.skipIf(!hasDocker)('S3MediaBackend against MinIO', () => {
       forcePathStyle: true,
       presignTtlSeconds: 3600,
     };
-  }, 60_000);
+  }, 180_000);
 
   it('stores bytes and presigns a GET URL that returns the exact bytes + content-type', async () => {
     const backend = new S3MediaBackend(config);

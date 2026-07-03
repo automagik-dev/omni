@@ -80,7 +80,7 @@ describe.skipIf(!hasDocker)('remote media e2e: stored media → presigned Provid
     // The DB is only touched by updateMessageLocalPath, which this flow does not
     // call — storeFromBuffer + presign never read it.
     remoteService = new MediaStorageService({} as unknown as Database, undefined, remoteBackend);
-  }, 60_000);
+  }, 180_000);
 
   it('stores via MediaStorageService, presigns through dispatch, and the GET returns the exact bytes', async () => {
     // 1. Ingest: store through the public service API. Remote mode records the

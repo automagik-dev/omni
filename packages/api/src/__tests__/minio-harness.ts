@@ -85,9 +85,10 @@ export function uniqueBucket(prefix: string): string {
 }
 
 async function waitForReady(port: number): Promise<void> {
-  // Single wait for the shared container — a modestly bumped deadline covers a
-  // cold `minio/minio` image pull without the per-file contention we removed.
-  const deadline = Date.now() + 45_000;
+  // Single wait for the shared container. Generous deadline: on a loaded CI
+  // runner (Blacksmith 4vcpu, full suite hammering the box) MinIO has been
+  // observed to need well over 45s to serve its readiness probe.
+  const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     try {
       const res = await harnessFetch(`http://127.0.0.1:${port}/minio/health/ready`);
@@ -97,7 +98,16 @@ async function waitForReady(port: number): Promise<void> {
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error('MinIO did not become ready within 45s');
+  throw new Error('MinIO did not become ready within 120s');
+}
+
+/** Container state + log tail for actionable CI failure messages. */
+function describeContainerFailure(containerId: string): string {
+  const state = Bun.spawnSync(['docker', 'inspect', '-f', '{{.State.Status}} exit={{.State.ExitCode}}', containerId]);
+  const logs = Bun.spawnSync(['docker', 'logs', '--tail', '15', containerId]);
+  const stateText = state.exitCode === 0 ? state.stdout.toString().trim() : 'container gone (--rm removed it)';
+  const logText = logs.exitCode === 0 ? `${logs.stdout.toString()}${logs.stderr.toString()}`.trim() : '(no logs)';
+  return `container state: ${stateText}\ncontainer logs:\n${logText}`;
 }
 
 let teardownRegistered = false;
@@ -118,6 +128,13 @@ function registerTeardown(containerId: string): void {
 let sharedMinioPromise: Promise<SharedMinio> | undefined;
 
 async function startSharedMinio(): Promise<SharedMinio> {
+  // Pre-pull explicitly so a cold image cache (fresh CI runner) cannot eat
+  // into the readiness budget or fail the run with an opaque timeout.
+  const pull = Bun.spawnSync(['docker', 'pull', 'minio/minio']);
+  if (pull.exitCode !== 0) {
+    throw new Error(`docker pull minio/minio failed: ${pull.stderr.toString()}`);
+  }
+
   // Random high port avoids collisions with a locally running MinIO.
   const port = 20000 + Math.floor(Math.random() * 20000);
   const proc = Bun.spawnSync([
@@ -140,15 +157,30 @@ async function startSharedMinio(): Promise<SharedMinio> {
   }
   const containerId = proc.stdout.toString().trim();
   registerTeardown(containerId);
-  await waitForReady(port);
+  try {
+    await waitForReady(port);
+  } catch (error) {
+    // Say WHY readiness failed (crashed container? still booting? port issue?)
+    // instead of a bare timeout — this is what makes a red CI debuggable.
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n${describeContainerFailure(containerId)}`,
+    );
+  }
   return { endpoint: `http://127.0.0.1:${port}`, accessKey: ACCESS_KEY, secretKey: SECRET_KEY, region: REGION };
 }
 
 /**
  * Lazily start ONE shared `minio/minio` container for this test process and
  * return its connection info. Every importing file gets the same container.
+ *
+ * A FAILED start is not cached: the next suite retries with a fresh container
+ * (and a fresh random port). Without this, one transient startup failure
+ * cascades into instant failures for every other MinIO suite in the process.
  */
 export function getSharedMinio(): Promise<SharedMinio> {
-  sharedMinioPromise ??= startSharedMinio();
+  sharedMinioPromise ??= startSharedMinio().catch((error) => {
+    sharedMinioPromise = undefined;
+    throw error;
+  });
   return sharedMinioPromise;
 }

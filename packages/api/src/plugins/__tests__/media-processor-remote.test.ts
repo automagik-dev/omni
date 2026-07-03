@@ -142,7 +142,7 @@ describe.skipIf(!hasDocker)('media-processor remote read (MinIO)', () => {
     remoteService = new MediaStorageService({} as unknown as Database, undefined, backend);
     // Seed the audio object the processor will fetch from S3.
     await backend.store({ key: audioKey, buffer: audioBytes, mimeType: 'audio/ogg' });
-  }, 60_000);
+  }, 180_000);
 
   it('fetches bytes from S3 into a temp file, processes them, and emits media.processed', async () => {
     const capture: ProcessCapture = {};

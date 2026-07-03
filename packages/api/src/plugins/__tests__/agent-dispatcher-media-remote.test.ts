@@ -89,7 +89,7 @@ describe.skipIf(!hasDocker)('remote-mode media dispatch (MinIO)', () => {
     // Seed the objects the dispatch code will presign.
     await remoteBackend.store({ key: imageKey, buffer: imageBytes, mimeType: 'image/png' });
     await remoteBackend.store({ key: audioKey, buffer: Buffer.from([1, 2, 3]), mimeType: 'audio/ogg' });
-  }, 60_000);
+  }, 180_000);
 
   it('remote: extractMediaFiles presigns the S3 key into ProviderFile.url (no path)', async () => {
     const files = await extractMediaFiles(
