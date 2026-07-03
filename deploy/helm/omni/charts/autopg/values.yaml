@@ -23,17 +23,20 @@ logLevel: info
 # Authentication
 #
 # The embedded postmaster always runs initdb with the built-in superuser
-# `postgres` and default password `postgres` (there is no boot-time flag to set
-# it). The provisioning Job rotates the superuser password to the value below on
-# every install/upgrade. Leave passwords empty to auto-generate a stable random
-# value that is preserved across upgrades (via a helm `lookup` of the Secret).
+# `postgres` and default password `postgres`, and its in-process admin pool
+# HARDCODES that default (bin/postgres-server.js passes no password option;
+# AUTOPG_PG_PASSWORD is ignored on the postmaster path). Rotating the superuser
+# password therefore crash-loops the pod on every recreation, so the provision
+# Job PINS it to the default instead. Apps must connect with their scoped
+# role (below), never the superuser; the Service is ClusterIP-only.
 #
-# Passwords are stored ONLY in the chart's Secret and injected via secretKeyRef;
-# they never appear in a ConfigMap or in pod args. Keep auto-generated values
-# alphanumeric-safe.
+# App-role passwords are stored ONLY in the chart's Secret and injected via
+# secretKeyRef; they never appear in a ConfigMap or in pod args. Leave empty to
+# auto-generate a stable random value preserved across upgrades (helm lookup).
 # -----------------------------------------------------------------------------
 auth:
-  # Superuser (`postgres`) password. Empty => auto-generated + preserved.
+  # Superuser password is pinned to the postmaster default (see above); this
+  # value is kept in the Secret for forward-compat but is NOT applied.
   superuserPassword: ""
   # Name of an existing Secret to source passwords from instead of managing one
   # here. When set, keys must be: superuser-password, and <role>-password for

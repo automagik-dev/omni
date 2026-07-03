@@ -28,6 +28,30 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        # Repair PGDATA on every pod start (verified in the wild on a node
+        # restart, 2026-07-03): kubelet's fsGroup pass re-applies setgid/g+w
+        # to the volume on each mount, which postgres refuses (pgdata must be
+        # 0700/0750); an unclean shutdown can also leave a stale
+        # postmaster.pid that fatals under container PID reuse. Runs as the
+        # pod user, which owns pgdata, so both repairs always succeed.
+        - name: fix-pgdata
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              if [ -d /data/pgdata ]; then
+                chmod 700 /data/pgdata
+                rm -f /data/pgdata/postmaster.pid
+              fi
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          volumeMounts:
+            - name: data
+              mountPath: /data
       containers:
         - name: autopg
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

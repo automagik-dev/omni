@@ -116,3 +116,49 @@ the conventional name the operator wires by hand.
 {{- printf "nats://%s:4222" (default "nats" .Values.nats.externalHost) }}
 {{- end }}
 {{- end }}
+
+{{/*
+Bundled-MinIO resource name (StatefulSet + Service + Secret + bootstrap Job).
+*/}}
+{{- define "omni.minio.fullname" -}}
+{{- printf "%s-minio" (include "omni.fullname" .) }}
+{{- end }}
+
+{{/*
+Whether the media backend runs in remote (S3/MinIO) mode. Returns "true" / "".
+Mirrors resolveMediaBackendConfig(): OMNI_MEDIA_MODE defaults to "local".
+*/}}
+{{- define "omni.media.remote" -}}
+{{- if eq (lower (default "local" .Values.media.mode)) "remote" -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+S3 endpoint for the media backend: an explicit media.s3.endpoint override wins,
+else the in-cluster bundled MinIO Service, else empty (real AWS S3 — the SDK
+derives the endpoint from the region).
+*/}}
+{{- define "omni.media.s3Endpoint" -}}
+{{- if .Values.media.s3.endpoint -}}
+{{- .Values.media.s3.endpoint -}}
+{{- else if .Values.minio.enabled -}}
+{{- printf "http://%s:%v" (include "omni.minio.fullname" .) .Values.minio.service.port -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Name of the Secret carrying OMNI_MEDIA_S3_ACCESS_KEY / _SECRET_KEY: the
+operator-supplied external Secret (prod) when media.s3.existingSecret is set,
+else the chart-minted MinIO Secret (bundled dev). Never renders plaintext creds
+into omni-api's env — they are always pulled by secretKeyRef.
+*/}}
+{{- define "omni.media.secretName" -}}
+{{- if .Values.media.s3.existingSecret -}}
+{{- .Values.media.s3.existingSecret -}}
+{{- else if .Values.minio.enabled -}}
+{{- include "omni.minio.fullname" . -}}
+{{- else -}}
+{{- fail "media.mode=remote requires either minio.enabled=true (bundled MinIO) or media.s3.existingSecret (external S3 creds) — neither is set, so omni-api's S3 secretKeyRef would point at a Secret that is never created" -}}
+{{- end -}}
+{{- end }}

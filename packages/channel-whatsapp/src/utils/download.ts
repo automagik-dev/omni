@@ -10,7 +10,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { DownloadTooLargeError } from '@omni/channel-sdk';
+import { DownloadTooLargeError, type MediaStorageBackend } from '@omni/channel-sdk';
 import type { WAMessage } from 'baileys';
 import { downloadMediaMessage } from 'baileys';
 import { getDocumentMessage } from './message';
@@ -273,6 +273,29 @@ export async function downloadMediaToFile(
   const size = await writeMediaStreamToFile(stream, outputPath, maxSizeBytes);
   if (size === 0) return null;
   return { mimeType: mediaInfo.mimeType, size };
+}
+
+/**
+ * Stream Baileys media straight to the active media backend under `key`.
+ *
+ * Same size-guarded streaming as {@link downloadMediaToFile} (no full-buffer in
+ * heap), but the bytes land wherever the backend persists — local disk in local
+ * mode, S3 in remote mode. Used for `OMNI_MEDIA_MODE=remote` so WhatsApp media
+ * actually reaches S3 instead of being written to a local file that never syncs.
+ */
+export async function downloadMediaToBackend(
+  msg: WAMessage,
+  backend: MediaStorageBackend,
+  key: string,
+  maxSizeBytes = getWhatsAppMediaDownloadMaxBytes(),
+): Promise<DownloadToFileResult | null> {
+  const mediaInfo = detectMediaType(msg);
+  if (!mediaInfo) return null;
+
+  const stream = await downloadMediaMessage(msg, 'stream', {});
+  const result = await backend.storeStream({ key, stream, mimeType: mediaInfo.mimeType, maxSizeBytes });
+  if (result.size === 0) return null;
+  return { mimeType: mediaInfo.mimeType, size: result.size };
 }
 
 export async function writeMediaStreamToFile(

@@ -10,8 +10,8 @@
  */
 
 import { basename, join } from 'node:path';
-import { createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
-import type { DedupeCache } from '@omni/channel-sdk';
+import { createDownloadGuard, createInboundDedupeCache, createMediaBackend, sanitizeMessage } from '@omni/channel-sdk';
+import type { DedupeCache, MediaStorageBackend } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from 'baileys';
@@ -20,6 +20,7 @@ import type { WhatsAppPlugin } from '../plugin';
 import type { DecryptFailureTracker } from '../utils/decrypt-failure-tracker';
 import {
   detectMediaType,
+  downloadMediaToBackend,
   downloadMediaToFile,
   getExtension,
   getWhatsAppMediaDownloadMaxBytes,
@@ -539,19 +540,48 @@ function shouldProcessMessage(plugin: WhatsAppPlugin, instanceId: string, msg: W
 const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
 
 /**
- * Download media from a message and return the API-serving URL.
+ * Lazily-constructed media backend selected by `OMNI_MEDIA_MODE`. Built once so
+ * remote mode does not construct a new S3 client per download. In local mode the
+ * streaming write path is byte-for-byte the previous `createWriteStream` behavior.
+ */
+let mediaBackend: MediaStorageBackend | null = null;
+function getMediaBackend(): MediaStorageBackend {
+  if (!mediaBackend) mediaBackend = createMediaBackend(MEDIA_BASE_PATH);
+  return mediaBackend;
+}
+
+/**
+ * Stream media once with a single retry — iOS/macOS media sometimes needs a
+ * second attempt. `sink` performs the actual write (local file or S3).
+ */
+async function streamMediaWithRetry(
+  sink: () => Promise<{ mimeType: string; size: number } | null>,
+): Promise<{ mimeType: string; size: number } | null> {
+  let result = await sink();
+  if (!result) {
+    await new Promise((r) => setTimeout(r, 1000));
+    result = await sink();
+  }
+  return result;
+}
+
+/**
+ * Download media from a message and return the API-serving URL + stored reference.
  *
- * Stores at: data/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
- * Returns:   {apiBaseUrl}/api/v2/media/{instanceId}/{YYYY-MM}/{externalId}.{ext}
+ * Stores under key: {instanceId}/{YYYY-MM}/{externalId}.{ext}
+ * - `local` mode: streams to `{MEDIA_BASE_PATH}/{key}` (unchanged behavior).
+ * - `remote` mode: streams to S3 under `key` (no local file). The size guard is
+ *   preserved in both modes so oversized video is never buffered in the heap.
  *
- * When apiBaseUrl is provided, returns an absolute URL (e.g. http://host:port/api/v2/media/...).
- * This is required for downstream consumers like the media processor that use fetch().
+ * `mediaLocalPath` in the return is the stable reference recorded on the row:
+ * the relative path locally, the S3 key remotely (never a URL).
  */
 export async function tryDownloadMedia(
   msg: WAMessage,
   instanceId: string,
   externalId: string,
   apiBaseUrl?: string,
+  backend: MediaStorageBackend = getMediaBackend(),
 ): Promise<{ mediaUrl: string; mediaLocalPath: string; mimeType: string; size: number } | null> {
   const mediaInfo = detectMediaType(msg);
   if (!mediaInfo) return null;
@@ -566,7 +596,7 @@ export async function tryDownloadMedia(
       downloadGuard.checkSize(declaredSize, log, { instanceId, channel: 'whatsapp' });
     }
 
-    // Build path matching MediaStorageService layout before streaming to disk
+    // Build the stable storage key matching MediaStorageService layout.
     const now = new Date();
     const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const ext = getExtension(mediaInfo.mimeType);
@@ -574,17 +604,19 @@ export async function tryDownloadMedia(
     // and replace any non-alphanumeric characters (WhatsApp IDs are hex/alphanum).
     const safeExternalId = basename(externalId).replace(/[^a-zA-Z0-9_\-]/g, '_');
     const relativePath = join(instanceId, yearMonth, `${safeExternalId}${ext}`);
-    const fullPath = join(MEDIA_BASE_PATH, relativePath);
 
-    // Try streaming download with retry — iOS/macOS media sometimes needs a second attempt
-    let result = await downloadMediaToFile(msg, fullPath, downloadGuard.maxSizeBytes);
-    if (!result) {
-      await new Promise((r) => setTimeout(r, 1000));
-      result = await downloadMediaToFile(msg, fullPath, downloadGuard.maxSizeBytes);
-    }
+    // Remote mode streams to S3; local mode keeps the exact createWriteStream path.
+    const result =
+      backend.mode === 'remote'
+        ? await streamMediaWithRetry(() =>
+            downloadMediaToBackend(msg, backend, relativePath, downloadGuard.maxSizeBytes),
+          )
+        : await streamMediaWithRetry(() =>
+            downloadMediaToFile(msg, join(MEDIA_BASE_PATH, relativePath), downloadGuard.maxSizeBytes),
+          );
     if (!result) return null;
 
-    log.debug('Downloaded media', { externalId, path: relativePath, size: result.size });
+    log.debug('Downloaded media', { externalId, path: relativePath, size: result.size, mode: backend.mode });
 
     const mediaPath = `/api/v2/media/${relativePath}`;
     return {
