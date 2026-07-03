@@ -9,7 +9,7 @@
     {
       "name": "omni",
       "description": "Full Omni platform control — multichannel messaging, automations, events, batch ops via the omni CLI",
-      "version": "2.260703.5",
+      "version": "2.260703.6",
       "author": {
         "name": "Automagik"
       },
