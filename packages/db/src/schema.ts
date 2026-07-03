@@ -57,7 +57,7 @@ export type AgentSystem = (typeof agentSystems)[number];
 export const agentEntityTypes = ['assistant', 'workflow', 'team', 'tool'] as const;
 export type AgentEntityType = (typeof agentEntityTypes)[number];
 
-export const debounceMode = ['disabled', 'fixed', 'randomized'] as const;
+export const debounceMode = ['disabled', 'fixed', 'randomized', 'presence'] as const;
 export type DebounceMode = (typeof debounceMode)[number];
 
 export const splitDelayMode = ['disabled', 'fixed', 'randomized'] as const;
@@ -404,6 +404,8 @@ export const agentRoutes = pgTable(
     messageDebounceMaxMs: integer('message_debounce_max_ms'),
     messageDebounceGroupMs: integer('message_debounce_group_ms'),
     messageDebounceRestartOnTyping: boolean('message_debounce_restart_on_typing'),
+    /** Hard cap (ms) for 'presence' mode — flush at firstBuffered + this even under continuous typing. NULL = no cap. */
+    messageDebounceMaxWaitMs: integer('message_debounce_max_wait_ms'),
 
     // ---- Split delay overrides (NULL = inherit from instance) ----
     messageSplitDelayMode: varchar('message_split_delay_mode', { length: 20 }).$type<SplitDelayMode>(),
@@ -756,6 +758,8 @@ export const instances = pgTable(
     messageDebounceMaxMs: integer('message_debounce_max_ms').notNull().default(0),
     /** Restart debounce timer when user is typing (requires channel support) */
     messageDebounceRestartOnTyping: boolean('message_debounce_restart_on_typing').notNull().default(false),
+    /** Hard cap (ms) for 'presence' mode — flush at firstBuffered + this even under continuous typing. NULL = no cap. */
+    messageDebounceMaxWaitMs: integer('message_debounce_max_wait_ms'),
 
     // ---- Smart Response Gate ----
     agentGateEnabled: boolean('agent_gate_enabled').notNull().default(false),

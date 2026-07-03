@@ -3790,7 +3790,7 @@ export interface components {
              * @description Debounce mode override
              * @enum {string|null}
              */
-            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+            messageDebounceMode: "disabled" | "fixed" | "randomized" | "presence" | null;
             /** @description Debounce min delay (ms) override */
             messageDebounceMinMs: number | null;
             /** @description Debounce max delay (ms) override */
@@ -3799,6 +3799,8 @@ export interface components {
             messageDebounceGroupMs: number | null;
             /** @description Restart debounce on typing override */
             messageDebounceRestartOnTyping: boolean | null;
+            /** @description Presence-mode hard cap (ms) override; null = no cap */
+            messageDebounceMaxWaitMs: number | null;
             /**
              * @description Split delay mode override
              * @enum {string|null}
@@ -3908,7 +3910,7 @@ export interface components {
              * @description Debounce mode
              * @enum {string}
              */
-            messageDebounceMode?: "disabled" | "fixed" | "randomized";
+            messageDebounceMode?: "disabled" | "fixed" | "randomized" | "presence";
             /** @description Debounce min delay (ms) */
             messageDebounceMinMs?: number;
             /** @description Debounce max delay (ms) */
@@ -3917,6 +3919,8 @@ export interface components {
             messageDebounceGroupMs?: number;
             /** @description Restart debounce on typing */
             messageDebounceRestartOnTyping?: boolean;
+            /** @description Presence-mode hard cap (ms); null = no cap */
+            messageDebounceMaxWaitMs?: number;
             /**
              * @description Split delay mode
              * @enum {string}
@@ -4007,7 +4011,7 @@ export interface components {
              * @description Debounce mode
              * @enum {string|null}
              */
-            messageDebounceMode?: "disabled" | "fixed" | "randomized" | null;
+            messageDebounceMode?: "disabled" | "fixed" | "randomized" | "presence" | null;
             /** @description Debounce min delay (ms) */
             messageDebounceMinMs?: number | null;
             /** @description Debounce max delay (ms) */
@@ -4016,6 +4020,8 @@ export interface components {
             messageDebounceGroupMs?: number | null;
             /** @description Restart debounce on typing */
             messageDebounceRestartOnTyping?: boolean | null;
+            /** @description Presence-mode hard cap (ms); null = no cap */
+            messageDebounceMaxWaitMs?: number | null;
             /**
              * @description Split delay mode
              * @enum {string|null}
@@ -11572,7 +11578,7 @@ export interface operations {
                              * @description Debounce mode override
                              * @enum {string|null}
                              */
-                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | "presence" | null;
                             /** @description Debounce min delay (ms) override */
                             messageDebounceMinMs: number | null;
                             /** @description Debounce max delay (ms) override */
@@ -11581,6 +11587,8 @@ export interface operations {
                             messageDebounceGroupMs: number | null;
                             /** @description Restart debounce on typing override */
                             messageDebounceRestartOnTyping: boolean | null;
+                            /** @description Presence-mode hard cap (ms) override; null = no cap */
+                            messageDebounceMaxWaitMs: number | null;
                             /**
                              * @description Split delay mode override
                              * @enum {string|null}
@@ -11727,7 +11735,7 @@ export interface operations {
                      * @description Debounce mode
                      * @enum {string}
                      */
-                    messageDebounceMode?: "disabled" | "fixed" | "randomized";
+                    messageDebounceMode?: "disabled" | "fixed" | "randomized" | "presence";
                     /** @description Debounce min delay (ms) */
                     messageDebounceMinMs?: number;
                     /** @description Debounce max delay (ms) */
@@ -11736,6 +11744,8 @@ export interface operations {
                     messageDebounceGroupMs?: number;
                     /** @description Restart debounce on typing */
                     messageDebounceRestartOnTyping?: boolean;
+                    /** @description Presence-mode hard cap (ms); null = no cap */
+                    messageDebounceMaxWaitMs?: number;
                     /**
                      * @description Split delay mode
                      * @enum {string}
@@ -11861,7 +11871,7 @@ export interface operations {
                              * @description Debounce mode override
                              * @enum {string|null}
                              */
-                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | "presence" | null;
                             /** @description Debounce min delay (ms) override */
                             messageDebounceMinMs: number | null;
                             /** @description Debounce max delay (ms) override */
@@ -11870,6 +11880,8 @@ export interface operations {
                             messageDebounceGroupMs: number | null;
                             /** @description Restart debounce on typing override */
                             messageDebounceRestartOnTyping: boolean | null;
+                            /** @description Presence-mode hard cap (ms) override; null = no cap */
+                            messageDebounceMaxWaitMs: number | null;
                             /**
                              * @description Split delay mode override
                              * @enum {string|null}
@@ -12076,7 +12088,7 @@ export interface operations {
                              * @description Debounce mode override
                              * @enum {string|null}
                              */
-                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | "presence" | null;
                             /** @description Debounce min delay (ms) override */
                             messageDebounceMinMs: number | null;
                             /** @description Debounce max delay (ms) override */
@@ -12085,6 +12097,8 @@ export interface operations {
                             messageDebounceGroupMs: number | null;
                             /** @description Restart debounce on typing override */
                             messageDebounceRestartOnTyping: boolean | null;
+                            /** @description Presence-mode hard cap (ms) override; null = no cap */
+                            messageDebounceMaxWaitMs: number | null;
                             /**
                              * @description Split delay mode override
                              * @enum {string|null}
@@ -12305,7 +12319,7 @@ export interface operations {
                      * @description Debounce mode
                      * @enum {string|null}
                      */
-                    messageDebounceMode?: "disabled" | "fixed" | "randomized" | null;
+                    messageDebounceMode?: "disabled" | "fixed" | "randomized" | "presence" | null;
                     /** @description Debounce min delay (ms) */
                     messageDebounceMinMs?: number | null;
                     /** @description Debounce max delay (ms) */
@@ -12314,6 +12328,8 @@ export interface operations {
                     messageDebounceGroupMs?: number | null;
                     /** @description Restart debounce on typing */
                     messageDebounceRestartOnTyping?: boolean | null;
+                    /** @description Presence-mode hard cap (ms); null = no cap */
+                    messageDebounceMaxWaitMs?: number | null;
                     /**
                      * @description Split delay mode
                      * @enum {string|null}
@@ -12433,7 +12449,7 @@ export interface operations {
                              * @description Debounce mode override
                              * @enum {string|null}
                              */
-                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | "presence" | null;
                             /** @description Debounce min delay (ms) override */
                             messageDebounceMinMs: number | null;
                             /** @description Debounce max delay (ms) override */
@@ -12442,6 +12458,8 @@ export interface operations {
                             messageDebounceGroupMs: number | null;
                             /** @description Restart debounce on typing override */
                             messageDebounceRestartOnTyping: boolean | null;
+                            /** @description Presence-mode hard cap (ms) override; null = no cap */
+                            messageDebounceMaxWaitMs: number | null;
                             /**
                              * @description Split delay mode override
                              * @enum {string|null}
