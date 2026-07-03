@@ -1,3 +1,4 @@
+<!-- ci: re-trigger @latest publish for v2.260624.4 (rolling promotion #730 rebased a [skip ci] head, skipping the main CI → version.yml @latest publish) -->
 <p align="center">
   <picture>
     <img src=".github/assets/omni-header-2.png" alt="Omni — One API, Every Channel" width="800" />
