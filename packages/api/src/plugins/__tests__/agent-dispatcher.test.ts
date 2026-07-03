@@ -1147,7 +1147,7 @@ describe('agent-dispatcher', () => {
   // Cleanup
   // ======================================================================
   describe('cleanup function', () => {
-    it('clears timers and buffers on cleanup', async () => {
+    it('flushes pending buffers on cleanup (does not drop)', async () => {
       const eventBus = createMockEventBus();
       const agentRunner = {
         getInstanceWithProvider: mock(async () =>
@@ -1171,16 +1171,14 @@ describe('agent-dispatcher', () => {
         mockDb,
       );
 
-      // Buffer a message (debounce set to 5000ms)
+      // Buffer a message (debounce set to 5000ms — the timer will NOT fire on its own)
       await eventBus.fire('message.received', createMessageEvent());
 
-      // Call cleanup before debounce fires
-      cleanup();
+      // Graceful shutdown drains pending buffers via flushAll() rather than
+      // dropping them — the buffered message is delivered as a final turn.
+      await cleanup();
 
-      // Wait — the run should NOT fire because cleanup cleared the timer
-      await new Promise((resolve) => setTimeout(resolve, 200));
-
-      expect(agentRunner.run).not.toHaveBeenCalled();
+      expect(agentRunner.run).toHaveBeenCalled();
     });
   });
 

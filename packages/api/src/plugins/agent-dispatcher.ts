@@ -384,13 +384,22 @@ class ReactionDedup {
 // Helper Functions
 // ============================================================================
 
+/** 'presence' mode defaults when the instance/route leaves the tuning columns unset. */
+const PRESENCE_DEFAULT_MIN_MS = 5_000; // quiet window after the user stops typing
+const PRESENCE_DEFAULT_MAX_WAIT_MS = 30_000; // hard cap under continuous typing
+
 function getDebounceConfig(instance: Instance): DebounceConfig {
+  const mode = instance.messageDebounceMode ?? 'disabled';
+  const isPresence = mode === 'presence';
   return {
-    mode: instance.messageDebounceMode ?? 'disabled',
-    minMs: instance.messageDebounceMinMs ?? 0,
+    mode,
+    // 'presence' is sugar for fixed + restartOnTyping + a hard cap. Apply sane
+    // defaults when the columns are unset (0/null) so operators only flip mode.
+    minMs: instance.messageDebounceMinMs || (isPresence ? PRESENCE_DEFAULT_MIN_MS : 0),
     maxMs: instance.messageDebounceMaxMs ?? 0,
-    restartOnTyping: instance.messageDebounceRestartOnTyping ?? false,
+    restartOnTyping: isPresence ? true : (instance.messageDebounceRestartOnTyping ?? false),
     groupMs: (instance as Record<string, unknown>).messageDebounceGroupMs as number | null,
+    maxWaitMs: instance.messageDebounceMaxWaitMs ?? (isPresence ? PRESENCE_DEFAULT_MAX_WAIT_MS : null),
   };
 }
 
@@ -4071,6 +4080,7 @@ function mergeRouteOverrides(instance: Instance, route: ResolvedRoute): Dispatch
     messageDebounceMaxMs: route.messageDebounceMaxMs ?? instance.messageDebounceMaxMs,
     messageDebounceGroupMs: route.messageDebounceGroupMs ?? instance.messageDebounceGroupMs,
     messageDebounceRestartOnTyping: route.messageDebounceRestartOnTyping ?? instance.messageDebounceRestartOnTyping,
+    messageDebounceMaxWaitMs: route.messageDebounceMaxWaitMs ?? instance.messageDebounceMaxWaitMs,
     messageSplitDelayMode:
       (route.messageSplitDelayMode as Instance['messageSplitDelayMode']) ?? instance.messageSplitDelayMode,
     messageSplitDelayFixedMs: route.messageSplitDelayFixedMs ?? instance.messageSplitDelayFixedMs,
@@ -5377,7 +5387,9 @@ export async function setupAgentDispatcher(
   return async () => {
     log.info('Shutting down agent dispatcher');
     clearInterval(mediaCleanupInterval);
-    debouncer.clear();
+    // flushAll (not clear) so a burst buffered right before shutdown is
+    // delivered as a final turn instead of silently dropped.
+    await debouncer.flushAll();
 
     // Reject any pending media promises on shutdown
     for (const [mediaId, pending] of mediaCompletions.entries()) {

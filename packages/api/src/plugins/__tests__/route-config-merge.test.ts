@@ -71,6 +71,7 @@ function makeNullRoute(overrides: Record<string, unknown> = {}) {
     messageDebounceMaxMs: null,
     messageDebounceGroupMs: null,
     messageDebounceRestartOnTyping: null,
+    messageDebounceMaxWaitMs: null,
     messageSplitDelayMode: null,
     messageSplitDelayFixedMs: null,
     messageSplitDelayMinMs: null,

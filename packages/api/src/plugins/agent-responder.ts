@@ -52,7 +52,7 @@ interface MessageMetadata {
 }
 
 interface DebounceConfig {
-  mode: 'disabled' | 'fixed' | 'randomized';
+  mode: 'disabled' | 'fixed' | 'randomized' | 'presence';
   minMs: number;
   maxMs: number;
   restartOnTyping: boolean;

@@ -74,6 +74,7 @@ export class RouteService {
       messageDebounceMaxMs: data.messageDebounceMaxMs ?? null,
       messageDebounceGroupMs: data.messageDebounceGroupMs ?? null,
       messageDebounceRestartOnTyping: data.messageDebounceRestartOnTyping ?? null,
+      messageDebounceMaxWaitMs: data.messageDebounceMaxWaitMs ?? null,
       messageSplitDelayMode: data.messageSplitDelayMode ?? null,
       messageSplitDelayFixedMs: data.messageSplitDelayFixedMs ?? null,
       messageSplitDelayMinMs: data.messageSplitDelayMinMs ?? null,

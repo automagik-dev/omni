@@ -39,6 +39,7 @@ function createRoute(overrides: Partial<ResolvedRoute> = {}): ResolvedRoute {
     messageDebounceMaxMs: null,
     messageDebounceGroupMs: null,
     messageDebounceRestartOnTyping: null,
+    messageDebounceMaxWaitMs: null,
     messageSplitDelayMode: null,
     messageSplitDelayFixedMs: null,
     messageSplitDelayMinMs: null,

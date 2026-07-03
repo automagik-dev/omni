@@ -46,6 +46,7 @@ export interface ResolvedRoute {
   messageDebounceMaxMs: number | null;
   messageDebounceGroupMs: number | null;
   messageDebounceRestartOnTyping: boolean | null;
+  messageDebounceMaxWaitMs: number | null;
   // Split delay overrides
   messageSplitDelayMode: string | null;
   messageSplitDelayFixedMs: number | null;
