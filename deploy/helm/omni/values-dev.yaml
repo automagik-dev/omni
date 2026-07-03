@@ -50,6 +50,26 @@ nats:
   persistence:
     size: 512Mi
 
+# Remote media backend backed by the bundled MinIO — a self-contained k8s dev
+# object store. Path-style addressing (MinIO requires it); dev creds inline.
+media:
+  mode: remote
+  s3:
+    bucket: omni-media
+    region: us-east-1
+    forcePathStyle: true
+    presignTtlSeconds: 3600
+    endpoint: ""          # empty → derived from the bundled MinIO Service
+
+minio:
+  enabled: true
+  # minio/minio + minio/mc are public images (unlike the locally-built omni-api),
+  # so they pull normally — do NOT set pullPolicy: Never here.
+  rootUser: omni
+  rootPassword: "omni-dev-minio-password"   # dev only — override in real use
+  persistence:
+    size: 2Gi
+
 autopg:
   enabled: true
   image:

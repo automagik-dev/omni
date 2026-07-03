@@ -1,7 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join } from 'node:path';
+import { extname, join } from 'node:path';
 
-import { createDownloadGuard } from '@omni/channel-sdk';
+import { type MediaStorageBackend, createDownloadGuard, createMediaBackend } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 
 import type { TelegramBotLike } from '../grammy-shim';
@@ -12,6 +11,17 @@ const log = createLogger('telegram:media-download');
 const downloadGuard = createDownloadGuard();
 
 const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
+
+/**
+ * Lazily-constructed media backend selected by `OMNI_MEDIA_MODE`. Built once so
+ * remote mode does not construct a new S3 client per download. In local mode it
+ * writes to `{MEDIA_BASE_PATH}/{key}` — byte-for-byte the previous behavior.
+ */
+let mediaBackend: MediaStorageBackend | null = null;
+function getMediaBackend(): MediaStorageBackend {
+  if (!mediaBackend) mediaBackend = createMediaBackend(MEDIA_BASE_PATH);
+  return mediaBackend;
+}
 
 /** Download retry settings */
 const MAX_RETRIES = 3;
@@ -112,22 +122,31 @@ export async function getFileWithRetry(bot: TelegramBotLike, fileId: string): Pr
 }
 
 /**
- * Download a Telegram file_id to local disk.
+ * Download a Telegram file_id and persist it via the active media backend.
  *
- * Stores at: data/media/{instanceId}/{YYYY-MM}/{externalId}{ext}
+ * Stores under key: {instanceId}/{YYYY-MM}/{externalId}{ext}
+ * - `local` mode: writes to `{MEDIA_BASE_PATH}/{key}` (unchanged behavior).
+ * - `remote` mode: uploads to the S3 bucket under `key`.
+ *
+ * Returns `{ localPath }` — the stable reference (relative path locally, S3 key
+ * remotely) recorded on the message row. Telegram already holds the full buffer
+ * (size-checked before read), so it routes through the backend's buffer `store`.
  *
  * Uses getFileWithRetry for resilient downloads:
  * - 3 retries with exponential backoff on transient failures
  * - Immediate fallback on "file too large" errors
  */
-export async function tryDownloadTelegramMedia(params: {
-  bot: TelegramBotLike;
-  instanceId: string;
-  externalId: string;
-  fileId: string;
-  mimeType?: string;
-  filename?: string;
-}): Promise<{ localPath: string } | null> {
+export async function tryDownloadTelegramMedia(
+  params: {
+    bot: TelegramBotLike;
+    instanceId: string;
+    externalId: string;
+    fileId: string;
+    mimeType?: string;
+    filename?: string;
+  },
+  backend: MediaStorageBackend = getMediaBackend(),
+): Promise<{ localPath: string } | null> {
   const { bot, instanceId, externalId, fileId, mimeType, filename } = params;
 
   try {
@@ -165,16 +184,18 @@ export async function tryDownloadTelegramMedia(params: {
     const nameWithExt = extname(baseName) ? baseName : `${baseName}${ext}`;
 
     const relativePath = join(instanceId, yearMonth, nameWithExt);
-    const fullPath = join(MEDIA_BASE_PATH, relativePath);
 
-    const dir = dirname(fullPath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const stored = await backend.store({ key: relativePath, buffer, mimeType });
 
-    writeFileSync(fullPath, buffer);
+    log.debug('Downloaded Telegram media', {
+      instanceId,
+      externalId,
+      path: stored.reference,
+      size: stored.size,
+      mode: backend.mode,
+    });
 
-    log.debug('Downloaded Telegram media', { instanceId, externalId, path: relativePath, size: buffer.length });
-
-    return { localPath: relativePath };
+    return { localPath: stored.reference };
   } catch (error) {
     log.warn('Telegram media download failed, continuing without local file', {
       instanceId,
