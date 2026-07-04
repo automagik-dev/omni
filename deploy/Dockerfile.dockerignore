@@ -1,0 +1,27 @@
+# BuildKit picks up "<dockerfile>.dockerignore" for this specific Dockerfile
+# (buildx >= v0.33), so a repo-root build context stays lean without adding a
+# global .dockerignore to the monorepo.
+#
+# NOTE: does NOT exclude `scripts/` (root postinstall: ensure-libicu-symlinks)
+# nor `packages/db/drizzle` (copied by build:migrations).
+**/node_modules
+**/dist
+**/.turbo
+.turbo
+.git
+.github
+.husky
+.well-known
+data
+docs
+examples
+plugins
+deploy
+**/__tests__
+**/*.test.ts
+**/*.spec.ts
+**/.env
+**/.env.*
+!**/.env.example
+*.log
+.DS_Store

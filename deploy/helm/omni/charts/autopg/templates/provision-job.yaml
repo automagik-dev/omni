@@ -1,0 +1,140 @@
+{{- if .Values.provisionJob.enabled -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "autopg.fullname" . }}-provision
+  labels:
+    {{- include "autopg.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.provisionJob.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "autopg.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: provision
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: provision
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PGHOST
+              value: {{ include "autopg.fullname" . | quote }}
+            - name: PGPORT
+              value: {{ .Values.port | quote }}
+            - name: PGUSER
+              value: postgres
+            - name: READY_TIMEOUT
+              value: {{ .Values.provisionJob.readyTimeoutSeconds | quote }}
+            - name: SUPERUSER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "autopg.secretName" . }}
+                  key: superuser-password
+            {{- range .Values.provisionedApps }}
+            - name: APP_PW_{{ .role }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "autopg.secretName" $ }}
+                  key: {{ printf "%s-password" .role }}
+            {{- end }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              # ---- wait for the server to accept connections ----------------
+              deadline=$(( $(date +%s) + READY_TIMEOUT ))
+              until pg_isready -h "$PGHOST" -p "$PGPORT" -q; do
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "timed out waiting for $PGHOST:$PGPORT" >&2; exit 1
+                fi
+                echo "waiting for postgres at $PGHOST:$PGPORT ..."; sleep 3
+              done
+              echo "postgres is accepting connections"
+
+              # ---- pick the working superuser password ----------------------
+              # Fresh initdb => password is the built-in 'postgres'. After the
+              # first provision run it is the managed SUPERUSER_PASSWORD.
+              if PGPASSWORD="$SUPERUSER_PASSWORD" psql -h "$PGHOST" -p "$PGPORT" \
+                   -U postgres -d postgres -tAc 'SELECT 1' >/dev/null 2>&1; then
+                export PGPASSWORD="$SUPERUSER_PASSWORD"
+              elif PGPASSWORD=postgres psql -h "$PGHOST" -p "$PGPORT" \
+                   -U postgres -d postgres -tAc 'SELECT 1' >/dev/null 2>&1; then
+                export PGPASSWORD=postgres
+              else
+                echo "cannot authenticate as postgres (managed or default pw)" >&2; exit 1
+              fi
+
+              # psql 15 (debian) does NOT interpolate :'var' in -c (that is
+              # psql 16+), so passwords are single-quoted directly. Managed
+              # passwords are alphanumeric (randAlphaNum) => injection-safe;
+              # operator-supplied passwords must not contain a single quote.
+              psqlx() { psql -v ON_ERROR_STOP=1 -h "$PGHOST" -p "$PGPORT" -U postgres "$@"; }
+
+              # ---- pin the superuser password to the postmaster default -----
+              # DO NOT rotate: autopg's postmaster hardcodes 'postgres' for its
+              # in-process admin pool (bin/postgres-server.js passes no password
+              # option; AUTOPG_PG_PASSWORD is ignored on this code path), so a
+              # rotated password crash-loops the pod on every RECREATION — the
+              # pool authenticates fresh at each start (verified in the wild on
+              # a node restart, 2026-07-03). Pin to the default until upstream
+              # autopg lets the postmaster consume a managed password. This
+              # also self-heals clusters that a previous chart version rotated.
+              # Network exposure is bounded: apps use scoped roles, and the
+              # Service is ClusterIP-only.
+              psqlx -d postgres -c "ALTER USER postgres PASSWORD 'postgres';"
+              export PGPASSWORD=postgres
+              echo "superuser password pinned to postmaster default"
+
+              # ---- provision a scoped app: role + db + schema ownership ------
+              provision_app() {
+                db="$1"; role="$2"; pw="$3"
+                echo "provisioning db=$db role=$role"
+                if [ "$(psqlx -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$role'")" = "1" ]; then
+                  psqlx -d postgres -c "ALTER ROLE \"$role\" LOGIN PASSWORD '$pw';"
+                else
+                  psqlx -d postgres -c "CREATE ROLE \"$role\" LOGIN PASSWORD '$pw';"
+                fi
+                if [ "$(psqlx -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$db'")" != "1" ]; then
+                  psqlx -d postgres -c "CREATE DATABASE \"$db\" OWNER \"$role\";"
+                fi
+                # Ownership so the role can run migrations (CREATE/ALTER/DROP)
+                # against its own schema.
+                psqlx -d "$db" -c "ALTER DATABASE \"$db\" OWNER TO \"$role\";"
+                psqlx -d "$db" -c "ALTER SCHEMA public OWNER TO \"$role\";"
+                psqlx -d "$db" -c "GRANT ALL ON SCHEMA public TO \"$role\";"
+                psqlx -d "$db" -c "GRANT ALL ON DATABASE \"$db\" TO \"$role\";"
+                echo "provisioned db=$db role=$role (role owns schema public)"
+              }
+
+              {{- range .Values.provisionedApps }}
+              provision_app {{ .db | quote }} {{ .role | quote }} "$APP_PW_{{ .role }}"
+              {{- end }}
+
+              echo "provisioning complete"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end -}}
