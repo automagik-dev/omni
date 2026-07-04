@@ -24,9 +24,9 @@ import { type S3BackendConfig, S3MediaBackend } from '@omni/channel-sdk';
 import type { Database } from '@omni/db';
 import {
   createBucket,
-  dockerAvailable,
   getSharedMinio,
   harnessFetch,
+  minioIntegrationEnabled,
   uniqueBucket,
 } from '../../__tests__/minio-harness';
 import { MediaStorageService } from '../../services/media-storage';
@@ -37,8 +37,10 @@ const { extractMediaFiles } = __test__;
 const BUCKET = uniqueBucket('omni-media-e2e-test');
 const REGION = 'us-east-1';
 
-const hasDocker = dockerAvailable();
-const skipReason = hasDocker ? '' : 'Docker unavailable — skipping MinIO remote-media e2e round-trip';
+const hasDocker = minioIntegrationEnabled();
+const skipReason = hasDocker
+  ? ''
+  : 'MinIO integration disabled (CI opt-in / no Docker) — skipping MinIO remote-media e2e round-trip';
 
 // Build a buffered message shaped like agent-dispatcher's BufferedMessage.
 type BufferedLike = Parameters<typeof extractMediaFiles>[0][number];
