@@ -17,9 +17,9 @@ import { type S3BackendConfig, S3MediaBackend } from '@omni/channel-sdk';
 import type { Database } from '@omni/db';
 import {
   createBucket,
-  minioIntegrationEnabled,
   getSharedMinio,
   harnessFetch,
+  minioIntegrationEnabled,
   uniqueBucket,
 } from '../../__tests__/minio-harness';
 import { MediaStorageService } from '../media-storage';

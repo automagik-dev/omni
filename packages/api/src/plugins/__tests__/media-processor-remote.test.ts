@@ -25,7 +25,7 @@ import { LocalMediaBackend, type S3BackendConfig, S3MediaBackend } from '@omni/c
 import type { EventBus, MessageReceivedPayload } from '@omni/core';
 import type { Database } from '@omni/db';
 import type { MediaProcessingService } from '@omni/media-processing';
-import { createBucket, minioIntegrationEnabled, getSharedMinio, uniqueBucket } from '../../__tests__/minio-harness';
+import { createBucket, getSharedMinio, minioIntegrationEnabled, uniqueBucket } from '../../__tests__/minio-harness';
 import type { Services } from '../../services';
 import { MediaStorageService } from '../../services/media-storage';
 import { type MediaProcessorContext, __test__ } from '../media-processor';
@@ -37,7 +37,9 @@ const REGION = 'us-east-1';
 const MEDIA_BASE_PATH = process.env.MEDIA_STORAGE_PATH || './data/media';
 
 const hasDocker = minioIntegrationEnabled();
-const skipReason = hasDocker ? '' : 'MinIO integration disabled (CI opt-in / no Docker) — skipping MinIO media-processor round-trip';
+const skipReason = hasDocker
+  ? ''
+  : 'MinIO integration disabled (CI opt-in / no Docker) — skipping MinIO media-processor round-trip';
 
 /** Records the path + bytes the processing service was handed. */
 interface ProcessCapture {
