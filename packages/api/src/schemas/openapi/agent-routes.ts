@@ -62,7 +62,7 @@ export const AgentRouteSchema = z.object({
 
   // Debounce overrides (null = inherit from instance)
   messageDebounceMode: z
-    .enum(['disabled', 'fixed', 'randomized'])
+    .enum(['disabled', 'fixed', 'randomized', 'presence'])
     .nullable()
     .openapi({ description: 'Debounce mode override' }),
   messageDebounceMinMs: z
@@ -87,6 +87,12 @@ export const AgentRouteSchema = z.object({
     .boolean()
     .nullable()
     .openapi({ description: 'Restart debounce on typing override' }),
+  messageDebounceMaxWaitMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .openapi({ description: 'Presence-mode hard cap (ms) override; null = no cap' }),
 
   // Split delay overrides (null = inherit from instance)
   messageSplitDelayMode: z
@@ -156,7 +162,10 @@ export const CreateAgentRouteRequestSchema = z.object({
   agentGatePrompt: z.string().optional().openapi({ description: 'Response gate prompt' }),
 
   // Debounce overrides
-  messageDebounceMode: z.enum(['disabled', 'fixed', 'randomized']).optional().openapi({ description: 'Debounce mode' }),
+  messageDebounceMode: z
+    .enum(['disabled', 'fixed', 'randomized', 'presence'])
+    .optional()
+    .openapi({ description: 'Debounce mode' }),
   messageDebounceMinMs: z.number().int().nonnegative().optional().openapi({ description: 'Debounce min delay (ms)' }),
   messageDebounceMaxMs: z.number().int().nonnegative().optional().openapi({ description: 'Debounce max delay (ms)' }),
   messageDebounceGroupMs: z
@@ -166,6 +175,12 @@ export const CreateAgentRouteRequestSchema = z.object({
     .optional()
     .openapi({ description: 'Debounce group chat delay (ms)' }),
   messageDebounceRestartOnTyping: z.boolean().optional().openapi({ description: 'Restart debounce on typing' }),
+  messageDebounceMaxWaitMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .openapi({ description: 'Presence-mode hard cap (ms); null = no cap' }),
 
   // Split delay overrides
   messageSplitDelayMode: z
@@ -223,7 +238,7 @@ export const UpdateAgentRouteRequestSchema = z.object({
 
   // Debounce overrides
   messageDebounceMode: z
-    .enum(['disabled', 'fixed', 'randomized'])
+    .enum(['disabled', 'fixed', 'randomized', 'presence'])
     .nullable()
     .optional()
     .openapi({ description: 'Debounce mode' }),
@@ -253,6 +268,13 @@ export const UpdateAgentRouteRequestSchema = z.object({
     .nullable()
     .optional()
     .openapi({ description: 'Restart debounce on typing' }),
+  messageDebounceMaxWaitMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Presence-mode hard cap (ms); null = no cap' }),
 
   // Split delay overrides
   messageSplitDelayMode: z

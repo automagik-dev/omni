@@ -30,6 +30,14 @@ permissions:
   # gets an empty placeholder token and the registry returns a misleading
   # 404 instead of the real auth failure.
   id-token: write
+  # Workflow-write for the "Dispatch release pipeline" step below: `gh workflow
+  # run release.yml` hits the workflow_dispatch API, which requires actions:write.
+  # workflow_dispatch is one of the two events GITHUB_TOKEN IS allowed to trigger
+  # (with repository_dispatch), so this is sufficient — no PAT needed. Without it
+  # the dispatch returns HTTP 403 "Resource not accessible by integration" and the
+  # GitHub Release never fires (npm @latest publishes, but the tagged Release does
+  # not), forcing a manual `gh workflow run release.yml` after every promotion.
+  actions: write
 
 concurrency:
   # Serialize per target branch so dev and homolog bumps cannot overwrite each other.
@@ -205,11 +213,13 @@ jobs:
       # guard); workflow_dispatch and repository_dispatch are the documented
       # exceptions, so this step kicks the orchestrator from version.yml.
       #
-      # NOTE: this step runs LAST so a failed dispatch (e.g. GITHUB_TOKEN
-      # lacking the workflow-write permission and getting HTTP 403) does
-      # not short-circuit the npm publish step. `continue-on-error: true`
-      # turns the failure into a workflow annotation; the operator can
-      # manually re-dispatch via `gh workflow run release.yml ...`.
+      # NOTE: this step runs LAST so a dispatch failure never short-circuits
+      # the npm publish step. The historical HTTP 403 (GITHUB_TOKEN lacking
+      # workflow-write) is now fixed by `actions: write` in the top-level
+      # permissions block, so this normally succeeds and the GitHub Release
+      # fires automatically. `continue-on-error: true` is kept as a safety net:
+      # any residual dispatch failure becomes a workflow annotation and the
+      # operator can manually re-dispatch via `gh workflow run release.yml ...`.
       # Pre-fix history: when dispatch ran BEFORE npm publish + Build CLI,
       # the 403 cascaded and skipped npm publish entirely (v2.260520.1 / .2
       # / .3 never made it to @next).

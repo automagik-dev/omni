@@ -64,11 +64,12 @@ export const AgentRouteSchema = z.object({
   agentGatePrompt: z.string().nullable(),
 
   // Debounce overrides (null = inherit from instance)
-  messageDebounceMode: z.enum(['disabled', 'fixed', 'randomized']).nullable(),
+  messageDebounceMode: z.enum(['disabled', 'fixed', 'randomized', 'presence']).nullable(),
   messageDebounceMinMs: z.number().int().nonnegative().nullable(),
   messageDebounceMaxMs: z.number().int().nonnegative().nullable(),
   messageDebounceGroupMs: z.number().int().nonnegative().nullable(),
   messageDebounceRestartOnTyping: z.boolean().nullable(),
+  messageDebounceMaxWaitMs: z.number().int().nonnegative().nullable(),
 
   // Split delay overrides (null = inherit from instance)
   messageSplitDelayMode: z.enum(['disabled', 'fixed', 'randomized']).nullable(),
@@ -118,11 +119,12 @@ export const CreateAgentRouteSchema = z
     agentGatePrompt: z.string().optional(),
 
     // Debounce overrides
-    messageDebounceMode: z.enum(['disabled', 'fixed', 'randomized']).optional(),
+    messageDebounceMode: z.enum(['disabled', 'fixed', 'randomized', 'presence']).optional(),
     messageDebounceMinMs: z.number().int().nonnegative().optional(),
     messageDebounceMaxMs: z.number().int().nonnegative().optional(),
     messageDebounceGroupMs: z.number().int().nonnegative().optional(),
     messageDebounceRestartOnTyping: z.boolean().optional(),
+    messageDebounceMaxWaitMs: z.number().int().nonnegative().optional(),
 
     // Split delay overrides
     messageSplitDelayMode: z.enum(['disabled', 'fixed', 'randomized']).optional(),
@@ -169,11 +171,12 @@ export const UpdateAgentRouteSchema = z.object({
   agentGatePrompt: z.string().optional().nullable(),
 
   // Debounce overrides
-  messageDebounceMode: z.enum(['disabled', 'fixed', 'randomized']).optional().nullable(),
+  messageDebounceMode: z.enum(['disabled', 'fixed', 'randomized', 'presence']).optional().nullable(),
   messageDebounceMinMs: z.number().int().nonnegative().optional().nullable(),
   messageDebounceMaxMs: z.number().int().nonnegative().optional().nullable(),
   messageDebounceGroupMs: z.number().int().nonnegative().optional().nullable(),
   messageDebounceRestartOnTyping: z.boolean().optional().nullable(),
+  messageDebounceMaxWaitMs: z.number().int().nonnegative().optional().nullable(),
 
   // Split delay overrides
   messageSplitDelayMode: z.enum(['disabled', 'fixed', 'randomized']).optional().nullable(),

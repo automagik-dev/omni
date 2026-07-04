@@ -40,6 +40,7 @@ import { FollowUpLifecycleService } from './follow-up-lifecycle';
 import { FollowUpSweeperService } from './follow-up-sweeper';
 import { GenieHostsService } from './genie-hosts';
 import { InstanceService } from './instances';
+import { MediaStorageService } from './media-storage';
 import { MessageService } from './messages';
 import { PayloadStoreService } from './payload-store';
 import { PersonService } from './persons';
@@ -86,6 +87,12 @@ export interface Services {
   followUpLifecycle: FollowUpLifecycleService;
   followUpSweeper: FollowUpSweeperService;
   genieHosts: GenieHostsService;
+  /**
+   * Media storage service — computes stable keys and delegates to the active
+   * backend (local disk or remote S3). Remote mode uses `presignedUrl` at
+   * dispatch time to hand agents a time-limited GET URL for stored media.
+   */
+  mediaStorage: MediaStorageService;
   /**
    * Direct access to the event bus for routes that need to publish
    * domain events alongside service calls (e.g. /messages/send/close-contact
@@ -166,6 +173,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     followUpLifecycle,
     followUpSweeper,
     genieHosts: new GenieHostsService(db),
+    mediaStorage: new MediaStorageService(db),
     eventBus,
   };
 }

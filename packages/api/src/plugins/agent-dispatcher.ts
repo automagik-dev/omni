@@ -83,6 +83,7 @@ import {
   shouldAgentReply,
 } from '../services/agent-runner';
 import { resolveKhalSessionId } from '../services/agent-session-identity';
+import type { MediaStorageService } from '../services/media-storage';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import type { ResolvedRoute } from '../services/route-resolver';
 import { publishTurnOpen } from '../services/turn-events';
@@ -384,13 +385,22 @@ class ReactionDedup {
 // Helper Functions
 // ============================================================================
 
+/** 'presence' mode defaults when the instance/route leaves the tuning columns unset. */
+const PRESENCE_DEFAULT_MIN_MS = 5_000; // quiet window after the user stops typing
+const PRESENCE_DEFAULT_MAX_WAIT_MS = 30_000; // hard cap under continuous typing
+
 function getDebounceConfig(instance: Instance): DebounceConfig {
+  const mode = instance.messageDebounceMode ?? 'disabled';
+  const isPresence = mode === 'presence';
   return {
-    mode: instance.messageDebounceMode ?? 'disabled',
-    minMs: instance.messageDebounceMinMs ?? 0,
+    mode,
+    // 'presence' is sugar for fixed + restartOnTyping + a hard cap. Apply sane
+    // defaults when the columns are unset (0/null) so operators only flip mode.
+    minMs: instance.messageDebounceMinMs || (isPresence ? PRESENCE_DEFAULT_MIN_MS : 0),
     maxMs: instance.messageDebounceMaxMs ?? 0,
-    restartOnTyping: instance.messageDebounceRestartOnTyping ?? false,
+    restartOnTyping: isPresence ? true : (instance.messageDebounceRestartOnTyping ?? false),
     groupMs: (instance as Record<string, unknown>).messageDebounceGroupMs as number | null,
+    maxWaitMs: instance.messageDebounceMaxWaitMs ?? (isPresence ? PRESENCE_DEFAULT_MAX_WAIT_MS : null),
   };
 }
 
@@ -873,20 +883,91 @@ function resolveMediaPath(mediaUrl: string): string | null {
 }
 
 /**
+ * Resolve a stored media reference (`messages.mediaLocalPath`) into the string
+ * handed to the agent alongside processed text.
+ *
+ * - `local` mode (unchanged): the reference is a relative path resolved to an
+ *   absolute local file path under {@link MEDIA_BASE_PATH}.
+ * - `remote` mode: the reference is an S3 key, presigned into a time-limited
+ *   GET URL at dispatch time (TTL from config) — never a stored expiring URL.
+ *
+ * `mediaStorage` is optional so unit tests with a partial `services` mock fall
+ * back to local resolution.
+ */
+async function resolveDispatchMediaPath(
+  mediaStorage: MediaStorageService | undefined,
+  reference: string | null | undefined,
+): Promise<string | null> {
+  if (!reference) return null;
+  if (mediaStorage?.getStorageMode?.() === 'remote') {
+    try {
+      return await mediaStorage.presignedUrl(reference);
+    } catch (error) {
+      log.warn('Failed to presign processed media URL', { error: String(error) });
+      return null;
+    }
+  }
+  return resolve(join(MEDIA_BASE_PATH, reference));
+}
+
+/**
  * Extract ProviderFile entries from buffered messages that have media attachments.
  * Respects agentSendMediaPath instance setting — returns empty if disabled.
+ *
+ * - `local` mode (unchanged): resolves `content.mediaUrl` to an absolute local
+ *   file path and emits `ProviderFile.path`.
+ * - `remote` mode: presigns the stored S3 key (`rawPayload.mediaLocalPath`) at
+ *   dispatch time and emits `ProviderFile.url` (no path). Audio is excluded —
+ *   only image/video/document get a presigned URL; audio stays URL-less and
+ *   rides the transcription text path.
  */
-function extractMediaFiles(messages: BufferedMessage[], agentSendMediaPath: boolean): ProviderFile[] {
+/**
+ * Remote-mode ProviderFile: presign the stored S3 key into a time-limited URL.
+ * Returns null when there is no stored key or the type is URL-less (audio).
+ */
+async function remoteMediaFile(
+  m: BufferedMessage,
+  mimeType: string,
+  mediaStorage: MediaStorageService,
+  allowedTypes: string[],
+): Promise<ProviderFile | null> {
+  const key = m.payload.rawPayload?.mediaLocalPath as string | undefined;
+  const type = m.payload.content?.type;
+  // Audio (and any non-path type) stays URL-less in remote mode.
+  if (!key || !type || !allowedTypes.includes(type)) return null;
+  try {
+    return { url: await mediaStorage.presignedUrl(key), mimeType };
+  } catch (error) {
+    log.warn('Failed to presign media URL for dispatch', { error: String(error) });
+    return null;
+  }
+}
+
+/** Local-mode ProviderFile: resolve `mediaUrl` to an absolute local path. */
+function localMediaFile(mediaUrl: string | undefined, mimeType: string): ProviderFile | null {
+  if (!mediaUrl) return null;
+  const path = resolveMediaPath(mediaUrl);
+  return path ? { path, mimeType } : null;
+}
+
+async function extractMediaFiles(
+  messages: BufferedMessage[],
+  agentSendMediaPath: boolean,
+  mediaStorage: MediaStorageService | undefined,
+  sendMediaPathTypes?: string[] | null,
+): Promise<ProviderFile[]> {
   if (!agentSendMediaPath) return [];
   const files: ProviderFile[] = [];
+  const remote = mediaStorage?.getStorageMode?.() === 'remote';
+  const allowedTypes = sendMediaPathTypes ?? DEFAULT_SEND_MEDIA_PATH_TYPES;
   for (const m of messages) {
     const content = m.payload.content;
-    if (content?.mediaUrl && content.mimeType) {
-      const path = resolveMediaPath(content.mediaUrl);
-      if (path) {
-        files.push({ path, mimeType: content.mimeType });
-      }
-    }
+    if (!content?.mimeType) continue;
+    const file =
+      remote && mediaStorage
+        ? await remoteMediaFile(m, content.mimeType, mediaStorage, allowedTypes)
+        : localMediaFile(content.mediaUrl, content.mimeType);
+    if (file) files.push(file);
   }
   return files;
 }
@@ -1004,7 +1085,10 @@ async function recoverProcessedMediaAfterTimeout(
   if (!refreshed) return null;
   const recovered = checkProcessedColumn(refreshed, column);
   if (recovered === 'pending' || recovered === 'error') return null;
-  return recovered;
+  return {
+    content: recovered.content,
+    localPath: await resolveDispatchMediaPath(services.mediaStorage, refreshed.mediaLocalPath as string | null),
+  };
 }
 
 /**
@@ -1042,14 +1126,19 @@ async function awaitMediaProcessing(
     log.warn('Media processing failed (DB)', { instanceId, chatId, externalId });
     return MEDIA_WAIT_NULL;
   }
-  if (existing !== 'pending') return existing;
+  if (existing !== 'pending') {
+    return {
+      content: existing.content,
+      localPath: await resolveDispatchMediaPath(services.mediaStorage, msg.mediaLocalPath as string | null),
+    };
+  }
 
   // 2. Check event cache — event may have arrived before dispatcher asked
   const cached = mediaResultCache.get(msg.id);
   if (cached) {
     mediaResultCache.delete(msg.id);
     if (!cached.content || cached.error) return MEDIA_WAIT_NULL;
-    const localPath = msg.mediaLocalPath ? resolve(join(MEDIA_BASE_PATH, msg.mediaLocalPath as string)) : null;
+    const localPath = await resolveDispatchMediaPath(services.mediaStorage, msg.mediaLocalPath as string | null);
     return { content: cached.content, localPath };
   }
 
@@ -1076,7 +1165,7 @@ async function awaitMediaProcessing(
 
   // Re-read message for localPath (media storage may have updated it)
   const updated = await services.messages.getByExternalId(chat.id, externalId);
-  const localPath = updated?.mediaLocalPath ? resolve(join(MEDIA_BASE_PATH, updated.mediaLocalPath as string)) : null;
+  const localPath = await resolveDispatchMediaPath(services.mediaStorage, updated?.mediaLocalPath as string | null);
   return { content: result.content, localPath };
 }
 
@@ -1544,7 +1633,12 @@ async function prepareAgentContent(
   }
 
   const processedMediaTexts: string[] = [];
-  const mediaFiles = extractMediaFiles(messages, instance.agentSendMediaPath);
+  const mediaFiles = await extractMediaFiles(
+    messages,
+    instance.agentSendMediaPath,
+    services.mediaStorage,
+    instance.agentSendMediaPathTypes,
+  );
 
   if (instance.agentWaitForMedia) {
     const processed = await collectProcessedMedia(services, instance, messages);
@@ -4071,6 +4165,7 @@ function mergeRouteOverrides(instance: Instance, route: ResolvedRoute): Dispatch
     messageDebounceMaxMs: route.messageDebounceMaxMs ?? instance.messageDebounceMaxMs,
     messageDebounceGroupMs: route.messageDebounceGroupMs ?? instance.messageDebounceGroupMs,
     messageDebounceRestartOnTyping: route.messageDebounceRestartOnTyping ?? instance.messageDebounceRestartOnTyping,
+    messageDebounceMaxWaitMs: route.messageDebounceMaxWaitMs ?? instance.messageDebounceMaxWaitMs,
     messageSplitDelayMode:
       (route.messageSplitDelayMode as Instance['messageSplitDelayMode']) ?? instance.messageSplitDelayMode,
     messageSplitDelayFixedMs: route.messageSplitDelayFixedMs ?? instance.messageSplitDelayFixedMs,
@@ -4628,8 +4723,16 @@ async function shouldProcessMessage(
     return null;
   }
 
+  // Loop protection: drop messages whose sender matches ANOTHER active
+  // instance's owner. Opt-out per instance via `allowFirstParty` so a user's
+  // "assistant" instance can reply to messages from their own personal number
+  // (another instance's owner). The separate "message from self" self-skip
+  // above is unaffected — an instance still never replies to its own outbound.
   const activeOwnerIdentifiers = await listActiveOwnerIdentifiers(db);
-  if (isFirstPartyInstanceSender(payload, instance.ownerIdentifier, activeOwnerIdentifiers)) {
+  if (
+    !instance.allowFirstParty &&
+    isFirstPartyInstanceSender(payload, instance.ownerIdentifier, activeOwnerIdentifiers)
+  ) {
     log.info('Skipping first-party cross-instance message', {
       instanceId: instance.id,
     });
@@ -5377,7 +5480,9 @@ export async function setupAgentDispatcher(
   return async () => {
     log.info('Shutting down agent dispatcher');
     clearInterval(mediaCleanupInterval);
-    debouncer.clear();
+    // flushAll (not clear) so a burst buffered right before shutdown is
+    // delivered as a final turn instead of silently dropped.
+    await debouncer.flushAll();
 
     // Reject any pending media promises on shutdown
     for (const [mediaId, pending] of mediaCompletions.entries()) {
@@ -5452,6 +5557,9 @@ export const __test__ = {
   mediaResultCache,
   checkProcessedColumn,
   getProcessedColumn,
+  extractMediaFiles,
+  formatProcessedMedia,
+  resolveDispatchMediaPath,
   MEDIA_WAIT_NULL,
   extractA2ACustomerContext,
   resolveCustomerContext,
