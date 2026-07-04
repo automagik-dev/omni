@@ -1,7 +1,7 @@
 ---
 title: "Remote Media Mode (S3/MinIO)"
 created: 2026-07-03
-updated: 2026-07-03
+updated: 2026-07-04
 tags: [media, storage, s3, minio, remote, presigned-url]
 status: current
 ---
@@ -36,12 +36,19 @@ is missing, the API throws rather than silently falling back to local disk. This
 prevents a misconfigured deployment from writing media to an ephemeral pod
 filesystem it will later lose.
 
+The mode value itself is validated the same way: only `local` and `remote` are
+accepted (unset defaults to `local`). Any other value — `s3`, `minio`, `aws`,
+a typo — throws on boot instead of silently selecting local disk. All
+`OMNI_MEDIA_*` parsing goes through a Zod schema in
+`packages/channel-sdk/src/media-backends/config.ts`.
+
 ## Configuration (`OMNI_MEDIA_*`)
 
 | Var | Default | Purpose |
 |-----|---------|---------|
-| `OMNI_MEDIA_MODE` | `local` | `local` \| `remote`. Selects the backend. |
+| `OMNI_MEDIA_MODE` | `local` | `local` \| `remote`. Selects the backend. Any other value **throws on boot**. |
 | `OMNI_MEDIA_S3_ENDPOINT` | _(empty)_ | S3-compatible endpoint (e.g. `http://minio:9000`). Empty → real AWS S3, derived from region. |
+| `OMNI_MEDIA_S3_PUBLIC_ENDPOINT` | _(empty)_ | Optional externally-reachable endpoint used **only** to generate presigned GET URLs. Uploads/reads keep using `OMNI_MEDIA_S3_ENDPOINT`. Empty → presign with `OMNI_MEDIA_S3_ENDPOINT`. |
 | `OMNI_MEDIA_S3_BUCKET` | — | Bucket name. **Required** in remote mode. |
 | `OMNI_MEDIA_S3_REGION` | `us-east-1` | AWS region for SigV4 signing. |
 | `OMNI_MEDIA_S3_ACCESS_KEY` | — | Access key id. **Required** in remote mode. |
@@ -69,6 +76,13 @@ fresh and expire quickly:
 
 The presigned URL retrieves the exact stored bytes with the original
 content-type; once the TTL elapses the object store returns a `4xx`.
+
+When the agent runtime lives outside the cluster/network that hosts the object
+store, set `OMNI_MEDIA_S3_PUBLIC_ENDPOINT` to the externally-reachable host
+(e.g. an Ingress/LoadBalancer in front of MinIO). Presigned URLs are then
+signed against that host, while the API keeps uploading/reading through
+`OMNI_MEDIA_S3_ENDPOINT`. Without it, a URL like `http://minio:9000/…` is only
+fetchable by co-located workloads.
 
 ## Kubernetes default: remote + bundled MinIO
 
@@ -112,11 +126,16 @@ The full remote path — store → presign at dispatch → GET returns the store
 bytes — is covered against a real `minio/minio` container by:
 
 - `packages/api/src/services/__tests__/s3-backend-remote.test.ts` (backend
-  round-trip)
+  round-trip, public presign endpoint, no orphaned objects on empty/aborted
+  streams)
 - `packages/api/src/plugins/__tests__/agent-dispatcher-media-remote.test.ts`
   (dispatch emits `ProviderFile.url`)
 - `packages/api/src/plugins/__tests__/media-remote-e2e.test.ts` (store through
   `MediaStorageService`, drive dispatch, `fetch()` the presigned URL, assert the
   bytes)
+- `packages/api/src/plugins/__tests__/media-processor-remote.test.ts` (realtime
+  processing fetches S3 bytes into a temp file and cleans it up)
+- `packages/api/src/services/__tests__/batch-jobs-remote.test.ts` (batch
+  `processItem` succeeds on items whose stored reference is an S3 key)
 
 These skip with a clear reason when Docker is unavailable.
