@@ -13,6 +13,7 @@
  */
 
 import { beforeAll, describe, expect, it } from 'bun:test';
+import { Readable } from 'node:stream';
 import { type S3BackendConfig, S3MediaBackend } from '@omni/channel-sdk';
 import type { Database } from '@omni/db';
 import {
@@ -92,6 +93,70 @@ describe.skipIf(!hasDocker)('S3MediaBackend against MinIO', () => {
     const download = await harnessFetch(url);
     expect(download.status).toBe(200);
     expect(Array.from(new Uint8Array(await download.arrayBuffer()))).toEqual([1, 2, 3]);
+  });
+
+  it('presigns with the public endpoint while uploads keep using the internal endpoint', async () => {
+    // `localhost` aliases the container's `127.0.0.1` endpoint — a DIFFERENT
+    // host string signed into the URL, but the same server, so the test can
+    // actually fetch the public-endpoint presigned URL.
+    const publicEndpoint = (config.endpoint ?? '').replace('127.0.0.1', 'localhost');
+    expect(publicEndpoint).toContain('localhost');
+    const backend = new S3MediaBackend({ ...config, publicEndpoint });
+
+    const key = 'inst-1/2026-07/msg-public.png';
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01, 0x02]);
+    // The upload goes through the internal client (127.0.0.1 endpoint) — it
+    // succeeding proves storage did not switch to the public endpoint.
+    await backend.store({ key, buffer: bytes, mimeType: 'image/png' });
+
+    const url = await backend.presignedUrl(key, 60);
+    expect(url.startsWith(`${publicEndpoint}/`)).toBe(true);
+    expect(url).not.toContain('127.0.0.1');
+
+    // The public-host signature is valid and retrieves the stored bytes.
+    const download = await harnessFetch(url);
+    expect(download.status).toBe(200);
+    expect(Array.from(new Uint8Array(await download.arrayBuffer()))).toEqual(Array.from(bytes));
+  });
+
+  it('leaves no object behind for an empty stream (mirrors the local backend rm)', async () => {
+    const backend = new S3MediaBackend(config);
+    const key = 'inst-1/2026-07/msg-empty.bin';
+
+    const result = await backend.storeStream({
+      key,
+      stream: Readable.from([]),
+      mimeType: 'application/octet-stream',
+    });
+    expect(result.size).toBe(0);
+
+    // Without the cleanup, writer.end() commits a 0-byte object at the key.
+    const url = await backend.presignedUrl(key, 60);
+    const download = await harnessFetch(url);
+    expect(download.status).toBe(404);
+  });
+
+  it('leaves no object behind when the stream exceeds maxSizeBytes', async () => {
+    const backend = new S3MediaBackend(config);
+    const key = 'inst-1/2026-07/msg-too-large.bin';
+
+    async function* chunks(): AsyncGenerator<Buffer> {
+      yield Buffer.alloc(1024, 1);
+      yield Buffer.alloc(1024, 2);
+    }
+
+    await expect(
+      backend.storeStream({
+        key,
+        stream: Readable.from(chunks()),
+        mimeType: 'application/octet-stream',
+        maxSizeBytes: 1500,
+      }),
+    ).rejects.toThrow(/exceeds limit/);
+
+    const url = await backend.presignedUrl(key, 60);
+    const download = await harnessFetch(url);
+    expect(download.status).toBe(404);
   });
 });
 
