@@ -114,18 +114,23 @@ secret:
 # ---- probes -----------------------------------------------------------------
 # GET /health → 200 {"status":"healthy",...} once DB + NATS are up (5s-cached).
 probes:
+  # Readiness sheds traffic while the event loop is busy — that is correct and
+  # can stay sensitive. Liveness must only kill a HUNG process: a fresh
+  # WhatsApp pairing's history sync can starve the loop for minutes (observed
+  # in the wild 2026-07-04: liveness killed the pod mid-sync, truncating the
+  # one-shot history backfill), so its budget is generous (~5 min).
   readiness:
     path: /health
     initialDelaySeconds: 10
     periodSeconds: 10
-    timeoutSeconds: 3
+    timeoutSeconds: 5
     failureThreshold: 6
   liveness:
     path: /health
     initialDelaySeconds: 45
     periodSeconds: 20
-    timeoutSeconds: 5
-    failureThreshold: 6
+    timeoutSeconds: 10
+    failureThreshold: 15
   # Migrations + DB readiness can take 30s+; startupProbe guards slow boots.
   startup:
     path: /health
