@@ -886,6 +886,20 @@ export const instances = pgTable(
      */
     requireGenieSignature: boolean('require_genie_signature').notNull().default(false),
 
+    // ---- First-party cross-instance opt-in ----
+    /**
+     * When true, this instance PROCESSES (does not drop) inbound messages whose
+     * sender phone matches ANOTHER active instance's owner. This lets a user run
+     * instance A as an "assistant" number that replies to messages A receives
+     * from their own personal number (which is instance B's owner).
+     *
+     * Default false preserves the loop-protection default: cross-instance
+     * first-party senders are dropped (see `isFirstPartyInstanceSender` in
+     * agent-dispatcher.ts). This does NOT affect the "message from self"
+     * self-skip — an instance still never replies to its own outbound.
+     */
+    allowFirstParty: boolean('allow_first_party').notNull().default(false),
+
     // ---- Timestamps ----
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

@@ -752,8 +752,9 @@ mediaRoutes.get('/:instanceId/*', async (c) => {
   const db = c.get('services');
   const storage = getMediaStorage(db);
 
-  // Read the file
-  const result = storage.readMedia(relativePath);
+  // Read the bytes via the active backend (local disk or S3 in remote mode —
+  // a plain disk read would 404 for remote-stored media).
+  const result = await storage.readMediaViaBackend(relativePath);
 
   if (!result) {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Media not found' } }, 404);

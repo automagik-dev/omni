@@ -166,6 +166,7 @@ export function createMediaProcessingService(config?: Partial<ProcessorConfig>):
     geminiApiKey: config?.geminiApiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY,
     audioProvider: config?.audioProvider ?? process.env.STT_PROVIDER,
     audioModel: config?.audioModel ?? process.env.OPENAI_STT_MODEL,
+    geminiAudioModel: config?.geminiAudioModel ?? process.env.GEMINI_STT_MODEL,
     audioPrompt: config?.audioPrompt,
     audioGlossary: config?.audioGlossary,
     defaultLanguage: config?.defaultLanguage ?? process.env.DEFAULT_LANGUAGE ?? 'pt',

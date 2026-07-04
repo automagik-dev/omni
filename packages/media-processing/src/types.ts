@@ -46,8 +46,10 @@ export interface ProcessorConfig {
   openaiApiKey?: string;
   /** Preferred audio provider (openai, gemini, groq) */
   audioProvider?: string;
-  /** Preferred audio model */
+  /** Preferred OpenAI-chat audio model (used by the 'openai' provider; never sent to Gemini) */
   audioModel?: string;
+  /** Preferred Gemini audio model (used by the 'gemini' provider; falls back to GEMINI_AUDIO_MODEL) */
+  geminiAudioModel?: string;
   /** Default audio transcription prompt/context */
   audioPrompt?: string;
   /** Default audio glossary */

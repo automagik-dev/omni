@@ -14,6 +14,7 @@
  */
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
+import { instances } from '@omni/db';
 
 // ---------------------------------------------------------------------------
 // We need to test internal classes and functions that are NOT exported.
@@ -26,7 +27,13 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 // ---------------------------------------------------------------------------
 
 // Import exported symbols
-import { type DispatcherCleanup, __test__, resolveQuotedMessage, setupAgentDispatcher } from '../agent-dispatcher';
+import {
+  type DispatcherCleanup,
+  __test__,
+  isFirstPartyInstanceSender,
+  resolveQuotedMessage,
+  setupAgentDispatcher,
+} from '../agent-dispatcher';
 
 // We need to mock the plugin loader to avoid real FS/channel-sdk imports
 mock.module('../loader', () => ({
@@ -2196,6 +2203,111 @@ describe('agent-dispatcher', () => {
       expect(findChatSpy.mock.calls.length).toBe(perDeliveryCalls * 3);
 
       cleanup();
+    });
+  });
+
+  // ======================================================================
+  // First-party cross-instance gate (allowFirstParty opt-out)
+  //
+  // Loop protection drops inbound messages whose sender phone matches ANOTHER
+  // active instance's owner (isFirstPartyInstanceSender). `allowFirstParty`
+  // opts an instance out of that drop so it can reply to messages the operator
+  // sends from their own personal number (another instance's owner).
+  // ======================================================================
+  describe('first-party cross-instance gate (allowFirstParty)', () => {
+    let cleanup: DispatcherCleanup;
+
+    afterEach(() => {
+      cleanup?.();
+    });
+
+    const CURRENT_OWNER = '5511986780008:12@s.whatsapp.net';
+    const OTHER_OWNER = '5512982298888:43@s.whatsapp.net';
+    const OTHER_PHONE = '5512982298888';
+
+    // db mock, branching on the queried table:
+    //  - `select().from(instances).where()` (awaited) → active-owner rows, so
+    //    isFirstPartyInstanceSender sees OTHER_OWNER as a second active owner.
+    //  - `select().from(agents).where().limit(1)` → the agent row for
+    //    applyAgentFkOverrides.
+    function createFirstPartyDb() {
+      const agentRow = {
+        id: 'agent-uuid-1',
+        agentProviderId: 'provider-1',
+        agentType: 'agent',
+        metadata: { providerAgentId: 'default-agent' },
+        configPath: null,
+      };
+      const ownerRows = [{ ownerIdentifier: CURRENT_OWNER }, { ownerIdentifier: OTHER_OWNER }];
+      const insertChain = (row: { eventId?: string }) => ({
+        onConflictDoNothing: () => ({ returning: async () => [{ eventId: row.eventId ?? 'mock-evt' }] }),
+      });
+      return {
+        select: () => ({
+          from: (table: unknown) => ({
+            where: () =>
+              table === instances ? Promise.resolve(ownerRows) : { limit: () => Promise.resolve([agentRow]) },
+          }),
+        }),
+        insert: () => ({ values: (row: { eventId?: string }) => insertChain(row) }),
+      } as unknown as import('@omni/db').Database;
+    }
+
+    // Fire a message whose sender (OTHER_PHONE) is OTHER_OWNER's phone — a
+    // first-party cross-instance sender — into an instance owned by
+    // CURRENT_OWNER. Returns the agentRunner so callers can assert whether
+    // dispatch proceeded (getSenderName is only reached past the gate).
+    async function fireFirstPartyMessage(allowFirstParty: boolean) {
+      const eventBus = createMockEventBus();
+      const agentRunner = {
+        getInstanceWithProvider: mock(async () =>
+          createMockInstance({ ownerIdentifier: CURRENT_OWNER, allowFirstParty }),
+        ),
+        getSenderName: mock(async () => 'Felipe'),
+        run: mock(async () => ({
+          parts: ['resp'],
+          metadata: { runId: 'r', sessionId: 's', status: 'completed' },
+        })),
+      };
+      const services = createMockServices({ agentRunner });
+      cleanup = await setupAgentDispatcher(
+        eventBus as unknown as import('@omni/core').EventBus,
+        services,
+        createFirstPartyDb(),
+      );
+      await eventBus.fire(
+        'message.received',
+        createMessageEvent({
+          payload: {
+            externalId: 'fp-1',
+            chatId: `${OTHER_PHONE}@s.whatsapp.net`,
+            from: OTHER_PHONE,
+            content: { type: 'text', text: 'hi from my other phone' },
+            rawPayload: { resolvedSenderPhone: OTHER_PHONE },
+          },
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return agentRunner;
+    }
+
+    it('is still detected as a first-party sender by isFirstPartyInstanceSender', () => {
+      const detected = isFirstPartyInstanceSender(
+        { from: OTHER_PHONE, rawPayload: { resolvedSenderPhone: OTHER_PHONE } },
+        CURRENT_OWNER,
+        [CURRENT_OWNER, OTHER_OWNER],
+      );
+      expect(detected).toBe(true);
+    });
+
+    it('drops the message when allowFirstParty is false (default loop-protection)', async () => {
+      const agentRunner = await fireFirstPartyMessage(false);
+      expect(agentRunner.getSenderName.mock.calls.length).toBe(0);
+    });
+
+    it('dispatches the message when allowFirstParty is true (opt-out)', async () => {
+      const agentRunner = await fireFirstPartyMessage(true);
+      expect(agentRunner.getSenderName.mock.calls.length).toBe(1);
     });
   });
 });

@@ -232,6 +232,14 @@ const createInstanceSchema = z.object({
     .describe(
       'When true, requests targeting this instance MUST carry a verified X-Genie-Signature. Bearer-only requests get 401. Default: false (additive rollout).',
     ),
+  // First-party cross-instance opt-in. Optional + default(false) — existing
+  // instances keep loop-protection (drop) until an operator opts in.
+  allowFirstParty: z
+    .boolean()
+    .default(false)
+    .describe(
+      'When true, this instance processes (does not drop) inbound messages whose sender matches another active instance owner. Lets an "assistant" instance reply to messages from the operator\'s own personal number. Default: false (loop-protection drop).',
+    ),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
@@ -280,6 +288,7 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   // Strip the .default(false) from the create-time schema so a PATCH that
   // omits this key doesn't silently flip the stored value back to false.
   requireGenieSignature: z.boolean().optional(),
+  allowFirstParty: z.boolean().optional(),
 });
 
 /**
