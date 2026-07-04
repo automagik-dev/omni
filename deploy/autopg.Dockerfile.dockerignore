@@ -1,0 +1,3 @@
+# autopg.Dockerfile is download-only: it copies nothing from the build
+# context, so exclude everything to keep the context upload at zero.
+*
