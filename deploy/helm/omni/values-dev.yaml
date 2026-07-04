@@ -98,3 +98,9 @@ autopg:
       password: "omni-dev-password"
   persistence:
     size: 2Gi
+
+# Expose the api to the host (OrbStack assigns a LoadBalancer IP reachable
+# from the Mac) — the omni CLI on the host points at this endpoint.
+service:
+  type: LoadBalancer
+  port: 8882
