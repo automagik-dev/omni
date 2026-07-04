@@ -25,6 +25,7 @@ import { createLogger, isValidUuid } from '@omni/core';
 import type { Database } from '@omni/db';
 import { mediaContent, messages, omniEvents } from '@omni/db';
 import {
+  GEMINI_AUDIO_MODEL,
   type MediaProcessingService,
   createMediaProcessingService,
   getMediaHealthTracker,
@@ -597,6 +598,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     defaultLanguage,
     audioProvider,
     audioModel,
+    geminiAudioModel,
     audioPrompt,
     imagePrompt,
     videoPrompt,
@@ -608,6 +610,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     services.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
     services.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
     services.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
+    services.settings.getString('stt.gemini.model', 'GEMINI_STT_MODEL', GEMINI_AUDIO_MODEL),
     services.settings.getString('prompt.audio_transcription'),
     services.settings.getString('prompt.image_description'),
     services.settings.getString('prompt.video_description'),
@@ -621,6 +624,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     defaultLanguage,
     audioProvider: audioProvider ?? 'openai',
     audioModel: audioModel ?? 'gpt-audio-mini',
+    geminiAudioModel: geminiAudioModel ?? GEMINI_AUDIO_MODEL,
     audioPrompt: audioPrompt ?? undefined,
   });
   const mediaStorage = new MediaStorageService(db);

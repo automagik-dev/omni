@@ -49,7 +49,13 @@ export type {
 export { DEFAULT_MEDIA_TIMEOUTS, getMediaTimeouts } from './types';
 
 // Models
-export { GEMINI_MODEL, OPENAI_VISION_MODEL, OPENAI_WHISPER_MODEL, GROQ_WHISPER_MODEL } from './models';
+export {
+  GEMINI_MODEL,
+  GEMINI_AUDIO_MODEL,
+  OPENAI_VISION_MODEL,
+  OPENAI_WHISPER_MODEL,
+  GROQ_WHISPER_MODEL,
+} from './models';
 
 // Prompts
 export {
