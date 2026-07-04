@@ -1,24 +1,25 @@
 ---
-description: Batch processing orchestrator for transcription and text extraction
+description: Bulk media processing over chat history — transcription, extraction, redownload. Use when the user wants old audio/images/documents processed at scale.
 arguments:
   - name: args
-    description: Batch operation (e.g., create --type transcribe --instance <id> --days 30)
+    description: Batch operation (e.g., create --type time_based_batch --instance <id> --days 30)
     required: false
 ---
 
 # /omni:batch — Batch Processing
 
-Orchestrate batch media processing jobs — transcription, text extraction, status monitoring, and cost estimation.
+Use for backfilling transcriptions and descriptions across many messages. Always estimate cost before creating. Job types: `targeted_chat_sync`, `time_based_batch`, `media_redownload`.
 
 ## Usage
 
 $ARGUMENTS
 
-## Examples
+## Examples (verified)
 
 ```bash
-omni batch estimate --instance my-wa --type transcribe --days 7
-omni batch create --instance my-wa --type transcribe --chat <chat-id> --days 30 --limit 100
-omni batch status <job-id> --watch --interval 2000
-omni batch cancel <job-id>
+omni batch estimate --instance <id> --type time_based_batch --days 7 --content-types audio --json
+omni batch create --instance <id> --type targeted_chat_sync --chat <chatId> --limit 200 --json
+omni batch status <jobId> --watch --interval 2000
 ```
+
+Estimate-then-create pattern, content types, list/cancel: omni-ops skill § Batch.
