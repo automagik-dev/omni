@@ -1,20 +1,36 @@
 {{- if .Values.provisionJob.enabled -}}
+{{- /*
+Deliberately a REGULAR resource, NOT a post-install hook (H3): under
+`helm install --wait`, hooks only run after all main resources are Ready —
+but omni-api cannot become Ready until the role this Job creates exists, so a
+hook deadlocks the first install (omni-api not Ready → --wait blocks → hook
+never runs → timeout). A pre-install hook can't work either: at pre-install
+time the autopg StatefulSet does not exist yet (hooks block resource
+creation), so there is no server to provision. As a regular resource the Job
+is created alongside the StatefulSet and runs as soon as postgres accepts
+connections; omni-api's own boot retry loop rides out the gap.
+
+Job specs are immutable, so each release revision gets its own Job name and
+finished Jobs are garbage-collected via ttlSecondsAfterFinished. The pod's
+app.kubernetes.io/name is suffixed -provision so the autopg Services (which
+select on name+instance) never route :5432 traffic to this pod, and so the
+umbrella chart's NetworkPolicy can whitelist it precisely.
+*/ -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "autopg.fullname" . }}-provision
+  name: {{ include "autopg.fullname" . }}-provision-{{ .Release.Revision }}
   labels:
     {{- include "autopg.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "5"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    app.kubernetes.io/component: provision
 spec:
   backoffLimit: {{ .Values.provisionJob.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.provisionJob.ttlSecondsAfterFinished }}
   template:
     metadata:
       labels:
-        {{- include "autopg.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/name: {{ include "autopg.name" . }}-provision
+        app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: provision
     spec:
       restartPolicy: Never
@@ -26,7 +42,7 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: provision
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "autopg.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: PGHOST

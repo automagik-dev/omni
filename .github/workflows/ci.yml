@@ -104,9 +104,11 @@ jobs:
 
       - name: Wait for database
         run: |
-          for i in $(seq 1 30); do
-            pg_isready -h localhost -p 5432 >/dev/null 2>&1 && \
-              echo "Database ready" && exit 0 || sleep 1
+          for _ in $(seq 1 30); do
+            if pg_isready -h localhost -p 5432 >/dev/null 2>&1; then
+              echo "Database ready" && exit 0
+            fi
+            sleep 1
           done
           echo "Database failed to start" && exit 1
 
@@ -139,6 +141,72 @@ jobs:
         run: bun test --env-file=.env
         env:
           NODE_ENV: test
+
+  remote-media-tests:
+    name: Remote Media (S3/MinIO integration)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Setup environment
+        run: |
+          cp .env.example .env
+          sed -i 's/localhost:8432/localhost:5432/g; s/PGSERVE_PORT=8432/PGSERVE_PORT=5432/' .env
+
+      - name: Test (S3/MinIO integration suites)
+        # The shared MinIO harness (packages/api/src/__tests__/minio-harness.ts)
+        # docker-runs its OWN `minio/minio` container on a random high port, so
+        # no `services:` container or endpoint env is needed — only Docker on
+        # the runner plus the `MINIO_INTEGRATION=1` opt-in. Without that flag
+        # the suites deterministically skip whenever `CI=true` (PR #770 H8).
+        # These suites use mocked DBs and no NATS, so this job skips the
+        # autopg/NATS bring-up the quality gate needs.
+        shell: bash
+        env:
+          NODE_ENV: test
+          MINIO_INTEGRATION: '1'
+        run: |
+          bun test --env-file=.env \
+            packages/api/src/services/__tests__/s3-backend-remote.test.ts \
+            packages/api/src/services/__tests__/batch-jobs-remote.test.ts \
+            packages/api/src/plugins/__tests__/media-remote-e2e.test.ts \
+            packages/api/src/plugins/__tests__/media-processor-remote.test.ts \
+            packages/api/src/plugins/__tests__/agent-dispatcher-media-remote.test.ts \
+            2>&1 | tee remote-media-tests.log
+
+      - name: Verify suites executed (not skipped)
+        # Guard against the H8 regression: with the MinIO gate closed the run
+        # still exits 0 — every test skips ("0 pass") and no real S3 backend is
+        # ever constructed. Demand positive evidence of execution so a silent
+        # re-skip (renamed opt-in env, Docker gone from the runner) fails
+        # loudly instead of reporting a green no-op.
+        run: |
+          if ! grep -q "Initialized S3 media backend" remote-media-tests.log; then
+            echo "::error::No S3 backend was constructed — the S3/MinIO suites did not execute (PR #770 H8)"
+            exit 1
+          fi
+          if grep -qE "^ 0 pass" remote-media-tests.log; then
+            echo "::error::0 tests passed — the S3/MinIO suites were skipped, not executed (PR #770 H8)"
+            exit 1
+          fi
+          echo "S3/MinIO suites executed against a real MinIO (S3 backend init lines + non-zero pass count present)"
 
   smoke-test:
     name: Smoke Test (Fresh Environment)
@@ -200,9 +268,11 @@ jobs:
 
       - name: Wait for database
         run: |
-          for i in $(seq 1 30); do
-            pg_isready -h localhost -p 5432 >/dev/null 2>&1 && \
-              echo "Database ready" && exit 0 || sleep 1
+          for _ in $(seq 1 30); do
+            if pg_isready -h localhost -p 5432 >/dev/null 2>&1; then
+              echo "Database ready" && exit 0
+            fi
+            sleep 1
           done
           echo "Database failed to start" && exit 1
 
@@ -226,9 +296,11 @@ jobs:
 
       - name: Wait for API
         run: |
-          for i in $(seq 1 15); do
-            curl --fail --silent http://localhost:8882/api/v2/health > /dev/null 2>&1 && \
-              echo "API is healthy" && exit 0 || sleep 2
+          for _ in $(seq 1 15); do
+            if curl --fail --silent http://localhost:8882/api/v2/health > /dev/null 2>&1; then
+              echo "API is healthy" && exit 0
+            fi
+            sleep 2
           done
           echo "API failed to start" && exit 1
 
