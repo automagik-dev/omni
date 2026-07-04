@@ -70,6 +70,14 @@ ENV NODE_ENV=production \
     HOME=/home/bun
 WORKDIR /app
 
+# ffmpeg: the audio processor (packages/media-processing/src/processors/audio.ts)
+# normalizes/transcodes WhatsApp opus voice notes before handing them to the
+# transcription provider. Installed here (as root, before USER bun) so audio STT
+# works out of the box; the slim base omits it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Production deps + the server bundle + migrations.
 COPY --from=prod-deps /prod/node_modules ./node_modules
 COPY --from=prod-deps /prod/package.json ./package.json
