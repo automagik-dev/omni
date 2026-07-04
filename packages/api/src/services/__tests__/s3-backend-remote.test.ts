@@ -17,7 +17,7 @@ import { type S3BackendConfig, S3MediaBackend } from '@omni/channel-sdk';
 import type { Database } from '@omni/db';
 import {
   createBucket,
-  dockerAvailable,
+  minioIntegrationEnabled,
   getSharedMinio,
   harnessFetch,
   uniqueBucket,
@@ -27,8 +27,8 @@ import { MediaStorageService } from '../media-storage';
 const BUCKET = uniqueBucket('omni-media-test');
 const REGION = 'us-east-1';
 
-const hasDocker = dockerAvailable();
-const skipReason = hasDocker ? '' : 'Docker unavailable — skipping MinIO S3 round-trip';
+const hasDocker = minioIntegrationEnabled();
+const skipReason = hasDocker ? '' : 'MinIO integration disabled (CI opt-in / no Docker) — skipping MinIO S3 round-trip';
 
 describe.skipIf(!hasDocker)('S3MediaBackend against MinIO', () => {
   let config: S3BackendConfig;
