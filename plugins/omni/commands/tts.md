@@ -1,24 +1,25 @@
 ---
-description: TTS voice selector and send voice note
+description: TTS voice selector and voice-note sender. Use to list available voices or send synthesized speech to a chat.
 arguments:
   - name: args
     description: TTS options (e.g., voices, or --to <recipient> --tts "text" --voice-id <id>)
     required: false
 ---
 
-# /omni:tts — Text-to-Speech
+# /omni:tts — Voice Notes
 
-List available TTS voices and send synthesized voice notes.
+Use to pick a TTS voice or send text as a synthesized voice note.
 
 ## Usage
 
 $ARGUMENTS
 
-## Examples
+## Examples (verified)
 
 ```bash
-omni tts voices
-omni tts voices --json | jq '.[] | {voiceId, name, category}'
-omni send --to 5511999 --tts "Hello, this is a voice note!" --instance my-wa
-omni send --to 5511999 --tts "[excited] Great news!" --voice-id xWdpADtEio43ew1zGxUQ --instance my-wa
+omni tts voices --json
+omni send --instance <id> --to +5511999 --tts "Hello!" --voice-id <elevenlabs-id>
+omni speak "On my way" --voice Kore   # inside a turn — chat context pre-set
 ```
+
+Providers (gemini/openai/elevenlabs), style prompts, language: omni-agent skill (speak verb) and `omni speak --help`.

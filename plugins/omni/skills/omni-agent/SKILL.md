@@ -4,114 +4,76 @@ description: "Agent communication toolkit — verb commands for WhatsApp, Telegr
 allowed-tools: Bash(omni *)
 ---
 
-# Omni Agent — Verb Reference
+# Omni Agent — Verbs
 
-Concise command reference for AI agents operating in turn-based mode. All verbs target the current conversation context (set via env vars).
+Verb commands for agents replying inside a conversation. In turn-based mode the bridge pre-sets the context — no `omni use` / `omni open` needed; every verb routes automatically.
 
-## Verb Commands
+| Env var | Meaning |
+|---------|---------|
+| `OMNI_INSTANCE` | Channel instance ID (which WhatsApp/Telegram account) |
+| `OMNI_CHAT` | Chat JID (the conversation) |
+| `OMNI_MESSAGE` | Inbound message ID that triggered this turn |
+| `OMNI_AGENT` | Your agent identifier |
 
-### omni say — Send text reply
+Out-of-turn (cron, manual): set context first — `omni use <instance-id>`, `omni open <chat-jid>`; check with `omni where`.
+
+## Verbs
+
 ```bash
-omni say "Hello, how can I help?"
+omni say "Your order shipped yesterday."             # text to the open chat; --reply [msg-id] quote-replies
+omni speak "Welcome!" --voice Kore --language pt-BR  # TTS voice note (providers: gemini, openai, elevenlabs)
+omni imagine "a city skyline at sunset"              # generate + send image
+omni film "waves crashing in slow motion"            # generate + send video (Veo)
+omni music "calm lo-fi with rain"                    # generate + send audio (Lyria)
+omni react "👍" --message <id>                       # emoji reaction; defaults to the trigger message
+omni see /path/img.jpg "what product is this?"       # describe image/video (Gemini Vision)
+omni listen /path/audio.ogg --language pt            # transcribe an audio file
+omni history --limit 20 --json                       # recent messages; --before <msg-id> paginates
+omni done "Final answer."                            # send final message + close turn — ATOMIC
 ```
-Send a text message to the current chat. Supports markdown formatting.
 
-### omni speak — Send voice note
-```bash
-omni speak "Welcome to our service" --voice Kore --language pt-BR
-```
-Generate a voice note via Gemini TTS and send it. Available voices: Kore, Charon, Aoede, Fenrir, Puck, and others. Defaults to English if `--language` is omitted.
+## Closing the turn — omni done
 
-### omni imagine — Generate and send image
-```bash
-omni imagine "a futuristic city skyline at sunset"
-```
-Generate an image via Gemini and send it to the current chat. Provide a descriptive prompt for best results.
+REQUIRED as the last action of every turn; without it the turn hangs until server timeout.
 
-### omni react — React to a message
-```bash
-omni react "👍" --message 3A01B2C3D4E5F6
-```
-Add an emoji reaction to a specific message. Use `omni history` first to get message IDs.
+- `omni done "<text>"` — sends `<text>` to the user as the final message AND closes the turn. Preferred.
+- `omni done --skip --reason "nothing to add"` — close silently.
+- `omni done --react "👍"` — close with a reaction only.
+- `omni done --media <path> --caption "<text>"` — close with media.
 
-### omni see — Describe image or video
-```bash
-omni see /path/to/image.jpg "What product is shown here?"
-```
-Analyze an image or video file via Gemini Vision. The optional prompt guides the description. Useful for processing received media.
+## Turn lifecycle
 
-### omni listen — Transcribe audio
-```bash
-omni listen /path/to/audio.ogg --language pt
-```
-Transcribe an audio file via Groq Whisper. Use `--language` to hint the spoken language for better accuracy.
+1. Bridge delivers the message (env vars set).
+2. `omni history --limit 5` if you need context.
+3. Reply with verbs (`say`, `speak`, `imagine`, ...) for mid-turn updates.
+4. `omni done "<final>"` — always last.
 
-### omni history — Read conversation messages
-```bash
-omni history --limit 20 --json
-```
-Retrieve recent messages from the current chat. Returns message IDs, senders, timestamps, and content. Use `--before <id>` to paginate backwards. Use `--json` for machine-readable output.
+A message counts as sent when the command exits 0 — report delivery only after that.
 
-### omni done — Close the turn
-```bash
-omni done "Handled customer inquiry about pricing"
-```
-Signal that the agent has finished processing the current message. **REQUIRED as the last action in every turn.** The optional text is logged as a summary but not sent to the user.
+## Send edge cases
 
-## Send Edge Cases
-
-For message types not covered by verbs, use `omni send` directly:
+`omni send` targets any recipient (`--to` accepts a phone, WA JID, or chat/person UUID; `--instance <id>` picks the account). Inside a turn prefer verbs — `send` bypasses turn tracking.
 
 ```bash
-omni send --media /path/to/file.pdf --caption "Here is the document"
-omni send --poll "Which option?" --options "A,B,C"
-omni send --location -23.5505 -46.6333 --name "Office"
-omni send --sticker /path/to/sticker.webp
+omni send --to +5511999999999 --text "Hi" --instance <id>
+omni send --media ./doc.pdf --caption "The document" --to <chat>
+omni send --tts "Spoken version of this text" --to <chat>
+omni send --location --lat -23.5505 --lng -46.6333 --address "Av. Paulista" --to <chat>
+omni send --poll "Which option?" --options "A,B,C" --to <chat>      # Discord
+omni send --sticker <url-or-base64> --to <chat>
+omni send --contact --name "Ana" --phone +5511888887777 --to <chat>
 omni send --reaction "❤️" --message <id>
 ```
 
-## Message Operations
+## Messages and chats
 
 ```bash
-omni messages search "refund request"     # Full-text search across messages
-omni messages get <id>                     # Get a specific message by ID
-omni messages read <id>                    # Send read receipt for a message
+omni messages search "refund request" --since 7d   # full-text, includes transcriptions/descriptions
+omni messages get <id>                             # full message detail
+omni messages read <id>                            # send read receipt
+omni chats list --unread                           # also --sort activity|unread|name, --attention
+omni chats get <id>
+omni chats messages <chatId> --json                # read any chat, not just the open one
 ```
 
-## Chat Operations
-
-```bash
-omni chats list                            # List all chats for the current instance
-omni chats list --unread                   # List chats with unread messages
-omni chats get <id>                        # Get chat details (name, participants, metadata)
-```
-
-## Turn-Based Lifecycle
-
-The standard agent turn follows this pattern:
-
-1. **Receive** — Bridge delivers a message event to the agent
-2. **Context** — `omni history` to load recent conversation (optional, for context)
-3. **Process** — Understand intent, query data, reason about the reply
-4. **Reply** — Send one or more responses via verbs (`say`, `speak`, `imagine`)
-5. **Close** — `omni done` to signal turn completion (REQUIRED)
-
-Example turn:
-```bash
-omni history --limit 5          # See what was said recently
-omni say "Your order #1234 shipped yesterday. Tracking: XYZ789."
-omni done "Answered shipping status question"
-```
-
-## Context
-
-In turn-based mode, these environment variables are pre-set by the bridge:
-
-| Variable | Purpose |
-|----------|---------|
-| `OMNI_INSTANCE` | Channel instance ID (identifies which WhatsApp/Telegram/etc. account) |
-| `OMNI_CHAT` | Chat JID (identifies the conversation) |
-| `OMNI_MESSAGE` | Inbound message ID (the message that triggered this turn) |
-| `OMNI_AGENT` | Agent identifier (your agent name) |
-
-These are injected automatically — there is no need to run `omni use` or `omni open` in turn-based mode. All verb commands read these env vars to route messages to the correct destination.
+More via `omni messages --help` (`edit`, `delete`, `star`, `remove-reaction`) and `omni chats --help` (`archive`, `pin`, `mute`, `label`, `participants`, `read`).

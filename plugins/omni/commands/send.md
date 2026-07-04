@@ -1,24 +1,25 @@
 ---
-description: Send any message type to any Omni channel instance
+description: Send any message type out-of-turn to any Omni channel instance — text, media, TTS, polls, embeds. Inside a turn, use the verbs (omni say / done) instead.
 arguments:
   - name: args
     description: Message options (e.g., --to <recipient> --text "Hello" --instance <id>)
     required: false
 ---
 
-# /omni:send — Send Message
+# /omni:send — Out-of-Turn Send
 
-Send messages via the omni CLI. Supports text, TTS, media, reactions, stickers, embeds, polls, and presence indicators.
+Use for proactive delivery (crons, alerts, cross-chat). Inside an Omni turn (`OMNI_INSTANCE` set) use `omni say` / `omni done` — never `send`.
 
 ## Usage
 
 $ARGUMENTS
 
-## Examples
+## Examples (verified)
 
 ```bash
-omni send --instance my-wa --to 5511999999999@s.whatsapp.net --text "Hello from Omni"
-omni send --instance telegram-bot --to 123456789 --tts "Voice message text"
-omni send --instance my-wa --to 5511999 --media ./photo.jpg --caption "Check this"
-omni send --instance discord-bot --to channel-id --embed --title "Alert" --description "Server OK" --color "#00ff00"
+omni send --instance <id> --to +5511999999999 --text "Hello"
+omni send --instance <id> --to <jid-or-uuid> --media ./photo.jpg --caption "Check this"
+omni send --instance <id> --to <chatId> --tts "Voice message" --voice-id <elevenlabs-id>
 ```
+
+`--to` accepts a WA JID, phone (+55…), or Omni chat/person UUID. Polls, embeds, stickers, forwards, presence: omni-agent skill (send edge cases).
