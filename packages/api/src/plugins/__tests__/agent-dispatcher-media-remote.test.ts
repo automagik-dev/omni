@@ -9,8 +9,10 @@
  *     (remote) / local path (local) into the in-text media line.
  *   - A presign minted with a short TTL is rejected by MinIO once it expires.
  *
- * If Docker is unavailable the whole suite skips with a clear reason (mirrors
- * the Group-1 s3-backend round-trip test).
+ * If Docker is unavailable the MinIO-backed suite skips with a clear reason
+ * (mirrors the Group-1 s3-backend round-trip test). The local-mode tests need
+ * no Docker at all, so they live in an ungated describe below (same split as
+ * media-processor-remote.test.ts) and run everywhere — including plain CI.
  */
 
 import { beforeAll, describe, expect, it } from 'bun:test';
@@ -61,7 +63,6 @@ function bufferedMessage(opts: {
 
 describe.skipIf(!hasDocker)('remote-mode media dispatch (MinIO)', () => {
   let remoteService: MediaStorageService;
-  let localService: MediaStorageService;
   const imageKey = 'inst-1/2026-07/img-1.png';
   const audioKey = 'inst-1/2026-07/aud-1.ogg';
   const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]);
@@ -82,11 +83,6 @@ describe.skipIf(!hasDocker)('remote-mode media dispatch (MinIO)', () => {
 
     const remoteBackend = new S3MediaBackend(s3Config);
     remoteService = new MediaStorageService({} as unknown as Database, undefined, remoteBackend);
-    localService = new MediaStorageService(
-      {} as unknown as Database,
-      MEDIA_BASE_PATH,
-      new LocalMediaBackend(MEDIA_BASE_PATH),
-    );
 
     // Seed the objects the dispatch code will presign.
     await remoteBackend.store({ key: imageKey, buffer: imageBytes, mimeType: 'image/png' });
@@ -121,6 +117,42 @@ describe.skipIf(!hasDocker)('remote-mode media dispatch (MinIO)', () => {
     expect(files).toHaveLength(0);
   });
 
+  it('remote: processed-media text carries the presigned URL', async () => {
+    const ref = await resolveDispatchMediaPath(remoteService, imageKey);
+    expect(ref).toContain(`/${BUCKET}/${imageKey}`);
+    expect(ref).toContain('X-Amz-Signature=');
+
+    const text = formatProcessedMedia('image', ref, 'a cat', true);
+    expect(text).toContain(ref!);
+    expect(text).toContain('a cat');
+    expect(text).toContain('http');
+  });
+
+  it('rejects an expired presign (TTL honored by MinIO)', async () => {
+    const url = await remoteService.presignedUrl(imageKey, 1);
+    // Wait past the 1s TTL (plus MinIO clock-skew slack).
+    await new Promise((r) => setTimeout(r, 2500));
+    const res = await harnessFetch(url);
+    expect(res.status).not.toBe(200);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  }, 15_000);
+});
+
+// Local-mode dispatch needs no MinIO/Docker: resolution is pure path math over
+// MEDIA_BASE_PATH (no filesystem reads). Ungated so it runs everywhere,
+// including the plain CI test job (PR #770 MED-4) — mirrors the
+// media-processor-remote.test.ts "local read (no MinIO)" split.
+describe('local-mode media dispatch (no MinIO)', () => {
+  let localService: MediaStorageService;
+
+  beforeAll(() => {
+    localService = new MediaStorageService(
+      {} as unknown as Database,
+      MEDIA_BASE_PATH,
+      new LocalMediaBackend(MEDIA_BASE_PATH),
+    );
+  });
+
   it('local: extractMediaFiles resolves a local path into ProviderFile.path (no url)', async () => {
     const files = await extractMediaFiles(
       [bufferedMessage({ type: 'image', mimeType: 'image/png', mediaUrl: '/api/v2/media/inst-1/2026-07/img-1.png' })],
@@ -133,17 +165,6 @@ describe.skipIf(!hasDocker)('remote-mode media dispatch (MinIO)', () => {
     expect(files[0]?.url).toBeUndefined();
   });
 
-  it('remote: processed-media text carries the presigned URL', async () => {
-    const ref = await resolveDispatchMediaPath(remoteService, imageKey);
-    expect(ref).toContain(`/${BUCKET}/${imageKey}`);
-    expect(ref).toContain('X-Amz-Signature=');
-
-    const text = formatProcessedMedia('image', ref, 'a cat', true);
-    expect(text).toContain(ref!);
-    expect(text).toContain('a cat');
-    expect(text).toContain('http');
-  });
-
   it('local: processed-media text carries the local path', async () => {
     const ref = await resolveDispatchMediaPath(localService, 'inst-1/2026-07/img-1.png');
     expect(ref).toBe(resolve(join(MEDIA_BASE_PATH, 'inst-1/2026-07/img-1.png')));
@@ -152,15 +173,6 @@ describe.skipIf(!hasDocker)('remote-mode media dispatch (MinIO)', () => {
     expect(text).toContain(ref!);
     expect(text).not.toContain('X-Amz-Signature');
   });
-
-  it('rejects an expired presign (TTL honored by MinIO)', async () => {
-    const url = await remoteService.presignedUrl(imageKey, 1);
-    // Wait past the 1s TTL (plus MinIO clock-skew slack).
-    await new Promise((r) => setTimeout(r, 2500));
-    const res = await harnessFetch(url);
-    expect(res.status).not.toBe(200);
-    expect(res.status).toBeGreaterThanOrEqual(400);
-  }, 15_000);
 });
 
 describe.skipIf(hasDocker)('remote-mode media dispatch (MinIO) (skipped)', () => {
