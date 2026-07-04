@@ -26,7 +26,11 @@ help: ## Show this help
 
 .PHONY: build
 build: ## Build omni-api image (arm64) into OrbStack's shared store
-	docker build --platform $(PLATFORM) -f $(CURDIR)/Dockerfile -t $(IMAGE_REF) $(ROOT)
+	# buildx forces BuildKit regardless of DOCKER_BUILDKIT/daemon defaults, so
+	# deploy/Dockerfile.dockerignore is always honored (classic builder would
+	# silently ship the full context: .git, node_modules, data/). --load lands
+	# the image in the local store even under a non-default builder driver.
+	docker buildx build --platform $(PLATFORM) -f $(CURDIR)/Dockerfile -t $(IMAGE_REF) --load $(ROOT)
 
 .PHONY: lint
 lint: ## helm lint the umbrella chart

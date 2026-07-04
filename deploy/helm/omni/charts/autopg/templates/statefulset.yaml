@@ -54,7 +54,7 @@ spec:
               mountPath: /data
       containers:
         - name: autopg
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "autopg.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["autopg", "postmaster"]
           args:
@@ -87,17 +87,19 @@ spec:
                   - -ec
                   - |
                     HBA=/var/lib/autopg/data/pgdata/pg_hba.conf
-                    {{- if eq .Values.hostAuth.cidr "all" }}
-                    RULE="host all all all {{ .Values.hostAuth.method }}"
-                    {{- else }}
-                    RULE="host all all {{ .Values.hostAuth.cidr }} {{ .Values.hostAuth.method }}"
-                    {{- end }}
                     for i in $(seq 1 90); do
                       pg_isready -h /var/run/autopg -p {{ .Values.port }} -q && break
                       sleep 2
                     done
+                    CHANGED=0
+                    {{- range .Values.hostAuth.cidrs }}
+                    RULE="host all all {{ . }} {{ $.Values.hostAuth.method }}"
                     if ! grep -qxF "$RULE" "$HBA" 2>/dev/null; then
                       printf '# added by autopg chart (in-cluster peer access)\n%s\n' "$RULE" >> "$HBA"
+                      CHANGED=1
+                    fi
+                    {{- end }}
+                    if [ "$CHANGED" = "1" ]; then
                       psql -h /var/run/autopg -p {{ .Values.port }} -U postgres -d postgres \
                         -c 'SELECT pg_reload_conf();'
                     fi
@@ -128,10 +130,17 @@ spec:
               mountPath: /var/lib/autopg/settings.json
               subPath: settings.json
               readOnly: true
+            # The postmaster's --socket-dir: an explicit writable emptyDir so
+            # the socket does not depend on a writable container rootfs (and
+            # survives a future readOnlyRootFilesystem hardening).
+            - name: run
+              mountPath: /var/run/autopg
       volumes:
         - name: settings
           configMap:
             name: {{ include "autopg.fullname" . }}-settings
+        - name: run
+          emptyDir: {}
         {{- if not .Values.persistence.enabled }}
         - name: data
           emptyDir: {}

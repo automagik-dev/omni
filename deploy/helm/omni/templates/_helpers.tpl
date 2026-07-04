@@ -38,11 +38,23 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
-Selector labels for the omni-api workload.
+Base selector labels shared by every workload in this chart. The component
+label is deliberately NOT set here — each workload appends its own
+app.kubernetes.io/component exactly once (api/minio/nats/...), so no manifest
+carries a duplicate key (kubeconform -strict / kubectl --strict reject those).
 */}}
 {{- define "omni.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "omni.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Selector labels for the omni-api workload. Rendered output is IDENTICAL to the
+pre-split selector (name+instance+component: api), so the api Deployment's
+immutable spec.selector is stable across upgrades.
+*/}}
+{{- define "omni.apiSelectorLabels" -}}
+{{ include "omni.selectorLabels" . }}
 app.kubernetes.io/component: api
 {{- end }}
 
@@ -65,12 +77,48 @@ Name of the chart-minted Secret (assembled DATABASE_URL + optional secret.env).
 {{- end }}
 
 {{/*
+The autopg subchart's fullname as seen from this parent chart — mirrors
+charts/autopg/templates/_helpers.tpl "autopg.fullname" (subchart values are
+coalesced under .Values.autopg, so nameOverride/fullnameOverride are visible).
+*/}}
+{{- define "omni.autopg.fullname" -}}
+{{- $av := .Values.autopg | default dict -}}
+{{- if $av.fullnameOverride -}}
+{{- $av.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default "autopg" $av.nameOverride -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Name of the Secret omni-api reads DATABASE_URL from (Option A), or "" when the
+chart assembles the URL itself (Option B). Resolution order:
+  1. database.existingSecret — explicit operator override.
+  2. bundled autopg (autopg.enabled) with no database.host set — the autopg
+     subchart publishes <release>-autopg-app holding a ready, percent-encoded
+     DATABASE_URL (see charts/autopg/templates/secret.yaml).
+  3. "" — Option B: assemble from database.* (requires database.host).
+*/}}
+{{- define "omni.databaseSecretName" -}}
+{{- if .Values.database.existingSecret -}}
+{{- .Values.database.existingSecret -}}
+{{- else if and .Values.autopg.enabled (not .Values.database.host) -}}
+{{- printf "%s-app" (include "omni.autopg.fullname" .) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Whether the chart-minted Secret renders at all: it does when DATABASE_URL is
-assembled here (no external DB secret) OR when secret.env has entries.
+assembled here (no external/autopg DB secret) OR when secret.env has entries.
 Returns "true" / "".
 */}}
 {{- define "omni.mintsSecret" -}}
-{{- if or (not .Values.database.existingSecret) (gt (len (default (dict) .Values.secret.env)) 0) -}}
+{{- if or (not (include "omni.databaseSecretName" .)) (gt (len (default (dict) .Values.secret.env)) 0) -}}
 true
 {{- end -}}
 {{- end }}
