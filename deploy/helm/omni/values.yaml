@@ -8,32 +8,44 @@ nameOverride: ""
 fullnameOverride: ""
 
 # ---- omni-api image ---------------------------------------------------------
+# Published by .github/workflows/image-publish.yml on merges to main as
+# ghcr.io/automagik-dev/omni-api:v<packages/cli version> (plus :main and
+# :main-<sha12>). tag "" => v<Chart.appVersion> — Chart.yaml appVersion tracks
+# the latest PUBLISHED release. The dev overlay swaps in a locally-built image
+# (repository omni-api, tag dev, pullPolicy Never).
 image:
-  repository: omni-api
-  tag: dev
-  # OrbStack shares its image store with k8s, so a locally-built image needs
-  # no registry. Use Never (dev) / IfNotPresent or Always (prod).
+  repository: ghcr.io/automagik-dev/omni-api
+  tag: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
 # ---- replicas + scaling -----------------------------------------------------
-# omni-api is STATELESS: WhatsApp/Baileys auth state is persisted in Postgres
-# via the storage abstraction (createStorageAuthState / clearAuthState), not on
-# local disk — so there is no per-pod session file to anchor. Replicas share
-# session state through the DB, so the HPA is ON by default.
+# Default: ONE replica, HPA OFF. omni-api persists WhatsApp/Baileys auth state
+# in Postgres (no per-pod session file), but a single WhatsApp *credential*
+# still maps to ONE live Baileys socket at the protocol level — 2+ replicas
+# binding the same credential risk key-ratchet corruption, duplicate sends,
+# and session resets that force re-pairing. Until single-socket ownership
+# (leader election) exists, scale out ONLY for HTTP/API traffic and
+# non-WhatsApp channels, and do so deliberately.
 #
-# NOTE for integration: a single WhatsApp *credential* still maps to one live
-# Baileys socket at the protocol level — validate concurrent-replica behaviour
-# for WhatsApp instances (key-ratchet races) at integration. The horizontal
-# win is unconditional for HTTP/API traffic and non-WhatsApp channels.
-replicaCount: 2
+# When you do run >1 replica (replicaCount > 1 or autoscaling.enabled), the
+# chart automatically adds a PodDisruptionBudget (podDisruptionBudget below)
+# and soft pod anti-affinity, and migrate-on-boot serializes via a Postgres
+# advisory lock.
+replicaCount: 1
 
 autoscaling:
-  enabled: true
-  minReplicas: 2
+  enabled: false
+  minReplicas: 1
   maxReplicas: 5
   targetCPUUtilizationPercentage: 75
   targetMemoryUtilizationPercentage: ""
+
+# PodDisruptionBudget — rendered only when >1 replica is possible (a
+# minAvailable:1 PDB on a single replica would block node drains).
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
 
 # Stateless → RollingUpdate for zero-downtime rollouts.
 strategy:
@@ -55,16 +67,15 @@ ingress:
   tls: []
 
 # ---- app config (non-secret → ConfigMap / plain env) ------------------------
+# The containerized API is driven entirely by DATABASE_URL + NATS_URL.
+# (PGSERVE_EMBEDDED / NATS_MANAGED are NOT set: embedded pgserve was removed —
+# the API only warns if PGSERVE_EMBEDDED=true — and NATS_MANAGED is read only
+# by the PM2 ecosystem config, which does not run in the container.)
 config:
   API_HOST: "0.0.0.0"
   API_PORT: "8882"
   NODE_ENV: "production"
   LOG_LEVEL: "info"
-  # Split-out infra: use the external autopg pod + nats StatefulSet, NOT omni's
-  # in-process embedded pgserve / self-managed nats. Without these the api tries
-  # to boot its own pg/nats and ignores DATABASE_URL / NATS_URL.
-  PGSERVE_EMBEDDED: "false"
-  NATS_MANAGED: "false"
 
 # Free-form extra non-secret env (key: value) merged into the ConfigMap.
 extraConfig: {}
@@ -79,23 +90,24 @@ env:
 # omni-api needs DATABASE_URL=postgresql://<role>:<pw>@<host>:5432/omni, where
 # <role> OWNS the omni tables (migrations ALTER them on boot).
 #
-# INTEGRATION (lead): the autopg subchart provisions db `omni` + a scoped owner
-# role and (ideally) publishes a Secret containing a ready DATABASE_URL. Point
-# omni at it via database.existingSecret / database.urlKey. Otherwise the chart
-# assembles DATABASE_URL from the fields below and stores it in the omni Secret.
+# The autopg subchart provisions db `omni` + a scoped owner role and publishes
+# Secret `<release>-autopg-app` holding a ready, percent-encoded DATABASE_URL.
+# When autopg.enabled and both existingSecret/host below are empty, the chart
+# wires omni-api to that Secret AUTOMATICALLY — the defaults just work.
 database:
-  # Option A (preferred at integration): consume a Secret that already holds a
-  # full DATABASE_URL (e.g. the one autopg emits). When set, host/user/password
-  # below are ignored.
-  existingSecret: ""      # e.g. "<release>-autopg-app"
-  urlKey: "DATABASE_URL"  # key within existingSecret holding the URL
+  # Option A: consume a Secret that already holds a full DATABASE_URL. When
+  # set, host/user/password below are ignored. Leave empty with autopg.enabled
+  # to auto-consume `<release>-autopg-app`.
+  existingSecret: ""
+  urlKey: "DATABASE_URL"  # key within the Secret holding the URL
 
-  # Option B (chart-assembled URL, stored in the omni Secret):
-  host: ""                # REQUIRED if existingSecret empty → autopg Service DNS
+  # Option B (chart-assembled URL, stored in the omni Secret; used when
+  # existingSecret is empty AND host is set — e.g. an external Postgres):
+  host: ""                # external Postgres / autopg Service DNS
   port: 5432
   name: omni
   user: omni              # scoped role that OWNS the omni tables
-  password: ""            # set via -f / --set-string
+  password: ""            # set via -f / --set-string (percent-encoded at render)
   sslmode: ""             # e.g. "disable" / "require"; empty → omit
 
 # ---- secret (DB creds + optional provider keys) -----------------------------
@@ -175,12 +187,29 @@ extraVolumeMounts: []
 # Subchart / bundled-dependency values
 # =============================================================================
 
-# ---- autopg (placeholder subchart; lead vendors the real chart) -------------
+# ---- autopg (vendored PostgreSQL 18 subchart) --------------------------------
+# The REAL autopg chart is vendored at charts/autopg/ — it is NOT a
+# placeholder. It runs Postgres 18 as a single-replica StatefulSet, provisions
+# db `omni` + a scoped owner role, and publishes Secret `<release>-autopg-app`
+# with a ready DATABASE_URL that this chart auto-consumes (see database.*).
+# Its Service is `<release>-autopg:5432`. Full knobs: charts/autopg/values.yaml
+# (set them under this `autopg:` key).
+#
+# SECURITY (read before enabling on a shared cluster): autopg's postmaster
+# HARDCODES superuser postgres/postgres and it cannot be rotated (rotation
+# crash-loops the pod — see charts/autopg/values.yaml `auth:`). Keeping
+# enabled=true therefore assumes (1) a single-tenant cluster/namespace, and
+# (2) the NetworkPolicy this chart ships (networkPolicy.enabled below)
+# restricting :5432 to omni-api + the provision Job — which only bites on
+# CNIs that enforce NetworkPolicy. On shared clusters without enforcement,
+# set enabled=false and point database.* at a managed Postgres instead.
 autopg:
   enabled: true
-  # The lead's real autopg values go here. The placeholder chart at
-  # charts/autopg/ only needs `enabled`. Document the Service name it exposes
-  # and set `database.host` (above) to it, e.g. "<release>-autopg".
+
+# NetworkPolicy around the bundled autopg: allow :5432 ingress only from
+# omni-api and autopg's provision Job. Rendered only when autopg.enabled.
+networkPolicy:
+  enabled: true
 
 # ---- bundled NATS + JetStream ----------------------------------------------
 nats:
@@ -206,7 +235,7 @@ nats:
 
 # ---- media backend (OMNI_MEDIA_*) -------------------------------------------
 # Selects the omni-api media storage backend. Mirrors resolveMediaBackendConfig
-# in packages/api/src/services/media-backends/config.ts.
+# in packages/channel-sdk/src/media-backends/config.ts.
 #   mode=local  → on-disk storage, no S3 env emitted (default).
 #   mode=remote → S3/MinIO; the OMNI_MEDIA_S3_* env is wired from s3.* below.
 media:
@@ -238,10 +267,17 @@ minio:
   enabled: false
   image: minio/minio:RELEASE.2024-01-16T16-07-38Z
   pullPolicy: IfNotPresent
-  # Root creds double as the S3 access/secret keys omni-api consumes. Override
-  # via --set-string / -f. Ignored when media.s3.existingSecret is set.
+  # Root creds boot the MinIO server and provision the bucket + app user.
+  # omni-api does NOT use them — it consumes the scoped app creds below.
+  # Ignored when media.s3.existingSecret is set.
   rootUser: omni
   rootPassword: ""       # REQUIRED when minio.enabled and no existingSecret
+  # Scoped S3 app user minted for omni-api (builtin readwrite policy) —
+  # distinct from root. Empty appPassword => auto-generate a stable random
+  # preserved across upgrades (helm lookup; template-rendering GitOps must pin
+  # it or use media.s3.existingSecret).
+  appUser: omni-media
+  appPassword: ""
   service:
     port: 9000           # S3 API
     consolePort: 9001    # web console

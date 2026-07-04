@@ -65,6 +65,22 @@ The Secret name holding passwords — an existing one if provided, else managed.
 {{- end -}}
 
 {{/*
+The Secret name publishing the app DATABASE_URL (consumed by the omni
+umbrella chart — keep in sync with "omni.databaseSecretName" there).
+*/}}
+{{- define "autopg.appSecretName" -}}
+{{- printf "%s-app" (include "autopg.fullname" .) -}}
+{{- end -}}
+
+{{/*
+Image reference. tag "" => v<Chart.appVersion>, the autopg release the
+published image bakes in.
+*/}}
+{{- define "autopg.image" -}}
+{{- printf "%s:%s" .Values.image.repository (default (printf "v%s" .Chart.AppVersion) .Values.image.tag) -}}
+{{- end -}}
+
+{{/*
 Secret key for a provisioned app role's password.
 */}}
 {{- define "autopg.appPasswordKey" -}}

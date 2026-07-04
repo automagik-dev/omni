@@ -2,12 +2,15 @@
 # -----------------------------------------------------------------------------
 
 image:
-  repository: autopg
-  # Image tag. Tracks the autopg release baked into the image (Chart.appVersion).
-  tag: dev
-  # For OrbStack/local images built into the shared docker store, use Never (or
-  # IfNotPresent). Use IfNotPresent/Always once the image is pushed to a registry.
-  pullPolicy: Never
+  # Published by the omni repo's image-publish workflow as
+  # ghcr.io/automagik-dev/autopg:v<autopg release> (Chart.appVersion), plus
+  # :v<omni cli version> and :main.
+  repository: ghcr.io/automagik-dev/autopg
+  # Image tag. "" => v<Chart.appVersion>, the autopg release baked into the
+  # published image. The dev overlay swaps in a locally-built image
+  # (repository autopg, tag dev, pullPolicy Never).
+  tag: ""
+  pullPolicy: IfNotPresent
 
 imagePullSecrets: []
 nameOverride: ""
@@ -41,7 +44,26 @@ auth:
   # Name of an existing Secret to source passwords from instead of managing one
   # here. When set, keys must be: superuser-password, and <role>-password for
   # each provisioned app. Empty => the chart creates and manages the Secret.
+  #
+  # GITOPS NOTE: auto-generated password stability relies on helm `lookup`,
+  # which returns EMPTY under `helm template` / ArgoCD / Flux template
+  # rendering — passwords would regenerate every sync while the database keeps
+  # the old ones (auth failures / CrashLoop). Template-rendering GitOps MUST
+  # set existingSecret to an externally managed Secret (and see
+  # appSecret.enabled below for the DATABASE_URL contract).
   existingSecret: ""
+
+# -----------------------------------------------------------------------------
+# App connection Secret (the contract the omni umbrella chart consumes).
+#
+# When enabled, the chart publishes Secret `<fullname>-app` holding key
+# DATABASE_URL — a ready postgresql:// URL for the FIRST provisionedApps entry,
+# with the password percent-encoded. Disable only if you assemble/manage the
+# URL yourself (e.g. GitOps with auth.existingSecret rendered without cluster
+# access — the chart fails loudly in that combination and tells you so).
+# -----------------------------------------------------------------------------
+appSecret:
+  enabled: true
 
 # -----------------------------------------------------------------------------
 # Scoped-role provisioning (post-install / post-upgrade hook Job)
@@ -97,9 +119,17 @@ settings:
 # -----------------------------------------------------------------------------
 hostAuth:
   enabled: true
-  # Source range. "all" => any host (0.0.0.0/0 + ::/0). Set a pod/service CIDR
-  # to tighten (e.g. "10.0.0.0/8"). Auth still requires a valid password.
-  cidr: "all"
+  # Source ranges appended as pg_hba host rules. Defaults to the RFC1918
+  # private ranges — every mainstream CNI's pod/service CIDR falls inside them
+  # while the public internet and IPv6-any stay rejected (the old default was
+  # the pg_hba keyword "all"). Tighten further to your cluster's actual pod
+  # CIDR when known (e.g. ["10.244.0.0/16"]). Auth still requires a valid
+  # password, and the omni umbrella chart layers a NetworkPolicy on top
+  # restricting :5432 to omni-api + the provision Job.
+  cidrs:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
   # scram-sha-256 (recommended) | md5 | password. Must match the server's
   # password_encryption (PG14+ default is scram-sha-256).
   method: "scram-sha-256"
@@ -149,12 +179,19 @@ podSecurityContext:
   runAsNonRoot: true
   fsGroup: 1000
 
-# Provisioning Job knobs.
+# Provisioning Job knobs. The Job is a REGULAR resource (not a Helm hook): it
+# is created together with the StatefulSet and runs as soon as postgres accepts
+# connections, so a first `helm install --wait` cannot deadlock on it (hooks
+# only run after all main resources are Ready, but omni-api can't become Ready
+# until the role this Job creates exists). Each revision gets its own Job name
+# (Job specs are immutable) and finished Jobs are garbage-collected via TTL.
 provisionJob:
   enabled: true
   backoffLimit: 6
   # Seconds the Job waits for the server to accept connections before giving up.
   readyTimeoutSeconds: 300
+  # Seconds a finished provision Job lingers before the TTL controller deletes it.
+  ttlSecondsAfterFinished: 900
 
 nodeSelector: {}
 tolerations: []
