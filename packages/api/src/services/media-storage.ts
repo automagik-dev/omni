@@ -4,7 +4,10 @@
  * @see history-sync wish
  */
 
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 
 import { type MediaStorageBackend, createMediaBackend } from '@omni/channel-sdk';
@@ -27,6 +30,16 @@ export interface StoredMediaResult {
   localPath: string;
   size: number;
   mimeType?: string;
+}
+
+/**
+ * Media bytes materialized as a local filesystem path for a processing service
+ * (which only accepts a path and reads whole files off disk), paired with a
+ * cleanup that removes any temp file created for it.
+ */
+export interface MaterializedMedia {
+  path: string;
+  cleanup: () => Promise<void>;
 }
 
 export interface MediaFetchOptions extends RequestInit {
@@ -412,5 +425,45 @@ export class MediaStorageService {
    */
   async presignedUrl(reference: string, ttlSeconds?: number): Promise<string> {
     return this.backend.presignedUrl(reference, ttlSeconds);
+  }
+
+  /**
+   * Materialize a stored reference as a local filesystem path a processing
+   * service can read, with a cleanup for any temp file created.
+   *
+   * - `local`: the bytes already live at `{basePath}/{reference}`, so hand back
+   *   that path directly with a no-op cleanup (byte-for-byte the pre-remote
+   *   behavior — no copy, and cleanup never deletes the stored file).
+   * - `remote`: `reference` is an S3 key, not a local path. Fetch the bytes via
+   *   the storage backend and write them to an `os.tmpdir()` temp file,
+   *   returning a cleanup that removes it. The temp file keeps the stored
+   *   extension so processors that sniff by extension (e.g. audio duration)
+   *   behave as on disk.
+   *
+   * Callers MUST invoke `cleanup` in a `finally` so remote temp files are
+   * removed on success and on processing error alike.
+   */
+  async materializeForProcessing(reference: string): Promise<MaterializedMedia> {
+    if (this.backend.mode === 'local') {
+      return { path: join(this.basePath, reference), cleanup: async () => {} };
+    }
+
+    const buffer = await this.backend.read(reference);
+    const ext = extname(reference) || '.bin';
+    const tempPath = join(tmpdir(), `omni-media-${randomUUID()}${ext}`);
+    try {
+      await writeFile(tempPath, buffer);
+    } catch (error) {
+      // A failed write (ENOSPC, permissions) can leave a partial file behind.
+      await rm(tempPath, { force: true }).catch(() => {});
+      throw error;
+    }
+
+    return {
+      path: tempPath,
+      cleanup: async () => {
+        await rm(tempPath, { force: true });
+      },
+    };
   }
 }
