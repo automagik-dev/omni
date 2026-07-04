@@ -39,7 +39,7 @@ const ACCESS_KEY = 'minioadmin';
 const SECRET_KEY = 'minioadmin';
 const REGION = 'us-east-1';
 
-export function dockerAvailable(): boolean {
+function dockerAvailable(): boolean {
   try {
     return Bun.spawnSync(['docker', 'info']).exitCode === 0;
   } catch {
