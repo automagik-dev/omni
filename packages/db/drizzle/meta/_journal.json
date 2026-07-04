@@ -267,6 +267,13 @@
       "when": 1777950000000,
       "tag": "0037_message_debounce_max_wait",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1778040000000,
+      "tag": "0038_instances_allow_first_party",
+      "breakpoints": true
     }
   ]
 }

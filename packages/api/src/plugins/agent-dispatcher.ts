@@ -4723,8 +4723,16 @@ async function shouldProcessMessage(
     return null;
   }
 
+  // Loop protection: drop messages whose sender matches ANOTHER active
+  // instance's owner. Opt-out per instance via `allowFirstParty` so a user's
+  // "assistant" instance can reply to messages from their own personal number
+  // (another instance's owner). The separate "message from self" self-skip
+  // above is unaffected — an instance still never replies to its own outbound.
   const activeOwnerIdentifiers = await listActiveOwnerIdentifiers(db);
-  if (isFirstPartyInstanceSender(payload, instance.ownerIdentifier, activeOwnerIdentifiers)) {
+  if (
+    !instance.allowFirstParty &&
+    isFirstPartyInstanceSender(payload, instance.ownerIdentifier, activeOwnerIdentifiers)
+  ) {
     log.info('Skipping first-party cross-instance message', {
       instanceId: instance.id,
     });

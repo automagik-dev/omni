@@ -142,6 +142,9 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   // `--no-require-genie-signature` (false) automatically when the option is
   // declared with `--require-genie-signature` syntax.
   setBool(body, 'requireGenieSignature', opts.requireGenieSignature);
+  // First-party cross-instance opt-in. Commander pairs `--allow-first-party`
+  // (true) and `--no-allow-first-party` (false) automatically.
+  setBool(body, 'allowFirstParty', opts.allowFirstParty);
   if (opts.triggerEvents !== undefined) {
     const raw = opts.triggerEvents as string;
     body.triggerEvents = raw === 'null' ? null : raw.split(',').map((s) => s.trim());
@@ -392,6 +395,15 @@ export function createInstancesCommand(): Command {
       'Require a verified X-Genie-Signature on requests targeting this instance. Bearer-only requests will be rejected with 401.',
     )
     .option('--no-require-genie-signature', 'Allow bearer-only requests targeting this instance (default).')
+    // First-party cross-instance opt-in
+    .option(
+      '--allow-first-party',
+      'Process (do not drop) inbound messages whose sender matches another active instance owner. Lets this instance reply to messages from your own personal number.',
+    )
+    .option(
+      '--no-allow-first-party',
+      'Drop inbound messages whose sender matches another active instance owner (default, loop-protection).',
+    )
     // Default
     .option('--is-default', 'Set as default instance for channel')
     .action(async (options: Record<string, unknown>) => {
@@ -926,6 +938,15 @@ export function createInstancesCommand(): Command {
       'Require a verified X-Genie-Signature on requests targeting this instance. Bearer-only requests will be rejected with 401.',
     )
     .option('--no-require-genie-signature', 'Allow bearer-only requests targeting this instance (default).')
+    // First-party cross-instance opt-in
+    .option(
+      '--allow-first-party',
+      'Process (do not drop) inbound messages whose sender matches another active instance owner. Lets this instance reply to messages from your own personal number.',
+    )
+    .option(
+      '--no-allow-first-party',
+      'Drop inbound messages whose sender matches another active instance owner (default, loop-protection).',
+    )
     .action(async (rawId: string, options: Record<string, unknown>) => {
       const client = getClient();
 
