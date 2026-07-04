@@ -21,10 +21,17 @@ config:
 
 ingress:
   enabled: true
-  className: ""          # OrbStack ships a default ingress controller
-  host: omni.k8s.orb.local
+  className: "nginx"     # ingress-nginx is the cluster default IngressClass
+  host: omni.felipe.namastex.io
   path: /
   pathType: Prefix
+  # TLS rides ingress-nginx's default wildcard cert
+  # (ingress-nginx/felipe-wildcard-tls, SANs *.felipe.namastex.io + apex) wired via
+  # --default-ssl-certificate, so no per-Ingress secretName is needed. The tls block
+  # only declares the host so nginx terminates HTTPS for it.
+  tls:
+    - hosts:
+        - omni.felipe.namastex.io
 
 # Dev DB wiring — the lead sets database.host to the autopg Service once the
 # real subchart is vendored (e.g. "omni-autopg"). Password via --set-string or
