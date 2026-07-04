@@ -18,6 +18,9 @@ data:
   {{- if include "omni.media.remote" . }}
   OMNI_MEDIA_MODE: "remote"
   OMNI_MEDIA_S3_ENDPOINT: {{ include "omni.media.s3Endpoint" . | quote }}
+  {{- with .Values.media.s3.publicEndpoint }}
+  OMNI_MEDIA_S3_PUBLIC_ENDPOINT: {{ . | quote }}
+  {{- end }}
   OMNI_MEDIA_S3_BUCKET: {{ .Values.media.s3.bucket | quote }}
   OMNI_MEDIA_S3_REGION: {{ .Values.media.s3.region | quote }}
   OMNI_MEDIA_S3_FORCE_PATH_STYLE: {{ .Values.media.s3.forcePathStyle | quote }}

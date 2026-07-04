@@ -252,6 +252,12 @@ media:
     # minio.enabled) or to let the AWS SDK derive it from region (real S3). Set
     # explicitly to point at an external S3-compatible endpoint.
     endpoint: ""
+    # Optional externally-reachable endpoint used ONLY to presign GET URLs
+    # (OMNI_MEDIA_S3_PUBLIC_ENDPOINT). Uploads/reads keep using endpoint above.
+    # Set when consumers of presigned URLs (e.g. agents) live outside the
+    # cluster and cannot resolve the in-cluster endpoint. Empty → presign with
+    # the regular endpoint; no env var is emitted.
+    publicEndpoint: ""
     # PROD: reference an existing Secret holding the S3 creds instead of minting
     # them. When set, minio.enabled is typically false and no plaintext creds are
     # rendered. The Secret must contain the two keys below.

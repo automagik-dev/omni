@@ -93,6 +93,12 @@ media:
     forcePathStyle: false
     presignTtlSeconds: 3600
     endpoint: ""                         # empty → real AWS S3 from region
+    # Presign GET URLs against a public endpoint instead of `endpoint` —
+    # required when agents consuming presigned media URLs run OUTSIDE the
+    # cluster and cannot reach the internal S3 endpoint. Uploads/reads are
+    # unaffected. Leave unset when `endpoint` is already publicly reachable
+    # (e.g. real AWS S3).
+    # publicEndpoint: "https://media.example.com"
     existingSecret: "omni-media-s3"      # must hold the two keys below
     accessKeyKey: "OMNI_MEDIA_S3_ACCESS_KEY"
     secretKeyKey: "OMNI_MEDIA_S3_SECRET_KEY"
