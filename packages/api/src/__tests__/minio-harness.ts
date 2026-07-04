@@ -39,12 +39,29 @@ const ACCESS_KEY = 'minioadmin';
 const SECRET_KEY = 'minioadmin';
 const REGION = 'us-east-1';
 
-export function dockerAvailable(): boolean {
+function dockerAvailable(): boolean {
   try {
     return Bun.spawnSync(['docker', 'info']).exitCode === 0;
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether the MinIO container-integration suites should actually run.
+ *
+ * They need a real `minio/minio` container. Locally (pre-push) that is fine, but
+ * on a shared/loaded CI runner the container's readiness probe intermittently
+ * blows the 120s deadline (~50% flake observed), which would red the whole
+ * Quality Gate for entirely unrelated PRs. So in CI these suites are OPT-IN:
+ * set `MINIO_INTEGRATION=1` (e.g. a dedicated integration job) to run them;
+ * otherwise they skip deterministically. Docker is still required either way,
+ * and local runs (no `CI` env) always run when Docker is present.
+ */
+export function minioIntegrationEnabled(): boolean {
+  if (!dockerAvailable()) return false;
+  if (process.env.CI === 'true' && process.env.MINIO_INTEGRATION !== '1') return false;
+  return true;
 }
 
 function sha256hex(data: string): string {
