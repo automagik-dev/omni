@@ -68,7 +68,17 @@ minio:
   rootUser: omni
   rootPassword: "omni-dev-minio-password"   # dev only — override in real use
   persistence:
-    size: 2Gi
+    # NOTE: local-path does not enforce quota; sized for the migrated WhatsApp
+    # media corpus (~15Gi) + growth. Applies to fresh installs only
+    # (volumeClaimTemplates are immutable on an existing StatefulSet).
+    size: 30Gi
+  resources:
+    requests:
+      memory: 256Mi
+    limits:
+      # 512Mi OOM-killed MinIO (exit 137) under sustained ~10MiB/s media
+      # ingest during the 15GiB migration — 2Gi rides it out comfortably.
+      memory: 2Gi
 
 autopg:
   enabled: true
