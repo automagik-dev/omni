@@ -353,6 +353,36 @@ describe('NatsGenieProvider.trigger() — env pass-through', () => {
   });
 });
 
+describe('NatsGenieProvider.trigger() — media files pass-through', () => {
+  it('forwards remote-mode ProviderFile.url (presigned S3) into the published payload', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    // Remote mode: the dispatcher hands the agent a presigned URL, not a path.
+    trigger.content.files = [
+      { url: 'https://minio.local/omni-media/inst-1/2026-07/msg-1.jpg?X-Amz-Signature=abc', mimeType: 'image/jpeg' },
+    ];
+    await provider.trigger(trigger);
+
+    const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
+    expect(payload.files).toHaveLength(1);
+    expect(payload.files[0].url).toBe('https://minio.local/omni-media/inst-1/2026-07/msg-1.jpg?X-Amz-Signature=abc');
+    expect(payload.files[0].mimeType).toBe('image/jpeg');
+    // Remote files carry a URL, never a local path.
+    expect(payload.files[0].path).toBeUndefined();
+  });
+
+  it('forwards local-mode ProviderFile.path unchanged', async () => {
+    const provider = makeProvider();
+    const trigger = makeTrigger();
+    trigger.content.files = [{ path: '/data/media/inst-1/2026-07/msg-1.jpg', mimeType: 'image/jpeg' }];
+    await provider.trigger(trigger);
+
+    const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
+    expect(payload.files[0].path).toBe('/data/media/inst-1/2026-07/msg-1.jpg');
+    expect(payload.files[0].url).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Langfuse/HML trace propagation
 // ---------------------------------------------------------------------------

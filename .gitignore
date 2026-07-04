@@ -75,3 +75,6 @@ version.json
 .beads/*.log.gz
 .rlmx/
 /core
+
+# Helm dependency build artifacts (unpacked charts/ is source of truth)
+deploy/helm/omni/charts/*.tgz
