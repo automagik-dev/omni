@@ -44,6 +44,31 @@ spec:
     - name: monitor
       port: {{ .Values.nats.monitorPort }}
       targetPort: monitor
+{{- if .Values.nats.externalAccess }}
+---
+# External client Service: the headless Service above keeps JetStream's
+# per-pod identity and cannot be a LoadBalancer, so out-of-cluster NATS
+# clients (e.g. a `genie omni serve` bridge on a sibling OrbStack VM) get
+# this separate routable endpoint on the client port only.
+# NOTE: bundled NATS has no auth — only enable on a trusted network
+# (OrbStack host net). Prod should front NATS with auth/TLS instead.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "omni.nats.fullname" . }}-client
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  type: {{ .Values.nats.externalServiceType | default "LoadBalancer" }}
+  selector:
+    {{- include "omni.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+  ports:
+    - name: client
+      port: {{ .Values.nats.port }}
+      targetPort: client
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet

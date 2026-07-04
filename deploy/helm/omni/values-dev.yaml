@@ -49,6 +49,10 @@ nats:
   enabled: true
   persistence:
     size: 512Mi
+  # Expose the client port (:4222) on an OrbStack LoadBalancer so a
+  # `genie omni serve` bridge running on a sibling VM can subscribe to
+  # omni.message.* and reply on omni.reply.*. Trusted host-net only.
+  externalAccess: true
 
 # Remote media backend backed by the bundled MinIO — a self-contained k8s dev
 # object store. Path-style addressing (MinIO requires it); dev creds inline.
