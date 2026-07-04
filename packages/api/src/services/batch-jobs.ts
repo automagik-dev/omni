@@ -29,6 +29,7 @@ import {
   messages,
 } from '@omni/db';
 import {
+  GEMINI_AUDIO_MODEL,
   type MediaProcessingService,
   type ProcessingResult,
   type ProcessorConfig,
@@ -155,16 +156,25 @@ export class BatchJobService {
   private async createMediaService(): Promise<MediaProcessingService> {
     let config: Partial<ProcessorConfig> | undefined;
     if (this.settings) {
-      const [groqApiKey, openaiApiKey, geminiApiKey, defaultLanguage, audioProvider, audioModel, audioPrompt] =
-        await Promise.all([
-          this.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
-          this.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
-          this.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
-          this.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
-          this.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
-          this.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
-          this.settings.getString('prompt.audio_transcription'),
-        ]);
+      const [
+        groqApiKey,
+        openaiApiKey,
+        geminiApiKey,
+        defaultLanguage,
+        audioProvider,
+        audioModel,
+        geminiAudioModel,
+        audioPrompt,
+      ] = await Promise.all([
+        this.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
+        this.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
+        this.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
+        this.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
+        this.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
+        this.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
+        this.settings.getString('stt.gemini.model', 'GEMINI_STT_MODEL', GEMINI_AUDIO_MODEL),
+        this.settings.getString('prompt.audio_transcription'),
+      ]);
       config = {
         groqApiKey: groqApiKey ?? undefined,
         openaiApiKey: openaiApiKey ?? undefined,
@@ -172,6 +182,7 @@ export class BatchJobService {
         defaultLanguage: defaultLanguage ?? 'pt',
         audioProvider: audioProvider ?? 'openai',
         audioModel: audioModel ?? 'gpt-audio-mini',
+        geminiAudioModel: geminiAudioModel ?? GEMINI_AUDIO_MODEL,
         audioPrompt: audioPrompt ?? undefined,
       };
     }
