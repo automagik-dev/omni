@@ -10,14 +10,26 @@
 | **Review date** | 2026-07-04 |
 | **Method** | 4 independent subagent reviewers (security, correctness, infrastructure, quality) + orchestrator verification of every HIGH against the code |
 | **Verdict** | **FIX-FIRST** — the prod Helm overlay cannot deploy as-written and remote-media mode is not production-ready |
-| **Status** | ⚠️ **MERGED to `main` on 2026-07-04** — all findings below are now LIVE in production `main`. Fixes must land via new `fix/*` → `dev` PRs (see handoff). |
-| **Next action** | Restart a **Fable autonomous fix orchestration** — see **[🤖 Autonomous Fix Handoff](#-autonomous-fix-handoff-start-here)** immediately below. |
+| **Status** | ✅ **HANDOFF EXECUTED 2026-07-05** — all HIGH/MED/LOW findings fixed and merged to `dev`; first promotion (#779) published `omni-api` + `autopg:v3.0.7` images. See the execution record below. |
+| **Next action** | Human merges rolling PR **#781** (dev→main, all checks green, `ready-to-merge`); then one more main→dev reconcile. Ongoing state: memory `pr770-fix-orchestration-state`. |
 
 > ⚠️ **Diff-staleness note:** the diff GitHub first returned was pinned to `818c8dbd` (~40 commits stale) and contained none of the `deploy/`, CI, Helm, Docker, or migration-0038 scope. This review targets the true head `1bec7ff2`. Anyone re-running `git diff bb5bc0c6 818c8dbd` will review a feature-less slice — use `bb5bc0c6..1bec7ff2`.
 
 ---
 
 ## 🤖 Autonomous Fix Handoff (START HERE)
+
+> ### ✅ Execution record (2026-07-05) — this handoff has been EXECUTED; do not re-run it
+> | Group | Findings | Landed as |
+> |---|---|---|
+> | G-HELM | H1v H2 H3 H4 H5 H6 MED-3/5/6 + deploy LOWs | PR #775 (`fix/helm-prod-deploy`) |
+> | G-CICD | H1p LOW-6/7/18/23 | PR #774 (`ci/autopg-image-publish`, new `deploy/autopg.Dockerfile`) |
+> | G-REMOTE | H7 MED-1/2 LOW-3/4/12 | PR #776 (`fix/remote-media-batch`, red-then-green H7 proof) |
+> | G-MEDIA-LOW | LOW-1/2/5/9/10 | PR #782 (`fix/media-hardening`) |
+> | G-CI-TESTS | H8 MED-4 | PR #778 (`ci/minio-integration`, anti-skip guard) |
+> | follow-up | MED-1 chart wiring | PR #777 (`fix/helm-public-presign-endpoint`) |
+>
+> All merged to `dev`. Step 0 verified: `dev` was a strict ancestor of `main` (reconcile #769/#773 had already carried the #770 work). Promotion #779 published `autopg:{v3.0.7,v2.260704.11}` + `omni-api:v2.260704.11` (GHCR, private). Reconcile #783 restored `main`=0 unique commits. Decisions taken on the recommended defaults (bundled-autopg published image; H6 via cidrs+NetworkPolicy, no rotation) — veto window open in the PR bodies. Remaining: human merge of rolling PR #781; optional fresh-namespace `helm install -f values-prod.yaml --wait` smoke (needs imagePullSecret). The text below is preserved as the original mission brief.
 
 **You are a fresh Fable orchestration.** PR #770 is merged to `main`; every finding in this document is now live in production. The review is **complete** — the four independent reviewers (security, correctness, infrastructure, quality) traced each finding end-to-end and the orchestrator re-verified every HIGH against the code. **Treat the findings as verified ground truth; do not re-review from scratch.** Your mission: autonomously **fix, verify, and land** all HIGH + MEDIUM findings and the cheap LOWs, via the repo's git workflow, without regressing anything in "Checked and clean."
 
