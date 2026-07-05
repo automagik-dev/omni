@@ -83,11 +83,14 @@ Adjust `ingress.host`, the dev-only passwords, and `service.type` in a copy of
 ever ask you to configure registry auth for these images.
 
 Provenance is verifiable — the publish workflow attaches SLSA provenance
-attestations:
+attestations (GitHub-native, via `actions/attest-build-provenance`):
 
 ```bash
 gh attestation verify oci://ghcr.io/automagik-dev/omni-api:v<version> -R automagik-dev/omni
 ```
+
+Only images published after attestation support landed (July 2026) carry
+these; older tags report "no attestations found".
 
 ### Proving the self-host path end-to-end
 
