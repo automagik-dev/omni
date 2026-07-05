@@ -207,6 +207,22 @@ const OUTBOUND_SEND_PREFIXES = ['/messages/send'];
 const PATH_INSTANCE_PREFIXES = ['/instances/'];
 const PATH_CHAT_PREFIXES = ['/chats/'];
 
+/**
+ * `GET /media/:instanceId/*` embeds the instance as the first path segment.
+ * GET-only on purpose: the POST verbs under /media (tts, stt, imagine, vision,
+ * film, music) put an action name in that segment, not an instance — treating
+ * "tts" as an instance target would deny every allowlisted key those verbs.
+ * Without this extraction the media path is invisible to instanceAllowlist:
+ * broad keys can read ANY instance's media while allowlisted keys are denied
+ * even their own (target=null against a non-empty list).
+ */
+const PATH_MEDIA_INSTANCE_PREFIX = '/media/';
+
+function mediaPathInstance(method: string, cleanPath: string): string | null {
+  if (method !== 'GET') return null;
+  return firstPathSegment(cleanPath, PATH_MEDIA_INSTANCE_PREFIX);
+}
+
 function firstPathSegment(cleanPath: string, prefix: string): string | null {
   if (!cleanPath.startsWith(prefix)) return null;
   const rest = cleanPath.slice(prefix.length);
@@ -266,8 +282,10 @@ export function extractLockTargets(
   const cleanPath = normalizePath(rawPath);
   const { instanceId, to, chatId } = readBodyTargets(body);
 
-  // Path-param extraction: /instances/:id, /chats/:id
-  const pathInstance = PATH_INSTANCE_PREFIXES.map((p) => firstPathSegment(cleanPath, p)).find((v) => v != null) ?? null;
+  // Path-param extraction: /instances/:id, /chats/:id, GET /media/:instanceId/*
+  const pathInstance =
+    PATH_INSTANCE_PREFIXES.map((p) => firstPathSegment(cleanPath, p)).find((v) => v != null) ??
+    mediaPathInstance(method, cleanPath);
   const pathChat = PATH_CHAT_PREFIXES.map((p) => firstPathSegment(cleanPath, p)).find((v) => v != null) ?? null;
   const headerInstance = headers?.instance && headers.instance.length > 0 ? headers.instance : null;
   const headerChat = headers?.chat && headers.chat.length > 0 ? headers.chat : null;

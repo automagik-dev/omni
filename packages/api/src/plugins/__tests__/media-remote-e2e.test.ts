@@ -119,10 +119,12 @@ describe.skipIf(!hasDocker)('remote media e2e: stored media → presigned Provid
     expect(Array.from(downloaded)).toEqual(Array.from(imageBytes));
   });
 
-  it('serves remote-stored media through the backend-aware route read (GET /media path)', async () => {
-    // The persisted mediaUrl points at GET /api/v2/media/<key>, which serves via
-    // readMediaViaBackend — in remote mode that must S3-GET the key, not 404 on
-    // a local-disk lookup (PR #761 review finding).
+  it('serves remote-stored media through the backend-aware service read', async () => {
+    // readMediaViaBackend must S3-GET the key in remote mode, not 404 on a
+    // local-disk lookup (PR #761 review finding). The GET /media route now
+    // serves via stat + ranged/streaming reads (PR #770 LOW-2, covered by
+    // routes/v2/__tests__/media-route.test.ts); this locks the service-level
+    // whole-buffer read contract.
     const stored = await remoteService.storeFromBuffer(
       'inst-1',
       'msg-e2e-route',

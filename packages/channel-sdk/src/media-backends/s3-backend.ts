@@ -12,7 +12,14 @@
 import { createLogger } from '@omni/core';
 import { DownloadTooLargeError } from '../download-guard';
 import type { S3BackendConfig } from './config';
-import type { MediaStorageBackend, StoreMediaInput, StoreMediaResult, StoreStreamInput } from './types';
+import {
+  type MediaObjectStat,
+  type MediaStorageBackend,
+  type StoreMediaInput,
+  type StoreMediaResult,
+  type StoreStreamInput,
+  isMediaNotFoundError,
+} from './types';
 
 const log = createLogger('services:media-backends:s3');
 
@@ -118,6 +125,37 @@ export class S3MediaBackend implements MediaStorageBackend {
     const bytes = await this.client.file(key).arrayBuffer();
     log.debug('Read media from S3', { key, size: bytes.byteLength });
     return Buffer.from(bytes);
+  }
+
+  async stat(key: string): Promise<MediaObjectStat | null> {
+    try {
+      const info = await this.client.file(key).stat();
+      return { size: info.size };
+    } catch (error) {
+      // Bun's S3Client throws S3Error code 'NoSuchKey' for a missing object;
+      // anything else (ConnectionRefused, InvalidAccessKeyId, NoSuchBucket…)
+      // is a transient/config failure the caller must NOT treat as 404.
+      if (isMediaNotFoundError(error)) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * Ranged S3 GET via `S3File.slice` — fetches exactly `[start, endInclusive]`
+   * (Blob-style exclusive end, hence `endInclusive + 1`), never the whole
+   * object. Verified against MinIO: `slice(10, 20)` returns bytes 10..19.
+   */
+  async readRange(key: string, start: number, endInclusive: number): Promise<Buffer> {
+    const bytes = await this.client
+      .file(key)
+      .slice(start, endInclusive + 1)
+      .arrayBuffer();
+    return Buffer.from(bytes);
+  }
+
+  /** Streaming S3 GET — chunks flow to the consumer without heap buffering. */
+  async readStream(key: string): Promise<ReadableStream<Uint8Array>> {
+    return this.client.file(key).stream();
   }
 
   async presignedUrl(key: string, ttlSeconds: number = this.presignTtlSeconds): Promise<string> {

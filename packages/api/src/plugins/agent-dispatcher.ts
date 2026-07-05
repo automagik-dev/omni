@@ -87,6 +87,7 @@ import type { MediaStorageService } from '../services/media-storage';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import type { ResolvedRoute } from '../services/route-resolver';
 import { publishTurnOpen } from '../services/turn-events';
+import { fetchMediaUrl } from '../utils/safe-media-fetch';
 import { AgentDispatchLimiter, loadAgentDispatchLimiterConfig } from './agent-dispatch-limiter';
 import { getPlugin } from './loader';
 import {
@@ -3105,7 +3106,10 @@ function mimeToContentType(mimeType: string): 'audio' | 'image' | 'video' | 'doc
  */
 async function downloadToTempFile(url: string, mimeType: string): Promise<string | null> {
   try {
-    const res = await fetch(url);
+    // SSRF-guarded: rejects private/metadata targets (initial URL and every
+    // redirect hop) before connecting — history-sync mediaUrl values originate
+    // from channel payloads, not from operator config.
+    const res = await fetchMediaUrl(url);
     if (!res.ok) return null;
 
     const buffer = Buffer.from(await res.arrayBuffer());
@@ -5553,6 +5557,7 @@ export const setupAgentResponder = setupAgentDispatcher;
 export const __test__ = {
   buildContextMessages,
   awaitMediaProcessing,
+  downloadToTempFile,
   mediaCompletions,
   mediaResultCache,
   checkProcessedColumn,

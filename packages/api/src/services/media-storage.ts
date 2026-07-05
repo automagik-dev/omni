@@ -5,16 +5,25 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 
-import { type MediaStorageBackend, createMediaBackend } from '@omni/channel-sdk';
+import {
+  type MediaObjectStat,
+  type MediaStorageBackend,
+  createMediaBackend,
+  isMediaNotFoundError,
+} from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { messages } from '@omni/db';
 import { eq } from 'drizzle-orm';
+
+import { type MediaFetchOptions, fetchMediaUrl } from '../utils/safe-media-fetch';
+
+export type { MediaFetchOptions } from '../utils/safe-media-fetch';
 
 const log = createLogger('services:media-storage');
 
@@ -42,16 +51,6 @@ export interface MaterializedMedia {
   cleanup: () => Promise<void>;
 }
 
-export interface MediaFetchOptions extends RequestInit {
-  /**
-   * Host suffixes where Authorization should be preserved across manual
-   * redirects. Fetch strips Authorization on cross-origin redirects; some
-   * private media URLs redirect inside the platform-owned domain and still
-   * require the same token.
-   */
-  preserveAuthRedirectHostSuffixes?: string[];
-}
-
 function normalizeMimeType(value: string | null | undefined): string | undefined {
   return value?.split(';')[0]?.trim().toLowerCase() || undefined;
 }
@@ -74,61 +73,6 @@ function shouldRejectHtmlMedia(
   const expected = normalizeMimeType(expectedMimeType);
   if (!expected || isHtmlMime(expected)) return false;
   return isHtmlMime(responseMimeType) || looksLikeHtml(buffer);
-}
-
-function hostMatchesSuffix(hostname: string, suffix: string): boolean {
-  const normalizedHost = hostname.toLowerCase();
-  const normalizedSuffix = suffix.toLowerCase();
-  return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
-}
-
-function shouldPreserveAuthForRedirect(url: URL, suffixes: string[] | undefined): boolean {
-  return Boolean(suffixes?.some((suffix) => hostMatchesSuffix(url.hostname, suffix)));
-}
-
-function headersWithOptionalAuthorization(
-  headers: RequestInit['headers'] | undefined,
-  preserveAuthorization: boolean,
-): Headers {
-  const nextHeaders = new Headers(headers);
-  if (!preserveAuthorization) nextHeaders.delete('authorization');
-  return nextHeaders;
-}
-
-async function fetchWithOptionalAuthenticatedRedirects(
-  url: string,
-  fetchOptions?: MediaFetchOptions,
-): Promise<Response> {
-  const { preserveAuthRedirectHostSuffixes, ...init } = fetchOptions ?? {};
-  if (!preserveAuthRedirectHostSuffixes?.length) {
-    return fetch(url, init);
-  }
-
-  let currentUrl = new URL(url);
-  let currentHeaders = new Headers(init.headers);
-
-  for (let redirects = 0; redirects <= 5; redirects++) {
-    const response: Response = await fetch(currentUrl.toString(), {
-      ...init,
-      headers: currentHeaders,
-      redirect: 'manual',
-    });
-
-    if (response.status < 300 || response.status >= 400) return response;
-
-    const location: string | null = response.headers.get('location');
-    if (!location) return response;
-
-    const nextUrl: URL = new URL(location, currentUrl);
-    const preserveAuthorization =
-      shouldPreserveAuthForRedirect(currentUrl, preserveAuthRedirectHostSuffixes) &&
-      shouldPreserveAuthForRedirect(nextUrl, preserveAuthRedirectHostSuffixes);
-
-    currentHeaders = headersWithOptionalAuthorization(init.headers, preserveAuthorization);
-    currentUrl = nextUrl;
-  }
-
-  throw new Error('Failed to download media: too many redirects');
 }
 
 /**
@@ -280,8 +224,10 @@ export class MediaStorageService {
     timestamp?: Date,
     fetchOptions?: MediaFetchOptions,
   ): Promise<StoredMediaResult> {
-    // Fetch the media (fetchOptions allows callers to supply auth headers, e.g. Slack bot token)
-    const response = await fetchWithOptionalAuthenticatedRedirects(url, fetchOptions);
+    // Fetch the media (fetchOptions allows callers to supply auth headers, e.g.
+    // Slack bot token). The fetch is SSRF-guarded: private/metadata targets are
+    // rejected before connecting, on the initial URL and on every redirect hop.
+    const response = await fetchMediaUrl(url, fetchOptions);
     if (!response.ok) {
       throw new Error(`Failed to download media: ${response.status}`);
     }
@@ -307,40 +253,50 @@ export class MediaStorageService {
   }
 
   /**
-   * Read media file
-   */
-  readMedia(relativePath: string): { buffer: Buffer; size: number } | null {
-    const fullPath = join(this.basePath, relativePath);
-
-    if (!existsSync(fullPath)) {
-      return null;
-    }
-
-    try {
-      const buffer = readFileSync(fullPath);
-      const stat = statSync(fullPath);
-      return {
-        buffer,
-        size: Number(stat.size),
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Backend-aware variant of readMedia: serves stored media in BOTH modes
-   * (local disk read or S3 GET). In remote mode the stored reference is an S3
-   * key with no file under basePath, so readMedia's disk lookup would 404 —
-   * the GET /media route must use this instead. Returns null when missing.
+   * Backend-aware read: serves stored media in BOTH modes (local disk read or
+   * S3 GET). In remote mode the stored reference is an S3 key with no file
+   * under basePath, so a disk lookup would 404 — readers must go through the
+   * backend.
+   *
+   * Returns `null` ONLY when the object does not exist (local ENOENT / S3
+   * NoSuchKey). Transient or config failures (endpoint unreachable, bad
+   * credentials, missing bucket) are rethrown so callers can surface a
+   * retryable 5xx instead of a lying 404.
    */
   async readMediaViaBackend(relativePath: string): Promise<{ buffer: Buffer; size: number } | null> {
     try {
       const buffer = await this.backend.read(relativePath);
       return { buffer, size: buffer.length };
-    } catch {
-      return null;
+    } catch (error) {
+      if (isMediaNotFoundError(error)) return null;
+      throw error;
     }
+  }
+
+  /**
+   * Stat a stored reference without reading its bytes. `null` means the object
+   * does not exist; transient backend failures are rethrown (same contract as
+   * {@link readMediaViaBackend}).
+   */
+  async statMedia(reference: string): Promise<MediaObjectStat | null> {
+    return this.backend.stat(reference);
+  }
+
+  /**
+   * Read an inclusive byte range of a stored reference. The backend fetches
+   * only the requested bytes (positional file read / S3 ranged GET), so Range
+   * serving never buffers the whole object.
+   */
+  async readMediaRange(reference: string, start: number, endInclusive: number): Promise<Buffer> {
+    return this.backend.readRange(reference, start, endInclusive);
+  }
+
+  /**
+   * Stream the full bytes of a stored reference without heap buffering
+   * (local file stream / S3 streaming GET).
+   */
+  async readMediaStream(reference: string): Promise<ReadableStream<Uint8Array>> {
+    return this.backend.readStream(reference);
   }
 
   /**

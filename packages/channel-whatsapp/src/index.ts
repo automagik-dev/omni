@@ -46,13 +46,11 @@ export type { MessageStatus, ReadReceiptMode, ReadReceiptConfig } from './receip
 
 // Media utilities
 export {
-  downloadMedia,
   downloadMediaToBuffer,
   detectMediaType,
   getExtension,
-  generateFilename,
 } from './utils/download';
-export type { DownloadResult, DetectedMedia } from './utils/download';
+export type { DetectedMedia } from './utils/download';
 
 // Senders
 export * from './senders';
