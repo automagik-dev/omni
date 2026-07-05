@@ -34,9 +34,13 @@ describe('resolveSslConfig', () => {
     expect(ssl?.rejectUnauthorized).toBe(true);
   });
 
-  test('honors libpq PGSSLROOTCERT when DATABASE_SSL_CA_FILE is unset', () => {
-    const ssl = resolveSslConfig(undefined, { PGSSLROOTCERT: caPath });
-    expect(ssl?.ca).toBe(FAKE_PEM);
+  test('ignores ambient libpq PGSSLROOTCERT (would force TLS onto sslmode=disable setups)', () => {
+    expect(resolveSslConfig(undefined, { PGSSLROOTCERT: caPath })).toBeUndefined();
+  });
+
+  test('treats an empty DATABASE_SSL_CA_FILE as unset', () => {
+    expect(resolveSslConfig(undefined, { DATABASE_SSL_CA_FILE: '' })).toBeUndefined();
+    expect(resolveSslConfig('', { DATABASE_SSL_CA_FILE: caPath })?.ca).toBe(FAKE_PEM);
   });
 
   test('explicit config wins over environment', () => {

@@ -124,7 +124,7 @@ spec:
             # --- DB TLS verify-full: verify server chain + hostname against
             # the mounted CA bundle (a bare sslmode=require never does) ---
             - name: DATABASE_SSL_CA_FILE
-              value: /etc/omni/db-tls/{{ .Values.database.sslCaKey }}
+              value: /etc/omni/db-tls/{{ .Values.database.sslCaKey | default "ca-bundle.pem" }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
