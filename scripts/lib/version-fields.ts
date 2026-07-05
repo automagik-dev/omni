@@ -153,7 +153,7 @@ function chartAppVersionField(): VersionField {
         return false;
       }
 
-      const updated = content.replace(lineRe, `appVersion: "${version}"`);
+      const updated = content.replace(lineRe, () => `appVersion: "${version}"`);
       writeFileSync(absPath, updated, 'utf-8');
       return true;
     },
