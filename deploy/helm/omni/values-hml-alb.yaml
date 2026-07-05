@@ -1,0 +1,70 @@
+# =============================================================================
+# HML co-tenant ALB delta — layered AFTER values-homolog.yaml, never alone.
+#
+# This is NOT a standalone overlay: it is a DELTA that re-flavors the homolog
+# shape for the co-tenant realm on the shared `langwatch-hml` EKS cluster
+# (sa-east-1, namespace omni-hml). Ingress moves from nginx+cert-manager to the
+# AWS Load Balancer Controller (TLS terminates at the ALB with an ACM cert),
+# and the media bucket/region switch to this lane's real values. Everything
+# else (external RDS via `omni-db`, real S3 creds via `omni-media-s3`, single
+# replica, sizing) is inherited from values-homolog.yaml.
+#
+# Exact deploy command (order of -f flags matters — this file LAST):
+#   helm upgrade --install omni deploy/helm/omni -n omni-hml \
+#     -f deploy/helm/omni/values-homolog.yaml \
+#     -f deploy/helm/omni/values-hml-alb.yaml \
+#     --set ingress.host=hml.omni.khal.ai \
+#     --set 'ingress.annotations.alb\.ingress\.kubernetes\.io/certificate-arn=<acm-cert-arn>' \
+#     --wait
+#
+# The ACM certificate ARN is deliberately NOT set in-file: it is an
+# environment-specific AWS resource identifier that only exists after the
+# tenant Terraform is applied, so it is supplied at deploy time via the
+# --set above (the dots in the annotation key must be escaped with `\.`).
+#
+# Secrets in this realm are ESO-materialized from Secrets Manager
+# `/khal/omni/hml/{db,media-s3}` into the `omni-db` / `omni-media-s3` Secrets
+# that values-homolog.yaml already references — no secret keys change here.
+# =============================================================================
+
+ingress:
+  # AWS Load Balancer Controller provisions an internet-facing ALB for
+  # ingressClassName `alb`; TLS terminates at the ALB using the ACM cert
+  # passed via --set (see header), so no in-cluster TLS material is needed.
+  className: alb
+  annotations:
+    # Helm map-merge cannot DELETE a key inherited from an earlier -f file, but
+    # a `null` override removes it at coalesce time — and even if a literal
+    # `cluster-issuer: null` ever rendered, it is harmless for an alb-class
+    # Ingress (cert-manager only acts on real issuer values, which must NOT
+    # leak into this realm: there is no cert-manager/nginx on this cluster).
+    cert-manager.io/cluster-issuer: null
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    # alb.ingress.kubernetes.io/certificate-arn: supplied at deploy time via
+    # --set (see header) — never commit an account-specific ARN here.
+  # Empty list REPLACES homolog's cert-manager tls block wholesale (helm
+  # replaces lists, it does not merge them): TLS lives at the ALB, so the
+  # rendered Ingress must carry no `tls:` section at all.
+  tls: []
+
+# Lane-correct media backend: the homolog defaults (bucket omni-media-hml,
+# us-east-1) are WRONG for this co-tenant realm. The bucket below is the
+# Terraform-provisioned one in the LangWatch HML account, and region must
+# match it (endpoint stays "" → the SDK derives the sa-east-1 endpoint).
+media:
+  s3:
+    bucket: nmstx-khal-omni-hml-media
+    region: sa-east-1
+
+# NATS JetStream persistence: values-homolog.yaml leaves storageClass unset,
+# which uses the cluster's DEFAULT StorageClass. The langwatch-hml EKS default
+# could not be verified from here (likely gp3 via the EBS CSI driver, but gp2
+# in-tree defaults still exist on older clusters). Keep this commented and
+# override-ready: uncomment (or pass --set nats.persistence.storageClass=gp3)
+# ONLY after `kubectl get storageclass` shows the default is not gp3/EBS-CSI.
+# nats:
+#   persistence:
+#     storageClass: gp3
