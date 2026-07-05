@@ -124,7 +124,26 @@ jobs:
           # runs bump homolog because HML images are built from homolog.
           ref: ${{ steps.context.outputs.checkout_ref }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Machine-account PAT for the bump push (checkout persists this
+          # credential, so the branch push in "Commit and tag" inherits it).
+          # Why: bump commits no longer carry the skip-ci token (D8), so each
+          # bump push to dev re-fires any OPEN rolling PR's pull_request runs;
+          # when the push actor is github-actions[bot], GitHub holds those
+          # runs at `action_required`, wedging the PR until a human closes/
+          # reopens it. Pushing as a machine account avoids the bot-actor hold.
+          # Fallback: while VERSION_BUMP_PAT is unset/empty this expression
+          # resolves to github.token — exactly the old behavior — so this is
+          # safe to merge before the secret exists.
+          # Secret spec: fine-grained PAT on a machine account (e.g.
+          # automagik-bot) scoped to automagik-dev/omni, Contents: read+write.
+          # NOTE: unlike GITHUB_TOKEN, PAT pushes DO fire on:push workflows.
+          # Branch push: desired on homolog (image-publish builds the bump
+          # commit's image, per D8); CI on the homolog bump is a harmless
+          # extra run — Version's workflow_run guard keys on the head-commit
+          # MESSAGE, not the actor, and bump messages fail the startsWith
+          # 'Merge pull request' check, so no re-fire loop. The v* TAG push
+          # must NOT use the PAT: see "Commit and tag" below.
+          token: ${{ secrets.VERSION_BUMP_PAT || github.token }}
 
       - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3  # v2
         with:
@@ -174,6 +193,10 @@ jobs:
           bun install
 
       - name: Commit and tag
+        env:
+          # For the tag push below ONLY — the branch push rides the
+          # checkout-persisted credential (VERSION_BUMP_PAT when configured).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
 
@@ -195,9 +218,28 @@ jobs:
           fi
 
           git tag "v${VERSION}"
-          # Push the current commit to the target branch explicitly so the
-          # version bump commit and its tag are both reachable from the branch.
-          git push --atomic origin HEAD:refs/heads/${{ steps.context.outputs.push_ref }} "refs/tags/v${VERSION}"
+
+          # Split push (was --atomic): the two refs need DIFFERENT credentials.
+          # Branch push uses the checkout-persisted credential (machine PAT
+          # when VERSION_BUMP_PAT is set) so the push actor is not
+          # github-actions[bot] — see the checkout step for why.
+          git push origin HEAD:refs/heads/${{ steps.context.outputs.push_ref }}
+
+          # Tag push stays on GITHUB_TOKEN DELIBERATELY: GITHUB_TOKEN pushes
+          # never fire on:push workflows (GitHub anti-recursion), so
+          # release.yml runs only via the explicit dispatch step below, which
+          # passes the correct channel. A PAT-pushed v* tag would ALSO fire
+          # release.yml's push:tags path, where channel falls through to
+          # 'stable' — duplicating the release pipeline AND promoting a
+          # dev/homolog cut to the stable channel. The -c flag blanks the
+          # checkout-persisted auth header for this one invocation so the
+          # URL-embedded GITHUB_TOKEN wins. Losing --atomic is safe with
+          # branch-first ordering: a tag-push failure self-heals on re-run
+          # (same derived version → no version-file diff → re-tag HEAD →
+          # no-op branch push → tag push retries).
+          git -c http.https://github.com/.extraheader= \
+            push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/v${VERSION}"
 
       # Dispatch the signed-tarball release pipeline (build → sign-attest →
       # publish) via release.yml's workflow_dispatch entry. GITHUB_TOKEN-
