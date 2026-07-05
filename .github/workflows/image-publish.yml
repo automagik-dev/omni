@@ -36,6 +36,10 @@ on:
       - 'apps/**'
       - 'deploy/Dockerfile'
       - 'deploy/autopg.Dockerfile'
+      # Chart/values-only promotions still advance appVersion (version.yml
+      # stamps deploy/helm/omni/Chart.yaml); without this filter the stamped
+      # tag would never get an image built (stranded-tag case).
+      - 'deploy/helm/**'
       - 'bun.lock'
       - '.github/workflows/image-publish.yml'
   workflow_dispatch:
