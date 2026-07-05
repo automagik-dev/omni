@@ -41,6 +41,14 @@ permissions:
 
 concurrency:
   # Serialize per target branch so dev and homolog bumps cannot overwrite each other.
+  # KNOWN GAP (documented, not fixed here): the group key includes event_name,
+  # so a dev→homolog promotion PR can fire this job twice for one merge —
+  # once via pull_request-closed and again via workflow_run (the merge commit
+  # "Merge pull request … /dev" passes the guard below) — in SEPARATE groups
+  # that run concurrently. Worst case is a duplicate bump/publish, not a loop:
+  # the bump commit itself never re-triggers (it fails the startsWith
+  # 'Merge pull request' guard). A real dedupe needs a gate job or step-level
+  # skip plumbing; deferred to keep this workflow's shape stable.
   group: version-${{ github.event_name }}-${{ github.event.workflow_run.head_branch || github.event.pull_request.base.ref || github.ref_name }}
   cancel-in-progress: false
 
@@ -146,7 +154,7 @@ jobs:
         env:
           OMNI_BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
 
-      - name: Sync package.json versions
+      - name: Sync versions (package.json + chart appVersion)
         run: bun scripts/sync-versions.ts ${{ steps.version.outputs.version }}
 
       - name: Format versioned JSON (Biome)
@@ -169,11 +177,21 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
 
-          git add -A '*.json' bun.lock
+          # Chart.yaml is listed explicitly: the '*.json' pathspec would
+          # silently drop the appVersion stamp sync-versions.ts just wrote,
+          # and verify-versions.ts (CI Quality Gate) fails on the drift.
+          git add -A '*.json' bun.lock deploy/helm/omni/Chart.yaml
           if git diff --cached --quiet; then
-            echo "No package.json or bun.lock changes to commit"
+            echo "No version file changes to commit"
           else
-            git commit -m "chore(version): bump to ${VERSION} [skip ci]"
+            # No [skip ci] (D8): homolog bumps MUST trigger image-publish so
+            # the stamped appVersion gets a matching image built from the
+            # bump commit. Blanket removal is safe on the dev path too — no
+            # workflow push-triggers on dev for these paths (CI/image-publish
+            # push branches are [main, homolog] only). Loop-safe: this
+            # commit's message fails version.yml's own startsWith
+            # 'Merge pull request' workflow_run guard.
+            git commit -m "chore(version): bump to ${VERSION}"
           fi
 
           git tag "v${VERSION}"
