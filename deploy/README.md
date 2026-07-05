@@ -46,6 +46,13 @@ Notes that apply across the matrix:
   External Secrets Operator from Secrets Manager `/khal/omni/hml/*` — do not
   create them by hand in this realm.
 
+  DB TLS is verify-full in this realm: apply
+  [`deploy/k8s/omni-hml/rds-ca-configmap.yaml`](../deploy/k8s/omni-hml/rds-ca-configmap.yaml)
+  (the RDS sa-east-1 CA bundle) before/with the release — `values-hml-alb.yaml`
+  points `database.sslCaConfigMap` at it, and the app then verifies the RDS
+  certificate chain and hostname instead of trusting any cert under
+  `sslmode=require`.
+
 - **homolog/prod pre-created Secrets** (same namespace as the release; see the
   header comments in each values file for exact commands):
   - `omni-db` — key `DATABASE_URL`, the full RDS connection URL.

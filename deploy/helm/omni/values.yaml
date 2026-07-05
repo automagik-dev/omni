@@ -110,6 +110,14 @@ database:
   password: ""            # set via -f / --set-string (percent-encoded at render)
   sslmode: ""             # e.g. "disable" / "require"; empty → omit
 
+  # TLS server verification (sslmode=verify-full semantics). Point at a
+  # ConfigMap carrying the server's CA bundle (e.g. the RDS regional bundle
+  # from truststore.pki.rds.amazonaws.com) and the app verifies certificate
+  # chain AND hostname — a bare sslmode=require in the URL encrypts but never
+  # authenticates the server. Empty → no mount, driver behavior unchanged.
+  sslCaConfigMap: ""      # ConfigMap in the release namespace holding the PEM
+  sslCaKey: "ca-bundle.pem"  # key within that ConfigMap
+
 # ---- secret (DB creds + optional provider keys) -----------------------------
 # There is NO OMNI_API_KEY: omni auth is DB-backed bearer keys (+ optional
 # per-instance ed25519 X-Genie-Signature) — API keys live in Postgres rows, not
