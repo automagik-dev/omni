@@ -7,16 +7,24 @@
 
 image:
   repository: ghcr.io/automagik-dev/omni-api   # set to your registry/path
-  tag: "2.260703"                              # pin a released tag
+  # Pin a tag that EXISTS on GHCR. image-publish.yml pushes v<packages/cli
+  # version> (plus :main, :main-<sha12>) on merges to main — v2.260704.4 is
+  # the latest published release at pin time. Leave "" to track the chart's
+  # appVersion (v<appVersion>).
+  tag: "v2.260704.4"
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# omni-api is stateless (session state in Postgres) → HPA on, min 2 for HA.
-# Integration note: validate concurrent replicas for WhatsApp *credentials*
-# (one live Baileys socket per credential at the protocol level).
+# ONE replica, HPA off (see values.yaml "replicas + scaling"): a single
+# WhatsApp credential maps to one live Baileys socket, so concurrent replicas
+# risk key-ratchet corruption / duplicate sends until single-socket ownership
+# (leader election) exists. Scale out only for HTTP/API + non-WhatsApp
+# traffic — the chart then auto-adds a PDB + pod anti-affinity, and
+# migrate-on-boot serializes via a Postgres advisory lock.
+replicaCount: 1
 autoscaling:
-  enabled: true
-  minReplicas: 2
+  enabled: false
+  minReplicas: 1
   maxReplicas: 6
   targetCPUUtilizationPercentage: 75
 
@@ -37,9 +45,12 @@ ingress:
       hosts:
         - omni.example.com
 
-# Prefer an existing Secret published by autopg (full DATABASE_URL) in prod.
+# DATABASE_URL comes from the Secret the autopg subchart publishes:
+# `<release>-autopg-app`, key DATABASE_URL (password percent-encoded). With
+# existingSecret/host left empty the chart auto-derives that name for ANY
+# release name — set existingSecret only to point at your own Secret instead.
 database:
-  existingSecret: "omni-autopg-app"   # Secret holding DATABASE_URL
+  existingSecret: ""
   urlKey: "DATABASE_URL"
 
 secret:
@@ -82,6 +93,12 @@ media:
     forcePathStyle: false
     presignTtlSeconds: 3600
     endpoint: ""                         # empty → real AWS S3 from region
+    # Presign GET URLs against a public endpoint instead of `endpoint` —
+    # required when agents consuming presigned media URLs run OUTSIDE the
+    # cluster and cannot reach the internal S3 endpoint. Uploads/reads are
+    # unaffected. Leave unset when `endpoint` is already publicly reachable
+    # (e.g. real AWS S3).
+    # publicEndpoint: "https://media.example.com"
     existingSecret: "omni-media-s3"      # must hold the two keys below
     accessKeyKey: "OMNI_MEDIA_S3_ACCESS_KEY"
     secretKeyKey: "OMNI_MEDIA_S3_SECRET_KEY"
@@ -91,5 +108,16 @@ media:
 minio:
   enabled: false
 
+# Bundled autopg Postgres. SECURITY: assumes a single-tenant cluster + the
+# chart's NetworkPolicy (networkPolicy.enabled, on by default) — the autopg
+# superuser password is hardcoded and unrotatable, see values.yaml `autopg:`.
 autopg:
   enabled: true
+  image:
+    # v<autopg release> — matches charts/autopg Chart.yaml appVersion (3.0.7).
+    # Published by the omni image-publish workflow; NOTE: a prod deploy before
+    # the first publish run to ghcr.io/automagik-dev/autopg will
+    # ImagePullBackOff. Leave tag "" to track the subchart's appVersion.
+    repository: ghcr.io/automagik-dev/autopg
+    tag: "v3.0.7"
+    pullPolicy: IfNotPresent

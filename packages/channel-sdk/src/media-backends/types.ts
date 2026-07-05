@@ -50,6 +50,30 @@ export interface StoreMediaResult {
   mimeType?: string;
 }
 
+/** Metadata for a stored object, fetched without reading its bytes. */
+export interface MediaObjectStat {
+  /** Object size in bytes. */
+  size: number;
+}
+
+/**
+ * Whether an error thrown by a backend read/stat means "the object does not
+ * exist" — as opposed to a transient or configuration failure (endpoint down,
+ * bad credentials, missing bucket) that callers must surface as retryable.
+ *
+ * Signals (verified against Bun 1.3.9 + MinIO):
+ * - local: `readFile`/`stat` throw with `code: 'ENOENT'`.
+ * - remote: `Bun.S3Client` throws `S3Error` with `code: 'NoSuchKey'` for a
+ *   missing object. Unreachable endpoints yield `ConnectionRefused`, bad
+ *   credentials `InvalidAccessKeyId`, a missing bucket `NoSuchBucket` — none
+ *   of which mean the object is gone.
+ */
+export function isMediaNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as { code?: unknown }).code;
+  return code === 'ENOENT' || code === 'NoSuchKey';
+}
+
 export interface MediaStorageBackend {
   readonly mode: MediaStorageMode;
 
@@ -79,6 +103,29 @@ export interface MediaStorageBackend {
    * filesystem path and cannot read an S3 key directly.
    */
   read(key: string): Promise<Buffer>;
+
+  /**
+   * Stat a previously stored `key` without reading its bytes. Returns `null`
+   * when the object does not exist; throws on transient/config failures
+   * (endpoint unreachable, bad credentials, …) so callers can distinguish
+   * "gone" from "down right now".
+   */
+  stat(key: string): Promise<MediaObjectStat | null>;
+
+  /**
+   * Read an inclusive byte range `[start, endInclusive]` of a stored `key`.
+   * Backends fetch ONLY the requested bytes (`fs` positional read / S3 ranged
+   * GET) — never the whole object — so Range-request serving stays O(range),
+   * not O(object).
+   */
+  readRange(key: string, start: number, endInclusive: number): Promise<Buffer>;
+
+  /**
+   * Open a byte stream over the full object without buffering it in the heap
+   * (local file stream / S3 streaming GET). Used to serve full-object GETs of
+   * potentially multi-GB media.
+   */
+  readStream(key: string): Promise<ReadableStream<Uint8Array>>;
 
   /**
    * Presign a time-limited GET URL for a previously stored `key`.

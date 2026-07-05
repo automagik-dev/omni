@@ -13,21 +13,42 @@ ordered-before-serving two ways:
      bucket exists.
 */ -}}
 {{- if not .Values.media.s3.existingSecret }}
+{{- /*
+App creds are DISTINCT from the root user: the bootstrap Job (and the per-pod
+initContainer) provision a scoped `minio.appUser` with the builtin readwrite
+policy, and omni-api consumes only that user via OMNI_MEDIA_S3_* — never the
+root/admin credential. An empty appPassword auto-generates a stable random
+preserved across upgrades via helm lookup (same GitOps caveat as autopg:
+template-rendering GitOps must pin minio.appPassword or use
+media.s3.existingSecret). Remaining bundled-MinIO assumptions: in-cluster
+ClusterIP + plaintext http:// only — keep media.s3.presignTtlSeconds as low as
+the workflow tolerates, and use an external S3 + existingSecret in prod.
+*/ -}}
+{{- $minioSecretName := include "omni.minio.fullname" . }}
+{{- $minioExisting := lookup "v1" "Secret" .Release.Namespace $minioSecretName }}
+{{- $appPw := .Values.minio.appPassword }}
+{{- if not $appPw }}
+{{- if and $minioExisting (hasKey $minioExisting.data "OMNI_MEDIA_S3_SECRET_KEY") }}
+{{- $appPw = index $minioExisting.data "OMNI_MEDIA_S3_SECRET_KEY" | b64dec }}
+{{- else }}
+{{- $appPw = randAlphaNum 32 }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "omni.minio.fullname" . }}
+  name: {{ $minioSecretName }}
   labels:
     {{- include "omni.labels" . | nindent 4 }}
     app.kubernetes.io/component: minio
 type: Opaque
 stringData:
-  # MinIO server root creds — also serve as the S3 access/secret keys consumed
-  # by omni-api (OMNI_MEDIA_S3_ACCESS_KEY / _SECRET_KEY) via secretKeyRef.
+  # MinIO server root creds (server boot + bucket/user provisioning only).
   MINIO_ROOT_USER: {{ .Values.minio.rootUser | quote }}
   MINIO_ROOT_PASSWORD: {{ .Values.minio.rootPassword | quote }}
-  OMNI_MEDIA_S3_ACCESS_KEY: {{ .Values.minio.rootUser | quote }}
-  OMNI_MEDIA_S3_SECRET_KEY: {{ .Values.minio.rootPassword | quote }}
+  # Scoped app creds consumed by omni-api via secretKeyRef (LOW-8: not root).
+  OMNI_MEDIA_S3_ACCESS_KEY: {{ .Values.minio.appUser | quote }}
+  OMNI_MEDIA_S3_SECRET_KEY: {{ $appPw | quote }}
 ---
 {{- end }}
 apiVersion: v1
@@ -159,4 +180,13 @@ spec:
               done
               mc mb --ignore-existing "omni/{{ .Values.media.s3.bucket }}"
               echo "bucket omni/{{ .Values.media.s3.bucket }} is ready"
+              # Provision the scoped app user omni-api consumes (distinct from
+              # root). `mc admin user add` also resets the password if the user
+              # exists, so re-runs converge on the Secret's current value.
+              if [ "$OMNI_MEDIA_S3_ACCESS_KEY" != "$MINIO_ROOT_USER" ]; then
+                mc admin user add omni "$OMNI_MEDIA_S3_ACCESS_KEY" "$OMNI_MEDIA_S3_SECRET_KEY"
+                mc admin policy attach omni readwrite --user "$OMNI_MEDIA_S3_ACCESS_KEY" \
+                  || echo "readwrite policy already attached"
+                echo "app user $OMNI_MEDIA_S3_ACCESS_KEY is ready"
+              fi
 {{- end }}

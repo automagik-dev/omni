@@ -1,0 +1,45 @@
+{{- /*
+NetworkPolicy locking down the bundled autopg Postgres (H6): its postmaster
+hardcodes superuser postgres/postgres and CANNOT rotate it, so nothing but
+network reachability protects the superuser. This policy allows :5432 ingress
+ONLY from the omni-api pods and autopg's own provision Job pods (which create
+the scoped role); everything else in the cluster is denied.
+
+Lives in the umbrella chart (not the autopg subchart) because only the parent
+knows both label sets. NOTE: it is enforced only on clusters whose CNI
+implements NetworkPolicy — on clusters without enforcement, do not run the
+bundled autopg next to untrusted workloads (see values.yaml `autopg:` notes).
+*/ -}}
+{{- if and .Values.autopg.enabled .Values.networkPolicy.enabled }}
+{{- $autopgName := default "autopg" (.Values.autopg | default dict).nameOverride }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "omni.autopg.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autopg
+spec:
+  # The autopg postgres pod (the provision Job pods carry a different
+  # app.kubernetes.io/name so they are NOT selected here).
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $autopgName }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # omni-api pods (same namespace)
+        - podSelector:
+            matchLabels:
+              {{- include "omni.apiSelectorLabels" . | nindent 14 }}
+        # autopg's provision Job pods (role/db bootstrap)
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ $autopgName }}-provision
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - protocol: TCP
+          port: {{ ((.Values.autopg | default dict).port) | default 5432 }}
+{{- end }}

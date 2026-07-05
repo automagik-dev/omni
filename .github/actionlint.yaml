@@ -1,0 +1,8 @@
+# actionlint configuration (https://github.com/rhysd/actionlint)
+#
+# Every CI job runs on Blacksmith-hosted runners (https://blacksmith.sh).
+# actionlint only knows GitHub-hosted labels, so declare the custom labels
+# here; otherwise every `runs-on:` line reports a runner-label false positive.
+self-hosted-runner:
+  labels:
+    - blacksmith-4vcpu-ubuntu-2404

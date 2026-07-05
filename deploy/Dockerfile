@@ -20,19 +20,37 @@
 # pinned to the toolchain that generated it. Override with --build-arg.
 ARG BUN_VERSION=1.3.9
 
+# ---- manifests: prune the context to workspace package.json files ------------
+# Throwaway stage that extracts ONLY the lockfile + every workspace manifest.
+# The deps stage COPYs from here, so its `bun install` layer is invalidated
+# only when dependencies actually change — not on every source edit.
+FROM oven/bun:${BUN_VERSION} AS manifests
+WORKDIR /src
+COPY package.json bun.lock ./
+COPY packages ./packages
+COPY apps ./apps
+# Vendored file: tarballs (e.g. channel-whatsapp's baileys .tgz) are install
+# inputs too — bun install fails without them, and like the manifests they
+# only change when dependencies change.
+RUN mkdir -p /manifests \
+  && cp --parents package.json bun.lock /manifests/ \
+  && find packages apps -maxdepth 2 -name package.json -exec cp --parents {} /manifests/ \; \
+  && find packages apps -path '*/vendor/*.tgz' -exec cp --parents {} /manifests/ \;
+
 # ---- deps: full monorepo install (dev deps needed to build) -----------------
 FROM oven/bun:${BUN_VERSION} AS deps
 ENV HUSKY=0
 WORKDIR /src
-# Manifests first for better layer caching of the install step.
-COPY package.json bun.lock ./
-COPY packages ./packages
-COPY apps ./apps
+# Manifests only → the install layer caches until dependencies change.
+COPY --from=manifests /manifests ./
 # --ignore-scripts: skip the monorepo's postinstall (ensure-libicu-symlinks,
 # husky) — irrelevant to producing the server bundle and its ICU symlinks would
 # not carry to the separate runtime base anyway. Deps resolve on disk for the
 # bundler regardless.
 RUN bun install --frozen-lockfile --ignore-scripts
+# Source arrives AFTER the install so code edits don't re-run bun install.
+COPY packages ./packages
+COPY apps ./apps
 
 # ---- builder: bundle the server + copy migrations ---------------------------
 FROM deps AS builder
@@ -58,15 +76,14 @@ RUN bun -e 'const p = await Bun.file("orig-package.json").json(); await Bun.writ
 
 # ---- runtime: slim, non-root ------------------------------------------------
 FROM oven/bun:${BUN_VERSION}-slim AS runtime
-# omni-api is stateless: creds/session live in Postgres, not on disk.
-# PGSERVE_EMBEDDED/NATS_MANAGED=false → use external DATABASE_URL / NATS_URL
-# instead of the in-process embedded pgserve / self-managed nats. HOME is an
-# ephemeral writable dir (no PVC needed) for any home-relative scratch writes.
+# omni-api is stateless: creds/session live in Postgres, not on disk. The
+# containerized API is driven entirely by DATABASE_URL + NATS_URL (embedded
+# pgserve was removed; NATS_MANAGED only matters to the PM2 ecosystem config,
+# which does not run here — neither env var is needed). HOME is an ephemeral
+# writable dir (no PVC needed) for any home-relative scratch writes.
 ENV NODE_ENV=production \
     API_HOST=0.0.0.0 \
     API_PORT=8882 \
-    PGSERVE_EMBEDDED=false \
-    NATS_MANAGED=false \
     HOME=/home/bun
 WORKDIR /app
 

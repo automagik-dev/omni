@@ -6,48 +6,33 @@ allowed-tools: Bash(omni *), Bash(jq *)
 
 # Omni Router
 
-First, check if Omni is running: `omni auth status --json 2>/dev/null || echo "not running"`
+Pure dispatcher — probe health, match intent, load exactly one tier, act there.
 
-If not running → load `omni-setup/SKILL.md` and follow Step 1 (install).
-If running → match the user's intent against the keyword tiers below.
+Health probe: `omni auth status --json 2>/dev/null || echo "not running"`. Not running → load `omni-setup/SKILL.md` (Step 1). Running → match the tiers below in priority order; first hit wins.
 
-## Three-Tier Routing (priority order)
+## 1. Agent tier — send and receive
 
-### 1. Agent tier — Send/Receive Messages
+**Triggers:** say, speak, reply, respond, send, message, text, voice, TTS, react, imagine, film, music, media, image, audio, video, listen, transcribe, see, vision, sticker, poll, location, history, chat, conversation, turn-based, done, message search
 
-Most agent work is conversational. Match these keywords first.
+**→ Load `omni-agent/SKILL.md`** — verb commands (`say`, `speak`, `imagine`, `film`, `music`, `react`, `see`, `listen`, `history`, `done`), send edge cases, messages/chats, turn lifecycle.
 
-**Keywords:** say, speak, imagine, react, history, done, reply, respond, send, message, text, voice, TTS, media, image, audio, listen, see, vision, transcribe, sticker, poll, location, chat, conversation, turn-based, WhatsApp reply, message search
+## 2. Setup tier — install and connect
 
-**→ Load:** `omni-agent/SKILL.md`
+**Triggers:** install, setup, get started, first time, fresh install, not installed, server not running, connect channel, connect WhatsApp, scan QR, pair, plug agent, start bridge, onboarding
 
-Covers verbs (`omni say`, `omni speak`, `omni imagine`, `omni react`, `omni see`, `omni listen`, `omni history`, `omni done`), send edge cases (media, polls, locations, stickers), message search, chat operations, and turn-based lifecycle.
+**→ Load `omni-setup/SKILL.md`** — install → connect channel → plug agent (`omni connect`) → start bridge → verify. Canonical home for that flow and its troubleshooting.
 
-### 2. Setup tier — Install & Connect
+## 3. Ops tier — platform administration
 
-For first-time installation, channel pairing, and getting an agent plugged in.
+**Triggers:** instances, routes, routing, providers, config, settings, API keys, events, analytics, timeline, replay, journey, automations, triggers, workflows, webhooks, custom events, prompts, gate prompt, persons, contacts, presence, batch, extract, debug, admin, status, logs, restart, dead letters, payloads, access, allowlist
 
-**Keywords:** install, setup, get started, first time, fresh install, server not running, not installed, connect channel, connect WhatsApp, scan QR, pair, plug agent, start bridge, configure, onboarding
-
-**→ Load:** `omni-setup/SKILL.md`
-
-4-step quick start: install → connect channel → plug agent → start bridge → verify.
-
-### 3. Ops tier — Platform Administration
-
-For infrastructure operations, debugging, analytics, and configuration.
-
-**Keywords:** instances, routes, routing, providers, agent providers, config, settings, API keys, events, analytics, timeline, replay, journey, automations, triggers, workflows, webhooks, custom events, prompts, gate prompt, persons, contacts, presence, batch, transcribe, extract, debug, admin, status, logs, restart, dead letters, payloads, access, allowlist
-
-**→ Load:** `omni-ops/SKILL.md`
-
-Mini-router covering instances, routes, providers, config, events, automations, webhooks, prompts, persons, and batch processing.
+**→ Load `omni-ops/SKILL.md`** — keyword-routed index over `references/` for instances, routes, providers, config, events, automations, webhooks, prompts, persons, batch.
 
 ## Default
 
-If no keyword matches, default to **`omni-agent/SKILL.md`** — most users want to communicate, not configure.
+No match → `omni-agent/SKILL.md`. Most requests are about communicating, not configuring.
 
-## Always Use
+## Always
 
-- `--json` flag by default for agent consumption
-- Verify instance/channel status before sending: `omni instances list --json`
+- Add `--json` to any command whose output you parse.
+- Before sending, confirm the target instance is connected: `omni instances list --status connected --json`.

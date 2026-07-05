@@ -7,12 +7,19 @@
  */
 
 import { createWriteStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, open, readFile, rm, stat } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { DownloadTooLargeError } from '../download-guard';
-import type { MediaStorageBackend, StoreMediaInput, StoreMediaResult, StoreStreamInput } from './types';
+import {
+  type MediaObjectStat,
+  type MediaStorageBackend,
+  type StoreMediaInput,
+  type StoreMediaResult,
+  type StoreStreamInput,
+  isMediaNotFoundError,
+} from './types';
 
 export class LocalMediaBackend implements MediaStorageBackend {
   readonly mode = 'local' as const;
@@ -83,6 +90,36 @@ export class LocalMediaBackend implements MediaStorageBackend {
 
   async read(key: string): Promise<Buffer> {
     return readFile(this.getSafePath(key));
+  }
+
+  async stat(key: string): Promise<MediaObjectStat | null> {
+    try {
+      const info = await stat(this.getSafePath(key));
+      return { size: Number(info.size) };
+    } catch (error) {
+      if (isMediaNotFoundError(error)) return null;
+      throw error;
+    }
+  }
+
+  async readRange(key: string, start: number, endInclusive: number): Promise<Buffer> {
+    const length = endInclusive - start + 1;
+    const handle = await open(this.getSafePath(key), 'r');
+    try {
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, start);
+      return bytesRead === length ? buffer : buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async readStream(key: string): Promise<ReadableStream<Uint8Array>> {
+    const path = this.getSafePath(key);
+    // Surface a missing file as ENOENT NOW (Bun.file streams error lazily,
+    // after the Response has already committed a 200).
+    await stat(path);
+    return Bun.file(path).stream();
   }
 
   async presignedUrl(_key?: string, _ttlSeconds?: number): Promise<string> {

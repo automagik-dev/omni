@@ -16,10 +16,6 @@
  * @see media-processing-realtime wish
  */
 
-import { randomUUID } from 'node:crypto';
-import { rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { extname, join } from 'node:path';
 import type { ChannelType, EventBus, MessageReceivedPayload } from '@omni/core';
 import { createLogger, isValidUuid } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -142,16 +138,6 @@ interface MediaResolution {
 }
 
 /**
- * Media bytes materialized as a local filesystem path for the processing
- * service (which only accepts a path and reads whole files off disk), paired
- * with a cleanup that removes any temp file created for it.
- */
-interface ProcessableMedia {
-  path: string;
-  cleanup: () => Promise<void>;
-}
-
-/**
  * Build fetch options for authenticated media downloads.
  * Slack private URLs require a bot-token Authorization header — we look it up
  * from the instances table so credentials never enter the event payload or DB.
@@ -269,41 +255,6 @@ async function resolveMediaPath(
   return {
     messageId: message.id,
     filePath,
-  };
-}
-
-/**
- * Materialize the stored media as a local filesystem path the processing
- * service can read.
- *
- * - `local`: the bytes already live at `{basePath}/{key}`, so hand back that
- *   path directly with a no-op cleanup (byte-for-byte the previous behavior).
- * - `remote`: `filePath` is an S3 key, not a local path. Fetch the bytes via
- *   the storage backend and write them to an `os.tmpdir()` temp file, returning
- *   a cleanup that removes it. The temp file keeps the stored extension so
- *   processors that sniff by extension (e.g. audio duration) behave as on disk.
- */
-async function materializeForProcessing(ctx: MediaProcessorContext, filePath: string): Promise<ProcessableMedia> {
-  if (ctx.mediaStorage.getStorageMode() === 'local') {
-    return { path: join(ctx.mediaStorage.getBasePath(), filePath), cleanup: async () => {} };
-  }
-
-  const buffer = await ctx.mediaStorage.read(filePath);
-  const ext = extname(filePath) || '.bin';
-  const tempPath = join(tmpdir(), `omni-media-${randomUUID()}${ext}`);
-  try {
-    await writeFile(tempPath, buffer);
-  } catch (error) {
-    // A failed write (ENOSPC, permissions) can leave a partial file behind.
-    await rm(tempPath, { force: true }).catch(() => {});
-    throw error;
-  }
-
-  return {
-    path: tempPath,
-    cleanup: async () => {
-      await rm(tempPath, { force: true });
-    },
   };
 }
 
@@ -429,7 +380,7 @@ async function processMessageMedia(
 
   // Obtain a readable local path for the bytes. In remote mode this fetches the
   // S3 object into a temp file; in local mode it resolves the on-disk path.
-  const processable = await materializeForProcessing(ctx, media.filePath);
+  const processable = await ctx.mediaStorage.materializeForProcessing(media.filePath);
 
   log.info('Processing media', { messageId: media.messageId, mimeType, filePath: processable.path });
 
@@ -716,7 +667,6 @@ export const __test__ = {
   persistProcessingResult,
   resolveSafeMediaContentEventId,
   processMessageMedia,
-  materializeForProcessing,
 };
 
 export type { MediaProcessorContext };

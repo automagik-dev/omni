@@ -16,6 +16,7 @@ import { Readable } from 'node:stream';
 import { createMediaBackend } from '../index';
 import { LocalMediaBackend } from '../local-backend';
 import { S3MediaBackend } from '../s3-backend';
+import { isMediaNotFoundError } from '../types';
 
 describe('createMediaBackend', () => {
   const OriginalS3Client = Bun.S3Client;
@@ -106,7 +107,7 @@ describe('LocalMediaBackend', () => {
     await expect(backend.presignedUrl('inst-1/2026-07/msg-1.png')).rejects.toThrow(/remote mode/);
   });
 
-  it('rejects keys that escape the storage root (store, storeStream, read)', async () => {
+  it('rejects keys that escape the storage root (store, storeStream, read, stat, readRange, readStream)', async () => {
     const backend = new LocalMediaBackend(tmpDir);
     const escapingKey = join('..', 'omni-escape-test.txt');
     const buffer = Buffer.from([1]);
@@ -117,6 +118,9 @@ describe('LocalMediaBackend', () => {
     await expect(backend.storeStream({ key: escapingKey, stream, mimeType: 'text/plain' })).rejects.toThrow(
       /storage root/,
     );
+    await expect(backend.stat(escapingKey)).rejects.toThrow(/storage root/);
+    await expect(backend.readRange(escapingKey, 0, 0)).rejects.toThrow(/storage root/);
+    await expect(backend.readStream(escapingKey)).rejects.toThrow(/storage root/);
 
     // Nothing escaped the root.
     expect(existsSync(join(tmpDir, '..', 'omni-escape-test.txt'))).toBe(false);
@@ -128,5 +132,66 @@ describe('LocalMediaBackend', () => {
     await backend.store({ key, buffer: Buffer.from([9, 9]), mimeType: 'application/octet-stream' });
     const bytes = await backend.read(key);
     expect(Array.from(bytes)).toEqual([9, 9]);
+  });
+
+  it('stat returns size for existing keys and null for missing ones', async () => {
+    const backend = new LocalMediaBackend(tmpDir);
+    const key = join('inst-1', '2026-07', 'msg-stat.bin');
+    await backend.store({ key, buffer: Buffer.from([1, 2, 3]), mimeType: 'application/octet-stream' });
+
+    expect(await backend.stat(key)).toEqual({ size: 3 });
+    expect(await backend.stat(join('inst-1', '2026-07', 'missing.bin'))).toBeNull();
+  });
+
+  it('readRange returns exactly the inclusive byte range without reading the whole file', async () => {
+    const backend = new LocalMediaBackend(tmpDir);
+    const key = join('inst-1', '2026-07', 'msg-range.bin');
+    const payload = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+    await backend.store({ key, buffer: payload, mimeType: 'application/octet-stream' });
+
+    const chunk = await backend.readRange(key, 10, 19);
+    expect(Array.from(chunk)).toEqual(Array.from(payload.subarray(10, 20)));
+
+    // Clamped at EOF: asking past the end returns only what exists.
+    const tail = await backend.readRange(key, 250, 300);
+    expect(Array.from(tail)).toEqual(Array.from(payload.subarray(250)));
+  });
+
+  it('readStream yields the full bytes and rejects with ENOENT for missing keys', async () => {
+    const backend = new LocalMediaBackend(tmpDir);
+    const key = join('inst-1', '2026-07', 'msg-stream.bin');
+    const payload = Buffer.from([5, 6, 7, 8]);
+    await backend.store({ key, buffer: payload, mimeType: 'application/octet-stream' });
+
+    const stream = await backend.readStream(key);
+    const bytes = Buffer.from(await new Response(stream).arrayBuffer());
+    expect(bytes.equals(payload)).toBe(true);
+
+    await expect(backend.readStream(join('inst-1', '2026-07', 'missing.bin'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+});
+
+describe('isMediaNotFoundError', () => {
+  function coded(code: string): Error {
+    const error = new Error(code) as Error & { code: string };
+    error.code = code;
+    return error;
+  }
+
+  it('classifies local ENOENT and S3 NoSuchKey as not-found', () => {
+    expect(isMediaNotFoundError(coded('ENOENT'))).toBe(true);
+    expect(isMediaNotFoundError(coded('NoSuchKey'))).toBe(true);
+  });
+
+  it('classifies transient/config failures as NOT not-found', () => {
+    expect(isMediaNotFoundError(coded('ConnectionRefused'))).toBe(false);
+    expect(isMediaNotFoundError(coded('InvalidAccessKeyId'))).toBe(false);
+    expect(isMediaNotFoundError(coded('NoSuchBucket'))).toBe(false);
+    expect(isMediaNotFoundError(coded('UnknownError'))).toBe(false);
+    expect(isMediaNotFoundError(new Error('plain'))).toBe(false);
+    expect(isMediaNotFoundError(null)).toBe(false);
+    expect(isMediaNotFoundError('NoSuchKey')).toBe(false);
   });
 });

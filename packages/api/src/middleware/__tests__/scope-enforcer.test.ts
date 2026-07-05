@@ -265,6 +265,20 @@ describe('extractLockTargets — route & body target extraction', () => {
     expect(t.instance).toBe('path-inst');
   });
 
+  // ── GET /media/:instanceId/* embeds the instance in the path (PR #770 LOW-9) ──
+
+  test('GET /media/:instanceId/* — first path segment becomes the instance target', () => {
+    const t = extractLockTargets('GET', '/api/v2/media/inst-9/2026-07/msg-1.ogg', null);
+    expect(t.instance).toBe('inst-9');
+    expect(t.chat).toBeNull();
+    expect(t.recipient).toBeNull();
+  });
+
+  test('POST /media/tts — the verb segment is NOT treated as an instance target', () => {
+    const t = extractLockTargets('POST', '/api/v2/media/tts', { text: 'hello' });
+    expect(t.instance).toBeNull();
+  });
+
   test('body is still used when neither path nor header supplies the target', () => {
     const t = extractLockTargets(
       'POST',
@@ -319,5 +333,17 @@ describe('Integration scenarios from wish acceptance criteria', () => {
     const r = enforceInstanceAllowlist(key, targets.instance);
     expect(r.allowed).toBe(false);
     expect(r.attempted).toBe('other-inst');
+  });
+
+  test('instance-allowlisted key CAN read its own media and CANNOT read another instance media (LOW-9)', () => {
+    const key = mkKey({ profile: 'personal', instanceAllowlist: ['inst-own'] });
+
+    const own = extractLockTargets('GET', '/api/v2/media/inst-own/2026-07/msg-1.jpg', null);
+    expect(enforceInstanceAllowlist(key, own.instance).allowed).toBe(true);
+
+    const other = extractLockTargets('GET', '/api/v2/media/inst-other/2026-07/msg-2.jpg', null);
+    const denied = enforceInstanceAllowlist(key, other.instance);
+    expect(denied.allowed).toBe(false);
+    expect(denied.attempted).toBe('inst-other');
   });
 });

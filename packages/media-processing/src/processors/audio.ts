@@ -134,7 +134,7 @@ export class AudioProcessor extends BaseProcessor {
             getNormalizedAudio,
           ),
         () => this.transcribeWithOpenAiTranscriptions(language, options, OPENAI_TRANSCRIBE_MODEL, getNormalizedAudio),
-        () => this.transcribeWithGemini(language, options, GEMINI_AUDIO_MODEL, getNormalizedAudio),
+        () => this.transcribeWithGemini(language, options, this.resolveGeminiAudioModel(undefined), getNormalizedAudio),
         () => this.transcribeWithGroq(language, getNormalizedAudio),
       ];
     }

@@ -3,7 +3,11 @@ name: omni
 description: Omni — multi-channel messaging API (Bun/Hono) with Postgres (autopg) and NATS/JetStream
 type: application
 version: 0.1.0
-appVersion: "2.260703"
+# appVersion tracks the latest PUBLISHED omni release (packages/cli version):
+# image-publish.yml pushes ghcr.io/automagik-dev/omni-api:v<version> on merge
+# to main, and the chart's default image tag is v<appVersion>. Bump this only
+# to versions that exist on GHCR.
+appVersion: "2.260704.4"
 keywords:
   - omni
   - messaging
@@ -15,12 +19,11 @@ sources:
 maintainers:
   - name: automagik-dev
 dependencies:
-  # autopg — Postgres chart built separately by the lead and vendored into
-  # charts/autopg/ from scratchpad/autopg/deploy/helm/autopg at integration.
-  # A minimal PLACEHOLDER chart lives at charts/autopg/ so this umbrella
-  # renders/lints standalone; the lead replaces it with the real one.
-  # Keep the name `autopg`; its values live under the top-level `autopg:` key.
-  # Toggle with `autopg.enabled` so an external Postgres can be used instead.
+  # autopg — the REAL vendored PostgreSQL 18 chart (from automagik-dev/autopg),
+  # not a placeholder: single-replica StatefulSet + scoped-role provisioning +
+  # a published `<release>-autopg-app` DATABASE_URL Secret. Do not rip it out.
+  # Its values live under the top-level `autopg:` key; toggle with
+  # `autopg.enabled` to use an external Postgres instead.
   - name: autopg
     version: "0.1.0"
     repository: "file://./charts/autopg"
