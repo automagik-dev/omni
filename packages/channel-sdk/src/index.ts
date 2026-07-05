@@ -97,9 +97,16 @@ export type { DownloadGuard, DownloadGuardConfig, DownloadGuardContext } from '.
 // Media storage backends (shared by @omni/api and channel plugins)
 // ─────────────────────────────────────────────────────────────
 
-export { createMediaBackend, LocalMediaBackend, resolveMediaBackendConfig, S3MediaBackend } from './media-backends';
+export {
+  createMediaBackend,
+  isMediaNotFoundError,
+  LocalMediaBackend,
+  resolveMediaBackendConfig,
+  S3MediaBackend,
+} from './media-backends';
 export type {
   MediaBackendConfig,
+  MediaObjectStat,
   MediaStorageBackend,
   MediaStorageMode,
   S3BackendConfig,

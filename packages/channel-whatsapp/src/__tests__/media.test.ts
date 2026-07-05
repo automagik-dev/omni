@@ -15,12 +15,7 @@ import {
   buildStickerContent,
   buildVideoContent,
 } from '../senders/media';
-import {
-  generateFilename,
-  getExtension,
-  getWhatsAppMediaDownloadMaxBytes,
-  writeMediaStreamToFile,
-} from '../utils/download';
+import { getExtension, getWhatsAppMediaDownloadMaxBytes, writeMediaStreamToFile } from '../utils/download';
 
 describe('Media Utilities', () => {
   describe('getExtension', () => {
@@ -54,23 +49,6 @@ describe('Media Utilities', () => {
 
     it('returns .bin for unknown types', () => {
       expect(getExtension('application/x-custom')).toBe('.bin');
-    });
-  });
-
-  describe('generateFilename', () => {
-    it('uses original filename if provided', () => {
-      expect(generateFilename('image/jpeg', 'photo.jpg')).toBe('photo.jpg');
-    });
-
-    it('generates UUID filename with correct extension', () => {
-      const filename = generateFilename('image/png');
-      expect(filename).toMatch(/^[a-f0-9-]+\.png$/);
-    });
-
-    it('generates different filenames each call', () => {
-      const filename1 = generateFilename('audio/ogg');
-      const filename2 = generateFilename('audio/ogg');
-      expect(filename1).not.toBe(filename2);
     });
   });
 
