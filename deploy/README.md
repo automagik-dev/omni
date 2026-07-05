@@ -12,6 +12,7 @@ self-hosting and Namastex's managed AWS clusters.
 |---|---|---|---|---|---|---|
 | **dev** | Local k8s (OrbStack, k3d, kind, …) — the self-host shape | [`values-dev.yaml`](helm/omni/values-dev.yaml) | Locally built `omni-api:dev` + `autopg:dev` (`pullPolicy: Never`); tracks the `dev` branch you build from | Bundled **autopg** subchart (Postgres 18, in-cluster) | Bundled **MinIO** (in-cluster S3) | You — `make -C deploy deploy` |
 | **homolog (HML)** | Dedicated AWS cluster | [`values-homolog.yaml`](helm/omni/values-homolog.yaml) | `ghcr.io/automagik-dev/omni-api` — `tag: ""` → `v<Chart.appVersion>`; the `:homolog` tag tracks the `homolog` branch | External **RDS** via pre-created Secret `omni-db` (`DATABASE_URL`) | Real **AWS S3** (`omni-media-hml`) via Secret `omni-media-s3` | Namastex |
+| **HML co-tenant (ALB)** | Shared `langwatch-hml` EKS cluster (sa-east-1), namespace `omni-hml` | [`values-homolog.yaml`](helm/omni/values-homolog.yaml) **+** [`values-hml-alb.yaml`](helm/omni/values-hml-alb.yaml) delta (in that order) | `ghcr.io/automagik-dev/omni-api` — `v<Chart.appVersion>` from public GHCR (no pull secret) | Shared RDS instance, **own `omni` database** — `omni-db` Secret ESO-synced from Secrets Manager `/khal/omni/hml/db` | Real **AWS S3** (`nmstx-khal-omni-hml-media`, sa-east-1) — `omni-media-s3` Secret ESO-synced from `/khal/omni/hml/media-s3` | Namastex |
 | **prod** | Dedicated AWS cluster (separate from HML) | [`values-prod.yaml`](helm/omni/values-prod.yaml) | `ghcr.io/automagik-dev/omni-api` — `tag: ""` → `v<Chart.appVersion>` (v-tags published on merge to `main`; `:main` also available) | External **RDS** via Secret `omni-db` (`DATABASE_URL`) | Real **AWS S3** (`omni-media`) via Secret `omni-media-s3` | Namastex |
 
 Notes that apply across the matrix:
@@ -25,6 +26,25 @@ Notes that apply across the matrix:
   make -C deploy deploy REALM=homolog HELM_EXTRA='--set ingress.host=omni-hml.example.com'
   make -C deploy deploy REALM=prod    HELM_EXTRA='--set ingress.host=omni.example.com'
   ```
+
+- **HML co-tenant (ALB) deploy command** — the co-tenant realm rides on the
+  shared `langwatch-hml` cluster, so ingress is the AWS Load Balancer
+  Controller instead of nginx/cert-manager. Layer the ALB delta AFTER the
+  homolog overlay and pass the ACM certificate ARN at deploy time (see the
+  header of [`values-hml-alb.yaml`](helm/omni/values-hml-alb.yaml)):
+
+  ```bash
+  helm upgrade --install omni deploy/helm/omni -n omni-hml \
+    -f deploy/helm/omni/values-homolog.yaml \
+    -f deploy/helm/omni/values-hml-alb.yaml \
+    --set ingress.host=hml.omni.khal.ai \
+    --set 'ingress.annotations.alb\.ingress\.kubernetes\.io/certificate-arn=<acm-cert-arn>' \
+    --wait
+  ```
+
+  The `omni-db` / `omni-media-s3` Secrets in `omni-hml` are materialized by
+  External Secrets Operator from Secrets Manager `/khal/omni/hml/*` — do not
+  create them by hand in this realm.
 
 - **homolog/prod pre-created Secrets** (same namespace as the release; see the
   header comments in each values file for exact commands):
