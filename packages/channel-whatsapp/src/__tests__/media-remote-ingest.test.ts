@@ -16,7 +16,13 @@ const bytes = Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
 
 // Mock Baileys so `downloadMediaMessage('stream')` yields a Readable without a
 // real WhatsApp socket. Only the runtime export used by download.ts is stubbed.
+// `mock.module` replaces the module PROCESS-WIDE for every test file that runs
+// after this one, so the real module must be spread in: dropping the other
+// exports breaks unrelated suites that import `initAuthCreds`, `Browsers`,
+// `makeWASocket`, etc. (file-order dependent — Linux CI hits it, macOS may not).
+const realBaileys = await import('baileys');
 mock.module('baileys', () => ({
+  ...realBaileys,
   downloadMediaMessage: mock(async () => Readable.from([bytes])),
 }));
 

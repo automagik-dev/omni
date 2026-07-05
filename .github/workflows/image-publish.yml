@@ -36,6 +36,10 @@ on:
       - 'apps/**'
       - 'deploy/Dockerfile'
       - 'deploy/autopg.Dockerfile'
+      # Chart/values-only promotions still advance appVersion (version.yml
+      # stamps deploy/helm/omni/Chart.yaml); without this filter the stamped
+      # tag would never get an image built (stranded-tag case).
+      - 'deploy/helm/**'
       - 'bun.lock'
       - '.github/workflows/image-publish.yml'
   workflow_dispatch:
@@ -51,6 +55,12 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  # GitHub-native build provenance for the published images — this is what
+  # makes the documented `gh attestation verify oci://…` command
+  # (deploy/README.md) actually pass. `id-token` signs via OIDC/Sigstore;
+  # `attestations` stores the provenance in the repo's Attestations API.
+  id-token: write
+  attestations: write
 
 jobs:
   build-push:
@@ -91,6 +101,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
@@ -108,6 +119,16 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+
+      # GitHub-native provenance (Attestations API + registry referrer), so
+      # `gh attestation verify oci://…` works as deploy/README.md documents.
+      # BuildKit's inline `provenance: true` above is NOT visible to `gh`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   # Packages the automagik-dev/autopg release tarball as a container image
   # (that repo publishes no image of its own). The Helm chart's prod overlay
@@ -150,6 +171,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: deploy
@@ -170,3 +192,11 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ env.AUTOPG_VERSION }}
+
+      # Same GitHub-native provenance as omni-api above (see that comment).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
