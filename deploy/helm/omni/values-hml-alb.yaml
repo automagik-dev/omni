@@ -59,6 +59,15 @@ media:
     bucket: nmstx-khal-omni-hml-media
     region: sa-east-1
 
+# DB TLS verify-full: the shared-RDS DATABASE_URL carries sslmode=require
+# (encrypts, but trusts any cert — the RDS CA is not in the container's trust
+# store). Mounting the regional RDS CA bundle upgrades the connection to full
+# chain + hostname verification in @omni/db. The ConfigMap is applied from
+# deploy/k8s/omni-hml/rds-ca-configmap.yaml alongside the ExternalSecrets.
+database:
+  sslCaConfigMap: rds-ca-bundle
+  sslCaKey: sa-east-1-bundle.pem
+
 # NATS JetStream persistence: values-homolog.yaml leaves storageClass unset,
 # which uses the cluster's DEFAULT StorageClass. The langwatch-hml EKS default
 # could not be verified from here (likely gp3 via the EBS CSI driver, but gp2

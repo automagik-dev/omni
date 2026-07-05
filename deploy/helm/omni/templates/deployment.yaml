@@ -120,6 +120,12 @@ spec:
                   name: {{ include "omni.media.secretName" . }}
                   key: {{ .Values.media.s3.secretKeyKey }}
             {{- end }}
+            {{- if .Values.database.sslCaConfigMap }}
+            # --- DB TLS verify-full: verify server chain + hostname against
+            # the mounted CA bundle (a bare sslmode=require never does) ---
+            - name: DATABASE_SSL_CA_FILE
+              value: /etc/omni/db-tls/{{ .Values.database.sslCaKey }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -147,13 +153,27 @@ spec:
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- with .Values.extraVolumeMounts }}
+          {{- if or .Values.database.sslCaConfigMap .Values.extraVolumeMounts }}
           volumeMounts:
+            {{- if .Values.database.sslCaConfigMap }}
+            - name: db-ssl-ca
+              mountPath: /etc/omni/db-tls
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
-      {{- with .Values.extraVolumes }}
+      {{- if or .Values.database.sslCaConfigMap .Values.extraVolumes }}
       volumes:
+        {{- if .Values.database.sslCaConfigMap }}
+        - name: db-ssl-ca
+          configMap:
+            name: {{ .Values.database.sslCaConfigMap }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
