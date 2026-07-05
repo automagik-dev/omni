@@ -15,7 +15,9 @@ export type { MediaBackendConfig, S3BackendConfig } from './config';
 export { resolveMediaBackendConfig } from './config';
 export { LocalMediaBackend } from './local-backend';
 export { S3MediaBackend } from './s3-backend';
+export { isMediaNotFoundError } from './types';
 export type {
+  MediaObjectStat,
   MediaStorageBackend,
   MediaStorageMode,
   StoreMediaInput,

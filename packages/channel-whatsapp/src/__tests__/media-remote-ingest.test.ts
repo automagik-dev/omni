@@ -44,6 +44,15 @@ class RecordingRemoteBackend implements MediaStorageBackend {
   async read(_key: string): Promise<Buffer> {
     return Buffer.alloc(0);
   }
+  async stat(_key: string): Promise<{ size: number } | null> {
+    return null;
+  }
+  async readRange(_key: string, _start: number, _endInclusive: number): Promise<Buffer> {
+    return Buffer.alloc(0);
+  }
+  async readStream(_key: string): Promise<ReadableStream<Uint8Array>> {
+    return new Blob([]).stream();
+  }
   async presignedUrl(key: string): Promise<string> {
     return `https://s3.example/${key}?X-Amz-Signature=deadbeef`;
   }
