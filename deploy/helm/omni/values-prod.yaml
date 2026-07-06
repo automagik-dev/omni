@@ -1,28 +1,43 @@
 # =============================================================================
-# Production overlay — dedicated AWS cluster, external RDS + real S3.
+# Production overlay — external RDS + real S3 via IRSA, HA baseline.
 #   helm upgrade --install omni deploy/helm/omni -n omni \
 #     -f deploy/helm/omni/values-prod.yaml \
 #     --set ingress.host=<prod fqdn>
+# The LIVE prod realm (omni.khal.ai, co-tenant on the langwatch-prod EKS
+# cluster) layers values-prod-alb.yaml on top — see THAT file's header for the
+# exact deploy command with the ALB/ACM/IRSA --set flags.
 #
 # Realm shape (shared with values-homolog.yaml — separate clusters, one shape):
 #   - NO bundled datastores: autopg + MinIO are OFF. Postgres is external RDS
-#     (database.existingSecret), media is real AWS S3 (media.s3.existingSecret).
+#     (database.existingSecret), media is real AWS S3.
 #   - image.tag "" → v<Chart.appVersion>, the tag image-publish.yml publishes.
 #   - ingress.host is intentionally EMPTY: the chart fail-fasts unless the
 #     realm FQDN is passed via --set ingress.host=… (see templates/ingress.yaml).
+# Prod hardens beyond homolog:
+#   - IRSA-ONLY media auth (media.s3.irsa) — no static S3 keys exist ANYWHERE
+#     in this realm, by design a one-way door (hml retired its keys; prod
+#     never mints any).
+#   - DB TLS verify-full via the mounted RDS CA bundle (database.sslCaConfigMap).
+#   - HA baseline: 2 pinned replicas + PDB + the chart's automatic soft pod
+#     anti-affinity; NATS JetStream on an explicit gp3 PVC.
+#   - Heavier resources / JetStream stores than homolog.
 #
-# Required pre-created Secrets (same namespace as the release):
-#   omni-db        key DATABASE_URL — full RDS URL, e.g.
-#                  postgresql://omni:<pw>@<rds-endpoint>:5432/omni?sslmode=verify-full
-#                  (password percent-encoded; the role must OWN the omni tables —
-#                  migrations ALTER them on boot. sslmode=require is a working
-#                  minimum but does NOT verify the server cert — verify-full
-#                  needs the RDS CA bundle available to the client)
-#   omni-media-s3  keys OMNI_MEDIA_S3_ACCESS_KEY + OMNI_MEDIA_S3_SECRET_KEY
+# Required pre-created resources (same namespace as the release):
+#   Secret omni-db          key DATABASE_URL — full RDS URL, e.g.
+#                           postgresql://omni:<pw>@<rds-endpoint>:5432/omni?sslmode=verify-full
+#                           (password percent-encoded; the role must OWN the
+#                           omni tables — migrations ALTER them on boot.
+#                           verify-full actually verifies here because
+#                           database.sslCaConfigMap below mounts the RDS CA)
+#   ConfigMap rds-ca-bundle key sa-east-1-bundle.pem — the regional RDS CA
+#                           bundle (see deploy/k8s/omni-hml/rds-ca-configmap.yaml
+#                           for the hml counterpart and the trust-store source)
+#   NO omni-media-s3 Secret — S3 auth is IRSA-only (media.s3.irsa below plus
+#   the ServiceAccount role-arn annotation supplied via values-prod-alb.yaml).
 # =============================================================================
 
 image:
-  repository: ghcr.io/automagik-dev/omni-api   # set to your registry/path
+  repository: ghcr.io/automagik-dev/omni-api
   # "" → v<Chart.appVersion>: the latest PUBLISHED release (image-publish.yml
   # pushes v<packages/cli version> on merges to main). Pin an explicit v-tag
   # only to hold prod back from the chart's tracked release.
@@ -30,18 +45,35 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# ONE replica, HPA off (see values.yaml "replicas + scaling"): a single
-# WhatsApp credential maps to one live Baileys socket, so concurrent replicas
-# risk key-ratchet corruption / duplicate sends until single-socket ownership
-# (leader election) exists. Scale out only for HTTP/API + non-WhatsApp
-# traffic — the chart then auto-adds a PDB + pod anti-affinity, and
-# migrate-on-boot serializes via a Postgres advisory lock.
-replicaCount: 1
+# HA baseline: TWO replicas, deliberately PINNED via the HPA below. The chart's
+# scaling guidance (values.yaml "replicas + scaling", hpa.yaml) still applies —
+# a single WhatsApp credential maps to ONE live Baileys socket at the protocol
+# level, so autoscaling is only safe for HTTP/API + non-WhatsApp traffic. Two
+# replicas buy zero-downtime rollouts and node-drain survival: the chart
+# auto-adds soft pod anti-affinity at >1 replica (see templates/deployment.yaml)
+# and migrate-on-boot serializes via a Postgres advisory lock.
+# NOTE: replicaCount is ignored by the Deployment while autoscaling.enabled
+# (the HPA owns the replica field); it is kept at 2 as documentation and as
+# the fallback if the HPA is ever disabled.
+replicaCount: 2
+
+# HPA pinned min=max=2: holds the Deployment at exactly two replicas — no
+# scale-out until 2-replica WhatsApp stability is proven. Raise maxReplicas
+# deliberately, and only for HTTP/API traffic (see hpa.yaml's warning).
 autoscaling:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 6
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 2
+  # Inert while min==max (the HPA cannot move), but kept explicit so the
+  # rendered HPA carries a valid metrics block.
   targetCPUUtilizationPercentage: 75
+
+# PDB (minAvailable 1): guarantees one live api pod through voluntary
+# disruptions (node drains, cluster upgrades). Renders because >1 replica is
+# possible here — see templates/pdb.yaml.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
 
 config:
   LOG_LEVEL: "info"
@@ -56,6 +88,8 @@ ingress:
   # (NOT omitted — base values.yaml defaults host to omni.local, which would
   # silently bypass the chart's empty-host fail-fast). The tls hosts entry is
   # templated so it tracks whatever host is set.
+  # (The live prod realm replaces this whole nginx+cert-manager block with the
+  # AWS Load Balancer Controller via values-prod-alb.yaml.)
   host: ""
   path: /
   pathType: Prefix
@@ -65,13 +99,20 @@ ingress:
         - "{{ .Values.ingress.host }}"
 
 # DATABASE_URL comes from a pre-created external Secret pointing at RDS —
-# the bundled autopg is OFF in this realm (autopg.enabled below). Create it
-# before the first deploy:
+# the bundled autopg is OFF in this realm (autopg.enabled below). In the live
+# prod realm the Secret is ESO-materialized from Secrets Manager; for a manual
+# bring-up create it before the first deploy:
 #   kubectl -n omni create secret generic omni-db \
 #     --from-literal=DATABASE_URL='postgresql://omni:<pw>@<rds-endpoint>:5432/omni?sslmode=verify-full'
 database:
   existingSecret: "omni-db"
   urlKey: "DATABASE_URL"
+  # DB TLS verify-full: sslmode=require alone encrypts but trusts ANY server
+  # cert (the RDS CA is not in the container's trust store). Mounting the
+  # regional RDS CA bundle upgrades the connection to full chain + hostname
+  # verification in @omni/db. The ConfigMap must pre-exist (see header).
+  sslCaConfigMap: rds-ca-bundle
+  sslCaKey: sa-east-1-bundle.pem
 
 secret:
   # No OMNI_API_KEY — omni auth keys live in Postgres. Optionally supply
@@ -99,19 +140,19 @@ nats:
     fileStore: 4Gi
   persistence:
     size: 8Gi
-    # storageClass: gp3
+    # Explicit gp3 (EBS CSI), NOT the cluster default: JetStream durability
+    # must not depend on whichever StorageClass happens to be the default
+    # (older clusters still default to in-tree gp2).
+    storageClass: gp3
 
 # Prod media backend: an EXTERNAL managed S3 bucket (real AWS S3 — endpoint
-# empty so the SDK derives it from region; forcePathStyle false). Creds come
-# from the pre-created omni-media-s3 Secret (never plaintext in rendered
-# output); the bucket is provisioned out of band and must already exist.
+# empty so the SDK derives it from region; forcePathStyle false). The bucket is
+# Terraform-provisioned out of band and must already exist.
 media:
   mode: remote
   s3:
-    # S3 bucket names are GLOBALLY unique — this generic placeholder will very
-    # likely collide; override with your org-prefixed bucket (e.g. acme-omni-media).
-    bucket: omni-media
-    region: us-east-1
+    bucket: nmstx-khal-omni-prod-media   # Terraform-provisioned prod bucket
+    region: sa-east-1
     forcePathStyle: false
     presignTtlSeconds: 3600
     endpoint: ""                         # empty → real AWS S3 from region
@@ -119,9 +160,13 @@ media:
     # reachable, so presigned GET URLs work as-is. It exists for split-endpoint
     # setups (e.g. in-cluster MinIO presigning through an external hostname).
     # publicEndpoint: "https://media.example.com"
-    existingSecret: "omni-media-s3"      # must hold the two keys below
-    accessKeyKey: "OMNI_MEDIA_S3_ACCESS_KEY"
-    secretKeyKey: "OMNI_MEDIA_S3_SECRET_KEY"
+    # IRSA-ONLY auth: the Deployment renders NO OMNI_MEDIA_S3_ACCESS_KEY /
+    # _SECRET_KEY envs and no media Secret is referenced — omni-api exchanges
+    # the pod's projected ServiceAccount web-identity token via STS
+    # AssumeRoleWithWebIdentity. Requires the eks.amazonaws.com/role-arn
+    # ServiceAccount annotation, supplied at deploy time with
+    # values-prod-alb.yaml (see that file's header).
+    irsa: true
 
 # Bundled MinIO is OFF: media rides real AWS S3 (media.s3 above).
 minio:

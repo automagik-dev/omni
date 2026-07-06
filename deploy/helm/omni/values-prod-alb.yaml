@@ -1,0 +1,72 @@
+# =============================================================================
+# Prod co-tenant ALB delta — layered AFTER values-prod.yaml, never alone.
+#
+# This is NOT a standalone overlay: it is a DELTA that re-flavors the prod
+# shape for the production realm on the `langwatch-prod` EKS cluster
+# (sa-east-1, acct 278522730053, namespace omni). Ingress moves from
+# nginx+cert-manager to the AWS Load Balancer Controller (TLS terminates at
+# the ALB with an ACM cert), and the ServiceAccount gains the IRSA role-arn
+# annotation that media.s3.irsa (set in values-prod.yaml) relies on.
+# Everything else (external RDS via `omni-db` + verify-full TLS, IRSA-only
+# media on nmstx-khal-omni-prod-media, 2 pinned replicas + PDB, NATS on gp3,
+# sizing) is inherited from values-prod.yaml.
+#
+# Exact deploy command (order of -f flags matters — this file LAST):
+#   helm upgrade --install omni deploy/helm/omni -n omni \
+#     -f deploy/helm/omni/values-prod.yaml \
+#     -f deploy/helm/omni/values-prod-alb.yaml \
+#     --set ingress.host=omni.khal.ai \
+#     --set 'ingress.annotations.alb\.ingress\.kubernetes\.io/certificate-arn=<acm-cert-arn>' \
+#     --set 'serviceAccount.annotations.eks\.amazonaws\.com/role-arn=<media-irsa-role-arn>' \
+#     --wait
+#
+# TWO AWS ARNs are deliberately NOT set in-file — both are environment-specific
+# resource identifiers that only exist after the tenant Terraform is applied,
+# so they are supplied at deploy time via the --set flags above (the dots in
+# the annotation KEYS must be escaped with `\.`):
+#   - the ACM certificate ARN for omni.khal.ai (ALB TLS), same pattern as
+#     values-hml-alb.yaml;
+#   - the media IRSA role ARN for the ServiceAccount annotation. (Unlike
+#     values-hml-alb.yaml, which pins its already-provisioned role in-file,
+#     prod's role does not exist at authoring time — pin it here once the
+#     tenant apply has minted it, if drift-free files are preferred over
+#     --set flags.)
+#
+# Secrets in this realm are ESO-materialized from Secrets Manager
+# `/khal/omni/prod/*` into the `omni-db` Secret that values-prod.yaml already
+# references. There is NO media-key Secret anywhere: S3 auth is IRSA-only
+# (one-way door — prod never mints static keys).
+# =============================================================================
+
+ingress:
+  # AWS Load Balancer Controller provisions an internet-facing ALB for
+  # ingressClassName `alb`; TLS terminates at the ALB using the ACM cert
+  # passed via --set (see header), so no in-cluster TLS material is needed.
+  className: alb
+  annotations:
+    # Helm map-merge cannot DELETE a key inherited from an earlier -f file, but
+    # a `null` override removes it at coalesce time — and even if a literal
+    # `cluster-issuer: null` ever rendered, it is harmless for an alb-class
+    # Ingress (cert-manager only acts on real issuer values, which must NOT
+    # leak into this realm: there is no cert-manager/nginx on this cluster).
+    cert-manager.io/cluster-issuer: null
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    # alb.ingress.kubernetes.io/certificate-arn: supplied at deploy time via
+    # --set (see header) — never commit an account-specific ARN here.
+  # Empty list REPLACES prod's cert-manager tls block wholesale (helm replaces
+  # lists, it does not merge them): TLS lives at the ALB, so the rendered
+  # Ingress must carry no `tls:` section at all.
+  tls: []
+
+# IRSA: annotating the ServiceAccount makes the EKS pod identity webhook mount
+# a projected web-identity token and inject AWS_WEB_IDENTITY_TOKEN_FILE +
+# AWS_ROLE_ARN into omni-api's pod — no static S3 keys in this realm. The
+# role ARN is supplied at deploy time via --set (see header); its trust policy
+# subject is system:serviceaccount:omni:omni (release `omni` in namespace
+# `omni` → ServiceAccount `omni`).
+# serviceAccount:
+#   annotations:
+#     eks.amazonaws.com/role-arn: <media-irsa-role-arn, via --set — see header>
