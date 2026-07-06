@@ -36,11 +36,15 @@ export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
     };
   }
 
-  // Check NATS (if available)
+  // Check NATS (if available). Must reflect the publisher's real connection
+  // state: a hardcoded `connected: true` masked dead publishers after a NATS
+  // server restart (green health while every publish threw "Not connected").
   let natsCheck: HealthCheck;
   if (eventBus) {
-    // TODO: Add actual NATS health check when eventBus is implemented
-    natsCheck = { status: 'ok', details: { connected: true } };
+    const connected = eventBus.isConnected();
+    natsCheck = connected
+      ? { status: 'ok', details: { connected: true } }
+      : { status: 'error', details: { connected: false }, error: 'NATS connection is not established' };
   } else {
     natsCheck = { status: 'ok', details: { connected: false, reason: 'Not configured' } };
   }
