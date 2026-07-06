@@ -107,7 +107,10 @@ spec:
                   name: {{ . }}
                   key: {{ $.Values.database.urlKey }}
             {{- end }}
-            {{- if include "omni.media.remote" . }}
+            {{- /* Under media.s3.irsa the two secretKeyRef envs are omitted
+            entirely: the pod authenticates to S3 via its ServiceAccount
+            web-identity token (IRSA) instead of static keys. */}}
+            {{- if and (include "omni.media.remote" .) (not .Values.media.s3.irsa) }}
             # --- S3 creds by reference only (never plaintext in rendered env) ---
             - name: OMNI_MEDIA_S3_ACCESS_KEY
               valueFrom:

@@ -272,6 +272,14 @@ media:
     existingSecret: ""
     accessKeyKey: "OMNI_MEDIA_S3_ACCESS_KEY"
     secretKeyKey: "OMNI_MEDIA_S3_SECRET_KEY"
+    # IRSA (EKS): source S3 credentials from the pod's web-identity token
+    # instead of a Secret. When true the Deployment OMITS the two
+    # OMNI_MEDIA_S3_ACCESS_KEY/_SECRET_KEY secretKeyRef envs — the EKS pod
+    # identity webhook injects AWS_WEB_IDENTITY_TOKEN_FILE + AWS_ROLE_ARN
+    # (from the serviceAccount.annotations `eks.amazonaws.com/role-arn`) and
+    # omni-api exchanges that token via STS AssumeRoleWithWebIdentity. Set the
+    # role-arn annotation under serviceAccount.annotations when enabling this.
+    irsa: false
 
 # ---- bundled MinIO (S3-compatible object store) -----------------------------
 # Default OFF in the base values (no unused workload); the dev overlay turns it
