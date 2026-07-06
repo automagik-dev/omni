@@ -5,9 +5,11 @@
 # shape for the co-tenant realm on the shared `langwatch-hml` EKS cluster
 # (sa-east-1, namespace omni-hml). Ingress moves from nginx+cert-manager to the
 # AWS Load Balancer Controller (TLS terminates at the ALB with an ACM cert),
-# and the media bucket/region switch to this lane's real values. Everything
-# else (external RDS via `omni-db`, real S3 creds via `omni-media-s3`, single
-# replica, sizing) is inherited from values-homolog.yaml.
+# and the media bucket/region switch to this lane's real values, with S3 auth
+# via IRSA (media.s3.irsa + the ServiceAccount role-arn annotation below)
+# instead of the `omni-media-s3` static-key Secret. Everything else (external
+# RDS via `omni-db`, single replica, sizing) is inherited from
+# values-homolog.yaml.
 #
 # Exact deploy command (order of -f flags matters — this file LAST):
 #   helm upgrade --install omni deploy/helm/omni -n omni-hml \
@@ -54,10 +56,23 @@ ingress:
 # us-east-1) are WRONG for this co-tenant realm. The bucket below is the
 # Terraform-provisioned one in the LangWatch HML account, and region must
 # match it (endpoint stays "" → the SDK derives the sa-east-1 endpoint).
+# irsa: true switches S3 auth to the pod's web-identity token — the Deployment
+# renders NO OMNI_MEDIA_S3_ACCESS_KEY/_SECRET_KEY envs; omni-api exchanges the
+# projected ServiceAccount token via STS AssumeRoleWithWebIdentity using the
+# role-arn annotation below (injected as AWS_ROLE_ARN by the EKS pod identity
+# webhook). The `omni-media-s3` Secret homolog references becomes unused here.
 media:
   s3:
     bucket: nmstx-khal-omni-hml-media
     region: sa-east-1
+    irsa: true
+
+# IRSA: annotating the ServiceAccount makes the EKS pod identity webhook mount
+# a projected web-identity token and inject AWS_WEB_IDENTITY_TOKEN_FILE +
+# AWS_ROLE_ARN into omni-api's pod — no static S3 keys in this realm.
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::223744800379:role/omni-hml-media-irsa
 
 # DB TLS verify-full: the shared-RDS DATABASE_URL carries sslmode=require
 # (encrypts, but trusts any cert — the RDS CA is not in the container's trust

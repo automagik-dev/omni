@@ -11,11 +11,14 @@ import { LocalMediaBackend } from './local-backend';
 import { S3MediaBackend } from './s3-backend';
 import type { MediaStorageBackend } from './types';
 
-export type { MediaBackendConfig, S3BackendConfig } from './config';
+export type { MediaBackendConfig, S3BackendConfig, S3CredentialSource, S3WebIdentityParams } from './config';
 export { resolveMediaBackendConfig } from './config';
 export { LocalMediaBackend } from './local-backend';
+export type { S3MediaBackendOptions } from './s3-backend';
 export { S3MediaBackend } from './s3-backend';
 export { isMediaNotFoundError } from './types';
+export type { S3CredentialProvider, StsCredentials } from './web-identity';
+export { parseAssumeRoleWithWebIdentityResponse, WebIdentityCredentialProvider } from './web-identity';
 export type {
   MediaObjectStat,
   MediaStorageBackend,

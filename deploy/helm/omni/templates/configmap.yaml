@@ -13,8 +13,13 @@ data:
   {{- end }}
   NATS_URL: {{ include "omni.natsUrl" . | quote }}
   # ---- media backend (non-secret) — OMNI_MEDIA_* ----------------------------
+  {{- if not .Values.media.s3.irsa }}
   # Secret creds (OMNI_MEDIA_S3_ACCESS_KEY / _SECRET_KEY) are injected by
   # secretKeyRef in the Deployment, never rendered here.
+  {{- else }}
+  # S3 credentials come from IRSA (STS AssumeRoleWithWebIdentity via the pod's
+  # ServiceAccount web-identity token) — no static key env exists anywhere.
+  {{- end }}
   {{- if include "omni.media.remote" . }}
   OMNI_MEDIA_MODE: "remote"
   OMNI_MEDIA_S3_ENDPOINT: {{ include "omni.media.s3Endpoint" . | quote }}
