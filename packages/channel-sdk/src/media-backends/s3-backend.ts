@@ -326,12 +326,15 @@ export class S3MediaBackend implements MediaStorageBackend {
       return presignClient.presign(key, { expiresIn: ttlSeconds, method: 'GET' });
     }
 
-    // Refresh only for a TTL a fresh credential could actually satisfy. A
-    // request longer than the max credential lifetime can never be honoured, so
-    // chasing it with a refresh would churn STS on every presign — clamp the
-    // healthy credential instead.
+    // Refresh only for a TTL a fresh credential could actually satisfy. Strict
+    // `<`: a request AT the max lifetime is also unsatisfiable, because by
+    // signing time a freshly-minted credential's remaining life is always a
+    // hair under full lifetime — with `<=` the default TTL (== session duration)
+    // would force a refresh on every presign that still ends up clamped, i.e.
+    // pure STS churn. Only a strictly-shorter TTL leaves headroom a refresh can
+    // fill; at or above the ceiling we clamp the healthy credential instead.
     const maxLifetimeMs = SESSION_DURATION_SECONDS * 1000;
-    if (requestedMs <= maxLifetimeMs && credentials.expiration.getTime() - this.now() < requestedMs) {
+    if (requestedMs < maxLifetimeMs && credentials.expiration.getTime() - this.now() < requestedMs) {
       credentials = await this.refreshForPresign(state, credentials);
     }
     const { presignClient } = this.buildOrReuseWebIdentityClients(state, credentials);

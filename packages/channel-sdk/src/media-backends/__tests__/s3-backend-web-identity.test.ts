@@ -244,4 +244,28 @@ describe('S3MediaBackend web-identity credential wiring', () => {
     expect(provider.refreshCalls).toBe(0);
     expect(constructedOptions[0]?.sessionToken).toBe('token-1');
   });
+
+  it('does not refresh per-presign when the requested TTL equals the session duration (default config)', async () => {
+    // Model production: a healthy, freshly-minted credential is always a hair
+    // under full lifetime by signing time. Mint at T0 with full lifetime, then
+    // sign 1ms later so remaining (3599999ms) < requestedMs at ttl == max.
+    const T0 = Date.parse('2026-07-06T00:00:00.000Z');
+    const provider = new FakeProvider(() => credentialsAt('token-1', new Date(T0 + SESSION_DURATION_SECONDS * 1000)));
+    const backend = new S3MediaBackend(WEB_IDENTITY_CONFIG, { credentialProvider: provider, now: () => T0 + 1 });
+
+    // The default presignTtlSeconds equals SESSION_DURATION_SECONDS — the exact
+    // boundary the `<=`-vs-`<` guard governs.
+    let lastUrl = '';
+    for (let i = 0; i < 5; i++) {
+      lastUrl = await backend.presignedUrl(`inst-1/2026-07/msg-${i}.png`, SESSION_DURATION_SECONDS);
+    }
+
+    // A refresh can never satisfy a TTL == max lifetime, so it must NOT fire —
+    // no per-presign STS churn on the default config. The URL is clamped to the
+    // healthy cred's remaining life (3599999ms → 3599s), signed by the one
+    // client built for it (no rebuilds).
+    expect(provider.refreshCalls).toBe(0);
+    expect(constructedOptions).toHaveLength(1);
+    expect(new URL(lastUrl).searchParams.get('X-Amz-Expires')).toBe('3599');
+  });
 });
