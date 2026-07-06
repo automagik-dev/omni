@@ -101,8 +101,10 @@ export {
   createMediaBackend,
   isMediaNotFoundError,
   LocalMediaBackend,
+  parseAssumeRoleWithWebIdentityResponse,
   resolveMediaBackendConfig,
   S3MediaBackend,
+  WebIdentityCredentialProvider,
 } from './media-backends';
 export type {
   MediaBackendConfig,
@@ -110,9 +112,13 @@ export type {
   MediaStorageBackend,
   MediaStorageMode,
   S3BackendConfig,
+  S3CredentialProvider,
+  S3CredentialSource,
+  S3WebIdentityParams,
   StoreMediaInput,
   StoreMediaResult,
   StoreStreamInput,
+  StsCredentials,
 } from './media-backends';
 
 // Explicit streaming type export for package root access
