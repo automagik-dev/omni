@@ -30,7 +30,12 @@ import {
   type StoreStreamInput,
   isMediaNotFoundError,
 } from './types';
-import { type S3CredentialProvider, type StsCredentials, WebIdentityCredentialProvider } from './web-identity';
+import {
+  type S3CredentialProvider,
+  SESSION_DURATION_SECONDS,
+  type StsCredentials,
+  WebIdentityCredentialProvider,
+} from './web-identity';
 
 const log = createLogger('services:media-backends:s3');
 
@@ -94,6 +99,12 @@ export interface S3MediaBackendOptions {
    * the backend would otherwise build from `config.webIdentity`.
    */
   credentialProvider?: S3CredentialProvider;
+  /**
+   * Injection seam for tests — defaults to `Date.now`. Used only by the
+   * presign TTL guard to compare a temporary credential's expiration against
+   * the requested URL lifetime.
+   */
+  now?: () => number;
 }
 
 export class S3MediaBackend implements MediaStorageBackend {
@@ -102,10 +113,14 @@ export class S3MediaBackend implements MediaStorageBackend {
   private readonly config: S3BackendConfig;
   private readonly state: CredentialState;
   private presignTtlSeconds: number;
+  private readonly now: () => number;
+  /** Guards the presign-TTL-cap warning so it logs once per backend, not per URL. */
+  private presignTtlCapWarned = false;
 
   constructor(config: S3BackendConfig, options: S3MediaBackendOptions = {}) {
     this.config = config;
     this.presignTtlSeconds = config.presignTtlSeconds;
+    this.now = options.now ?? Date.now;
     this.state =
       config.credentialSource === 'web-identity'
         ? { source: 'web-identity', provider: resolveProvider(config, options), current: null, staticFallback: null }
@@ -140,6 +155,16 @@ export class S3MediaBackend implements MediaStorageBackend {
     } catch (error) {
       return this.fallbackToStaticClients(state, error);
     }
+    return this.buildOrReuseWebIdentityClients(state, credentials);
+  }
+
+  /**
+   * Return the client pair for `credentials`, rebuilding the `Bun.S3Client`
+   * pair only when the sessionToken changed (a refresh). Pure client bookkeeping
+   * with no credential fetching, so both {@link resolveWebIdentityClients} and
+   * the presign path can drive it with credentials they already hold.
+   */
+  private buildOrReuseWebIdentityClients(state: WebIdentityState, credentials: StsCredentials): S3Clients {
     if (!state.current || state.current.sessionToken !== credentials.sessionToken) {
       const clients = buildClients(this.config, {
         accessKeyId: credentials.accessKeyId,
@@ -270,8 +295,82 @@ export class S3MediaBackend implements MediaStorageBackend {
   }
 
   async presignedUrl(key: string, ttlSeconds: number = this.presignTtlSeconds): Promise<string> {
-    const { presignClient } = await this.resolveClients();
-    return presignClient.presign(key, { expiresIn: ttlSeconds, method: 'GET' });
+    // Static credentials never expire, so the signed URL honours `ttlSeconds`
+    // outright — leave that path untouched.
+    if (this.state.source === 'static') {
+      return this.state.clients.presignClient.presign(key, { expiresIn: ttlSeconds, method: 'GET' });
+    }
+    return this.presignWithTtlGuarantee(this.state, key, ttlSeconds);
+  }
+
+  /**
+   * Presign under temporary (web-identity) credentials. A URL signed by a
+   * temporary credential is only valid until that credential expires, so a URL
+   * minted late in a credential's life would honour far less than `ttlSeconds`.
+   * Guarantee the requested TTL by refreshing the credential when it has less
+   * than `ttlSeconds` of life left; when `ttlSeconds` exceeds the maximum
+   * credential lifetime the URL cannot outlive the credential, so clamp
+   * `expiresIn` to the credential's remaining life (and warn once) rather than
+   * promise a TTL the URL will not honour.
+   */
+  private async presignWithTtlGuarantee(state: WebIdentityState, key: string, ttlSeconds: number): Promise<string> {
+    const requestedMs = ttlSeconds * 1000;
+
+    let credentials: StsCredentials;
+    try {
+      credentials = await state.provider.getCredentials();
+    } catch (error) {
+      // STS is down with no still-valid cache: the static fallback keys do not
+      // expire, so sign with the requested TTL and no guard.
+      const { presignClient } = this.fallbackToStaticClients(state, error);
+      return presignClient.presign(key, { expiresIn: ttlSeconds, method: 'GET' });
+    }
+
+    // Refresh only for a TTL a fresh credential could actually satisfy. A
+    // request longer than the max credential lifetime can never be honoured, so
+    // chasing it with a refresh would churn STS on every presign — clamp the
+    // healthy credential instead.
+    const maxLifetimeMs = SESSION_DURATION_SECONDS * 1000;
+    if (requestedMs <= maxLifetimeMs && credentials.expiration.getTime() - this.now() < requestedMs) {
+      credentials = await this.refreshForPresign(state, credentials);
+    }
+    const { presignClient } = this.buildOrReuseWebIdentityClients(state, credentials);
+
+    const remainingMs = credentials.expiration.getTime() - this.now();
+    let expiresIn = ttlSeconds;
+    if (requestedMs > remainingMs) {
+      expiresIn = Math.max(1, Math.floor(remainingMs / 1000));
+      this.warnPresignTtlCapped(ttlSeconds, expiresIn);
+    }
+    return presignClient.presign(key, { expiresIn, method: 'GET' });
+  }
+
+  /**
+   * Force a fresh credential ahead of signing. If the exchange fails, keep the
+   * still-valid current credential (the caller clamps the URL to its remaining
+   * life) rather than failing the presign outright.
+   */
+  private async refreshForPresign(state: WebIdentityState, current: StsCredentials): Promise<StsCredentials> {
+    try {
+      return await state.provider.forceRefresh();
+    } catch (error) {
+      log.warn('Presign credential refresh failed; signing with the current credential', {
+        source: state.provider.source,
+        error: String(error),
+      });
+      return current;
+    }
+  }
+
+  /** Warn once per backend that a presign TTL was capped to the credential lifetime. */
+  private warnPresignTtlCapped(requestedTtlSeconds: number, effectiveTtlSeconds: number): void {
+    if (this.presignTtlCapWarned) return;
+    this.presignTtlCapWarned = true;
+    log.warn('Presign TTL exceeds temporary-credential lifetime; capping URL expiry to the credential remaining life', {
+      requestedTtlSeconds,
+      effectiveTtlSeconds,
+      maxCredentialLifetimeSeconds: SESSION_DURATION_SECONDS,
+    });
   }
 }
 

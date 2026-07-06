@@ -16,8 +16,11 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { createLogger } from '@omni/core';
 import { z } from 'zod';
 import type { S3WebIdentityParams } from './config';
+
+const log = createLogger('services:media-backends:web-identity');
 
 /** Temporary credentials minted by STS AssumeRoleWithWebIdentity. */
 export interface StsCredentials {
@@ -34,13 +37,27 @@ export interface StsCredentials {
 export interface S3CredentialProvider {
   readonly source: 'web-identity';
   getCredentials(): Promise<StsCredentials>;
+  /**
+   * Mint a fresh credential regardless of cache freshness, updating the cache.
+   * The S3 backend calls this before signing a presigned URL whose TTL exceeds
+   * the current credential's remaining life, so the URL is signed by a
+   * full-lifetime credential rather than one about to expire.
+   */
+  forceRefresh(): Promise<StsCredentials>;
 }
 
 /** Refresh window: mint fresh credentials once within 10 min of expiry. */
 const REFRESH_MARGIN_MS = 10 * 60 * 1000;
+/**
+ * Safety floor for serving a cached credential after a failed refresh: only
+ * reuse the cache when it still has more than this much life left, so a served
+ * credential does not expire mid-operation.
+ */
+const STALE_SERVE_FLOOR_MS = 60 * 1000;
 const STS_API_VERSION = '2011-06-15';
 const ROLE_SESSION_NAME = 'omni-media';
-const SESSION_DURATION_SECONDS = 3600;
+/** Requested STS session lifetime — the ceiling on a temporary credential's life. */
+export const SESSION_DURATION_SECONDS = 3600;
 
 /** Zod gate over the fields extracted from the STS XML (external input). */
 const StsCredentialsSchema = z.object({
@@ -113,6 +130,28 @@ export class WebIdentityCredentialProvider implements S3CredentialProvider {
     if (this.cached && this.cached.expiration.getTime() - this.now() > REFRESH_MARGIN_MS) {
       return this.cached;
     }
+    try {
+      return await this.refresh();
+    } catch (error) {
+      return this.serveStaleOrThrow(error);
+    }
+  }
+
+  /**
+   * Force a fresh STS exchange regardless of cache freshness, updating the
+   * cache. Unlike {@link getCredentials} this does NOT serve a stale credential
+   * on failure — the caller (presign) decides how to degrade.
+   */
+  async forceRefresh(): Promise<StsCredentials> {
+    return this.refresh();
+  }
+
+  /**
+   * Single-flighted STS exchange shared by the refresh-margin path and
+   * {@link forceRefresh}: concurrent callers await one request, and the minted
+   * credential replaces the cache.
+   */
+  private refresh(): Promise<StsCredentials> {
     this.inflight ??= this.assumeRole()
       .then((credentials) => {
         this.cached = credentials;
@@ -122,6 +161,25 @@ export class WebIdentityCredentialProvider implements S3CredentialProvider {
         this.inflight = null;
       });
     return this.inflight;
+  }
+
+  /**
+   * The refresh exchange failed while inside the refresh margin. In
+   * web-identity-only mode a brief STS blip must not break media ops when a
+   * usable credential is still cached: serve the cached credential while it has
+   * more than {@link STALE_SERVE_FLOOR_MS} of life left, otherwise rethrow.
+   */
+  private serveStaleOrThrow(error: unknown): StsCredentials {
+    const cached = this.cached;
+    const remainingMs = cached ? cached.expiration.getTime() - this.now() : 0;
+    if (cached && remainingMs > STALE_SERVE_FLOOR_MS) {
+      log.warn(`STS refresh failed, serving cached credential valid for ${Math.floor(remainingMs / 1000)}s`, {
+        source: this.source,
+        error: String(error),
+      });
+      return cached;
+    }
+    throw error;
   }
 
   /**

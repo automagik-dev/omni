@@ -12,9 +12,26 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { configureLogging, getLogConfig } from '@omni/core';
 import type { S3BackendConfig } from '../config';
 import { S3MediaBackend } from '../s3-backend';
-import type { S3CredentialProvider, StsCredentials } from '../web-identity';
+import { type S3CredentialProvider, SESSION_DURATION_SECONDS, type StsCredentials } from '../web-identity';
+
+/** Swallow + collect everything the logger writes to stdout while `run` executes. */
+async function captureStdout(run: () => Promise<void>): Promise<string> {
+  const chunks: string[] = [];
+  const original = process.stdout.write;
+  process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+    chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    await run();
+  } finally {
+    process.stdout.write = original;
+  }
+  return chunks.join('');
+}
 
 const WEB_IDENTITY_CONFIG: S3BackendConfig = {
   endpoint: 'http://minio.internal:9000',
@@ -31,24 +48,42 @@ const WEB_IDENTITY_CONFIG: S3BackendConfig = {
 };
 
 function credentials(sessionToken: string): StsCredentials {
+  return credentialsAt(sessionToken, new Date(Date.now() + 3600_000));
+}
+
+/** Credential with an explicit expiration — for exercising the presign TTL guard. */
+function credentialsAt(sessionToken: string, expiration: Date): StsCredentials {
   return {
     accessKeyId: `ASIA-${sessionToken}`,
     secretAccessKey: `secret-${sessionToken}`,
     sessionToken,
-    expiration: new Date(Date.now() + 3600_000),
+    expiration,
   };
 }
 
-/** Deterministic provider: yields whatever `produce` currently returns. */
+/**
+ * Deterministic provider: `getCredentials` yields whatever `produce` returns;
+ * `forceRefresh` yields `produceOnRefresh` (defaults to `produce`). Tracks the
+ * two call counts separately so tests can assert a pre-sign refresh happened.
+ */
 class FakeProvider implements S3CredentialProvider {
   readonly source = 'web-identity' as const;
   calls = 0;
+  refreshCalls = 0;
 
-  constructor(private readonly produce: () => StsCredentials) {}
+  constructor(
+    private readonly produce: () => StsCredentials,
+    private readonly produceOnRefresh: () => StsCredentials = produce,
+  ) {}
 
   async getCredentials(): Promise<StsCredentials> {
     this.calls++;
     return this.produce();
+  }
+
+  async forceRefresh(): Promise<StsCredentials> {
+    this.refreshCalls++;
+    return this.produceOnRefresh();
   }
 }
 
@@ -159,5 +194,54 @@ describe('S3MediaBackend web-identity credential wiring', () => {
   it('fails loudly at construction in static mode without a key pair', () => {
     const { credentialSource: _credentialSource, webIdentity: _webIdentity, ...staticShape } = WEB_IDENTITY_CONFIG;
     expect(() => new S3MediaBackend(staticShape)).toThrow(/static mode requires accessKeyId \+ secretKey/);
+  });
+
+  it('refreshes a near-expiry credential before signing so the URL gets its full TTL', async () => {
+    const T0 = Date.parse('2026-07-06T00:00:00.000Z');
+    const provider = new FakeProvider(
+      () => credentialsAt('token-near', new Date(T0 + 30_000)), // only 30s of life left
+      () => credentialsAt('token-fresh', new Date(T0 + SESSION_DURATION_SECONDS * 1000)), // full-lifetime refresh
+    );
+    const backend = new S3MediaBackend(WEB_IDENTITY_CONFIG, { credentialProvider: provider, now: () => T0 });
+
+    const url = await backend.presignedUrl('inst-1/2026-07/msg-1.png', 60);
+
+    // The 30s-of-life credential cannot cover a 60s URL, so a force-refresh runs
+    // and the client is built with the fresh credential, which signs the URL.
+    expect(provider.refreshCalls).toBe(1);
+    expect(constructedOptions).toHaveLength(1);
+    expect(constructedOptions[0]?.sessionToken).toBe('token-fresh');
+    const params = new URL(url).searchParams;
+    expect(params.get('X-Amz-Security-Token')).toBe('token-fresh');
+    expect(params.get('X-Amz-Expires')).toBe('60'); // full requested TTL, not clamped
+  });
+
+  it('clamps URL expiry to the credential lifetime when the requested TTL exceeds it, warning once', async () => {
+    const T0 = Date.parse('2026-07-06T00:00:00.000Z');
+    const provider = new FakeProvider(() => credentialsAt('token-1', new Date(T0 + SESSION_DURATION_SECONDS * 1000)));
+    const backend = new S3MediaBackend(WEB_IDENTITY_CONFIG, { credentialProvider: provider, now: () => T0 });
+
+    const oversizedTtl = SESSION_DURATION_SECONDS * 2; // longer than any credential can live
+    const previous = getLogConfig();
+    configureLogging({ level: 'info', modules: '*' }); // make the warn deterministic, env aside
+    let firstUrl = '';
+    try {
+      const output = await captureStdout(async () => {
+        firstUrl = await backend.presignedUrl('inst-1/2026-07/msg-1.png', oversizedTtl);
+        await backend.presignedUrl('inst-1/2026-07/msg-2.png', oversizedTtl); // second clamp
+      });
+      // The cap is warned exactly once across repeated clamps, not once per URL.
+      const capWarnings = output.split('Presign TTL exceeds temporary-credential lifetime').length - 1;
+      expect(capWarnings).toBe(1);
+    } finally {
+      configureLogging({ level: previous.level, modules: previous.modules });
+    }
+
+    // A URL cannot outlive its signing credential: expiry is clamped to the full
+    // credential lifetime, never the requested 2x TTL. An unsatisfiable TTL is
+    // not chased with a refresh — the healthy credential is signed as-is.
+    expect(new URL(firstUrl).searchParams.get('X-Amz-Expires')).toBe(String(SESSION_DURATION_SECONDS));
+    expect(provider.refreshCalls).toBe(0);
+    expect(constructedOptions[0]?.sessionToken).toBe('token-1');
   });
 });

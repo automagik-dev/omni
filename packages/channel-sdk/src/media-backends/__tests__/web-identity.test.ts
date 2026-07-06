@@ -193,4 +193,65 @@ describe('WebIdentityCredentialProvider', () => {
     expect((await provider.getCredentials()).accessKeyId).toBe('ASIA-TEST');
     expect(fetchCount).toBe(2);
   });
+
+  it('serves the still-valid cached credential when a refresh exchange fails', async () => {
+    const T0 = Date.parse('2026-01-01T00:00:00.000Z');
+    let nowMs = T0;
+    let fetchCount = 0;
+    const provider = new WebIdentityCredentialProvider(
+      { ...PARAMS, tokenFile },
+      {
+        fetchImpl: async () => {
+          fetchCount++;
+          // First exchange succeeds (cred valid until T0+1h); every later one throws.
+          if (fetchCount === 1) {
+            return new Response(stsXml({ sessionToken: 'token-1', expiration: '2026-01-01T01:00:00.000Z' }), {
+              status: 200,
+            });
+          }
+          throw new Error('STS unreachable');
+        },
+        now: () => nowMs,
+      },
+    );
+
+    // Prime the cache.
+    expect((await provider.getCredentials()).sessionToken).toBe('token-1');
+    expect(fetchCount).toBe(1);
+
+    // Advance into the refresh margin (599s of life left ≤ 10 min): the refresh
+    // fetch throws, but the cached cred still has ~10 min left, so it is served.
+    nowMs = T0 + (3600 - 599) * 1000;
+    const served = await provider.getCredentials();
+    expect(served.sessionToken).toBe('token-1');
+    expect(fetchCount).toBe(2); // it did attempt a refresh before falling back
+  });
+
+  it('throws when a refresh fails and no still-valid credential is cached', async () => {
+    const T0 = Date.parse('2026-01-01T00:00:00.000Z');
+    let nowMs = T0;
+    let fetchCount = 0;
+    const provider = new WebIdentityCredentialProvider(
+      { ...PARAMS, tokenFile },
+      {
+        fetchImpl: async () => {
+          fetchCount++;
+          if (fetchCount === 1) {
+            return new Response(stsXml({ sessionToken: 'token-1', expiration: '2026-01-01T01:00:00.000Z' }), {
+              status: 200,
+            });
+          }
+          throw new Error('STS unreachable');
+        },
+        now: () => nowMs,
+      },
+    );
+
+    expect((await provider.getCredentials()).sessionToken).toBe('token-1');
+
+    // Advance past expiry: the cached cred is no longer usable, so a failed
+    // refresh must surface the error rather than serve a dead credential.
+    nowMs = T0 + 3600 * 1000 + 1000;
+    await expect(provider.getCredentials()).rejects.toThrow(/STS unreachable/);
+  });
 });
