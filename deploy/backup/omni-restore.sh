@@ -5,7 +5,8 @@
 #   (default)        VERIFY — restore the dump into a throwaway `postgres:18`
 #                    container and print row counts. Touches nothing live; the
 #                    container is removed on exit. Run this regularly to prove
-#                    your backups are actually restorable.
+#                    your backups are actually restorable. Exits non-zero if
+#                    pg_restore reports any error (a corrupt dump must FAIL).
 #   --target <db>    RESTORE into database <db> on the live autopg (requires
 #                    --confirm). Restore into a fresh/empty DB, or pass --clean.
 #
@@ -17,13 +18,24 @@
 # Media restore is intentionally NOT scripted (it overwrites the live bucket) —
 # see README.md for the guarded `mc mirror` command.
 #
-# Env: KCTX NS RELEASE OMNI_BACKUP_DIR PG_FWD_PORT PG_SUPERUSER PG_SUPERPASS
+# Env: KCTX NS RELEASE OMNI_BACKUP_DIR PG_FWD_PORT PG_SVC PG_SUPERUSER
+#      PG_SUPERPASS RESTORE_ROLE (target mode; defaults to the target db name)
 set -euo pipefail
 
 KCTX="${KCTX:-orbstack}"; NS="${NS:-omni}"; RELEASE="${RELEASE:-omni}"
 DEST="${OMNI_BACKUP_DIR:-$HOME/omni-backups}"
 PG_FWD_PORT="${PG_FWD_PORT:-15432}"
 PG_SUPERUSER="${PG_SUPERUSER:-postgres}"; PG_SUPERPASS="${PG_SUPERPASS:-postgres}"
+PG_SVC="${PG_SVC:-${RELEASE}-autopg}"
+
+# Centralized cleanup: the throwaway container and any port-forward are removed
+# even on a premature exit.
+CID=""; PF=""
+cleanup(){
+  [ -n "${CID:-}" ] && docker rm -f "$CID" >/dev/null 2>&1 || true
+  [ -n "${PF:-}" ] && kill "$PF" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 FILE=""; TARGET=""; CONFIRM=0; CLEAN=""
 while [ $# -gt 0 ]; do case "$1" in
@@ -31,7 +43,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --target)  TARGET="$2"; shift 2;;
   --confirm) CONFIRM=1; shift;;
   --clean)   CLEAN="--clean --if-exists"; shift;;
-  -h|--help) sed -n '2,20p' "$0"; exit 0;;
+  -h|--help) sed -n '2,23p' "$0"; exit 0;;
   *) echo "omni-restore: unknown arg: $1" >&2; exit 2;;
 esac; done
 
@@ -45,10 +57,15 @@ if [ -z "$TARGET" ]; then
   CID="omni-restore-verify-$$"
   docker rm -f "$CID" >/dev/null 2>&1 || true
   docker run -d --name "$CID" -e POSTGRES_PASSWORD=x -v "$(cd "$(dirname "$FILE")" && pwd):/dumps:ro" postgres:18 >/dev/null
-  trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
-  for _ in $(seq 1 30); do docker exec "$CID" pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
+  for _ in {1..30}; do docker exec "$CID" pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
+  docker exec "$CID" pg_isready -U postgres >/dev/null 2>&1 \
+    || { echo "omni-restore: throwaway postgres never became ready" >&2; exit 1; }
   docker exec "$CID" createdb -U postgres verify
-  docker exec "$CID" pg_restore -U postgres -d verify --no-owner "/dumps/$(basename "$FILE")" 2>&1 | tail -3 || true
+  # Preserve pg_restore's exit status — a dump that does not restore cleanly
+  # must FAIL the verify, that is the whole point of this mode.
+  if ! docker exec "$CID" pg_restore -U postgres -d verify --no-owner "/dumps/$(basename "$FILE")"; then
+    log "verify FAIL — pg_restore reported errors (corrupt or partial dump?)"; exit 1
+  fi
   docker exec "$CID" psql -U postgres -d verify -qc "ANALYZE;" >/dev/null
   log "restored OK — top tables by row count:"
   docker exec "$CID" psql -U postgres -d verify -P pager=off -c \
@@ -59,12 +76,19 @@ fi
 
 # ---------- TARGET: restore into a live DB (guarded) ----------
 [ "$CONFIRM" = 1 ] || { echo "omni-restore: refusing to write live db '$TARGET' without --confirm" >&2; exit 3; }
-kubectl --context "$KCTX" -n "$NS" port-forward --address 127.0.0.1 "svc/${RELEASE}-autopg" "${PG_FWD_PORT}:5432" >/dev/null 2>&1 &
-PF=$!; trap 'kill $PF 2>/dev/null || true' EXIT; sleep 3
-log "restoring $(basename "$FILE") into LIVE db '$TARGET'…"
+# Restore AS the app role (SET ROLE via --role) so restored objects stay owned
+# by it — restoring as the superuser with --no-owner would leave everything
+# owned by postgres and break the app's own access/migrations. The role must
+# already exist (globals restore / the chart's provision Job creates it).
+RESTORE_ROLE="${RESTORE_ROLE:-$TARGET}"
+kubectl --context "$KCTX" -n "$NS" port-forward --address 127.0.0.1 "svc/${PG_SVC}" "${PG_FWD_PORT}:5432" >/dev/null 2>&1 &
+PF=$!; sleep 3
+kill -0 "$PF" 2>/dev/null || { echo "omni-restore: port-forward failed (svc/${PG_SVC}, host port ${PG_FWD_PORT} taken?)" >&2; exit 1; }
+log "restoring $(basename "$FILE") into LIVE db '$TARGET' as role '$RESTORE_ROLE'…"
 docker run --rm -i --add-host=host.docker.internal:host-gateway -e PGPASSWORD="$PG_SUPERPASS" \
   -v "$(cd "$(dirname "$FILE")" && pwd):/dumps:ro" postgres:18 \
-  pg_restore -h host.docker.internal -p "$PG_FWD_PORT" -U "$PG_SUPERUSER" -d "$TARGET" --no-owner $CLEAN \
+  pg_restore -h host.docker.internal -p "$PG_FWD_PORT" -U "$PG_SUPERUSER" -d "$TARGET" \
+  --no-owner --role "$RESTORE_ROLE" $CLEAN \
   "/dumps/$(basename "$FILE")"
-kill $PF 2>/dev/null || true; trap - EXIT
+kill "$PF" 2>/dev/null || true; PF=""
 log "restore into '$TARGET' complete"
