@@ -81,6 +81,12 @@ metadata:
 spec:
   serviceName: {{ include "omni.minio.fullname" . }}
   replicas: 1
+  {{- with .Values.minio.persistentVolumeClaimRetentionPolicy }}
+  # Self-host data safety: keep the media PVC when this StatefulSet is deleted/
+  # scaled. Rendered only when set, so cloud realms (minio disabled) are unaffected.
+  persistentVolumeClaimRetentionPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "omni.selectorLabels" . | nindent 6 }}

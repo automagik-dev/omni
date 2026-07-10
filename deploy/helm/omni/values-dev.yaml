@@ -47,15 +47,21 @@ database:
 resources:
   requests:
     cpu: 100m
-    memory: 256Mi
+    memory: 384Mi
   limits:
     cpu: "1"
-    memory: 768Mi
+    # Bumped 768Mi -> 1536Mi: media processing (image decode + gemini calls)
+    # spikes; a live baseline of ~467Mi was already 61% of the old limit.
+    memory: 1536Mi
 
 nats:
   enabled: true
   persistence:
     size: 512Mi
+  # Keep the JetStream data PVC if the StatefulSet is deleted (self-host safety).
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
   # Expose the client port (:4222) on an OrbStack LoadBalancer so a
   # `genie omni serve` bridge running on a sibling VM can subscribe to
   # omni.message.* and reply on omni.reply.*. Trusted host-net only.
@@ -83,6 +89,11 @@ minio:
     # media corpus (~15Gi) + growth. Applies to fresh installs only
     # (volumeClaimTemplates are immutable on an existing StatefulSet).
     size: 30Gi
+  # Keep the media PVC if the StatefulSet is deleted (self-host safety). Note the
+  # local-path PV reclaimPolicy is still Delete — see deploy/backup/README.md.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
   resources:
     requests:
       memory: 256Mi
@@ -105,6 +116,10 @@ autopg:
       password: "omni-dev-password"
   persistence:
     size: 2Gi
+  # Keep the Postgres data PVC if the StatefulSet is deleted (self-host safety).
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
 
 # Expose the api to the host (OrbStack assigns a LoadBalancer IP reachable
 # from the Mac) — the omni CLI on the host points at this endpoint.
