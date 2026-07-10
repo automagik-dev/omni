@@ -43,7 +43,9 @@ while [ $# -gt 0 ]; do case "$1" in
   --target)  TARGET="$2"; shift 2;;
   --confirm) CONFIRM=1; shift;;
   --clean)   CLEAN="--clean --if-exists"; shift;;
-  -h|--help) sed -n '2,22p' "$0"; exit 0;;
+  # Print the leading comment block (after the shebang) up to the first
+  # non-comment line — immune to header edits shifting line numbers.
+  -h|--help) sed -e '1d' -e '/^[^#]/,$d' "$0"; exit 0;;
   *) echo "omni-restore: unknown arg: $1" >&2; exit 2;;
 esac; done
 
