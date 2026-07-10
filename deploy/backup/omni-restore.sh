@@ -43,7 +43,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --target)  TARGET="$2"; shift 2;;
   --confirm) CONFIRM=1; shift;;
   --clean)   CLEAN="--clean --if-exists"; shift;;
-  -h|--help) sed -n '2,23p' "$0"; exit 0;;
+  -h|--help) sed -n '2,22p' "$0"; exit 0;;
   *) echo "omni-restore: unknown arg: $1" >&2; exit 2;;
 esac; done
 
