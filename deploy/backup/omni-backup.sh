@@ -43,9 +43,13 @@ STAMP="$(date +%Y%m%d-%H%M)"
 kc(){ kubectl --context "$KCTX" -n "$NS" "$@"; }
 log(){ echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 need(){ command -v "$1" >/dev/null || { echo "omni-backup: missing required tool: $1" >&2; exit 1; }; }
-# base64 decode across GNU (-d/--decode), BSD/macOS (-D/--decode), busybox (-d).
-b64d(){ base64 --decode 2>/dev/null || base64 -d 2>/dev/null || base64 -D; }
 need kubectl; need docker
+# Detect the base64 decode flag ONCE at startup — GNU (-d/--decode),
+# BSD/macOS (-D/--decode), busybox (-d) — instead of a per-call fallback chain.
+if   printf 'eA==' | base64 --decode >/dev/null 2>&1; then b64d(){ base64 --decode; }
+elif printf 'eA==' | base64 -d       >/dev/null 2>&1; then b64d(){ base64 -d; }
+elif printf 'eA==' | base64 -D       >/dev/null 2>&1; then b64d(){ base64 -D; }
+else echo "omni-backup: no working 'base64' decode flag found" >&2; exit 1; fi
 
 # Centralized cleanup so a premature exit never leaks a background port-forward.
 PF_PG=""; PF_MINIO=""

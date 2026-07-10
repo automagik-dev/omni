@@ -140,7 +140,7 @@ deploy/backup/omni-restore.sh --target omni --clean --confirm
 
 ```bash
 kubectl -n omni port-forward --address 127.0.0.1 svc/omni-minio 19000:9000 &
-# --decode works on both GNU (Linux) and BSD (macOS) base64
+# --decode works on GNU (Linux) and modern BSD/macOS base64 (use -D on old macOS)
 MU=$(kubectl -n omni get secret -l app.kubernetes.io/component=minio -o jsonpath='{.items[0].data.MINIO_ROOT_USER}' | base64 --decode)
 MP=$(kubectl -n omni get secret -l app.kubernetes.io/component=minio -o jsonpath='{.items[0].data.MINIO_ROOT_PASSWORD}' | base64 --decode)
 docker run --rm --add-host=host.docker.internal:host-gateway -e MU="$MU" -e MP="$MP" \
