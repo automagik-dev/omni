@@ -19,6 +19,9 @@
 #   KCTX=orbstack  NS=omni  RELEASE=omni  OMNI_BACKUP_DIR=~/omni-backups
 #   PG_DB=omni     MEDIA_BUCKET=omni-media
 #   PG_FWD_PORT=15432  MINIO_FWD_PORT=19000  RETENTION_DAYS=14
+#   PG_SVC / MINIO_SVC — override the rendered Service names for non-default
+#   release layouts (MINIO_SVC otherwise auto-derives from the release Secret,
+#   which the chart names identically to the Service).
 # The forwards use NON-standard host ports on purpose: :5432/:9000 are commonly
 # already bound on a dev box (OrbStack exposes its own services there).
 set -euo pipefail
@@ -34,25 +37,41 @@ MINIO_FWD_PORT="${MINIO_FWD_PORT:-19000}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 PG_SUPERUSER="${PG_SUPERUSER:-postgres}"
 PG_SUPERPASS="${PG_SUPERPASS:-postgres}"   # autopg pins the superuser to postgres/postgres
+PG_SVC="${PG_SVC:-${RELEASE}-autopg}"
 
 STAMP="$(date +%Y%m%d-%H%M)"
 kc(){ kubectl --context "$KCTX" -n "$NS" "$@"; }
 log(){ echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 need(){ command -v "$1" >/dev/null || { echo "omni-backup: missing required tool: $1" >&2; exit 1; }; }
+# base64 decode across GNU (-d/--decode), BSD/macOS (-D/--decode), busybox (-d).
+b64d(){ base64 --decode 2>/dev/null || base64 -d 2>/dev/null || base64 -D; }
 need kubectl; need docker
+
+# Centralized cleanup so a premature exit never leaks a background port-forward.
+PF_PG=""; PF_MINIO=""
+cleanup(){
+  [ -n "${PF_PG:-}" ] && kill "$PF_PG" 2>/dev/null || true
+  [ -n "${PF_MINIO:-}" ] && kill "$PF_MINIO" 2>/dev/null || true
+}
+trap cleanup EXIT
+
 mkdir -p "$DEST/postgres" "$DEST/media"
 log "=== omni-backup start ($STAMP) — release=$RELEASE ns=$NS -> $DEST ==="
 
 # --- Postgres: globals + the app DB (custom format) via a v18 client ---------
-kc port-forward --address 127.0.0.1 "svc/${RELEASE}-autopg" "${PG_FWD_PORT}:5432" >/dev/null 2>&1 &
-PF=$!; trap 'kill $PF 2>/dev/null || true' EXIT; sleep 3
+# Background kubectl DIRECTLY (not via the kc function): backgrounding a
+# function forks a subshell whose $! is not kubectl's PID, so killing it
+# orphans the actual port-forward.
+kubectl --context "$KCTX" -n "$NS" port-forward --address 127.0.0.1 "svc/${PG_SVC}" "${PG_FWD_PORT}:5432" >/dev/null 2>&1 &
+PF_PG=$!; sleep 3
+kill -0 "$PF_PG" 2>/dev/null || { echo "omni-backup: Postgres port-forward failed (svc/${PG_SVC}, host port ${PG_FWD_PORT} taken?)" >&2; exit 1; }
 docker run --rm --add-host=host.docker.internal:host-gateway -e PGPASSWORD="$PG_SUPERPASS" postgres:18 \
   pg_dumpall -h host.docker.internal -p "$PG_FWD_PORT" -U "$PG_SUPERUSER" --globals-only \
   | gzip > "$DEST/postgres/globals-$STAMP.sql.gz"
 docker run --rm --add-host=host.docker.internal:host-gateway -e PGPASSWORD="$PG_SUPERPASS" postgres:18 \
   pg_dump -h host.docker.internal -p "$PG_FWD_PORT" -U "$PG_SUPERUSER" -Fc -d "$PG_DB" \
   > "$DEST/postgres/${PG_DB}-$STAMP.dump"
-kill $PF 2>/dev/null || true; trap - EXIT
+kill "$PF_PG" 2>/dev/null || true; PF_PG=""
 log "postgres dumped -> ${PG_DB}-$STAMP.dump ($(du -h "$DEST/postgres/${PG_DB}-$STAMP.dump" | cut -f1))"
 
 # --- MinIO media: incremental mirror (creds read from the release Secret) ----
@@ -63,16 +82,20 @@ if [ -z "$MINIO_SECRET" ]; then
   log "no bundled MinIO Secret found (external S3?) — skipping media backup"
   log "=== omni-backup done (postgres only) ==="; exit 0
 fi
-MU="$(kc get secret "$MINIO_SECRET" -o jsonpath='{.data.MINIO_ROOT_USER}' | base64 -d)"
-MP="$(kc get secret "$MINIO_SECRET" -o jsonpath='{.data.MINIO_ROOT_PASSWORD}' | base64 -d)"
-kc port-forward --address 127.0.0.1 "svc/${RELEASE}-minio" "${MINIO_FWD_PORT}:9000" >/dev/null 2>&1 &
-PF=$!; trap 'kill $PF 2>/dev/null || true' EXIT; sleep 3
+# The chart names the MinIO Secret and Service identically (omni.minio.fullname),
+# so the Secret we just found doubles as the Service name for any release name.
+MINIO_SVC="${MINIO_SVC:-$MINIO_SECRET}"
+MU="$(kc get secret "$MINIO_SECRET" -o jsonpath='{.data.MINIO_ROOT_USER}' | b64d)"
+MP="$(kc get secret "$MINIO_SECRET" -o jsonpath='{.data.MINIO_ROOT_PASSWORD}' | b64d)"
+kubectl --context "$KCTX" -n "$NS" port-forward --address 127.0.0.1 "svc/${MINIO_SVC}" "${MINIO_FWD_PORT}:9000" >/dev/null 2>&1 &
+PF_MINIO=$!; sleep 3
+kill -0 "$PF_MINIO" 2>/dev/null || { echo "omni-backup: MinIO port-forward failed (svc/${MINIO_SVC}, host port ${MINIO_FWD_PORT} taken?)" >&2; exit 1; }
 # `mc alias set` (not the MC_HOST URL) so passwords with @ : / don't corrupt a URL.
 docker run --rm --add-host=host.docker.internal:host-gateway \
   -e MU="$MU" -e MP="$MP" -v "$DEST/media:/backup" --entrypoint sh minio/mc -c \
   "mc alias set omni \"http://host.docker.internal:${MINIO_FWD_PORT}\" \"\$MU\" \"\$MP\" >/dev/null && \
    mc mirror --overwrite \"omni/${MEDIA_BUCKET}\" \"/backup/${MEDIA_BUCKET}\""
-kill $PF 2>/dev/null || true; trap - EXIT
+kill "$PF_MINIO" 2>/dev/null || true; PF_MINIO=""
 log "media mirrored -> media/${MEDIA_BUCKET} ($(du -sh "$DEST/media/${MEDIA_BUCKET}" 2>/dev/null | cut -f1))"
 
 # --- Retention: prune pg dumps older than N days (media mirror kept whole) ---

@@ -52,6 +52,8 @@ deploy/backup/omni-restore.sh
 | `MEDIA_BUCKET` | `omni-media` | MinIO bucket to mirror |
 | `PG_FWD_PORT` / `MINIO_FWD_PORT` | `15432` / `19000` | host ports for the forwards |
 | `RETENTION_DAYS` | `14` | prune pg dumps older than this (media mirror kept whole) |
+| `PG_SVC` / `MINIO_SVC` | derived from `RELEASE` | override the Service names for non-default release layouts |
+| `RESTORE_ROLE` | the `--target` db name | restore-only: role that ends up owning restored objects |
 
 ## Keep the backups safe (Time Machine)
 
@@ -138,8 +140,9 @@ deploy/backup/omni-restore.sh --target omni --clean --confirm
 
 ```bash
 kubectl -n omni port-forward --address 127.0.0.1 svc/omni-minio 19000:9000 &
-MU=$(kubectl -n omni get secret -l app.kubernetes.io/component=minio -o jsonpath='{.items[0].data.MINIO_ROOT_USER}' | base64 -d)
-MP=$(kubectl -n omni get secret -l app.kubernetes.io/component=minio -o jsonpath='{.items[0].data.MINIO_ROOT_PASSWORD}' | base64 -d)
+# --decode works on both GNU (Linux) and BSD (macOS) base64
+MU=$(kubectl -n omni get secret -l app.kubernetes.io/component=minio -o jsonpath='{.items[0].data.MINIO_ROOT_USER}' | base64 --decode)
+MP=$(kubectl -n omni get secret -l app.kubernetes.io/component=minio -o jsonpath='{.items[0].data.MINIO_ROOT_PASSWORD}' | base64 --decode)
 docker run --rm --add-host=host.docker.internal:host-gateway -e MU="$MU" -e MP="$MP" \
   -v ~/omni-backups/media:/backup --entrypoint sh minio/mc -c \
   'mc alias set omni http://host.docker.internal:19000 "$MU" "$MP" && mc mirror --overwrite /backup/omni-media omni/omni-media'
