@@ -93,6 +93,13 @@ const DEFAULTS = {
 } as const;
 
 /**
+ * How long a publish waits for an in-flight connection rebuild before
+ * failing. The rebuild keeps running in the background, so later publishes
+ * succeed as soon as the server is reachable again.
+ */
+const ENSURE_CONNECTED_WAIT_MS = 5_000;
+
+/**
  * Internal config type with properly typed credentials
  */
 interface InternalConfig {
@@ -118,6 +125,7 @@ export class NatsEventBus implements EventBus {
   private readonly subscriptionManager = new SubscriptionManager();
   private connectionAttempts = 0;
   private isClosing = false;
+  private pendingReconnect: Promise<void> | null = null;
 
   constructor(config: EventBusConfig = {}) {
     this.config = {
@@ -143,7 +151,13 @@ export class NatsEventBus implements EventBus {
       servers: this.config.url,
       name: this.config.serviceName,
       reconnect: true,
-      maxReconnectAttempts: this.config.reconnect.maxRetries,
+      // Retry forever: a NATS pod move/upgrade can outlast any finite budget,
+      // and once the budget is exhausted the connection closes permanently —
+      // every publish then throws until the process restarts. Infinite retry
+      // keeps the same connection object (and its subscriptions) alive across
+      // arbitrarily long server outages. `maxRetries` still bounds the outer
+      // retry loop in connect() below.
+      maxReconnectAttempts: -1,
       reconnectTimeWait: this.config.reconnect.delayMs,
       waitOnFirstConnect: true,
     };
@@ -220,7 +234,7 @@ export class NatsEventBus implements EventBus {
     payload: unknown,
     metadata?: Partial<OmniEvent['metadata']>,
   ): Promise<PublishResult> {
-    this.ensureConnected();
+    await this.ensureConnected();
 
     const eventId = crypto.randomUUID();
     const timestamp = Date.now();
@@ -552,8 +566,56 @@ export class NatsEventBus implements EventBus {
 
   /**
    * Ensure connected before operations
+   *
+   * When the underlying connection object is dead (e.g. the server closed it
+   * before infinite transport reconnect was in place), rebuild it instead of
+   * failing every publish until the process restarts. Waits a bounded amount
+   * of time for the rebuild; the rebuild keeps running in the background so
+   * subsequent calls succeed once the server is reachable again.
    */
-  private ensureConnected(): void {
+  private async ensureConnected(): Promise<void> {
+    if (this.isConnected()) return;
+    if (this.isClosing) {
+      throw new Error('Not connected to NATS. Call connect() first.');
+    }
+
+    const reconnect = this.scheduleReconnect();
+    const winner = await Promise.race([
+      reconnect.then(() => 'connected' as const),
+      this.sleep(ENSURE_CONNECTED_WAIT_MS).then(() => 'timeout' as const),
+    ]);
+
+    if (winner === 'timeout' || !this.isConnected()) {
+      throw new Error('Not connected to NATS. Reconnect in progress.');
+    }
+  }
+
+  /**
+   * Rebuild the connection after the previous one died. Deduplicates
+   * concurrent callers onto a single in-flight attempt.
+   */
+  private scheduleReconnect(): Promise<void> {
+    if (!this.pendingReconnect) {
+      log.warn('Connection lost, rebuilding', { url: this.config.url });
+      this.pendingReconnect = (async () => {
+        this.nc = null;
+        this.js = null;
+        this.jsm = null;
+        await this.connect();
+      })().finally(() => {
+        this.pendingReconnect = null;
+      });
+      // Waiters observe failures through their own awaits; without this
+      // guard a timed-out waiter would leave the rejection unhandled.
+      this.pendingReconnect.catch(() => {});
+    }
+    return this.pendingReconnect;
+  }
+
+  /**
+   * Synchronous connectivity assertion for paths that cannot await a rebuild
+   */
+  private assertConnected(): void {
     if (!this.isConnected()) {
       throw new Error('Not connected to NATS. Call connect() first.');
     }
@@ -564,7 +626,7 @@ export class NatsEventBus implements EventBus {
    * Throws if not connected
    */
   private requireJetStream(): JetStreamClient {
-    this.ensureConnected();
+    this.assertConnected();
     if (!this.js) {
       throw new Error('JetStream not initialized');
     }
@@ -576,7 +638,7 @@ export class NatsEventBus implements EventBus {
    * Throws if not connected
    */
   private requireJetStreamManager(): JetStreamManager {
-    this.ensureConnected();
+    this.assertConnected();
     if (!this.jsm) {
       throw new Error('JetStreamManager not initialized');
     }
@@ -587,12 +649,21 @@ export class NatsEventBus implements EventBus {
    * Setup connection event handlers
    */
   private setupConnectionHandlers(): void {
-    if (!this.nc) return;
+    const nc = this.nc;
+    if (!nc) return;
+
+    // Rebuild when the connection dies underneath us (e.g. server closed it)
+    // and it was not an intentional close(). Without this, publishing stays
+    // broken until the next ensureConnected() call — or forever if none comes.
+    nc.closed().then((err) => {
+      if (this.isClosing || this.nc !== nc) return;
+      log.error('Connection closed unexpectedly', { error: err ? String(err) : 'none' });
+      this.scheduleReconnect();
+    });
 
     // Handle connection status events
     (async () => {
-      if (!this.nc) return;
-      for await (const status of this.nc.status()) {
+      for await (const status of nc.status()) {
         switch (status.type) {
           case 'disconnect':
             log.warn('Disconnected from NATS');

@@ -66,6 +66,13 @@ deploy: ## Install/upgrade the release to ns $(NAMESPACE)
 	  --namespace $(NAMESPACE) --create-namespace \
 	  -f $(VALUES) $(HELM_EXTRA) --wait --timeout 5m
 
+.PHONY: redeploy
+redeploy: build ## Rebuild omni-api image + rollout restart (repick the fixed :dev tag)
+	# The dev image tag is fixed (:dev) with pullPolicy Never, so a plain `deploy`
+	# leaves the pod on the old image after a rebuild — force a rollout.
+	kubectl -n $(NAMESPACE) rollout restart deploy/$(RELEASE)
+	kubectl -n $(NAMESPACE) rollout status deploy/$(RELEASE) --timeout=5m
+
 .PHONY: status
 status: ## Rollout status + pods
 	kubectl -n $(NAMESPACE) rollout status deploy/$(RELEASE) --timeout=5m || true

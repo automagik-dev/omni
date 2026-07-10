@@ -78,3 +78,6 @@ version.json
 
 # Helm dependency build artifacts (unpacked charts/ is source of truth)
 deploy/helm/omni/charts/*.tgz
+
+# Personal per-machine helm overrides (never commit)
+deploy/helm/omni/values-local.yaml

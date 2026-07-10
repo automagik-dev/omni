@@ -146,6 +146,11 @@ persistence:
   accessModes:
     - ReadWriteOnce
 
+# StatefulSet PVC retention. Empty {} => omit the field (Kubernetes default
+# Retain/Retain). Self-host overlays can make data-safety explicit with:
+#   persistentVolumeClaimRetentionPolicy: {whenDeleted: Retain, whenScaled: Retain}
+persistentVolumeClaimRetentionPolicy: {}
+
 resources:
   requests:
     cpu: 250m

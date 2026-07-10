@@ -233,6 +233,10 @@ nats:
   persistence:
     storageClass: ""
     size: 1Gi
+  # StatefulSet PVC retention (JetStream data). Empty {} => omit the field
+  # (k8s default Retain/Retain). Self-host overlays may set
+  # {whenDeleted: Retain, whenScaled: Retain}.
+  persistentVolumeClaimRetentionPolicy: {}
   resources:
     requests:
       cpu: 50m
@@ -306,6 +310,10 @@ minio:
   persistence:
     storageClass: ""
     size: 10Gi
+  # StatefulSet PVC retention. Empty {} => omit the field (k8s default
+  # Retain/Retain). Self-host overlays may set {whenDeleted: Retain,
+  # whenScaled: Retain} to make media data-safety explicit.
+  persistentVolumeClaimRetentionPolicy: {}
   # mc (MinIO client) image for the bucket bootstrap Job + omni-api initContainer.
   mc:
     image: minio/mc:RELEASE.2024-01-16T16-06-34Z

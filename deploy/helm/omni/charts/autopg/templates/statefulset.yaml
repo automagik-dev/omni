@@ -7,6 +7,14 @@ metadata:
 spec:
   replicas: 1
   serviceName: {{ include "autopg.headlessServiceName" . }}
+  {{- with .Values.persistentVolumeClaimRetentionPolicy }}
+  # Self-host data safety: control the data PVC's fate when this StatefulSet is
+  # deleted (e.g. `helm uninstall`) or scaled down. Rendered ONLY when set —
+  # realms that omit it keep the Kubernetes default (Retain/Retain), so cloud
+  # manifests are unchanged.
+  persistentVolumeClaimRetentionPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "autopg.selectorLabels" . | nindent 6 }}
