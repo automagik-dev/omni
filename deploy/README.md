@@ -136,6 +136,36 @@ Requires Docker running, `helm`, `kubectl`, and `k3d` or `kind` (auto-installs
 k3d via Homebrew if neither is present). See the target header in
 [`Makefile`](Makefile) for tunables (`SMOKE_TIMEOUT`, `SMOKE_SET`, …).
 
+### Data safety & backups (self-host)
+
+The bundled datastores hold real data — Postgres has your message history and the
+**WhatsApp/Baileys session state** (lose it and every instance re-pairs), and
+MinIO has media. Two things to set up:
+
+1. **Backups** — [`backup/omni-backup.sh`](backup/) dumps Postgres (logical
+   `pg_dump`, restore-verified) and mirrors the MinIO media to a local folder
+   (`~/omni-backups` by default, Time Machine–friendly), with a matching
+   [`backup/omni-restore.sh`](backup/). Nothing runs by default — wire it to
+   `launchd` (macOS) or a `systemd` timer (Linux); see
+   [`backup/README.md`](backup/README.md).
+
+2. **PVC retention** — `values-dev.yaml` sets
+   `persistentVolumeClaimRetentionPolicy: Retain` on the bundled StatefulSets, so
+   the data PVCs survive a `helm uninstall`. But the StorageClass's **PV reclaim
+   policy** is separate: on OrbStack/k3s `local-path` it defaults to `Delete`, so
+   deleting the *PVC* (or the namespace) still erases the data dir. Flip the live
+   PVs to `Retain` for a real safety net:
+
+   ```bash
+   for pv in $(kubectl get pv \
+     -o jsonpath='{range .items[?(@.spec.claimRef.namespace=="omni")]}{.metadata.name}{"\n"}{end}'); do
+     kubectl patch pv "$pv" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+   done
+   ```
+
+Local backups survive a cluster/OrbStack reset but not machine loss — keep
+`~/omni-backups` under Time Machine, or copy it off-box.
+
 ## Makefile reference
 
 Run everything as `make -C deploy <target>` from the repo root.
@@ -147,6 +177,7 @@ Run everything as `make -C deploy <target>` from the repo root.
 | `deps` | `helm dependency build` (vendors the autopg subchart) |
 | `lint` / `template` | Lint / render the chart with the selected realm overlay |
 | `deploy` | `helm upgrade --install --wait` to namespace `$(NAMESPACE)` |
+| `redeploy` | Rebuild the image + `rollout restart` (repick the fixed `:dev` tag) |
 | `status` / `logs` / `health` | Rollout status, API logs, port-forward + `GET /health` |
 | `smoke` | Run the image alone in Docker (no cluster) |
 | `deploy-smoke` | Full disposable-cluster install proof (see above) |

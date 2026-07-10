@@ -80,6 +80,13 @@ metadata:
 spec:
   serviceName: {{ include "omni.nats.fullname" . }}
   replicas: 1
+  {{- with .Values.nats.persistentVolumeClaimRetentionPolicy }}
+  # Self-host data safety: keep the JetStream PVC when this StatefulSet is
+  # deleted/scaled. Rendered only when set — realms that omit it (incl. prod,
+  # where nats is enabled) keep the Kubernetes default, so their output is unchanged.
+  persistentVolumeClaimRetentionPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "omni.selectorLabels" . | nindent 6 }}
