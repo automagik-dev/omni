@@ -10,18 +10,10 @@ import { Badge, Button, Input, MetricDisplay, SectionCard } from '@khal-os/ui';
 import { useState } from 'react';
 import type { TurnItem } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
-import {
-  type ColumnDef,
-  ConfirmDialog,
-  DataTable,
-  FieldGrid,
-  MutationResult,
-  PageShell,
-  ResourceDetail,
-} from '../../components';
+import { type ColumnDef, ConfirmDialog, DataTable, MutationResult, PageShell, ResourceDetail } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
-import { errMsg, fmtTime } from './shared';
+import { DataRowList, errMsg, fmtTime } from './shared';
 
 export function TurnsPage() {
   const { ext } = useOmniClient();
@@ -150,16 +142,16 @@ export function TurnsPage() {
             }
           >
             <ResourceDetail.Section title="Fields">
-              <FieldGrid
-                fields={[
-                  { label: 'Instance', value: selected.instanceId, mono: true },
-                  { label: 'Chat', value: selected.chatId, mono: true },
-                  { label: 'Agent', value: selected.agentId, mono: true },
+              <DataRowList
+                rows={[
+                  { label: 'Instance', value: selected.instanceId ?? '—' },
+                  { label: 'Chat', value: selected.chatId ?? '—' },
+                  { label: 'Agent', value: selected.agentId ?? '—' },
                   { label: 'Action', value: selected.action ?? '—' },
-                  { label: 'Nudges', value: selected.nudgeCount },
-                  { label: 'Messages sent', value: selected.messagesSent },
-                  { label: 'Started', value: fmtTime(selected.startedAt), mono: true },
-                  { label: 'Closed', value: fmtTime(selected.closedAt), mono: true },
+                  { label: 'Nudges', value: selected.nudgeCount ?? 0 },
+                  { label: 'Messages sent', value: selected.messagesSent ?? 0 },
+                  { label: 'Started', value: fmtTime(selected.startedAt) },
+                  { label: 'Closed', value: fmtTime(selected.closedAt) },
                 ]}
               />
             </ResourceDetail.Section>

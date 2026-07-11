@@ -5,7 +5,7 @@
  * active, shows the full record and any per-item errors, and offers a gated
  * cancel (LIVE) for running jobs.
  */
-import { Badge, Button, MetricDisplay, Note, Spinner } from '@khal-os/ui';
+import { Badge, Button, MetricDisplay, Note, ProgressBar, Spinner } from '@khal-os/ui';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { FieldGrid } from '../../components/FieldGrid';
@@ -91,6 +91,12 @@ export function BatchJobDetailPage() {
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
           <Panel title="Progress" description={active ? 'Live · polling every 3s.' : 'Final.'}>
+            <ProgressBar
+              value={shown.progressPercent ?? 0}
+              max={100}
+              color={(shown.failedItems ?? 0) > 0 ? T.warn : T.accent}
+              size="md"
+            />
             <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
               <MetricDisplay value={shown.processedItems ?? 0} label="Processed" />
               <MetricDisplay value={shown.totalItems ?? 0} label="Total" />

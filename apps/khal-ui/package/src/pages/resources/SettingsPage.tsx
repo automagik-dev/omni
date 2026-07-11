@@ -7,23 +7,70 @@
  * chosen value + read-back). Secret-typed values arrive masked and are never
  * echoed. Deleting a key is destructive and typed-phrase gated.
  */
-import { Badge, Button, Input, Note, PillBadge, SectionCard } from '@khal-os/ui';
+import { Badge, Button, Input, Note, PillBadge, SectionCard, StatusDot } from '@khal-os/ui';
 import { useMemo, useState } from 'react';
 import type { SettingHistoryRow, SettingRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
-import {
-  type ColumnDef,
-  ConfirmDialog,
-  DataTable,
-  FieldGrid,
-  MutationResult,
-  PageShell,
-  ResourceDetail,
-} from '../../components';
+import { type ColumnDef, ConfirmDialog, DataTable, MutationResult, PageShell, ResourceDetail } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
 import { coerceValue, displayValue, groupOf, isSecretWipe } from './settings-helpers';
-import { errMsg, fmtTime } from './shared';
+import { CardSection, DataRowList, errMsg, fmtTime } from './shared';
+
+/** Masked secret rendered with a lock glyph so the value column reads as sealed. */
+function SecretValue({ setting }: { setting: Pick<SettingRow, 'isSecret' | 'value'> }) {
+  if (!setting.isSecret) return <>{displayValue(setting)}</>;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: T.secondary }}>
+      <span aria-hidden style={{ fontSize: 11 }}>
+        🔒
+      </span>
+      <span style={{ letterSpacing: '0.15em' }}>••••••••</span>
+    </span>
+  );
+}
+
+/** Change history as a vertical StatusDot timeline — newest first, mono metadata. */
+function HistoryTimeline({ rows, loading }: { rows: SettingHistoryRow[]; loading: boolean }) {
+  if (loading) return <span style={{ fontSize: 12, color: T.muted }}>Loading…</span>;
+  if (rows.length === 0) return <span style={{ fontSize: 12.5, color: T.muted }}>No change history.</span>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {rows.map((h, i) => (
+        <div
+          key={`${h.changedAt}-${h.changedBy}-${i}`}
+          style={{ position: 'relative', paddingLeft: 22, paddingBottom: i === rows.length - 1 ? 0 : 14 }}
+        >
+          <span
+            aria-hidden
+            style={{
+              position: 'absolute',
+              left: 6,
+              top: 14,
+              bottom: i === rows.length - 1 ? undefined : -2,
+              height: i === rows.length - 1 ? 0 : undefined,
+              width: 1,
+              background: T.border,
+            }}
+          />
+          <span style={{ position: 'absolute', left: 2, top: 4 }}>
+            <StatusDot state={i === 0 ? 'active' : 'idle'} size="sm" pulse={i === 0} />
+          </span>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontFamily: T.mono, color: T.secondary, fontVariantNumeric: 'tabular-nums' }}>
+              {fmtTime(h.changedAt)}
+            </span>
+            <span style={{ fontSize: 12.5, color: T.fg, fontWeight: 600 }}>{h.changedBy ?? '—'}</span>
+            {h.changeReason && <span style={{ fontSize: 12, color: T.muted }}>· {h.changeReason}</span>}
+          </div>
+          <div style={{ marginTop: 3, fontSize: 12, fontFamily: T.mono, color: T.tertiary, wordBreak: 'break-all' }}>
+            {String(h.newValue ?? '(redacted)')}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function SettingsPage() {
   const { ext } = useOmniClient();
@@ -77,7 +124,7 @@ export function SettingsPage() {
       mono: true,
       render: (s) => <span style={{ fontWeight: 600, color: T.fg }}>{s.key}</span>,
     },
-    { key: 'value', header: 'Value', mono: true, accessor: (s) => displayValue(s) },
+    { key: 'value', header: 'Value', mono: true, render: (s) => <SecretValue setting={s} /> },
     {
       key: 'valueType',
       header: 'Type',
@@ -91,13 +138,6 @@ export function SettingsPage() {
       width: 160,
       accessor: (s) => (s.defaultValue === undefined ? '—' : String(s.defaultValue)),
     },
-  ];
-
-  const historyColumns: ColumnDef<SettingHistoryRow>[] = [
-    { key: 'changedAt', header: 'When', width: 180, mono: true, accessor: (h) => fmtTime(h.changedAt) },
-    { key: 'changedBy', header: 'By', accessor: (h) => h.changedBy ?? '—' },
-    { key: 'changeReason', header: 'Reason', accessor: (h) => h.changeReason ?? '—' },
-    { key: 'newValue', header: 'New', mono: true, accessor: (h) => String(h.newValue ?? '(redacted)') },
   ];
 
   return (
@@ -118,8 +158,7 @@ export function SettingsPage() {
       )}
 
       {groups.map(([group, settings]) => (
-        <SectionCard key={group} padding="md">
-          <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: T.fg }}>{group}</h3>
+        <CardSection key={group} title={group}>
           <DataTable
             columns={settingColumns}
             rows={settings}
@@ -131,7 +170,7 @@ export function SettingsPage() {
               put.reset();
             }}
           />
-        </SectionCard>
+        </CardSection>
       ))}
 
       {selectedKey && selected && (
@@ -147,18 +186,17 @@ export function SettingsPage() {
             }
           >
             <ResourceDetail.Section title="Fields">
-              <FieldGrid
-                fields={[
-                  { label: 'Type', value: selected.valueType },
+              <DataRowList
+                rows={[
+                  { label: 'Type', value: selected.valueType ?? '—' },
                   { label: 'Category', value: selected.category ?? '—' },
                   { label: 'Description', value: selected.description ?? '—' },
                   {
                     label: 'Default',
                     value: selected.defaultValue === undefined ? '—' : String(selected.defaultValue),
-                    mono: true,
                   },
-                  { label: 'Current', value: displayValue(selected), mono: true },
-                  { label: 'Updated', value: fmtTime(selected.updatedAt), mono: true },
+                  { label: 'Current', value: <SecretValue setting={selected} /> },
+                  { label: 'Updated', value: fmtTime(selected.updatedAt) },
                 ]}
               />
             </ResourceDetail.Section>
@@ -210,13 +248,7 @@ export function SettingsPage() {
                 </Button>
               }
             >
-              <DataTable
-                columns={historyColumns}
-                rows={history.data?.items ?? []}
-                getRowKey={(h) => `${h.changedAt}-${h.changedBy}`}
-                loading={history.isLoading}
-                emptyTitle="No change history"
-              />
+              <HistoryTimeline rows={history.data?.items ?? []} loading={history.isLoading} />
             </ResourceDetail.Section>
           </ResourceDetail>
         </SectionCard>

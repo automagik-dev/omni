@@ -10,6 +10,7 @@
 import { PillBadge } from '@khal-os/ui';
 import type { ReactNode } from 'react';
 import { T } from './tokens';
+import './runtime-styles';
 
 export interface PageShellProps {
   title: string;
@@ -23,7 +24,7 @@ export interface PageShellProps {
 
 export function PageShell({ title, description, actions, eyebrow, children }: PageShellProps) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, minWidth: 0 }}>
+    <div className="khal-anim-fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 24, minWidth: 0 }}>
       <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
           {eyebrow && (

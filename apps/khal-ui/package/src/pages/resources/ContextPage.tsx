@@ -6,13 +6,13 @@
  * Setting a real `chatId` is validated server-side, so synthetic exploration uses
  * a `messageId`-only set; every write is LIVE and confirmed.
  */
-import { Button, Input, Note, SectionCard } from '@khal-os/ui';
+import { Button, Input, Note } from '@khal-os/ui';
 import { useState } from 'react';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
-import { ConfirmDialog, FieldGrid, MutationResult, PageShell } from '../../components';
+import { ConfirmDialog, MutationResult, PageShell } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
-import { errMsg, fmtTime } from './shared';
+import { CardSection, DataRowList, errMsg, fmtTime } from './shared';
 
 export function ContextPage() {
   const { ext } = useOmniClient();
@@ -50,21 +50,19 @@ export function ContextPage() {
 
   return (
     <PageShell eyebrow="Configuration" title="Context" description="The API key's conversation-context pointer.">
-      <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: T.fg }}>Current pointer</h3>
-        <FieldGrid
-          fields={[
-            { label: 'Instance', value: ctx.instanceId ?? '—', mono: true },
-            { label: 'Active instance', value: (ctx as Record<string, unknown>).activeInstanceId ?? '—', mono: true },
-            { label: 'Chat', value: ctx.chatId ?? '—', mono: true },
-            { label: 'Message', value: (ctx as Record<string, unknown>).messageId ?? '—', mono: true },
-            { label: 'Updated', value: fmtTime((ctx as Record<string, unknown>).updatedAt), mono: true },
+      <CardSection title="Current pointer">
+        <DataRowList
+          rows={[
+            { label: 'Instance', value: String(ctx.instanceId ?? '—') },
+            { label: 'Active instance', value: String((ctx as Record<string, unknown>).activeInstanceId ?? '—') },
+            { label: 'Chat', value: String(ctx.chatId ?? '—') },
+            { label: 'Message', value: String((ctx as Record<string, unknown>).messageId ?? '—') },
+            { label: 'Updated', value: fmtTime((ctx as Record<string, unknown>).updatedAt) },
           ]}
         />
-      </SectionCard>
+      </CardSection>
 
-      <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 600, color: T.fg }}>Set context</h3>
+      <CardSection title="Set context">
         <Note type="warning" label="LIVE">
           A real <code style={{ fontFamily: T.mono }}>chatId</code> is validated against the DB. For synthetic
           exploration set only a <code style={{ fontFamily: T.mono }}>messageId</code> (KV-style, no chat lookup).
@@ -120,7 +118,7 @@ export function ContextPage() {
             />
           </div>
         )}
-      </SectionCard>
+      </CardSection>
 
       <ConfirmDialog
         open={confirmSet}

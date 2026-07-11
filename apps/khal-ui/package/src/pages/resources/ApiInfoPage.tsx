@@ -7,10 +7,10 @@
  */
 import { Badge, Button, SectionCard } from '@khal-os/ui';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
-import { FieldGrid, JsonInspector, PageShell } from '../../components';
+import { JsonInspector, PageShell, SectionHead } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
-import { errMsg } from './shared';
+import { DataRowList, errMsg } from './shared';
 
 function linkStyle(): React.CSSProperties {
   return { color: T.accentBlue, fontSize: 13, textDecoration: 'none', fontFamily: T.mono };
@@ -49,20 +49,22 @@ export function ApiInfoPage() {
     >
       <SectionCard padding="md">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: T.fg }}>Backend</h3>
+          <SectionHead>Backend</SectionHead>
           <Badge variant={healthStatus === 'ok' || healthStatus === 'healthy' ? 'green' : 'gray'}>{healthStatus}</Badge>
         </div>
-        <FieldGrid
-          fields={[
-            { label: 'Version', value: String(version), mono: true },
-            { label: 'Info status', value: info.error ? errMsg(info.error) : 'loaded' },
+        <DataRowList
+          rows={[
+            { label: 'Version', value: String(version) },
+            { label: 'Info status', value: info.error ? (errMsg(info.error) ?? 'error') : 'loaded' },
             { label: 'Health status', value: healthStatus },
           ]}
         />
       </SectionCard>
 
       <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: T.fg }}>Documentation</h3>
+        <div style={{ marginBottom: 10 }}>
+          <SectionHead>Documentation</SectionHead>
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <a href={ext.apiInfo.openApiUrl()} target="_blank" rel="noreferrer" style={linkStyle()} download>
             ↓ OpenAPI spec (openapi.json)
@@ -75,13 +77,17 @@ export function ApiInfoPage() {
 
       {info.data && (
         <SectionCard padding="md">
-          <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: T.fg }}>/info</h3>
+          <div style={{ marginBottom: 10 }}>
+            <SectionHead>/info</SectionHead>
+          </div>
           <JsonInspector value={info.data} />
         </SectionCard>
       )}
       {health.data && (
         <SectionCard padding="md">
-          <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: T.fg }}>/health</h3>
+          <div style={{ marginBottom: 10 }}>
+            <SectionHead>/health</SectionHead>
+          </div>
           <JsonInspector value={health.data} />
         </SectionCard>
       )}

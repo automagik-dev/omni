@@ -5,7 +5,7 @@
  * re-download). A live table that polls while any job is active, with a create
  * wizard (estimate → confirmed create). Rows link into the per-job detail.
  */
-import { Badge, Button } from '@khal-os/ui';
+import { Badge, Button, ProgressBar, StatusDot } from '@khal-os/ui';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { BatchJobRow } from '../../api/ext';
@@ -38,13 +38,19 @@ export function BatchJobsListPage() {
     {
       key: 'progress',
       header: 'Progress',
-      width: 160,
-      render: (j) => (
-        <span style={{ fontSize: 12, color: T.muted }}>
-          {j.processedItems ?? 0}/{j.totalItems ?? 0}
-          {j.failedItems ? ` · ${j.failedItems} failed` : ''} ({j.progressPercent ?? 0}%)
-        </span>
-      ),
+      width: 180,
+      render: (j) => {
+        const pct = j.progressPercent ?? 0;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 150 }}>
+            <ProgressBar value={pct} max={100} color={j.failedItems ? T.warn : T.accent} size="sm" />
+            <span style={{ fontSize: 11, color: T.muted, fontFamily: T.mono, fontVariantNumeric: 'tabular-nums' }}>
+              {j.processedItems ?? 0}/{j.totalItems ?? 0}
+              {j.failedItems ? ` · ${j.failedItems} failed` : ''} · {pct}%
+            </span>
+          </div>
+        );
+      },
     },
     { key: 'cost', header: 'Cost', width: 90, accessor: (j) => formatUsd(j.totalCostUsd) },
     { key: 'instanceId', header: 'Instance', mono: true, width: 200, accessor: (j) => j.instanceId },
@@ -58,7 +64,12 @@ export function BatchJobsListPage() {
       description="Transcription and extraction batches over historical media."
       actions={
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {anyActive && <span style={{ fontSize: 11, color: T.accent }}>live · polling</span>}
+          {anyActive && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <StatusDot state="live" size="sm" pulse />
+              <span style={{ fontSize: 11, color: T.accent, fontFamily: T.mono }}>polling</span>
+            </span>
+          )}
           <Button size="small" variant="secondary" onClick={() => void jobs.refetch()}>
             Refresh
           </Button>

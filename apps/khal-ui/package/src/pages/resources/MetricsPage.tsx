@@ -5,13 +5,13 @@
  * metric families with their samples. A filter narrows the families; consumer
  * lag surfaces as any family whose name mentions `lag`/`consumer`.
  */
-import { Button, Input, Note, PillBadge, SectionCard } from '@khal-os/ui';
+import { Button, Input, Note, PillBadge, ProgressBar, SectionCard } from '@khal-os/ui';
 import { useMemo, useState } from 'react';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { type ColumnDef, DataTable, PageShell } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
-import { errMsg } from './shared';
+import { CardSection, errMsg } from './shared';
 
 interface Sample {
   labels: string;
@@ -75,6 +75,55 @@ function parsePrometheus(text: string): MetricFamily[] {
   return [...families.values()].filter((f) => f.samples.length > 0).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Consumer lag at a glance — every sample from the lag/consumer families as a
+ * labelled {@link ProgressBar}, scaled against the largest observed lag so the
+ * hottest consumer reads immediately. Lag is unbounded, so the bar is relative,
+ * not absolute; the mono value carries the real number.
+ */
+function LagPanel({ families }: { families: MetricFamily[] }) {
+  const samples = families.flatMap((f) =>
+    f.samples.map((s) => ({ key: `${f.name}${s.labels}`, name: f.name, labels: s.labels, value: Number(s.value) })),
+  );
+  const numeric = samples.filter((s) => Number.isFinite(s.value));
+  if (numeric.length === 0) return null;
+  const max = Math.max(1, ...numeric.map((s) => s.value));
+
+  return (
+    <CardSection title="Consumer lag">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {numeric.map((s) => {
+          const hot = s.value >= max * 0.66;
+          return (
+            <div key={s.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+                <span
+                  style={{ fontSize: 12, fontFamily: T.mono, color: T.secondary, minWidth: 0, wordBreak: 'break-all' }}
+                >
+                  {s.name}
+                  {s.labels ? <span style={{ color: T.tertiary }}> {s.labels}</span> : null}
+                </span>
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontFamily: T.mono,
+                    fontVariantNumeric: 'tabular-nums',
+                    color: hot ? T.warn : T.fg,
+                    flexShrink: 0,
+                  }}
+                >
+                  {s.value}
+                </span>
+              </div>
+              <ProgressBar value={s.value} max={max} color={hot ? T.warn : T.accent} size="sm" />
+            </div>
+          );
+        })}
+      </div>
+    </CardSection>
+  );
+}
+
 function FamilyCard({ family }: { family: MetricFamily }) {
   const columns: ColumnDef<Sample>[] = [
     { key: 'labels', header: 'Labels', mono: true, accessor: (s) => s.labels || '(none)' },
@@ -135,6 +184,7 @@ export function MetricsPage() {
               </span>
             </div>
           </SectionCard>
+          {lag.length > 0 && <LagPanel families={lag} />}
           {metrics.isLoading && <span style={{ fontSize: 12, color: T.muted }}>Loading metrics…</span>}
           {shown.length === 0 && !metrics.isLoading && <Note type="default">No matching metric families.</Note>}
           {shown.map((f) => (

@@ -25,7 +25,7 @@ import {
 } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
-import { errMsg, fmtTime } from './shared';
+import { CardSection, errMsg, fmtTime } from './shared';
 
 export function EventsPage() {
   const { ext } = useOmniClient();
@@ -113,7 +113,7 @@ export function EventsPage() {
         </SectionCard>
         <SectionCard padding="md">
           <MetricDisplay
-            value={`${Math.round((analytics.data?.successRate ?? 0) * 100)}%`}
+            value={analytics.data?.successRate != null ? `${Math.round(analytics.data.successRate)}%` : '—'}
             label="Success rate"
             accentColor={T.ok}
           />
@@ -235,8 +235,7 @@ export function EventsPage() {
         </SectionCard>
       )}
 
-      <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 600, color: T.fg }}>Trigger a custom event</h3>
+      <CardSection title="Trigger a custom event">
         <Note type="warning" label="LIVE">
           Publishes a real event into the pipeline. Event type must start with{' '}
           <code style={{ fontFamily: T.mono }}>custom.</code>. Typed-phrase confirm required — never auto-run.
@@ -265,7 +264,7 @@ export function EventsPage() {
             />
           </div>
         )}
-      </SectionCard>
+      </CardSection>
 
       <ConfirmDialog
         open={confirmPurge}

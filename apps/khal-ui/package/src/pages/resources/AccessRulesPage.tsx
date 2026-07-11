@@ -20,6 +20,7 @@ import {
   MutationResult,
   PageShell,
   ResourceDetail,
+  SectionHead,
 } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
@@ -124,7 +125,9 @@ export function AccessRulesPage() {
       />
 
       <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: T.fg }}>New rule</h3>
+        <div style={{ marginBottom: 10 }}>
+          <SectionHead>New rule</SectionHead>
+        </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           <select value={ruleType} onChange={(e) => setRuleType(e.target.value)} style={selectStyle}>
             <option value="deny">deny</option>
@@ -166,7 +169,9 @@ export function AccessRulesPage() {
       </SectionCard>
 
       <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: T.fg }}>Access checker</h3>
+        <div style={{ marginBottom: 10 }}>
+          <SectionHead>Access checker</SectionHead>
+        </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           <InstancePicker value={checkInstance} onChange={setCheckInstance} />
           <Input

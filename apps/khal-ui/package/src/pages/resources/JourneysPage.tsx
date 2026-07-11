@@ -5,13 +5,83 @@
  * plus a per-stage percentile table come from GET /journeys/summary; a
  * correlationId lookup renders a single journey's checkpoints and latencies.
  */
-import { Button, Input, MetricDisplay, Note, SectionCard } from '@khal-os/ui';
+import { Button, Input, MetricDisplay, Note, SectionCard, StatusDot } from '@khal-os/ui';
 import { useState } from 'react';
+import type { Journey } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
-import { type ColumnDef, DataTable, FieldGrid, JsonInspector, PageShell } from '../../components';
+import { type ColumnDef, DataTable, JsonInspector, PageShell } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
-import { errMsg, fmtTime } from './shared';
+import { CardSection, DataRowList, errMsg, fmtTime } from './shared';
+
+function fmtMs(ms: number): string {
+  if (!Number.isFinite(ms)) return '—';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+/**
+ * A single journey's checkpoints as the shared vertical StatusDot timeline — each
+ * checkpoint a node on a connected spine, with its stage, absolute time, and the
+ * delta from the prior checkpoint in mono. Mirrors the chat "Trace" tab so a
+ * latency journey reads identically wherever it surfaces.
+ */
+function JourneyTrace({ journey }: { journey: Journey }) {
+  const checkpoints = [...(journey.checkpoints ?? [])].sort((a, b) => a.timestamp - b.timestamp);
+  if (checkpoints.length === 0) {
+    return <span style={{ fontSize: 12.5, color: T.muted }}>No checkpoints recorded for this journey.</span>;
+  }
+  const start = checkpoints[0]?.timestamp ?? 0;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {checkpoints.map((c, i) => {
+        const prev = checkpoints[i - 1];
+        const delta = prev ? c.timestamp - prev.timestamp : 0;
+        const last = i === checkpoints.length - 1;
+        return (
+          <div
+            key={`${c.stage}-${c.timestamp}-${i}`}
+            style={{ position: 'relative', paddingLeft: 22, paddingBottom: last ? 0 : 14 }}
+          >
+            <span
+              aria-hidden
+              style={{
+                position: 'absolute',
+                left: 6,
+                top: 14,
+                bottom: last ? undefined : -2,
+                height: last ? 0 : undefined,
+                width: 1,
+                background: T.border,
+              }}
+            />
+            <span style={{ position: 'absolute', left: 2, top: 4 }}>
+              <StatusDot state={last ? 'active' : 'online'} size="sm" pulse={last} />
+            </span>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: T.fg }}>{c.name || c.stage}</span>
+              {c.name && c.stage && c.name !== c.stage && (
+                <span style={{ fontSize: 11, fontFamily: T.mono, color: T.tertiary }}>{c.stage}</span>
+              )}
+              <span style={{ marginLeft: 'auto', display: 'flex', gap: 10 }}>
+                {i > 0 && (
+                  <span
+                    style={{ fontSize: 11, fontFamily: T.mono, color: T.secondary, fontVariantNumeric: 'tabular-nums' }}
+                  >
+                    +{fmtMs(delta)}
+                  </span>
+                )}
+                <span style={{ fontSize: 11, fontFamily: T.mono, color: T.muted, fontVariantNumeric: 'tabular-nums' }}>
+                  {fmtMs(c.timestamp - start)}
+                </span>
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 interface StageRow {
   stage: string;
@@ -113,8 +183,7 @@ export function JourneysPage() {
         emptyDescription="No journeys tracked in this window."
       />
 
-      <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: T.fg }}>Look up a journey</h3>
+      <CardSection title="Look up a journey">
         <form
           style={{ display: 'flex', gap: 8 }}
           onSubmit={(e) => {
@@ -129,7 +198,7 @@ export function JourneysPage() {
         </form>
 
         {lookupId && (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 14 }}>
             {journey.isLoading ? (
               <span style={{ fontSize: 12, color: T.muted }}>Loading…</span>
             ) : journey.error ? (
@@ -137,21 +206,22 @@ export function JourneysPage() {
                 {errMsg(journey.error)}
               </Note>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <FieldGrid
-                  fields={[
-                    { label: 'Correlation ID', value: journey.data?.correlationId, mono: true },
-                    { label: 'Started', value: fmtTime(journey.data?.startedAt), mono: true },
-                    { label: 'Completed', value: fmtTime(journey.data?.completedAt), mono: true },
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <DataRowList
+                  rows={[
+                    { label: 'Correlation ID', value: journey.data?.correlationId ?? '—' },
+                    { label: 'Started', value: fmtTime(journey.data?.startedAt) },
+                    { label: 'Completed', value: fmtTime(journey.data?.completedAt) },
                     { label: 'Checkpoints', value: journey.data?.checkpoints?.length ?? 0 },
                   ]}
                 />
+                {journey.data && <JourneyTrace journey={journey.data} />}
                 <JsonInspector value={journey.data ?? {}} />
               </div>
             )}
           </div>
         )}
-      </SectionCard>
+      </CardSection>
     </PageShell>
   );
 }

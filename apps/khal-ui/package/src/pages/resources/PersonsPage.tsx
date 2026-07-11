@@ -23,6 +23,7 @@ import {
   PageShell,
   ResourceDetail,
   SchemaForm,
+  SectionHead,
 } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
@@ -207,7 +208,9 @@ export function PersonsPage() {
       )}
 
       <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 600, color: T.fg }}>Identity operations</h3>
+        <div style={{ marginBottom: 4 }}>
+          <SectionHead>Identity operations</SectionHead>
+        </div>
         <Note type="warning" label="LIVE · destructive">
           Link, unlink, and merge permanently rewrite the identity graph. Every person here is production data — each op
           requires a typed-phrase confirm and is never run by automated validation.

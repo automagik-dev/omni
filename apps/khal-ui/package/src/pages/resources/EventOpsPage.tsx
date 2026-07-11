@@ -10,7 +10,15 @@ import { Button, Input, MetricDisplay, Note, SectionCard, Toggle } from '@khal-o
 import { useState } from 'react';
 import type { ReplaySession } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
-import { type ColumnDef, ConfirmDialog, DataTable, JsonInspector, MutationResult, PageShell } from '../../components';
+import {
+  type ColumnDef,
+  ConfirmDialog,
+  DataTable,
+  JsonInspector,
+  MutationResult,
+  PageShell,
+  SectionHead,
+} from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
 import { errMsg, fmtTime } from './shared';
@@ -97,7 +105,9 @@ export function EventOpsPage() {
       />
 
       <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 600, color: T.fg }}>New replay session</h3>
+        <div style={{ marginBottom: 4 }}>
+          <SectionHead>New replay session</SectionHead>
+        </div>
         <Note type="warning" label="LIVE">
           A non-dry-run replay reprocesses real events. Start with dry-run. Confirm required.
         </Note>
@@ -133,9 +143,9 @@ export function EventOpsPage() {
 
       {(scheduled.data || scheduled.error) && (
         <SectionCard padding="md">
-          <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: T.fg }}>
-            Scheduled maintenance result
-          </h3>
+          <div style={{ marginBottom: 10 }}>
+            <SectionHead>Scheduled maintenance result</SectionHead>
+          </div>
           {scheduled.error ? (
             <Note type="error">{errMsg(scheduled.error)}</Note>
           ) : (

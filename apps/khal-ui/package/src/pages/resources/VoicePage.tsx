@@ -18,6 +18,7 @@ import {
   MutationResult,
   PageShell,
   ResourceDetail,
+  SectionHead,
 } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
@@ -115,7 +116,9 @@ export function VoicePage() {
       )}
 
       <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 600, color: T.fg }}>Join a voice channel</h3>
+        <div style={{ marginBottom: 4 }}>
+          <SectionHead>Join a voice channel</SectionHead>
+        </div>
         <Note type="warning" label="LIVE">
           Joining connects a live instance to a voice channel. Confirm required.
         </Note>

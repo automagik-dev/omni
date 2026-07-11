@@ -7,6 +7,7 @@
  * still dark. Data is static/bundled, so filtering is local.
  */
 import { Input, MetricDisplay, PillBadge, SectionCard } from '@khal-os/ui';
+import type { CSSProperties } from 'react';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Capability } from '../../capabilities';
@@ -15,6 +16,7 @@ import { evidenceSummary } from '../../capabilities/evidence';
 import { DataTable } from '../../components/DataTable';
 import type { ColumnDef } from '../../components/DataTable';
 import { PageShell } from '../../components/PageShell';
+import { SectionHead } from '../../components/ResourceDetail';
 import { T } from '../../components/tokens';
 
 /**
@@ -105,10 +107,26 @@ const columns: ColumnDef<Capability>[] = [
   {
     key: 'note',
     header: 'Note',
-    width: 220,
+    width: 240,
     render: (c) =>
       c.note ? (
-        <span style={{ color: T.warn, fontSize: 11.5, lineHeight: 1.35, display: 'inline-block' }}>⚠ {c.note}</span>
+        <span
+          style={{
+            display: 'inline-flex',
+            gap: 6,
+            alignItems: 'flex-start',
+            padding: '4px 8px',
+            borderRadius: 8,
+            border: `1px solid ${T.warn}`,
+            background: `color-mix(in oklch, ${T.warn} 12%, transparent)`,
+            color: T.warn,
+            fontSize: 11,
+            lineHeight: 1.35,
+          }}
+        >
+          <span aria-hidden>⚠</span>
+          <span>{c.note}</span>
+        </span>
       ) : (
         <span style={{ color: T.muted, fontSize: 12 }}>—</span>
       ),
@@ -137,7 +155,7 @@ function EvidencePanel() {
   return (
     <SectionCard padding="md">
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
-        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: T.fg }}>Live evidence</h3>
+        <SectionHead>Live evidence</SectionHead>
         <span style={{ fontSize: 11, color: T.muted, fontFamily: T.mono }}>
           {evidenceSummary.generatedAt
             ? `last run ${fmtEvidenceTime(evidenceSummary.generatedAt)}`
@@ -173,20 +191,37 @@ function EvidencePanel() {
   );
 }
 
+const pillButtonStyle: CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  cursor: 'pointer',
+};
+
 export function CapabilitiesPage() {
   const [query, setQuery] = useState('');
+  const [family, setFamily] = useState<string | null>(null);
   const totals = capabilityInventory.totals;
+
+  /** Distinct resource families with their counts, busiest first — filter chips. */
+  const families = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of capabilityInventory.capabilities) counts.set(c.resource, (counts.get(c.resource) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, []);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return capabilityInventory.capabilities;
-    return capabilityInventory.capabilities.filter(
-      (c) =>
+    return capabilityInventory.capabilities.filter((c) => {
+      if (family && c.resource !== family) return false;
+      if (!q) return true;
+      return (
         c.route.toLowerCase().includes(q) ||
         c.resource.toLowerCase().includes(q) ||
-        (c.scope ?? '').toLowerCase().includes(q),
-    );
-  }, [query]);
+        (c.scope ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [query, family]);
 
   return (
     <PageShell
@@ -196,32 +231,42 @@ export function CapabilitiesPage() {
     >
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12 }}>
         <SectionCard padding="md">
-          <MetricDisplay value={totals.total} label="Capabilities" />
-        </SectionCard>
-        <SectionCard padding="md">
-          <MetricDisplay value={totals.inSpec} label="In-spec" description={`${totals.offSpec} off-spec`} />
+          <MetricDisplay value={totals.total} label="Capabilities" description={`${totals.offSpec} off-spec`} />
         </SectionCard>
         <SectionCard padding="md">
           <MetricDisplay
-            value={totals.total - (totals.byUiStatus.none ?? 0)}
-            label="Exposed+"
-            description={`${totals.byUiStatus.none ?? 0} still dark`}
+            value={totals.byUiStatus.none ?? 0}
+            label="Dark"
+            description="no UI yet"
+            accentColor={T.danger}
+          />
+        </SectionCard>
+        <SectionCard padding="md">
+          <MetricDisplay value={totals.byUiStatus.exposed ?? 0} label="Exposed" description="visible, read-only" />
+        </SectionCard>
+        <SectionCard padding="md">
+          <MetricDisplay
+            value={totals.byUiStatus.operable ?? 0}
+            label="Operable"
+            description="drivable"
+            accentColor={T.accentBlue}
+          />
+        </SectionCard>
+        <SectionCard padding="md">
+          <MetricDisplay
+            value={totals.byUiStatus['live-verified'] ?? 0}
+            label="Live-verified"
+            description="proven vs backend"
             accentColor={T.ok}
           />
         </SectionCard>
         <SectionCard padding="md">
           <MetricDisplay
-            value={
-              (totals.byUiStatus.operable ?? 0) +
-              (totals.byUiStatus['live-verified'] ?? 0) +
-              (totals.byUiStatus['ux-complete'] ?? 0)
-            }
-            label="Operable+"
-            description={`${totals.byUiStatus['live-verified'] ?? 0} live-verified`}
+            value={totals.byUiStatus['ux-complete'] ?? 0}
+            label="UX-complete"
+            description="khalos-native"
+            accentColor={T.accent}
           />
-        </SectionCard>
-        <SectionCard padding="md">
-          <MetricDisplay value={totals.destructive} label="Destructive" accentColor={T.danger} />
         </SectionCard>
       </div>
 
@@ -233,11 +278,27 @@ export function CapabilitiesPage() {
         getRowKey={(c) => c.key}
         emptyTitle="No matching capabilities"
         toolbar={
-          <Input
-            placeholder="Filter by route, resource, or scope…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Input
+              placeholder="Filter by route, resource, or scope…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <button type="button" onClick={() => setFamily(null)} style={pillButtonStyle}>
+                <PillBadge size="sm" variant={family === null ? 'accent' : 'muted'}>
+                  all · {capabilityInventory.capabilities.length}
+                </PillBadge>
+              </button>
+              {families.map(([fam, count]) => (
+                <button key={fam} type="button" onClick={() => setFamily(fam)} style={pillButtonStyle}>
+                  <PillBadge size="sm" variant={family === fam ? 'accent' : 'muted'}>
+                    {fam} · {count}
+                  </PillBadge>
+                </button>
+              ))}
+            </div>
+          </div>
         }
       />
     </PageShell>

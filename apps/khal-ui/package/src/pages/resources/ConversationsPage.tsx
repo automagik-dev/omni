@@ -21,6 +21,7 @@ import {
   PageShell,
   ResourceDetail,
   SchemaForm,
+  SectionHead,
 } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
@@ -97,7 +98,9 @@ export function ConversationsPage() {
       />
 
       <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: T.fg }}>New conversation</h3>
+        <div style={{ marginBottom: 10 }}>
+          <SectionHead>New conversation</SectionHead>
+        </div>
         <SchemaForm schema={editSchema} submitLabel="Create" onSubmit={(data) => create.mutate({ ...data })} />
         {(create.data || create.error) && (
           <div style={{ marginTop: 12 }}>

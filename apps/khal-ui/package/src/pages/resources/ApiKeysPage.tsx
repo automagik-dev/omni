@@ -11,18 +11,10 @@ import { Badge, Button, Input, Note, SectionCard } from '@khal-os/ui';
 import { useState } from 'react';
 import type { ApiKeyAuditRow, ApiKeyRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
-import {
-  type ColumnDef,
-  ConfirmDialog,
-  DataTable,
-  FieldGrid,
-  MutationResult,
-  PageShell,
-  ResourceDetail,
-} from '../../components';
+import { type ColumnDef, ConfirmDialog, DataTable, MutationResult, PageShell, ResourceDetail } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
-import { errMsg, fmtTime } from './shared';
+import { CardSection, DataRowList, errMsg, fmtTime } from './shared';
 
 const PROFILES = ['', 'cs', 'personal', 'scout', 'coworker', 'admin'];
 
@@ -143,8 +135,7 @@ export function ApiKeysPage() {
         }
       />
 
-      <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 600, color: T.fg }}>Create key</h3>
+      <CardSection title="Create key">
         <Note type="warning" label="LIVE">
           The raw key is shown once here and never again. The <code style={{ fontFamily: T.mono }}>admin</code> profile
           is refused server-side.
@@ -204,7 +195,7 @@ export function ApiKeysPage() {
             />
           </div>
         )}
-      </SectionCard>
+      </CardSection>
 
       {selectedId && selected && (
         <SectionCard padding="md">
@@ -229,15 +220,15 @@ export function ApiKeysPage() {
             }
           >
             <ResourceDetail.Section title="Fields">
-              <FieldGrid
-                fields={[
-                  { label: 'Prefix', value: selected.keyPrefix, mono: true },
+              <DataRowList
+                rows={[
+                  { label: 'Prefix', value: selected.keyPrefix ?? '—' },
                   { label: 'Profile', value: selected.profile ?? '—' },
                   { label: 'Scopes', value: (selected.scopes ?? []).join(', ') || '—' },
                   { label: 'Instances', value: (selected.instanceIds ?? []).join(', ') || 'all' },
                   { label: 'Usage count', value: selected.usageCount ?? 0 },
-                  { label: 'Expires', value: fmtTime(selected.expiresAt), mono: true },
-                  { label: 'Created', value: fmtTime(selected.createdAt), mono: true },
+                  { label: 'Expires', value: fmtTime(selected.expiresAt) },
+                  { label: 'Created', value: fmtTime(selected.createdAt) },
                 ]}
               />
             </ResourceDetail.Section>

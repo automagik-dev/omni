@@ -12,6 +12,7 @@ import { z } from 'zod';
 import type { MediaResult } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { ConfirmDialog, JsonInspector, MutationResult, PageShell, SchemaForm } from '../../components';
+import { SectionHead } from '../../components/ResourceDetail';
 import { T } from '../../components/tokens';
 import { useOmniMutation } from '../../hooks/useOmniQuery';
 import { errMsg } from './shared';
@@ -67,7 +68,9 @@ function MediaPanel({ def }: { def: PanelDef }) {
 
   return (
     <SectionCard padding="md">
-      <h3 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 600, color: T.fg }}>{def.title}</h3>
+      <div style={{ marginBottom: 10 }}>
+        <SectionHead>{def.title}</SectionHead>
+      </div>
       <Note type="warning" label="LIVE · costs money">
         Calls a paid external provider. Confirm required — this panel is never auto-run by validation.
       </Note>
@@ -183,9 +186,11 @@ export function MediaConsolePage() {
       title="Media Console"
       description="Generative media endpoints — every panel calls a paid provider behind a confirm."
     >
-      {PANELS.map((def) => (
-        <MediaPanel key={def.id} def={def} />
-      ))}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 16 }}>
+        {PANELS.map((def) => (
+          <MediaPanel key={def.id} def={def} />
+        ))}
+      </div>
     </PageShell>
   );
 }

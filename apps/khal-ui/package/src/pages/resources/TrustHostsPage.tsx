@@ -14,7 +14,6 @@ import {
   type ColumnDef,
   ConfirmDialog,
   DataTable,
-  FieldGrid,
   JsonInspector,
   MutationResult,
   PageShell,
@@ -22,7 +21,7 @@ import {
 } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
-import { errMsg, fmtTime } from './shared';
+import { DataRowList, errMsg, fmtTime } from './shared';
 
 export function TrustHostsPage() {
   const { ext } = useOmniClient();
@@ -103,12 +102,12 @@ export function TrustHostsPage() {
             }
           >
             <ResourceDetail.Section title="Fields">
-              <FieldGrid
-                fields={[
-                  { label: 'Pubkey', value: selected.pubkey, mono: true },
+              <DataRowList
+                rows={[
+                  { label: 'Pubkey', value: String(selected.pubkey ?? '—') },
                   { label: 'Scopes', value: (selected.scopes ?? []).join(', ') || '—' },
-                  { label: 'Last seen', value: fmtTime(selected.lastSeenAt as string), mono: true },
-                  { label: 'Created', value: fmtTime(selected.createdAt), mono: true },
+                  { label: 'Last seen', value: fmtTime(selected.lastSeenAt as string) },
+                  { label: 'Created', value: fmtTime(selected.createdAt) },
                 ]}
               />
             </ResourceDetail.Section>

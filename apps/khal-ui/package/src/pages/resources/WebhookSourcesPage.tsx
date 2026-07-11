@@ -17,6 +17,7 @@ import {
   MutationResult,
   PageShell,
   ResourceDetail,
+  SectionHead,
 } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
@@ -80,7 +81,9 @@ export function WebhookSourcesPage() {
       />
 
       <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: T.fg }}>New source</h3>
+        <div style={{ marginBottom: 10 }}>
+          <SectionHead>New source</SectionHead>
+        </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           <Input placeholder="name" value={name} onChange={(e) => setName(e.target.value)} />
           <Input placeholder="description" value={description} onChange={(e) => setDescription(e.target.value)} />
