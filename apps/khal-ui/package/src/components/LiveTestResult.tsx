@@ -1,0 +1,77 @@
+'use client';
+
+import { EffectBadge } from './EffectBadge';
+/**
+ * Result of running a capability's live/dry-run test: what was run, at what blast
+ * radius ({@link EffectLabel}), whether it passed, and the evidence payload that
+ * proves it. The evidence renders through {@link JsonInspector} (redacted by
+ * default). Powers the "verify this works against the real backend" affordance
+ * later groups attach to each resource.
+ */
+import { JsonInspector } from './JsonInspector';
+import type { EffectLabel } from './effect';
+import { T } from './tokens';
+
+export type LiveTestStatus = 'pass' | 'fail' | 'pending';
+
+export interface LiveTestResultProps {
+  name: string;
+  effect: EffectLabel;
+  status: LiveTestStatus;
+  message?: string;
+  evidence?: unknown;
+  /** Observed latency in ms, if measured. */
+  latencyMs?: number;
+}
+
+const STATUS_META: Record<LiveTestStatus, { label: string; color: string; glyph: string }> = {
+  pass: { label: 'PASS', color: T.ok, glyph: '✓' },
+  fail: { label: 'FAIL', color: T.danger, glyph: '✕' },
+  pending: { label: 'RUNNING', color: T.muted, glyph: '…' },
+};
+
+export function LiveTestResult({ name, effect, status, message, evidence, latencyMs }: LiveTestResultProps) {
+  const meta = STATUS_META[status];
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        padding: 14,
+        borderRadius: 10,
+        border: `1px solid ${T.border}`,
+        borderLeft: `3px solid ${meta.color}`,
+        background: T.surface,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span
+          aria-label={meta.label}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 20,
+            height: 20,
+            borderRadius: 999,
+            color: meta.color,
+            border: `1.5px solid ${meta.color}`,
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
+          {meta.glyph}
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: T.fg, flex: 1, minWidth: 0 }}>{name}</span>
+        {latencyMs !== undefined && (
+          <span style={{ fontSize: 11, color: T.muted, fontFamily: T.mono }}>{latencyMs}ms</span>
+        )}
+        <EffectBadge effect={effect} />
+      </div>
+
+      {message && <div style={{ fontSize: 12, color: status === 'fail' ? T.danger : T.muted }}>{message}</div>}
+      {evidence !== undefined && <JsonInspector value={evidence} />}
+    </div>
+  );
+}

@@ -34,6 +34,12 @@ export default defineConfig({
           });
         },
       },
+      // The BFF serves diagnostics at its origin root (not under /omni). The
+      // header freshness chip and Health page poll it.
+      '/diag': {
+        target: 'http://127.0.0.1:8899',
+        changeOrigin: true,
+      },
     },
   },
   build: {

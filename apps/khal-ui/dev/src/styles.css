@@ -22,6 +22,10 @@
    it out of the react-18 root.) */
 @source "../node_modules/@khal-os/ui/dist";
 
+/* Also scan the pack source so any Tailwind utilities the shell/pages use get
+   generated (the pack renders through the Vite alias, outside dev/'s tree). */
+@source "../../package/src";
+
 /* next-themes (attribute="class") toggles `.dark` on <html>; map dark: to it. */
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -103,7 +107,9 @@ body,
 #root {
   margin: 0;
   padding: 0;
-  min-height: 100%;
+  /* Full height so the pack's shell (height:100%) fills the viewport standalone,
+     matching the fixed-size window it gets embedded in inside KHAL. */
+  height: 100%;
   background: var(--bg);
   color: var(--fg);
   font-family: var(--khal-font-body, system-ui, -apple-system, "Segoe UI", sans-serif);
