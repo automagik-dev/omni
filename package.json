@@ -3,7 +3,7 @@
   "version": "2.260710.3",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": ["packages/*", "apps/*", "apps/khal-ui/*"],
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",

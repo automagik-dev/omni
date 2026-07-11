@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Omni Admin App Settings",
+  "description": "Operator-configurable settings for Omni Admin. Declare each runtime key here; secret key names are also listed in khal-app.json settings.secrets. Concrete values are set in KHAL OS App Settings — OMNI_API_KEY lives in the KHAL vault and is never committed.",
+  "type": "object",
+  "properties": {
+    "OMNI_BASE_URL": {
+      "type": "string",
+      "format": "uri",
+      "description": "Base URL of the Omni backend the BFF proxies to (no trailing slash)."
+    }
+  },
+  "required": ["OMNI_BASE_URL"],
+  "additionalProperties": false
+}
