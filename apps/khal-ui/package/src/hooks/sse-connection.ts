@@ -8,8 +8,14 @@
  * - Opens an `EventSource` and streams parsed messages to `onMessage`.
  * - On error, closes and reconnects with exponential backoff (+ jitter), and
  *   raises the `degraded` flag so the UI can fall back to polling.
- * - A heartbeat watchdog forces a reconnect if no frame (message OR the
- *   server's `:heartbeat` comment) arrives within `heartbeatMs`.
+ * - An optional stall watchdog forces a reconnect if no frame arrives within
+ *   `heartbeatMs`. This only guards streams that emit periodic *data* frames.
+ *   `EventSource` silently swallows SSE comment lines (`: heartbeat`), so a
+ *   change-only stream whose sole keepalive is a comment would false-trip the
+ *   watchdog even while healthy — pass `heartbeatMs: 0` to disable it and let
+ *   `EventSource`'s own error detection drive `degraded` instead. (The upstream
+ *   comment keepalive still holds the TCP connection open; only our app-level
+ *   frame watchdog is blind to it.)
  * - On a healthy (re)open, backoff resets and `degraded` clears.
  * - Optional gap detection: if `getSequence` is supplied, non-consecutive
  *   sequence numbers invoke `onGap` (a hook point for later groups to backfill).
@@ -57,7 +63,12 @@ export interface SseConnectionOptions {
   backoffFactor?: number;
   /** Reconnect delay ceiling in ms (default 30000). */
   backoffMaxMs?: number;
-  /** No-frame timeout before a forced reconnect (default 30000). */
+  /**
+   * No-frame timeout before a forced reconnect (default 30000). Set to `0` (or
+   * any non-positive value) to disable the watchdog entirely — required for
+   * change-only streams whose only keepalive is an SSE comment line that
+   * `EventSource` never surfaces (e.g. the agent-state stream).
+   */
   heartbeatMs?: number;
   timers?: TimerHost;
   /** Jitter in [0,1) for reconnect delay — default deterministic 0 for tests. */
@@ -147,7 +158,8 @@ export class SseConnection {
       }
       this.lastSequence = seq;
     }
-    // The server's heartbeat comment carries no data; skip user delivery.
+    // A frame with empty data (e.g. a bare keepalive event) is liveness only —
+    // it re-arms the watchdog above but is not delivered to the consumer.
     if (data !== '') this.opts.onMessage?.(data, eventType);
   }
 
@@ -171,6 +183,10 @@ export class SseConnection {
 
   private armWatchdog(): void {
     this.clearWatchdog();
+    // heartbeatMs <= 0 disables the stall watchdog: the stream is change-only
+    // and kept alive by a comment keepalive EventSource never surfaces, so
+    // degraded is driven purely by EventSource's onerror.
+    if (this.opts.heartbeatMs <= 0) return;
     this.watchdogTimer = this.opts.timers.set(() => this.handleStall(), this.opts.heartbeatMs);
   }
 

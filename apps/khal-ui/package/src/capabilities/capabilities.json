@@ -14,10 +14,10 @@
       "trust"
     ],
     "byUiStatus": {
-      "none": 213,
+      "none": 145,
       "exposed": 0,
-      "operable": 45,
-      "live-verified": 10,
+      "operable": 107,
+      "live-verified": 16,
       "ux-complete": 0
     }
   },
@@ -85,7 +85,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /chats/:id/label",
@@ -98,7 +98,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /chats/:id/participants/:platformUserId",
@@ -111,7 +111,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /context",
@@ -189,7 +189,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /follow-up/instances/:id",
@@ -293,7 +293,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /messages/:id/reactions",
@@ -306,7 +306,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /messages/:id/star",
@@ -319,7 +319,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /providers/:id",
@@ -449,7 +449,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /agent-state/stream",
@@ -462,7 +462,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": true,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /agent-tasks",
@@ -657,7 +657,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /chats/:id",
@@ -670,7 +670,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /chats/:id/messages",
@@ -683,7 +683,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /chats/:id/participants",
@@ -696,7 +696,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /chats/by-external",
@@ -709,7 +709,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /context",
@@ -761,7 +761,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /dead-letters",
@@ -956,7 +956,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /follow-up/instances/:id",
@@ -1411,7 +1411,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /messages/:id",
@@ -1424,7 +1424,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /messages/by-external",
@@ -1437,7 +1437,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /messages/tts/voices",
@@ -1450,7 +1450,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /metrics",
@@ -1840,7 +1840,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /chats/:id/participants/:platformUserId",
@@ -1853,7 +1853,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /conversations/:id",
@@ -1918,7 +1918,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /messages/:id/delivery-status",
@@ -1931,7 +1931,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /messages/:id/document-extraction",
@@ -1944,7 +1944,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /messages/:id/image-description",
@@ -1957,7 +1957,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /messages/:id/transcription",
@@ -1970,7 +1970,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /messages/:id/video-description",
@@ -1983,7 +1983,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /persons/:id",
@@ -2243,7 +2243,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/archive",
@@ -2256,7 +2256,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/disappearing",
@@ -2269,7 +2269,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/hide",
@@ -2282,7 +2282,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/label",
@@ -2295,7 +2295,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/mute",
@@ -2308,7 +2308,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/participants",
@@ -2321,7 +2321,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/pin",
@@ -2334,7 +2334,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/read",
@@ -2347,7 +2347,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/unarchive",
@@ -2360,7 +2360,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/unhide",
@@ -2373,7 +2373,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/unmute",
@@ -2386,7 +2386,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/:id/unpin",
@@ -2399,7 +2399,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /chats/sync-names",
@@ -2412,7 +2412,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /context",
@@ -2880,7 +2880,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/:id/edit",
@@ -2893,7 +2893,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/:id/reactions",
@@ -2906,7 +2906,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/:id/read",
@@ -2919,7 +2919,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/:id/star",
@@ -2932,7 +2932,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/contact",
@@ -2945,7 +2945,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/delete-channel",
@@ -2958,7 +2958,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/edit-channel",
@@ -2971,7 +2971,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/location",
@@ -2984,7 +2984,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/media/download",
@@ -2997,7 +2997,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/reaction",
@@ -3010,7 +3010,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/read",
@@ -3023,7 +3023,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/send",
@@ -3036,7 +3036,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "POST /messages/send/contact",
@@ -3049,7 +3049,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/send/embed",
@@ -3062,7 +3062,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/send/forward",
@@ -3075,7 +3075,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/send/location",
@@ -3088,7 +3088,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/send/media",
@@ -3101,7 +3101,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/send/poll",
@@ -3114,7 +3114,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/send/presence",
@@ -3127,7 +3127,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/send/reaction",
@@ -3140,7 +3140,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/send/sticker",
@@ -3153,7 +3153,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/send/tts",
@@ -3166,7 +3166,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /messages/sticker",
@@ -3179,7 +3179,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /persons/link",
@@ -3361,7 +3361,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "PUT /follow-up/agents/:id",
@@ -3387,7 +3387,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PUT /follow-up/instances/:id",

@@ -25,6 +25,12 @@ export interface UseSseOptions {
   onDegraded?: (degraded: boolean) => void;
   /** Disable the stream (e.g. before a target is selected). */
   enabled?: boolean;
+  /**
+   * No-frame stall timeout in ms. Pass `0` to disable the watchdog for
+   * change-only streams kept alive by SSE comment keepalives EventSource never
+   * surfaces (the agent-state stream). Defaults to {@link SseConnection}'s 30s.
+   */
+  heartbeatMs?: number;
   /** Injectable EventSource constructor for tests; defaults to the browser's. */
   createEventSource?: EventSourceFactory;
 }
@@ -63,6 +69,7 @@ export function useSse(path: string, options: UseSseOptions = {}): UseSseResult 
       url,
       createEventSource: factory,
       events: optsRef.current.events,
+      ...(optsRef.current.heartbeatMs !== undefined ? { heartbeatMs: optsRef.current.heartbeatMs } : {}),
       onOpen: () => setConnected(true),
       onMessage: (data, eventType) => {
         optsRef.current.onMessage?.(data, eventType);

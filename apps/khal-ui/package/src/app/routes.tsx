@@ -8,6 +8,7 @@
 import type { ComponentType } from 'react';
 import type { RouteObject } from 'react-router-dom';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
+import { ChatPage } from '../pages/chat/ChatPage';
 import { CapabilitiesPage } from '../pages/dev/CapabilitiesPage';
 import { ActivityPage } from '../pages/home/ActivityPage';
 import { HealthPage } from '../pages/home/HealthPage';
@@ -22,6 +23,7 @@ const LIVE_PAGES: Record<string, ComponentType> = {
   '/': OverviewPage,
   '/health': HealthPage,
   '/activity': ActivityPage,
+  '/chat': ChatPage,
   '/instances': InstancesListPage,
   '/dev/capabilities': CapabilitiesPage,
 };

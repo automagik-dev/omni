@@ -136,6 +136,32 @@ describe('SseConnection', () => {
     expect(FakeEventSource.instances).toHaveLength(2);
   });
 
+  test('heartbeatMs=0 disables the stall watchdog (comment-keepalive streams)', () => {
+    FakeEventSource.instances = [];
+    const timers = manualTimers();
+    const degradedLog: boolean[] = [];
+    const conn = new SseConnection({
+      url: '/omni/api/v2/agent-state/stream?chatId=x',
+      createEventSource: (url) => new FakeEventSource(url),
+      events: ['connected', 'agent.state.changed'],
+      onDegradedChange: (d) => degradedLog.push(d),
+      heartbeatMs: 0,
+      timers: timers.host,
+    });
+    conn.start();
+    FakeEventSource.instances[0]?.emitOpen();
+    // The `connected` frame arrives; then the stream is idle (change-only).
+    FakeEventSource.instances[0]?.emitNamed('connected', '{"chatId":"x","agentId":null}');
+    // No watchdog was scheduled, so there is nothing to fire and no false stall.
+    expect(timers.count()).toBe(0);
+    expect(conn.degraded).toBe(false);
+    // A real transport error still degrades and reconnects via backoff.
+    FakeEventSource.instances[0]?.emitError();
+    expect(conn.degraded).toBe(true);
+    timers.fire(1000);
+    expect(FakeEventSource.instances).toHaveLength(2);
+  });
+
   test('delivers messages and detects sequence gaps', () => {
     const { conn, messages, gaps } = setup();
     conn.start();

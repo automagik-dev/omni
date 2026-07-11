@@ -124,17 +124,208 @@ export interface AgentRouteRow {
   [key: string]: unknown;
 }
 
+/** The agent state-machine statuses the backend accepts (NATS KV enum). */
+export const AGENT_STATUSES = ['idle', 'thinking', 'typing', 'sending', 'running_task', 'waiting', 'error'] as const;
+export type AgentStatus = (typeof AGENT_STATUSES)[number];
+
 export interface AgentStateSnapshot {
   agentId: string;
   chatId: string;
-  state?: Record<string, unknown> | null;
-  updatedAt?: string;
+  conversationId?: string | null;
+  status?: AgentStatus | string;
+  statusMeta?: Record<string, unknown> | null;
+  /** Epoch milliseconds. */
+  updatedAt?: number;
   [key: string]: unknown;
 }
 
 export interface ContextResult {
   chatId?: string;
   messages?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+// ── Live-chat rich shapes (broader than the narrow SDK Chat/Message types) ─────
+// The generated `@omni/sdk` Chat/Message types are summaries; the live endpoints
+// return ~40 columns the WhatsApp-Web console needs (unread counts, delivery
+// status, reactions, media, sender identity). Index signatures capture the rest.
+
+/** A chat row as the live `/chats` endpoint returns it. */
+export interface ChatRow {
+  id: string;
+  instanceId: string;
+  externalId: string;
+  canonicalId?: string | null;
+  chatType: string;
+  channel: string;
+  name?: string | null;
+  description?: string | null;
+  avatarUrl?: string | null;
+  parentChatId?: string | null;
+  participantCount?: number;
+  messageCount?: number;
+  unreadCount?: number;
+  lastMessageAt?: string | null;
+  lastMessagePreview?: string | null;
+  lastMessageFromMe?: boolean;
+  /** 'visible' | 'archived' | 'hidden'. */
+  visibility?: string;
+  labels?: string[];
+  settings?: Record<string, unknown> | null;
+  conversationId?: string | null;
+  isGroup?: boolean;
+  isArchived?: boolean;
+  archivedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+/** A message row as the live `/chats/:id/messages` and `/messages` endpoints return it. */
+export interface MessageRow {
+  id: string;
+  chatId: string;
+  externalId?: string | null;
+  source?: string;
+  senderPersonId?: string | null;
+  senderPlatformUserId?: string | null;
+  senderDisplayName?: string | null;
+  senderAgentId?: string | null;
+  isFromMe?: boolean;
+  messageType: string;
+  textContent?: string | null;
+  transcription?: string | null;
+  imageDescription?: string | null;
+  videoDescription?: string | null;
+  documentExtraction?: string | null;
+  hasMedia?: boolean;
+  mediaMimeType?: string | null;
+  mediaUrl?: string | null;
+  mediaLocalPath?: string | null;
+  mediaMetadata?: Record<string, unknown> | null;
+  replyToMessageId?: string | null;
+  quotedText?: string | null;
+  quotedSenderName?: string | null;
+  isForwarded?: boolean;
+  forwardCount?: number;
+  mentions?: unknown;
+  status?: string | null;
+  /** 'pending' | 'sent' | 'delivered' | 'read' | 'failed'. */
+  deliveryStatus?: string | null;
+  editCount?: number;
+  editedAt?: string | null;
+  reactions?: unknown;
+  reactionCounts?: Record<string, number> | null;
+  platformTimestamp?: string | null;
+  receivedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+/** An event row as the live `/events` endpoint returns it (pipeline trace). */
+export interface EventRow {
+  id: string;
+  externalId?: string | null;
+  channel?: string;
+  instanceId?: string;
+  eventType: string;
+  direction?: string | null;
+  contentType?: string | null;
+  textContent?: string | null;
+  /** The chat's external JID (e.g. `...@s.whatsapp.net`). */
+  chatId?: string | null;
+  /** The chat's internal UUID — the join key back to a `ChatRow.id`. */
+  chatUuid?: string | null;
+  conversationId?: string | null;
+  agentId?: string | null;
+  status?: string | null;
+  errorMessage?: string | null;
+  errorStage?: string | null;
+  receivedAt?: string | null;
+  processedAt?: string | null;
+  deliveredAt?: string | null;
+  readAt?: string | null;
+  processingTimeMs?: number | null;
+  agentLatencyMs?: number | null;
+  totalLatencyMs?: number | null;
+  rawPayload?: unknown;
+  agentRequest?: unknown;
+  agentResponse?: unknown;
+  metadata?: Record<string, unknown> | null;
+  createdAt?: string;
+  [key: string]: unknown;
+}
+
+/** A staged payload record from `/events/:id/payloads` (request/response snapshots). */
+export interface EventPayloadRecord {
+  id?: string;
+  eventId?: string;
+  stage?: string;
+  payload?: unknown;
+  createdAt?: string;
+  [key: string]: unknown;
+}
+
+export interface ListChatsExtParams {
+  instanceId?: string;
+  channel?: string;
+  chatType?: string;
+  excludeChatTypes?: string;
+  search?: string;
+  includeArchived?: boolean;
+  includeHidden?: boolean;
+  unreadOnly?: boolean;
+  sort?: 'activity' | 'unread' | 'name';
+  limit?: number;
+  cursor?: string;
+  label?: string;
+  [key: string]: string | number | boolean | undefined;
+}
+
+export interface ListMessagesExtParams {
+  limit?: number;
+  before?: string;
+  after?: string;
+  mediaOnly?: boolean;
+  [key: string]: string | number | boolean | undefined;
+}
+
+export interface PaginatedRows<T> {
+  items: T[];
+  meta?: { hasMore?: boolean; cursor?: string | null; total?: number };
+}
+
+export interface MediaDownloadResult {
+  messageId: string;
+  instanceId: string;
+  mediaMimeType?: string | null;
+  mediaLocalPath?: string | null;
+  downloadUrl: string;
+  cached: boolean;
+}
+
+export interface AccessDecision {
+  allowed: boolean;
+  reason?: string;
+  mode?: string;
+  [key: string]: unknown;
+}
+
+export interface AgentSummary {
+  id: string;
+  name?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  agentProviderId?: string | null;
+  isActive?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ProviderSummary {
+  id: string;
+  name?: string | null;
+  schema?: string | null;
   [key: string]: unknown;
 }
 
@@ -209,6 +400,9 @@ export function omniExt(base = '/omni') {
     },
     followUp: {
       getForChat: (id: string) => get<{ data?: FollowUpConfig }>(`/follow-up/chats/${enc(id)}`),
+      setForChat: (id: string, body: FollowUpConfig) =>
+        put<{ data?: FollowUpConfig }>(`/follow-up/chats/${enc(id)}`, body),
+      clearForChat: (id: string) => del<{ data?: unknown }>(`/follow-up/chats/${enc(id)}`),
       getForAgent: (id: string) => get<{ data?: FollowUpConfig }>(`/follow-up/agents/${enc(id)}`),
       getForInstance: (id: string) => get<{ data?: FollowUpConfig }>(`/follow-up/instances/${enc(id)}`),
       setForInstance: (id: string, body: FollowUpConfig) =>
@@ -311,8 +505,127 @@ export function omniExt(base = '/omni') {
         del<{ data?: unknown }>(`/instances/${enc(id)}/routes/${enc(routeId)}`),
     },
     agentState: {
+      /** One-shot current state. Returns 404 when no active state exists for the pair. */
       get: (agentId: string, chatId: string) =>
-        get<{ data?: AgentStateSnapshot }>(`/agent-state/${encodeURIComponent(agentId)}/${encodeURIComponent(chatId)}`),
+        get<{ data?: AgentStateSnapshot }>(`/agent-state/${enc(agentId)}/${enc(chatId)}`),
+      /**
+       * Update state. The state machine (`idle` → `thinking` → `typing` →
+       * `sending` → `idle`, with `running_task`/`waiting`/`error` branches) is
+       * KV-backed; a valid status is one of {@link AGENT_STATUSES}.
+       */
+      put: (
+        agentId: string,
+        chatId: string,
+        body: { status: AgentStatus; statusMeta?: Record<string, unknown>; conversationId?: string | null },
+      ) => put<{ data?: AgentStateSnapshot }>(`/agent-state/${enc(agentId)}/${enc(chatId)}`, body),
+      /** SSE stream path (relative to `/api/v2`) for {@link useSse}. Filter by chat or agent. */
+      streamPath: (filter: { chatId?: string; agentId?: string }) =>
+        `/agent-state/stream${buildQuery({ chatId: filter.chatId, agentId: filter.agentId })}`,
+    },
+    /**
+     * Live-chat reads (rich rows) and the off-spec chat mutations the SDK omits
+     * (pin/unpin, mute/unmute, disappearing timer, clear-session, reopen-contact,
+     * hide/unhide, by-external lookup). Archive/label/read/rename/participants
+     * stay on the typed SDK surface; these fill the gaps.
+     */
+    chats: {
+      list: (params?: ListChatsExtParams) => get<PaginatedRows<ChatRow>>(`/chats${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: ChatRow }>(`/chats/${enc(id)}`),
+      byExternal: (instanceId: string, externalId: string) =>
+        get<{ data?: ChatRow }>(`/chats/by-external${buildQuery({ instanceId, externalId })}`),
+      messages: (id: string, params?: ListMessagesExtParams) =>
+        get<{ items?: MessageRow[] }>(`/chats/${enc(id)}/messages${buildQuery(params)}`),
+      pin: (id: string, instanceId: string) => post<{ data?: ChatRow }>(`/chats/${enc(id)}/pin`, { instanceId }),
+      unpin: (id: string, instanceId: string) => post<{ data?: ChatRow }>(`/chats/${enc(id)}/unpin`, { instanceId }),
+      mute: (id: string, instanceId: string, duration?: number) =>
+        post<{ data?: ChatRow }>(`/chats/${enc(id)}/mute`, { instanceId, ...(duration ? { duration } : {}) }),
+      unmute: (id: string, instanceId: string) => post<{ data?: ChatRow }>(`/chats/${enc(id)}/unmute`, { instanceId }),
+      hide: (id: string) => post<{ data?: ChatRow }>(`/chats/${enc(id)}/hide`),
+      unhide: (id: string) => post<{ data?: ChatRow }>(`/chats/${enc(id)}/unhide`),
+      disappearing: (id: string, instanceId: string, duration: 'off' | '24h' | '7d' | '90d') =>
+        post<{ data?: unknown }>(`/chats/${enc(id)}/disappearing`, { instanceId, duration }),
+      clearSession: (instanceId: string, chatId: string) =>
+        post<{ data?: unknown }>('/chats/clear-session', { instanceId, chatId }),
+      reopenContact: (id: string) => post<{ data?: unknown }>(`/chats/${enc(id)}/reopen-contact`),
+      syncNames: (instanceId: string) => post<{ data?: unknown }>('/chats/sync-names', { instanceId }),
+      // Full-surface coverage (create/delete/participants/conversation) — the
+      // console surfaces a subset, but the typed data layer reaches all of them.
+      create: (body: Record<string, unknown>) => post<{ data?: ChatRow }>('/chats', body),
+      remove: (id: string) => del<{ data?: unknown }>(`/chats/${enc(id)}`),
+      patchParticipant: (id: string, platformUserId: string, body: Record<string, unknown>) =>
+        patch<{ data?: unknown }>(`/chats/${enc(id)}/participants/${enc(platformUserId)}`, body),
+      forConversation: (conversationId: string) =>
+        get<{ items?: ChatRow[] }>(`/conversations/${enc(conversationId)}/chats`),
+    },
+    /**
+     * Message helpers beyond the SDK's send surface: media caching, external
+     * lookup, and the full read/annotate/moderate row operations. The console
+     * uses the send + media subset; the rest complete the typed data layer.
+     */
+    messages: {
+      list: (params?: { chatId?: string; instanceId?: string; limit?: number; cursor?: string }) =>
+        get<PaginatedRows<MessageRow>>(`/messages${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: MessageRow }>(`/messages/${enc(id)}`),
+      getByExternal: (instanceId: string, externalId: string) =>
+        get<{ data?: MessageRow }>(`/messages/by-external${buildQuery({ instanceId, externalId })}`),
+      create: (body: Record<string, unknown>) => post<{ data?: MessageRow }>('/messages', body),
+      patch: (id: string, body: Record<string, unknown>) => patch<{ data?: MessageRow }>(`/messages/${enc(id)}`, body),
+      remove: (id: string) => del<{ data?: unknown }>(`/messages/${enc(id)}`),
+      edit: (id: string, body: Record<string, unknown>) =>
+        post<{ data?: MessageRow }>(`/messages/${enc(id)}/edit`, body),
+      star: (id: string, body?: Record<string, unknown>) => post<{ data?: unknown }>(`/messages/${enc(id)}/star`, body),
+      unstar: (id: string, body?: Record<string, unknown>) =>
+        del<{ data?: unknown }>(`/messages/${enc(id)}/star`, body),
+      addReaction: (id: string, body: Record<string, unknown>) =>
+        post<{ data?: unknown }>(`/messages/${enc(id)}/reactions`, body),
+      removeReaction: (id: string, body: Record<string, unknown>) =>
+        del<{ data?: unknown }>(`/messages/${enc(id)}/reactions`, body),
+      markRead: (id: string, body: { instanceId: string }) =>
+        post<{ data?: unknown }>(`/messages/${enc(id)}/read`, body),
+      batchMarkRead: (body: { instanceId: string; chatId: string; messageIds: string[] }) =>
+        post<{ data?: unknown }>('/messages/read', body),
+      setDeliveryStatus: (id: string, body: Record<string, unknown>) =>
+        patch<{ data?: unknown }>(`/messages/${enc(id)}/delivery-status`, body),
+      setTranscription: (id: string, body: Record<string, unknown>) =>
+        patch<{ data?: unknown }>(`/messages/${enc(id)}/transcription`, body),
+      setImageDescription: (id: string, body: Record<string, unknown>) =>
+        patch<{ data?: unknown }>(`/messages/${enc(id)}/image-description`, body),
+      setVideoDescription: (id: string, body: Record<string, unknown>) =>
+        patch<{ data?: unknown }>(`/messages/${enc(id)}/video-description`, body),
+      setDocumentExtraction: (id: string, body: Record<string, unknown>) =>
+        patch<{ data?: unknown }>(`/messages/${enc(id)}/document-extraction`, body),
+      // Channel-side moderation + alternate persist endpoints.
+      deleteOnChannel: (body: Record<string, unknown>) => post<{ data?: unknown }>('/messages/delete-channel', body),
+      editOnChannel: (body: Record<string, unknown>) => post<{ data?: unknown }>('/messages/edit-channel', body),
+      persistContact: (body: Record<string, unknown>) => post<{ data?: unknown }>('/messages/contact', body),
+      persistLocation: (body: Record<string, unknown>) => post<{ data?: unknown }>('/messages/location', body),
+      persistSticker: (body: Record<string, unknown>) => post<{ data?: unknown }>('/messages/sticker', body),
+      persistReaction: (body: Record<string, unknown>) => post<{ data?: unknown }>('/messages/reaction', body),
+      ttsVoices: () => get<{ data?: { voices?: unknown[] } }>('/messages/tts/voices'),
+      /** Ensure a message's media is cached locally; returns a BFF-servable URL. */
+      mediaDownload: (ref: { messageId: string } | { chatId: string; externalId: string }) =>
+        post<{ data?: MediaDownloadResult }>('/messages/media/download', ref),
+    },
+    /**
+     * Event pipeline reads. `/events` ignores a chat filter server-side, so
+     * {@link listForChat} over-fetches and narrows client-side on `chatUuid`.
+     */
+    events: {
+      list: (params?: { instanceId?: string; eventType?: string; limit?: number; cursor?: string }) =>
+        get<PaginatedRows<EventRow>>(`/events${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: EventRow }>(`/events/${enc(id)}`),
+      payloads: (id: string) => get<{ items?: EventPayloadRecord[] }>(`/events/${enc(id)}/payloads`),
+    },
+    access: {
+      check: (body: { instanceId: string; platformUserId: string; channel: string }) =>
+        post<{ data?: AccessDecision }>('/access/check', body),
+    },
+    /** Read-only id → name resolvers for the Agent Lens (agents/providers). */
+    resolve: {
+      agents: (params?: { limit?: number }) => get<{ items?: AgentSummary[] }>(`/agents${buildQuery(params)}`),
+      agent: (id: string) => get<{ data?: AgentSummary }>(`/agents/${enc(id)}`),
+      providers: (params?: { limit?: number }) => get<{ items?: ProviderSummary[] }>(`/providers${buildQuery(params)}`),
+      routes: (instanceId: string) => get<{ items?: AgentRouteRow[] }>(`/instances/${enc(instanceId)}/routes`),
     },
     turns: {
       list: (params?: ListTurnsParams) => get<TurnListResponse>(`/turns${buildQuery(params)}`),
