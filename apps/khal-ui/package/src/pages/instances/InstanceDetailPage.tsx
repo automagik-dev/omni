@@ -6,7 +6,7 @@
  * status, and a guarded delete. Production instances render everything read-only
  * — their mutating controls are disabled with a visible reason, never hidden.
  */
-import { Badge, Button, Note, Spinner } from '@khal-os/ui';
+import { Badge, Button, Note, Spinner, StatusDot } from '@khal-os/ui';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
@@ -90,6 +90,7 @@ export function InstanceDetailPage() {
         subtitle={channelLabel(channel)}
         status={
           <>
+            <StatusDot state={instance.isActive ? 'active' : 'idle'} size="sm" pulse={instance.isActive} />
             <Badge variant={instance.isActive ? 'green' : 'gray'}>{instance.isActive ? 'active' : 'inactive'}</Badge>
             {instance.isDefault && <Badge variant="blue">default</Badge>}
             {isProduction && <Badge variant="amber">production · read-only</Badge>}

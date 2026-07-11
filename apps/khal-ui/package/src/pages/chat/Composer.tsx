@@ -11,7 +11,17 @@
  * sanctioned canary requires an explicit LIVE confirmation before the first send
  * so an operator can't message a real contact by reflex.
  */
-import { Button, Dialog } from '@khal-os/ui';
+import {
+  Button,
+  Dialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  GlassCard,
+  Icons,
+  StatusDot,
+} from '@khal-os/ui';
 import { useRef, useState } from 'react';
 import type { ChatRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
@@ -19,6 +29,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { MutationResult } from '../../components/MutationResult';
 import { SchemaForm } from '../../components/SchemaForm';
 import { T } from '../../components/tokens';
+import '../../components/runtime-styles';
 import { chatDisplayName, requiresSendConfirm } from './chat-helpers';
 import { ATTACHMENT_KINDS, type AttachmentKind, type SendOutcome } from './composer-schemas';
 
@@ -30,6 +41,20 @@ interface SendEvidence {
   pending: boolean;
 }
 
+/** Expressive glyph per attachment kind — mirrors the emoji vocabulary the
+ * thread already uses (📌 🔕 📄) so the menu reads at a glance. */
+const KIND_GLYPH: Record<string, string> = {
+  media: '🖼️',
+  sticker: '🏷️',
+  reaction: '😀',
+  contact: '👤',
+  location: '📍',
+  tts: '🔊',
+  poll: '📊',
+  forward: '↪️',
+  presence: '✍️',
+};
+
 export function Composer({ chat, instanceId }: { chat: ChatRow; instanceId: string }) {
   const { client } = useOmniClient();
   const to = chat.id; // backend resolves a chat UUID to its platform JID
@@ -40,7 +65,6 @@ export function Composer({ chat, instanceId }: { chat: ChatRow; instanceId: stri
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [textEvidence, setTextEvidence] = useState<SendEvidence | null>(null);
   const [activeKind, setActiveKind] = useState<AttachmentKind | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const doSendText = async (value: string) => {
@@ -49,6 +73,7 @@ export function Composer({ chat, instanceId }: { chat: ChatRow; instanceId: stri
       const res = await client.messages.send({ instanceId, to, text: value });
       setTextEvidence({ method: 'POST', path: '/messages/send', outcome: res, pending: false });
       setText('');
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
     } catch (e) {
       setTextEvidence({
         method: 'POST',
@@ -70,117 +95,120 @@ export function Composer({ chat, instanceId }: { chat: ChatRow; instanceId: stri
     void doSendText(value);
   };
 
+  // Grow the single-row field with its content, up to a cap.
+  const autoGrow = (el: HTMLTextAreaElement) => {
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  };
+
   return (
     <div style={{ borderTop: `1px solid ${T.border}`, padding: 10, background: T.bg }}>
-      {textEvidence && (
-        <div style={{ marginBottom: 8, fontSize: 12 }}>
-          {textEvidence.pending ? (
-            <span style={{ color: T.muted }}>Sending…</span>
-          ) : textEvidence.error ? (
-            <span style={{ color: T.danger }}>Send failed: {textEvidence.error}</span>
-          ) : (
-            <span style={{ color: T.ok, display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-              <span>✓ sent</span>
-              <span style={{ fontFamily: T.mono, color: T.muted }}>
-                id {textEvidence.outcome?.messageId?.slice(0, 12) || '—'} · {textEvidence.outcome?.status}
-              </span>
-              <button type="button" onClick={() => setTextEvidence(null)} style={dismissBtn}>
-                dismiss
-              </button>
-            </span>
-          )}
-        </div>
-      )}
+      {textEvidence && <SendStatusLine evidence={textEvidence} onDismiss={() => setTextEvidence(null)} />}
 
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, position: 'relative' }}>
-        <div style={{ position: 'relative' }}>
-          <Button
-            typeName="button"
-            variant="secondary"
-            size="small"
-            onClick={() => setMenuOpen((o) => !o)}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-          >
-            +
-          </Button>
-          {menuOpen && (
-            <>
-              <button
-                type="button"
-                aria-label="Close menu"
-                onClick={() => setMenuOpen(false)}
-                style={{ position: 'fixed', inset: 0, background: 'transparent', border: 'none', zIndex: 10 }}
-              />
-              <div
-                role="menu"
-                style={{
-                  position: 'absolute',
-                  bottom: 'calc(100% + 6px)',
-                  left: 0,
-                  zIndex: 11,
-                  minWidth: 220,
-                  background: T.elevated,
-                  border: `1px solid ${T.border}`,
-                  borderRadius: 10,
-                  padding: 6,
-                  boxShadow: '0 8px 28px rgba(0,0,0,0.35)',
-                }}
-              >
-                {ATTACHMENT_KINDS.map((k) => (
-                  <button
-                    key={k.id}
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setActiveKind(k);
-                      setMenuOpen(false);
-                    }}
-                    style={menuItem}
-                  >
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="omni-iconbtn"
+              aria-label="Attachments"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 38,
+                height: 38,
+                flexShrink: 0,
+                borderRadius: 10,
+                border: `1px solid ${T.border}`,
+                background: T.surface,
+                color: T.secondary,
+                cursor: 'pointer',
+              }}
+            >
+              <Icons.Plus size={16} />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" side="top">
+            {ATTACHMENT_KINDS.map((k) => (
+              <DropdownMenuItem key={k.id} onSelect={() => setActiveKind(k)}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 220 }}>
+                  <span aria-hidden style={{ fontSize: 15, width: 20, textAlign: 'center', flexShrink: 0 }}>
+                    {KIND_GLYPH[k.id] ?? '＋'}
+                  </span>
+                  <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
                     <span style={{ fontWeight: 600, color: T.fg }}>{k.label}</span>
                     <span style={{ fontSize: 11, color: T.muted }}>{k.hint}</span>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
+                  </span>
+                </span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              onSubmitText();
-            }
-          }}
-          placeholder={`Message ${chatDisplayName(chat)}…`}
-          rows={1}
+        <div
+          className="omni-composer"
           style={{
             flex: 1,
-            resize: 'none',
-            minHeight: 38,
-            maxHeight: 140,
-            padding: '9px 12px',
+            display: 'flex',
+            alignItems: 'flex-end',
             borderRadius: 10,
             border: `1px solid ${T.border}`,
             background: T.surface,
-            color: T.fg,
-            fontSize: 13.5,
-            fontFamily: 'inherit',
-            lineHeight: 1.4,
+            transition: 'border-color 120ms cubic-bezier(0.22,1,0.36,1), box-shadow 120ms cubic-bezier(0.22,1,0.36,1)',
           }}
-        />
+        >
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              autoGrow(e.target);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                onSubmitText();
+              }
+            }}
+            placeholder={`Message ${chatDisplayName(chat)}…`}
+            rows={1}
+            style={{
+              flex: 1,
+              resize: 'none',
+              minHeight: 36,
+              maxHeight: 140,
+              padding: '9px 12px',
+              borderRadius: 10,
+              border: 'none',
+              outline: 'none',
+              background: 'transparent',
+              color: T.fg,
+              fontSize: 13.5,
+              fontFamily: 'inherit',
+              lineHeight: 1.4,
+            }}
+          />
+        </div>
+
         <Button typeName="button" variant="default" onClick={onSubmitText} disabled={!text.trim()}>
           Send
         </Button>
       </div>
 
       {requiresConfirm && (
-        <div style={{ marginTop: 6, fontSize: 11, color: T.warn }}>
+        <div
+          style={{
+            marginTop: 6,
+            fontSize: 11,
+            fontFamily: T.mono,
+            color: T.warn,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <StatusDot state="away" size="sm" />
           Production chat (not the canary) — sends require confirmation.
         </div>
       )}
@@ -216,6 +244,46 @@ export function Composer({ chat, instanceId }: { chat: ChatRow; instanceId: stri
           requiresConfirm={requiresConfirm}
           onClose={() => setActiveKind(null)}
         />
+      )}
+    </div>
+  );
+}
+
+/** Above-composer status line: mono, with a working/active/error StatusDot that
+ * reflects the real in-flight send — honest presence, never fabricated. */
+function SendStatusLine({ evidence, onDismiss }: { evidence: SendEvidence; onDismiss: () => void }) {
+  return (
+    <div
+      style={{
+        marginBottom: 8,
+        fontSize: 12,
+        fontFamily: T.mono,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+      }}
+    >
+      {evidence.pending ? (
+        <>
+          <StatusDot state="working" size="sm" pulse />
+          <span style={{ color: T.secondary }}>Sending…</span>
+        </>
+      ) : evidence.error ? (
+        <>
+          <StatusDot state="error" size="sm" />
+          <span style={{ color: T.danger }}>Send failed: {evidence.error}</span>
+        </>
+      ) : (
+        <>
+          <StatusDot state="active" size="sm" />
+          <span style={{ color: T.ok }}>sent</span>
+          <span style={{ color: T.muted }}>
+            id {evidence.outcome?.messageId?.slice(0, 12) || '—'} · {evidence.outcome?.status}
+          </span>
+          <button type="button" onClick={onDismiss} style={dismissBtn}>
+            dismiss
+          </button>
+        </>
       )}
     </div>
   );
@@ -269,9 +337,19 @@ function AttachmentModal({
         <Dialog.Title>Send {kind.label.toLowerCase()}</Dialog.Title>
         <Dialog.Body>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 380 }}>
-            <span style={{ fontSize: 12, color: T.muted }}>
-              {kind.hint} → <strong style={{ color: T.fg }}>{chatDisplayName(chat)}</strong>
-            </span>
+            <GlassCard variant="raised" padding="md">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span aria-hidden style={{ fontSize: 20 }}>
+                  {KIND_GLYPH[kind.id] ?? '＋'}
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                  <span style={{ fontSize: 13, fontWeight: 650, color: T.fg }}>{kind.label}</span>
+                  <span style={{ fontSize: 12, color: T.muted }}>
+                    {kind.hint} → <strong style={{ color: T.secondary }}>{chatDisplayName(chat)}</strong>
+                  </span>
+                </div>
+              </div>
+            </GlassCard>
             <SchemaForm schema={kind.schema} submitLabel={`Send ${kind.label.toLowerCase()}`} onSubmit={submit} />
             {result && (
               <MutationResult
@@ -319,18 +397,5 @@ const dismissBtn = {
   border: `1px solid ${T.border}`,
   background: 'transparent',
   color: T.muted,
-  cursor: 'pointer',
-} as const;
-
-const menuItem = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 1,
-  width: '100%',
-  textAlign: 'left',
-  padding: '7px 9px',
-  borderRadius: 7,
-  border: 'none',
-  background: 'transparent',
   cursor: 'pointer',
 } as const;

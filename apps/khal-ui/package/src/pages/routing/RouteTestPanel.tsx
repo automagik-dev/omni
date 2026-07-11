@@ -15,6 +15,7 @@ import type { AgentRow, ProviderHealth } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { EffectBadge } from '../../components/EffectBadge';
 import { T } from '../../components/tokens';
+import '../../components/runtime-styles';
 import { Panel } from '../instances/components';
 import { type DecisionOutcome, type RouteDecision, explainRouteDecision, pickWinningRoute } from './routing-helpers';
 
@@ -24,6 +25,13 @@ const OUTCOME_DOT: Record<DecisionOutcome, 'active' | 'away' | 'error' | 'idle'>
   fail: 'error',
   info: 'idle',
 };
+
+/** Overall verdict tone from the worst step outcome. */
+function verdictNoteType(steps: RouteDecision['steps']): 'success' | 'warning' | 'error' {
+  if (steps.some((s) => s.outcome === 'fail')) return 'error';
+  if (steps.some((s) => s.outcome === 'warn')) return 'warning';
+  return 'success';
+}
 
 const MESSAGE_TYPES = ['text', 'image', 'audio', 'document', 'reaction'];
 
@@ -119,31 +127,31 @@ export function RouteTestPanel({ instances }: { instances: Instance[] }) {
       {error && <Note type="error">{error}</Note>}
 
       {decision && (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 10,
-            padding: 14,
-            borderRadius: 10,
-            border: `1px solid ${T.border}`,
-            borderLeft: `3px solid ${T.accent}`,
-            background: T.surface,
-          }}
-        >
-          <div style={{ fontSize: 13, fontWeight: 600, color: T.fg }}>{decision.verdict}</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {decision.steps.map((s) => (
-              <div key={s.label} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                <StatusDot state={OUTCOME_DOT[s.outcome]} size="sm" />
-                <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: T.fg }}>{s.label}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Note type={verdictNoteType(decision.steps)} label="Verdict">
+            {decision.verdict}
+          </Note>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {decision.steps.map((s, i) => (
+              <div key={s.label} style={{ position: 'relative', paddingLeft: 24, paddingBottom: 10 }}>
+                {/* connected timeline spine */}
+                {i < decision.steps.length - 1 && (
+                  <span
+                    aria-hidden
+                    style={{ position: 'absolute', left: 6, top: 16, bottom: -2, width: 1, background: T.border }}
+                  />
+                )}
+                <span style={{ position: 'absolute', left: 2, top: 3 }}>
+                  <StatusDot state={OUTCOME_DOT[s.outcome]} size="sm" pulse={s.outcome === 'fail'} />
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: T.fg }}>{s.label}</span>
                   <span style={{ fontSize: 12, color: T.muted }}>{s.detail}</span>
                 </div>
               </div>
             ))}
           </div>
-          <span style={{ fontSize: 11, color: T.muted }}>
+          <span style={{ fontSize: 11, color: T.muted, fontFamily: T.mono }}>
             Synthetic — assembled from real reads (routes + agent + provider health + access check). No message was
             sent.
           </span>

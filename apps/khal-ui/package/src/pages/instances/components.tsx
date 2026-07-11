@@ -8,10 +8,11 @@
  * lifecycle and sub-resource action in this slice runs through it, so the
  * safety and evidence contract is uniform.
  */
-import { Button } from '@khal-os/ui';
+import { Button, SectionCard } from '@khal-os/ui';
 import { type ReactNode, useState } from 'react';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { LiveTestResult, type LiveTestStatus } from '../../components/LiveTestResult';
+import { SectionHead } from '../../components/ResourceDetail';
 import { EFFECTS, type EffectLabel } from '../../components/effect';
 import { T } from '../../components/tokens';
 
@@ -75,29 +76,24 @@ export function Panel({
   children: ReactNode;
 }) {
   return (
-    <section
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12,
-        padding: 16,
-        borderRadius: 10,
-        border: `1px solid ${T.border}`,
-        background: T.surface,
-        minWidth: 0,
-      }}
-    >
+    <SectionCard padding="md" style={{ minWidth: 0 }}>
       {(title || actions) && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-            {title && <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: T.fg }}>{title}</h3>}
-            {description && <span style={{ fontSize: 12, color: T.muted }}>{description}</span>}
-          </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            marginBottom: description ? 4 : 12,
+          }}
+        >
+          {title ? <SectionHead>{title}</SectionHead> : <span />}
           {actions}
         </div>
       )}
-      {children}
-    </section>
+      {description && <p style={{ margin: '0 0 12px', fontSize: 12.5, color: T.muted }}>{description}</p>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>{children}</div>
+    </SectionCard>
   );
 }
 
@@ -117,7 +113,7 @@ export interface ActionButtonProps {
   disabled?: boolean;
   /** Shown as a tooltip and disables the button (e.g. production guard). */
   disabledReason?: string;
-  variant?: 'default' | 'secondary';
+  variant?: 'default' | 'secondary' | 'error' | 'warning' | 'ghost';
   size?: 'small' | 'medium';
   /** Called after a successful run, e.g. to invalidate a list. */
   onDone?: (result: unknown) => void;
@@ -140,7 +136,7 @@ export function ActionButton({
   destructive,
   disabled,
   disabledReason,
-  variant = 'secondary',
+  variant,
   size = 'small',
   onDone,
 }: ActionButtonProps) {
@@ -150,6 +146,8 @@ export function ActionButton({
   const [evidence, setEvidence] = useState<unknown>();
   const [latency, setLatency] = useState<number | undefined>();
   const gated = EFFECTS[effect].mutating;
+  // Destructive actions read as error-toned by default; callers can still override.
+  const btnVariant = variant ?? (destructive ? 'error' : 'secondary');
 
   const execute = async () => {
     setStatus('pending');
@@ -180,7 +178,7 @@ export function ActionButton({
       <div title={disabledReason}>
         <Button
           size={size}
-          variant={variant}
+          variant={btnVariant}
           disabled={disabled || Boolean(disabledReason) || status === 'pending'}
           onClick={onClick}
         >

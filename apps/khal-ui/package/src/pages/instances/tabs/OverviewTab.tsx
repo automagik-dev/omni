@@ -4,26 +4,19 @@
  * Overview tab: the send/receive proof split. Rather than a single "connected"
  * chip, it shows transport state, the last inbound message actually observed
  * (with preview), and the last outbound state — derived from the status endpoint
- * plus this instance's recent events — so an operator sees the instance moving
- * messages, not just claiming to be up. Plus a profile summary and quick facts.
+ * plus this instance's recent events — as MetricDisplay proof tiles, so an
+ * operator sees the instance moving messages, not just claiming to be up. Plus a
+ * profile summary and quick facts as mono DataRows.
  */
-import { SectionCard, Spinner, StatusDot } from '@khal-os/ui';
-import type { ReactNode } from 'react';
+import { DataRow, MetricDisplay, SectionCard, Spinner, StatusDot } from '@khal-os/ui';
 import { useOmniClient } from '../../../app/providers/OmniClientProvider';
 import { FreshnessBadge, formatAge } from '../../../components/FreshnessBadge';
+import { SectionHead } from '../../../components/ResourceDetail';
 import { T } from '../../../components/tokens';
+import '../../../components/runtime-styles';
 import { useOmniQuery } from '../../../hooks/useOmniQuery';
 import { channelLabel, connStateDot, deriveSendReceiveProof } from '../instance-helpers';
 import type { InstanceTabProps } from '../tab-types';
-
-function Fact({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span style={{ fontSize: 11, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
-      <span style={{ fontSize: 13, color: T.fg }}>{value}</span>
-    </div>
-  );
-}
 
 export function OverviewTab({ instance }: InstanceTabProps) {
   const { client } = useOmniClient();
@@ -38,66 +31,92 @@ export function OverviewTab({ instance }: InstanceTabProps) {
 
   const proof = deriveSendReceiveProof(status.data, events.data?.items ?? []);
   const now = Date.now();
+  const transportDot = connStateDot(proof.transport);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
       <SectionCard padding="md">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: T.fg }}>Send / receive proof</h3>
+        <div
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}
+        >
+          <SectionHead>Send / receive proof</SectionHead>
           <FreshnessBadge observedAt={status.dataUpdatedAt || undefined} source="status" staleAfterMs={30_000} />
         </div>
         {status.isLoading && <Spinner size="sm" />}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <StatusDot state={connStateDot(proof.transport)} size="md" />
-            <Fact
-              label="Transport"
-              value={<strong style={{ textTransform: 'capitalize' }}>{proof.transport}</strong>}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+          <SectionCard variant="inset" padding="md" className="omni-card-hover">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <StatusDot state={transportDot} size="lg" pulse={transportDot === 'live' || transportDot === 'active'} />
+              <MetricDisplay
+                size="sm"
+                value={proof.transport}
+                label="Transport"
+                accentColor={transportDot === 'error' ? T.danger : T.fg}
+              />
+            </div>
+          </SectionCard>
+          <SectionCard variant="inset" padding="md" className="omni-card-hover">
+            <MetricDisplay
+              size="sm"
+              value={proof.lastInboundAt ? formatAge(now - proof.lastInboundAt) : '—'}
+              label="Last inbound"
+              description={proof.lastInboundPreview ? `“${proof.lastInboundPreview}”` : 'none observed'}
             />
-          </div>
-          <Fact
-            label="Last inbound"
-            value={
-              proof.lastInboundAt
-                ? `${formatAge(now - proof.lastInboundAt)}${proof.lastInboundPreview ? ` · "${proof.lastInboundPreview}"` : ''}`
-                : 'none observed'
-            }
-          />
-          <Fact
-            label="Last outbound"
-            value={
-              proof.lastOutboundAt
-                ? `${formatAge(now - proof.lastOutboundAt)} · ${proof.lastOutboundState ?? 'sent'}`
-                : 'none observed'
-            }
-          />
+          </SectionCard>
+          <SectionCard variant="inset" padding="md" className="omni-card-hover">
+            <MetricDisplay
+              size="sm"
+              value={proof.lastOutboundAt ? formatAge(now - proof.lastOutboundAt) : '—'}
+              label="Last outbound"
+              description={proof.lastOutboundAt ? (proof.lastOutboundState ?? 'sent') : 'none observed'}
+            />
+          </SectionCard>
         </div>
       </SectionCard>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
         <SectionCard padding="md">
-          <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 600, color: T.fg }}>Profile</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <Fact label="Profile name" value={String(instance.profileName ?? '—')} />
-            <Fact label="Owner" value={String(instance.ownerIdentifier ?? '—')} />
-            <Fact label="Bio" value={String(instance.profileBio ?? '—')} />
-            <Fact
-              label="Profile synced"
-              value={instance.profileSyncedAt ? new Date(String(instance.profileSyncedAt)).toLocaleString() : 'never'}
+          <div style={{ marginBottom: 12 }}>
+            <SectionHead>Status</SectionHead>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <DataRow variant="rule" label="Channel" value={channelLabel(instance.channel)} />
+            <DataRow
+              variant="rule"
+              label="Active"
+              value={instance.isActive ? 'yes' : 'no'}
+              statusDot
+              dotColor={instance.isActive ? T.ok : T.muted}
+              accentColor={instance.isActive ? T.ok : T.muted}
+            />
+            <DataRow
+              variant="rule"
+              label="Default"
+              value={instance.isDefault ? 'yes' : 'no'}
+              statusDot
+              dotColor={instance.isDefault ? T.accentBlue : T.muted}
+            />
+            <DataRow variant="rule" label="Agent" value={String(instance.agentId ?? 'unbound')} />
+            <DataRow
+              variant="rule"
+              label="Last message"
+              value={instance.lastMessageAt ? formatAge(now - new Date(String(instance.lastMessageAt)).getTime()) : '—'}
             />
           </div>
         </SectionCard>
 
         <SectionCard padding="md">
-          <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 600, color: T.fg }}>Quick facts</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <Fact label="Channel" value={channelLabel(instance.channel)} />
-            <Fact label="Active" value={instance.isActive ? 'yes' : 'no'} />
-            <Fact label="Default" value={instance.isDefault ? 'yes' : 'no'} />
-            <Fact label="Agent" value={String(instance.agentId ?? 'unbound')} />
-            <Fact
-              label="Last message"
-              value={instance.lastMessageAt ? formatAge(now - new Date(String(instance.lastMessageAt)).getTime()) : '—'}
+          <div style={{ marginBottom: 12 }}>
+            <SectionHead>Profile</SectionHead>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <DataRow variant="rule" label="Profile name" value={String(instance.profileName ?? '—')} />
+            <DataRow variant="rule" label="Owner" value={String(instance.ownerIdentifier ?? '—')} />
+            <DataRow variant="rule" label="Bio" value={String(instance.profileBio ?? '—')} />
+            <DataRow
+              variant="rule"
+              label="Profile synced"
+              value={instance.profileSyncedAt ? new Date(String(instance.profileSyncedAt)).toLocaleString() : 'never'}
             />
           </div>
         </SectionCard>

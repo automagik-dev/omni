@@ -3,13 +3,14 @@
 /**
  * Agent Lens — "Trace" tab. The correlated event pipeline for the selected chat,
  * derived by narrowing instance events to `chatUuid === chat.id` (the `/events`
- * chatId query is ignored server-side). Each step shows type, time, latency, and
- * outcome; expanding it lazily pulls the staged payloads from
+ * chatId query is ignored server-side). Rendered as a LiveFeed-style vertical
+ * timeline: each step is a stage on a connected spine with its own StatusDot,
+ * type, mono latency and time. Expanding it lazily pulls the staged payloads from
  * `/events/:id/payloads` and renders everything through the redact-by-default
  * {@link JsonInspector} (which also provides "Copy redacted"). A message can be
  * highlighted to spotlight its own pipeline (join on `externalId`).
  */
-import { StatusDot } from '@khal-os/ui';
+import { PillBadge, StatusDot } from '@khal-os/ui';
 import { useState } from 'react';
 import type { ChatRow, EventPayloadRecord, EventRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
@@ -20,7 +21,7 @@ import { type TraceStep, correlateChatEvents, eventCorrelationId, formatDuration
 
 const OUTCOME_DOT = { ok: 'active', pending: 'queued', error: 'error' } as const;
 
-function TraceRow({ step, highlighted }: { step: TraceStep; highlighted: boolean }) {
+function TraceRow({ step, highlighted, last }: { step: TraceStep; highlighted: boolean; last: boolean }) {
   const { ext } = useOmniClient();
   const [open, setOpen] = useState(false);
   const [payloads, setPayloads] = useState<EventPayloadRecord[] | null>(null);
@@ -51,12 +52,29 @@ function TraceRow({ step, highlighted }: { step: TraceStep; highlighted: boolean
   return (
     <div
       style={{
-        borderLeft: `2px solid ${highlighted ? T.accentBlue : T.border}`,
-        paddingLeft: 10,
-        marginLeft: 4,
-        background: highlighted ? 'color-mix(in srgb, var(--khal-accent, #3b82f6) 8%, transparent)' : 'transparent',
+        position: 'relative',
+        paddingLeft: 22,
+        background: highlighted ? 'color-mix(in oklch, var(--khal-accent) 8%, transparent)' : 'transparent',
+        borderRadius: 8,
       }}
     >
+      {/* timeline spine + node */}
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute',
+          left: 6,
+          top: 18,
+          bottom: last && !open ? undefined : -2,
+          height: last && !open ? 0 : undefined,
+          width: 1,
+          background: T.border,
+        }}
+      />
+      <span style={{ position: 'absolute', left: 2, top: 9 }}>
+        <StatusDot state={OUTCOME_DOT[step.outcome]} size="sm" pulse={step.outcome === 'pending'} />
+      </span>
+
       <button
         type="button"
         onClick={toggle}
@@ -66,26 +84,40 @@ function TraceRow({ step, highlighted }: { step: TraceStep; highlighted: boolean
           gap: 8,
           width: '100%',
           textAlign: 'left',
-          padding: '6px 4px',
+          padding: '5px 4px',
           border: 'none',
           background: 'transparent',
           cursor: 'pointer',
         }}
       >
-        <StatusDot state={OUTCOME_DOT[step.outcome]} size="sm" />
         <span style={{ flex: 1, minWidth: 0 }}>
           <span style={{ fontSize: 12.5, fontWeight: 600, color: T.fg }}>{event.eventType}</span>
           {event.direction && <span style={{ fontSize: 11, color: T.muted }}> · {event.direction}</span>}
           {event.errorStage && <span style={{ fontSize: 11, color: T.danger }}> · {event.errorStage}</span>}
         </span>
-        <span style={{ fontSize: 11, color: T.muted, fontFamily: T.mono }}>{formatDuration(step.durationMs)}</span>
-        <span style={{ fontSize: 11, color: T.muted }}>{time}</span>
+        <span style={{ fontSize: 11, color: T.secondary, fontFamily: T.mono, fontVariantNumeric: 'tabular-nums' }}>
+          {formatDuration(step.durationMs)}
+        </span>
+        <span style={{ fontSize: 11, color: T.muted, fontFamily: T.mono, fontVariantNumeric: 'tabular-nums' }}>
+          {time}
+        </span>
         <span style={{ color: T.muted, fontSize: 11 }}>{open ? '▾' : '▸'}</span>
       </button>
 
       {open && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '2px 0 10px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '2px 10px', fontSize: 11 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '2px 0 12px' }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'auto 1fr',
+              gap: '3px 10px',
+              fontSize: 11,
+              padding: '8px 10px',
+              borderRadius: 8,
+              background: T.sunken,
+              border: `1px solid ${T.borderSubtle}`,
+            }}
+          >
             <span style={{ color: T.muted }}>status</span>
             <span style={{ color: event.errorMessage ? T.danger : T.fg }}>
               {event.status ?? '—'}
@@ -96,7 +128,7 @@ function TraceRow({ step, highlighted }: { step: TraceStep; highlighted: boolean
             <span style={{ color: T.muted }}>correlation</span>
             <span style={{ fontFamily: T.mono, color: T.fg, wordBreak: 'break-all' }}>{correlationId ?? '—'}</span>
             <span style={{ color: T.muted }}>latency</span>
-            <span style={{ color: T.fg }}>
+            <span style={{ color: T.fg, fontFamily: T.mono, fontVariantNumeric: 'tabular-nums' }}>
               total {formatDuration(event.totalLatencyMs)} · agent {formatDuration(event.agentLatencyMs)} · proc{' '}
               {formatDuration(event.processingTimeMs)}
             </span>
@@ -115,7 +147,7 @@ function TraceRow({ step, highlighted }: { step: TraceStep; highlighted: boolean
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {payloads.map((p, i) => (
                   <div key={p.id ?? `${event.id}-${i}`}>
-                    <div style={{ fontSize: 10.5, color: T.accentBlue, marginBottom: 2 }}>
+                    <div style={{ fontSize: 10.5, color: T.accent, fontFamily: T.mono, marginBottom: 2 }}>
                       {p.stage ?? `stage ${i + 1}`}
                     </div>
                     <JsonInspector value={p.payload ?? p} />
@@ -150,11 +182,11 @@ export function AgentLensTrace({
   const steps = toTraceSteps(correlateChatEvents(events, chat.id, messageExternalIds)).reverse(); // newest first
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: 12, color: T.muted }}>
-          {steps.length} correlated event{steps.length === 1 ? '' : 's'}
-        </span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <PillBadge size="sm" variant="muted" dot dotColor={T.accent}>
+          {steps.length} event{steps.length === 1 ? '' : 's'}
+        </PillBadge>
         <FreshnessBadge observedAt={lastPolledAt} source="events 5s" degraded={degraded} />
       </div>
       {steps.length === 0 ? (
@@ -163,10 +195,11 @@ export function AgentLensTrace({
         </span>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {steps.map((step) => (
+          {steps.map((step, i) => (
             <TraceRow
               key={step.event.id}
               step={step}
+              last={i === steps.length - 1}
               highlighted={Boolean(highlightExternalId && step.event.externalId === highlightExternalId)}
             />
           ))}
@@ -178,9 +211,10 @@ export function AgentLensTrace({
 
 const miniLabel = {
   fontSize: 10,
+  fontFamily: T.mono,
   textTransform: 'uppercase' as const,
-  letterSpacing: '0.05em',
-  color: T.muted,
+  letterSpacing: '0.1em',
+  color: T.tertiary,
   marginBottom: 4,
-  fontWeight: 700,
+  fontWeight: 650,
 };

@@ -1,13 +1,16 @@
 'use client';
 
 /**
- * The live agent console — a WhatsApp-Web-style three-pane page: chat list,
- * conversation thread, and the Agent Lens. Select a chat on the left, converse
- * in the center, and watch what the agent is seeing and doing on the right.
+ * The live agent console — a WhatsApp-Web-style three-region page built on the
+ * @khal-os/ui SplitPane (resizable chat list | thread) with the Agent Lens as a
+ * collapsible right panel. Select a chat on the left, converse in the center,
+ * and watch what the agent is seeing and doing on the right. The SplitPane
+ * stacks on narrow viewports (collapseBelow) so the console degrades gracefully.
  *
  * Supports a `?chatId=` (optionally `&instanceId=`) deep link so other pages
  * (e.g. an instance's detail view) can open a specific conversation here.
  */
+import { EmptyState, SplitPane } from '@khal-os/ui';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { ChatRow } from '../../api/ext';
@@ -51,46 +54,53 @@ export function ChatPage() {
   };
 
   return (
-    <div style={{ display: 'flex', height: '100%', minHeight: 0, minWidth: 0 }}>
-      <div style={{ width: 320, flexShrink: 0, borderRight: `1px solid ${T.border}`, minHeight: 0 }}>
-        <ChatList selectedChatId={selected?.id ?? null} onSelectChat={selectChat} />
-      </div>
-
-      <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
-        {selected ? (
-          <ChatThread
-            key={selected.id}
-            chat={selected}
-            actions={<ChatActionsMenu chat={selected} onChanged={() => void 0} />}
-          />
-        ) : (
-          <div
-            style={{
-              height: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexDirection: 'column',
-              gap: 8,
-              color: T.muted,
-              padding: 24,
-              textAlign: 'center',
-            }}
-          >
-            <div style={{ fontSize: 15, fontWeight: 600, color: T.fg }}>Select a conversation</div>
-            <div style={{ fontSize: 13 }}>Pick a chat on the left to open the live thread and the Agent Lens.</div>
-          </div>
-        )}
+    <div
+      style={{
+        display: 'flex',
+        height: '100%',
+        minHeight: 0,
+        minWidth: 0,
+        borderRadius: T.radiusCard,
+        border: `1px solid ${T.border}`,
+        overflow: 'hidden',
+        background: T.bg,
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%' }}>
+        <SplitPane defaultSize={330} min={260} max={460} collapseBelow={760}>
+          <SplitPane.Panel style={{ height: '100%', borderRight: `1px solid ${T.border}` }}>
+            <ChatList selectedChatId={selected?.id ?? null} onSelectChat={selectChat} />
+          </SplitPane.Panel>
+          <SplitPane.Panel style={{ height: '100%' }}>
+            {selected ? (
+              <ChatThread
+                key={selected.id}
+                chat={selected}
+                actions={<ChatActionsMenu chat={selected} onChanged={() => void 0} />}
+              />
+            ) : (
+              <div
+                style={{
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 24,
+                }}
+              >
+                <EmptyState
+                  icon={<span style={{ fontSize: 26 }}>💬</span>}
+                  title="Select a conversation"
+                  description="Pick a chat on the left to open the live thread and the Agent Lens."
+                />
+              </div>
+            )}
+          </SplitPane.Panel>
+        </SplitPane>
       </div>
 
       {selected && (
-        <div
-          style={{
-            width: lensCollapsed ? 'auto' : 380,
-            flexShrink: 0,
-            minHeight: 0,
-          }}
-        >
+        <div style={{ width: lensCollapsed ? 'auto' : 380, flexShrink: 0, minHeight: 0, height: '100%' }}>
           <AgentLens
             key={selected.id}
             chat={selected}

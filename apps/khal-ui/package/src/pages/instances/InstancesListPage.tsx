@@ -1,20 +1,20 @@
 'use client';
 
 /**
- * Instances list — the entry point of the channels vertical. A live DataTable of
- * every instance (name, channel, active/default, profile) with a create flow and
- * row navigation into the per-instance detail. Production instances are tagged
- * so an operator sees, before clicking in, which rows are read-only.
+ * Instances list — the entry point of the channels vertical. Each instance is a
+ * SectionCard row (avatar, live StatusDot, name, channel + profile in mono, and
+ * a production read-only tag) that lifts on hover and opens the per-instance
+ * detail. Production instances are tagged so an operator sees, before clicking
+ * in, which rows are read-only.
  */
-import { Badge, Button, PillBadge } from '@khal-os/ui';
+import { Avatar, Button, EmptyState, Note, PillBadge, SectionCard, Spinner, StatusDot } from '@khal-os/ui';
 import type { Instance } from '@omni/sdk';
-import { useState } from 'react';
+import { type KeyboardEvent as ReactKeyboardEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useScope } from '../../app/providers/ScopeProvider';
-import type { ColumnDef } from '../../components/DataTable';
-import { DataTable } from '../../components/DataTable';
 import { PageShell } from '../../components/PageShell';
 import { T } from '../../components/tokens';
+import '../../components/runtime-styles';
 import { CreateInstanceDialog } from './CreateInstanceDialog';
 import { channelLabel, isProductionInstance } from './instance-helpers';
 
@@ -23,32 +23,7 @@ export function InstancesListPage() {
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
 
-  const columns: ColumnDef<Instance>[] = [
-    {
-      key: 'name',
-      header: 'Name',
-      render: (i) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 600, color: T.fg }}>{i.name}</span>
-          {i.isDefault && <PillBadge>default</PillBadge>}
-          {isProductionInstance(i.id) && (
-            <span style={{ fontSize: 10, color: T.warn, fontWeight: 700, letterSpacing: '0.04em' }}>
-              PROD · READ-ONLY
-            </span>
-          )}
-        </div>
-      ),
-    },
-    { key: 'channel', header: 'Channel', width: 170, accessor: (i) => channelLabel(i.channel) },
-    {
-      key: 'isActive',
-      header: 'Status',
-      width: 110,
-      render: (i) => <Badge variant={i.isActive ? 'green' : 'gray'}>{i.isActive ? 'active' : 'inactive'}</Badge>,
-    },
-    { key: 'profileName', header: 'Profile', accessor: (i) => i.profileName ?? '—' },
-    { key: 'id', header: 'ID', mono: true, width: 300 },
-  ];
+  const instances = scope.instances;
 
   return (
     <PageShell
@@ -66,16 +41,31 @@ export function InstancesListPage() {
         </div>
       }
     >
-      <DataTable
-        columns={columns}
-        rows={scope.instances}
-        getRowKey={(i) => i.id}
-        loading={scope.instancesLoading}
-        error={scope.instancesError ? scope.instancesError.message : null}
-        emptyTitle="No instances yet"
-        emptyDescription="Create one to connect a channel."
-        onRowClick={(i) => navigate(`/instances/${i.id}`)}
-      />
+      {scope.instancesError && <Note type="error">{scope.instancesError.message}</Note>}
+
+      {scope.instancesLoading && instances.length === 0 ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+          <Spinner />
+        </div>
+      ) : instances.length === 0 ? (
+        <SectionCard padding="lg">
+          <EmptyState
+            title="No instances yet"
+            description="Create one to connect a channel."
+            action={
+              <Button size="small" variant="default" onClick={() => setCreating(true)}>
+                New instance
+              </Button>
+            }
+          />
+        </SectionCard>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {instances.map((inst, i) => (
+            <InstanceRow key={inst.id} instance={inst} index={i} onOpen={() => navigate(`/instances/${inst.id}`)} />
+          ))}
+        </div>
+      )}
 
       <CreateInstanceDialog
         open={creating}
@@ -86,5 +76,66 @@ export function InstancesListPage() {
         }}
       />
     </PageShell>
+  );
+}
+
+function InstanceRow({ instance, index, onOpen }: { instance: Instance; index: number; onOpen: () => void }) {
+  const production = isProductionInstance(instance.id);
+  const owner = (instance as { ownerIdentifier?: string | null }).ownerIdentifier ?? null;
+  return (
+    <SectionCard
+      padding="md"
+      className="omni-card-hover khal-anim-fade-up"
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e: ReactKeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      style={{ cursor: 'pointer', animationDelay: `${index * 50}ms` }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+        <StatusDot state={instance.isActive ? 'active' : 'idle'} size="md" pulse={instance.isActive} />
+        <Avatar name={instance.name} size="md" />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 15, fontWeight: 650, color: T.fg, letterSpacing: '-0.01em' }}>
+              {instance.name}
+            </span>
+            {instance.isDefault && (
+              <PillBadge size="sm" variant="muted">
+                default
+              </PillBadge>
+            )}
+            {production && (
+              <PillBadge size="sm" variant="muted" dot dotColor={T.warn}>
+                prod · read-only
+              </PillBadge>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 3, fontSize: 12, color: T.muted, flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: T.mono }}>{channelLabel(instance.channel)}</span>
+            {instance.profileName && <span>· {instance.profileName}</span>}
+            {owner && <span style={{ fontFamily: T.mono }}>· {owner}</span>}
+          </div>
+        </div>
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            color: T.secondary,
+            flexShrink: 0,
+          }}
+        >
+          Open <span style={{ color: T.accent }}>→</span>
+        </span>
+      </div>
+    </SectionCard>
   );
 }

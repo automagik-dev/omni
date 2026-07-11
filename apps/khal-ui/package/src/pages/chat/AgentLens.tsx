@@ -7,10 +7,12 @@
  * the id→name resolvers, so opening the lens is what starts those streams.
  * Collapsible to hand the width back to the thread.
  */
+import { PillBadge } from '@khal-os/ui';
 import { useMemo, useState } from 'react';
 import type { ChatRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { T } from '../../components/tokens';
+import '../../components/runtime-styles';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
 import { AgentLensNow } from './AgentLensNow';
 import { AgentLensTrace } from './AgentLensTrace';
@@ -54,16 +56,20 @@ export function AgentLens({
         type="button"
         onClick={onToggleCollapsed}
         title="Show Agent Lens"
+        className="omni-iconbtn"
         style={{
+          height: '100%',
           writingMode: 'vertical-rl',
-          padding: '12px 6px',
+          padding: '12px 7px',
           border: 'none',
           borderLeft: `1px solid ${T.border}`,
           background: T.surface,
-          color: T.muted,
+          color: T.secondary,
           cursor: 'pointer',
-          fontSize: 12,
-          letterSpacing: '0.05em',
+          fontSize: 10.5,
+          fontFamily: T.mono,
+          textTransform: 'uppercase',
+          letterSpacing: '0.14em',
         }}
       >
         ◂ Agent Lens
@@ -86,26 +92,41 @@ export function AgentLens({
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 6,
-          padding: '8px 10px',
+          gap: 8,
+          padding: '9px 10px',
           borderBottom: `1px solid ${T.border}`,
           background: T.surface,
         }}
       >
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: T.fg }}>Agent Lens</span>
-        <div style={{ display: 'flex', gap: 4, marginLeft: 8 }}>
+        <PillBadge size="sm" variant="muted" dot dotColor={T.accent}>
+          Agent Lens
+        </PillBadge>
+        <div
+          style={{
+            display: 'flex',
+            gap: 2,
+            marginLeft: 4,
+            padding: 2,
+            borderRadius: 8,
+            border: `1px solid ${T.border}`,
+            background: T.sunken,
+          }}
+        >
           {(['now', 'trace'] as const).map((t) => (
             <button
               key={t}
               type="button"
               onClick={() => setTab(t)}
+              className="omni-seg-btn"
               style={{
-                fontSize: 12,
-                padding: '3px 10px',
-                borderRadius: 7,
-                border: `1px solid ${tab === t ? T.accentBlue : T.border}`,
-                background:
-                  tab === t ? 'color-mix(in srgb, var(--khal-accent, #3b82f6) 18%, transparent)' : 'transparent',
+                fontSize: 11.5,
+                fontWeight: 600,
+                padding: '3px 11px',
+                borderRadius: 6,
+                border: 'none',
+                background: tab === t ? 'color-mix(in oklch, var(--khal-accent) 16%, transparent)' : 'transparent',
+                boxShadow:
+                  tab === t ? 'inset 0 0 0 1px color-mix(in oklch, var(--khal-accent) 40%, transparent)' : 'none',
                 color: tab === t ? T.fg : T.muted,
                 cursor: 'pointer',
                 textTransform: 'capitalize',
@@ -119,13 +140,20 @@ export function AgentLens({
           type="button"
           onClick={onToggleCollapsed}
           title="Collapse"
+          className="omni-iconbtn"
           style={{
             marginLeft: 'auto',
             border: 'none',
+            borderRadius: 6,
+            width: 26,
+            height: 26,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
             background: 'transparent',
             color: T.muted,
             cursor: 'pointer',
-            fontSize: 14,
+            fontSize: 13,
           }}
         >
           ▸

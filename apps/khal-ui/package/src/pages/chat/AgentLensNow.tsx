@@ -8,7 +8,7 @@
  * counterpart, dependency health chips when present, and a "possibly stalled"
  * warning when the agent is busy but nothing has moved for over 60s.
  */
-import { PillBadge, StatusDot } from '@khal-os/ui';
+import { DataRow, Note, PillBadge, StatusDot } from '@khal-os/ui';
 import { useEffect, useState } from 'react';
 import type { ChatRow, EventRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
@@ -16,6 +16,7 @@ import { EffectBadge } from '../../components/EffectBadge';
 import { FreshnessBadge } from '../../components/FreshnessBadge';
 import { JsonInspector } from '../../components/JsonInspector';
 import { T } from '../../components/tokens';
+import '../../components/runtime-styles';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
 import {
   agentStatusDot,
@@ -47,14 +48,44 @@ function formatElapsed(ms: number | null): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+/** Mono id with a click-to-copy affordance — the standard KhalOS handle. */
+function CopyValue({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const real = value && value !== '—';
+  const copy = () => {
+    if (!real) return;
+    void navigator.clipboard?.writeText(value).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      },
+      () => void 0,
+    );
+  };
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.05em', color: T.muted }}>
-        {label}
-      </span>
-      <span style={{ fontSize: 12.5, color: T.fg, wordBreak: 'break-word' }}>{children}</span>
-    </div>
+    <button
+      type="button"
+      onClick={copy}
+      disabled={!real}
+      className={real ? 'omni-copy' : undefined}
+      title={real ? 'Copy' : undefined}
+      style={{
+        border: 'none',
+        background: 'transparent',
+        padding: 0,
+        fontFamily: T.mono,
+        fontSize: 11.5,
+        fontVariantNumeric: 'tabular-nums',
+        color: copied ? T.ok : T.secondary,
+        cursor: real ? 'pointer' : 'default',
+        maxWidth: 190,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {copied ? '✓ copied' : value}
+    </button>
   );
 }
 
@@ -103,39 +134,39 @@ export function AgentLensNow({
 
   const statusMeta = (snapshot?.statusMeta ?? {}) as Record<string, unknown>;
   const dependencies = (statusMeta.dependencies ?? statusMeta.health ?? null) as Record<string, unknown> | null;
+  const elapsedLabel = status ? formatElapsed(timeInState(snapshot, now)) : '—';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 12 }}>
       <StatusHeader status={status} agentState={agentState} />
       <StreamNotices agentState={agentState} hasSnapshot={Boolean(snapshot)} />
       {stalled && (
-        <StallBanner
-          status={status}
-          elapsedMs={Math.max(timeInState(snapshot, now) ?? 0, lastEventAt ? now - lastEventAt : 0)}
-        />
+        <Note type="warning" label="Possibly stalled">
+          Status is <strong>{status}</strong> but no transition or event for{' '}
+          {formatElapsed(Math.max(timeInState(snapshot, now) ?? 0, lastEventAt ? now - lastEventAt : 0))}.
+        </Note>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <Field label="Agent">
-          <span style={{ fontWeight: 600 }}>{agentName}</span>
-        </Field>
-        <Field label="Provider">{providerName}</Field>
-        <Field label="Time in state">{status ? formatElapsed(timeInState(snapshot, now)) : '—'}</Field>
-        <Field label="Source">{agentState.source ?? 'stream'}</Field>
-        <Field label="Conversation">
-          <span style={{ fontFamily: T.mono, fontSize: 11.5 }}>
-            {snapshot?.conversationId ?? chat.conversationId ?? '—'}
-          </span>
-        </Field>
-        <Field label="Agent id">
-          <span style={{ fontFamily: T.mono, fontSize: 11.5 }}>{resolvedAgentId ?? '—'}</span>
-        </Field>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <SectionLabel>Binding</SectionLabel>
+        <DataRow variant="rule" label="Agent" value={agentName} accentColor={agentName === '—' ? T.muted : T.fg} />
+        <DataRow variant="rule" label="Provider" value={providerName} />
+        <DataRow variant="rule" label="Time in state" value={elapsedLabel} statusDot dotColor={dotFor(status)} />
+        <DataRow variant="rule" label="Source" value={agentState.source ?? 'stream'} />
+        <DataRow variant="rule" label="Conversation">
+          <CopyValue value={snapshot?.conversationId ?? chat.conversationId ?? '—'} />
+        </DataRow>
+        <DataRow variant="rule" label="Agent id">
+          <CopyValue value={resolvedAgentId ?? '—'} />
+        </DataRow>
       </div>
 
       {Object.keys(statusMeta).length > 0 && (
         <div>
-          <div style={sectionLabel}>Status meta</div>
-          <JsonInspector value={statusMeta} />
+          <SectionLabel>Status meta</SectionLabel>
+          <div style={{ marginTop: 6 }}>
+            <JsonInspector value={statusMeta} />
+          </div>
         </div>
       )}
 
@@ -151,12 +182,19 @@ export function AgentLensNow({
   );
 }
 
+function dotFor(status: string | null): string {
+  const s = agentStatusDot(status);
+  return s === 'working' ? T.accent : s === 'error' ? T.danger : s === 'away' ? T.warn : T.muted;
+}
+
 function StatusHeader({ status, agentState }: { status: string | null; agentState: UseAgentStateResult }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <StatusDot state={agentStatusDot(status)} size="md" />
-        <span style={{ fontSize: 15, fontWeight: 650, color: T.fg }}>{status ?? 'no active state'}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <StatusDot state={agentStatusDot(status)} size="lg" pulse={agentStatusDot(status) === 'working'} />
+        <span style={{ fontSize: 16, fontWeight: 650, letterSpacing: '-0.01em', color: T.fg }}>
+          {status ?? 'no active state'}
+        </span>
       </div>
       <FreshnessBadge
         observedAt={agentState.lastChangeAt}
@@ -186,29 +224,11 @@ function StreamNotices({ agentState, hasSnapshot }: { agentState: UseAgentStateR
   return null;
 }
 
-function StallBanner({ status, elapsedMs }: { status: string | null; elapsedMs: number }) {
-  return (
-    <div
-      style={{
-        fontSize: 12.5,
-        color: T.warn,
-        border: `1px solid ${T.warn}`,
-        borderRadius: 8,
-        padding: '8px 10px',
-        background: 'color-mix(in srgb, var(--ds-amber-700, #d97706) 12%, transparent)',
-      }}
-    >
-      ⚠ Possibly stalled — status is <strong>{status}</strong> but no transition or event for {formatElapsed(elapsedMs)}
-      .
-    </div>
-  );
-}
-
 function DependenciesSection({ dependencies }: { dependencies: Record<string, unknown> }) {
   return (
     <div>
-      <div style={sectionLabel}>Dependencies</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      <SectionLabel>Dependencies</SectionLabel>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
         {Object.entries(dependencies).map(([name, val]) => {
           const ok = val === true || val === 'ok' || val === 'healthy' || (val as { healthy?: boolean })?.healthy;
           return (
@@ -231,18 +251,25 @@ function FollowUpSection({
 }) {
   return (
     <div>
-      <div style={sectionLabel}>Follow-up</div>
-      {loading ? (
-        <span style={{ fontSize: 12, color: T.muted }}>Loading…</span>
-      ) : config ? (
-        <div style={{ fontSize: 12.5, color: T.fg }}>
-          {config.enabled ? 'Enabled' : 'Disabled'}
-          {config.idleMinutes != null && ` · idle ${config.idleMinutes}m`}
-          {config.prompt && <div style={{ color: T.muted, marginTop: 2 }}>“{config.prompt}”</div>}
-        </div>
-      ) : (
-        <span style={{ fontSize: 12, color: T.muted }}>No follow-up configured for this chat.</span>
-      )}
+      <SectionLabel>Follow-up</SectionLabel>
+      <div style={{ marginTop: 6 }}>
+        {loading ? (
+          <span style={{ fontSize: 12, color: T.muted }}>Loading…</span>
+        ) : config ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 12.5, color: T.fg }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <StatusDot state={config.enabled ? 'active' : 'idle'} size="sm" />
+              {config.enabled ? 'Enabled' : 'Disabled'}
+              {config.idleMinutes != null && (
+                <span style={{ color: T.muted, fontFamily: T.mono, fontSize: 11.5 }}>· idle {config.idleMinutes}m</span>
+              )}
+            </span>
+            {config.prompt && <div style={{ color: T.muted }}>“{config.prompt}”</div>}
+          </div>
+        ) : (
+          <span style={{ fontSize: 12, color: T.muted }}>No follow-up configured for this chat.</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -260,39 +287,53 @@ function AccessSection({
 }) {
   return (
     <div>
-      <div style={{ ...sectionLabel, display: 'flex', alignItems: 'center', gap: 8 }}>
-        Access <EffectBadge effect="read-only" />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <SectionLabel>Access</SectionLabel>
+        <EffectBadge effect="read-only" />
       </div>
-      {loading ? (
-        <span style={{ fontSize: 12, color: T.muted }}>Checking…</span>
-      ) : decision ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
-          <StatusDot state={decision.allowed ? 'active' : 'error'} size="sm" />
-          <span style={{ color: decision.allowed ? T.ok : T.danger, fontWeight: 600 }}>
-            {decision.allowed ? 'allowed' : 'blocked'}
+      <div style={{ marginTop: 6 }}>
+        {loading ? (
+          <span style={{ fontSize: 12, color: T.muted }}>Checking…</span>
+        ) : decision ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, flexWrap: 'wrap' }}>
+            <PillBadge
+              dot
+              dotColor={decision.allowed ? T.ok : T.danger}
+              variant={decision.allowed ? 'accent' : 'muted'}
+            >
+              {decision.allowed ? 'allowed' : 'blocked'}
+            </PillBadge>
+            <span style={{ color: T.muted }}>
+              {decision.reason}
+              {decision.mode ? ` (${decision.mode})` : ''}
+            </span>
+          </div>
+        ) : (
+          <span style={{ fontSize: 12, color: T.muted }}>
+            No decision{counterpart ? '' : ' (group chat — no single counterpart)'}.
           </span>
-          <span style={{ color: T.muted }}>
-            {decision.reason}
-            {decision.mode ? ` (${decision.mode})` : ''}
-          </span>
+        )}
+        <div style={{ fontSize: 11, color: T.muted, marginTop: 4 }}>
+          Counterpart: <span style={{ fontFamily: T.mono }}>{counterpart || fallbackName}</span>
         </div>
-      ) : (
-        <span style={{ fontSize: 12, color: T.muted }}>
-          No decision{counterpart ? '' : ' (group chat — no single counterpart)'}.
-        </span>
-      )}
-      <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>
-        Counterpart: <span style={{ fontFamily: T.mono }}>{counterpart || fallbackName}</span>
       </div>
     </div>
   );
 }
 
-const sectionLabel = {
-  fontSize: 10.5,
-  textTransform: 'uppercase' as const,
-  letterSpacing: '0.05em',
-  color: T.muted,
-  marginBottom: 6,
-  fontWeight: 700,
-};
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span
+      style={{
+        fontSize: 10.5,
+        fontFamily: T.mono,
+        textTransform: 'uppercase',
+        letterSpacing: '0.12em',
+        color: T.tertiary,
+        fontWeight: 650,
+      }}
+    >
+      {children}
+    </span>
+  );
+}

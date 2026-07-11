@@ -2,15 +2,21 @@
 
 /**
  * A single message bubble in the thread: direction-aware layout, sender name,
- * media (image inline, audio/video players, document link — via BFF media URLs),
+ * media (image inline, audio/video players, document card — via BFF media URLs),
  * reply quotes, forwarded/edited markers, reactions, timestamp, and delivery
  * ticks on outbound. Media that isn't cached yet is fetched on demand so a
  * scroll-through doesn't download every attachment.
+ *
+ * KhalOS-native surfaces: inbound sits on a raised surface (left tail), outbound
+ * is copper-tinted (right tail); every timestamp and tick is mono + tabular;
+ * media is a rounded card with a hover-zoom affordance; reactions float as a
+ * pill cluster over the bubble's edge; a reply is an inset hairline quote.
  */
 import { useState } from 'react';
 import type { MessageRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { T } from '../../components/tokens';
+import '../../components/runtime-styles';
 import {
   type DeliveryTick,
   deliveryTick,
@@ -25,7 +31,7 @@ import {
 const TICK_TONE: Record<DeliveryTick['tone'], string> = {
   muted: T.muted,
   ok: T.ok,
-  accent: T.accentBlue,
+  accent: T.accent,
   danger: T.danger,
 };
 
@@ -65,11 +71,12 @@ function MediaBlock({ msg }: { msg: MessageRow }) {
           alignItems: 'center',
           gap: 6,
           padding: '6px 10px',
-          borderRadius: 8,
-          border: `1px dashed ${T.border}`,
+          borderRadius: 10,
+          border: `1px dashed ${T.borderStrong}`,
           background: T.sunken,
           color: T.fg,
           fontSize: 12,
+          fontFamily: T.mono,
           cursor: loading ? 'default' : 'pointer',
         }}
       >
@@ -81,31 +88,52 @@ function MediaBlock({ msg }: { msg: MessageRow }) {
 
   if (kind === 'image' || kind === 'sticker') {
     return (
-      <a href={url} target="_blank" rel="noreferrer">
+      <a href={url} target="_blank" rel="noreferrer" className="omni-media" style={{ width: 'fit-content' }}>
         <img
           src={url}
           alt={msg.textContent ?? 'image'}
-          style={{ maxWidth: kind === 'sticker' ? 140 : 260, maxHeight: 300, borderRadius: 8, display: 'block' }}
+          style={{ maxWidth: kind === 'sticker' ? 140 : 260, maxHeight: 300 }}
         />
       </a>
     );
   }
   if (kind === 'audio') {
     // biome-ignore lint/a11y/useMediaCaption: user-generated voice notes have no captions.
-    return <audio controls src={url} style={{ maxWidth: 260 }} />;
+    return <audio controls src={url} style={{ maxWidth: 260, borderRadius: 10 }} />;
   }
   if (kind === 'video') {
-    // biome-ignore lint/a11y/useMediaCaption: user-generated video has no captions.
-    return <video controls src={url} style={{ maxWidth: 280, maxHeight: 320, borderRadius: 8 }} />;
+    return (
+      <div className="omni-media" style={{ width: 'fit-content' }}>
+        {/* biome-ignore lint/a11y/useMediaCaption: user-generated video has no captions. */}
+        <video controls src={url} style={{ maxWidth: 280, maxHeight: 320 }} />
+      </div>
+    );
   }
   return (
     <a
       href={url}
       target="_blank"
       rel="noreferrer"
-      style={{ color: T.accentBlue, fontSize: 13, display: 'inline-flex', gap: 6, alignItems: 'center' }}
+      style={{
+        display: 'inline-flex',
+        gap: 8,
+        alignItems: 'center',
+        padding: '8px 11px',
+        borderRadius: 10,
+        border: `1px solid ${T.border}`,
+        background: T.sunken,
+        color: T.fg,
+        fontSize: 12.5,
+        textDecoration: 'none',
+      }}
     >
-      📄 {msg.mediaMimeType ?? 'document'}
+      <span aria-hidden style={{ fontSize: 15 }}>
+        📄
+      </span>
+      <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <span style={{ color: T.accentBlue }}>Open document</span>
+        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{msg.mediaMimeType ?? 'document'}</span>
+      </span>
     </a>
   );
 }
@@ -115,16 +143,18 @@ function ReplyQuote({ msg }: { msg: MessageRow }) {
   return (
     <div
       style={{
-        borderLeft: `3px solid ${T.accentBlue}`,
-        padding: '2px 8px',
-        margin: '2px 0 4px',
-        background: T.sunken,
-        borderRadius: 4,
+        borderLeft: `2px solid ${T.accent}`,
+        padding: '3px 9px',
+        margin: '2px 0 5px',
+        background: 'color-mix(in oklch, var(--khal-fg) 5%, transparent)',
+        borderRadius: '0 6px 6px 0',
         fontSize: 12,
-        color: T.muted,
+        color: T.secondary,
       }}
     >
-      {msg.quotedSenderName && <div style={{ color: T.accentBlue, fontWeight: 600 }}>{msg.quotedSenderName}</div>}
+      {msg.quotedSenderName && (
+        <div style={{ color: T.accent, fontWeight: 600, marginBottom: 1 }}>{msg.quotedSenderName}</div>
+      )}
       {msg.quotedText ?? 'Replied message'}
     </div>
   );
@@ -151,9 +181,11 @@ function BubbleMeta({ msg, mine }: { msg: MessageRow; mine: boolean }) {
         alignItems: 'center',
         justifyContent: 'flex-end',
         gap: 5,
-        marginTop: 2,
+        marginTop: 3,
         fontSize: 10.5,
-        color: T.muted,
+        fontFamily: T.mono,
+        fontVariantNumeric: 'tabular-nums',
+        color: mine ? 'color-mix(in oklch, var(--khal-fg) 55%, transparent)' : T.muted,
       }}
     >
       {edited && <span title={msg.editedAt ?? undefined}>edited</span>}
@@ -171,16 +203,28 @@ function Reactions({ msg, mine }: { msg: MessageRow; mine: boolean }) {
   const reactions = reactionSummary(msg);
   if (reactions.length === 0) return null;
   return (
-    <div style={{ display: 'flex', gap: 4, marginTop: -4, marginRight: mine ? 4 : 0, marginLeft: mine ? 0 : 4 }}>
+    <div
+      style={{
+        display: 'flex',
+        gap: 4,
+        marginTop: -8,
+        marginRight: mine ? 8 : 0,
+        marginLeft: mine ? 0 : 8,
+        position: 'relative',
+        zIndex: 1,
+      }}
+    >
       {reactions.map((r) => (
         <span
           key={r.emoji}
           style={{
             fontSize: 11,
-            padding: '1px 6px',
+            fontVariantNumeric: 'tabular-nums',
+            padding: '1px 7px',
             borderRadius: 999,
-            background: T.surface,
+            background: T.elevated,
             border: `1px solid ${T.border}`,
+            boxShadow: '0 2px 8px color-mix(in oklch, black 28%, transparent)',
           }}
         >
           {r.emoji} {r.count > 1 ? r.count : ''}
@@ -194,17 +238,17 @@ export function MessageBubble({ msg, showSender }: { msg: MessageRow; showSender
   const mine = Boolean(msg.isFromMe);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', gap: 2 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', gap: 0 }}>
       <div
         style={{
           maxWidth: '78%',
           minWidth: 0,
           padding: '7px 11px',
           borderRadius: 12,
-          borderBottomRightRadius: mine ? 3 : 12,
-          borderBottomLeftRadius: mine ? 12 : 3,
-          background: mine ? 'color-mix(in srgb, var(--khal-accent, #3b82f6) 22%, transparent)' : T.surface,
-          border: `1px solid ${mine ? 'color-mix(in srgb, var(--khal-accent, #3b82f6) 40%, transparent)' : T.border}`,
+          borderBottomRightRadius: mine ? 4 : 12,
+          borderBottomLeftRadius: mine ? 12 : 4,
+          background: mine ? 'color-mix(in oklch, var(--khal-accent) 15%, transparent)' : T.elevated,
+          border: `1px solid ${mine ? 'color-mix(in oklch, var(--khal-accent) 32%, transparent)' : T.border}`,
           color: T.fg,
           fontSize: 13.5,
           lineHeight: 1.45,
@@ -212,16 +256,26 @@ export function MessageBubble({ msg, showSender }: { msg: MessageRow; showSender
         }}
       >
         {showSender && !mine && (
-          <div style={{ fontSize: 11.5, fontWeight: 700, color: T.accentBlue, marginBottom: 2 }}>
-            {senderLabel(msg)}
-          </div>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: T.accent, marginBottom: 2 }}>{senderLabel(msg)}</div>
         )}
         {msg.isForwarded && (
-          <div style={{ fontSize: 11, color: T.muted, fontStyle: 'italic', marginBottom: 2 }}>↪ Forwarded</div>
+          <div
+            style={{
+              fontSize: 11,
+              color: T.muted,
+              fontStyle: 'italic',
+              marginBottom: 2,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            ↪ Forwarded
+          </div>
         )}
         <ReplyQuote msg={msg} />
         {mediaKind(msg) !== 'none' && (
-          <div style={{ margin: '2px 0' }}>
+          <div style={{ margin: '3px 0' }}>
             <MediaBlock msg={msg} />
           </div>
         )}

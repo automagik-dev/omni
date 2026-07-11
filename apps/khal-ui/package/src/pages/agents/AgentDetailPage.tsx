@@ -6,7 +6,7 @@
  * overview/edit, A2A card + discovery, identities, tasks, follow-up config,
  * routes-using-this-agent, and an agent-state debug panel.
  */
-import { Badge, Button, Note, Spinner } from '@khal-os/ui';
+import { Badge, Button, Note, Spinner, StatusDot } from '@khal-os/ui';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
@@ -75,6 +75,7 @@ export function AgentDetailPage() {
         subtitle={`${agent.provider} · ${agentTypeLabel(agent.agentType)}`}
         status={
           <>
+            <StatusDot state={agent.isActive ? 'active' : 'idle'} size="sm" pulse={agent.isActive} />
             <Badge variant={providerBadgeVariant(agent.provider)}>{agent.provider}</Badge>
             <Badge variant={agent.isActive ? 'green' : 'gray'}>{agent.isActive ? 'active' : 'inactive'}</Badge>
             {agent.isInternal && <Badge variant="blue">internal</Badge>}

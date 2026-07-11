@@ -7,14 +7,14 @@
  * alternative. Fetch/render only — a disposable test instance is never actually
  * paired, so this drives the flow up to a rendered QR and stops.
  */
-import { Button, Note, Spinner } from '@khal-os/ui';
+import { Button, GlassCard, Note, NumberFlow, Spinner, StatusDot } from '@khal-os/ui';
 import { useEffect, useState } from 'react';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { FreshnessBadge } from '../../components/FreshnessBadge';
 import { T } from '../../components/tokens';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
 import { ActionButton, Panel } from './components';
-import { type ConnState, isQrImage, normalizeConnState } from './instance-helpers';
+import { type ConnState, connStateDot, isQrImage, normalizeConnState } from './instance-helpers';
 
 /** Why polling stopped, surfaced to the user instead of silently going quiet. */
 type StopReason = 'connected' | 'error' | 'timeout';
@@ -90,9 +90,19 @@ export function QrConnectWizard({
 
       {polling && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ fontSize: 13, color: T.fg }}>
-            Transport: <strong>{conn}</strong>
-            {status.data?.profileName ? ` · ${status.data.profileName}` : ''}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontSize: 13,
+              color: T.fg,
+              fontFamily: T.mono,
+            }}
+          >
+            <StatusDot state={connStateDot(conn)} size="sm" pulse={conn === 'connecting'} />
+            <span style={{ textTransform: 'uppercase', letterSpacing: '0.06em' }}>{conn}</span>
+            {status.data?.profileName && <span style={{ color: T.muted }}>· {status.data.profileName}</span>}
           </div>
 
           {conn === 'connected' ? (
@@ -193,38 +203,78 @@ function PollStopNote({ reason }: { reason: StopReason }) {
   return <Note type="warning">Polling stopped after 120s without connecting. Use “Connect & start QR” to retry.</Note>;
 }
 
+/** Seconds remaining until `expiresAt`, ticking each second (null when absent/expired). */
+function useCountdown(expiresAt: string | null): number | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!expiresAt) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [expiresAt]);
+  if (!expiresAt) return null;
+  const ms = new Date(expiresAt).getTime() - now;
+  if (Number.isNaN(ms)) return null;
+  return Math.max(0, Math.round(ms / 1000));
+}
+
 function QrView({ qr, expiresAt }: { qr: string; expiresAt: string | null }) {
+  const secondsLeft = useCountdown(expiresAt);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {isQrImage(qr) ? (
-        <img
-          src={qr}
-          alt="WhatsApp QR code"
-          style={{ width: 240, height: 240, borderRadius: 8, border: `1px solid ${T.border}`, background: '#fff' }}
-        />
-      ) : (
-        <pre
+    <GlassCard variant="raised" padding="md" glow={T.accent}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+        <div
           style={{
-            margin: 0,
-            padding: 12,
-            borderRadius: 8,
-            border: `1px solid ${T.border}`,
-            background: T.sunken,
-            color: T.fg,
+            fontSize: 10.5,
             fontFamily: T.mono,
-            fontSize: 11,
-            maxWidth: '100%',
-            overflowX: 'auto',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-all',
+            textTransform: 'uppercase',
+            letterSpacing: '0.14em',
+            color: T.tertiary,
           }}
         >
-          {qr}
-        </pre>
-      )}
-      {expiresAt && (
-        <span style={{ fontSize: 11, color: T.muted }}>Expires {new Date(expiresAt).toLocaleTimeString()}</span>
-      )}
-    </div>
+          Scan to connect
+        </div>
+        {isQrImage(qr) ? (
+          <img
+            src={qr}
+            alt="WhatsApp QR code"
+            style={{ width: 240, height: 240, borderRadius: 12, border: `1px solid ${T.border}`, background: '#fff' }}
+          />
+        ) : (
+          <pre
+            style={{
+              margin: 0,
+              padding: 12,
+              borderRadius: 12,
+              border: `1px solid ${T.border}`,
+              background: T.sunken,
+              color: T.fg,
+              fontFamily: T.mono,
+              fontSize: 11,
+              maxWidth: '100%',
+              overflowX: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+            }}
+          >
+            {qr}
+          </pre>
+        )}
+        {secondsLeft !== null && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 12,
+              fontFamily: T.mono,
+              color: secondsLeft <= 10 ? T.warn : T.muted,
+            }}
+          >
+            <StatusDot state={secondsLeft <= 10 ? 'away' : 'active'} size="sm" pulse={secondsLeft <= 10} />
+            expires in <NumberFlow value={secondsLeft} />s
+          </div>
+        )}
+      </div>
+    </GlassCard>
   );
 }

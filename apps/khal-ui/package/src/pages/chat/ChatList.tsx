@@ -1,17 +1,33 @@
 'use client';
 
 /**
- * Left pane: the chat list. Instance selector (seeded from the global scope),
- * a search filter, and rows showing avatar, name, last-message preview + time,
- * unread badge, and pinned / muted / archived indicators. Polled incrementally
- * so unread counts and ordering stay live.
+ * Left pane: the chat list. A khal-native instance selector (DropdownMenu seeded
+ * from the global scope), a search filter, an include-archived toggle, and a
+ * keyboard-navigable {@link ListView} of rows showing avatar, name, last-message
+ * preview + time, unread badge, and pinned / muted / archived indicators.
+ * ↑/↓ move + open, Enter opens; the active row wears a copper inset bar. Polled
+ * incrementally so unread counts and ordering stay live.
  */
-import { Avatar, Input, Spinner } from '@khal-os/ui';
+import {
+  Avatar,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+  EmptyState,
+  Input,
+  ListView,
+  PillBadge,
+  Spinner,
+  Toggle,
+} from '@khal-os/ui';
 import { useMemo, useState } from 'react';
 import type { ChatRow } from '../../api/ext';
 import { useScope } from '../../app/providers/ScopeProvider';
 import { FreshnessBadge } from '../../components/FreshnessBadge';
 import { T } from '../../components/tokens';
+import '../../components/runtime-styles';
 import { channelLabel } from '../instances/instance-helpers';
 import { chatDisplayName, formatClock, isCanaryChat, isProductionChat } from './chat-helpers';
 import { useChatList } from './useChatData';
@@ -60,48 +76,89 @@ export function ChatList({
     });
   }, [list.chats]);
 
+  const selectByKey = (key: string | null) => {
+    if (!key) return;
+    const chat = chats.find((c) => c.id === key);
+    if (chat) onSelectChat(chat);
+  };
+
+  const currentInstance = instanceId ? scope.instances.find((i) => i.id === instanceId) : undefined;
+  const instanceLabel = currentInstance ? currentInstance.name : 'All instances';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, background: T.surface }}>
       <div
         style={{ padding: 10, borderBottom: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', gap: 8 }}
       >
-        <select
-          value={instanceId ?? ''}
-          onChange={(e) => setLocalInstanceId(e.target.value || null)}
-          style={selectStyle}
-        >
-          <option value="">All instances</option>
-          {scope.instances.map((inst) => (
-            <option key={inst.id} value={inst.id}>
-              {inst.name} · {channelLabel(inst.channel)}
-            </option>
-          ))}
-        </select>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" className="omni-seg-btn" style={selectorTrigger}>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {instanceLabel}
+                {currentInstance && (
+                  <span style={{ color: T.muted, fontFamily: T.mono, fontSize: 11 }}>
+                    {' '}
+                    · {channelLabel(currentInstance.channel)}
+                  </span>
+                )}
+              </span>
+              <span style={{ color: T.muted, flexShrink: 0 }}>▾</span>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuRadioGroup value={instanceId ?? ''} onValueChange={(v) => setLocalInstanceId(v || null)}>
+              <DropdownMenuRadioItem value="">All instances</DropdownMenuRadioItem>
+              {scope.instances.map((inst) => (
+                <DropdownMenuRadioItem key={inst.id} value={inst.id}>
+                  {inst.name} · {channelLabel(inst.channel)}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search chats…" size="small" />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.muted }}>
-          <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
+
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 11,
+            fontFamily: T.mono,
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+            color: T.muted,
+          }}
+        >
+          <Toggle checked={includeArchived} onChange={setIncludeArchived} aria-label="Include archived chats" />
           Include archived
-        </label>
+        </div>
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {list.isLoading && chats.length === 0 ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}>
             <Spinner />
           </div>
         ) : chats.length === 0 ? (
-          <div style={{ padding: 20, fontSize: 13, color: T.muted, textAlign: 'center' }}>
-            {list.error ? `Failed to load: ${list.error.message}` : 'No chats found.'}
+          <div style={{ padding: 16 }}>
+            <EmptyState
+              title={list.error ? 'Failed to load' : 'No chats found'}
+              description={list.error ? list.error.message : 'Adjust the instance or search filters.'}
+              compact
+            />
           </div>
         ) : (
-          chats.map((chat) => (
-            <ChatListItem
-              key={chat.id}
-              chat={chat}
-              selected={chat.id === selectedChatId}
-              onSelect={() => onSelectChat(chat)}
-            />
-          ))
+          <ListView<ChatRow>
+            items={chats}
+            selected={selectedChatId}
+            onSelect={selectByKey}
+            onActivate={(chat) => onSelectChat(chat)}
+            getKey={(chat) => chat.id}
+            className="h-full"
+            renderItem={(chat, { selected }) => <ChatRowContent chat={chat} selected={selected} />}
+          />
         )}
       </div>
 
@@ -112,31 +169,29 @@ export function ChatList({
   );
 }
 
-function ChatListItem({ chat, selected, onSelect }: { chat: ChatRow; selected: boolean; onSelect: () => void }) {
+/** Row body. Full-bleed so the copper selection asserts over the ListView's own
+ * (blue) selected tint, keeping copper as the single selection color. */
+function ChatRowContent({ chat, selected }: { chat: ChatRow; selected: boolean }) {
   const flags = chatFlags(chat);
   const unread = chat.unreadCount ?? 0;
   return (
-    <button
-      type="button"
-      onClick={onSelect}
+    <div
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 10,
-        width: '100%',
-        textAlign: 'left',
-        padding: '9px 12px',
-        border: 'none',
+        margin: '-4px -8px',
+        padding: '9px 12px 10px',
         borderBottom: `1px solid ${T.borderSubtle}`,
-        background: selected ? 'color-mix(in srgb, var(--khal-accent, #3b82f6) 16%, transparent)' : 'transparent',
-        cursor: 'pointer',
+        background: selected ? 'color-mix(in oklch, var(--khal-accent) 13%, var(--khal-bg-surface))' : 'transparent',
+        boxShadow: selected ? 'inset 2px 0 0 var(--khal-accent)' : 'none',
       }}
     >
       <Avatar name={chatDisplayName(chat)} src={chat.avatarUrl ?? undefined} size="sm" />
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {flags.pinned && (
-            <span title="Pinned" style={{ fontSize: 11 }}>
+            <span title="Pinned" aria-hidden style={{ fontSize: 10 }}>
               📌
             </span>
           )}
@@ -153,16 +208,16 @@ function ChatListItem({ chat, selected, onSelect }: { chat: ChatRow; selected: b
           >
             {chatDisplayName(chat)}
           </span>
-          {isProductionChat(chat) && isCanaryChat(chat) && (
-            <span style={{ fontSize: 9, color: T.ok, fontWeight: 700 }}>CANARY</span>
-          )}
-          <span style={{ fontSize: 10.5, color: T.muted, flexShrink: 0 }}>{lastActivityLabel(chat)}</span>
+          {isProductionChat(chat) && isCanaryChat(chat) && <StatusTag color={T.ok} label="canary" />}
+          <span style={{ fontSize: 10.5, color: T.muted, flexShrink: 0, fontFamily: T.mono }}>
+            {lastActivityLabel(chat)}
+          </span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 1 }}>
           <span
             style={{
               fontSize: 12,
-              color: T.muted,
+              color: unread > 0 ? T.secondary : T.muted,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
@@ -173,39 +228,53 @@ function ChatListItem({ chat, selected, onSelect }: { chat: ChatRow; selected: b
             {chat.lastMessagePreview ?? '—'}
           </span>
           {flags.muted && (
-            <span title="Muted" style={{ fontSize: 10 }}>
+            <span title="Muted" aria-hidden style={{ fontSize: 10 }}>
               🔕
             </span>
           )}
-          {flags.archived && <span style={{ fontSize: 9, color: T.muted }}>archived</span>}
+          {flags.archived && (
+            <span style={{ fontSize: 9, fontFamily: T.mono, textTransform: 'uppercase', color: T.muted }}>arch</span>
+          )}
           {unread > 0 && (
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                color: '#fff',
-                background: T.accent,
-                borderRadius: 999,
-                padding: '0 6px',
-                minWidth: 16,
-                textAlign: 'center',
-              }}
-            >
+            <PillBadge size="sm" variant="accent">
               {unread > 99 ? '99+' : unread}
-            </span>
+            </PillBadge>
           )}
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
-const selectStyle = {
+function StatusTag({ color, label }: { color: string; label: string }) {
+  return (
+    <span
+      style={{
+        fontSize: 9,
+        fontFamily: T.mono,
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        color,
+        flexShrink: 0,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+const selectorTrigger = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  width: '100%',
   padding: '7px 10px',
   borderRadius: 8,
   border: `1px solid ${T.border}`,
   background: T.bg,
   color: T.fg,
   fontSize: 12.5,
-  width: '100%',
+  cursor: 'pointer',
 } as const;

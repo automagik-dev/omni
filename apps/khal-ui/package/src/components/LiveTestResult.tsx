@@ -1,6 +1,6 @@
 'use client';
 
-import { StatusDot } from '@khal-os/ui';
+import { NumberFlow, StatusDot } from '@khal-os/ui';
 import { EffectBadge } from './EffectBadge';
 /**
  * Result of running a capability's live/dry-run test: what was run, at what blast
@@ -51,7 +51,8 @@ export function LiveTestResult({ name, effect, status, message, evidence, latenc
         <span style={{ fontSize: 13, fontWeight: 600, color: T.fg, flex: 1, minWidth: 0 }}>{name}</span>
         {latencyMs !== undefined && (
           <span style={{ fontSize: 11, color: T.muted, fontFamily: T.mono, fontVariantNumeric: 'tabular-nums' }}>
-            {latencyMs}ms
+            <NumberFlow value={latencyMs} />
+            ms
           </span>
         )}
         <EffectBadge effect={effect} />
