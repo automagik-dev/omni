@@ -2,7 +2,7 @@ export { PageShell } from './PageShell';
 export type { PageShellProps } from './PageShell';
 export { DataTable } from './DataTable';
 export type { ColumnDef, DataTableProps, PaginationState, SortDirection, SortState } from './DataTable';
-export { ResourceDetail } from './ResourceDetail';
+export { ResourceDetail, SectionHead } from './ResourceDetail';
 export type { ResourceDetailProps, ResourceSectionProps } from './ResourceDetail';
 export { FieldGrid } from './FieldGrid';
 export type { FieldSpec } from './FieldGrid';

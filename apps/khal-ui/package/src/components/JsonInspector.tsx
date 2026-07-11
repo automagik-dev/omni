@@ -138,8 +138,8 @@ export function JsonInspector({ value, collapseBelowDepth = 1, defaultRaw = fals
     <div
       style={{
         border: `1px solid ${T.border}`,
-        borderRadius: 10,
-        background: T.sunken,
+        borderRadius: T.radius,
+        background: T.cell,
         overflow: 'hidden',
       }}
     >
@@ -149,12 +149,21 @@ export function JsonInspector({ value, collapseBelowDepth = 1, defaultRaw = fals
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 8,
-          padding: '6px 10px',
+          padding: '6px 12px',
           borderBottom: `1px solid ${T.border}`,
-          background: T.surface,
+          background: T.chrome,
         }}
       >
-        <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: T.muted }}>
+        <span
+          style={{
+            fontFamily: T.mono,
+            fontSize: 10.5,
+            textTransform: 'uppercase',
+            letterSpacing: '0.14em',
+            fontWeight: 650,
+            color: T.tertiary,
+          }}
+        >
           JSON {raw ? '(raw)' : '(redacted)'}
         </span>
         <div style={{ display: 'flex', gap: 6 }}>

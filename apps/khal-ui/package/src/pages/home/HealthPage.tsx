@@ -5,12 +5,11 @@
  * Combines the BFF↔backend edge (`/diag`), backend `/health` checks, NATS
  * consumer positions (`/health/consumers`), and dead-letter stats. All reads.
  */
-import { Button, MetricDisplay, SectionCard, Spinner, StatusDot } from '@khal-os/ui';
+import { Button, DataRow, MetricDisplay, ProgressBar, SectionCard, Spinner, StatusDot } from '@khal-os/ui';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
-import { DataTable } from '../../components/DataTable';
-import type { ColumnDef } from '../../components/DataTable';
 import { FreshnessBadge, formatAge } from '../../components/FreshnessBadge';
 import { PageShell } from '../../components/PageShell';
+import { SectionHead } from '../../components/ResourceDetail';
 import { T } from '../../components/tokens';
 import { useDiag } from '../../hooks/useDiag';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
@@ -28,19 +27,6 @@ interface ConsumersResponse {
   consumers: Consumer[];
   totalTracked: number;
 }
-
-const consumerColumns: ColumnDef<Consumer>[] = [
-  { key: 'consumer', header: 'Consumer' },
-  { key: 'stream', header: 'Stream', width: 120 },
-  { key: 'lastSequence', header: 'Last seq', width: 110, mono: true, align: 'right' },
-  {
-    key: 'updatedAt',
-    header: 'Updated',
-    width: 110,
-    mono: true,
-    accessor: (c) => (c.updatedAt ? formatAge(Date.now() - new Date(c.updatedAt).getTime()) : '—'),
-  },
-];
 
 export function HealthPage() {
   const { client, bffBase } = useOmniClient();
@@ -60,6 +46,8 @@ export function HealthPage() {
 
   const h = health.data;
   const dl = deadLetters.data;
+  const dlTotal = dl?.total ?? 0;
+  const dlPending = dl?.pending ?? 0;
 
   return (
     <PageShell
@@ -86,29 +74,36 @@ export function HealthPage() {
     >
       <SectionCard padding="md">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: T.fg }}>BFF ↔ backend edge</h3>
-          {diag && <StatusDot state={diag.auth === 'ok' ? 'active' : 'error'} size="sm" showLabel label={diag.auth} />}
+          <SectionHead>BFF ↔ backend edge</SectionHead>
+          {diag && (
+            <StatusDot state={diag.auth === 'ok' ? 'online' : 'error'} size="sm" pulse showLabel label={diag.auth} />
+          )}
         </div>
         {!diag && <Spinner size="sm" />}
         {diag && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
-            <Field label="Auth" value={diag.auth} accent={diag.auth === 'ok' ? T.ok : T.danger} />
-            <Field label="Backend version" value={diag.version ?? '—'} mono />
-            <Field label="Latency" value={diag.latencyMs !== undefined ? `${diag.latencyMs}ms` : '—'} mono />
-            <Field label="Key" value={diag.keyName ?? diag.keyPrefix ?? '—'} mono />
-            <Field label="Scopes" value={diag.scopes ? String(diag.scopes.length) : '—'} />
-            <Field label="Origin" value={diag.baseUrl ?? '—'} mono />
+          <div>
+            <DataRow variant="rule" label="Auth" value={diag.auth} accentColor={diag.auth === 'ok' ? T.ok : T.danger} />
+            <DataRow variant="rule" label="Backend version" value={diag.version ?? '—'} />
+            <DataRow
+              variant="rule"
+              label="Latency"
+              value={diag.latencyMs !== undefined ? `${diag.latencyMs}ms` : '—'}
+            />
+            <DataRow variant="rule" label="Key" value={diag.keyName ?? diag.keyPrefix ?? '—'} />
+            <DataRow variant="rule" label="Scopes" value={diag.scopes ? String(diag.scopes.length) : '—'} />
+            <DataRow variant="rule" label="Origin" value={diag.baseUrl ?? '—'} />
           </div>
         )}
       </SectionCard>
 
       <SectionCard padding="md">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: T.fg }}>Backend health</h3>
+          <SectionHead>Backend health</SectionHead>
           {h && (
             <StatusDot
-              state={h.status === 'healthy' ? 'active' : h.status === 'degraded' ? 'away' : 'error'}
+              state={h.status === 'healthy' ? 'online' : h.status === 'degraded' ? 'away' : 'error'}
               size="sm"
+              pulse
               showLabel
               label={h.status}
             />
@@ -116,72 +111,77 @@ export function HealthPage() {
         </div>
         {!h && <Spinner size="sm" />}
         {h && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20 }}>
+          <div>
             {Object.entries(h.checks ?? {}).map(([name, check]) => {
               const status = (check as { status?: string; latency?: number }).status;
               const latency = (check as { latency?: number }).latency;
+              const ok = status === 'ok';
               return (
-                <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <StatusDot state={status === 'ok' ? 'active' : 'error'} size="sm" />
-                  <span style={{ fontSize: 13, color: T.fg, textTransform: 'capitalize' }}>{name}</span>
-                  {latency !== undefined && (
-                    <span style={{ fontSize: 11, color: T.muted, fontFamily: T.mono }}>{latency}ms</span>
-                  )}
-                </div>
+                <DataRow
+                  key={name}
+                  variant="rule"
+                  label={name}
+                  value={latency !== undefined ? `${status ?? '—'} · ${latency}ms` : (status ?? '—')}
+                  statusDot
+                  dotColor={ok ? T.ok : T.danger}
+                  accentColor={ok ? T.ok : T.danger}
+                />
               );
             })}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 11, color: T.muted }}>uptime</span>
-              <span style={{ fontSize: 13, color: T.fg, fontFamily: T.mono }}>{formatAge(1000 * (h.uptime ?? 0))}</span>
+            <DataRow variant="rule" label="uptime" value={formatAge(1000 * (h.uptime ?? 0))} />
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard padding="md">
+        <div style={{ marginBottom: 12 }}>
+          <SectionHead>Consumers{consumers.data ? ` · ${consumers.data.totalTracked} tracked` : ''}</SectionHead>
+        </div>
+        {consumers.isLoading && <Spinner size="sm" />}
+        {consumers.error && <span style={{ fontSize: 13, color: T.danger }}>{(consumers.error as Error).message}</span>}
+        {consumers.data && consumers.data.consumers.length === 0 && (
+          <span style={{ fontSize: 13, color: T.muted }}>No consumers tracked.</span>
+        )}
+        <div>
+          {(consumers.data?.consumers ?? []).map((c) => (
+            <DataRow
+              key={c.consumer}
+              variant="rule"
+              label={c.consumer}
+              value={`${c.stream} · seq ${c.lastSequence} · ${c.updatedAt ? formatAge(Date.now() - new Date(c.updatedAt).getTime()) : '—'}`}
+            />
+          ))}
+        </div>
+      </SectionCard>
+
+      <SectionCard padding="md">
+        <div style={{ marginBottom: 12 }}>
+          <SectionHead>Dead letters</SectionHead>
+        </div>
+        {!dl && <Spinner size="sm" />}
+        {dl && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 12 }}>
+              <MetricDisplay value={dlTotal} label="Total" accentColor={dlTotal > 0 ? T.warn : undefined} />
+              <MetricDisplay value={dlPending} label="Pending" accentColor={dlPending > 0 ? T.danger : undefined} />
+              <MetricDisplay value={dl.retrying ?? 0} label="Retrying" />
+              <MetricDisplay value={dl.resolved ?? 0} label="Resolved" />
+              <MetricDisplay value={dl.abandoned ?? 0} label="Abandoned" />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span style={{ fontSize: 11, color: T.tertiary, fontFamily: T.mono, letterSpacing: '0.08em' }}>
+                PENDING BACKLOG
+              </span>
+              <ProgressBar
+                value={dlPending}
+                max={Math.max(dlTotal, 1)}
+                color={dlPending > 0 ? T.danger : T.ok}
+                showLabel
+              />
             </div>
           </div>
         )}
       </SectionCard>
-
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: T.fg }}>
-          Consumers{consumers.data ? ` (${consumers.data.totalTracked} tracked)` : ''}
-        </h3>
-        <DataTable
-          columns={consumerColumns}
-          rows={consumers.data?.consumers ?? []}
-          getRowKey={(c) => c.consumer}
-          loading={consumers.isLoading}
-          error={consumers.error ? (consumers.error as Error).message : null}
-          emptyTitle="No consumers tracked"
-        />
-      </section>
-
-      <SectionCard padding="md">
-        <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 600, color: T.fg }}>Dead letters</h3>
-        {!dl && <Spinner size="sm" />}
-        {dl && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 12 }}>
-            <MetricDisplay value={dl.total ?? 0} label="Total" accentColor={(dl.total ?? 0) > 0 ? T.warn : undefined} />
-            <MetricDisplay
-              value={dl.pending ?? 0}
-              label="Pending"
-              accentColor={(dl.pending ?? 0) > 0 ? T.danger : undefined}
-            />
-            <MetricDisplay value={dl.retrying ?? 0} label="Retrying" />
-            <MetricDisplay value={dl.resolved ?? 0} label="Resolved" />
-            <MetricDisplay value={dl.abandoned ?? 0} label="Abandoned" />
-          </div>
-        )}
-      </SectionCard>
     </PageShell>
-  );
-}
-
-function Field({ label, value, mono, accent }: { label: string; value: string; mono?: boolean; accent?: string }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span style={{ fontSize: 11, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
-      <span
-        style={{ fontSize: 13, color: accent ?? T.fg, fontFamily: mono ? T.mono : undefined, wordBreak: 'break-all' }}
-      >
-        {value}
-      </span>
-    </div>
   );
 }

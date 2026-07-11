@@ -4,11 +4,14 @@
  * Server-driven data table. It renders columns and rows and *emits* sort and
  * pagination intent — it never sorts or slices locally, so a page stays the
  * single source of truth for what the backend returns. Handles the three states
- * every list has: loading, error, and empty.
+ * every list has: loading, error, and empty. Styled KhalOS-native: a SectionCard
+ * surface, a quiet mono header, tabular-nums for ids/numbers, and a copper inset
+ * bar on row hover.
  */
-import { Button, EmptyState, Note, Spinner } from '@khal-os/ui';
+import { Button, EmptyState, Note, SectionCard, Spinner } from '@khal-os/ui';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { T } from './tokens';
+import './runtime-styles';
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -83,7 +86,7 @@ export function DataTable<T>({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
       {toolbar}
 
       {error && (
@@ -92,17 +95,18 @@ export function DataTable<T>({
         </Note>
       )}
 
-      <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden', background: T.surface }}>
+      <SectionCard variant="default" padding="none" style={{ overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
-              <tr style={{ background: T.elevated }}>
+              <tr>
                 {columns.map((col) => {
                   const active = sort?.column === col.key;
                   const interactive = Boolean(col.sortable && onSortChange);
                   return (
                     <th
                       key={col.key}
+                      className="omni-th"
                       {...(interactive
                         ? {
                             role: 'button',
@@ -118,12 +122,13 @@ export function DataTable<T>({
                         : {})}
                       style={{
                         textAlign: col.align ?? 'left',
-                        padding: '9px 12px',
-                        color: T.muted,
-                        fontWeight: 600,
-                        fontSize: 11,
+                        padding: '10px 14px',
+                        color: T.tertiary,
+                        fontFamily: T.mono,
+                        fontWeight: 650,
+                        fontSize: 10.5,
                         textTransform: 'uppercase',
-                        letterSpacing: '0.04em',
+                        letterSpacing: '0.1em',
                         whiteSpace: 'nowrap',
                         borderBottom: `1px solid ${T.border}`,
                         cursor: interactive ? 'pointer' : 'default',
@@ -146,6 +151,7 @@ export function DataTable<T>({
               {rows.map((row) => (
                 <tr
                   key={getRowKey(row)}
+                  className={onRowClick ? 'omni-row omni-row-clickable' : 'omni-row'}
                   {...(onRowClick
                     ? {
                         tabIndex: 0,
@@ -155,21 +161,19 @@ export function DataTable<T>({
                         },
                       }
                     : {})}
-                  style={{
-                    borderBottom: `1px solid ${T.borderSubtle}`,
-                    cursor: onRowClick ? 'pointer' : 'default',
-                  }}
+                  style={{ borderBottom: `1px solid ${T.borderSubtle}` }}
                 >
                   {columns.map((col) => (
                     <td
                       key={col.key}
                       style={{
-                        padding: '9px 12px',
+                        padding: '10px 14px',
                         textAlign: col.align ?? 'left',
                         color: T.fg,
                         verticalAlign: 'top',
                         fontFamily: col.mono ? T.mono : undefined,
                         fontSize: col.mono ? 12 : 13,
+                        fontVariantNumeric: col.mono || col.align === 'right' ? 'tabular-nums' : undefined,
                         whiteSpace: col.mono ? 'nowrap' : undefined,
                       }}
                     >
@@ -193,11 +197,11 @@ export function DataTable<T>({
             <EmptyState title={emptyTitle} description={emptyDescription} compact />
           </div>
         )}
-      </div>
+      </SectionCard>
 
       {pagination && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <span style={{ fontSize: 12, color: T.muted }}>
+          <span style={{ fontSize: 12, color: T.muted, fontFamily: T.mono, fontVariantNumeric: 'tabular-nums' }}>
             Page {pagination.page + 1}
             {pagination.total !== undefined && ` · ${pagination.total} total`}
           </span>

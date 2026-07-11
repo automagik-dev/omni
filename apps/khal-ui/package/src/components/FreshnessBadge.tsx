@@ -53,19 +53,21 @@ export function FreshnessBadge({ observedAt, source, degraded = false, staleAfte
         padding: '4px 10px',
         borderRadius: 999,
         border: `1px solid ${T.border}`,
-        background: T.surface,
+        background: T.chrome,
         fontSize: 12,
         color: T.muted,
         whiteSpace: 'nowrap',
       }}
       title={observedAt ? `Observed ${new Date(observedAt).toLocaleString()} · ${source}` : `${source} · no data yet`}
     >
-      <StatusDot state={state} size="sm" />
+      <StatusDot state={state} size="sm" pulse={state === 'live'} />
       <span style={{ color: T.fg, fontWeight: 500 }}>{source}</span>
       <span aria-hidden style={{ opacity: 0.4 }}>
         ·
       </span>
-      <span>{degraded ? 'degraded' : age === undefined ? 'no data' : formatAge(age)}</span>
+      <span style={{ fontFamily: T.mono, fontVariantNumeric: 'tabular-nums' }}>
+        {degraded ? 'degraded' : age === undefined ? 'no data' : formatAge(age)}
+      </span>
     </span>
   );
 }

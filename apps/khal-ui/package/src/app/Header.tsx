@@ -1,39 +1,35 @@
 'use client';
 
 /**
- * Global header: the explicit instance/channel scope selector, a backend
- * origin + version + freshness chip fed by `/diag`, and the theme toggle.
- *
- * Scope here is *visible context*, not a hidden filter — the selector always
- * shows the active instance/channel, and "All" is always reachable, so pages
- * built on `useScope()` can honour the selection without an operator wondering
- * why a list looks short.
+ * Slim top toolbar: the explicit instance/channel scope selector and a ⌘K
+ * affordance. Scope here is *visible context*, not a hidden filter — the
+ * selector always shows the active instance/channel, and "All" is always
+ * reachable, so pages built on `useScope()` can honour the selection without an
+ * operator wondering why a list looks short. Backend origin/version/freshness
+ * live in the bottom StatusBar; the theme switch lives in the sidebar head.
  */
-import { Button, ThemeSwitcher } from '@khal-os/ui';
+import { Button } from '@khal-os/ui';
 import type { Channel } from '@omni/sdk';
 import { useNavigate } from 'react-router-dom';
-import { FreshnessBadge } from '../components/FreshnessBadge';
 import { T } from '../components/tokens';
-import { useDiag } from '../hooks/useDiag';
 import { useScope } from './providers/ScopeProvider';
 
 const selectStyle = {
-  padding: '5px 8px',
+  padding: '5px 9px',
   borderRadius: 8,
   border: `1px solid ${T.border}`,
-  background: T.surface,
+  background: T.cell,
   color: T.fg,
   fontSize: 12,
-  maxWidth: 200,
+  fontFamily: T.mono,
+  maxWidth: 220,
 } as const;
 
-export function Header() {
+export function Header({ onOpenPalette }: { onOpenPalette?: () => void }) {
   const scope = useScope();
   const navigate = useNavigate();
-  const { diag, observedAt } = useDiag();
 
   const channels = Array.from(new Set(scope.instances.map((i) => i.channel))).sort();
-  const origin = diag?.baseUrl ? diag.baseUrl.replace(/^https?:\/\//, '') : '—';
 
   return (
     <header
@@ -41,15 +37,26 @@ export function Header() {
         display: 'flex',
         alignItems: 'center',
         gap: 12,
-        padding: '10px 16px',
+        padding: '10px clamp(24px, 4vw, 56px)',
         borderBottom: `1px solid ${T.border}`,
-        background: T.surface,
+        background: T.chrome,
         minHeight: 52,
         flexWrap: 'wrap',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 11, color: T.muted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Scope</span>
+        <span
+          style={{
+            fontSize: 10.5,
+            color: T.tertiary,
+            textTransform: 'uppercase',
+            letterSpacing: '0.14em',
+            fontFamily: T.mono,
+            fontWeight: 650,
+          }}
+        >
+          Scope
+        </span>
         <select
           aria-label="Instance scope"
           value={scope.selectedInstanceId ?? ''}
@@ -85,27 +92,19 @@ export function Header() {
 
       <div style={{ flex: 1 }} />
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 12, color: T.muted, fontFamily: T.mono }} title="Backend origin (via BFF)">
-          {origin}
-        </span>
-        {diag?.version && (
-          <span
-            style={{
-              fontSize: 11,
-              padding: '2px 8px',
-              borderRadius: 999,
-              border: `1px solid ${T.border}`,
-              color: T.fg,
-              fontFamily: T.mono,
-            }}
-          >
-            v{diag.version}
-          </span>
-        )}
-        <FreshnessBadge observedAt={observedAt} source="backend" degraded={diag !== undefined && diag.auth !== 'ok'} />
-        <ThemeSwitcher small />
-      </div>
+      <Button size="small" variant="tertiary" onClick={onOpenPalette} suffix={<kbd style={kbdStyle}>⌘K</kbd>}>
+        Search
+      </Button>
     </header>
   );
 }
+
+const kbdStyle = {
+  fontFamily: T.mono,
+  fontSize: 10.5,
+  padding: '1px 5px',
+  borderRadius: 5,
+  border: `1px solid ${T.border}`,
+  color: T.secondary,
+  background: T.cell,
+} as const;

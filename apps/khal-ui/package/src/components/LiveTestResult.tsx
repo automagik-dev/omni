@@ -1,5 +1,6 @@
 'use client';
 
+import { StatusDot } from '@khal-os/ui';
 import { EffectBadge } from './EffectBadge';
 /**
  * Result of running a capability's live/dry-run test: what was run, at what blast
@@ -24,10 +25,10 @@ export interface LiveTestResultProps {
   latencyMs?: number;
 }
 
-const STATUS_META: Record<LiveTestStatus, { label: string; color: string; glyph: string }> = {
-  pass: { label: 'PASS', color: T.ok, glyph: '✓' },
-  fail: { label: 'FAIL', color: T.danger, glyph: '✕' },
-  pending: { label: 'RUNNING', color: T.muted, glyph: '…' },
+const STATUS_META: Record<LiveTestStatus, { label: string; color: string; state: 'online' | 'error' | 'working' }> = {
+  pass: { label: 'PASS', color: T.ok, state: 'online' },
+  fail: { label: 'FAIL', color: T.danger, state: 'error' },
+  pending: { label: 'RUNNING', color: T.muted, state: 'working' },
 };
 
 export function LiveTestResult({ name, effect, status, message, evidence, latencyMs }: LiveTestResultProps) {
@@ -39,33 +40,19 @@ export function LiveTestResult({ name, effect, status, message, evidence, latenc
         flexDirection: 'column',
         gap: 10,
         padding: 14,
-        borderRadius: 10,
+        borderRadius: T.radiusCard,
         border: `1px solid ${T.border}`,
         borderLeft: `3px solid ${meta.color}`,
         background: T.surface,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span
-          aria-label={meta.label}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 20,
-            height: 20,
-            borderRadius: 999,
-            color: meta.color,
-            border: `1.5px solid ${meta.color}`,
-            fontSize: 12,
-            fontWeight: 700,
-          }}
-        >
-          {meta.glyph}
-        </span>
+        <StatusDot state={meta.state} size="sm" pulse={status === 'pending'} showLabel label={meta.label} />
         <span style={{ fontSize: 13, fontWeight: 600, color: T.fg, flex: 1, minWidth: 0 }}>{name}</span>
         {latencyMs !== undefined && (
-          <span style={{ fontSize: 11, color: T.muted, fontFamily: T.mono }}>{latencyMs}ms</span>
+          <span style={{ fontSize: 11, color: T.muted, fontFamily: T.mono, fontVariantNumeric: 'tabular-nums' }}>
+            {latencyMs}ms
+          </span>
         )}
         <EffectBadge effect={effect} />
       </div>

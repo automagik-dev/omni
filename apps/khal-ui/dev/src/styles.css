@@ -16,6 +16,12 @@
 @import "@khal-os/ui/styles/khal-os.css";
 @import "@khal-os/ui/styles/khal-tailwind.css";
 
+/* Wallpaper is opt-in (NOT in the khal-os.css barrel): the app root wears the
+   `khal-wallpaper` class for a subtle branded backdrop. Honors reduced
+   transparency via its own media guard. Embedded in KHAL the host supplies the
+   desktop; standalone this gives the pack the same OS-native ground. */
+@import "@khal-os/ui/styles/khal-wallpaper.css";
+
 /* Tailwind ignores node_modules when scanning; point it at the built @khal-os/ui
    so the utility classes its components reference actually get generated.
    (@khal-os is installed under the harness's own node_modules — react 19 keeps

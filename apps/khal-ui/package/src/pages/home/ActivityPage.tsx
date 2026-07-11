@@ -3,34 +3,49 @@
 /**
  * Activity — a live-ish feed of recent events, refreshed on a 10s incremental
  * poll that dedupes by id and backs off while the window is hidden
- * ({@link useIncrementalPoll}). Read-only.
+ * ({@link useIncrementalPoll}). Renders as a full-height `LiveFeed` console with
+ * direction/type filters. Read-only.
  */
-import { StatusDot } from '@khal-os/ui';
+import { Button, LiveFeed, SectionCard } from '@khal-os/ui';
+import type { FeedEvent } from '@khal-os/ui';
 import type { Event } from '@omni/sdk';
+import { useState } from 'react';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
-import { FreshnessBadge, formatAge } from '../../components/FreshnessBadge';
+import { FreshnessBadge } from '../../components/FreshnessBadge';
 import { PageShell } from '../../components/PageShell';
 import { T } from '../../components/tokens';
 import { useIncrementalPoll } from '../../hooks/useIncrementalPoll';
+import { type FeedFilter, feedMessage, matchesFilter, toFeedType } from './feed-helpers';
 
-function directionState(direction: string): 'active' | 'queued' {
-  return direction === 'inbound' ? 'active' : 'queued';
-}
+const FILTERS: { key: FeedFilter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'inbound', label: 'Inbound' },
+  { key: 'outbound', label: 'Outbound' },
+  { key: 'agent', label: 'Agent' },
+  { key: 'error', label: 'Errors' },
+];
 
-function eventText(e: Event): string {
-  const text = e.textContent ?? e.transcription ?? e.imageDescription ?? '';
-  if (text) return text.length > 140 ? `${text.slice(0, 140)}…` : text;
-  return e.contentType ? `[${e.contentType}]` : '—';
-}
+// Tall console that fills most of the window without a live resize observer.
+const FEED_HEIGHT = typeof window !== 'undefined' ? Math.max(360, window.innerHeight - 320) : 520;
 
 export function ActivityPage() {
   const { client } = useOmniClient();
+  const [filter, setFilter] = useState<FeedFilter>('all');
   const { items, error, lastPolledAt } = useIncrementalPoll<Event>({
     fetchPage: () => client.events.list({ limit: 20 }).then((r) => r.items),
     getId: (e) => e.id,
     intervalMs: 10_000,
     max: 200,
   });
+
+  const feedEvents: FeedEvent[] = items
+    .filter((e) => matchesFilter(e, filter))
+    .map((e) => ({
+      id: e.id,
+      type: toFeedType(e),
+      message: feedMessage(e),
+      timestamp: e.receivedAt ? new Date(e.receivedAt) : undefined,
+    }));
 
   return (
     <PageShell
@@ -39,32 +54,24 @@ export function ActivityPage() {
       description="Recent events, polled every 10 seconds."
       actions={<FreshnessBadge observedAt={lastPolledAt} source="events poll" degraded={Boolean(error)} />}
     >
-      {error && <div style={{ fontSize: 13, color: T.danger }}>Error: {error.message}</div>}
-      {items.length === 0 && !error && <div style={{ fontSize: 13, color: T.muted }}>Waiting for events…</div>}
-
-      <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {items.map((e) => (
-          <li
-            key={e.id}
-            style={{
-              display: 'flex',
-              alignItems: 'baseline',
-              gap: 10,
-              padding: '8px 10px',
-              borderBottom: `1px solid ${T.borderSubtle}`,
-            }}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {FILTERS.map((f) => (
+          <Button
+            key={f.key}
+            size="small"
+            variant={filter === f.key ? 'secondary' : 'tertiary'}
+            onClick={() => setFilter(f.key)}
           >
-            <StatusDot state={directionState(e.direction)} size="sm" />
-            <span style={{ fontSize: 12, fontFamily: T.mono, color: T.accentBlue, minWidth: 150, flexShrink: 0 }}>
-              {e.eventType}
-            </span>
-            <span style={{ fontSize: 13, color: T.fg, flex: 1, minWidth: 0 }}>{eventText(e)}</span>
-            <span style={{ fontSize: 11, color: T.muted, fontFamily: T.mono, flexShrink: 0 }}>
-              {e.receivedAt ? formatAge(Date.now() - new Date(e.receivedAt).getTime()) : ''}
-            </span>
-          </li>
+            {f.label}
+          </Button>
         ))}
-      </ul>
+      </div>
+
+      {error && <div style={{ fontSize: 13, color: T.danger }}>Error: {error.message}</div>}
+
+      <SectionCard padding="sm">
+        <LiveFeed events={feedEvents} height={FEED_HEIGHT} maxVisible={200} showTimestamps />
+      </SectionCard>
     </PageShell>
   );
 }

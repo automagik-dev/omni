@@ -5,8 +5,9 @@
  * tested {@link introspect} module; this component is the renderer + controlled
  * state around it, covering string, number, boolean, enum, array, nested object,
  * and record fields, with declared defaults, inline validation errors, and a
- * read-only preview mode. This is the workhorse behind every create/edit surface
- * in later waves.
+ * read-only preview mode. Laid out KhalOS-native with `.k-fieldset` surfaces,
+ * `.k-form-row` label/control rows, and `.k-helper` hints. This is the workhorse
+ * behind every create/edit surface in later waves.
  */
 import { Button, Input, Toggle } from '@khal-os/ui';
 import type { CSSProperties, ReactNode } from 'react';
@@ -121,7 +122,8 @@ function FieldRenderer({ node, value, path, update, errors, readOnly, label }: R
   switch (node.kind) {
     case 'object':
       return (
-        <FieldGroup label={label} description={node.description} nested={path.length > 0}>
+        <fieldset className="k-fieldset" style={fieldsetStyle(label)}>
+          {label && <div className="k-fieldset-h">{label}</div>}
           {(node.fields ?? []).map(({ key, node: child }) => (
             <FieldRenderer
               key={key}
@@ -134,7 +136,7 @@ function FieldRenderer({ node, value, path, update, errors, readOnly, label }: R
               label={key}
             />
           ))}
-        </FieldGroup>
+        </fieldset>
       );
     case 'array':
       return (
@@ -175,21 +177,22 @@ function FieldRenderer({ node, value, path, update, errors, readOnly, label }: R
   }
 }
 
-function FieldLabel({ label, node }: { label?: string; node: FieldNode }) {
+function FormLabel({ label, node }: { label?: string; node: FieldNode }) {
   if (!label) return null;
-  // Caption span (not <label>): the control is a sibling rendered by the field,
-  // not a nested child, so a <label> here would have no associated control.
+  const required = !node.optional && node.defaultValue === undefined;
   return (
-    <span style={{ fontSize: 12, fontWeight: 600, color: T.fg, display: 'flex', gap: 6, alignItems: 'baseline' }}>
+    <div className="k-form-label">
       {label}
-      {!node.optional && node.defaultValue === undefined && <span style={{ color: T.danger }}>*</span>}
-      {node.description && <span style={{ fontWeight: 400, color: T.muted }}>— {node.description}</span>}
-    </span>
+      {required && <span style={{ color: T.accent }}> *</span>}
+      {node.description && <span className="k-form-hint">{node.description}</span>}
+    </div>
   );
 }
 
 function ScalarField({ node, value, path, update, errors, readOnly, label }: RendererProps) {
   const err = errors[pathKey(path)];
+  const isText = node.kind !== 'boolean' && node.kind !== 'enum';
+
   const control = (() => {
     if (node.kind === 'boolean') {
       return (
@@ -219,15 +222,21 @@ function ScalarField({ node, value, path, update, errors, readOnly, label }: Ren
         type={node.kind === 'number' ? 'number' : 'text'}
         readOnly={readOnly}
         onChange={(e) => update(path, e.target.value)}
+        style={{ width: '100%' }}
       />
     );
   })();
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-      <FieldLabel label={label} node={node} />
-      {control}
-      {err && <span style={{ fontSize: 11, color: T.danger }}>{err}</span>}
+    <div className="k-form-row">
+      <FormLabel label={label} node={node} />
+      <div
+        className="k-form-control"
+        style={{ flexDirection: 'column', alignItems: isText ? 'stretch' : 'flex-end', gap: 4 }}
+      >
+        {control}
+        {err && <div className="k-helper k-helper-error">{err}</div>}
+      </div>
     </div>
   );
 }
@@ -236,50 +245,53 @@ function ArrayField({ node, value, path, update, errors, readOnly, label }: Rend
   const items = Array.isArray(value) ? value : [];
   const element = node.element as FieldNode;
   return (
-    <FieldGroup label={label} description={node.description} nested>
-      {items.length === 0 && <span style={{ fontSize: 12, color: T.muted }}>No items.</span>}
-      {items.map((item, index) => (
-        <div key={`${pathKey(path)}.${index}`} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <FieldRenderer
-              node={element}
-              value={item}
-              path={[...path, index]}
-              update={update}
-              errors={errors}
-              readOnly={readOnly}
-            />
+    <fieldset className="k-fieldset" style={fieldsetStyle(label)}>
+      {label && <div className="k-fieldset-h">{label}</div>}
+      <div style={blockBody}>
+        {items.length === 0 && <span className="k-helper">No items.</span>}
+        {items.map((item, index) => (
+          <div key={`${pathKey(path)}.${index}`} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <FieldRenderer
+                node={element}
+                value={item}
+                path={[...path, index]}
+                update={update}
+                errors={errors}
+                readOnly={readOnly}
+              />
+            </div>
+            {!readOnly && (
+              <Button
+                typeName="button"
+                size="small"
+                variant="secondary"
+                onClick={() =>
+                  update(
+                    path,
+                    items.filter((_, i) => i !== index),
+                  )
+                }
+              >
+                Remove
+              </Button>
+            )}
           </div>
-          {!readOnly && (
+        ))}
+        {!readOnly && (
+          <div>
             <Button
               typeName="button"
               size="small"
               variant="secondary"
-              onClick={() =>
-                update(
-                  path,
-                  items.filter((_, i) => i !== index),
-                )
-              }
+              onClick={() => update(path, [...items, initialValue(element)])}
             >
-              Remove
+              Add item
             </Button>
-          )}
-        </div>
-      ))}
-      {!readOnly && (
-        <div>
-          <Button
-            typeName="button"
-            size="small"
-            variant="secondary"
-            onClick={() => update(path, [...items, initialValue(element)])}
-          >
-            Add item
-          </Button>
-        </div>
-      )}
-    </FieldGroup>
+          </div>
+        )}
+      </div>
+    </fieldset>
   );
 }
 
@@ -288,100 +300,76 @@ function RecordField({ node, value, path, update, errors, readOnly, label }: Ren
   const valueType = node.valueType as FieldNode;
   const [newKey, setNewKey] = useState('');
   return (
-    <FieldGroup label={label} description={node.description} nested>
-      {entries.length === 0 && <span style={{ fontSize: 12, color: T.muted }}>No entries.</span>}
-      {entries.map(([k, v]) => (
-        <div key={k} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-          <span style={{ minWidth: 120, fontFamily: T.mono, fontSize: 12, color: T.accentBlue, paddingTop: 8 }}>
-            {k}
-          </span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <FieldRenderer
-              node={valueType}
-              value={v}
-              path={[...path, k]}
-              update={update}
-              errors={errors}
-              readOnly={readOnly}
-            />
+    <fieldset className="k-fieldset" style={fieldsetStyle(label)}>
+      {label && <div className="k-fieldset-h">{label}</div>}
+      <div style={blockBody}>
+        {entries.length === 0 && <span className="k-helper">No entries.</span>}
+        {entries.map(([k, v]) => (
+          <div key={k} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <span style={{ minWidth: 120, fontFamily: T.mono, fontSize: 12, color: T.accentBlue, paddingTop: 8 }}>
+              {k}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <FieldRenderer
+                node={valueType}
+                value={v}
+                path={[...path, k]}
+                update={update}
+                errors={errors}
+                readOnly={readOnly}
+              />
+            </div>
+            {!readOnly && (
+              <Button
+                typeName="button"
+                size="small"
+                variant="secondary"
+                onClick={() => {
+                  const next = { ...(value as Record<string, unknown>) };
+                  delete next[k];
+                  update(path, next);
+                }}
+              >
+                Remove
+              </Button>
+            )}
           </div>
-          {!readOnly && (
+        ))}
+        {!readOnly && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Input value={newKey} placeholder="new key" onChange={(e) => setNewKey(e.target.value)} />
             <Button
               typeName="button"
               size="small"
               variant="secondary"
+              disabled={!newKey}
               onClick={() => {
-                const next = { ...(value as Record<string, unknown>) };
-                delete next[k];
-                update(path, next);
+                update(path, { ...(value as Record<string, unknown>), [newKey]: initialValue(valueType) });
+                setNewKey('');
               }}
             >
-              Remove
+              Add
             </Button>
-          )}
-        </div>
-      ))}
-      {!readOnly && (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Input value={newKey} placeholder="new key" onChange={(e) => setNewKey(e.target.value)} />
-          <Button
-            typeName="button"
-            size="small"
-            variant="secondary"
-            disabled={!newKey}
-            onClick={() => {
-              update(path, { ...(value as Record<string, unknown>), [newKey]: initialValue(valueType) });
-              setNewKey('');
-            }}
-          >
-            Add
-          </Button>
-        </div>
-      )}
-    </FieldGroup>
-  );
-}
-
-function FieldGroup({
-  label,
-  description,
-  nested,
-  children,
-}: {
-  label?: string;
-  description?: string;
-  nested?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <fieldset
-      style={{
-        border: nested ? `1px solid ${T.border}` : 'none',
-        borderRadius: nested ? 8 : 0,
-        padding: nested ? 12 : 0,
-        margin: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12,
-        minWidth: 0,
-      }}
-    >
-      {label && (
-        <legend style={{ fontSize: 12, fontWeight: 700, color: T.fg, padding: nested ? '0 6px' : 0 }}>
-          {label}
-          {description && <span style={{ fontWeight: 400, color: T.muted }}> — {description}</span>}
-        </legend>
-      )}
-      {children}
+          </div>
+        )}
+      </div>
     </fieldset>
   );
 }
 
+// Reset the browser fieldset default margins so `.k-fieldset` styling wins
+// cleanly; nested groups (those with a head label) get a little top separation.
+function fieldsetStyle(label?: string): CSSProperties {
+  return { margin: label ? '10px 0 0' : 0, minWidth: 0 };
+}
+const blockBody: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12, padding: '4px 16px 12px' };
+
 const selectStyle: CSSProperties = {
-  padding: '7px 10px',
+  padding: '6px 10px',
   borderRadius: 8,
   border: `1px solid ${T.border}`,
-  background: T.surface,
+  background: T.cell,
   color: T.fg,
   fontSize: 13,
+  fontFamily: T.mono,
 };
