@@ -715,7 +715,15 @@ mediaRoutes.post('/music', zValidator('json', musicRequestSchema), async (c) => 
 /**
  * GET /media/:instanceId/* - Serve stored media files
  *
- * Supports range requests for audio/video streaming.
+ * Supports range requests for audio/video streaming. Bytes are served through
+ * the active backend WITHOUT full-object buffering: Range requests fetch only
+ * the requested bytes (positional file read / S3 ranged GET) and full GETs
+ * stream (local file stream / S3 streaming GET) — a browser seeking through a
+ * multi-GB remote video never pulls whole objects into API memory.
+ *
+ * Error contract: a missing object is 404; a backend that is down/misconfigured
+ * (S3 unreachable, bad credentials, missing bucket) is 503 so clients retry
+ * instead of treating a transient outage as gone-forever.
  */
 mediaRoutes.get('/:instanceId/*', async (c) => {
   const instanceId = c.req.param('instanceId');
@@ -752,49 +760,76 @@ mediaRoutes.get('/:instanceId/*', async (c) => {
   const db = c.get('services');
   const storage = getMediaStorage(db);
 
-  // Read the file
-  const result = storage.readMedia(relativePath);
-
-  if (!result) {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Media not found' } }, 404);
-  }
-
-  const buffer = result.buffer;
-  const fileSize = result.size;
-  const mimeType = storage.getMimeType(path);
-
-  // Handle range requests for streaming
-  const rangeHeader = c.req.header('Range');
-
-  if (rangeHeader) {
-    const matches = rangeHeader.match(/bytes=(\d+)-(\d*)/);
-    if (matches?.[1]) {
-      const start = Number.parseInt(matches[1], 10);
-      const end = matches[2] ? Number.parseInt(matches[2], 10) : fileSize - 1;
-      const chunkSize = end - start + 1;
-
-      return new Response(buffer.subarray(start, end + 1), {
-        status: 206,
-        headers: {
-          'Content-Type': mimeType,
-          'Content-Length': String(chunkSize),
-          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-          'Accept-Ranges': 'bytes',
-        },
-      });
+  try {
+    // Stat first: resolves existence + size without reading bytes, and is the
+    // gate that turns backend outages into 503 before any body is committed.
+    const stat = await storage.statMedia(relativePath);
+    if (!stat) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Media not found' } }, 404);
     }
-  }
 
-  // Return full file
-  return new Response(buffer, {
-    status: 200,
-    headers: {
-      'Content-Type': mimeType,
-      'Content-Length': String(fileSize),
-      'Accept-Ranges': 'bytes',
-      'Cache-Control': 'public, max-age=31536000', // 1 year cache (content-addressable)
-    },
-  });
+    const fileSize = stat.size;
+    const mimeType = storage.getMimeType(path);
+
+    // Handle range requests for streaming
+    const rangeHeader = c.req.header('Range');
+
+    if (rangeHeader) {
+      const matches = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+      if (matches?.[1]) {
+        const start = Number.parseInt(matches[1], 10);
+        const requestedEnd = matches[2] ? Number.parseInt(matches[2], 10) : fileSize - 1;
+        // Clamp to the object per RFC 7233 (also keeps Content-Length honest).
+        const end = Math.min(requestedEnd, fileSize - 1);
+
+        if (start >= fileSize || start > end) {
+          return new Response(null, {
+            status: 416,
+            headers: { 'Content-Range': `bytes */${fileSize}`, 'Accept-Ranges': 'bytes' },
+          });
+        }
+
+        const chunk = await storage.readMediaRange(relativePath, start, end);
+
+        return new Response(chunk, {
+          status: 206,
+          headers: {
+            'Content-Type': mimeType,
+            'Content-Length': String(end - start + 1),
+            'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+            'Accept-Ranges': 'bytes',
+          },
+        });
+      }
+    }
+
+    // Return full file as a stream (never a whole-object heap Buffer)
+    const stream = await storage.readMediaStream(relativePath);
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': mimeType,
+        'Content-Length': String(fileSize),
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'public, max-age=31536000', // 1 year cache (content-addressable)
+      },
+    });
+  } catch (err) {
+    // statMedia/read* rethrow anything that is NOT object-not-found: transient
+    // S3/disk failures surface as 503 so clients retry instead of caching a 404.
+    log.error('Media backend read failed', { relativePath, error: String(err) });
+    return c.json(
+      { error: { code: 'MEDIA_BACKEND_UNAVAILABLE', message: 'Media storage backend unavailable, retry later' } },
+      503,
+    );
+  }
 });
+
+/** Test-only hooks: inject/reset the module-level storage singleton. */
+export const __test__ = {
+  setMediaStorage(service: MediaStorageService | null): void {
+    mediaStorage = service;
+  },
+};
 
 export { mediaRoutes };

@@ -1,0 +1,19 @@
+{{- /*
+PodDisruptionBudget for the omni-api Deployment — only rendered when more than
+one replica is possible (replicaCount > 1 or HPA on). With a single replica a
+minAvailable:1 PDB would block node drains forever, so it is skipped.
+*/ -}}
+{{- if and .Values.podDisruptionBudget.enabled (or .Values.autoscaling.enabled (gt (int .Values.replicaCount) 1)) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "omni.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "omni.apiSelectorLabels" . | nindent 6 }}
+{{- end }}

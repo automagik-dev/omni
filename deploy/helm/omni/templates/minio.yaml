@@ -1,0 +1,198 @@
+{{- if .Values.minio.enabled }}
+{{- /*
+First-party bundled MinIO (S3-compatible object store) for the "remote" media
+backend. Kept small and offline (no subchart download) for OrbStack/dev, mirroring
+templates/nats.yaml. Swap for the official minio chart or an external S3 bucket
+(minio.enabled=false + media.s3.existingSecret) in prod.
+
+The bucket-bootstrap is guaranteed idempotent (mc mb --ignore-existing) and
+ordered-before-serving two ways:
+  1. a Helm post-install/post-upgrade hook Job (release-level bootstrap), and
+  2. an initContainer on the omni-api Deployment (per-pod hard gate) — see
+     templates/deployment.yaml. omni-api's api container cannot start until the
+     bucket exists.
+*/ -}}
+{{- if not .Values.media.s3.existingSecret }}
+{{- /*
+App creds are DISTINCT from the root user: the bootstrap Job (and the per-pod
+initContainer) provision a scoped `minio.appUser` with the builtin readwrite
+policy, and omni-api consumes only that user via OMNI_MEDIA_S3_* — never the
+root/admin credential. An empty appPassword auto-generates a stable random
+preserved across upgrades via helm lookup (same GitOps caveat as autopg:
+template-rendering GitOps must pin minio.appPassword or use
+media.s3.existingSecret). Remaining bundled-MinIO assumptions: in-cluster
+ClusterIP + plaintext http:// only — keep media.s3.presignTtlSeconds as low as
+the workflow tolerates, and use an external S3 + existingSecret in prod.
+*/ -}}
+{{- $minioSecretName := include "omni.minio.fullname" . }}
+{{- $minioExisting := lookup "v1" "Secret" .Release.Namespace $minioSecretName }}
+{{- $appPw := .Values.minio.appPassword }}
+{{- if not $appPw }}
+{{- if and $minioExisting (hasKey $minioExisting.data "OMNI_MEDIA_S3_SECRET_KEY") }}
+{{- $appPw = index $minioExisting.data "OMNI_MEDIA_S3_SECRET_KEY" | b64dec }}
+{{- else }}
+{{- $appPw = randAlphaNum 32 }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $minioSecretName }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+type: Opaque
+stringData:
+  # MinIO server root creds (server boot + bucket/user provisioning only).
+  MINIO_ROOT_USER: {{ .Values.minio.rootUser | quote }}
+  MINIO_ROOT_PASSWORD: {{ .Values.minio.rootPassword | quote }}
+  # Scoped app creds consumed by omni-api via secretKeyRef (LOW-8: not root).
+  OMNI_MEDIA_S3_ACCESS_KEY: {{ .Values.minio.appUser | quote }}
+  OMNI_MEDIA_S3_SECRET_KEY: {{ $appPw | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "omni.minio.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "omni.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+  ports:
+    - name: api
+      port: {{ .Values.minio.service.port }}
+      targetPort: api
+    - name: console
+      port: {{ .Values.minio.service.consolePort }}
+      targetPort: console
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "omni.minio.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  serviceName: {{ include "omni.minio.fullname" . }}
+  replicas: 1
+  {{- with .Values.minio.persistentVolumeClaimRetentionPolicy }}
+  # Self-host data safety: keep the media PVC when this StatefulSet is deleted/
+  # scaled. Rendered only when set, so cloud realms (minio disabled) are unaffected.
+  persistentVolumeClaimRetentionPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "omni.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "omni.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      containers:
+        - name: minio
+          image: {{ .Values.minio.image | quote }}
+          imagePullPolicy: {{ .Values.minio.pullPolicy }}
+          args:
+            - "server"
+            - "/data"
+            - "--console-address"
+            - ":{{ .Values.minio.service.consolePort }}"
+          envFrom:
+            - secretRef:
+                name: {{ include "omni.media.secretName" . }}
+          ports:
+            - name: api
+              containerPort: {{ .Values.minio.service.port }}
+            - name: console
+              containerPort: {{ .Values.minio.service.consolePort }}
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.minio.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.minio.persistence.storageClass }}
+        storageClassName: {{ .Values.minio.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.minio.persistence.size | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "omni.minio.fullname" . }}-bootstrap
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio-bootstrap
+  annotations:
+    # Run after the MinIO StatefulSet + Service are applied, on every
+    # install/upgrade. Idempotent, so re-running on upgrade is safe.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.minio.bootstrap.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "omni.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-bucket
+          image: {{ .Values.minio.mc.image | quote }}
+          imagePullPolicy: {{ .Values.minio.mc.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ include "omni.media.secretName" . }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              # Wait for MinIO to accept connections, then create the bucket
+              # idempotently. `mc mb --ignore-existing` is a no-op if the bucket
+              # already exists, so install/upgrade re-runs are safe.
+              until mc alias set omni "http://{{ include "omni.minio.fullname" . }}:{{ .Values.minio.service.port }}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+                echo "waiting for minio to become reachable..."
+                sleep 2
+              done
+              mc mb --ignore-existing "omni/{{ .Values.media.s3.bucket }}"
+              echo "bucket omni/{{ .Values.media.s3.bucket }} is ready"
+              # Provision the scoped app user omni-api consumes (distinct from
+              # root). `mc admin user add` also resets the password if the user
+              # exists, so re-runs converge on the Secret's current value.
+              if [ "$OMNI_MEDIA_S3_ACCESS_KEY" != "$MINIO_ROOT_USER" ]; then
+                mc admin user add omni "$OMNI_MEDIA_S3_ACCESS_KEY" "$OMNI_MEDIA_S3_SECRET_KEY"
+                mc admin policy attach omni readwrite --user "$OMNI_MEDIA_S3_ACCESS_KEY" \
+                  || echo "readwrite policy already attached"
+                echo "app user $OMNI_MEDIA_S3_ACCESS_KEY is ready"
+              fi
+{{- end }}

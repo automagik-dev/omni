@@ -83,9 +83,9 @@ const createInstanceSchema = z.object({
     .nullable()
     .describe('Content types that receive file path (e.g. image, video, document). Default: all except audio'),
   messageDebounceMode: z
-    .enum(['disabled', 'fixed', 'randomized'])
+    .enum(['disabled', 'fixed', 'randomized', 'presence'])
     .default('randomized')
-    .describe('Message debounce mode: disabled, fixed delay, or randomized delay'),
+    .describe('Message debounce mode: disabled, fixed delay, randomized delay, or presence (typing-aware)'),
   messageDebounceMinMs: z
     .number()
     .int()
@@ -106,6 +106,15 @@ const createInstanceSchema = z.object({
     .nullable()
     .default(null)
     .describe('Debounce delay for group chats in milliseconds (null = use messageDebounceMinMs)'),
+  messageDebounceMaxWaitMs: z
+    .number()
+    .int()
+    .min(0)
+    .nullable()
+    .default(null)
+    .describe(
+      'Presence-mode hard cap in milliseconds — flush at firstBuffered + this even under continuous typing (null = no cap)',
+    ),
   messageSplitDelayMode: z
     .enum(['disabled', 'fixed', 'randomized'])
     .default('randomized')
@@ -223,6 +232,14 @@ const createInstanceSchema = z.object({
     .describe(
       'When true, requests targeting this instance MUST carry a verified X-Genie-Signature. Bearer-only requests get 401. Default: false (additive rollout).',
     ),
+  // First-party cross-instance opt-in. Optional + default(false) — existing
+  // instances keep loop-protection (drop) until an operator opts in.
+  allowFirstParty: z
+    .boolean()
+    .default(false)
+    .describe(
+      'When true, this instance processes (does not drop) inbound messages whose sender matches another active instance owner. Lets an "assistant" instance reply to messages from the operator\'s own personal number. Default: false (loop-protection drop).',
+    ),
 });
 
 // Update instance schema - allow null to clear values (only for nullable DB fields)
@@ -271,6 +288,7 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   // Strip the .default(false) from the create-time schema so a PATCH that
   // omits this key doesn't silently flip the stored value back to false.
   requireGenieSignature: z.boolean().optional(),
+  allowFirstParty: z.boolean().optional(),
 });
 
 /**

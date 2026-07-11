@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-sdk",
-  "version": "2.260609.5",
+  "version": "2.260710.3",
   "type": "module",
   "exports": {
     ".": {
@@ -26,7 +26,8 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@omni/core": "workspace:*"
+    "@omni/core": "workspace:*",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "bun-types": "^1.1.42",

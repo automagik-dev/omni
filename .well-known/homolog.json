@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "channel": "homolog",
+  "version": "2.260703.6",
+  "released_at": "2026-07-03T08:15:14Z",
+  "tarball_base": "https://github.com/automagik-dev/omni/releases/download/v2.260703.6",
+  "platforms": ["linux-x64-glibc", "linux-x64-musl", "linux-arm64", "darwin-arm64"]
+}

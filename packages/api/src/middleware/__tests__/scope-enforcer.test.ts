@@ -231,6 +231,63 @@ describe('extractLockTargets — route & body target extraction', () => {
     expect(t.instance).toBeNull();
     expect(t.recipient).toBeNull();
   });
+
+  // ── Precedence: route-derived targets win over the body (scope-bypass guard) ──
+
+  test('path instance wins over a conflicting body.instanceId (no body-injection bypass)', () => {
+    const t = extractLockTargets('PATCH', '/api/v2/instances/real-inst', { instanceId: 'allowlisted-inst' });
+    expect(t.instance).toBe('real-inst');
+  });
+
+  test('path chat wins over a conflicting body.chatId', () => {
+    const t = extractLockTargets('PATCH', '/api/v2/chats/real-chat', { chatId: 'allowlisted-chat' });
+    expect(t.chat).toBe('real-chat');
+  });
+
+  // ── Header-derived targets (x-omni-*) are extracted and rank above the body ──
+
+  test('x-omni-instance / x-omni-chat headers become targets (header-scoped routes)', () => {
+    const t = extractLockTargets('POST', '/api/v2/turns/close', null, {
+      instance: 'hdr-inst',
+      chat: 'hdr-chat',
+    });
+    expect(t.instance).toBe('hdr-inst');
+    expect(t.chat).toBe('hdr-chat');
+  });
+
+  test('header target wins over a conflicting body target', () => {
+    const t = extractLockTargets('POST', '/api/v2/turns/close', { instanceId: 'body-inst' }, { instance: 'hdr-inst' });
+    expect(t.instance).toBe('hdr-inst');
+  });
+
+  test('path target still wins over the header', () => {
+    const t = extractLockTargets('PATCH', '/api/v2/instances/path-inst', null, { instance: 'hdr-inst' });
+    expect(t.instance).toBe('path-inst');
+  });
+
+  // ── GET /media/:instanceId/* embeds the instance in the path (PR #770 LOW-9) ──
+
+  test('GET /media/:instanceId/* — first path segment becomes the instance target', () => {
+    const t = extractLockTargets('GET', '/api/v2/media/inst-9/2026-07/msg-1.ogg', null);
+    expect(t.instance).toBe('inst-9');
+    expect(t.chat).toBeNull();
+    expect(t.recipient).toBeNull();
+  });
+
+  test('POST /media/tts — the verb segment is NOT treated as an instance target', () => {
+    const t = extractLockTargets('POST', '/api/v2/media/tts', { text: 'hello' });
+    expect(t.instance).toBeNull();
+  });
+
+  test('body is still used when neither path nor header supplies the target', () => {
+    const t = extractLockTargets(
+      'POST',
+      '/api/v2/messages/send',
+      { instanceId: 'body-inst', to: 'jid', text: 'x' },
+      {},
+    );
+    expect(t.instance).toBe('body-inst');
+  });
 });
 
 describe('Integration scenarios from wish acceptance criteria', () => {
@@ -276,5 +333,17 @@ describe('Integration scenarios from wish acceptance criteria', () => {
     const r = enforceInstanceAllowlist(key, targets.instance);
     expect(r.allowed).toBe(false);
     expect(r.attempted).toBe('other-inst');
+  });
+
+  test('instance-allowlisted key CAN read its own media and CANNOT read another instance media (LOW-9)', () => {
+    const key = mkKey({ profile: 'personal', instanceAllowlist: ['inst-own'] });
+
+    const own = extractLockTargets('GET', '/api/v2/media/inst-own/2026-07/msg-1.jpg', null);
+    expect(enforceInstanceAllowlist(key, own.instance).allowed).toBe(true);
+
+    const other = extractLockTargets('GET', '/api/v2/media/inst-other/2026-07/msg-2.jpg', null);
+    const denied = enforceInstanceAllowlist(key, other.instance);
+    expect(denied.allowed).toBe(false);
+    expect(denied.attempted).toBe('inst-other');
   });
 });

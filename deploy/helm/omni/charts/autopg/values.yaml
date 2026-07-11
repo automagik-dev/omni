@@ -1,0 +1,205 @@
+# Default values for the autopg chart.
+# -----------------------------------------------------------------------------
+
+image:
+  # Published by the omni repo's image-publish workflow as
+  # ghcr.io/automagik-dev/autopg:v<autopg release> (Chart.appVersion), plus
+  # :v<omni cli version> and :main.
+  repository: ghcr.io/automagik-dev/autopg
+  # Image tag. "" => v<Chart.appVersion>, the autopg release baked into the
+  # published image. The dev overlay swaps in a locally-built image
+  # (repository autopg, tag dev, pullPolicy Never).
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# TCP port the postmaster binds and the Services expose.
+port: 5432
+
+# Log level for `autopg postmaster` (error|warn|info|debug).
+logLevel: info
+
+# -----------------------------------------------------------------------------
+# Authentication
+#
+# The embedded postmaster always runs initdb with the built-in superuser
+# `postgres` and default password `postgres`, and its in-process admin pool
+# HARDCODES that default (bin/postgres-server.js passes no password option;
+# AUTOPG_PG_PASSWORD is ignored on the postmaster path). Rotating the superuser
+# password therefore crash-loops the pod on every recreation, so the provision
+# Job PINS it to the default instead. Apps must connect with their scoped
+# role (below), never the superuser; the Service is ClusterIP-only.
+#
+# App-role passwords are stored ONLY in the chart's Secret and injected via
+# secretKeyRef; they never appear in a ConfigMap or in pod args. Leave empty to
+# auto-generate a stable random value preserved across upgrades (helm lookup).
+# -----------------------------------------------------------------------------
+auth:
+  # Superuser password is pinned to the postmaster default (see above); this
+  # value is kept in the Secret for forward-compat but is NOT applied.
+  superuserPassword: ""
+  # Name of an existing Secret to source passwords from instead of managing one
+  # here. When set, keys must be: superuser-password, and <role>-password for
+  # each provisioned app. Empty => the chart creates and manages the Secret.
+  #
+  # GITOPS NOTE: auto-generated password stability relies on helm `lookup`,
+  # which returns EMPTY under `helm template` / ArgoCD / Flux template
+  # rendering — passwords would regenerate every sync while the database keeps
+  # the old ones (auth failures / CrashLoop). Template-rendering GitOps MUST
+  # set existingSecret to an externally managed Secret (and see
+  # appSecret.enabled below for the DATABASE_URL contract).
+  existingSecret: ""
+
+# -----------------------------------------------------------------------------
+# App connection Secret (the contract the omni umbrella chart consumes).
+#
+# When enabled, the chart publishes Secret `<fullname>-app` holding key
+# DATABASE_URL — a ready postgresql:// URL for the FIRST provisionedApps entry,
+# with the password percent-encoded. Disable only if you assemble/manage the
+# URL yourself (e.g. GitOps with auth.existingSecret rendered without cluster
+# access — the chart fails loudly in that combination and tells you so).
+# -----------------------------------------------------------------------------
+appSecret:
+  enabled: true
+
+# -----------------------------------------------------------------------------
+# Scoped-role provisioning (post-install / post-upgrade hook Job)
+#
+# For each entry the Job idempotently:
+#   1. CREATE ROLE <role> LOGIN PASSWORD <from-secret>   (ALTER if exists)
+#   2. CREATE DATABASE <db> OWNER <role>                 (skipped if exists)
+#   3. ALTER SCHEMA public OWNER TO <role> in <db>       (so <role> can run
+#      migrations: CREATE / ALTER / DROP its own tables)
+#
+# Passwords: set `password` to pin one, or leave empty to auto-generate a stable
+# value stored under Secret key `<role>-password`.
+# -----------------------------------------------------------------------------
+provisionedApps:
+  - db: omni
+    role: omni
+    password: ""
+
+# -----------------------------------------------------------------------------
+# PostgreSQL GUC tuning.
+#
+# IMPORTANT (autopg semantics): autopg ships curated GUC defaults (e.g.
+# max_connections=1000, shared_buffers=128MB) that WIN over anything under
+# `postgres._extra` in settings.json. So operator tuning MUST be set as curated
+# top-level keys — this chart renders `settings.gucs` as top-level `postgres.*`
+# keys, and `listen_addresses` (which has no curated default) under
+# `postgres._extra`. Do not move tuning into extraGucs expecting it to apply.
+# -----------------------------------------------------------------------------
+settings:
+  # listen_addresses MUST be '*' so in-cluster peers can reach the pod over TCP.
+  # Injected via postgres._extra (no curated default shadows it).
+  listenAddresses: "*"
+  # Curated top-level postgres GUCs. Tune to taste / to your resources block.
+  gucs:
+    max_connections: 120
+    shared_buffers: 256MB
+    effective_cache_size: 1GB
+    maintenance_work_mem: 128MB
+    work_mem: 8MB
+    wal_compression: "on"
+  # Escape hatch: additional GUCs emitted under postgres._extra. Only takes
+  # effect for GUCs WITHOUT a curated default (see note above).
+  extraGucs: {}
+
+# -----------------------------------------------------------------------------
+# Host-based auth (pg_hba).
+#
+# autopg's initdb writes a pg_hba.conf that only trusts the local socket and
+# 127.0.0.1/::1 — so even with listen_addresses='*' an in-cluster PEER pod is
+# rejected ("no pg_hba.conf entry for host"). autopg exposes no pg_hba knob, so
+# a container postStart hook appends this rule (via the local trust socket) and
+# reloads. Idempotent; runs before the pod is marked Ready.
+# -----------------------------------------------------------------------------
+hostAuth:
+  enabled: true
+  # Source ranges appended as pg_hba host rules. Defaults to the RFC1918
+  # private ranges — every mainstream CNI's pod/service CIDR falls inside them
+  # while the public internet and IPv6-any stay rejected (the old default was
+  # the pg_hba keyword "all"). Tighten further to your cluster's actual pod
+  # CIDR when known (e.g. ["10.244.0.0/16"]). Auth still requires a valid
+  # password, and the omni umbrella chart layers a NetworkPolicy on top
+  # restricting :5432 to omni-api + the provision Job.
+  cidrs:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+  # scram-sha-256 (recommended) | md5 | password. Must match the server's
+  # password_encryption (PG14+ default is scram-sha-256).
+  method: "scram-sha-256"
+
+# -----------------------------------------------------------------------------
+# Persistence — PVC at /var/lib/autopg/data (PGDATA). The binary cache and
+# settings.json live elsewhere in the image / ConfigMap and are NOT on the PVC.
+# -----------------------------------------------------------------------------
+persistence:
+  enabled: true
+  size: 8Gi
+  # Empty => cluster default StorageClass (OrbStack provides one).
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+
+# StatefulSet PVC retention. Empty {} => omit the field (Kubernetes default
+# Retain/Retain). Self-host overlays can make data-safety explicit with:
+#   persistentVolumeClaimRetentionPolicy: {whenDeleted: Retain, whenScaled: Retain}
+persistentVolumeClaimRetentionPolicy: {}
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 1Gi
+  limits:
+    memory: 4Gi
+
+# -----------------------------------------------------------------------------
+# Probes. pg_isready does not authenticate, so no password is needed. The
+# startupProbe is generous to cover first-boot initdb on a cold PVC.
+# -----------------------------------------------------------------------------
+probes:
+  startup:
+    periodSeconds: 5
+    failureThreshold: 60   # ~5 min for first-boot initdb
+  readiness:
+    periodSeconds: 10
+    failureThreshold: 6
+  liveness:
+    periodSeconds: 20
+    failureThreshold: 6
+
+# Time for a graceful postgres shutdown on pod termination.
+terminationGracePeriodSeconds: 90
+
+# Pod-level security context. fsGroup makes the PVC group-writable by the
+# autopg user (uid/gid 1000) so initdb can create PGDATA.
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  fsGroup: 1000
+
+# Provisioning Job knobs. The Job is a REGULAR resource (not a Helm hook): it
+# is created together with the StatefulSet and runs as soon as postgres accepts
+# connections, so a first `helm install --wait` cannot deadlock on it (hooks
+# only run after all main resources are Ready, but omni-api can't become Ready
+# until the role this Job creates exists). Each revision gets its own Job name
+# (Job specs are immutable) and finished Jobs are garbage-collected via TTL.
+provisionJob:
+  enabled: true
+  backoffLimit: 6
+  # Seconds the Job waits for the server to accept connections before giving up.
+  readyTimeoutSeconds: 300
+  # Seconds a finished provision Job lingers before the TTL controller deletes it.
+  ttlSecondsAfterFinished: 900
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+commonLabels: {}

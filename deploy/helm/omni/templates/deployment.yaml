@@ -1,0 +1,205 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "omni.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  strategy:
+    type: {{ .Values.strategy.type }}
+  selector:
+    # NOTE: spec.selector is immutable on upgrade — omni.apiSelectorLabels
+    # renders the exact label set this Deployment has always used.
+    matchLabels:
+      {{- include "omni.apiSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Roll pods when config/secret content changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "omni.apiSelectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "omni.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if and (include "omni.media.remote" .) .Values.minio.enabled }}
+      # Hard per-pod ordering gate: block omni-api's container until the media
+      # bucket exists. `mc mb --ignore-existing` is idempotent, so this both
+      # creates-if-missing and verifies, and never fails on a pre-existing
+      # bucket. Complements the release-level bootstrap Job in minio.yaml.
+      initContainers:
+        - name: wait-for-media-bucket
+          image: {{ .Values.minio.mc.image | quote }}
+          imagePullPolicy: {{ .Values.minio.mc.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ include "omni.media.secretName" . }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              until mc alias set omni "{{ include "omni.media.s3Endpoint" . }}" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+                echo "waiting for minio to become reachable..."
+                sleep 2
+              done
+              mc mb --ignore-existing "omni/{{ .Values.media.s3.bucket }}"
+              echo "media bucket omni/{{ .Values.media.s3.bucket }} is ready"
+              # Also provision the scoped app user here (idempotent, same as the
+              # bootstrap Job) so the api container never starts before its S3
+              # credential exists — post-install hooks run after pods on a
+              # first `--wait` install, so the Job alone would leave a window.
+              if [ "$OMNI_MEDIA_S3_ACCESS_KEY" != "$MINIO_ROOT_USER" ]; then
+                mc admin user add omni "$OMNI_MEDIA_S3_ACCESS_KEY" "$OMNI_MEDIA_S3_SECRET_KEY"
+                mc admin policy attach omni readwrite --user "$OMNI_MEDIA_S3_ACCESS_KEY" \
+                  || echo "readwrite policy already attached"
+                echo "app user $OMNI_MEDIA_S3_ACCESS_KEY is ready"
+              fi
+      {{- end }}
+      containers:
+        - name: omni-api
+          # image.tag "" → v<Chart.appVersion>, the tag scheme image-publish.yml
+          # actually pushes (v<packages/cli version>).
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "v%s" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          envFrom:
+            # Non-secret config (API_HOST, API_PORT, NATS_URL, OMNI_MEDIA_*, ...)
+            - configMapRef:
+                name: {{ include "omni.fullname" . }}-config
+            {{- if include "omni.mintsSecret" . }}
+            # Assembled DATABASE_URL (Option B) + optional provider keys
+            - secretRef:
+                name: {{ include "omni.secretName" . }}
+            {{- end }}
+            {{- if .Values.secret.existingSecret }}
+            # Extra app secrets provided by the operator
+            - secretRef:
+                name: {{ .Values.secret.existingSecret }}
+            {{- end }}
+          env:
+            {{- with include "omni.databaseSecretName" . }}
+            # --- DATABASE_URL from an external / autopg-published Secret (Option A) ---
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.database.urlKey }}
+            {{- end }}
+            {{- /* Under media.s3.irsa the two secretKeyRef envs are omitted
+            entirely: the pod authenticates to S3 via its ServiceAccount
+            web-identity token (IRSA) instead of static keys. */}}
+            {{- if and (include "omni.media.remote" .) (not .Values.media.s3.irsa) }}
+            # --- S3 creds by reference only (never plaintext in rendered env) ---
+            - name: OMNI_MEDIA_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "omni.media.secretName" . }}
+                  key: {{ .Values.media.s3.accessKeyKey }}
+            - name: OMNI_MEDIA_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "omni.media.secretName" . }}
+                  key: {{ .Values.media.s3.secretKeyKey }}
+            {{- end }}
+            {{- if .Values.database.sslCaConfigMap }}
+            # --- DB TLS verify-full: verify server chain + hostname against
+            # the mounted CA bundle (a bare sslmode=require never does) ---
+            - name: DATABASE_SSL_CA_FILE
+              value: /etc/omni/db-tls/{{ .Values.database.sslCaKey | default "ca-bundle.pem" }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.startup.path }}
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if or .Values.database.sslCaConfigMap .Values.extraVolumeMounts }}
+          volumeMounts:
+            {{- if .Values.database.sslCaConfigMap }}
+            - name: db-ssl-ca
+              mountPath: /etc/omni/db-tls
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+      {{- if or .Values.database.sslCaConfigMap .Values.extraVolumes }}
+      volumes:
+        {{- if .Values.database.sslCaConfigMap }}
+        - name: db-ssl-ca
+          configMap:
+            name: {{ .Values.database.sslCaConfigMap }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.affinity }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else if or .Values.autoscaling.enabled (gt (int .Values.replicaCount) 1) }}
+      # Default soft anti-affinity for the >1-replica case: prefer spreading
+      # api replicas across nodes so a single node failure/drain cannot take
+      # every replica down at once. Override via .Values.affinity.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "omni.apiSelectorLabels" . | nindent 20 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

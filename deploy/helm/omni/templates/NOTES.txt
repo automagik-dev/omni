@@ -1,0 +1,30 @@
+omni {{ .Chart.Version }} deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+omni-api (stateless)
+  Service : {{ include "omni.fullname" . }}:{{ .Values.service.port }}  (container port 8882)
+  Scaling : {{ if .Values.autoscaling.enabled }}HPA {{ .Values.autoscaling.minReplicas }}–{{ .Values.autoscaling.maxReplicas }} (target CPU {{ .Values.autoscaling.targetCPUUtilizationPercentage }}%){{ else }}{{ .Values.replicaCount }} replica(s), HPA off{{ end }}
+  Health  : GET /health
+
+Wiring
+  DATABASE_URL : {{ with include "omni.databaseSecretName" . }}secret {{ . }}[{{ $.Values.database.urlKey }}]{{ else }}assembled → db "{{ .Values.database.name }}" @ {{ default "<UNSET database.host>" .Values.database.host }}:{{ .Values.database.port }} as "{{ .Values.database.user }}"{{ end }}
+  NATS_URL     : {{ include "omni.natsUrl" . }}
+  NATS bundled : {{ .Values.nats.enabled }}
+  autopg dep   : {{ if .Values.autopg.enabled }}enabled{{ else }}disabled (external Postgres){{ end }}
+
+Stateful pods are autopg + nats only; omni-api keeps WhatsApp/Baileys session
+state in Postgres, so it needs no PVC and scales horizontally.
+
+Check it:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "omni.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "omni.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl -s localhost:{{ .Values.service.port }}/health | jq
+
+{{- if not (include "omni.databaseSecretName" .) }}
+{{- if not .Values.database.host }}
+
+WARNING: no DATABASE_URL source — database.host and database.existingSecret are
+         unset and the bundled autopg is disabled. Set database.host to your
+         Postgres Service, or database.existingSecret to a Secret holding a
+         full DATABASE_URL, or enable autopg.
+{{- end }}
+{{- end }}

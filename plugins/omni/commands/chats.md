@@ -1,5 +1,5 @@
 ---
-description: Chat browser — list, filter, archive, and view messages (compact JSON + jq by default)
+description: Chat browser — list, search, and read conversations as compact JSON. Use when asked what is happening in chats, what is unread, or to pull messages from a conversation.
 arguments:
   - name: args
     description: Free-form search query, chat-id, or explicit subcommand (list/messages/archive/participants...)
@@ -8,78 +8,29 @@ arguments:
 
 # /omni:chats — Chat Browser
 
-Browse and manage conversations — list, filter, archive, pin, mute, and view participants.
+Never render table output — rows pad past 1000 chars. Always `--json | jq -r` with a compact selector, and when `$ARGUMENTS` has content, auto-run the best-matching subcommand instead of printing usage.
 
-**Defaults you must honor as an agent:**
+## Dispatch $ARGUMENTS
 
-- **Never use table output.** Table rows pad to ~1000+ chars and blow the token budget.
-- **Always use `--json | jq -r`** with a compact selector. Select only the fields needed.
-- **Auto-execute** — when `$ARGUMENTS` contains content, run the best-matching subcommand directly instead of printing usage.
+- Starts with a subcommand (`list`, `messages`, `archive`, `participants`, `pin`, `mute`, `read`, `label`, ...) — run `omni chats $ARGUMENTS --json`, select only needed fields.
+- UUID or JID (`…@s.whatsapp.net` / `…@g.us` / `…@lid`) — chat-id: run the messages template.
+- Anything else — search: run the list template. Empty — show the templates and wait.
 
----
-
-## How to dispatch `$ARGUMENTS`
-
-| Input shape | What to run |
-|-------------|-------------|
-| Empty | Print the one-liners below and wait for user input. |
-| Starts with `list`/`messages`/`archive`/`participants`/`create`/`update`/`delete`/`pin`/`mute`/`read`/`label`/`hide`/`disappearing` | Treat as explicit subcommand: run `omni chats $ARGUMENTS --json` and pipe through a `jq` selector that matches that subcommand. |
-| UUID (36 chars with dashes) or JID (`…@s.whatsapp.net` / `…@g.us` / `…@lid`) | Treat as a chat-id and run the `messages` template below. |
-| Anything else | Treat as a `list --search` query: run the search template below. |
-
----
-
-## Templates (copy these verbatim, substitute `$ARGUMENTS`)
-
-### Search / list (default for free-form text)
+## Templates (verified)
 
 ```bash
+# Search / list — flags: --instance, --unread, --attention, --type dm|group|channel, --limit
 omni chats list --search "$ARGUMENTS" --json \
   | jq -r '.[] | "\(.id) \(.name // .externalId) | unread:\(.unreadCount // 0) | \((.lastMessagePreview // "") | .[:80])"'
-```
 
-Useful flag additions:
-
-- `--instance <id>` — scope to one channel instance
-- `--unread` — only chats with unread messages
-- `--attention` — unread + pending + follow-up
-- `--type dm|group|channel` — filter chat type
-- `--limit <n>` — cap result count
-
-### Messages (when `$ARGUMENTS` is a chat-id)
-
-```bash
+# Messages — for noisy groups add --search "<kw>" or --audio-only / --images-only / --docs-only
 omni chats messages "$ARGUMENTS" --since 7d --json \
   | jq -r '.[] | "\(.platformTimestamp[11:16]) \(.senderDisplayName // "?"): \((.textContent // "[media]") | .[:200])"'
 ```
 
-For noisy group chats, add `--search "<keyword>"` or `--audio-only` / `--images-only` / `--docs-only`.
+## Caveats
 
-### Archive / participants / read / pin / mute
+- Piped `--json` can truncate near 64 KB (issue #402) — on jq "Unfinished string at EOF", write to a file first, then jq the file.
+- Unnamed groups: fall back to `.externalId`. LID chats: prefer `.canonicalId`.
 
-Pass `$ARGUMENTS` through and pipe JSON when the subcommand returns structured data:
-
-```bash
-omni chats participants <chat-id> --json \
-  | jq -r '.[] | "\(.userId) \(.name // "-") [\(.role // "member")]"'
-```
-
-Mutations (`archive`, `delete`, `read`, `pin`, `mute`, `label`) typically return a terse status — run them with `--json` and log the result line.
-
----
-
-## Output-shape cheat sheet
-
-`chats list` JSON items expose: `id`, `name`, `externalId`, `unreadCount`, `lastMessageAt`, `lastMessagePreview`, `messageCount`, `isGroup`, `instanceId`, `chatType`, `canonicalId`.
-
-`chats messages` JSON items expose: `id`, `platformTimestamp`, `textContent`, `senderDisplayName`, `senderPlatformUserId`, `hasMedia`, `mediaMimeType`, `transcription`, `imageDescription`, `videoDescription`, `documentExtraction`, `isFromMe`.
-
-Select only what you need; skip the rest.
-
----
-
-## Known caveats
-
-- **Large message streams**: `omni chats messages` JSON output has been observed to truncate at ~64 KB when piped (see issue #402). If your `jq` errors with "Unfinished string at EOF", redirect to a file first: `omni … --json > /tmp/out.json && jq … /tmp/out.json`.
-- **Groups without names**: fall back to `.externalId` (ends in `@g.us`).
-- **LID JIDs**: use `.canonicalId` when present — it resolves the phone JID for anonymized linked-identity chats.
+Depth: omni-agent skill (chat/message operations) · omni-ops skill § Instances (contacts, groups, sync) · § Batch (backfill missing transcriptions).

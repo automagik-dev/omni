@@ -1,0 +1,20 @@
+apiVersion: v2
+name: autopg
+description: >-
+  Embedded PostgreSQL 18 (autopg) as a single-replica StatefulSet — self-contained,
+  offline-boot, with scoped-role provisioning for consuming apps.
+type: application
+version: 0.1.0
+# The autopg release the default image tag tracks. Keep in sync with
+# values.yaml image.tag and deploy/Dockerfile ARG AUTOPG_VERSION.
+appVersion: "3.0.7"
+keywords:
+  - postgresql
+  - postgres
+  - autopg
+  - database
+home: https://github.com/automagik-dev/autopg
+sources:
+  - https://github.com/automagik-dev/autopg
+maintainers:
+  - name: automagik-dev

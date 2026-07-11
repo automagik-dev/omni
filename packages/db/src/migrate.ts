@@ -19,6 +19,13 @@ import type { Database } from './client';
 
 const log = createLogger('db:migrate');
 
+/**
+ * Advisory lock key serializing migrate-on-boot across concurrent processes
+ * (e.g. multiple k8s replicas booting at once). Arbitrary constant — must be
+ * unique among any advisory locks this application ever takes.
+ */
+const MIGRATION_LOCK_ID = 772_005_770;
+
 function countMigrationFiles(migrationsFolder: string): number {
   const journalPath = path.join(migrationsFolder, 'meta', '_journal.json');
   const journal = JSON.parse(fs.readFileSync(journalPath, 'utf-8'));
@@ -28,6 +35,15 @@ function countMigrationFiles(migrationsFolder: string): number {
 /**
  * Apply pending migrations and validate that all files are applied.
  *
+ * The whole run is serialized under a Postgres advisory lock: the drizzle
+ * postgres-js migrator takes no lock of its own, so two pods booting
+ * concurrently would race `CREATE ... IF NOT EXISTS` on drizzle's bookkeeping
+ * catalog (not concurrency-safe → unique violations / transient CrashLoop).
+ * `pg_advisory_xact_lock` is acquired inside a wrapper transaction — a single
+ * dedicated connection holds it and it is released automatically on
+ * commit/rollback (even if the process dies mid-migration), so concurrent
+ * boots queue up and then find the work already done.
+ *
  * @param db - Drizzle database instance
  * @param migrationsFolder - Path to the drizzle migrations folder
  * @throws if the applied count in DB is less than the number of migration files
@@ -35,21 +51,27 @@ function countMigrationFiles(migrationsFolder: string): number {
 export async function applyMigrations(db: Database, migrationsFolder: string): Promise<void> {
   const fileCount = countMigrationFiles(migrationsFolder);
 
-  await migrate(db, { migrationsFolder });
+  await db.transaction(async (tx) => {
+    log.info('Acquiring migration advisory lock', { lockId: MIGRATION_LOCK_ID });
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${MIGRATION_LOCK_ID})`);
+    log.info('Migration advisory lock acquired');
 
-  // Guard: Drizzle silently skips migrations whose journal 'when' timestamp
-  // is earlier than the last applied migration's created_at.
-  // Detect this by comparing file count against applied row count.
-  const result = await db.execute(sql`SELECT count(*) AS count FROM drizzle.__drizzle_migrations`);
-  const appliedCount = Number((result[0] as { count: string }).count);
+    await migrate(db, { migrationsFolder });
 
-  if (appliedCount < fileCount) {
-    throw new Error(
-      `Migration count mismatch: ${appliedCount} applied, ${fileCount} files. ${fileCount - appliedCount} migration(s) were silently skipped. Ensure _journal.json "when" timestamps are strictly increasing.`,
-    );
-  }
+    // Guard: Drizzle silently skips migrations whose journal 'when' timestamp
+    // is earlier than the last applied migration's created_at.
+    // Detect this by comparing file count against applied row count.
+    const result = await db.execute(sql`SELECT count(*) AS count FROM drizzle.__drizzle_migrations`);
+    const appliedCount = Number((result[0] as { count: string }).count);
 
-  log.info('All migrations applied', { appliedCount, fileCount });
+    if (appliedCount < fileCount) {
+      throw new Error(
+        `Migration count mismatch: ${appliedCount} applied, ${fileCount} files. ${fileCount - appliedCount} migration(s) were silently skipped. Ensure _journal.json "when" timestamps are strictly increasing.`,
+      );
+    }
+
+    log.info('All migrations applied', { appliedCount, fileCount });
+  });
 }
 
 // Script entry point (bun run src/migrate.ts)

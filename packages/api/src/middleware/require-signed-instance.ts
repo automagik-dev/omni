@@ -33,7 +33,7 @@ import { createLogger } from '@omni/core';
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import type { AppVariables } from '../types';
-import { extractLockTargets } from './scope-enforcer';
+import { extractLockTargets, readHeaderTargets } from './scope-enforcer';
 
 const log = createLogger('api:require-signed-instance');
 
@@ -92,7 +92,7 @@ export const requireSignedInstanceMiddleware = createMiddleware<{ Variables: App
   const path = c.req.path;
   const body = await safeReadJsonBody(c);
 
-  const targets = extractLockTargets(method, path, body);
+  const targets = extractLockTargets(method, path, body, readHeaderTargets(c));
   if (!targets.instance) {
     // No instance target → nothing to enforce.
     return next();

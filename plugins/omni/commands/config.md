@@ -1,24 +1,25 @@
 ---
-description: Interactive config setup — API key, base URL, default instance
+description: Omni CLI setup — API key, base URL, default instance. Use for first-run configuration, auth failures (401 / "not configured"), or switching the default instance.
 arguments:
   - name: args
     description: Config operation (e.g., set defaultInstance <id>, get apiUrl)
     required: false
 ---
 
-# /omni:config — Configuration
+# /omni:config — CLI Configuration
 
-Set up the Omni CLI configuration — API key, base URL, default instance, and providers.
+Use for first-run setup, credential problems, or changing CLI defaults.
 
 ## Usage
 
 $ARGUMENTS
 
-## Examples
+## Examples (verified)
 
 ```bash
-omni auth login --api-key sk_xxx --api-url http://localhost:8882
-omni config set defaultInstance my-whatsapp
-omni config list
+omni auth login --api-key <key> --api-url http://localhost:8882
+omni config set defaultInstance <id>
 omni status
 ```
+
+API keys, server settings, logs, dead letters, auth recovery: omni-ops skill § Config.

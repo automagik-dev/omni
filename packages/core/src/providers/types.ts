@@ -523,6 +523,14 @@ export interface AgentTriggerResult {
       inputTokens?: number;
       outputTokens?: number;
     };
+    /**
+     * True when the response text was replaced by the customer-safe error
+     * fallback (a provider/billing/secret error was blocked — see
+     * `toSafeCustomerFallback`). The dispatcher uses this to trigger a human
+     * handoff on channels that support it (Gupshup) instead of forwarding the
+     * generic fallback message.
+     */
+    customerErrorBlocked?: boolean;
   };
 }
 

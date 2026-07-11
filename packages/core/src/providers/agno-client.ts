@@ -21,7 +21,9 @@ import {
   type StreamChunk,
 } from './types';
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+// #738 — aligned to the 600s agent-dispatch default so a caller that omits an
+// explicit timeout gets the same generous budget as the rest of the pipeline.
+const DEFAULT_TIMEOUT_MS = 600_000;
 
 export class AgnoClient implements IAgentClient {
   private readonly baseUrl: string;

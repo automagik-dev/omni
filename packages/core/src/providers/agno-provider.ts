@@ -6,6 +6,7 @@
  */
 
 import { createLogger } from '../logger';
+import { resolveSafeProviderErrorMessage, toSafeCustomerFallback } from './customer-safe-errors';
 import { buildProviderRequestContext } from './execution-context';
 import { createTraceContextFromTraceId } from './trace-context';
 import type {
@@ -70,14 +71,25 @@ export class AgnoAgentProvider implements IAgentProvider {
     // Call the provider — client routes internally by agentType
     const response = await this.client.run(request);
 
+    const customerContent = toSafeCustomerFallback(response.content);
+    const customerErrorBlocked = customerContent !== response.content;
+
+    if (customerErrorBlocked) {
+      log.error('Blocked provider error from customer-facing Agno response', {
+        agentId: this.config.agentId,
+        runId: response.runId,
+        traceId: context.traceId,
+      });
+    }
+
     // Split response if enabled
     const parts =
       this.config.enableAutoSplit !== false
-        ? response.content
+        ? customerContent
             .split('\n\n')
             .map((p) => p.trim())
             .filter(Boolean)
-        : [response.content.trim()].filter(Boolean);
+        : [customerContent.trim()].filter(Boolean);
 
     const durationMs = Date.now() - startTime;
 
@@ -101,6 +113,7 @@ export class AgnoAgentProvider implements IAgentProvider {
               outputTokens: response.metrics.outputTokens,
             }
           : undefined,
+        customerErrorBlocked,
       },
     };
   }
@@ -125,11 +138,21 @@ export class AgnoAgentProvider implements IAgentProvider {
     try {
       for await (const chunk of this.client.stream(request)) {
         if (chunk.content) {
-          yield { phase: 'content', content: chunk.content };
+          const safeContent = toSafeCustomerFallback(chunk.content);
+          if (safeContent !== chunk.content) {
+            log.error('Blocked provider error from customer-facing Agno stream chunk', {
+              agentId: this.config.agentId,
+              traceId: context.traceId,
+            });
+            yield { phase: 'content', content: safeContent };
+            continue;
+          }
+          yield { phase: 'content', content: safeContent };
         }
 
         if (chunk.isComplete) {
-          yield { phase: 'final', content: chunk.fullContent ?? chunk.content ?? '' };
+          const finalContent = chunk.fullContent ?? chunk.content ?? '';
+          yield { phase: 'final', content: toSafeCustomerFallback(finalContent) };
         }
       }
     } catch (error) {
@@ -139,7 +162,7 @@ export class AgnoAgentProvider implements IAgentProvider {
         traceId: context.traceId,
         error: message,
       });
-      yield { phase: 'error', error: message };
+      yield { phase: 'error', error: resolveSafeProviderErrorMessage() };
     }
   }
 

@@ -173,7 +173,11 @@ export interface EventBusConfig {
 
   /** Reconnect configuration */
   reconnect?: {
-    /** Maximum number of reconnect attempts (default: 10) */
+    /**
+     * Maximum number of initial-connect attempts (default: 10).
+     * Once established, the transport reconnects indefinitely so a NATS
+     * server restart never permanently kills the publisher.
+     */
     maxRetries: number;
     /** Initial delay between retries in ms (default: 1000) */
     delayMs: number;

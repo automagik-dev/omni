@@ -79,14 +79,28 @@ export const SendPresenceSchema = z.object({
   instanceId: z.string().uuid().openapi({ description: 'Instance ID to send from' }),
   to: z.string().min(1).openapi({ description: 'Chat ID to show presence in' }),
   type: z.enum(['typing', 'recording', 'paused']).openapi({ description: 'Presence type' }),
+  threadId: z
+    .string()
+    .optional()
+    .openapi({ description: 'Thread timestamp/id for thread-scoped presence surfaces such as Slack AI Assistant' }),
+  status: z
+    .string()
+    .min(1)
+    .max(100)
+    .optional()
+    .openapi({ description: 'Custom status text for channels that support text status, such as Slack AI Assistant' }),
+  loadingMessages: z
+    .array(z.string().min(1).max(100))
+    .max(10)
+    .optional()
+    .openapi({ description: 'Rotating loading messages for channels that support them, such as Slack AI Assistant' }),
   duration: z
     .number()
     .int()
     .min(0)
     .max(30000)
     .optional()
-    .default(5000)
-    .openapi({ description: 'Duration in ms before auto-pause (default 5000, 0 = until paused)' }),
+    .openapi({ description: 'Duration in ms before auto-pause; omit for channel default, 0 = until paused' }),
 });
 
 // Presence response
@@ -95,6 +109,15 @@ export const PresenceResponseSchema = z.object({
   chatId: z.string().openapi({ description: 'Chat ID where presence was sent' }),
   type: z.string().openapi({ description: 'Presence type sent' }),
   duration: z.number().openapi({ description: 'Duration in ms' }),
+  threadId: z.string().optional().openapi({ description: 'Thread timestamp/id used by the presence renderer' }),
+  delivered: z.boolean().optional().openapi({ description: 'Whether the channel reported the status as delivered' }),
+  method: z.string().optional().openapi({ description: 'Channel-specific presence method used' }),
+  reason: z.string().optional().openapi({ description: 'Reason when the channel no-opped or failed best-effort' }),
+  status: z.string().optional().openapi({ description: 'Channel-specific status text sent' }),
+  loadingMessages: z
+    .array(z.string())
+    .optional()
+    .openapi({ description: 'Channel-specific rotating loading messages sent' }),
 });
 
 // Mark message read request
@@ -293,7 +316,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
     tags: ['Messages', 'Presence'],
     summary: 'Send presence indicator',
     description:
-      'Send typing/recording indicator in a chat. Auto-pauses after duration. WhatsApp supports typing, recording, paused. Discord only supports typing.',
+      'Send typing/recording indicator in a chat. WhatsApp supports typing, recording, paused. Discord supports typing. Slack supports AI Assistant thread status via threadId or the active thread cache; omit duration to keep Slack status until reply cleanup or Slack timeout.',
     request: { body: { content: { 'application/json': { schema: SendPresenceSchema } } } },
     responses: {
       200: {

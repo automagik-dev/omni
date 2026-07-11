@@ -134,14 +134,20 @@ export class AudioProcessor extends BaseProcessor {
             getNormalizedAudio,
           ),
         () => this.transcribeWithOpenAiTranscriptions(language, options, OPENAI_TRANSCRIBE_MODEL, getNormalizedAudio),
-        () => this.transcribeWithGemini(language, options, GEMINI_AUDIO_MODEL, getNormalizedAudio),
+        () => this.transcribeWithGemini(language, options, this.resolveGeminiAudioModel(undefined), getNormalizedAudio),
         () => this.transcribeWithGroq(language, getNormalizedAudio),
       ];
     }
 
     if (provider === 'gemini') {
       return [
-        () => this.transcribeWithGemini(language, options, preferredModel ?? GEMINI_AUDIO_MODEL, getNormalizedAudio),
+        () =>
+          this.transcribeWithGemini(
+            language,
+            options,
+            this.resolveGeminiAudioModel(options?.model),
+            getNormalizedAudio,
+          ),
         () => this.transcribeWithOpenAiAudioChat(language, options, OPENAI_AUDIO_CHAT_MODEL, getNormalizedAudio),
         () => this.transcribeWithGroq(language, getNormalizedAudio),
       ];
@@ -157,6 +163,19 @@ export class AudioProcessor extends BaseProcessor {
           getNormalizedAudio,
         ),
     ];
+  }
+
+  /**
+   * Resolve the model for a Gemini transcription attempt.
+   *
+   * `config.audioModel` is the OpenAI-chat model and must never leak into Gemini
+   * — that leak made WhatsApp voice notes fail as `provider:gemini model:gpt-audio-mini`.
+   * A per-call override is honored only when it targets Gemini; otherwise fall back
+   * to the configured Gemini model, then the built-in default.
+   */
+  private resolveGeminiAudioModel(optionModel: string | undefined): string {
+    if (optionModel?.startsWith('gemini')) return optionModel;
+    return this.config.geminiAudioModel ?? GEMINI_AUDIO_MODEL;
   }
 
   private async transcribeWithOpenAiAudioChat(

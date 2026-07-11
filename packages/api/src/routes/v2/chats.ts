@@ -1050,8 +1050,13 @@ chatsRoutes.post('/clear-session', async (c) => {
 
       const isAgentPaused = (dbChat.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
       if (isAgentPaused) {
+        // Merge — a bare replace would drop unrelated settings keys.
         await services.chats.update(dbChat.id, {
-          settings: { agentPaused: false, agentResumedAt: new Date().toISOString() },
+          settings: {
+            ...((dbChat.settings as Record<string, unknown>) ?? {}),
+            agentPaused: false,
+            agentResumedAt: new Date().toISOString(),
+          },
         });
       }
     }

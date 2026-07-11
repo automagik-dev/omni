@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  # Headless Service backing the StatefulSet — gives the pod a stable DNS name
+  # (<pod>.<release>-autopg-headless). Also serves as the StatefulSet
+  # serviceName. Not the connection endpoint for clients — use the ClusterIP one.
+  name: {{ include "autopg.headlessServiceName" . }}
+  labels:
+    {{- include "autopg.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: postgres
+      port: {{ .Values.port }}
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "autopg.selectorLabels" . | nindent 4 }}

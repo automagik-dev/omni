@@ -539,7 +539,7 @@ export interface paths {
         put?: never;
         /**
          * Send presence indicator
-         * @description Send typing/recording indicator in a chat. Auto-pauses after duration. WhatsApp supports typing, recording, paused. Discord only supports typing.
+         * @description Send typing/recording indicator in a chat. WhatsApp supports typing, recording, paused. Discord supports typing. Slack supports AI Assistant thread status via threadId or the active thread cache; omit duration to keep Slack status until reply cleanup or Slack timeout.
          */
         post: operations["sendPresence"];
         delete?: never;
@@ -2832,11 +2832,14 @@ export interface components {
              * @enum {string}
              */
             type: "typing" | "recording" | "paused";
-            /**
-             * @description Duration in ms before auto-pause (default 5000, 0 = until paused)
-             * @default 5000
-             */
-            duration: number;
+            /** @description Thread timestamp/id for thread-scoped presence surfaces such as Slack AI Assistant */
+            threadId?: string;
+            /** @description Custom status text for channels that support text status, such as Slack AI Assistant */
+            status?: string;
+            /** @description Rotating loading messages for channels that support them, such as Slack AI Assistant */
+            loadingMessages?: string[];
+            /** @description Duration in ms before auto-pause; omit for channel default, 0 = until paused */
+            duration?: number;
         };
         PresenceResponse: {
             /**
@@ -2850,6 +2853,18 @@ export interface components {
             type: string;
             /** @description Duration in ms */
             duration: number;
+            /** @description Thread timestamp/id used by the presence renderer */
+            threadId?: string;
+            /** @description Whether the channel reported the status as delivered */
+            delivered?: boolean;
+            /** @description Channel-specific presence method used */
+            method?: string;
+            /** @description Reason when the channel no-opped or failed best-effort */
+            reason?: string;
+            /** @description Channel-specific status text sent */
+            status?: string;
+            /** @description Channel-specific rotating loading messages sent */
+            loadingMessages?: string[];
         };
         MarkMessageReadRequest: {
             /**
@@ -3775,7 +3790,7 @@ export interface components {
              * @description Debounce mode override
              * @enum {string|null}
              */
-            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+            messageDebounceMode: "disabled" | "fixed" | "randomized" | "presence" | null;
             /** @description Debounce min delay (ms) override */
             messageDebounceMinMs: number | null;
             /** @description Debounce max delay (ms) override */
@@ -3784,6 +3799,8 @@ export interface components {
             messageDebounceGroupMs: number | null;
             /** @description Restart debounce on typing override */
             messageDebounceRestartOnTyping: boolean | null;
+            /** @description Presence-mode hard cap (ms) override; null = no cap */
+            messageDebounceMaxWaitMs: number | null;
             /**
              * @description Split delay mode override
              * @enum {string|null}
@@ -3893,7 +3910,7 @@ export interface components {
              * @description Debounce mode
              * @enum {string}
              */
-            messageDebounceMode?: "disabled" | "fixed" | "randomized";
+            messageDebounceMode?: "disabled" | "fixed" | "randomized" | "presence";
             /** @description Debounce min delay (ms) */
             messageDebounceMinMs?: number;
             /** @description Debounce max delay (ms) */
@@ -3902,6 +3919,8 @@ export interface components {
             messageDebounceGroupMs?: number;
             /** @description Restart debounce on typing */
             messageDebounceRestartOnTyping?: boolean;
+            /** @description Presence-mode hard cap (ms); null = no cap */
+            messageDebounceMaxWaitMs?: number;
             /**
              * @description Split delay mode
              * @enum {string}
@@ -3992,7 +4011,7 @@ export interface components {
              * @description Debounce mode
              * @enum {string|null}
              */
-            messageDebounceMode?: "disabled" | "fixed" | "randomized" | null;
+            messageDebounceMode?: "disabled" | "fixed" | "randomized" | "presence" | null;
             /** @description Debounce min delay (ms) */
             messageDebounceMinMs?: number | null;
             /** @description Debounce max delay (ms) */
@@ -4001,6 +4020,8 @@ export interface components {
             messageDebounceGroupMs?: number | null;
             /** @description Restart debounce on typing */
             messageDebounceRestartOnTyping?: boolean | null;
+            /** @description Presence-mode hard cap (ms); null = no cap */
+            messageDebounceMaxWaitMs?: number | null;
             /**
              * @description Split delay mode
              * @enum {string|null}
@@ -7643,10 +7664,13 @@ export interface operations {
                      * @enum {string}
                      */
                     type: "typing" | "recording" | "paused";
-                    /**
-                     * @description Duration in ms before auto-pause (default 5000, 0 = until paused)
-                     * @default 5000
-                     */
+                    /** @description Thread timestamp/id for thread-scoped presence surfaces such as Slack AI Assistant */
+                    threadId?: string;
+                    /** @description Custom status text for channels that support text status, such as Slack AI Assistant */
+                    status?: string;
+                    /** @description Rotating loading messages for channels that support them, such as Slack AI Assistant */
+                    loadingMessages?: string[];
+                    /** @description Duration in ms before auto-pause; omit for channel default, 0 = until paused */
                     duration?: number;
                 };
             };
@@ -7672,6 +7696,18 @@ export interface operations {
                             type: string;
                             /** @description Duration in ms */
                             duration: number;
+                            /** @description Thread timestamp/id used by the presence renderer */
+                            threadId?: string;
+                            /** @description Whether the channel reported the status as delivered */
+                            delivered?: boolean;
+                            /** @description Channel-specific presence method used */
+                            method?: string;
+                            /** @description Reason when the channel no-opped or failed best-effort */
+                            reason?: string;
+                            /** @description Channel-specific status text sent */
+                            status?: string;
+                            /** @description Channel-specific rotating loading messages sent */
+                            loadingMessages?: string[];
                         };
                     };
                 };
@@ -11542,7 +11578,7 @@ export interface operations {
                              * @description Debounce mode override
                              * @enum {string|null}
                              */
-                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | "presence" | null;
                             /** @description Debounce min delay (ms) override */
                             messageDebounceMinMs: number | null;
                             /** @description Debounce max delay (ms) override */
@@ -11551,6 +11587,8 @@ export interface operations {
                             messageDebounceGroupMs: number | null;
                             /** @description Restart debounce on typing override */
                             messageDebounceRestartOnTyping: boolean | null;
+                            /** @description Presence-mode hard cap (ms) override; null = no cap */
+                            messageDebounceMaxWaitMs: number | null;
                             /**
                              * @description Split delay mode override
                              * @enum {string|null}
@@ -11697,7 +11735,7 @@ export interface operations {
                      * @description Debounce mode
                      * @enum {string}
                      */
-                    messageDebounceMode?: "disabled" | "fixed" | "randomized";
+                    messageDebounceMode?: "disabled" | "fixed" | "randomized" | "presence";
                     /** @description Debounce min delay (ms) */
                     messageDebounceMinMs?: number;
                     /** @description Debounce max delay (ms) */
@@ -11706,6 +11744,8 @@ export interface operations {
                     messageDebounceGroupMs?: number;
                     /** @description Restart debounce on typing */
                     messageDebounceRestartOnTyping?: boolean;
+                    /** @description Presence-mode hard cap (ms); null = no cap */
+                    messageDebounceMaxWaitMs?: number;
                     /**
                      * @description Split delay mode
                      * @enum {string}
@@ -11831,7 +11871,7 @@ export interface operations {
                              * @description Debounce mode override
                              * @enum {string|null}
                              */
-                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | "presence" | null;
                             /** @description Debounce min delay (ms) override */
                             messageDebounceMinMs: number | null;
                             /** @description Debounce max delay (ms) override */
@@ -11840,6 +11880,8 @@ export interface operations {
                             messageDebounceGroupMs: number | null;
                             /** @description Restart debounce on typing override */
                             messageDebounceRestartOnTyping: boolean | null;
+                            /** @description Presence-mode hard cap (ms) override; null = no cap */
+                            messageDebounceMaxWaitMs: number | null;
                             /**
                              * @description Split delay mode override
                              * @enum {string|null}
@@ -12046,7 +12088,7 @@ export interface operations {
                              * @description Debounce mode override
                              * @enum {string|null}
                              */
-                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | "presence" | null;
                             /** @description Debounce min delay (ms) override */
                             messageDebounceMinMs: number | null;
                             /** @description Debounce max delay (ms) override */
@@ -12055,6 +12097,8 @@ export interface operations {
                             messageDebounceGroupMs: number | null;
                             /** @description Restart debounce on typing override */
                             messageDebounceRestartOnTyping: boolean | null;
+                            /** @description Presence-mode hard cap (ms) override; null = no cap */
+                            messageDebounceMaxWaitMs: number | null;
                             /**
                              * @description Split delay mode override
                              * @enum {string|null}
@@ -12275,7 +12319,7 @@ export interface operations {
                      * @description Debounce mode
                      * @enum {string|null}
                      */
-                    messageDebounceMode?: "disabled" | "fixed" | "randomized" | null;
+                    messageDebounceMode?: "disabled" | "fixed" | "randomized" | "presence" | null;
                     /** @description Debounce min delay (ms) */
                     messageDebounceMinMs?: number | null;
                     /** @description Debounce max delay (ms) */
@@ -12284,6 +12328,8 @@ export interface operations {
                     messageDebounceGroupMs?: number | null;
                     /** @description Restart debounce on typing */
                     messageDebounceRestartOnTyping?: boolean | null;
+                    /** @description Presence-mode hard cap (ms); null = no cap */
+                    messageDebounceMaxWaitMs?: number | null;
                     /**
                      * @description Split delay mode
                      * @enum {string|null}
@@ -12403,7 +12449,7 @@ export interface operations {
                              * @description Debounce mode override
                              * @enum {string|null}
                              */
-                            messageDebounceMode: "disabled" | "fixed" | "randomized" | null;
+                            messageDebounceMode: "disabled" | "fixed" | "randomized" | "presence" | null;
                             /** @description Debounce min delay (ms) override */
                             messageDebounceMinMs: number | null;
                             /** @description Debounce max delay (ms) override */
@@ -12412,6 +12458,8 @@ export interface operations {
                             messageDebounceGroupMs: number | null;
                             /** @description Restart debounce on typing override */
                             messageDebounceRestartOnTyping: boolean | null;
+                            /** @description Presence-mode hard cap (ms) override; null = no cap */
+                            messageDebounceMaxWaitMs: number | null;
                             /**
                              * @description Split delay mode override
                              * @enum {string|null}

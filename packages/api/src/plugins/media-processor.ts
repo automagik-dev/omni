@@ -16,12 +16,12 @@
  * @see media-processing-realtime wish
  */
 
-import { join } from 'node:path';
 import type { ChannelType, EventBus, MessageReceivedPayload } from '@omni/core';
 import { createLogger, isValidUuid } from '@omni/core';
 import type { Database } from '@omni/db';
 import { mediaContent, messages, omniEvents } from '@omni/db';
 import {
+  GEMINI_AUDIO_MODEL,
   type MediaProcessingService,
   createMediaProcessingService,
   getMediaHealthTracker,
@@ -130,8 +130,11 @@ interface MediaProcessorContext {
  */
 interface MediaResolution {
   messageId: string;
+  /**
+   * Stored reference recorded on the message row. In local mode this is a path
+   * relative to the media base dir; in remote mode it is the S3 object key.
+   */
   filePath: string;
-  fullPath: string;
 }
 
 /**
@@ -252,7 +255,6 @@ async function resolveMediaPath(
   return {
     messageId: message.id,
     filePath,
-    fullPath: join(ctx.mediaStorage.getBasePath(), filePath),
   };
 }
 
@@ -376,13 +378,23 @@ async function processMessageMedia(
   );
   if (!media) return;
 
-  log.info('Processing media', { messageId: media.messageId, mimeType, filePath: media.fullPath });
+  // Obtain a readable local path for the bytes. In remote mode this fetches the
+  // S3 object into a temp file; in local mode it resolves the on-disk path.
+  const processable = await ctx.mediaStorage.materializeForProcessing(media.filePath);
 
-  const result = await ctx.mediaService.process(media.fullPath, mimeType, {
-    language: ctx.defaultLanguage,
-    caption: content.text,
-    prompt: getPromptOverride(ctx, content.type),
-  });
+  log.info('Processing media', { messageId: media.messageId, mimeType, filePath: processable.path });
+
+  let result: Awaited<ReturnType<MediaProcessingService['process']>>;
+  try {
+    result = await ctx.mediaService.process(processable.path, mimeType, {
+      language: ctx.defaultLanguage,
+      caption: content.text,
+      prompt: getPromptOverride(ctx, content.type),
+    });
+  } finally {
+    // Always remove any temp file fetched for remote processing (no-op in local mode).
+    await processable.cleanup();
+  }
 
   if (!result.success) {
     const reason = result.errorMessage ?? 'unknown';
@@ -537,6 +549,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     defaultLanguage,
     audioProvider,
     audioModel,
+    geminiAudioModel,
     audioPrompt,
     imagePrompt,
     videoPrompt,
@@ -548,6 +561,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     services.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
     services.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
     services.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
+    services.settings.getString('stt.gemini.model', 'GEMINI_STT_MODEL', GEMINI_AUDIO_MODEL),
     services.settings.getString('prompt.audio_transcription'),
     services.settings.getString('prompt.image_description'),
     services.settings.getString('prompt.video_description'),
@@ -561,6 +575,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     defaultLanguage,
     audioProvider: audioProvider ?? 'openai',
     audioModel: audioModel ?? 'gpt-audio-mini',
+    geminiAudioModel: geminiAudioModel ?? GEMINI_AUDIO_MODEL,
     audioPrompt: audioPrompt ?? undefined,
   });
   const mediaStorage = new MediaStorageService(db);
@@ -651,4 +666,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
 export const __test__ = {
   persistProcessingResult,
   resolveSafeMediaContentEventId,
+  processMessageMedia,
 };
+
+export type { MediaProcessorContext };

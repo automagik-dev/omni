@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  # Stable in-cluster endpoint consumers connect to: <release>-autopg:5432
+  name: {{ include "autopg.fullname" . }}
+  labels:
+    {{- include "autopg.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: {{ .Values.port }}
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "autopg.selectorLabels" . | nindent 4 }}

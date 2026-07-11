@@ -103,6 +103,73 @@ describe('processors', () => {
       }
     });
 
+    it('uses a Gemini model (not the OpenAI default) when audioProvider is gemini', async () => {
+      const audioPath = join(tmpdir(), `omni-audio-gemini-${Date.now()}.mp3`);
+      await writeFile(audioPath, Buffer.from('fake-audio'));
+      const calls: Array<{ url: string }> = [];
+      globalThis.fetch = mock(async (url: string | URL | Request) => {
+        calls.push({ url: String(url) });
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'gemini transcript' }] } }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as unknown as typeof fetch;
+
+      try {
+        // audioModel is the OpenAI-chat model; it must NOT leak into the Gemini request.
+        const processorWithGemini = new AudioProcessor({
+          ...mockConfig,
+          geminiApiKey: 'test-gemini-key',
+          audioProvider: 'gemini',
+          audioModel: 'gpt-audio-mini',
+        });
+
+        const result = await processorWithGemini.process(audioPath, 'audio/mpeg', { language: 'pt-BR' });
+
+        expect(result.success).toBe(true);
+        expect(result.provider).toBe('gemini');
+        expect(result.model).toBe('gemini-3.1-flash-lite');
+        expect(result.content).toBe('gemini transcript');
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.url).toContain('gemini-3.1-flash-lite');
+        expect(calls[0]?.url).not.toContain('gpt-audio-mini');
+      } finally {
+        await rm(audioPath, { force: true });
+      }
+    });
+
+    it('honors a configured geminiAudioModel for gemini transcription', async () => {
+      const audioPath = join(tmpdir(), `omni-audio-gemini-override-${Date.now()}.mp3`);
+      await writeFile(audioPath, Buffer.from('fake-audio'));
+      const calls: Array<{ url: string }> = [];
+      globalThis.fetch = mock(async (url: string | URL | Request) => {
+        calls.push({ url: String(url) });
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as unknown as typeof fetch;
+
+      try {
+        const processorWithGemini = new AudioProcessor({
+          ...mockConfig,
+          geminiApiKey: 'test-gemini-key',
+          audioProvider: 'gemini',
+          audioModel: 'gpt-audio-mini',
+          geminiAudioModel: 'gemini-3-flash-preview',
+        });
+
+        const result = await processorWithGemini.process(audioPath, 'audio/mpeg');
+
+        expect(result.success).toBe(true);
+        expect(result.model).toBe('gemini-3-flash-preview');
+        expect(calls[0]?.url).toContain('gemini-3-flash-preview');
+        expect(calls[0]?.url).not.toContain('gpt-audio-mini');
+      } finally {
+        await rm(audioPath, { force: true });
+      }
+    });
+
     it('normalizes once across fallback attempts and rejects oversized normalized audio', async () => {
       const dir = await mkdtemp(join(tmpdir(), 'omni-audio-normalize-'));
       const audioPath = join(dir, 'input.ogg');

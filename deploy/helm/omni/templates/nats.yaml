@@ -1,0 +1,154 @@
+{{- if .Values.nats.enabled }}
+{{- /*
+Minimal first-party NATS + JetStream. Kept intentionally small and offline
+(no subchart download) for OrbStack verification. Swap for the official nats
+chart later if HA/clustering is needed.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "omni.nats.fullname" . }}-config
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+data:
+  nats.conf: |
+    port: {{ .Values.nats.port }}
+    http: {{ .Values.nats.monitorPort }}
+    server_name: $POD_NAME
+    {{- if .Values.nats.jetstream.enabled }}
+    jetstream {
+      store_dir: "/data/jetstream"
+      max_memory_store: {{ include "omni.nats.bytes" .Values.nats.jetstream.memStore }}
+      max_file_store: {{ include "omni.nats.bytes" .Values.nats.jetstream.fileStore }}
+    }
+    {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "omni.nats.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  # Headless so JetStream has a stable per-pod identity.
+  clusterIP: None
+  selector:
+    {{- include "omni.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+  ports:
+    - name: client
+      port: {{ .Values.nats.port }}
+      targetPort: client
+    - name: monitor
+      port: {{ .Values.nats.monitorPort }}
+      targetPort: monitor
+{{- if .Values.nats.externalAccess }}
+---
+# External client Service: the headless Service above keeps JetStream's
+# per-pod identity and cannot be a LoadBalancer, so out-of-cluster NATS
+# clients (e.g. a `genie omni serve` bridge on a sibling OrbStack VM) get
+# this separate routable endpoint on the client port only.
+# NOTE: bundled NATS has no auth — only enable on a trusted network
+# (OrbStack host net). Prod should front NATS with auth/TLS instead.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "omni.nats.fullname" . }}-client
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  type: {{ .Values.nats.externalServiceType | default "LoadBalancer" }}
+  selector:
+    {{- include "omni.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+  ports:
+    - name: client
+      port: {{ .Values.nats.port }}
+      targetPort: client
+{{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "omni.nats.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  serviceName: {{ include "omni.nats.fullname" . }}
+  replicas: 1
+  {{- with .Values.nats.persistentVolumeClaimRetentionPolicy }}
+  # Self-host data safety: keep the JetStream PVC when this StatefulSet is
+  # deleted/scaled. Rendered only when set — realms that omit it (incl. prod,
+  # where nats is enabled) keep the Kubernetes default, so their output is unchanged.
+  persistentVolumeClaimRetentionPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "omni.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nats
+  template:
+    metadata:
+      labels:
+        {{- include "omni.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: nats
+    spec:
+      containers:
+        - name: nats
+          image: {{ .Values.nats.image | quote }}
+          args:
+            - "--config"
+            - "/etc/nats/nats.conf"
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - name: client
+              containerPort: {{ .Values.nats.port }}
+            - name: monitor
+              containerPort: {{ .Values.nats.monitorPort }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.nats.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nats
+            {{- if .Values.nats.jetstream.enabled }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "omni.nats.fullname" . }}-config
+  {{- if .Values.nats.jetstream.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.nats.persistence.storageClass }}
+        storageClassName: {{ .Values.nats.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.nats.persistence.size | quote }}
+  {{- end }}
+{{- end }}

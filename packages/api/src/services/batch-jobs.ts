@@ -14,7 +14,6 @@
  * @see media-processing-batch wish
  */
 
-import { join } from 'node:path';
 import type { BatchJobProgress, BatchJobType, EventBus } from '@omni/core';
 import { NotFoundError, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -29,6 +28,7 @@ import {
   messages,
 } from '@omni/db';
 import {
+  GEMINI_AUDIO_MODEL,
   type MediaProcessingService,
   type ProcessingResult,
   type ProcessorConfig,
@@ -155,16 +155,25 @@ export class BatchJobService {
   private async createMediaService(): Promise<MediaProcessingService> {
     let config: Partial<ProcessorConfig> | undefined;
     if (this.settings) {
-      const [groqApiKey, openaiApiKey, geminiApiKey, defaultLanguage, audioProvider, audioModel, audioPrompt] =
-        await Promise.all([
-          this.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
-          this.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
-          this.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
-          this.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
-          this.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
-          this.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
-          this.settings.getString('prompt.audio_transcription'),
-        ]);
+      const [
+        groqApiKey,
+        openaiApiKey,
+        geminiApiKey,
+        defaultLanguage,
+        audioProvider,
+        audioModel,
+        geminiAudioModel,
+        audioPrompt,
+      ] = await Promise.all([
+        this.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
+        this.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
+        this.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
+        this.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
+        this.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
+        this.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
+        this.settings.getString('stt.gemini.model', 'GEMINI_STT_MODEL', GEMINI_AUDIO_MODEL),
+        this.settings.getString('prompt.audio_transcription'),
+      ]);
       config = {
         groqApiKey: groqApiKey ?? undefined,
         openaiApiKey: openaiApiKey ?? undefined,
@@ -172,6 +181,7 @@ export class BatchJobService {
         defaultLanguage: defaultLanguage ?? 'pt',
         audioProvider: audioProvider ?? 'openai',
         audioModel: audioModel ?? 'gpt-audio-mini',
+        geminiAudioModel: geminiAudioModel ?? GEMINI_AUDIO_MODEL,
         audioPrompt: audioPrompt ?? undefined,
       };
     }
@@ -804,10 +814,19 @@ export class BatchJobService {
       return this.failedResult(resolved.reason);
     }
 
-    const fullPath = join(this.mediaStorage.getBasePath(), resolved.path);
-    const result = await mediaService.process(fullPath, mimeType, {
-      caption: message.textContent ?? undefined,
-    });
+    // Materialize a readable local path for the stored reference. In local mode
+    // this is `{basePath}/{path}` (no copy); in remote mode the reference is an
+    // S3 key, so the bytes are fetched into a temp file that MUST be cleaned up.
+    const materialized = await this.mediaStorage.materializeForProcessing(resolved.path);
+    let result: ProcessingResult;
+    try {
+      result = await mediaService.process(materialized.path, mimeType, {
+        caption: message.textContent ?? undefined,
+      });
+    } finally {
+      // Always remove any temp file fetched for remote processing (no-op in local mode).
+      await materialized.cleanup();
+    }
 
     if (result.success && result.content) {
       await this.persistProcessingResult(message.id, result, batchJobId);

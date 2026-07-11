@@ -4,13 +4,12 @@
  * Handles downloading media from Baileys messages and saving to local storage.
  */
 
-import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, rm } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { DownloadTooLargeError } from '@omni/channel-sdk';
+import { DownloadTooLargeError, type MediaStorageBackend } from '@omni/channel-sdk';
 import type { WAMessage } from 'baileys';
 import { downloadMediaMessage } from 'baileys';
 import { getDocumentMessage } from './message';
@@ -29,20 +28,6 @@ export function getWhatsAppMediaDownloadMaxBytes(): number {
   const parsed = Number.parseInt(overrideMb, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_WHATSAPP_MEDIA_MAX_DOWNLOAD_BYTES;
   return parsed * 1024 * 1024;
-}
-
-/**
- * Result of downloading media
- */
-export interface DownloadResult {
-  /** Local file path where media was saved */
-  localPath: string;
-  /** MIME type of the media */
-  mimeType: string;
-  /** File size in bytes */
-  size: number;
-  /** Original filename if available */
-  filename?: string;
 }
 
 export interface DownloadToFileResult {
@@ -165,62 +150,6 @@ export function getExtension(mimeType: string): string {
 }
 
 /**
- * Generate a unique filename for downloaded media
- */
-export function generateFilename(mimeType: string, originalFilename?: string): string {
-  if (originalFilename) {
-    return originalFilename;
-  }
-
-  const uuid = randomUUID();
-  const ext = getExtension(mimeType);
-  return `${uuid}${ext}`;
-}
-
-/**
- * Download media from a Baileys message
- *
- * @param msg - Baileys WAMessage containing media
- * @param basePath - Base directory to save media
- * @returns Download result with local path and metadata
- */
-export async function downloadMedia(msg: WAMessage, basePath: string): Promise<DownloadResult | null> {
-  const mediaInfo = detectMediaType(msg);
-  if (!mediaInfo) {
-    return null;
-  }
-
-  try {
-    // Download the media buffer
-    const buffer = await downloadMediaMessage(msg, 'buffer', {});
-
-    if (!buffer || !(buffer instanceof Buffer)) {
-      return null;
-    }
-
-    // Generate filename and path
-    const filename = generateFilename(mediaInfo.mimeType, mediaInfo.filename);
-    const localPath = join(basePath, mediaInfo.type, filename);
-
-    // Ensure directory exists
-    await mkdir(dirname(localPath), { recursive: true });
-
-    // Write file
-    await writeFile(localPath, buffer);
-
-    return {
-      localPath,
-      mimeType: mediaInfo.mimeType,
-      size: buffer.length,
-      filename: mediaInfo.filename,
-    };
-  } catch (_error) {
-    // Download failed - could be expired or unavailable
-    return null;
-  }
-}
-
-/**
  * Download media to a buffer (without saving to disk)
  */
 export async function downloadMediaToBuffer(msg: WAMessage): Promise<{ buffer: Buffer; mimeType: string } | null> {
@@ -273,6 +202,29 @@ export async function downloadMediaToFile(
   const size = await writeMediaStreamToFile(stream, outputPath, maxSizeBytes);
   if (size === 0) return null;
   return { mimeType: mediaInfo.mimeType, size };
+}
+
+/**
+ * Stream Baileys media straight to the active media backend under `key`.
+ *
+ * Same size-guarded streaming as {@link downloadMediaToFile} (no full-buffer in
+ * heap), but the bytes land wherever the backend persists — local disk in local
+ * mode, S3 in remote mode. Used for `OMNI_MEDIA_MODE=remote` so WhatsApp media
+ * actually reaches S3 instead of being written to a local file that never syncs.
+ */
+export async function downloadMediaToBackend(
+  msg: WAMessage,
+  backend: MediaStorageBackend,
+  key: string,
+  maxSizeBytes = getWhatsAppMediaDownloadMaxBytes(),
+): Promise<DownloadToFileResult | null> {
+  const mediaInfo = detectMediaType(msg);
+  if (!mediaInfo) return null;
+
+  const stream = await downloadMediaMessage(msg, 'stream', {});
+  const result = await backend.storeStream({ key, stream, mimeType: mediaInfo.mimeType, maxSizeBytes });
+  if (result.size === 0) return null;
+  return { mimeType: mediaInfo.mimeType, size: result.size };
 }
 
 export async function writeMediaStreamToFile(

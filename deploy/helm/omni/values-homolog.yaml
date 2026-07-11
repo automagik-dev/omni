@@ -1,0 +1,123 @@
+# =============================================================================
+# Homolog (HML) overlay — dedicated AWS cluster, external RDS + real S3.
+#   helm upgrade --install omni deploy/helm/omni -n omni \
+#     -f deploy/helm/omni/values-homolog.yaml \
+#     --set ingress.host=<hml fqdn>
+#
+# Realm shape (shared with values-prod.yaml — separate clusters, one shape):
+#   - NO bundled datastores: autopg + MinIO are OFF. Postgres is external RDS
+#     (database.existingSecret), media is real AWS S3 (media.s3.existingSecret).
+#   - image.tag "" → v<Chart.appVersion>, the tag image-publish.yml publishes.
+#   - ingress.host is intentionally EMPTY: the chart fail-fasts unless the
+#     realm FQDN is passed via --set ingress.host=… (see templates/ingress.yaml).
+# HML differs from prod only in sizing (lighter resources / JetStream stores)
+# and its own bucket + hostname.
+#
+# Required pre-created Secrets (same namespace as the release):
+#   omni-db        key DATABASE_URL — full RDS URL, e.g.
+#                  postgresql://omni:<pw>@<rds-endpoint>:5432/omni?sslmode=verify-full
+#                  (password percent-encoded; the role must OWN the omni tables —
+#                  migrations ALTER them on boot)
+#   omni-media-s3  keys OMNI_MEDIA_S3_ACCESS_KEY + OMNI_MEDIA_S3_SECRET_KEY
+# =============================================================================
+
+image:
+  repository: ghcr.io/automagik-dev/omni-api
+  # "" → v<Chart.appVersion>: the latest PUBLISHED release (image-publish.yml
+  # pushes v<packages/cli version> on merges to main).
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# ONE replica, HPA off — same WhatsApp/Baileys single-socket constraint as prod
+# (see values.yaml "replicas + scaling").
+replicaCount: 1
+autoscaling:
+  enabled: false
+
+config:
+  LOG_LEVEL: "info"
+  NODE_ENV: "production"
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  # REQUIRED at deploy time: --set ingress.host=<hml fqdn>. Deliberately ""
+  # (NOT omitted — base values.yaml defaults host to omni.local, which would
+  # silently bypass the chart's empty-host fail-fast). The tls hosts entry is
+  # templated so it tracks whatever host is set.
+  host: ""
+  path: /
+  pathType: Prefix
+  tls:
+    - secretName: omni-tls
+      hosts:
+        - "{{ .Values.ingress.host }}"
+
+# DATABASE_URL comes from a pre-created external Secret pointing at the HML
+# RDS instance — the bundled autopg is OFF in this realm (autopg.enabled
+# below). Create it before the first deploy:
+#   kubectl -n omni create secret generic omni-db \
+#     --from-literal=DATABASE_URL='postgresql://omni:<pw>@<rds-endpoint>:5432/omni?sslmode=verify-full'
+database:
+  existingSecret: "omni-db"
+  urlKey: "DATABASE_URL"
+
+secret:
+  # No OMNI_API_KEY — omni auth keys live in Postgres. Optionally supply
+  # provider creds here (or reference an existing Secret via existingSecret):
+  existingSecret: ""
+  env: {}
+    # OPENAI_API_KEY: ""
+    # ANTHROPIC_API_KEY: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+nats:
+  enabled: true
+  jetstream:
+    enabled: true
+    memStore: 256Mi
+    fileStore: 2Gi
+  persistence:
+    size: 4Gi
+    # storageClass: gp3
+
+# HML media backend: an EXTERNAL managed S3 bucket (real AWS S3 — endpoint
+# empty so the SDK derives it from region; forcePathStyle false). Creds come
+# from the pre-created omni-media-s3 Secret (never plaintext in rendered
+# output); the bucket is provisioned out of band and must already exist.
+media:
+  mode: remote
+  s3:
+    bucket: omni-media-hml               # bucket names are global — use the HML one
+    region: us-east-1
+    forcePathStyle: false
+    presignTtlSeconds: 3600
+    endpoint: ""                         # empty → real AWS S3 from region
+    # publicEndpoint stays unset: real S3 endpoints are already publicly
+    # reachable, so presigned GET URLs work as-is. It exists for split-endpoint
+    # setups (e.g. in-cluster MinIO presigning through an external hostname).
+    # publicEndpoint: "https://media-hml.example.com"
+    existingSecret: "omni-media-s3"      # must hold the two keys below
+    accessKeyKey: "OMNI_MEDIA_S3_ACCESS_KEY"
+    secretKeyKey: "OMNI_MEDIA_S3_SECRET_KEY"
+
+# Bundled MinIO is OFF: media rides real AWS S3 (media.s3 above).
+minio:
+  enabled: false
+
+# Bundled autopg Postgres is OFF: this realm uses external RDS via
+# database.existingSecret above. (networkPolicy.enabled stays at its default —
+# the chart's only NetworkPolicy guards the bundled autopg, so nothing renders
+# while autopg is disabled.)
+autopg:
+  enabled: false

@@ -4,12 +4,20 @@
  * Tests Group D: File Handling + Polish
  */
 
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { SLACK_CAPABILITIES } from '../capabilities';
-import { extractFileInfo, getContentTypeFromMime } from '../handlers/files';
+import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from '../handlers/files';
 import { extractMessageMeta } from '../handlers/messages';
 import type { SlackFileInfo } from '../types';
+
+const noop = () => undefined;
+const noopLogger = { debug: noop, info: noop, warn: noop, error: noop };
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
 
 // ─────────────────────────────────────────────────────────────
 // File info extraction
@@ -133,6 +141,82 @@ describe('getContentTypeFromMime', () => {
     expect(getContentTypeFromMime('text/plain')).toBe('document');
     expect(getContentTypeFromMime('application/json')).toBe('document');
     expect(getContentTypeFromMime('application/octet-stream')).toBe('document');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Private file downloads
+// ─────────────────────────────────────────────────────────────
+
+describe('downloadSlackFile', () => {
+  it('preserves bot token auth across Slack private file redirects', async () => {
+    const calls: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      calls.push({ url: String(input), authorization: headers.get('authorization') });
+      if (calls.length === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://files-pri.slack.com/files-pri/photo.png' },
+        });
+      }
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { 'content-type': 'image/png', 'content-length': '4' },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await downloadSlackFile(
+      'https://files.slack.com/download/photo.png',
+      'xoxb-test-token',
+      noopLogger as never,
+      'image/png',
+    );
+
+    expect(result.mimeType).toBe('image/png');
+    expect(result.buffer.length).toBe(4);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.authorization).toBe('Bearer xoxb-test-token');
+    expect(calls[1]?.authorization).toBe('Bearer xoxb-test-token');
+  });
+
+  it('rejects Slack login HTML when image bytes were expected', async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response('<!DOCTYPE html><html><body>login required</body></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8', 'content-length': '56' },
+        }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      downloadSlackFile(
+        'https://files.slack.com/download/photo.png',
+        'xoxb-test-token',
+        noopLogger as never,
+        'image/png',
+      ),
+    ).rejects.toThrow('Slack returned HTML');
+  });
+
+  it('does not reject text files that mention HTML snippets', async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response('Markdown docs can mention <html> tags without being HTML.', {
+          status: 200,
+          headers: { 'content-type': 'text/plain; charset=utf-8', 'content-length': '57' },
+        }),
+    ) as unknown as typeof fetch;
+
+    const result = await downloadSlackFile(
+      'https://files.slack.com/download/readme.txt',
+      'xoxb-test-token',
+      noopLogger as never,
+      'text/plain',
+    );
+
+    expect(result.mimeType).toBe('text/plain; charset=utf-8');
+    expect(result.buffer.toString('utf8')).toContain('<html>');
   });
 });
 

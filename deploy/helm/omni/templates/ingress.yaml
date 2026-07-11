@@ -1,0 +1,45 @@
+{{- if .Values.ingress.enabled }}
+{{- /*
+Fail-fast host guard: an enabled ingress with an EMPTY host is always operator
+error — nginx would treat the rule as catch-all and serve omni on every
+hostname hitting the controller. Cloud overlays (values-prod / values-homolog)
+opt in by setting `ingress.host: ""` explicitly, forcing the real FQDN through
+`--set ingress.host=…` per realm. NOTE: base values.yaml defaults host to
+`omni.local`, so an overlay that does NOT null the host inherits that default
+and bypasses this guard — cloud overlays MUST keep `ingress.host: ""`.
+*/}}
+{{- if not .Values.ingress.host }}
+{{- fail "ingress.enabled=true but ingress.host is empty — this overlay requires the realm FQDN at deploy time: --set ingress.host=<fqdn> (see values-prod.yaml / values-homolog.yaml `ingress.host`)" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "omni.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- /* tpl: lets overlays write hosts: ['{{ .Values.ingress.host }}'] so the
+    TLS block tracks the --set host; plain strings pass through unchanged. */}}
+    {{- tpl (toYaml .) $ | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "omni.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}

@@ -5,10 +5,11 @@
  *   - scripts/sync-versions.ts  — writes a single calver to every entry
  *   - scripts/verify-versions.ts — fails CI if any entry drifts from root
  *
- * Three kinds of entries are returned (in this order):
+ * Four kinds of entries are returned (in this order):
  *   1. Standard package.json files (root + every workspace package)
  *   2. The omni Claude plugin manifest (plugins/omni/.claude-plugin/plugin.json)
  *   3. The marketplace plugin entry (.claude-plugin/marketplace.json -> plugins[name=omni])
+ *   4. The umbrella Helm chart appVersion (deploy/helm/omni/Chart.yaml)
  */
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -23,6 +24,14 @@ const EXCLUDED_WORKSPACE_PACKAGES = new Set(['audio-decode-shim']);
 
 /** Marketplace plugin entry that this repo owns and keeps in sync. */
 const MARKETPLACE_PLUGIN_NAME = 'omni';
+
+/**
+ * Umbrella Helm chart whose `appVersion` must track the release version.
+ * Scoped strictly to this one file — the vendored subchart at
+ * deploy/helm/omni/charts/autopg/Chart.yaml is versioned independently
+ * (it tracks autopg releases, not omni releases) and must never be touched.
+ */
+const UMBRELLA_CHART_PATH = 'deploy/helm/omni/Chart.yaml';
 
 export type VersionField = {
   /** Path relative to the repo root, used for human-readable output. */
@@ -109,6 +118,48 @@ function marketplacePluginField(): VersionField {
   };
 }
 
+/**
+ * Build a VersionField for the umbrella Helm chart's `appVersion` line.
+ *
+ * Line-based on purpose: Chart.yaml carries load-bearing comments (the
+ * appVersion contract, the autopg dependency rationale) that a YAML/JSON
+ * round-trip would strip. Only the single `appVersion: "..."` line is
+ * rewritten; every other byte of the file is preserved.
+ */
+function chartAppVersionField(): VersionField {
+  const absPath = join(repoRoot, UMBRELLA_CHART_PATH);
+  // Anchored to the top-level key at column 0; matches the first (only)
+  // appVersion line. Chart.yaml appVersion is always double-quoted here so
+  // calver values like 2.260705.3 are never YAML-coerced.
+  const lineRe = /^appVersion: "([^"\n]*)"[ \t]*$/m;
+
+  return {
+    path: UMBRELLA_CHART_PATH,
+    description: 'umbrella helm chart appVersion',
+    read(): string | null {
+      if (!existsSync(absPath)) return null;
+      const content = readFileSync(absPath, 'utf-8');
+      return content.match(lineRe)?.[1] ?? null;
+    },
+    write(version: string): boolean {
+      const content = readFileSync(absPath, 'utf-8');
+      const current = content.match(lineRe)?.[1];
+
+      if (current === undefined) {
+        throw new Error(`${UMBRELLA_CHART_PATH} has no top-level appVersion: "..." line`);
+      }
+
+      if (current === version) {
+        return false;
+      }
+
+      const updated = content.replace(lineRe, () => `appVersion: "${version}"`);
+      writeFileSync(absPath, updated, 'utf-8');
+      return true;
+    },
+  };
+}
+
 /** Walk packages/* and apps/* and yield package.json paths (excluding the deny list). */
 function findWorkspacePackageJsonPaths(): string[] {
   const paths: string[] = [];
@@ -138,6 +189,7 @@ function findWorkspacePackageJsonPaths(): string[] {
  *   2. workspace package.json files (alphabetical, packages/ before apps/)
  *   3. plugins/omni/.claude-plugin/plugin.json
  *   4. .claude-plugin/marketplace.json (omni entry)
+ *   5. deploy/helm/omni/Chart.yaml (appVersion)
  */
 export function getAllVersionFields(): VersionField[] {
   const fields: VersionField[] = [];
@@ -151,6 +203,8 @@ export function getAllVersionFields(): VersionField[] {
   fields.push(topLevelJsonField('plugins/omni/.claude-plugin/plugin.json', 'omni claude plugin manifest'));
 
   fields.push(marketplacePluginField());
+
+  fields.push(chartAppVersionField());
 
   return fields;
 }
