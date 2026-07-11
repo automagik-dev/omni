@@ -5,14 +5,14 @@
  * plus a per-stage percentile table come from GET /journeys/summary; a
  * correlationId lookup renders a single journey's checkpoints and latencies.
  */
-import { Button, Input, MetricDisplay, Note, SectionCard, StatusDot } from '@khal-os/ui';
+import { Button, Input, Note, StatusDot } from '@khal-os/ui';
 import { useState } from 'react';
 import type { Journey } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { type ColumnDef, DataTable, JsonInspector, PageShell } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
-import { CardSection, DataRowList, errMsg, fmtTime } from './shared';
+import { CardSection, DataRowList, StatGrid, errMsg, fmtTime } from './shared';
 
 function fmtMs(ms: number): string {
   if (!Number.isFinite(ms)) return '—';
@@ -161,17 +161,13 @@ export function JourneysPage() {
           {errMsg(summary.error)}
         </Note>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
-          <SectionCard padding="md">
-            <MetricDisplay value={summary.data?.totalTracked ?? 0} label="Tracked" />
-          </SectionCard>
-          <SectionCard padding="md">
-            <MetricDisplay value={summary.data?.completedJourneys ?? 0} label="Completed" />
-          </SectionCard>
-          <SectionCard padding="md">
-            <MetricDisplay value={summary.data?.activeJourneys ?? 0} label="Active" accentColor={T.accentBlue} />
-          </SectionCard>
-        </div>
+        <StatGrid
+          stats={[
+            { label: 'Tracked', value: summary.data?.totalTracked ?? 0 },
+            { label: 'Completed', value: summary.data?.completedJourneys ?? 0 },
+            { label: 'Active', value: summary.data?.activeJourneys ?? 0, accentColor: T.accentBlue },
+          ]}
+        />
       )}
 
       <DataTable

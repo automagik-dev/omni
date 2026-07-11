@@ -7,7 +7,7 @@
  * destructive payload purge, and a manual custom-event trigger gated behind a
  * LIVE typed-phrase confirm (never auto-run).
  */
-import { Badge, Button, Input, MetricDisplay, Note, SectionCard } from '@khal-os/ui';
+import { Badge, Button, Input, Note, SectionCard } from '@khal-os/ui';
 import { useState } from 'react';
 import type { EventRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
@@ -25,7 +25,7 @@ import {
 } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
-import { CardSection, errMsg, fmtTime } from './shared';
+import { CardSection, StatGrid, errMsg, fmtTime } from './shared';
 
 export function EventsPage() {
   const { ext } = useOmniClient();
@@ -107,29 +107,22 @@ export function EventsPage() {
       title="Events"
       description="Pipeline event stream — analytics, search, payload stages, and manual triggers."
     >
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
-        <SectionCard padding="md">
-          <MetricDisplay value={analytics.data?.totalMessages ?? 0} label="Total (24h)" />
-        </SectionCard>
-        <SectionCard padding="md">
-          <MetricDisplay
-            value={analytics.data?.successRate != null ? `${Math.round(analytics.data.successRate)}%` : '—'}
-            label="Success rate"
-            accentColor={T.ok}
-          />
-        </SectionCard>
-        <SectionCard padding="md">
-          <MetricDisplay value={analytics.data?.failedMessages ?? 0} label="Failed" accentColor={T.danger} />
-        </SectionCard>
-        <SectionCard padding="md">
-          <MetricDisplay
-            value={
-              analytics.data?.avgProcessingTimeMs != null ? `${Math.round(analytics.data.avgProcessingTimeMs)}ms` : '—'
-            }
-            label="Avg processing"
-          />
-        </SectionCard>
-      </div>
+      <StatGrid
+        stats={[
+          { label: 'Total (24h)', value: analytics.data?.totalMessages ?? 0 },
+          {
+            label: 'Success rate',
+            value: analytics.data?.successRate != null ? `${Math.round(analytics.data.successRate)}%` : '—',
+            accentColor: T.ok,
+          },
+          { label: 'Failed', value: analytics.data?.failedMessages ?? 0, accentColor: T.danger },
+          {
+            label: 'Avg processing',
+            value:
+              analytics.data?.avgProcessingTimeMs != null ? `${Math.round(analytics.data.avgProcessingTimeMs)}ms` : '—',
+          },
+        ]}
+      />
 
       <DataTable
         columns={columns}

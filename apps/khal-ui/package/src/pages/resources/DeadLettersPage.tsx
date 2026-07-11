@@ -6,7 +6,7 @@
  * resolve / abandon are wired behind confirms (abandon is destructive); validation
  * exercises the read paths only.
  */
-import { Badge, Button, Input, MetricDisplay, Note, SectionCard } from '@khal-os/ui';
+import { Badge, Button, Input, Note, SectionCard } from '@khal-os/ui';
 import { useState } from 'react';
 import type { DeadLetterRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
@@ -22,7 +22,7 @@ import {
 } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
-import { errMsg, fmtTime } from './shared';
+import { StatGrid, errMsg, fmtTime } from './shared';
 
 type PendingAction = { kind: 'retry' | 'resolve' | 'abandon'; row: DeadLetterRow } | null;
 
@@ -88,20 +88,15 @@ export function DeadLettersPage() {
 
   return (
     <PageShell eyebrow="Operations" title="Dead Letters" description="Failed events and their resolution.">
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 12 }}>
-        <SectionCard padding="md">
-          <MetricDisplay value={s?.total ?? 0} label="Total" />
-        </SectionCard>
-        <SectionCard padding="md">
-          <MetricDisplay value={s?.pending ?? 0} label="Pending" accentColor={T.warn} />
-        </SectionCard>
-        <SectionCard padding="md">
-          <MetricDisplay value={s?.resolved ?? 0} label="Resolved" accentColor={T.ok} />
-        </SectionCard>
-        <SectionCard padding="md">
-          <MetricDisplay value={s?.abandoned ?? 0} label="Abandoned" accentColor={T.danger} />
-        </SectionCard>
-      </div>
+      <StatGrid
+        min={130}
+        stats={[
+          { label: 'Total', value: s?.total ?? 0 },
+          { label: 'Pending', value: s?.pending ?? 0, accentColor: T.warn },
+          { label: 'Resolved', value: s?.resolved ?? 0, accentColor: T.ok },
+          { label: 'Abandoned', value: s?.abandoned ?? 0, accentColor: T.danger },
+        ]}
+      />
 
       <DataTable
         columns={columns}

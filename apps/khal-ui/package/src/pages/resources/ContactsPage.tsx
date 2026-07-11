@@ -6,14 +6,18 @@
  * (block/unblock) live on the instance detail's Contacts tab; this is the
  * cross-cutting browse surface.
  */
-import { Badge, Note } from '@khal-os/ui';
-import { useState } from 'react';
+import { Badge, Note, SectionCard } from '@khal-os/ui';
+import { useMemo, useState } from 'react';
 import type { ContactRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
-import { type ColumnDef, DataTable, JsonInspector, PageShell } from '../../components';
+import { type ColumnDef, DataTable, FieldGrid, JsonInspector, PageShell, ResourceDetail } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
-import { InstancePicker, errMsg } from './shared';
+import { InstancePicker, StatGrid, errMsg } from './shared';
+
+function contactName(r: ContactRow): string {
+  return r.displayName ?? '(unnamed)';
+}
 
 export function ContactsPage() {
   const { ext } = useOmniClient();
@@ -24,11 +28,22 @@ export function ContactsPage() {
     enabled: Boolean(instanceId),
   });
 
+  const rows = useMemo(() => contacts.data?.items ?? [], [contacts.data]);
+  const counts = useMemo(() => {
+    let groups = 0;
+    let business = 0;
+    for (const r of rows) {
+      if (r.isGroup) groups++;
+      if (r.isBusiness) business++;
+    }
+    return { total: rows.length, groups, business, contacts: rows.length - groups - business };
+  }, [rows]);
+
   const columns: ColumnDef<ContactRow>[] = [
     {
       key: 'displayName',
       header: 'Name',
-      render: (r) => <span style={{ fontWeight: 600, color: T.fg }}>{r.displayName ?? '(unnamed)'}</span>,
+      render: (r) => <span style={{ fontWeight: 600, color: T.fg }}>{contactName(r)}</span>,
     },
     { key: 'phone', header: 'Phone', mono: true, accessor: (r) => r.phone ?? '—' },
     {
@@ -59,9 +74,21 @@ export function ContactsPage() {
         </Note>
       ) : (
         <>
+          {rows.length > 0 && (
+            <StatGrid
+              min={130}
+              stats={[
+                { label: 'Total', value: counts.total },
+                { label: 'Contacts', value: counts.contacts },
+                { label: 'Groups', value: counts.groups },
+                { label: 'Business', value: counts.business },
+              ]}
+            />
+          )}
+
           <DataTable
             columns={columns}
-            rows={contacts.data?.items ?? []}
+            rows={rows}
             getRowKey={(r) => r.platformUserId ?? JSON.stringify(r)}
             loading={contacts.isLoading}
             error={errMsg(contacts.error)}
@@ -69,10 +96,38 @@ export function ContactsPage() {
             emptyDescription="This instance returned no contacts, or the channel does not support contact listing."
             onRowClick={(r) => setSelected(r)}
           />
+
           {selected && (
-            <div style={{ marginTop: 4 }}>
-              <JsonInspector value={selected} />
-            </div>
+            <SectionCard padding="md">
+              <ResourceDetail
+                title={contactName(selected)}
+                id={selected.platformUserId ?? undefined}
+                status={
+                  selected.isGroup ? (
+                    <Badge variant="purple">group</Badge>
+                  ) : selected.isBusiness ? (
+                    <Badge variant="teal">business</Badge>
+                  ) : (
+                    <Badge variant="gray">contact</Badge>
+                  )
+                }
+              >
+                <ResourceDetail.Section title="Fields">
+                  <FieldGrid
+                    fields={[
+                      { label: 'Name', value: selected.displayName ?? '—' },
+                      { label: 'Phone', value: selected.phone ?? '—', mono: true },
+                      { label: 'Platform ID', value: selected.platformUserId ?? '—', mono: true },
+                      { label: 'Group', value: Boolean(selected.isGroup) },
+                      { label: 'Business', value: Boolean(selected.isBusiness) },
+                    ]}
+                  />
+                </ResourceDetail.Section>
+                <ResourceDetail.Section title="Raw">
+                  <JsonInspector value={selected} />
+                </ResourceDetail.Section>
+              </ResourceDetail>
+            </SectionCard>
           )}
         </>
       )}

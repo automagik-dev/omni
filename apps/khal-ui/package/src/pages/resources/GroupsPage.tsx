@@ -6,7 +6,7 @@
  * source instance. Deep group management (subject, participants, invites) lives
  * on the instance detail's Groups tab — each row links there.
  */
-import { Badge, Button, Note } from '@khal-os/ui';
+import { Badge, Button, Input, Note } from '@khal-os/ui';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { GroupRow } from '../../api/ext';
@@ -14,7 +14,7 @@ import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { type ColumnDef, DataTable, PageShell } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
-import { errMsg, fmtTime, useInstanceMap } from './shared';
+import { StatGrid, errMsg, fmtTime, useInstanceMap } from './shared';
 
 interface GroupWithInstance extends GroupRow {
   __instanceId: string;
@@ -81,30 +81,26 @@ export function GroupsPage() {
       {instancesLoading ? (
         <Note type="default">Loading instances…</Note>
       ) : (
-        <DataTable
-          columns={columns}
-          rows={rows}
-          getRowKey={(r) => `${r.__instanceId}:${r.externalId ?? r.name}`}
-          loading={groups.isLoading}
-          error={errMsg(groups.error)}
-          emptyTitle="No groups"
-          emptyDescription="No instance returned any groups."
-          toolbar={
-            <input
-              placeholder="Filter groups…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              style={{
-                padding: '7px 10px',
-                borderRadius: 8,
-                border: `1px solid ${T.border}`,
-                background: T.surface,
-                color: T.fg,
-                fontSize: 13,
-              }}
-            />
-          }
-        />
+        <>
+          <StatGrid
+            min={150}
+            stats={[
+              { label: 'Groups', value: groups.data?.length ?? 0 },
+              { label: 'Instances scanned', value: instances.length },
+            ]}
+          />
+
+          <DataTable
+            columns={columns}
+            rows={rows}
+            getRowKey={(r) => `${r.__instanceId}:${r.externalId ?? r.name}`}
+            loading={groups.isLoading}
+            error={errMsg(groups.error)}
+            emptyTitle="No groups"
+            emptyDescription="No instance returned any groups."
+            toolbar={<Input placeholder="Filter groups…" value={search} onChange={(e) => setSearch(e.target.value)} />}
+          />
+        </>
       )}
     </PageShell>
   );

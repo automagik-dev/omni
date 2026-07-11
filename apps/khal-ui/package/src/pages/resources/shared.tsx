@@ -6,7 +6,7 @@
  * remove the boilerplate every list/detail page repeats (instance picker, error
  * text, timestamp formatting, the production-instance read-only guard).
  */
-import { DataRow, SectionCard } from '@khal-os/ui';
+import { DataRow, MetricDisplay, SectionCard } from '@khal-os/ui';
 import type { ReactNode } from 'react';
 import { useMemo } from 'react';
 import type { InstanceRow } from '../../api/ext';
@@ -129,6 +129,33 @@ export function CardSection({
       {description && <p style={{ margin: '0 0 12px', fontSize: 12.5, color: T.muted }}>{description}</p>}
       {children}
     </SectionCard>
+  );
+}
+
+export interface StatSpec {
+  label: string;
+  value: string | number;
+  /** Copper is brand-only; use a status token here sparingly, never decoratively. */
+  accentColor?: string;
+  description?: string;
+}
+
+/**
+ * The KhalOS stat-tile row every operations page opens with: a responsive grid of
+ * {@link MetricDisplay} values, each on its own {@link SectionCard} surface. Values
+ * are always mono tabular semibold (MetricDisplay's own treatment); the grid wraps
+ * on `minmax(min, 1fr)`. Consolidates the identical hand-rolled grid the coverage
+ * pages repeated — pass `min` to tune tile density (default 140).
+ */
+export function StatGrid({ stats, min = 140 }: { stats: StatSpec[]; min?: number }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))`, gap: 12 }}>
+      {stats.map((s) => (
+        <SectionCard key={s.label} padding="md">
+          <MetricDisplay value={s.value} label={s.label} accentColor={s.accentColor} description={s.description} />
+        </SectionCard>
+      ))}
+    </div>
   );
 }
 

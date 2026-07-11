@@ -17,8 +17,8 @@
       "none": 0,
       "exposed": 2,
       "operable": 195,
-      "live-verified": 71,
-      "ux-complete": 0
+      "live-verified": 20,
+      "ux-complete": 51
     }
   },
   "capabilities": [
@@ -59,7 +59,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "DELETE /automations/:id",
@@ -72,7 +72,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "DELETE /chats/:id",
@@ -215,7 +215,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "DELETE /instances/:id/block",
@@ -267,7 +267,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "DELETE /keys/:id",
@@ -345,7 +345,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "DELETE /trust/hosts/:id",
@@ -371,7 +371,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /_internal/health",
@@ -397,7 +397,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /a2a/agents/:agentId/card",
@@ -449,7 +449,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /agent-state/stream",
@@ -462,7 +462,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": true,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /agent-tasks",
@@ -501,7 +501,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /agents/:id",
@@ -514,7 +514,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /agents/:id/identities",
@@ -579,7 +579,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /automations/:id",
@@ -618,7 +618,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /batch-jobs/:id",
@@ -657,7 +657,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /chats/:id",
@@ -683,7 +683,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /chats/:id/participants",
@@ -774,7 +774,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /dead-letters/:id",
@@ -800,7 +800,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /event-ops/metrics",
@@ -852,7 +852,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /events/:eventId/payloads",
@@ -904,7 +904,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /events/by-sender/:senderId",
@@ -982,7 +982,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified",
+      "uiStatus": "ux-complete",
       "note": "backend returns 500 as of 2026-07-11; error surfaced honestly in UI"
     },
     {
@@ -1035,7 +1035,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /instances/:id",
@@ -1048,7 +1048,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /instances/:id/blocklist",
@@ -1087,7 +1087,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /instances/:id/groups",
@@ -1100,7 +1100,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /instances/:id/groups/:groupJid/invite",
@@ -1204,7 +1204,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /instances/:id/status",
@@ -1217,7 +1217,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /instances/:id/sync",
@@ -1269,7 +1269,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /instances/:instanceId/routes/:id",
@@ -1282,7 +1282,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /instances/supported-channels",
@@ -1295,7 +1295,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /journeys/:correlationId",
@@ -1321,7 +1321,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /keys",
@@ -1373,7 +1373,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /logs/stream",
@@ -1464,7 +1464,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /payload-config",
@@ -1477,7 +1477,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /payload-stats",
@@ -1490,7 +1490,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /persons",
@@ -1555,7 +1555,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /providers/:id",
@@ -1633,7 +1633,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /settings/:key",
@@ -1659,7 +1659,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /trust/hosts",
@@ -1763,7 +1763,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "GET /webhook-sources/:id",
@@ -1815,7 +1815,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "PATCH /automations/:id",
@@ -1880,7 +1880,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "PATCH /instances/:instanceId/routes/:id",
@@ -2101,7 +2101,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "POST /agents/:id/identities",
@@ -2140,7 +2140,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "POST /automations/:id/disable",
@@ -2192,7 +2192,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "POST /batch-jobs",
@@ -2231,7 +2231,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "POST /chats",
@@ -2556,7 +2556,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "POST /instances/:id/block",
@@ -2777,7 +2777,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "POST /keys",
@@ -3037,7 +3037,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "POST /messages/send/contact",
@@ -3245,7 +3245,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "POST /trust/handshake",
@@ -3336,7 +3336,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "POST /webhooks/:source",
@@ -3362,7 +3362,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     },
     {
       "key": "PUT /follow-up/agents/:id",
@@ -3505,7 +3505,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "ux-complete"
     }
   ]
 }

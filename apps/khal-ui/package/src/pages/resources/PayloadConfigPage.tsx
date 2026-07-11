@@ -5,7 +5,7 @@
  * stored and for how long. Storage stats up top, a config table (the `*` row is
  * the default), and a PUT editor with read-back.
  */
-import { MetricDisplay, Note, SectionCard } from '@khal-os/ui';
+import { Note, SectionCard } from '@khal-os/ui';
 import { useState } from 'react';
 import { z } from 'zod';
 import type { PayloadConfigRow } from '../../api/ext';
@@ -13,7 +13,7 @@ import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { type ColumnDef, DataTable, MutationResult, PageShell, ResourceDetail, SchemaForm } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
-import { errMsg } from './shared';
+import { StatGrid, errMsg } from './shared';
 
 const cfgSchema = z.object({
   storeWebhookRaw: z.boolean(),
@@ -90,20 +90,17 @@ export function PayloadConfigPage() {
       title="Payload Config"
       description="Per-event-type payload storage retention and stages."
     >
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
-        <SectionCard padding="md">
-          <MetricDisplay value={s?.totalPayloads ?? 0} label="Payloads stored" />
-        </SectionCard>
-        <SectionCard padding="md">
-          <MetricDisplay value={fmtBytes(s?.totalSizeCompressed)} label="Compressed size" />
-        </SectionCard>
-        <SectionCard padding="md">
-          <MetricDisplay
-            value={s?.avgCompressionRatio != null ? `${s.avgCompressionRatio.toFixed(2)}x` : '—'}
-            label="Avg compression"
-          />
-        </SectionCard>
-      </div>
+      <StatGrid
+        min={150}
+        stats={[
+          { label: 'Payloads stored', value: s?.totalPayloads ?? 0 },
+          { label: 'Compressed size', value: fmtBytes(s?.totalSizeCompressed) },
+          {
+            label: 'Avg compression',
+            value: s?.avgCompressionRatio != null ? `${s.avgCompressionRatio.toFixed(2)}x` : '—',
+          },
+        ]}
+      />
 
       <DataTable
         columns={columns}

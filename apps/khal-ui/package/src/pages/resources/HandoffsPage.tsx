@@ -4,11 +4,12 @@
  * Handoffs — the agent-to-agent handoff log (read-only). List with an inline
  * detail showing the handoff fields and any extra payload.
  */
-import { Button, SectionCard } from '@khal-os/ui';
+import { Button, Note, SectionCard } from '@khal-os/ui';
 import { useState } from 'react';
 import type { HandoffRecord } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { type ColumnDef, DataTable, FieldGrid, JsonInspector, PageShell, ResourceDetail } from '../../components';
+import { T } from '../../components/tokens';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
 import { errMsg, fmtTime } from './shared';
 
@@ -59,13 +60,25 @@ export function HandoffsPage() {
         </Button>
       }
     >
+      {list.error && (
+        <Note type="error" label="GET /handoffs · 500">
+          The handoffs list endpoint returns a <strong>500</strong> — a uuid-cast error where the list route falls into
+          the <code style={{ fontFamily: T.mono }}>/handoffs/:id</code> handler on the backend. This is a known backend
+          bug, surfaced here rather than hidden.
+          <span style={{ display: 'block', marginTop: 6, fontFamily: T.mono, fontSize: 12, color: T.secondary }}>
+            {errMsg(list.error)}
+          </span>
+        </Note>
+      )}
+
       <DataTable
         columns={columns}
         rows={list.data?.data ?? []}
         getRowKey={(r) => r.id}
         loading={list.isLoading}
-        error={errMsg(list.error)}
+        error={null}
         emptyTitle="No handoffs"
+        emptyDescription={list.error ? 'List unavailable — see the error above.' : undefined}
         onRowClick={(r) => setSelected(r)}
       />
 
