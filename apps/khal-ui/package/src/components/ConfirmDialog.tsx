@@ -30,6 +30,8 @@ export interface ConfirmDialogProps {
   confirmPhrase?: string;
   confirmLabel?: string;
   pending?: boolean;
+  /** Block confirmation even when the phrase is satisfied (e.g. an invalid value in `description`). */
+  confirmDisabled?: boolean;
 }
 
 export function ConfirmDialog({
@@ -45,11 +47,12 @@ export function ConfirmDialog({
   confirmPhrase,
   confirmLabel = 'Confirm',
   pending = false,
+  confirmDisabled = false,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState('');
   const requireType = destructive ?? EFFECTS[effect].mutating;
   const phrase = confirmPhrase ?? targetName;
-  const canConfirm = !pending && confirmSatisfied(typed, phrase, requireType);
+  const canConfirm = !pending && !confirmDisabled && confirmSatisfied(typed, phrase, requireType);
 
   return (
     <Dialog open={open} onClose={onClose}>

@@ -22,31 +22,8 @@ import {
 } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
+import { coerceValue, displayValue, groupOf, isSecretWipe } from './settings-helpers';
 import { errMsg, fmtTime } from './shared';
-
-function groupOf(key: string): string {
-  const dot = key.indexOf('.');
-  if (dot > 0) return key.slice(0, dot);
-  const us = key.indexOf('_');
-  return us > 0 ? key.slice(0, us) : 'general';
-}
-
-/** Parse a value string the way the API's type auto-detect expects: JSON if it parses, else the raw string. */
-function coerceValue(text: string): unknown {
-  const t = text.trim();
-  if (!t) return '';
-  try {
-    return JSON.parse(t);
-  } catch {
-    return text;
-  }
-}
-
-function displayValue(s: SettingRow): string {
-  if (s.isSecret) return '••••••••';
-  if (s.value === null || s.value === undefined) return '—';
-  return typeof s.value === 'object' ? JSON.stringify(s.value) : String(s.value);
-}
 
 export function SettingsPage() {
   const { ext } = useOmniClient();
@@ -91,6 +68,7 @@ export function SettingsPage() {
   }, [list.data]);
 
   const selected = detail.data?.data;
+  const restoreWipe = selected ? isSecretWipe(selected, restoreValue) : false;
 
   const settingColumns: ColumnDef<SettingRow>[] = [
     {
@@ -198,7 +176,7 @@ export function SettingsPage() {
                 <Button
                   size="small"
                   variant="default"
-                  disabled={put.isPending}
+                  disabled={put.isPending || isSecretWipe(selected, editValue)}
                   onClick={() =>
                     put.mutate({ key: selected.key, value: coerceValue(editValue), reason: 'khal-ui edit' })
                   }
@@ -206,6 +184,11 @@ export function SettingsPage() {
                   Save
                 </Button>
               </div>
+              {isSecretWipe(selected, editValue) && (
+                <div style={{ marginTop: 6, fontSize: 12, color: T.muted }}>
+                  Enter a new value to save — a secret can't be overwritten with an empty string.
+                </div>
+              )}
               {(put.readBackData || put.error) && (
                 <div style={{ marginTop: 12 }}>
                   <MutationResult
@@ -243,7 +226,7 @@ export function SettingsPage() {
         open={confirmRestore}
         onClose={() => setConfirmRestore(false)}
         onConfirm={() => {
-          if (selectedKey)
+          if (selectedKey && !restoreWipe)
             put.mutate({ key: selectedKey, value: coerceValue(restoreValue), reason: 'khal-ui restore' });
           setConfirmRestore(false);
         }}
@@ -252,10 +235,16 @@ export function SettingsPage() {
         targetId={selectedKey ?? ''}
         effect="live"
         confirmLabel="Restore"
+        confirmDisabled={restoreWipe}
         description={
           <span style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={{ fontSize: 12, color: T.muted }}>Value to restore (JSON auto-detected)</span>
             <Input value={restoreValue} onChange={(e) => setRestoreValue(e.target.value)} placeholder="value" />
+            {restoreWipe && (
+              <span style={{ fontSize: 12, color: T.muted }}>
+                Enter a value to restore — a secret can't be overwritten with an empty string.
+              </span>
+            )}
           </span>
         }
       />

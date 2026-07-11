@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { AgentRouteRow, AgentRow } from '../../api/ext';
-import { explainRouteDecision, pickWinningRoute } from './routing-helpers';
+import { explainRouteDecision, messageTypeNote, pickWinningRoute } from './routing-helpers';
 
 const route = (over: Partial<AgentRouteRow>): AgentRouteRow => ({
   id: 'r1',
@@ -100,5 +100,41 @@ describe('explainRouteDecision', () => {
     });
     expect(d.winningRoute).toBeNull();
     expect(d.verdict).toContain('fall back to the instance default');
+  });
+
+  test('includes a message-type relevance step reflecting the simulated type', () => {
+    const base = {
+      instanceName: 'x',
+      routes: [route({})],
+      access: { allowed: true },
+      agent: agent({}),
+      providerHealth: { healthy: true },
+    };
+    const reaction = explainRouteDecision({ ...base, messageType: 'reaction' });
+    const step = reaction.steps.find((s) => s.label === 'Message type');
+    expect(step?.outcome).toBe('warn');
+    expect(step?.detail.toLowerCase()).toContain('reaction');
+
+    const image = explainRouteDecision({ ...base, messageType: 'image' });
+    expect(image.steps.find((s) => s.label === 'Message type')?.detail.toLowerCase()).toContain('media');
+
+    // defaults to text when unspecified
+    const dflt = explainRouteDecision(base);
+    expect(dflt.steps.find((s) => s.label === 'Message type')?.detail.toLowerCase()).toContain('baseline');
+  });
+});
+
+describe('messageTypeNote', () => {
+  test('warns on reactions (commonly dropped by trigger mode)', () => {
+    expect(messageTypeNote('reaction').outcome).toBe('warn');
+  });
+  test('notes media requirements for image/audio/document', () => {
+    for (const t of ['image', 'audio', 'document', 'video']) {
+      expect(messageTypeNote(t).detail.toLowerCase()).toContain(t);
+    }
+  });
+  test('treats missing/text as the baseline path', () => {
+    expect(messageTypeNote(null).detail.toLowerCase()).toContain('baseline');
+    expect(messageTypeNote('text').outcome).toBe('info');
   });
 });

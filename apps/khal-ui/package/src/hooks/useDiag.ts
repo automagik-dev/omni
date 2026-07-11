@@ -19,6 +19,8 @@ export interface DiagResult {
   baseUrl?: string;
   reason?: string;
   message?: string;
+  /** Upstream HTTP status when the key was rejected (auth: 'invalid'). */
+  upstreamStatus?: number;
 }
 
 async function fetchDiag(diagPath: string): Promise<DiagResult> {

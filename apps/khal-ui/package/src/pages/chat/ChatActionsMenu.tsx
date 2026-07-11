@@ -266,6 +266,11 @@ export function ChatActionsMenu({ chat, onChanged }: { chat: ChatRow; onChanged?
                 }),
               { allowed: sessionAllowed, reason: sessionReason },
             )}
+            {!sessionAllowed && (
+              <div style={{ padding: '4px 12px 6px', fontSize: 11, color: T.muted, lineHeight: 1.35 }}>
+                {sessionReason}
+              </div>
+            )}
           </div>
         </>
       )}

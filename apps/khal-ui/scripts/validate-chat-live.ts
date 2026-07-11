@@ -27,7 +27,7 @@
  * The `mutate` guard refuses any other write; the evidence lists every mutation.
  */
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createBff } from '../service/src/bff.ts';
 
 const FELIPE_WHATSAPP = '506377b1-eb79-4ae3-abc1-80bd00986f6b'; // sends the canary
@@ -350,6 +350,7 @@ function finish(evidence: Record<string, unknown>): number {
   const hardFailures = checks.filter((c) => c.status === 'fail' && !SOFT_CHECKS.has(c.name));
   const summary = {
     ok: hardFailures.length === 0,
+    generatedAt: new Date().toISOString(),
     productionIds: PRODUCTION_IDS,
     mutations,
     checks,
@@ -357,6 +358,17 @@ function finish(evidence: Record<string, unknown>): number {
     evidence,
   };
   console.log(JSON.stringify(summary, null, 2));
+
+  // Persist a key-free copy so `bun run evidence` can reuse it without re-sending
+  // the canary. Content is already truncated in `evidence`; no key material here.
+  try {
+    const dir = `${import.meta.dir}/../evidence`;
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const date = new Date().toISOString().slice(0, 10);
+    writeFileSync(`${dir}/chat-evidence-${date}.json`, `${JSON.stringify(summary, null, 2)}\n`);
+  } catch {
+    /* evidence persistence is best-effort; the stdout JSON is the source of record */
+  }
   if (hardFailures.length > 0) {
     console.error(`\nFAIL: ${hardFailures.length} hard check(s) failed.`);
     return 1;

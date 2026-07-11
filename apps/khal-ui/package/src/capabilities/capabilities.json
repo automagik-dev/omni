@@ -982,7 +982,8 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "live-verified"
+      "uiStatus": "live-verified",
+      "note": "backend returns 500 as of 2026-07-11; error surfaced honestly in UI"
     },
     {
       "key": "GET /handoffs/:id",

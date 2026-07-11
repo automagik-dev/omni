@@ -66,6 +66,8 @@ export interface Capability {
   realtime: boolean;
   /** UI coverage level for this capability. */
   uiStatus: UiStatus;
+  /** Optional honest caveat (e.g. a known backend bug); curated, not derived. */
+  note?: string;
 }
 
 interface InventoryFile {
@@ -131,6 +133,15 @@ const DARK_CAPABILITIES: Array<{ method: string; route: string }> = [
   { method: 'GET', route: '/handoffs' },
   { method: 'GET', route: '/handoffs/:id' },
 ];
+
+// ── Curated notes — honest caveats about specific capabilities ────────────────
+// Manually maintained (not derivable from the census sources) and attached by
+// key during assembly, so `--check` stays deterministic. Keep terse and factual;
+// these render as caveats in the Capabilities page.
+
+const CAPABILITY_NOTES: Record<string, string> = {
+  'GET /handoffs': 'backend returns 500 as of 2026-07-11; error surfaced honestly in UI',
+};
 
 // ── Merge ────────────────────────────────────────────────────────────────────
 
@@ -204,6 +215,7 @@ function assemble(previous: Map<string, UiStatus>): InventoryFile {
   const caps = [...buildCapabilities().values()].map((cap) => ({
     ...cap,
     uiStatus: previous.get(cap.key) ?? cap.uiStatus,
+    ...(CAPABILITY_NOTES[cap.key] ? { note: CAPABILITY_NOTES[cap.key] } : {}),
   }));
   caps.sort((a, b) => a.key.localeCompare(b.key));
 

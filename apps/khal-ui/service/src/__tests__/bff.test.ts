@@ -80,6 +80,48 @@ describe('BFF proxy', () => {
     const res = await bff.fetch(new Request('http://localhost:8899/nope'));
     expect(res.status).toBe(404);
   });
+
+  test('SSE: a client disconnect aborts the upstream fetch (closes the backend stream)', async () => {
+    let upstreamSignal: AbortSignal | undefined;
+    const bff = bffWith(async (_input, init) => {
+      upstreamSignal = init?.signal ?? undefined;
+      // A never-ending body, like a live SSE endpoint.
+      const body = new ReadableStream<Uint8Array>({ start() {} });
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    });
+
+    const ac = new AbortController();
+    const res = await bff.fetch(
+      new Request('http://localhost:8899/omni/api/v2/logs/stream', {
+        headers: { accept: 'text/event-stream' },
+        signal: ac.signal,
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(upstreamSignal?.aborted).toBe(false);
+
+    ac.abort();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(upstreamSignal?.aborted).toBe(true);
+  });
+
+  test('a client that disconnects before the backend responds gets 499, not a false timeout', async () => {
+    const bff = bffWith(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+          );
+        }),
+    );
+    const ac = new AbortController();
+    const promise = bff.fetch(new Request('http://localhost:8899/omni/api/v2/instances', { signal: ac.signal }));
+    ac.abort();
+    const res = await promise;
+    expect(res.status).toBe(499);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('CLIENT_CLOSED');
+  });
 });
 
 describe('BFF diagnostics', () => {

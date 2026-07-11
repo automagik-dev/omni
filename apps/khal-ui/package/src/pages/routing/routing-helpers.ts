@@ -59,6 +59,37 @@ export interface RouteDecisionInput {
   providerHealth: ProviderHealth | null;
   /** Operator-picked route to explain; defaults to the highest-priority active route. */
   selectedRouteId?: string | null;
+  /** Simulated inbound message type (text/image/audio/document/reaction), for a relevance note. */
+  messageType?: string | null;
+}
+
+/**
+ * A synthetic relevance note for the simulated message type. Routing itself is
+ * type-agnostic (the same route wins), but whether a matched route actually
+ * *acts* depends on the type: reactions are commonly dropped by an agent's
+ * trigger/reply mode, and media requires the agent/provider to accept it.
+ */
+export function messageTypeNote(messageType: string | null | undefined): DecisionStep {
+  const type = (messageType ?? 'text').toLowerCase();
+  if (type === 'reaction') {
+    return {
+      label: 'Message type',
+      outcome: 'warn',
+      detail: 'Reaction — routing matches the same, but many agents drop reaction events via their trigger/reply mode.',
+    };
+  }
+  if (type === 'image' || type === 'audio' || type === 'document' || type === 'video') {
+    return {
+      label: 'Message type',
+      outcome: 'info',
+      detail: `${type} — media inbound; the matched route still wins, but the agent/provider must accept ${type} (transcription/vision may apply).`,
+    };
+  }
+  return {
+    label: 'Message type',
+    outcome: 'info',
+    detail: 'text — the baseline path; routing and triggers apply exactly as shown above.',
+  };
 }
 
 export interface RouteDecision {
@@ -152,6 +183,9 @@ export function explainRouteDecision(input: RouteDecisionInput): RouteDecision {
       steps.push({ label: 'Provider health', outcome: 'info', detail: 'Provider not probed.' });
     }
   }
+
+  // 5. Message-type relevance (routing is type-agnostic; delivery may not be).
+  steps.push(messageTypeNote(input.messageType));
 
   // Verdict.
   const blocked = steps.some((s) => s.outcome === 'fail');

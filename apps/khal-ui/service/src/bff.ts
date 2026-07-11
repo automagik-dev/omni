@@ -101,6 +101,12 @@ export function createBff(config: BffConfig): Bff {
     const controller = new AbortController();
     const timer = streaming ? undefined : setTimeout(() => controller.abort(), timeoutMs);
 
+    // Tear the upstream down if the client disconnects. Critical for SSE: without
+    // this, a browser closing a `/logs/stream` tab leaves the backend streaming
+    // into a dead socket. `req.signal` aborts when the client goes away.
+    const onClientAbort = () => controller.abort();
+    req.signal.addEventListener('abort', onClientAbort);
+
     const init: StreamingRequestInit = {
       method: req.method,
       headers: upstreamHeaders(req),
@@ -117,12 +123,22 @@ export function createBff(config: BffConfig): Bff {
       upstream = await doFetch(target, init);
     } catch (err) {
       if (timer) clearTimeout(timer);
+      req.signal.removeEventListener('abort', onClientAbort);
       const aborted = err instanceof Error && err.name === 'AbortError';
+      // A timer-driven abort is a real upstream timeout; a client-driven abort
+      // means the caller already went away, so distinguish the two.
+      if (aborted && req.signal.aborted) {
+        return jsonError(req, 499, 'CLIENT_CLOSED', 'Client closed the request before the backend responded.');
+      }
       return aborted
         ? jsonError(req, 504, 'UPSTREAM_TIMEOUT', `Omni backend did not respond within ${timeoutMs}ms.`)
         : jsonError(req, 502, 'UPSTREAM_UNREACHABLE', 'Could not reach the Omni backend.');
     }
     if (timer) clearTimeout(timer);
+    // Non-stream responses are fully read downstream; drop the abort link so a
+    // late client-abort can't cancel an already-delivered body. SSE keeps it: the
+    // stream lives on and must follow the client's lifetime.
+    if (!streaming) req.signal.removeEventListener('abort', onClientAbort);
 
     const headers = new Headers(upstream.headers);
     for (const h of HOP_BY_HOP) headers.delete(h);

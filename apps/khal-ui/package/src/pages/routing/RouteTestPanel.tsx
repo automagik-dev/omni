@@ -69,7 +69,9 @@ export function RouteTestPanel({ instances }: { instances: Instance[] }) {
       const access =
         (await ext.access.check({ instanceId, platformUserId: identity, channel: instance.channel })).data ?? null;
 
-      setDecision(explainRouteDecision({ instanceName: instance.name, routes, access, agent, providerHealth }));
+      setDecision(
+        explainRouteDecision({ instanceName: instance.name, routes, access, agent, providerHealth, messageType }),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Route test failed');
     } finally {

@@ -21,6 +21,8 @@ export interface Capability {
   destructive: boolean;
   realtime: boolean;
   uiStatus: UiStatus;
+  /** Optional honest caveat (e.g. a known backend bug); curated, not derived. */
+  note?: string;
 }
 
 export interface CapabilityInventory {
