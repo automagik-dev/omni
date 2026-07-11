@@ -596,6 +596,315 @@ export interface ListBatchJobsParams {
   [key: string]: string | number | boolean | undefined;
 }
 
+// ── Horizontal-coverage family shapes (Group F) ───────────────────────────────
+// Loose index-signatured rows for the remaining Omni families the breadth pass
+// surfaces. Shapes mirror the API's Drizzle rows / service returns; index
+// signatures capture undocumented columns so tables/detail views see every field.
+
+export interface ConversationRow {
+  id: string;
+  title?: string | null;
+  summary?: string | null;
+  state?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface PersonRow {
+  id: string;
+  displayName?: string | null;
+  primaryPhone?: string | null;
+  primaryEmail?: string | null;
+  avatarUrl?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface PersonPresence {
+  person?: PersonRow;
+  identities?: Array<Record<string, unknown>>;
+  summary?: Record<string, unknown>;
+  byChannel?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface ContactRow {
+  platformUserId?: string;
+  displayName?: string | null;
+  phone?: string | null;
+  avatarUrl?: string | null;
+  isGroup?: boolean;
+  isBusiness?: boolean;
+  platformMetadata?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface GroupRow {
+  externalId?: string;
+  name?: string | null;
+  description?: string | null;
+  memberCount?: number;
+  createdAt?: string | null;
+  createdBy?: string | null;
+  isReadOnly?: boolean;
+  platformMetadata?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface JourneySummary {
+  totalTracked?: number;
+  completedJourneys?: number;
+  activeJourneys?: number;
+  since?: number;
+  stages?: Record<
+    string,
+    { count: number; avg: number; min: number; max: number; p50: number; p95: number; p99: number }
+  >;
+  [key: string]: unknown;
+}
+
+export interface Journey {
+  correlationId?: string;
+  checkpoints?: Array<{ name: string; stage: string; timestamp: number }>;
+  startedAt?: number;
+  completedAt?: number;
+  latencies?: Record<string, number>;
+  [key: string]: unknown;
+}
+
+export interface VoiceSession {
+  sessionId: string;
+  instanceId?: string;
+  channelId?: string;
+  state?: string;
+  participants?: unknown;
+  createdAt?: string;
+  [key: string]: unknown;
+}
+
+export interface EventAnalytics {
+  totalMessages?: number;
+  successfulMessages?: number;
+  failedMessages?: number;
+  successRate?: number;
+  avgProcessingTimeMs?: number | null;
+  avgAgentTimeMs?: number | null;
+  messageTypes?: Record<string, number>;
+  errorStages?: Record<string, number>;
+  instances?: Record<string, number>;
+  byChannel?: Record<string, number>;
+  byDirection?: { inbound: number; outbound: number };
+  timeline?: Array<{ bucket: string; count: number }>;
+  [key: string]: unknown;
+}
+
+export interface EventMetrics {
+  totalEvents?: number;
+  eventsLast24h?: number;
+  eventsLast7d?: number;
+  eventsLastHour?: number;
+  eventsPerHour?: number;
+  eventsPerMinute?: number;
+  completed?: number;
+  failed?: number;
+  pending?: number;
+  avgProcessingTimeMs?: number | null;
+  avgAgentLatencyMs?: number | null;
+  p95ProcessingTimeMs?: number | null;
+  failureRate?: number;
+  errorsByStage?: Record<string, number>;
+  deadLettersPending?: number;
+  deadLettersResolved?: number;
+  payloadsStored?: number;
+  storageSizeBytes?: number;
+  [key: string]: unknown;
+}
+
+export interface ReplaySession {
+  id: string;
+  status?: string;
+  options?: Record<string, unknown>;
+  progress?: Record<string, unknown>;
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
+  dryRun?: boolean;
+  [key: string]: unknown;
+}
+
+export interface DeadLetterRow {
+  id: string;
+  eventId?: string;
+  eventType?: string;
+  subject?: string;
+  payload?: unknown;
+  error?: string;
+  stack?: string | null;
+  autoRetryCount?: number;
+  manualRetryCount?: number;
+  nextAutoRetryAt?: string | null;
+  status?: 'pending' | 'retrying' | 'resolved' | 'abandoned' | string;
+  createdAt?: string;
+  lastRetryAt?: string | null;
+  resolvedAt?: string | null;
+  resolvedBy?: string | null;
+  [key: string]: unknown;
+}
+
+export interface DeadLetterStats {
+  total?: number;
+  pending?: number;
+  resolved?: number;
+  abandoned?: number;
+  byEventType?: Record<string, number>;
+  [key: string]: unknown;
+}
+
+export interface LogEntry {
+  time?: string | number;
+  level?: string;
+  module?: string;
+  msg?: string;
+  data?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface SettingRow {
+  id?: string;
+  key: string;
+  value?: unknown;
+  valueType?: 'string' | 'integer' | 'boolean' | 'json' | 'secret' | string;
+  category?: string | null;
+  description?: string | null;
+  isSecret?: boolean;
+  isRequired?: boolean;
+  defaultValue?: unknown;
+  createdAt?: string;
+  updatedAt?: string;
+  updatedBy?: string | null;
+  [key: string]: unknown;
+}
+
+export interface SettingHistoryRow {
+  oldValue?: unknown;
+  newValue?: unknown;
+  changedBy?: string | null;
+  changedAt?: string;
+  changeReason?: string | null;
+  [key: string]: unknown;
+}
+
+export interface PayloadConfigRow {
+  id?: string;
+  eventType: string;
+  storeWebhookRaw?: boolean;
+  storeAgentRequest?: boolean;
+  storeAgentResponse?: boolean;
+  storeChannelSend?: boolean;
+  storeError?: boolean;
+  retentionDays?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface PayloadStats {
+  totalPayloads?: number;
+  totalSizeOriginal?: number;
+  totalSizeCompressed?: number;
+  avgCompressionRatio?: number;
+  byStage?: Record<string, number>;
+  byEventType?: Record<string, number>;
+  [key: string]: unknown;
+}
+
+export interface EventPayloadStageRecord {
+  id?: string;
+  eventId?: string;
+  eventType?: string;
+  stage?: string;
+  payloadSizeOriginal?: number | null;
+  payloadSizeCompressed?: number | null;
+  timestamp?: string;
+  containsMedia?: boolean;
+  containsBase64?: boolean;
+  deletedAt?: string | null;
+  hasData?: boolean;
+  payload?: unknown;
+  [key: string]: unknown;
+}
+
+export interface ApiKeyRow {
+  id: string;
+  name: string;
+  description?: string | null;
+  keyPrefix?: string;
+  scopes?: string[];
+  profile?: string | null;
+  instanceIds?: string[];
+  status?: 'active' | 'revoked' | 'expired' | string;
+  rateLimit?: number | null;
+  expiresAt?: string | null;
+  lastUsedAt?: string | null;
+  usageCount?: number;
+  revokedAt?: string | null;
+  revokedBy?: string | null;
+  revokeReason?: string | null;
+  createdAt?: string;
+  /** Present ONLY on the create response, once. */
+  plainTextKey?: string;
+  [key: string]: unknown;
+}
+
+export interface ApiKeyAuditRow {
+  id?: string;
+  apiKeyId?: string;
+  method?: string;
+  path?: string;
+  statusCode?: number;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  responseTimeMs?: number | null;
+  timestamp?: string;
+  [key: string]: unknown;
+}
+
+export interface WebhookSourceRow {
+  id: string;
+  name: string;
+  description?: string | null;
+  expectedHeaders?: Record<string, boolean> | null;
+  enabled?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface AccessRuleRow {
+  id: string;
+  instanceId?: string | null;
+  ruleType?: 'allow' | 'deny' | string;
+  phonePattern?: string | null;
+  platformUserId?: string | null;
+  personId?: string | null;
+  priority?: number;
+  enabled?: boolean;
+  reason?: string | null;
+  action?: 'block' | 'allow' | 'silent_block' | string;
+  blockMessage?: string | null;
+  expiresAt?: string | null;
+  createdAt?: string;
+  [key: string]: unknown;
+}
+
+export interface MediaResult {
+  provider?: string;
+  [key: string]: unknown;
+}
+
 // ── Fetch helper ──────────────────────────────────────────────────────────────
 
 function buildQuery(params?: Record<string, string | number | boolean | undefined>): string {
@@ -643,10 +952,16 @@ export function omniExt(base = '/omni') {
       listHosts: () => get<{ items?: TrustHost[] }>('/trust/hosts'),
       getHost: (id: string) => get<{ data?: TrustHost }>(`/trust/hosts/${encodeURIComponent(id)}`),
       handshake: (body: Record<string, unknown>) => post<{ data?: TrustHost }>('/trust/handshake', body),
+      /** LIVE: wholesale-replace a host's scopes. */
+      patchScopes: (id: string, scopes: string[]) => patch<{ data?: TrustHost }>(`/trust/hosts/${enc(id)}`, { scopes }),
+      /** DESTRUCTIVE: revoke a trust host (breaks its signing). */
+      remove: (id: string) => del<{ data?: TrustHost }>(`/trust/hosts/${enc(id)}`),
     },
     handoffs: {
-      list: (params?: { chatId?: string; instanceId?: string; limit?: number; cursor?: string }) =>
-        get<{ items?: HandoffRecord[] }>(`/handoffs${buildQuery(params)}`),
+      list: (params?: { chatId?: string; instanceId?: string; limit?: number; offset?: number }) =>
+        get<{ data?: HandoffRecord[]; meta?: { limit?: number; offset?: number; count?: number } }>(
+          `/handoffs${buildQuery(params)}`,
+        ),
       get: (id: string) => get<{ data?: HandoffRecord }>(`/handoffs/${encodeURIComponent(id)}`),
     },
     followUp: {
@@ -677,6 +992,16 @@ export function omniExt(base = '/omni') {
       patch: (id: string, body: Record<string, unknown>) =>
         patch<{ data?: InstanceRow }>(`/instances/${enc(id)}`, body),
       supportedChannels: () => get<{ items?: SupportedChannel[] }>('/instances/supported-channels'),
+      list: () => get<{ items?: InstanceRow[] }>('/instances'),
+      // Per-instance directory reads (contacts / groups fan-in for the messaging pages).
+      contacts: (id: string, params?: { limit?: number; search?: string; guildId?: string; excludeGroups?: boolean }) =>
+        get<{ items?: ContactRow[]; meta?: Record<string, unknown> }>(
+          `/instances/${enc(id)}/contacts${buildQuery(params)}`,
+        ),
+      groups: (id: string, params?: { limit?: number; search?: string }) =>
+        get<{ items?: GroupRow[]; meta?: Record<string, unknown> }>(
+          `/instances/${enc(id)}/groups${buildQuery(params)}`,
+        ),
 
       // Profile writes.
       setProfileName: (id: string, name: string) =>
@@ -865,14 +1190,222 @@ export function omniExt(base = '/omni') {
      * {@link listForChat} over-fetches and narrows client-side on `chatUuid`.
      */
     events: {
-      list: (params?: { instanceId?: string; eventType?: string; limit?: number; cursor?: string }) =>
-        get<PaginatedRows<EventRow>>(`/events${buildQuery(params)}`),
+      list: (params?: {
+        instanceId?: string;
+        eventType?: string;
+        channel?: string;
+        direction?: string;
+        personId?: string;
+        search?: string;
+        since?: string;
+        until?: string;
+        limit?: number;
+        cursor?: string;
+      }) => get<PaginatedRows<EventRow>>(`/events${buildQuery(params)}`),
       get: (id: string) => get<{ data?: EventRow }>(`/events/${enc(id)}`),
-      payloads: (id: string) => get<{ items?: EventPayloadRecord[] }>(`/events/${enc(id)}/payloads`),
+      analytics: (params?: {
+        since?: string;
+        until?: string;
+        instanceId?: string;
+        granularity?: string;
+        allTime?: boolean;
+      }) => get<EventAnalytics>(`/events/analytics${buildQuery(params)}`),
+      bySender: (senderId: string, params?: { instanceId?: string; limit?: number }) =>
+        get<{ items?: EventRow[]; meta?: { total?: number; hasMore?: boolean } }>(
+          `/events/by-sender/${enc(senderId)}${buildQuery(params)}`,
+        ),
+      timeline: (personId: string, params?: { channels?: string; since?: string; until?: string; limit?: number }) =>
+        get<{ personId?: string; items?: EventRow[]; meta?: { hasMore?: boolean; cursor?: string } }>(
+          `/events/timeline/${enc(personId)}${buildQuery(params)}`,
+        ),
+      /** POST full-text/filter search. */
+      search: (body: Record<string, unknown>) =>
+        post<{ items?: EventRow[]; meta?: { hasMore?: boolean; cursor?: string }; summary?: string }>(
+          '/events/search',
+          body,
+        ),
+      /** LIVE: publish a synthetic `custom.*` event into the pipeline. */
+      trigger: (body: {
+        eventType: string;
+        payload: Record<string, unknown>;
+        correlationId?: string;
+        instanceId?: string;
+      }) => post<{ eventId?: string; published?: boolean }>('/events/trigger', body),
+      payloads: (id: string) => get<{ items?: EventPayloadStageRecord[] }>(`/events/${enc(id)}/payloads`),
+      payloadStage: (id: string, stage: string) =>
+        get<{ data?: EventPayloadStageRecord }>(`/events/${enc(id)}/payloads/${enc(stage)}`),
+      /** DESTRUCTIVE: soft-delete all stored payloads for an event. */
+      deletePayloads: (id: string, reason: string) =>
+        del<{ deleted?: number }>(`/events/${enc(id)}/payloads`, { reason }),
+    },
+    eventOps: {
+      metrics: () => get<{ data?: EventMetrics }>('/event-ops/metrics'),
+      replayList: () => get<{ items?: ReplaySession[] }>('/event-ops/replay'),
+      replayGet: (id: string) => get<{ data?: ReplaySession }>(`/event-ops/replay/${enc(id)}`),
+      /** LIVE: start a replay session (accepts dryRun in the body). */
+      replayCreate: (body: Record<string, unknown>) => post<{ data?: ReplaySession }>('/event-ops/replay', body),
+      /** LIVE: cancel a running replay session. */
+      replayDelete: (id: string) => del<{ success?: boolean }>(`/event-ops/replay/${enc(id)}`),
+      /** LIVE: run scheduled maintenance (auto-retry + cleanup). */
+      scheduled: () =>
+        post<{ data?: { autoRetry?: Record<string, number>; payloadCleanup?: number; deadLetterCleanup?: number } }>(
+          '/event-ops/scheduled',
+        ),
+    },
+    deadLetters: {
+      list: (params?: {
+        status?: string;
+        eventType?: string;
+        since?: string;
+        until?: string;
+        limit?: number;
+        cursor?: string;
+      }) =>
+        get<{ items?: DeadLetterRow[]; meta?: { hasMore?: boolean; cursor?: string } }>(
+          `/dead-letters${buildQuery(params)}`,
+        ),
+      get: (id: string) => get<{ data?: DeadLetterRow }>(`/dead-letters/${enc(id)}`),
+      stats: () => get<{ data?: DeadLetterStats }>('/dead-letters/stats'),
+      /** LIVE: re-enqueue a failed event. */
+      retry: (id: string) =>
+        post<{ success?: boolean; deadLetterId?: string; error?: string }>(`/dead-letters/${enc(id)}/retry`),
+      /** LIVE: mark resolved with an operator note. */
+      resolve: (id: string, note: string) =>
+        post<{ data?: DeadLetterRow }>(`/dead-letters/${enc(id)}/resolve`, { note }),
+      /** DESTRUCTIVE: abandon (give up on) a failed event. */
+      abandon: (id: string) => post<{ data?: DeadLetterRow }>(`/dead-letters/${enc(id)}/abandon`),
+    },
+    logs: {
+      recent: (params?: { modules?: string; level?: string; limit?: number }) =>
+        get<{ items?: LogEntry[]; meta?: { total?: number; bufferSize?: number; limit?: number } }>(
+          `/logs/recent${buildQuery(params)}`,
+        ),
+      /** SSE stream path (relative to `/api/v2`) for {@link useSse}. */
+      streamPath: (params?: { modules?: string; level?: string }) => `/logs/stream${buildQuery(params)}`,
+    },
+    metrics: {
+      /** Prometheus exposition text (through the BFF). */
+      text: async () => {
+        const res = await fetch(`${base}/api/v2/metrics`, { headers: { accept: 'text/plain' } });
+        return res.text();
+      },
+    },
+    conversations: {
+      list: (params?: { limit?: number }) => get<{ items?: ConversationRow[] }>(`/conversations${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: ConversationRow }>(`/conversations/${enc(id)}`),
+      chats: (id: string) => get<{ items?: ChatRow[] }>(`/conversations/${enc(id)}/chats`),
+      create: (body: Record<string, unknown>) => post<{ data?: ConversationRow }>('/conversations', body),
+      patch: (id: string, body: Record<string, unknown>) =>
+        patch<{ data?: ConversationRow }>(`/conversations/${enc(id)}`, body),
+      remove: (id: string) => del<{ success?: boolean }>(`/conversations/${enc(id)}`),
+    },
+    persons: {
+      list: (params?: { search?: string; limit?: number; cursor?: string }) =>
+        get<{ items?: PersonRow[]; meta?: { hasMore?: boolean; cursor?: string } }>(`/persons${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: PersonRow }>(`/persons/${enc(id)}`),
+      patch: (id: string, body: Record<string, unknown>) => patch<{ data?: PersonRow }>(`/persons/${enc(id)}`, body),
+      presence: (id: string) => get<{ data?: PersonPresence }>(`/persons/${enc(id)}/presence`),
+      timeline: (id: string, params?: { channels?: string; since?: string; until?: string; limit?: number }) =>
+        get<{ items?: EventRow[]; meta?: { hasMore?: boolean; cursor?: string } }>(
+          `/persons/${enc(id)}/timeline${buildQuery(params)}`,
+        ),
+      /** DESTRUCTIVE identity ops — never run against production persons in validation. */
+      link: (identityA: string, identityB: string) =>
+        post<{ data?: PersonRow }>('/persons/link', { identityA, identityB }),
+      unlink: (identityId: string, reason: string) =>
+        post<{ data?: { person?: PersonRow; identity?: unknown } }>('/persons/unlink', { identityId, reason }),
+      merge: (sourcePersonId: string, targetPersonId: string, reason?: string) =>
+        post<{ data?: { person?: PersonRow; deletedPersonId?: string } }>('/persons/merge', {
+          sourcePersonId,
+          targetPersonId,
+          reason,
+        }),
+    },
+    journeys: {
+      summary: (params?: { since?: string }) => get<JourneySummary>(`/journeys/summary${buildQuery(params)}`),
+      get: (correlationId: string) => get<Journey>(`/journeys/${enc(correlationId)}`),
+    },
+    voice: {
+      sessions: () => get<{ items?: VoiceSession[] }>('/voice/sessions'),
+      session: (id: string) => get<{ data?: VoiceSession }>(`/voice/sessions/${enc(id)}`),
+      /** LIVE: join a voice channel (could disturb a live instance). */
+      join: (body: { instanceId: string; channelId: string; guildId?: string }) =>
+        post<{ data?: VoiceSession }>('/voice/join', body),
+      /** LIVE: leave a voice session. */
+      leave: (sessionId: string) => post<{ success?: boolean }>('/voice/leave', { sessionId }),
+    },
+    settings: {
+      list: (params?: { category?: string }) => get<{ items?: SettingRow[] }>(`/settings${buildQuery(params)}`),
+      get: (key: string) => get<{ data?: SettingRow }>(`/settings/${enc(key)}`),
+      history: (key: string, params?: { limit?: number; since?: string }) =>
+        get<{ items?: SettingHistoryRow[] }>(`/settings/${enc(key)}/history${buildQuery(params)}`),
+      /** LIVE: set a single setting (type auto-detected). */
+      put: (key: string, value: unknown, reason?: string) =>
+        put<{ data?: SettingRow }>(`/settings/${enc(key)}`, { value, reason }),
+      /** LIVE: bulk update. */
+      patch: (settings: Record<string, unknown>, reason?: string) =>
+        patch<{ items?: SettingRow[] }>('/settings', { settings, reason }),
+      /** DESTRUCTIVE: delete a setting key. */
+      remove: (key: string) => del<{ success?: boolean }>(`/settings/${enc(key)}`),
+    },
+    payloadConfig: {
+      list: () => get<{ items?: PayloadConfigRow[] }>('/payload-config'),
+      stats: () => get<{ data?: PayloadStats }>('/payload-stats'),
+      /** LIVE: upsert per-event-type payload storage config. */
+      put: (eventType: string, body: Record<string, unknown>) =>
+        put<{ data?: PayloadConfigRow }>(`/payload-config/${enc(eventType)}`, body),
+    },
+    keys: {
+      list: (params?: { status?: string; limit?: number }) =>
+        get<{ items?: ApiKeyRow[]; meta?: { total?: number } }>(`/keys${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: ApiKeyRow }>(`/keys/${enc(id)}`),
+      audit: (id: string, params?: { limit?: number; cursor?: string }) =>
+        get<{ items?: ApiKeyAuditRow[]; meta?: { total?: number; hasMore?: boolean; cursor?: string } }>(
+          `/keys/${enc(id)}/audit${buildQuery(params)}`,
+        ),
+      /** LIVE: create a key. Response carries `plainTextKey` ONCE. `admin` profile is refused server-side. */
+      create: (body: Record<string, unknown>) => post<{ data?: ApiKeyRow }>('/keys', body),
+      patch: (id: string, body: Record<string, unknown>) => patch<{ data?: ApiKeyRow }>(`/keys/${enc(id)}`, body),
+      /** DESTRUCTIVE: revoke a key. */
+      revoke: (id: string, reason?: string) => post<{ data?: ApiKeyRow }>(`/keys/${enc(id)}/revoke`, { reason }),
+      /** DESTRUCTIVE: hard-delete a key. */
+      remove: (id: string) => del<{ data?: { deleted?: boolean } }>(`/keys/${enc(id)}`),
+    },
+    webhookSources: {
+      list: (params?: { enabled?: boolean }) =>
+        get<{ items?: WebhookSourceRow[] }>(`/webhook-sources${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: WebhookSourceRow }>(`/webhook-sources/${enc(id)}`),
+      create: (body: Record<string, unknown>) => post<{ data?: WebhookSourceRow }>('/webhook-sources', body),
+      patch: (id: string, body: Record<string, unknown>) =>
+        patch<{ data?: WebhookSourceRow }>(`/webhook-sources/${enc(id)}`, body),
+      /** DESTRUCTIVE: delete a webhook source. */
+      remove: (id: string) => del<{ success?: boolean }>(`/webhook-sources/${enc(id)}`),
+    },
+    media: {
+      tts: (body: Record<string, unknown>) => post<{ data?: MediaResult }>('/media/tts', body),
+      stt: (body: Record<string, unknown>) => post<{ data?: MediaResult }>('/media/stt', body),
+      imagine: (body: Record<string, unknown>) => post<{ data?: MediaResult }>('/media/imagine', body),
+      vision: (body: Record<string, unknown>) => post<{ data?: MediaResult }>('/media/vision', body),
+      film: (body: Record<string, unknown>) => post<{ data?: MediaResult }>('/media/film', body),
+      music: (body: Record<string, unknown>) => post<{ data?: MediaResult }>('/media/music', body),
+    },
+    apiInfo: {
+      info: () => get<Record<string, unknown>>('/info'),
+      health: () => get<Record<string, unknown>>('/health'),
+      openApiUrl: () => `${base}/api/v2/openapi.json`,
+      docsUrl: () => `${base}/api/v2/docs`,
     },
     access: {
       check: (body: { instanceId: string; platformUserId: string; channel: string }) =>
         post<{ data?: AccessDecision }>('/access/check', body),
+      rules: (params?: { instanceId?: string; type?: string }) =>
+        get<{ items?: AccessRuleRow[] }>(`/access/rules${buildQuery(params)}`),
+      rule: (id: string) => get<{ data?: AccessRuleRow }>(`/access/rules/${enc(id)}`),
+      createRule: (body: Record<string, unknown>) => post<{ data?: AccessRuleRow }>('/access/rules', body),
+      patchRule: (id: string, body: Record<string, unknown>) =>
+        patch<{ data?: AccessRuleRow }>(`/access/rules/${enc(id)}`, body),
+      /** DESTRUCTIVE: delete an access rule. */
+      removeRule: (id: string) => del<{ success?: boolean }>(`/access/rules/${enc(id)}`),
     },
     /** Read-only id → name resolvers for the Agent Lens (agents/providers). */
     resolve: {
@@ -966,13 +1499,25 @@ export function omniExt(base = '/omni') {
       metrics: () => get<{ data?: RouteCacheMetrics }>('/routes/metrics'),
     },
     turns: {
-      list: (params?: ListTurnsParams) => get<TurnListResponse>(`/turns${buildQuery(params)}`),
+      list: (params?: ListTurnsParams) => get<{ data?: TurnListResponse }>(`/turns${buildQuery(params)}`),
       get: (id: string) => get<{ data?: TurnItem }>(`/turns/${encodeURIComponent(id)}`),
-      stats: () => get<TurnStats>('/turns/stats'),
+      stats: () => get<{ data?: TurnStats }>('/turns/stats'),
+      /** LIVE: admin force-close a single turn. */
+      forceClose: (id: string, reason?: string) =>
+        post<{ data?: { turnId?: string; status?: string; closedAt?: string } }>(`/turns/${enc(id)}/close`, { reason }),
+      /** LIVE (admin): close ALL open turns — requires confirm. */
+      closeAll: (reason?: string) =>
+        post<{ data?: { closedCount?: number; message?: string } }>('/turns/close-all', { confirm: true, reason }),
     },
     context: {
-      get: (params?: { chatId?: string; instanceId?: string; limit?: number }) =>
-        get<ContextResult>(`/context${buildQuery(params)}`),
+      get: () => get<{ data?: ContextResult }>('/context'),
+      /** LIVE: set the API key's context pointer (use a synthetic chatId only in validation). */
+      set: (body: { instanceId?: string; chatId?: string; messageId?: string }) =>
+        post<{ data?: Record<string, unknown> }>('/context', body),
+      /** LIVE: switch the active instance. */
+      use: (instanceId: string) => post<{ data?: { activeInstanceId?: string } }>('/context/use', { instanceId }),
+      /** DESTRUCTIVE: clear the context pointer. */
+      clear: () => del<{ data?: { cleared?: boolean } }>('/context'),
     },
   };
 }

@@ -24,6 +24,30 @@ import { InstanceDetailPage } from '../pages/instances/InstanceDetailPage';
 import { InstancesListPage } from '../pages/instances/InstancesListPage';
 import { ProviderDetailPage } from '../pages/providers/ProviderDetailPage';
 import { ProvidersListPage } from '../pages/providers/ProvidersListPage';
+import { A2APage } from '../pages/resources/A2APage';
+import { AccessRulesPage } from '../pages/resources/AccessRulesPage';
+import { ApiInfoPage } from '../pages/resources/ApiInfoPage';
+import { ApiKeysPage } from '../pages/resources/ApiKeysPage';
+import { ContactsPage } from '../pages/resources/ContactsPage';
+import { ContextPage } from '../pages/resources/ContextPage';
+import { ConversationsPage } from '../pages/resources/ConversationsPage';
+import { DeadLettersPage } from '../pages/resources/DeadLettersPage';
+import { EventOpsPage } from '../pages/resources/EventOpsPage';
+import { EventsPage } from '../pages/resources/EventsPage';
+import { GroupsPage } from '../pages/resources/GroupsPage';
+import { HandoffsPage } from '../pages/resources/HandoffsPage';
+import { JourneysPage } from '../pages/resources/JourneysPage';
+import { LogsPage } from '../pages/resources/LogsPage';
+import { MediaConsolePage } from '../pages/resources/MediaConsolePage';
+import { MetricsPage } from '../pages/resources/MetricsPage';
+import { PayloadConfigPage } from '../pages/resources/PayloadConfigPage';
+import { PersonsPage } from '../pages/resources/PersonsPage';
+import { SettingsPage } from '../pages/resources/SettingsPage';
+import { TrustHostsPage } from '../pages/resources/TrustHostsPage';
+import { TtsVoicesPage } from '../pages/resources/TtsVoicesPage';
+import { TurnsPage } from '../pages/resources/TurnsPage';
+import { VoicePage } from '../pages/resources/VoicePage';
+import { WebhookSourcesPage } from '../pages/resources/WebhookSourcesPage';
 import { RoutingPage } from '../pages/routing/RoutingPage';
 import { AppShell } from './AppShell';
 import { ALL_NAV_ITEMS } from './sitemap';
@@ -41,6 +65,31 @@ const LIVE_PAGES: Record<string, ComponentType> = {
   '/batch-jobs': BatchJobsListPage,
   '/routing': RoutingPage,
   '/dev/capabilities': CapabilitiesPage,
+  // Group F — horizontal coverage (messaging, operations, configuration, access).
+  '/conversations': ConversationsPage,
+  '/persons': PersonsPage,
+  '/contacts': ContactsPage,
+  '/groups': GroupsPage,
+  '/journeys': JourneysPage,
+  '/voice': VoicePage,
+  '/webhook-sources': WebhookSourcesPage,
+  '/access-rules': AccessRulesPage,
+  '/events': EventsPage,
+  '/event-ops': EventOpsPage,
+  '/dead-letters': DeadLettersPage,
+  '/logs': LogsPage,
+  '/metrics': MetricsPage,
+  '/settings': SettingsPage,
+  '/payload-config': PayloadConfigPage,
+  '/tts-voices': TtsVoicesPage,
+  '/api-keys': ApiKeysPage,
+  '/trust-hosts': TrustHostsPage,
+  '/media-console': MediaConsolePage,
+  '/turns': TurnsPage,
+  '/context': ContextPage,
+  '/handoffs': HandoffsPage,
+  '/a2a': A2APage,
+  '/api-info': ApiInfoPage,
 };
 
 /** Detail routes not present in the sitemap (param routes, sub-pages). */
