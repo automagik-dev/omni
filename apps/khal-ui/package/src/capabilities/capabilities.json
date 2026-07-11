@@ -14,10 +14,10 @@
       "trust"
     ],
     "byUiStatus": {
-      "none": 145,
+      "none": 98,
       "exposed": 0,
-      "operable": 107,
-      "live-verified": 16,
+      "operable": 136,
+      "live-verified": 34,
       "ux-complete": 0
     }
   },
@@ -46,7 +46,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /agents/:id",
@@ -59,7 +59,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "DELETE /automations/:id",
@@ -72,7 +72,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "DELETE /chats/:id",
@@ -176,7 +176,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /follow-up/chats/:id",
@@ -267,7 +267,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "operable"
+      "uiStatus": "live-verified"
     },
     {
       "key": "DELETE /keys/:id",
@@ -332,7 +332,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /settings/:key",
@@ -397,7 +397,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /a2a/agents/:agentId/card",
@@ -410,7 +410,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /access/rules",
@@ -475,7 +475,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /agent-tasks/:id",
@@ -488,7 +488,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /agents",
@@ -501,7 +501,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /agents/:id",
@@ -514,7 +514,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /agents/:id/identities",
@@ -527,7 +527,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /agents/:id/tasks",
@@ -540,7 +540,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /automation-logs",
@@ -553,7 +553,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /automation-metrics",
@@ -566,7 +566,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /automations",
@@ -579,7 +579,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /automations/:id",
@@ -592,7 +592,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /automations/:id/logs",
@@ -605,7 +605,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /batch-jobs",
@@ -618,7 +618,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /batch-jobs/:id",
@@ -631,7 +631,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /batch-jobs/:id/status",
@@ -644,7 +644,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /chats",
@@ -943,7 +943,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /follow-up/chats/:id",
@@ -1268,7 +1268,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "operable"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /instances/:instanceId/routes/:id",
@@ -1281,7 +1281,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "operable"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /instances/supported-channels",
@@ -1554,7 +1554,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /providers/:id",
@@ -1567,7 +1567,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /providers/:id/agents",
@@ -1580,7 +1580,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /providers/:id/teams",
@@ -1593,7 +1593,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /providers/:id/workflows",
@@ -1606,7 +1606,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /routes/metrics",
@@ -1619,7 +1619,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /settings",
@@ -1801,7 +1801,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /agents/:id",
@@ -1814,7 +1814,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "PATCH /automations/:id",
@@ -1827,7 +1827,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /chats/:id",
@@ -2009,7 +2009,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /settings",
@@ -2061,7 +2061,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "POST /access/rules",
@@ -2087,7 +2087,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /agents",
@@ -2100,7 +2100,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "POST /agents/:id/identities",
@@ -2113,7 +2113,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /auth/validate",
@@ -2139,7 +2139,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "POST /automations/:id/disable",
@@ -2152,7 +2152,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /automations/:id/enable",
@@ -2165,7 +2165,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /automations/:id/execute",
@@ -2178,7 +2178,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /automations/:id/test",
@@ -2191,7 +2191,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "POST /batch-jobs",
@@ -2204,7 +2204,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /batch-jobs/:id/cancel",
@@ -2217,7 +2217,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /batch-jobs/estimate",
@@ -2230,7 +2230,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "POST /chats",
@@ -2776,7 +2776,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "operable"
+      "uiStatus": "live-verified"
     },
     {
       "key": "POST /keys",
@@ -3231,7 +3231,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /providers/:id/health",
@@ -3244,7 +3244,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "POST /trust/handshake",
@@ -3374,7 +3374,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PUT /follow-up/chats/:id",

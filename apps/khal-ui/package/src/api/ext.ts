@@ -345,6 +345,257 @@ export interface OmniError {
   upstreamStatus?: number;
 }
 
+// ── Agents / automation family shapes (Group E) ───────────────────────────────
+// Full rows for the agents-automation vertical. These mirror the API's Drizzle
+// rows (broader than the summary `AgentSummary`/`ProviderSummary` above) so the
+// registry cards and detail views can render every field the schema exposes.
+
+export type AgentProvider = 'claude' | 'agno' | 'openai' | 'gemini' | 'custom' | 'omni-internal';
+export type AgentType = 'assistant' | 'workflow' | 'team' | 'tool';
+
+/** A full agent row from GET /agents / GET /agents/:id. */
+export interface AgentRow {
+  id: string;
+  name: string;
+  provider: AgentProvider | string;
+  model?: string | null;
+  agentType: AgentType | string;
+  capabilities?: string[];
+  ownerId?: string | null;
+  agentProviderId?: string | null;
+  configPath?: string | null;
+  isInternal?: boolean;
+  isActive?: boolean;
+  metadata?: Record<string, unknown> | null;
+  agentCard?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface AgentIdentityRow {
+  id?: string;
+  platformIdentityId?: string;
+  agentId?: string;
+  [key: string]: unknown;
+}
+
+export type AgentTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'waiting_input';
+
+export interface AgentTaskRow {
+  id: string;
+  agentId: string;
+  chatId?: string | null;
+  conversationId?: string | null;
+  messageId?: string | null;
+  type: string;
+  title: string;
+  description?: string | null;
+  status: AgentTaskStatus | string;
+  progress?: number;
+  priority?: number;
+  metadata?: Record<string, unknown> | null;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  parentTaskId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+/** A full provider row. `apiKey` arrives masked; sensitive schemaConfig is `[REDACTED]`. */
+export interface ProviderRow {
+  id: string;
+  name: string;
+  schema?: string;
+  baseUrl?: string;
+  apiKey?: string | null;
+  schemaConfig?: Record<string, unknown> | null;
+  defaultStream?: boolean;
+  defaultTimeout?: number;
+  supportsStreaming?: boolean;
+  supportsImages?: boolean;
+  supportsAudio?: boolean;
+  supportsDocuments?: boolean;
+  description?: string | null;
+  tags?: string[];
+  isActive?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+/** POST /providers/:id/health response. */
+export interface ProviderHealth {
+  healthy: boolean;
+  latency?: number;
+  error?: string | null;
+}
+
+/** A discovered entry (agent/team/workflow) from a provider's discovery call. */
+export interface ProviderEntry {
+  id?: string;
+  name?: string;
+  type?: string;
+  [key: string]: unknown;
+}
+
+/** Provider sub-resource list — carries a `message` when the schema doesn't support discovery. */
+export interface ProviderEntriesResult {
+  items?: ProviderEntry[];
+  message?: string;
+  error?: string;
+}
+
+export interface AutomationRow {
+  id: string;
+  name: string;
+  description?: string | null;
+  triggerEventType: string;
+  triggerConditions?: Array<Record<string, unknown>>;
+  conditionLogic?: 'and' | 'or' | string;
+  actions?: Array<Record<string, unknown>>;
+  debounce?: Record<string, unknown> | null;
+  enabled?: boolean;
+  priority?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface AutomationTestResult {
+  matched: boolean;
+  conditions?: unknown[];
+  actions?: Array<{ type: string; wouldExecute: boolean }>;
+  dryRun?: boolean;
+  [key: string]: unknown;
+}
+
+export interface AutomationExecuteResult {
+  automationId: string;
+  triggered: boolean;
+  results: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+export interface AutomationLogRow {
+  id?: string;
+  automationId?: string;
+  eventId?: string;
+  status?: 'success' | 'failed' | 'skipped' | string;
+  conditionsMatched?: boolean;
+  actionsExecuted?: unknown;
+  error?: string | null;
+  executionTimeMs?: number;
+  createdAt?: string;
+  [key: string]: unknown;
+}
+
+export interface AutomationMetrics {
+  running?: boolean;
+  instanceQueues?: unknown[];
+  totalExecutions?: number;
+  totalActions?: number;
+  successRate?: number;
+  avgExecutionTimeMs?: number;
+  recentFailures?: number;
+  [key: string]: unknown;
+}
+
+export type BatchJobType = 'targeted_chat_sync' | 'time_based_batch' | 'media_redownload';
+export type BatchJobStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface BatchJobRow {
+  id: string;
+  jobType: BatchJobType | string;
+  instanceId: string;
+  status: BatchJobStatusValue | string;
+  requestParams?: Record<string, unknown> | null;
+  totalItems?: number;
+  processedItems?: number;
+  failedItems?: number;
+  skippedItems?: number;
+  currentItem?: string | null;
+  progressPercent?: number;
+  totalCostUsd?: number | string;
+  totalTokens?: number;
+  errorMessage?: string | null;
+  errors?: Array<Record<string, unknown>>;
+  createdAt?: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  [key: string]: unknown;
+}
+
+export interface BatchJobStatusRow {
+  id: string;
+  status: BatchJobStatusValue | string;
+  totalItems?: number;
+  processedItems?: number;
+  failedItems?: number;
+  skippedItems?: number;
+  progressPercent?: number;
+  currentItem?: string | null;
+  totalCostUsd?: number;
+  totalTokens?: number;
+  estimatedCompletion?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  [key: string]: unknown;
+}
+
+export interface BatchJobEstimate {
+  totalItems?: number;
+  estimatedCostUsd?: number;
+  estimatedTokens?: number;
+  breakdown?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface RouteCacheMetrics {
+  cache?: Record<string, unknown>;
+  timestamp?: string;
+  [key: string]: unknown;
+}
+
+export interface ListAgentsParams {
+  ownerId?: string;
+  provider?: string;
+  isActive?: boolean;
+  limit?: number;
+  [key: string]: string | number | boolean | undefined;
+}
+
+export interface ListAgentTasksParams {
+  agentId?: string;
+  chatId?: string;
+  conversationId?: string;
+  status?: string;
+  type?: string;
+  parentTaskId?: string;
+  limit?: number;
+  cursor?: string;
+  [key: string]: string | number | boolean | undefined;
+}
+
+export interface ListAutomationLogsParams {
+  limit?: number;
+  cursor?: string;
+  status?: string;
+  eventType?: string;
+  automationId?: string;
+  [key: string]: string | number | boolean | undefined;
+}
+
+export interface ListBatchJobsParams {
+  instanceId?: string;
+  status?: string;
+  jobType?: string;
+  limit?: number;
+  cursor?: string;
+  [key: string]: string | number | boolean | undefined;
+}
+
 // ── Fetch helper ──────────────────────────────────────────────────────────────
 
 function buildQuery(params?: Record<string, string | number | boolean | undefined>): string {
@@ -404,6 +655,9 @@ export function omniExt(base = '/omni') {
         put<{ data?: FollowUpConfig }>(`/follow-up/chats/${enc(id)}`, body),
       clearForChat: (id: string) => del<{ data?: unknown }>(`/follow-up/chats/${enc(id)}`),
       getForAgent: (id: string) => get<{ data?: FollowUpConfig }>(`/follow-up/agents/${enc(id)}`),
+      setForAgent: (id: string, body: FollowUpConfig) =>
+        put<{ data?: FollowUpConfig }>(`/follow-up/agents/${enc(id)}`, body),
+      clearForAgent: (id: string) => del<{ data?: unknown }>(`/follow-up/agents/${enc(id)}`),
       getForInstance: (id: string) => get<{ data?: FollowUpConfig }>(`/follow-up/instances/${enc(id)}`),
       setForInstance: (id: string, body: FollowUpConfig) =>
         put<{ data?: FollowUpConfig }>(`/follow-up/instances/${enc(id)}`, body),
@@ -626,6 +880,90 @@ export function omniExt(base = '/omni') {
       agent: (id: string) => get<{ data?: AgentSummary }>(`/agents/${enc(id)}`),
       providers: (params?: { limit?: number }) => get<{ items?: ProviderSummary[] }>(`/providers${buildQuery(params)}`),
       routes: (instanceId: string) => get<{ items?: AgentRouteRow[] }>(`/instances/${enc(instanceId)}/routes`),
+    },
+    /**
+     * First-class agent registry (Group E). CRUD plus the sub-resources the SDK
+     * keeps off its typed surface: identities and per-agent tasks.
+     */
+    agents: {
+      list: (params?: ListAgentsParams) => get<{ items?: AgentRow[] }>(`/agents${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: AgentRow }>(`/agents/${enc(id)}`),
+      create: (body: Record<string, unknown>) => post<{ data?: AgentRow }>('/agents', body),
+      patch: (id: string, body: Record<string, unknown>) => patch<{ data?: AgentRow }>(`/agents/${enc(id)}`, body),
+      remove: (id: string) => del<{ success?: boolean }>(`/agents/${enc(id)}`),
+      identities: (id: string) => get<{ items?: AgentIdentityRow[] }>(`/agents/${enc(id)}/identities`),
+      linkIdentity: (id: string, body: Record<string, unknown>) =>
+        post<{ data?: AgentIdentityRow }>(`/agents/${enc(id)}/identities/link`, body),
+      tasks: (id: string) => get<{ items?: AgentTaskRow[]; hasMore?: boolean }>(`/agents/${enc(id)}/tasks`),
+    },
+    /** Persistent agent task history (top-level surface). */
+    agentTasks: {
+      list: (params?: ListAgentTasksParams) =>
+        get<{ items?: AgentTaskRow[]; hasMore?: boolean; cursor?: string }>(`/agent-tasks${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: AgentTaskRow }>(`/agent-tasks/${enc(id)}`),
+      create: (body: Record<string, unknown>) => post<{ data?: AgentTaskRow }>('/agent-tasks', body),
+      patch: (id: string, body: Record<string, unknown>) =>
+        patch<{ data?: AgentTaskRow }>(`/agent-tasks/${enc(id)}`, body),
+      remove: (id: string) => del<{ success?: boolean }>(`/agent-tasks/${enc(id)}`),
+    },
+    /** Agent provider config + health + (Agno-only) discovery of agents/teams/workflows. */
+    providers: {
+      list: (params?: { active?: boolean }) => get<{ items?: ProviderRow[] }>(`/providers${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: ProviderRow }>(`/providers/${enc(id)}`),
+      create: (body: Record<string, unknown>) => post<{ data?: ProviderRow }>('/providers', body),
+      patch: (id: string, body: Record<string, unknown>) =>
+        patch<{ data?: ProviderRow }>(`/providers/${enc(id)}`, body),
+      remove: (id: string) => del<{ success?: boolean }>(`/providers/${enc(id)}`),
+      /** Read-only probe — reports latency + status, never mutates provider state. */
+      health: (id: string) => post<ProviderHealth>(`/providers/${enc(id)}/health`),
+      agents: (id: string) => get<ProviderEntriesResult>(`/providers/${enc(id)}/agents`),
+      teams: (id: string) => get<ProviderEntriesResult>(`/providers/${enc(id)}/teams`),
+      workflows: (id: string) => get<ProviderEntriesResult>(`/providers/${enc(id)}/workflows`),
+    },
+    /**
+     * Event-driven automations: CRUD, enable/disable, dry-run test (no side
+     * effects) vs live execute (runs actions), per-automation + global logs, and
+     * engine metrics.
+     */
+    automations: {
+      list: (params?: { enabled?: boolean }) => get<{ items?: AutomationRow[] }>(`/automations${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: AutomationRow }>(`/automations/${enc(id)}`),
+      create: (body: Record<string, unknown>) => post<{ data?: AutomationRow }>('/automations', body),
+      patch: (id: string, body: Record<string, unknown>) =>
+        patch<{ data?: AutomationRow }>(`/automations/${enc(id)}`, body),
+      remove: (id: string) => del<{ success?: boolean }>(`/automations/${enc(id)}`),
+      enable: (id: string) => post<{ data?: AutomationRow }>(`/automations/${enc(id)}/enable`),
+      disable: (id: string) => post<{ data?: AutomationRow }>(`/automations/${enc(id)}/disable`),
+      /** Dry-run: evaluates conditions against a sample event; does NOT run actions. */
+      test: (id: string, event: { type: string; payload: Record<string, unknown> }) =>
+        post<AutomationTestResult>(`/automations/${enc(id)}/test`, { event }),
+      /** LIVE: actually runs the automation's actions with the provided event. */
+      execute: (id: string, event: { type: string; payload: Record<string, unknown> }) =>
+        post<AutomationExecuteResult>(`/automations/${enc(id)}/execute`, { event }),
+      logs: (id: string, params?: { limit?: number; cursor?: string }) =>
+        get<PaginatedRows<AutomationLogRow>>(`/automations/${enc(id)}/logs${buildQuery(params)}`),
+      globalLogs: (params?: ListAutomationLogsParams) =>
+        get<PaginatedRows<AutomationLogRow>>(`/automation-logs${buildQuery(params)}`),
+      metrics: () => get<AutomationMetrics>('/automation-metrics'),
+    },
+    /** Batch media-processing jobs: estimate → create → poll status → cancel. */
+    batchJobs: {
+      list: (params?: ListBatchJobsParams) => get<PaginatedRows<BatchJobRow>>(`/batch-jobs${buildQuery(params)}`),
+      get: (id: string) => get<{ data?: BatchJobRow }>(`/batch-jobs/${enc(id)}`),
+      status: (id: string) => get<{ data?: BatchJobStatusRow }>(`/batch-jobs/${enc(id)}/status`),
+      /** Read-only cost/count preview — no job is created. */
+      estimate: (body: Record<string, unknown>) => post<{ data?: BatchJobEstimate }>('/batch-jobs/estimate', body),
+      create: (body: Record<string, unknown>) => post<{ data?: BatchJobRow }>('/batch-jobs', body),
+      cancel: (id: string) => post<{ data?: BatchJobRow }>(`/batch-jobs/${enc(id)}/cancel`),
+    },
+    /** A2A agent discovery (read-only): the discoverable-agent list and per-agent card. */
+    a2a: {
+      agents: () => get<{ items?: Record<string, unknown>[] }>('/a2a/agents'),
+      card: (agentId: string) => get<{ data?: Record<string, unknown> }>(`/a2a/agents/${enc(agentId)}/card`),
+    },
+    /** Cross-instance route resolver metrics (global cache stats). */
+    routes: {
+      metrics: () => get<{ data?: RouteCacheMetrics }>('/routes/metrics'),
     },
     turns: {
       list: (params?: ListTurnsParams) => get<TurnListResponse>(`/turns${buildQuery(params)}`),
