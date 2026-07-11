@@ -12,7 +12,8 @@
     "dev": "bun scripts/dev.ts",
     "dev:bff": "bun run --filter '@omni/khal-ui-service' dev",
     "dev:harness": "bun run --filter '@omni/khal-ui-dev' dev",
-    "test": "bun test service package"
+    "test": "bun test service package",
+    "validate:instances": "bun scripts/validate-instances-live.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.1.42",

@@ -9,8 +9,9 @@
  * built on `useScope()` can honour the selection without an operator wondering
  * why a list looks short.
  */
-import { ThemeSwitcher } from '@khal-os/ui';
+import { Button, ThemeSwitcher } from '@khal-os/ui';
 import type { Channel } from '@omni/sdk';
+import { useNavigate } from 'react-router-dom';
 import { FreshnessBadge } from '../components/FreshnessBadge';
 import { T } from '../components/tokens';
 import { useDiag } from '../hooks/useDiag';
@@ -28,6 +29,7 @@ const selectStyle = {
 
 export function Header() {
   const scope = useScope();
+  const navigate = useNavigate();
   const { diag, observedAt } = useDiag();
 
   const channels = Array.from(new Set(scope.instances.map((i) => i.channel))).sort();
@@ -74,6 +76,11 @@ export function Header() {
             </option>
           ))}
         </select>
+        {scope.selectedInstanceId && (
+          <Button size="small" variant="secondary" onClick={() => navigate(`/instances/${scope.selectedInstanceId}`)}>
+            Open
+          </Button>
+        )}
       </div>
 
       <div style={{ flex: 1 }} />

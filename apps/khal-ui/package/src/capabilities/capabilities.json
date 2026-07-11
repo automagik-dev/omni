@@ -14,10 +14,10 @@
       "trust"
     ],
     "byUiStatus": {
-      "none": 268,
+      "none": 213,
       "exposed": 0,
-      "operable": 0,
-      "live-verified": 0,
+      "operable": 45,
+      "live-verified": 10,
       "ux-complete": 0
     }
   },
@@ -202,7 +202,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /instances/:id",
@@ -215,7 +215,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "DELETE /instances/:id/block",
@@ -228,7 +228,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /instances/:id/guilds/:guildId/config",
@@ -241,7 +241,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /instances/:id/profile/picture",
@@ -254,7 +254,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /instances/:instanceId/routes/:id",
@@ -267,7 +267,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "DELETE /keys/:id",
@@ -969,7 +969,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /handoffs",
@@ -1034,7 +1034,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /instances/:id",
@@ -1047,7 +1047,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /instances/:id/blocklist",
@@ -1060,7 +1060,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:id/chats/:chatId/invite",
@@ -1073,7 +1073,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:id/contacts",
@@ -1086,7 +1086,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /instances/:id/groups",
@@ -1099,7 +1099,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /instances/:id/groups/:groupJid/invite",
@@ -1112,7 +1112,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:id/groups/:jid/members",
@@ -1125,7 +1125,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:id/guilds",
@@ -1138,7 +1138,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:id/guilds/:guildId/audit",
@@ -1151,7 +1151,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:id/guilds/:guildId/config",
@@ -1164,7 +1164,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:id/pairing-requests",
@@ -1177,7 +1177,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:id/privacy",
@@ -1190,7 +1190,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:id/qr",
@@ -1203,7 +1203,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /instances/:id/status",
@@ -1216,7 +1216,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /instances/:id/sync",
@@ -1229,7 +1229,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:id/sync/:jobId",
@@ -1242,7 +1242,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:id/users/:userId/profile",
@@ -1255,7 +1255,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:instanceId/routes",
@@ -1268,7 +1268,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/:instanceId/routes/:id",
@@ -1281,7 +1281,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "GET /instances/supported-channels",
@@ -1294,7 +1294,7 @@
       "mutating": false,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "GET /journeys/:correlationId",
@@ -1879,7 +1879,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "PATCH /instances/:instanceId/routes/:id",
@@ -1892,7 +1892,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PATCH /keys/:id",
@@ -2555,7 +2555,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "live-verified"
     },
     {
       "key": "POST /instances/:id/block",
@@ -2568,7 +2568,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/calls/reject",
@@ -2581,7 +2581,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/check-number",
@@ -2594,7 +2594,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/connect",
@@ -2607,7 +2607,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/disconnect",
@@ -2620,7 +2620,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/groups",
@@ -2633,7 +2633,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/groups/:groupJid/invite/revoke",
@@ -2646,7 +2646,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/groups/join",
@@ -2659,7 +2659,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/logout",
@@ -2672,7 +2672,7 @@
       "mutating": true,
       "destructive": true,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/pair",
@@ -2685,7 +2685,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/pairing-requests/:requestId/action",
@@ -2698,7 +2698,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/replay",
@@ -2711,7 +2711,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/restart",
@@ -2724,7 +2724,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/resync",
@@ -2737,7 +2737,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/sync",
@@ -2750,7 +2750,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:id/sync/profile",
@@ -2763,7 +2763,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /instances/:instanceId/routes",
@@ -2776,7 +2776,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "POST /keys",
@@ -3400,7 +3400,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PUT /instances/:id/groups/:groupJid/picture",
@@ -3413,7 +3413,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PUT /instances/:id/guilds/:guildId/config",
@@ -3426,7 +3426,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PUT /instances/:id/presence",
@@ -3439,7 +3439,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PUT /instances/:id/profile/name",
@@ -3452,7 +3452,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PUT /instances/:id/profile/picture",
@@ -3465,7 +3465,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PUT /instances/:id/profile/status",
@@ -3478,7 +3478,7 @@
       "mutating": true,
       "destructive": false,
       "realtime": false,
-      "uiStatus": "none"
+      "uiStatus": "operable"
     },
     {
       "key": "PUT /payload-config/:eventType",

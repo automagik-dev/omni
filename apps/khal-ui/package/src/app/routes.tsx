@@ -12,16 +12,22 @@ import { CapabilitiesPage } from '../pages/dev/CapabilitiesPage';
 import { ActivityPage } from '../pages/home/ActivityPage';
 import { HealthPage } from '../pages/home/HealthPage';
 import { OverviewPage } from '../pages/home/OverviewPage';
+import { InstanceDetailPage } from '../pages/instances/InstanceDetailPage';
+import { InstancesListPage } from '../pages/instances/InstancesListPage';
 import { AppShell } from './AppShell';
 import { ALL_NAV_ITEMS } from './sitemap';
 
-/** Paths Group B ships as real, live pages. Everything else is a placeholder. */
+/** Paths shipped as real, live pages. Everything else is a placeholder. */
 const LIVE_PAGES: Record<string, ComponentType> = {
   '/': OverviewPage,
   '/health': HealthPage,
   '/activity': ActivityPage,
+  '/instances': InstancesListPage,
   '/dev/capabilities': CapabilitiesPage,
 };
+
+/** Detail routes not present in the sitemap (param routes, sub-pages). */
+const EXTRA_ROUTES: RouteObject[] = [{ path: 'instances/:id', element: <InstanceDetailPage /> }];
 
 function childRoutes(): RouteObject[] {
   return ALL_NAV_ITEMS.map((item) => {
@@ -35,6 +41,6 @@ export const routes: RouteObject[] = [
   {
     path: '/',
     element: <AppShell />,
-    children: [...childRoutes(), { path: '*', element: <PlaceholderPage /> }],
+    children: [...childRoutes(), ...EXTRA_ROUTES, { path: '*', element: <PlaceholderPage /> }],
   },
 ];
