@@ -19,5 +19,7 @@ export default {
       message.startsWith(
         'ci(test): execute S3/MinIO integration suites in CI; ungate dispatcher local tests (PR #770 H8, MED-4) (#778)',
       ),
+    // Immutable khal-ui promotion commits with >100-char headers/body lines.
+    (message: string) => message.startsWith('fix(deps): pin @types/react 18 hoist fallback'),
   ],
 };
