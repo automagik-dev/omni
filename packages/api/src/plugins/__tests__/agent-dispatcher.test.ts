@@ -14,6 +14,11 @@
  */
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
+// Real @omni/core captured before mock.module below replaces it. Bun's
+// mock.module REPLACES the module (it does not merge), so the factory must
+// spread the real exports or OmniError/createLogger/etc. become undefined for
+// every test file ordered after this one (the messages-route mock-bleed).
+import * as omniCoreReal from '@omni/core';
 import { instances } from '@omni/db';
 
 // ---------------------------------------------------------------------------
@@ -96,6 +101,9 @@ mock.module('@omni/core', () => {
   // createLogger is NOT mocked — the real implementation passes through via
   // bun's merge behavior, keeping logger.test.ts and other test files working.
   return {
+    // Preserve every real export (OmniError, createLogger, EventType, …) so
+    // this global module mock only overrides the provider surface below.
+    ...omniCoreReal,
     AgnoAgentProvider: MockAgnoAgentProvider,
     WebhookAgentProvider: MockWebhookAgentProvider,
     createProviderClient: mock(() => ({})),
