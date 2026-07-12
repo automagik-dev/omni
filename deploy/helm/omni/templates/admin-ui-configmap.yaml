@@ -1,0 +1,27 @@
+{{- if .Values.adminUi.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "omni.adminUi.fullname" . }}-config
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-ui
+data:
+  # The BFF binds 0.0.0.0 in-cluster; PORT is driven by the Service port so the
+  # container port, Service targetPort, and bind port stay in lockstep.
+  HOST: {{ .Values.adminUi.config.HOST | default "0.0.0.0" | quote }}
+  PORT: {{ .Values.adminUi.service.port | quote }}
+  # Point PUBLIC_DIR at the SPA baked into the image so the BFF serves the UI.
+  PUBLIC_DIR: "/app/public"
+  # The omni-api base the BFF proxies /omni/* to (defaults to the in-cluster
+  # omni-api Service when adminUi.config.OMNI_BASE_URL is empty).
+  OMNI_BASE_URL: {{ include "omni.adminUi.baseUrl" . | quote }}
+  {{- with .Values.adminUi.config.BFF_CORS_ORIGINS }}
+  # Same-origin in the single-container shape, so CORS is usually unneeded; set
+  # this only if the UI is served from a different origin than the BFF.
+  BFF_CORS_ORIGINS: {{ . | quote }}
+  {{- end }}
+  {{- range $k, $v := .Values.adminUi.extraConfig }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+{{- end }}

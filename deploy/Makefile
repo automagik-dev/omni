@@ -27,6 +27,13 @@ VALUES         ?= $(CHART)/values-$(REALM).yaml
 HELM_EXTRA     ?=
 PORT           ?= 8882
 
+# Admin UI (khal-ui) bearer key — supplied at deploy time, NEVER committed. When
+# set, it is injected into the UI BFF's Secret via --set-string; empty → no flag
+# (the UI, when enabled, runs keyless until a key is provided). --set-string
+# avoids any type coercion of the omni_sk_ value.
+OMNI_API_KEY   ?=
+ADMIN_UI_KEY_SET := $(if $(OMNI_API_KEY),--set-string adminUi.secret.env.OMNI_API_KEY=$(OMNI_API_KEY),)
+
 .DEFAULT_GOAL := help
 
 .PHONY: help
@@ -47,6 +54,17 @@ build-autopg: ## Build autopg:dev image from deploy/autopg.Dockerfile
 	docker buildx build --platform $(PLATFORM) -f $(CURDIR)/autopg.Dockerfile \
 	  -t autopg:dev --load $(CURDIR)
 
+.PHONY: build-ui
+build-ui: ## Build omni-admin-ui:dev image (needs @khal-os token in ~/.npmrc)
+	# The UI image bundles PRIVATE @khal-os/* packages; the git.namastex.io token
+	# is read from ~/.npmrc and passed as a BuildKit secret (never baked into a
+	# layer). Context is the repo root (the Dockerfile COPYs apps/khal-ui +
+	# packages/sdk). buildx forces BuildKit so the secret mount + per-Dockerfile
+	# .dockerignore are honored.
+	docker buildx build --platform $(PLATFORM) -f $(CURDIR)/Dockerfile.admin-ui \
+	  --secret id=npmrc,src=$(HOME)/.npmrc \
+	  -t omni-admin-ui:$(TAG) --load $(ROOT)
+
 .PHONY: lint
 lint: ## helm lint the umbrella chart
 	helm lint $(CHART) -f $(VALUES) $(HELM_EXTRA)
@@ -60,11 +78,11 @@ deps: ## helm dependency build (vendor subcharts into charts/)
 	helm dependency build $(CHART)
 
 .PHONY: deploy
-deploy: ## Install/upgrade the release to ns $(NAMESPACE)
+deploy: ## Install/upgrade the release to ns $(NAMESPACE) (OMNI_API_KEY=… for the UI)
 	helm dependency build $(CHART) || true
 	helm upgrade --install $(RELEASE) $(CHART) \
 	  --namespace $(NAMESPACE) --create-namespace \
-	  -f $(VALUES) $(HELM_EXTRA) --wait --timeout 5m
+	  -f $(VALUES) $(HELM_EXTRA) $(ADMIN_UI_KEY_SET) --wait --timeout 5m
 
 .PHONY: redeploy
 redeploy: build ## Rebuild omni-api image + rollout restart (repick the fixed :dev tag)
@@ -72,6 +90,13 @@ redeploy: build ## Rebuild omni-api image + rollout restart (repick the fixed :d
 	# leaves the pod on the old image after a rebuild — force a rollout.
 	kubectl -n $(NAMESPACE) rollout restart deploy/$(RELEASE)
 	kubectl -n $(NAMESPACE) rollout status deploy/$(RELEASE) --timeout=5m
+
+.PHONY: redeploy-ui
+redeploy-ui: build-ui ## Rebuild omni-admin-ui image + rollout restart the UI pod
+	# Same fixed-:dev-tag reason as `redeploy`: force the admin-ui Deployment to
+	# repick the rebuilt image.
+	kubectl -n $(NAMESPACE) rollout restart deploy/$(RELEASE)-admin-ui
+	kubectl -n $(NAMESPACE) rollout status deploy/$(RELEASE)-admin-ui --timeout=5m
 
 .PHONY: status
 status: ## Rollout status + pods

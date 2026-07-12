@@ -70,3 +70,28 @@ ingress:
 # serviceAccount:
 #   annotations:
 #     eks.amazonaws.com/role-arn: <media-irsa-role-arn, via --set — see header>
+
+# ---- Admin UI (khal-ui) — enable later, behind auth -------------------------
+# The UI ships OFF in this realm (values-prod.yaml `adminUi.enabled: false`).
+# To turn it on once a real auth layer fronts it, flip enabled=true and
+# uncomment the ingress below. It inherits the ALB shape; supply the ACM cert
+# ARN the same way the api ingress does (--set, dots escaped). The BFF's
+# OMNI_API_KEY comes from an ESO-synced `omni-ui` Secret (materialize it from
+# SM /khal/omni/prod/ui, mirroring the omni-db ExternalSecret; IRSA-only realm —
+# no static keys in git).
+# adminUi:
+#   enabled: true
+#   secret:
+#     existingSecret: omni-ui        # ESO-materialized from SM /khal/omni/prod/ui
+#   ingress:
+#     enabled: true
+#     className: alb
+#     host: admin.omni.khal.ai
+#     annotations:
+#       cert-manager.io/cluster-issuer: null
+#       alb.ingress.kubernetes.io/scheme: internet-facing
+#       alb.ingress.kubernetes.io/target-type: ip
+#       alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+#       alb.ingress.kubernetes.io/healthcheck-path: /health
+#       # alb.ingress.kubernetes.io/certificate-arn: supplied at deploy via --set
+#     tls: []

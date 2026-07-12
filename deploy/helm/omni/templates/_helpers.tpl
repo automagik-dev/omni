@@ -59,6 +59,39 @@ app.kubernetes.io/component: api
 {{- end }}
 
 {{/*
+Admin UI (khal-ui) workload — an optional second Deployment+Service gated on
+adminUi.enabled. Its own component label keeps it clear of the api workload's
+PDB / anti-affinity / networkpolicy selectors (which key on component: api).
+*/}}
+{{- define "omni.adminUi.fullname" -}}
+{{- printf "%s-admin-ui" (include "omni.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "omni.adminUiSelectorLabels" -}}
+{{ include "omni.selectorLabels" . }}
+app.kubernetes.io/component: admin-ui
+{{- end }}
+
+{{/*
+Name of the chart-minted admin-ui Secret (OMNI_API_KEY from adminUi.secret.env).
+*/}}
+{{- define "omni.adminUi.secretName" -}}
+{{- printf "%s-secret" (include "omni.adminUi.fullname" .) }}
+{{- end }}
+
+{{/*
+OMNI_BASE_URL the admin UI's BFF proxies to: an explicit
+adminUi.config.OMNI_BASE_URL wins, else the in-cluster omni-api Service.
+*/}}
+{{- define "omni.adminUi.baseUrl" -}}
+{{- if .Values.adminUi.config.OMNI_BASE_URL -}}
+{{- .Values.adminUi.config.OMNI_BASE_URL -}}
+{{- else -}}
+{{- printf "http://%s:%v" (include "omni.fullname" .) .Values.service.port -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Service account name.
 */}}
 {{- define "omni.serviceAccountName" -}}

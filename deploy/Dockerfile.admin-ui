@@ -1,0 +1,78 @@
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# Omni Admin UI — single-origin image (KhalOS pack + BFF)
+# =============================================================================
+# Build from the REPO ROOT (context must see apps/khal-ui + packages/sdk):
+#
+#   DOCKER_BUILDKIT=1 docker build --platform linux/arm64 \
+#     -f deploy/Dockerfile.admin-ui \
+#     --secret id=npmrc,src=$HOME/.npmrc \
+#     -t omni-admin-ui:dev .
+#
+# One process serves everything on port 8899:
+#   • the built SPA (the dev/ Vite harness = the standalone KhalOS shell that
+#     bundles the pack from source and supplies the @khal-os context) on any
+#     non-API route, and
+#   • the BFF proxy on `/omni/*` (injects `x-api-key` server-side so the browser
+#     never sees the key) + `/health` + `/diag`.
+#
+# The private @khal-os/* packages (git.namastex.io) are only reachable at BUILD
+# time via the `npmrc` build secret — never baked into a layer, never in the
+# runtime image. The BFF itself has zero runtime deps (pure Bun APIs), so the
+# runtime stage ships no node_modules.
+# =============================================================================
+
+# Pinned to the toolchain that generated apps/khal-ui/bun.lock. Override with
+# --build-arg BUN_VERSION=…
+ARG BUN_VERSION=1.3.9
+
+# ---- builder: install (private @khal-os) + vite-build the standalone SPA -----
+FROM oven/bun:${BUN_VERSION} AS builder
+ENV HUSKY=0
+WORKDIR /app/apps/khal-ui
+# packages/sdk is the file: target of the pack's `@omni/sdk` dep and the Vite
+# alias source; place it where the relative link expects
+# (apps/khal-ui/package → ../../../packages/sdk).
+COPY packages/sdk /app/packages/sdk
+# App sources — includes the committed capabilities.json the pack imports.
+COPY apps/khal-ui /app/apps/khal-ui
+# The token for @khal-os/* is mounted (never persisted to a layer). BuildKit
+# required. `.npmrc` in the app dir maps the registry; this supplies the auth.
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
+    bun install --frozen-lockfile
+# packages/sdk's only runtime dep (openapi-fetch, public npm) must resolve from
+# its OWN src/ during the Vite build — rolldown resolves relative to the
+# importing file (packages/sdk/src/client.ts), and apps/khal-ui/node_modules is
+# not on that path. In the monorepo it comes from the omni root install; here we
+# give packages/sdk its own node_modules. --production skips the heavy
+# openapi-typescript devDep (only needed to regenerate types, not to build).
+RUN cd /app/packages/sdk && bun install --production --ignore-scripts
+# Build the Vite harness → apps/khal-ui/dev/dist (a self-contained servable SPA).
+RUN bun run --filter '@omni/khal-ui-dev' build
+
+# ---- runtime: slim, non-root; BFF serves the SPA + injects x-api-key ---------
+FROM oven/bun:${BUN_VERSION}-slim AS runtime
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=8899 \
+    PUBLIC_DIR=/app/public \
+    HOME=/home/bun
+WORKDIR /app
+# The BFF is pure Bun (Bun.serve/Bun.file/fetch/node:*), so no node_modules.
+COPY --from=builder /app/apps/khal-ui/service/src ./service/src
+COPY --from=builder /app/apps/khal-ui/dev/dist ./public
+
+# `bun` user (uid 1000) ships with the oven/bun image.
+RUN mkdir -p /home/bun && chown -R bun:bun /app /home/bun
+USER bun
+
+LABEL org.opencontainers.image.title="omni-admin-ui" \
+      org.opencontainers.image.description="Omni Admin UI (KhalOS pack + BFF) — single-origin static + x-api-key proxy" \
+      org.opencontainers.image.source="https://github.com/automagik-dev/omni" \
+      org.opencontainers.image.licenses="MIT"
+
+EXPOSE 8899
+# Health: GET /health → "ok" (the BFF answers immediately; no upstream needed).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD bun -e "fetch('http://127.0.0.1:8899/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+ENTRYPOINT ["bun", "run", "service/src/index.ts"]
