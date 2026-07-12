@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Omni Admin — KHAL OS pack (React view) + BFF + Vite harness for the live Omni backend.",
+  "description": "Omni Admin \u2014 KHAL OS pack (React view) + BFF + Vite harness for the live Omni backend.",
   "scripts": {
     "capabilities": "bun scripts/build-capability-inventory.ts",
     "capabilities:check": "bun scripts/build-capability-inventory.ts --check",
@@ -22,5 +22,6 @@
   "devDependencies": {
     "@types/bun": "^1.1.42",
     "typescript": "^5.7.3"
-  }
+  },
+  "workspaces": ["package", "service", "dev"]
 }
