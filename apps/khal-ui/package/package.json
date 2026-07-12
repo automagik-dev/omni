@@ -1,0 +1,52 @@
+{
+  "name": "@omni/khal-ui-pack",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": ["dist", "../khal-app.json", "../schemas", "README.md"],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@omni/sdk": "file:../../../packages/sdk",
+    "@tanstack/react-query": "^5.90.20",
+    "react-router-dom": "^7.13.0",
+    "zod": "^3.24.2"
+  },
+  "peerDependencies": {
+    "@khal-os/sdk": "^1.0.0 || ^2.0.0",
+    "@khal-os/ui": "^2.0.0",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@khal-os/sdk": "^2.0.111",
+    "@khal-os/types": "^2.2.63",
+    "@khal-os/ui": "^2.0.111",
+    "@types/bun": "^1.1.42",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "next-themes": "^0.4.6",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.3",
+    "zustand": "^5.0.14"
+  }
+}

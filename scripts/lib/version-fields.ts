@@ -20,7 +20,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const repoRoot = join(__dirname, '..', '..');
 
 /** Workspace package directories that should NOT be touched by version sync. */
-const EXCLUDED_WORKSPACE_PACKAGES = new Set(['audio-decode-shim']);
+const EXCLUDED_WORKSPACE_PACKAGES = new Set(['audio-decode-shim', 'khal-ui']);
 
 /** Marketplace plugin entry that this repo owns and keeps in sync. */
 const MARKETPLACE_PLUGIN_NAME = 'omni';

@@ -1,0 +1,11 @@
+# Secrets — never commit. Real values live in .env (local) or the KHAL vault (prod).
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Deps
+node_modules/

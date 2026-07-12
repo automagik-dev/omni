@@ -1,0 +1,28 @@
+{
+  "$tool": "scripts/run-evidence.ts",
+  "generatedAt": "2026-07-11T17:32:38.982Z",
+  "backendVersion": "2.260710.3",
+  "families": {
+    "instances": {
+      "ranAt": "2026-07-11T17:32:33.960Z",
+      "ok": true,
+      "checks": 10
+    },
+    "agents": {
+      "ranAt": "2026-07-11T17:32:33.961Z",
+      "ok": true,
+      "checks": 23
+    },
+    "coverage": {
+      "ranAt": "2026-07-11T17:32:33.962Z",
+      "ok": true,
+      "checks": 44
+    },
+    "chat": {
+      "ranAt": null,
+      "ok": null,
+      "checks": 0,
+      "note": "run separately via `bun run validate:chat` — canary budget"
+    }
+  }
+}

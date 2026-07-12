@@ -1,0 +1,56 @@
+{
+  "$schema": "https://install.khal.ai/app-kit/schema/khal-app-schema.json",
+  "schemaVersion": 1,
+  "kind": "app",
+  "id": "omni-admin",
+  "name": "Omni Admin",
+  "version": "0.1.0",
+  "icon": "/icons/dusk/app.svg",
+  "description": "Admin console for the Omni messaging platform — instances, chats, agents, events, and more.",
+  "author": "Namastex Labs",
+  "permissions": ["nats:publish", "nats:subscribe"],
+  "defaultScope": "shared",
+  "allowedScopes": ["shared", "user"],
+  "views": [
+    {
+      "id": "main",
+      "label": "Omni Admin",
+      "permission": "omni-admin",
+      "minRole": "member",
+      "defaultSize": { "width": 1280, "height": 800 },
+      "component": "./views/main/MainView"
+    }
+  ],
+  "services": [
+    {
+      "name": "omni-admin-bff",
+      "entry": "service/src/index.ts",
+      "runtime": "bun",
+      "ports": [8899],
+      "health": { "type": "tcp", "target": 8899 }
+    }
+  ],
+  "env": [
+    {
+      "key": "OMNI_API_KEY",
+      "description": "Omni API key (omni_sk_…). Injected as x-api-key by the BFF only; never exposed to the browser.",
+      "required": true,
+      "type": "secret",
+      "visibility": "vault"
+    },
+    {
+      "key": "OMNI_BASE_URL",
+      "description": "Base URL of the Omni backend (no trailing slash).",
+      "required": true,
+      "type": "url",
+      "visibility": "config"
+    }
+  ],
+  "settings": {
+    "schema": {
+      "path": "schemas/app-settings.schema.json",
+      "description": "Operator-facing App Settings for Omni Admin. Secret values live in the KHAL vault, never in git."
+    },
+    "secrets": ["OMNI_API_KEY"]
+  }
+}

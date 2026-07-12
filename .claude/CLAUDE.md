@@ -355,27 +355,37 @@ make migrate-messages      # Live migration
 > **New work = PR to dev. Fixes = direct commit to dev.**
 
 ```
-main <── rolling PR (human merges) <── dev <── feature PRs (auto-merge)
-                                         |
-                                         └── direct commits (fixes/hotfixes)
+main <── homolog <── dev <── feature PRs (auto-merge)
+  ▲          ▲         |
+promote   promote      └── direct commits (fixes/hotfixes)
+(human)   (human)
 ```
+
+Promotion is a **two-hop carry-exact roll**: `dev → homolog → main`. `dev` is
+integration; `homolog` is the staging/hml gate that must go green before
+production; `main` is production. Each hop is a PR a human merges — the version
+carries exactly (bump on `dev` only, never re-bumped on promotion).
 
 ### Branch Roles
 
 | Branch | Purpose | Who commits | Protection |
 |--------|---------|-------------|------------|
-| `main` | Production | Human merges rolling PR | PR-only, all checks required |
+| `main` | Production | Human merges `homolog → main` promotion PR | PR-only, all checks required |
+| `homolog` | Staging / hml gate | Human merges `dev → homolog` promotion PR | PR-only, checks required |
 | `dev` | Integration | Agent + PRs | Direct commits OK, PRs need checks |
 | `feat/*` | New features | Worktrees, PR to `dev` | Auto-merge when green |
 | `fix/*` | Bug fixes | Direct on `dev` or worktree | — |
 
-### Rolling PR (dev to main)
+### Promotion (dev → homolog → main)
 
-A rolling PR from `dev` to `main` is always maintained:
-- **GitHub Actions** creates it automatically if missing (every 15 min)
-- **Agent** monitors CI status and fixes issues
-- **Human** reviews and merges when ready
-- Label `ready-to-merge` added when all checks pass
+1. **`dev → homolog`** — open when `dev` is ahead of `homolog` and green. Carry-exact
+   (no version re-bump). Human merges after homolog CI passes.
+2. **`homolog → main`** — open once `homolog` carries the promoted content. Human
+   merges; `main` merge triggers release-please. Keep `homolog` and `dev` in sync so
+   the next `dev → homolog` never re-conflicts on version files.
+
+Keep `homolog` fast-forwardable from `dev` (reset/promote, never let it drift) so
+promotions stay carry-exact rather than turning into version-file merge conflicts.
 
 ### Conventional Commits (Required)
 

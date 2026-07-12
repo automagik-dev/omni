@@ -1,0 +1,712 @@
+{
+  "$tool": "scripts/run-evidence.ts",
+  "generatedAt": "2026-07-11T17:32:38.982Z",
+  "backend": {
+    "baseUrl": "http://192.168.139.2:8882",
+    "auth": "ok",
+    "version": "2.260710.3"
+  },
+  "diag": {
+    "auth": "ok",
+    "keyPrefix": "[omni-key-redacted]...",
+    "keyName": "primary",
+    "scopes": [
+      "*"
+    ],
+    "profile": null,
+    "version": "2.260710.3",
+    "latencyMs": 11,
+    "baseUrl": "http://192.168.139.2:8882"
+  },
+  "capabilities": {
+    "total": 268,
+    "inSpec": 136,
+    "offSpec": 132,
+    "inScopeMap": 241,
+    "mutating": 160,
+    "destructive": 32,
+    "realtime": 2,
+    "darkFamilyCount": 2,
+    "darkFamilies": [
+      "handoffs",
+      "trust"
+    ],
+    "byUiStatus": {
+      "none": 0,
+      "exposed": 2,
+      "operable": 195,
+      "live-verified": 71,
+      "ux-complete": 0
+    }
+  },
+  "validators": {
+    "instances": {
+      "ok": true,
+      "exitCode": 0,
+      "ranAt": "2026-07-11T17:32:33.960Z",
+      "finishedAt": "2026-07-11T17:32:38.968Z",
+      "checks": 10,
+      "summary": {
+        "ok": true,
+        "mutatedIds": [
+          "b1d24f18-e955-46c6-9509-24245202abba"
+        ],
+        "productionIds": [
+          "506377b1-eb79-4ae3-abc1-80bd00986f6b",
+          "11c1a3e2-bb53-45df-aac8-0418f44ea5d5"
+        ],
+        "checks": [
+          {
+            "name": "GET /instances/supported-channels",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /instances",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "POST /instances (create disposable)",
+            "status": "pass",
+            "detail": "status=201 id=b1d24f18-e955-46c6-9509-24245202abba"
+          },
+          {
+            "name": "PATCH /instances/:id config round-trip",
+            "status": "pass",
+            "detail": "patch=200 debounce randomized→fixed autoSplit true→false"
+          },
+          {
+            "name": "GET /instances/:id/status",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /instances/:id/qr (fetch/render only)",
+            "status": "pass",
+            "detail": "status=200 payload=true qrValue=true"
+          },
+          {
+            "name": "PRODUCTION read-only 506377b1",
+            "status": "pass",
+            "detail": "status=200 contacts=200 groups=200"
+          },
+          {
+            "name": "PRODUCTION read-only 11c1a3e2",
+            "status": "pass",
+            "detail": "status=200 contacts=200 groups=200"
+          },
+          {
+            "name": "DELETE /instances/:id (cleanup)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "SAFETY: only the disposable was mutated",
+            "status": "pass",
+            "detail": "mutatedIds=[\"b1d24f18-e955-46c6-9509-24245202abba\"]"
+          }
+        ],
+        "evidence": {
+          "disposableName": "zz-test-khalui-1783791154024",
+          "disposableId": "b1d24f18-e955-46c6-9509-24245202abba",
+          "configRoundTrip": {
+            "request": {
+              "messageDebounceMode": "fixed",
+              "enableAutoSplit": false
+            },
+            "before": {
+              "messageDebounceMode": "randomized",
+              "enableAutoSplit": true
+            },
+            "after": {
+              "messageDebounceMode": "fixed",
+              "enableAutoSplit": false
+            }
+          },
+          "qr": {
+            "payloadPresent": true,
+            "qrValuePresent": true
+          },
+          "productionReadOnly": [
+            {
+              "id": "506377b1-eb79-4ae3-abc1-80bd00986f6b",
+              "status": 200,
+              "contacts": 3,
+              "groups": 3
+            },
+            {
+              "id": "11c1a3e2-bb53-45df-aac8-0418f44ea5d5",
+              "status": 200,
+              "contacts": 3,
+              "groups": 3
+            }
+          ],
+          "deleted": true
+        }
+      }
+    },
+    "agents": {
+      "ok": true,
+      "exitCode": 0,
+      "ranAt": "2026-07-11T17:32:33.961Z",
+      "finishedAt": "2026-07-11T17:32:35.155Z",
+      "checks": 23,
+      "summary": {
+        "ok": true,
+        "productionInstanceIds": [
+          "506377b1-eb79-4ae3-abc1-80bd00986f6b",
+          "11c1a3e2-bb53-45df-aac8-0418f44ea5d5"
+        ],
+        "mutatedInstanceIds": [
+          "cf09aad1-9787-4edb-96cb-02ec3f9252f1"
+        ],
+        "createdDisposables": {
+          "agentId": "c674a89c-0f8e-4b80-acaa-4007fd627a6b",
+          "automationId": "3b670f58-ccb5-4149-88c3-213162b8eeb1",
+          "instanceId": "cf09aad1-9787-4edb-96cb-02ec3f9252f1",
+          "chatId": "6137b2cc-50c2-4b9a-ba59-13cbf986013b",
+          "routeId": "497ef23e-ce49-470c-adb1-1cef9e5b814b"
+        },
+        "checks": [
+          {
+            "name": "GET /agents",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /providers",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /automations",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /batch-jobs",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "POST /providers/6b18d4eb/health",
+            "status": "pass",
+            "detail": "status=200 healthy=false"
+          },
+          {
+            "name": "POST /providers/22beeb71/health",
+            "status": "pass",
+            "detail": "status=200 healthy=false"
+          },
+          {
+            "name": "POST /agents (disposable, inactive)",
+            "status": "pass",
+            "detail": "status=201 id=c674a89c-0f8e-4b80-acaa-4007fd627a6b"
+          },
+          {
+            "name": "PATCH /agents/:id round-trip",
+            "status": "pass",
+            "detail": "patch=200 model→khalui-model-1783791153979 isActive=false"
+          },
+          {
+            "name": "client zod validate (automation body)",
+            "status": "pass",
+            "detail": "valid"
+          },
+          {
+            "name": "POST /automations (disposable, DISABLED)",
+            "status": "pass",
+            "detail": "status=201 id=3b670f58-ccb5-4149-88c3-213162b8eeb1 enabled=false"
+          },
+          {
+            "name": "POST /automations/:id/test (dry-run, synthetic)",
+            "status": "pass",
+            "detail": "status=200 matched=false dryRun=true"
+          },
+          {
+            "name": "POST /instances (disposable)",
+            "status": "pass",
+            "detail": "status=201 id=cf09aad1-9787-4edb-96cb-02ec3f9252f1"
+          },
+          {
+            "name": "POST /chats (disposable)",
+            "status": "pass",
+            "detail": "status=201 id=6137b2cc-50c2-4b9a-ba59-13cbf986013b"
+          },
+          {
+            "name": "POST /instances/:id/routes (bind disposable agent)",
+            "status": "pass",
+            "detail": "status=201 id=497ef23e-ce49-470c-adb1-1cef9e5b814b"
+          },
+          {
+            "name": "GET route read-back",
+            "status": "pass",
+            "detail": "status=200 agentId=c674a89c-0f8e-4b80-acaa-4007fd627a6b"
+          },
+          {
+            "name": "route-test explainer (synthetic decision)",
+            "status": "pass",
+            "detail": "fallback=\"Message would fall back to the instance default agent (no explicit route).\" selected=\"Message would be BLOCKED before reaching an agent.\""
+          },
+          {
+            "name": "POST /batch-jobs/estimate (read-only)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "DELETE route (cleanup)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "DELETE chat (cleanup)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "DELETE instance (cleanup)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "DELETE agent (cleanup)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "DELETE automation (cleanup)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "SAFETY: no production instance mutated",
+            "status": "pass",
+            "detail": "mutatedInstanceIds=[\"cf09aad1-9787-4edb-96cb-02ec3f9252f1\"]"
+          }
+        ],
+        "evidence": {
+          "counts": {
+            "agents": 9,
+            "providers": 2,
+            "automations": 1
+          },
+          "providerHealth": [
+            {
+              "id": "6b18d4eb-ef91-4f54-8244-989298faa40b",
+              "name": "nats-genie-felipe",
+              "healthy": false,
+              "latency": 0,
+              "error": "protocol must be http:, https: or s3:"
+            },
+            {
+              "id": "22beeb71-b3d2-4f3b-bf64-d4b26dea8e46",
+              "name": "nats-genie-felipe-scout",
+              "healthy": false,
+              "latency": 0,
+              "error": "protocol must be http:, https: or s3:"
+            }
+          ],
+          "agentRoundTrip": {
+            "requested": {
+              "model": "khalui-model-1783791153979"
+            },
+            "readBack": {
+              "model": "khalui-model-1783791153979",
+              "isActive": false
+            }
+          },
+          "automationTest": {
+            "matched": false,
+            "dryRun": true
+          },
+          "routeTest": {
+            "access": {
+              "allowed": true,
+              "reason": "No matching rule, default allow",
+              "mode": "blocklist"
+            },
+            "fallback": {
+              "verdict": "Message would fall back to the instance default agent (no explicit route).",
+              "steps": [
+                {
+                  "label": "Access check",
+                  "outcome": "pass",
+                  "detail": "Allowed (mode: blocklist)"
+                },
+                {
+                  "label": "Route match",
+                  "outcome": "warn",
+                  "detail": "No active routes — falls back to the instance default agent."
+                },
+                {
+                  "label": "Provider health",
+                  "outcome": "info",
+                  "detail": "Provider not probed."
+                },
+                {
+                  "label": "Message type",
+                  "outcome": "info",
+                  "detail": "text — the baseline path; routing and triggers apply exactly as shown above."
+                }
+              ]
+            },
+            "selectedInactiveRoute": {
+              "verdict": "Message would be BLOCKED before reaching an agent.",
+              "steps": [
+                {
+                  "label": "Access check",
+                  "outcome": "pass",
+                  "detail": "Allowed (mode: blocklist)"
+                },
+                {
+                  "label": "Route match",
+                  "outcome": "pass",
+                  "detail": "Matched route khalui-test-route (scope=chat, priority=0)."
+                },
+                {
+                  "label": "Agent active",
+                  "outcome": "fail",
+                  "detail": "Agent \"zz-khalui-agent-1783791153979\" is inactive — dispatch would be dropped."
+                },
+                {
+                  "label": "Provider health",
+                  "outcome": "info",
+                  "detail": "Provider not probed."
+                },
+                {
+                  "label": "Message type",
+                  "outcome": "info",
+                  "detail": "text — the baseline path; routing and triggers apply exactly as shown above."
+                }
+              ]
+            }
+          },
+          "batchEstimate": {
+            "totalItems": 0,
+            "audioCount": 0,
+            "imageCount": 0,
+            "videoCount": 0,
+            "documentCount": 0,
+            "estimatedCostCents": 0,
+            "estimatedCostUsd": 0,
+            "estimatedDurationMinutes": 0
+          }
+        }
+      }
+    },
+    "coverage": {
+      "ok": true,
+      "exitCode": 0,
+      "ranAt": "2026-07-11T17:32:33.962Z",
+      "finishedAt": "2026-07-11T17:32:36.340Z",
+      "checks": 44,
+      "summary": {
+        "ok": true,
+        "productionInstanceIds": [
+          "506377b1-eb79-4ae3-abc1-80bd00986f6b",
+          "11c1a3e2-bb53-45df-aac8-0418f44ea5d5"
+        ],
+        "createdDisposables": {
+          "webhookId": "74866d77-b582-43a6-995d-01d0aef2b748",
+          "keyId": "3e2cecdb-57e4-49a0-87c5-69b84f6cf2b0"
+        },
+        "documentedExceptions": {
+          "GET /_internal/health": "internal readiness probe — no operator page (marked exposed)",
+          "POST /webhooks/:source": "inbound webhook receiver called by external systems, not an operator (marked exposed)",
+          "operable-via-wiring (never live-run)": "persons link/unlink/merge; media tts/stt/imagine/vision/film/music; voice join/leave; turns close/close-all; events trigger; event-ops replay create/delete + scheduled; dead-letters retry/resolve/abandon; trust patch/revoke — all UI-complete behind confirms, never executed by validation"
+        },
+        "checks": [
+          {
+            "name": "GET /persons",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /conversations",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /journeys/summary",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /voice/sessions",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /events",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /events/analytics",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /event-ops/metrics",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /event-ops/replay",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /dead-letters",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /dead-letters/stats",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /logs/recent",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /metrics",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /settings",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /payload-config",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /payload-stats",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /messages/tts/voices",
+            "status": "pass",
+            "detail": "status=400"
+          },
+          {
+            "name": "GET /keys",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /trust/hosts",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /turns",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /turns/stats",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /handoffs",
+            "status": "pass",
+            "detail": "status=500 (server-side 5xx — recorded as evidence, backend bug)"
+          },
+          {
+            "name": "GET /context",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /a2a/agents",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /webhook-sources",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /access/rules",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /info",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /health",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /instances/:id/contacts (fan-in)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /instances/:id/groups (fan-in)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /logs/stream (SSE frames)",
+            "status": "pass",
+            "detail": "status=200 bytes=183"
+          },
+          {
+            "name": "POST /webhook-sources (create, DISABLED)",
+            "status": "pass",
+            "detail": "status=201 id=74866d77-b582-43a6-995d-01d0aef2b748 enabled=false"
+          },
+          {
+            "name": "PUT /settings/:key (v1 → v2 → restore v1)",
+            "status": "pass",
+            "detail": "v1=200 v2=200 restore=200"
+          },
+          {
+            "name": "settings read-back v1 after restore",
+            "status": "pass",
+            "detail": "status=200 value=khalui-v1"
+          },
+          {
+            "name": "GET /settings/:key/history (>=2 entries)",
+            "status": "pass",
+            "detail": "status=200 entries=2"
+          },
+          {
+            "name": "POST /keys (create minimal, metrics:read)",
+            "status": "pass",
+            "detail": "status=201 id=3e2cecdb-57e4-49a0-87c5-69b84f6cf2b0 keyReturned=true"
+          },
+          {
+            "name": "new key used once (direct GET /metrics)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "GET /keys/:id/audit",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "POST /context (synthetic messageId) → read-back",
+            "status": "pass",
+            "detail": "set=200 readBack=true"
+          },
+          {
+            "name": "DELETE /webhook-sources/:id (cleanup)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "DELETE /settings/:key (cleanup probe)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "POST /keys/:id/revoke (cleanup)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "DELETE /keys/:id (cleanup)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "POST /context (restore original)",
+            "status": "pass",
+            "detail": "status=200"
+          },
+          {
+            "name": "SAFETY: no production instance mutated",
+            "status": "pass",
+            "detail": "productionIds=[\"506377b1-eb79-4ae3-abc1-80bd00986f6b\",\"11c1a3e2-bb53-45df-aac8-0418f44ea5d5\"] (reads only)"
+          }
+        ],
+        "evidence": {
+          "sweep": {
+            "GET /persons": 200,
+            "GET /conversations": 200,
+            "GET /journeys/summary": 200,
+            "GET /voice/sessions": 200,
+            "GET /events": 200,
+            "GET /events/analytics": 200,
+            "GET /event-ops/metrics": 200,
+            "GET /event-ops/replay": 200,
+            "GET /dead-letters": 200,
+            "GET /dead-letters/stats": 200,
+            "GET /logs/recent": 200,
+            "GET /metrics": 200,
+            "GET /settings": 200,
+            "GET /payload-config": 200,
+            "GET /payload-stats": 200,
+            "GET /messages/tts/voices": 400,
+            "GET /keys": 200,
+            "GET /trust/hosts": 200,
+            "GET /turns": 200,
+            "GET /turns/stats": 200,
+            "GET /handoffs": 500,
+            "GET /context": 200,
+            "GET /a2a/agents": 200,
+            "GET /webhook-sources": 200,
+            "GET /access/rules": 200,
+            "GET /info": 200,
+            "GET /health": 200
+          },
+          "serverErrors": [
+            {
+              "endpoint": "GET /handoffs",
+              "status": 500,
+              "at": "2026-07-11T17:32:34.848Z",
+              "body": "{\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"invalid input syntax for type uuid: \\\"handoffs\\\"\"}}"
+            }
+          ],
+          "fanIn": {
+            "instance": "506377b1-eb79-4ae3-abc1-80bd00986f6b",
+            "contactsStatus": 200,
+            "groupsStatus": 200
+          },
+          "logsStream": {
+            "status": 200,
+            "sample": "event: connected\ndata: {\"modules\":[\"*\"],\"level\":\"info\"}\n\nevent: log\ndata: {\"level\":\"info\",\"time\":1783791156124,\"module\":\"http\",\"msg\":\"→ GET /api/v2/logs/stream\",\"status\":200,\"ms\":2}\n\n"
+          },
+          "settingsProbe": {
+            "historyEntries": 2,
+            "restoredValue": "khalui-v1"
+          },
+          "newKeyUse": {
+            "status": 200
+          },
+          "context": {
+            "setStatus": 200,
+            "readBackMatched": true
+          }
+        }
+      }
+    },
+    "chat": {
+      "ok": null,
+      "exitCode": null,
+      "ranAt": null,
+      "finishedAt": null,
+      "checks": 0,
+      "summary": null,
+      "note": "run separately via `bun run validate:chat` — canary budget"
+    }
+  }
+}
