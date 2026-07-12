@@ -1,0 +1,124 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Omni Admin harness — Tailwind v4 + KhalOS design tokens.
+
+   @khal-os/ui components render through Tailwind utility classes (bg-gray-1000,
+   text-copy-13 …) backed by the --ds-* / --khal-* token theme. Inside KhalOS the
+   host provides that layer; standalone, this file reproduces the contract so the
+   harness renders components the way they look in the running OS.
+   ────────────────────────────────────────────────────────────────────────── */
+
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;550;600;650;700&family=Geist+Mono:wght@400;500;650&display=swap");
+
+@import "tailwindcss";
+
+/* Canonical KhalOS token + component layers (define --ds-* and --khal-*). */
+@import "@khal-os/ui/tokens.css";
+@import "@khal-os/ui/styles/khal-os.css";
+@import "@khal-os/ui/styles/khal-tailwind.css";
+
+/* Wallpaper is opt-in (NOT in the khal-os.css barrel): the app root wears the
+   `khal-wallpaper` class for a subtle branded backdrop. Honors reduced
+   transparency via its own media guard. Embedded in KHAL the host supplies the
+   desktop; standalone this gives the pack the same OS-native ground. */
+@import "@khal-os/ui/styles/khal-wallpaper.css";
+
+/* Tailwind ignores node_modules when scanning; point it at the built @khal-os/ui
+   so the utility classes its components reference actually get generated.
+   (@khal-os is installed under the harness's own node_modules — react 19 keeps
+   it out of the react-18 root.) */
+@source "../node_modules/@khal-os/ui/dist";
+
+/* Also scan the pack source so any Tailwind utilities the shell/pages use get
+   generated (the pack renders through the Vite alias, outside dev/'s tree). */
+@source "../../package/src";
+
+/* next-themes (attribute="class") toggles `.dark` on <html>; map dark: to it. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Map the runtime design tokens into Tailwind's theme namespaces so utilities
+   like bg-gray-1000 resolve to the theme-aware --ds-* values. */
+@theme inline {
+  --color-gray-100: var(--ds-gray-100);
+  --color-gray-200: var(--ds-gray-200);
+  --color-gray-300: var(--ds-gray-300);
+  --color-gray-400: var(--ds-gray-400);
+  --color-gray-500: var(--ds-gray-500);
+  --color-gray-600: var(--ds-gray-600);
+  --color-gray-700: var(--ds-gray-700);
+  --color-gray-800: var(--ds-gray-800);
+  --color-gray-900: var(--ds-gray-900);
+  --color-gray-1000: var(--ds-gray-1000);
+  --color-gray-alpha-100: var(--ds-gray-alpha-100);
+  --color-gray-alpha-200: var(--ds-gray-alpha-200);
+  --color-gray-alpha-300: var(--ds-gray-alpha-300);
+  --color-gray-alpha-400: var(--ds-gray-alpha-400);
+  --color-gray-alpha-500: var(--ds-gray-alpha-500);
+  --color-gray-alpha-600: var(--ds-gray-alpha-600);
+  --color-blue-100: var(--ds-blue-100);
+  --color-blue-400: var(--ds-blue-400);
+  --color-blue-500: var(--ds-blue-500);
+  --color-blue-700: var(--ds-blue-700);
+  --color-blue-900: var(--ds-blue-900);
+  --color-red-100: var(--ds-red-100);
+  --color-red-500: var(--ds-red-500);
+  --color-red-700: var(--ds-red-700);
+  --color-red-900: var(--ds-red-900);
+  --color-amber-100: var(--ds-amber-100);
+  --color-amber-500: var(--ds-amber-500);
+  --color-amber-900: var(--ds-amber-900);
+  --color-green-100: var(--ds-green-100);
+  --color-green-500: var(--ds-green-500);
+  --color-green-700: var(--ds-green-700);
+  --color-green-900: var(--ds-green-900);
+  --color-background-100: var(--ds-background-100);
+  --color-background-200: var(--ds-background-200);
+  --color-black: var(--ds-black);
+  --color-white: var(--ds-white);
+
+  --text-copy-13: 13px;
+  --text-copy-14: 14px;
+  --text-label-12: 12px;
+  --text-label-13: 13px;
+
+  --font-display: var(--khal-font-display);
+  --font-body: var(--khal-font-body);
+  --font-mono: var(--khal-font-mono);
+}
+
+:root {
+  --bg: #0a0a0a;
+  --bg-elev: #141414;
+  --fg: #ededed;
+  --fg-dim: #8a8a8a;
+  --border: #2a2a2a;
+  color-scheme: dark;
+}
+
+html.light,
+[data-theme="light"] {
+  --bg: #fafafa;
+  --bg-elev: #ffffff;
+  --fg: #111111;
+  --fg-dim: #555555;
+  --border: #e2e2e2;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  /* Full height so the pack's shell (height:100%) fills the viewport standalone,
+     matching the fixed-size window it gets embedded in inside KHAL. */
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--khal-font-body, system-ui, -apple-system, "Segoe UI", sans-serif);
+  font-size: 14px;
+  line-height: 1.5;
+}
