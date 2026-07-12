@@ -138,7 +138,9 @@ jobs:
         run: bunx knip
 
       - name: Test
-        run: bun test --env-file=.env
+        # Scope to omni packages + the ui app; apps/khal-ui is a decoupled
+        # sub-project (private @khal-os deps) with its own test run.
+        run: bun test packages apps/ui --env-file=.env
         env:
           NODE_ENV: test
 
