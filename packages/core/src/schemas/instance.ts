@@ -16,6 +16,14 @@ export const DebounceModeSchema = z.enum(['disabled', 'fixed', 'randomized']);
 export const SplitDelayModeSchema = z.enum(['disabled', 'fixed', 'randomized']);
 
 /**
+ * Stale-reply (supersede) mode enum — what to do with an agent reply when
+ * newer inbound arrived while the agent was still running: 'off' delivers it
+ * (legacy behavior), 'discard' drops it so the debounced re-flush answers
+ * with full context.
+ */
+export const SupersedeModeSchema = z.enum(['off', 'discard']);
+
+/**
  * Agent type enum
  */
 export const AgentTypeSchema = z.enum(['agent', 'team', 'workflow']);
@@ -125,6 +133,9 @@ export const InstanceSchema = z.object({
   messageDebounceMode: DebounceModeSchema,
   messageDebounceMinMs: z.number().int().min(0),
   messageDebounceMaxMs: z.number().int().min(0),
+
+  // Stale-reply policy (see SupersedeModeSchema)
+  messageSupersedeMode: SupersedeModeSchema,
 
   // Split delay
   messageSplitDelayMode: SplitDelayModeSchema,

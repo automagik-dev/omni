@@ -63,6 +63,12 @@ export type DebounceMode = (typeof debounceMode)[number];
 export const splitDelayMode = ['disabled', 'fixed', 'randomized'] as const;
 export type SplitDelayMode = (typeof splitDelayMode)[number];
 
+// Policy for agent replies whose input snapshot is stale (newer inbound arrived
+// while the agent was running): 'off' delivers them (legacy behavior), 'discard'
+// drops them so the debouncer re-flush answers with full context.
+export const supersedeMode = ['off', 'discard'] as const;
+export type SupersedeMode = (typeof supersedeMode)[number];
+
 export const replyFilterMode = ['all', 'filtered'] as const;
 export type ReplyFilterMode = (typeof replyFilterMode)[number];
 
@@ -760,6 +766,16 @@ export const instances = pgTable(
     messageDebounceRestartOnTyping: boolean('message_debounce_restart_on_typing').notNull().default(false),
     /** Hard cap (ms) for 'presence' mode — flush at firstBuffered + this even under continuous typing. NULL = no cap. */
     messageDebounceMaxWaitMs: integer('message_debounce_max_wait_ms'),
+    /**
+     * Stale-reply policy: what to do when newer inbound arrived while the agent
+     * was still processing the previous batch. 'off' delivers the (stale) reply
+     * as before; 'discard' drops it — the debouncer's re-flush then dispatches
+     * the buffered messages and produces one reply with full context.
+     */
+    messageSupersedeMode: varchar('message_supersede_mode', { length: 20 })
+      .notNull()
+      .default('off')
+      .$type<SupersedeMode>(),
 
     // ---- Smart Response Gate ----
     agentGateEnabled: boolean('agent_gate_enabled').notNull().default(false),
