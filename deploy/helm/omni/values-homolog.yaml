@@ -121,3 +121,12 @@ minio:
 # while autopg is disabled.)
 autopg:
   enabled: false
+
+# ---- Admin UI (khal-ui) — OFF in this realm --------------------------------
+# Shipped disabled (explicit, so the intent is visible): the standalone shell
+# mocks a full-admin user with no real login, so an open ingress would hand
+# anyone reaching the host full control of the omni backend. Turn it on only
+# behind a real auth layer — see the ready-to-uncomment stanza in
+# values-hml-alb.yaml (ALB ingress + the ESO-synced omni-ui key Secret).
+adminUi:
+  enabled: false

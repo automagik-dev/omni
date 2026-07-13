@@ -14,6 +14,8 @@
  * never contains the key. `/diag` reports auth/version/latency for readiness.
  */
 
+import { resolve, sep } from 'node:path';
+
 const ALLOW_PREFIX = '/api/v2/';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_CORS_ORIGINS = ['http://localhost:5174'];
@@ -33,6 +35,12 @@ export interface BffConfig {
   timeoutMs?: number;
   /** Mount prefix the SDK/UI target (default /omni). */
   omniPrefix?: string;
+  /**
+   * Absolute path to the built SPA to serve on non-API routes (the container
+   * image sets this via PUBLIC_DIR). Unset locally — the dev harness serves the
+   * UI through Vite — so static serving stays inert until deployed.
+   */
+  publicDir?: string;
   /** Injectable fetch, for tests. */
   fetchImpl?: FetchLike;
 }
@@ -54,6 +62,7 @@ export function createBff(config: BffConfig): Bff {
   const corsOrigins = config.corsOrigins ?? DEFAULT_CORS_ORIGINS;
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const omniPrefix = config.omniPrefix ?? '/omni';
+  const publicDir = config.publicDir ? resolve(config.publicDir) : undefined;
   const doFetch = config.fetchImpl ?? fetch;
 
   function corsHeaders(req: Request): Record<string, string> {
@@ -199,6 +208,53 @@ export function createBff(config: BffConfig): Bff {
     }
   }
 
+  /**
+   * Serve the built SPA from `publicDir` on any route the API handlers above
+   * did not claim. `/health`, `/diag`, and `/omni/*` are matched first, so API
+   * routes always win. A request that resolves to a real file is streamed with
+   * its content-type; a client-side route (extensionless, or an HTML
+   * navigation) falls back to `index.html` so the SPA router resolves it; a
+   * missing hashed asset 404s rather than masquerading as the app. Any path
+   * that escapes `publicDir` is refused. Returns null when nothing matches, so
+   * the caller emits the normalized 404 envelope. Inert unless `publicDir` is
+   * set (the container image only).
+   */
+  async function handleStatic(req: Request, url: URL): Promise<Response | null> {
+    if (!publicDir) return null;
+    if (req.method !== 'GET' && req.method !== 'HEAD') return null;
+
+    let pathname: string;
+    try {
+      pathname = decodeURIComponent(url.pathname);
+    } catch {
+      return null; // malformed %-encoding — let the caller 404
+    }
+
+    if (pathname !== '/') {
+      const abs = resolve(publicDir, `.${pathname}`);
+      // Refuse anything that resolves outside the served root (path traversal).
+      if ((abs === publicDir || abs.startsWith(publicDir + sep)) && abs !== publicDir) {
+        const file = Bun.file(abs);
+        if (await file.exists()) {
+          return new Response(file, { status: 200 });
+        }
+      }
+    }
+
+    const hasExtension = /\.[a-z0-9]+$/i.test(pathname);
+    const wantsHtml = (req.headers.get('accept') ?? '').includes('text/html');
+    if (!hasExtension || wantsHtml) {
+      const index = Bun.file(resolve(publicDir, 'index.html'));
+      if (await index.exists()) {
+        return new Response(index, {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
+        });
+      }
+    }
+    return null;
+  }
+
   return {
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
@@ -215,6 +271,8 @@ export function createBff(config: BffConfig): Bff {
       if (url.pathname === omniPrefix || url.pathname.startsWith(`${omniPrefix}/`)) {
         return handleProxy(req, url);
       }
+      const staticRes = await handleStatic(req, url);
+      if (staticRes) return staticRes;
       return jsonError(req, 404, 'NOT_FOUND', `No route for ${url.pathname}.`);
     },
   };

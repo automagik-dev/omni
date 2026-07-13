@@ -1,0 +1,88 @@
+{{- if .Values.adminUi.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "omni.adminUi.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-ui
+spec:
+  replicas: {{ .Values.adminUi.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "omni.adminUiSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Roll pods when the UI's config/secret content changes.
+        checksum/config: {{ include (print $.Template.BasePath "/admin-ui-configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/admin-ui-secret.yaml") . | sha256sum }}
+        {{- with .Values.adminUi.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "omni.adminUiSelectorLabels" . | nindent 8 }}
+    spec:
+      {{- with (default .Values.imagePullSecrets .Values.adminUi.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "omni.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: admin-ui
+          # image.tag "" → v<Chart.appVersion>, the tag image-publish.yml pushes.
+          image: "{{ .Values.adminUi.image.repository }}:{{ .Values.adminUi.image.tag | default (printf "v%s" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.adminUi.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.adminUi.service.port }}
+              protocol: TCP
+          envFrom:
+            # Non-secret config (HOST, PORT, PUBLIC_DIR, OMNI_BASE_URL, ...)
+            - configMapRef:
+                name: {{ include "omni.adminUi.fullname" . }}-config
+            {{- if gt (len (default (dict) .Values.adminUi.secret.env)) 0 }}
+            # Chart-minted Secret (OMNI_API_KEY via --set adminUi.secret.env.*)
+            - secretRef:
+                name: {{ include "omni.adminUi.secretName" . }}
+            {{- end }}
+            {{- with .Values.adminUi.secret.existingSecret }}
+            # Operator/ESO-supplied Secret (must carry OMNI_API_KEY)
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.adminUi.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.adminUi.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.adminUi.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.adminUi.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.adminUi.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.adminUi.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.adminUi.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.adminUi.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.adminUi.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.adminUi.probes.liveness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.adminUi.resources | nindent 12 }}
+      {{- with .Values.adminUi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.adminUi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.adminUi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
