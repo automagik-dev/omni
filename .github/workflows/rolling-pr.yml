@@ -24,18 +24,20 @@ jobs:
           # Use a PAT with contents:read + pull-requests:write scopes.
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
-          # Check if open PR exists (dev -> main)
-          PR=$(gh pr list --repo ${{ github.repository }} --base main --head dev --state open --json number --jq '.[0].number')
+          # Check if open PR exists (homolog -> main)
+          PR=$(gh pr list --repo ${{ github.repository }} --base main --head homolog --state open --json number --jq '.[0].number')
 
           if [ -z "$PR" ]; then
             # Create new rolling PR
             gh pr create --repo ${{ github.repository }} \
-              --base main --head dev \
-              --title "chore: rolling promotion dev -> main" \
+              --base main --head homolog \
+              --title "chore: rolling promotion homolog -> main" \
               --body "$(cat <<'BODY'
           ## Rolling Promotion PR
 
-          Auto-maintained rolling promotion PR from `dev` to `main`.
+          Auto-maintained rolling promotion PR from `homolog` to `main` — the
+          final hop of the two-hop `dev → homolog → main` flow. (`dev → homolog`
+          is opened per-promotion; this keeps the production gate always open.)
 
           **Process:**
           - This PR is automatically created and kept open
