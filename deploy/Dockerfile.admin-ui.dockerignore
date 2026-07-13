@@ -1,0 +1,30 @@
+# BuildKit picks up "<dockerfile>.dockerignore" for this specific Dockerfile
+# (buildx >= v0.33), so the repo-root build context stays lean.
+#
+# This image only COPYs apps/khal-ui + packages/sdk. Keep the committed
+# capabilities.json (package/src/capabilities/*.json) — the pack imports it —
+# and packages/sdk/src (the Vite alias source). dev/dist is rebuilt inside the
+# image, so a stale local one is correctly excluded via **/dist.
+**/node_modules
+**/dist
+**/.turbo
+.turbo
+.git
+.github
+.husky
+data
+docs
+examples
+plugins
+deploy
+apps/ui
+apps/khal-ui/evidence
+apps/khal-ui/.qa
+**/__tests__
+**/*.test.ts
+**/*.spec.ts
+**/.env
+**/.env.*
+!**/.env.example
+*.log
+.DS_Store

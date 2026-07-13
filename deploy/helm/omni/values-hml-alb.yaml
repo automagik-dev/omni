@@ -92,3 +92,27 @@ database:
 # nats:
 #   persistence:
 #     storageClass: gp3
+
+# ---- Admin UI (khal-ui) — enable later, behind auth -------------------------
+# The UI ships OFF in this realm (values-homolog.yaml `adminUi.enabled: false`).
+# To turn it on once a real auth layer fronts it, flip enabled=true and
+# uncomment the ingress below. It inherits the ALB shape; supply the ACM cert
+# ARN the same way the api ingress does (--set, dots escaped). The BFF's
+# OMNI_API_KEY comes from the ESO-synced `omni-ui` Secret
+# (deploy/k8s/omni-hml/externalsecret-omni-ui.yaml — apply it first).
+# adminUi:
+#   enabled: true
+#   secret:
+#     existingSecret: omni-ui        # ESO-materialized from SM /khal/omni/hml/ui
+#   ingress:
+#     enabled: true
+#     className: alb
+#     host: admin.hml.omni.khal.ai
+#     annotations:
+#       cert-manager.io/cluster-issuer: null
+#       alb.ingress.kubernetes.io/scheme: internet-facing
+#       alb.ingress.kubernetes.io/target-type: ip
+#       alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+#       alb.ingress.kubernetes.io/healthcheck-path: /health
+#       # alb.ingress.kubernetes.io/certificate-arn: supplied at deploy via --set
+#     tls: []

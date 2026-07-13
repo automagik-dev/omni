@@ -126,3 +126,28 @@ autopg:
 service:
   type: LoadBalancer
   port: 8882
+
+# ---- Admin UI (khal-ui) — dogfood on the local dev cluster ------------------
+# Single-container pod: the BFF serves the built SPA AND proxies /omni/* to the
+# in-cluster omni-api Service (OMNI_BASE_URL defaults to http://omni:8882).
+# Build the image locally with `make -C deploy build-ui` (omni-admin-ui:dev,
+# pullPolicy Never — never pulled). Supply the real bearer key at deploy time:
+#   make -C deploy deploy OMNI_API_KEY=omni_sk_…
+# (threaded into --set adminUi.secret.env.OMNI_API_KEY). NEVER commit a key.
+adminUi:
+  enabled: true
+  image:
+    repository: omni-admin-ui
+    tag: dev
+    pullPolicy: Never
+  ingress:
+    enabled: true
+    className: nginx       # ingress-nginx is the cluster default IngressClass
+    host: admin.omni.felipe.namastex.io
+    path: /
+    pathType: Prefix
+    # TLS rides ingress-nginx's default wildcard cert (*.felipe.namastex.io),
+    # same as the api ingress above — the block only declares the host.
+    tls:
+      - hosts:
+          - admin.omni.felipe.namastex.io

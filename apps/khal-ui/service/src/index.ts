@@ -25,6 +25,8 @@ function loadAppEnv(): void {
 loadAppEnv();
 
 const PORT = Number(process.env.PORT) || 8899;
+// Default to loopback for local dev; the container image sets HOST=0.0.0.0 so
+// the BFF is reachable inside the pod.
 const HOST = process.env.HOST || '127.0.0.1';
 const apiKey = process.env.OMNI_API_KEY ?? '';
 const baseUrl = process.env.OMNI_BASE_URL ?? 'http://192.168.139.2:8882';
@@ -32,12 +34,16 @@ const corsOrigins = (process.env.BFF_CORS_ORIGINS ?? 'http://localhost:5174')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+// When set (the container image points it at the built SPA), the BFF also
+// serves the UI on non-API routes so one origin covers UI + `/omni`. Unset
+// locally — the Vite dev harness serves the UI instead.
+const publicDir = process.env.PUBLIC_DIR || undefined;
 
 if (!apiKey) {
   console.error('WARN: OMNI_API_KEY is not set — /omni and /diag will report auth errors.');
 }
 
-const bff = createBff({ apiKey, baseUrl, corsOrigins });
+const bff = createBff({ apiKey, baseUrl, corsOrigins, publicDir });
 
 const server = Bun.serve({
   port: PORT,
@@ -46,4 +52,8 @@ const server = Bun.serve({
   fetch: bff.fetch,
 });
 
-console.log(`omni-admin-bff listening on http://${server.hostname}:${server.port} → ${baseUrl}`);
+console.log(
+  `omni-admin-bff listening on http://${server.hostname}:${server.port} → ${baseUrl}${
+    publicDir ? ` (serving UI from ${publicDir})` : ''
+  }`,
+);

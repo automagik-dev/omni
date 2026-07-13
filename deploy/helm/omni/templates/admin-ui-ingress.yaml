@@ -1,0 +1,41 @@
+{{- if and .Values.adminUi.enabled .Values.adminUi.ingress.enabled }}
+{{- /*
+Same fail-fast host guard as the api ingress: an enabled ingress with an empty
+host becomes a catch-all rule. Realms set the FQDN via
+`--set adminUi.ingress.host=<fqdn>` (or in the overlay).
+*/}}
+{{- if not .Values.adminUi.ingress.host }}
+{{- fail "adminUi.ingress.enabled=true but adminUi.ingress.host is empty — set the realm FQDN at deploy time: --set adminUi.ingress.host=<fqdn>" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "omni.adminUi.fullname" . }}
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-ui
+  {{- with .Values.adminUi.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.adminUi.ingress.className }}
+  ingressClassName: {{ .Values.adminUi.ingress.className }}
+  {{- end }}
+  {{- with .Values.adminUi.ingress.tls }}
+  tls:
+    {{- /* tpl: overlays can write hosts: ['{{ .Values.adminUi.ingress.host }}']. */}}
+    {{- tpl (toYaml .) $ | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.adminUi.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.adminUi.ingress.path }}
+            pathType: {{ .Values.adminUi.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "omni.adminUi.fullname" . }}
+                port:
+                  number: {{ .Values.adminUi.service.port }}
+{{- end }}
