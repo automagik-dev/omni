@@ -115,6 +115,12 @@ const createInstanceSchema = z.object({
     .describe(
       'Presence-mode hard cap in milliseconds — flush at firstBuffered + this even under continuous typing (null = no cap)',
     ),
+  messageSupersedeMode: z
+    .enum(['off', 'discard'])
+    .default('off')
+    .describe(
+      "Stale-reply policy: 'discard' drops an agent reply when newer inbound arrived while the agent was running (the debounced re-flush answers with full context); 'off' keeps legacy behavior",
+    ),
   messageSplitDelayMode: z
     .enum(['disabled', 'fixed', 'randomized'])
     .default('randomized')
