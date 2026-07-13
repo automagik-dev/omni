@@ -10,7 +10,7 @@ version: 0.1.0
 # homolog. The chart's default image tag is v<appVersion>, so a promoted tree
 # always references exactly the image its own promotion publishes. Do not edit
 # by hand — scripts/verify-versions.ts fails CI on drift.
-appVersion: "2.260713.2"
+appVersion: "2.260713.3"
 keywords:
   - omni
   - messaging
