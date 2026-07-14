@@ -1,9 +1,15 @@
 /**
- * Contract tests for the 5 code-defined profile templates.
+ * Contract tests for the code-defined profile templates.
  *
  * These tests are the snapshot of what each profile resolves to — any
  * change to a template or to a bucket's underlying scopes is an
  * intentional behavior change and must update this file deliberately.
+ *
+ * The registry holds the 5 messaging-agent profiles plus the 3 lock-free
+ * `console-*` profiles (added by the omni-appkit-gap wish, Group 2). The
+ * console tiers are asserted in detail by
+ * `routes/v2/__tests__/keys-console-profiles.test.ts` and
+ * `console-profile-scope-coverage.test.ts`; here we only pin the registry keys.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -22,8 +28,17 @@ function resolveTemplateScopes(name: ProfileName): string[] {
 }
 
 describe('PROFILES registry', () => {
-  test('exports exactly the 5 documented profiles', () => {
-    expect(Object.keys(PROFILES).sort()).toEqual(['admin', 'coworker', 'cs', 'personal', 'scout']);
+  test('exports exactly the documented profiles (5 agent + 3 console)', () => {
+    expect(Object.keys(PROFILES).sort()).toEqual([
+      'admin',
+      'console-admin',
+      'console-operator',
+      'console-viewer',
+      'coworker',
+      'cs',
+      'personal',
+      'scout',
+    ]);
   });
 });
 

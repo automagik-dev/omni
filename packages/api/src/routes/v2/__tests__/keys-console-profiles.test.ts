@@ -43,11 +43,18 @@ function mountKeysRoutes(): { app: Hono<{ Variables: AppVariables }>; created: C
         }),
       },
     } as never);
-    // Caller holds keys:write — the scope the BFF's minting key will carry.
+    // Caller is the platform primary/minting key (`*`). The mint ceiling
+    // (keys.ts `enforceMintCeiling`) requires the requested scopes to be a
+    // subset of the caller's own, and console profiles resolve to broad scope
+    // sets — so the minter must legitimately hold those scopes. In production
+    // the khal-ui BFF mints per-user console keys with the platform primary
+    // key (or a `console-admin` key, which likewise covers every console
+    // scope); a `keys:write`-only caller is now correctly rejected and is
+    // covered by keys-mint-ceiling.test.ts.
     c.set('apiKey', {
       id: 'minter',
       name: 'minter',
-      scopes: ['keys:write'],
+      scopes: ['*'],
       instanceIds: null,
       expiresAt: null,
     } as never);
