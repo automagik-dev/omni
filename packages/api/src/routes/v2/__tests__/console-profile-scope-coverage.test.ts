@@ -11,14 +11,15 @@
  *     generated from `SCOPE_MAP` by build-capability-inventory.ts), and every
  *     capability is pushed through the REAL `scopeEnforcerMiddleware`.
  *
- * Known gap (reported, not papered over): 27 inventory capabilities carry
- * `scope: null` — they are mounted and reachable but absent from SCOPE_MAP
- * (`/trust/*`, `/handoffs/*`, `/follow-up/*`, `/voice/*`, four legacy
- * `/messages/*` aliases, `/health`, `/info`). The enforcer denies unmapped
- * routes by default, so NO scoped key — console-admin included — can reach
- * them; only a `*` wildcard key can. Granting the console a wildcard would
- * defeat the whole tiering, so those routes are excluded from the coverage
- * assertion below and tracked as an API-side SCOPE_MAP gap.
+ * The `/trust/*`, `/handoffs/*`, `/follow-up/*`, and `/voice/*` families are now
+ * mapped into SCOPE_MAP (Group 2 HIGH-2), so `console-admin` reaches them. The
+ * ONLY capabilities that remain `scope: null` are intentionally-dark platform
+ * meta routes and legacy message-send aliases the console never calls
+ * (`/health`, `/info`, `/_internal/health`, four `POST /messages/*` aliases).
+ * They are enumerated in `INTENTIONALLY_DARK` below; the coverage test now
+ * asserts that EVERY other inventory capability is both mapped (non-null scope)
+ * and reachable (non-403) under `console-admin`, so a future UI-invoked route
+ * that lands unmapped fails this suite instead of being silently skipped.
  */
 
 import { describe, expect, mock, test } from 'bun:test';
@@ -31,6 +32,23 @@ import type { AppVariables } from '../../../types';
 import { instancesRoutes } from '../instances';
 
 const INSTANCE_ID = '11111111-1111-4111-8111-111111111111';
+
+/**
+ * Capabilities intentionally left OUT of SCOPE_MAP: platform meta/health
+ * endpoints and legacy message-send aliases the Omni Admin console never
+ * invokes. These are the only routes allowed to carry `scope: null`; anything
+ * else unmapped is a real gap the coverage test must fail on. Keyed by the
+ * inventory `key` (`METHOD route`).
+ */
+const INTENTIONALLY_DARK: ReadonlySet<string> = new Set([
+  'GET /health',
+  'GET /info',
+  'GET /_internal/health',
+  'POST /messages/contact',
+  'POST /messages/location',
+  'POST /messages/reaction',
+  'POST /messages/sticker',
+]);
 
 const INVENTORY_PATH = join(
   import.meta.dir,
@@ -170,6 +188,55 @@ describe('console-admin — capability inventory coverage', () => {
     }
 
     expect(denied).toEqual([]);
+  });
+
+  test('every console-invokable route is mapped and reachable (non-403) under console-admin, except intentionally-dark meta routes', async () => {
+    const app = mountEnforcerProbe(consoleKey('console-admin', CONSOLE_ADMIN_SCOPES));
+    const all = loadInventory();
+
+    // No silent skips: any capability outside the allowlist that is still
+    // unmapped (scope: null) is a real SCOPE_MAP gap and must fail here.
+    const unexpectedlyDark = all.filter((c) => c.scope === null && !INTENTIONALLY_DARK.has(c.key)).map((c) => c.key);
+    expect(unexpectedlyDark).toEqual([]);
+
+    // Every mapped, non-dark route must be reachable under console-admin.
+    const denied: string[] = [];
+    for (const cap of all) {
+      if (INTENTIONALLY_DARK.has(cap.key) || cap.scope === null) continue;
+      const res = await app.request(concretePath(cap.route), { method: cap.method });
+      if (res.status === 403) denied.push(`${cap.key} (needs ${cap.scope})`);
+    }
+    expect(denied).toEqual([]);
+  });
+
+  test('the trust/handoffs/voice/follow-up families are now mapped (no longer scope: null)', () => {
+    const byScope = new Map(loadInventory().map((c) => [c.key, c.scope]));
+    const expected: Record<string, string> = {
+      'GET /trust/hosts': 'trust:read',
+      'GET /trust/hosts/:id': 'trust:read',
+      'PATCH /trust/hosts/:id': 'trust:write',
+      'DELETE /trust/hosts/:id': 'trust:write',
+      'POST /trust/handshake': 'trust:write',
+      'GET /handoffs': 'handoffs:read',
+      'GET /handoffs/:id': 'handoffs:read',
+      'GET /voice/sessions': 'voice:read',
+      'GET /voice/sessions/:id': 'voice:read',
+      'POST /voice/join': 'voice:write',
+      'POST /voice/leave': 'voice:write',
+      'GET /follow-up/agents/:id': 'follow-up:read',
+      'PUT /follow-up/agents/:id': 'follow-up:write',
+      'DELETE /follow-up/agents/:id': 'follow-up:write',
+      'GET /follow-up/instances/:id': 'follow-up:read',
+      'PUT /follow-up/instances/:id': 'follow-up:write',
+      'DELETE /follow-up/instances/:id': 'follow-up:write',
+      'GET /follow-up/chats/:id': 'follow-up:read',
+      'PUT /follow-up/chats/:id': 'follow-up:write',
+      'DELETE /follow-up/chats/:id': 'follow-up:write',
+    };
+    const mismatches = Object.entries(expected)
+      .filter(([key, scope]) => byScope.get(key) !== scope)
+      .map(([key, scope]) => `${key} expected ${scope} got ${String(byScope.get(key))}`);
+    expect(mismatches).toEqual([]);
   });
 
   test('console-admin scope set is exactly the inventory scope set — no more, no less', () => {

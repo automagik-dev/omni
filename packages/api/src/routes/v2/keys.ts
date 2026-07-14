@@ -10,6 +10,7 @@ import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { ProfileResolutionError, type ResolveProfileInput, resolveProfile } from '../../lib/resolve-profile';
 import { optionalDateParam } from '../../schemas/date-query';
+import { ApiKeyService } from '../../services/api-keys';
 import type { AppVariables } from '../../types';
 
 export const keysRoutes = new Hono<{ Variables: AppVariables }>();
@@ -122,12 +123,14 @@ const auditQuerySchema = z.object({
 keysRoutes.post(
   '/',
   async (c, next) => {
-    // Intentionally peek the raw body before zod so `profile: "admin"` is
-    // refused even if other fields would fail validation (e.g. missing name).
-    const raw = await c.req.raw
-      .clone()
-      .json()
-      .catch(() => null);
+    // Intentionally peek the body before zod so `profile: "admin"` is refused
+    // even if other fields would fail validation (e.g. missing name). Use the
+    // Hono-cached `c.req.json()` (not `c.req.raw.clone().json()`): the
+    // scope-enforcer middleware runs first in production and already consumed
+    // the raw body stream, so cloning the raw request yields an unusable body
+    // and the guard would silently fall through to zod. `c.req.json()` returns
+    // the cached parse and fires reliably regardless of upstream reads.
+    const raw = await c.req.json().catch(() => null);
     if (raw && typeof raw === 'object' && (raw as { profile?: unknown }).profile === 'admin') {
       return c.json(
         {
@@ -164,6 +167,38 @@ function normalizeOverrides(overrides: CreateKeyData['overrides']): ResolveProfi
   };
 }
 
+/**
+ * Least-privilege mint ceiling.
+ *
+ * A caller may only mint a key whose scopes are a SUBSET of its OWN scopes.
+ * `ApiKeyService.scopeAllows(callerScopes, requested)` is exactly the covering
+ * relation we need:
+ *   - a `*` caller (the real god-key / `admin` profile) covers every requested
+ *     scope, so god-key minting and internal agent-provisioning keep working
+ *     unchanged;
+ *   - a concrete-scoped caller (e.g. `console-admin`) covers a requested scope
+ *     it holds — or one under a `ns:*` it holds — but does NOT cover `*` or a
+ *     `ns:*` super-scope it lacks. So a bounded caller can never escalate to a
+ *     god key or a whole-namespace grant, even by minting a broader profile.
+ *
+ * Returns a 403 `Response` listing the disallowed scopes, or `null` when every
+ * requested scope is within the caller's ceiling.
+ */
+function enforceMintCeiling(c: Context<{ Variables: AppVariables }>, requestedScopes: string[]): Response | null {
+  const callerScopes = c.get('apiKey')?.scopes ?? [];
+  const exceeding = requestedScopes.filter((scope) => !ApiKeyService.scopeAllows(callerScopes, scope));
+  if (exceeding.length === 0) return null;
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: `Cannot mint a key whose scopes exceed the caller's own. Disallowed: ${exceeding.join(', ')}`,
+      },
+    },
+    403,
+  );
+}
+
 async function handleProfileCreate(
   c: Context<{ Variables: AppVariables }>,
   data: CreateKeyData,
@@ -179,6 +214,11 @@ async function handleProfileCreate(
       overrides: normalizeOverrides(data.overrides),
       denylistPresetKey: data.denylistPresetKey,
     });
+
+    // Enforce the mint ceiling on the RESOLVED profile scopes so a bounded
+    // caller can't escalate by requesting a broader profile than it holds.
+    const ceilingDenied = enforceMintCeiling(c, resolved.scopes);
+    if (ceilingDenied) return ceilingDenied;
 
     const result = await services.apiKeys.create({
       name: data.name,
@@ -224,6 +264,12 @@ async function handleLegacyCreate(
       400,
     );
   }
+
+  // Enforce the mint ceiling: the requested scopes must be a subset of the
+  // caller's own. Blocks a `console-admin` (or any concrete-scoped) caller from
+  // minting `['*']` / a `ns:*` super-scope and using it as a one-hop god key.
+  const ceilingDenied = enforceMintCeiling(c, data.scopes);
+  if (ceilingDenied) return ceilingDenied;
 
   const result = await services.apiKeys.create({
     name: data.name,
