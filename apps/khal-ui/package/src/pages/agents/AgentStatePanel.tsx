@@ -11,6 +11,7 @@ import { Button, Input, Note } from '@khal-os/ui';
 import { useState } from 'react';
 import { AGENT_STATUSES, type AgentStatus } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
+import { requirementReason, useCan } from '../../auth';
 import { JsonInspector } from '../../components/JsonInspector';
 import { LiveTestResult, type LiveTestStatus } from '../../components/LiveTestResult';
 import { T } from '../../components/tokens';
@@ -28,6 +29,10 @@ export function AgentStatePanel({ agentId, lockAgentId = false }: { agentId?: st
   const [writeMsg, setWriteMsg] = useState<string | undefined>();
 
   const canRun = Boolean(agent && chat);
+  // Reading state is safe for any viewer; writing the KV status is an operational
+  // action, so `member` (read-only) can read but not write.
+  const canOperate = useCan('operate');
+  const operateReason = requirementReason('operate');
 
   const read = async () => {
     setReadStatus('pending');
@@ -43,6 +48,7 @@ export function AgentStatePanel({ agentId, lockAgentId = false }: { agentId?: st
   };
 
   const write = async () => {
+    if (!canOperate) return;
     setWriteStatus('pending');
     try {
       const res = await ext.agentState.put(agent, chat, { status });
@@ -103,7 +109,13 @@ export function AgentStatePanel({ agentId, lockAgentId = false }: { agentId?: st
         <Button size="small" variant="secondary" disabled={!canRun} onClick={() => void read()}>
           Read state
         </Button>
-        <Button size="small" variant="secondary" disabled={!canRun} onClick={() => void write()}>
+        <Button
+          size="small"
+          variant="secondary"
+          disabled={!canRun || !canOperate}
+          title={canOperate ? undefined : operateReason}
+          onClick={() => void write()}
+        >
           Write state
         </Button>
       </div>

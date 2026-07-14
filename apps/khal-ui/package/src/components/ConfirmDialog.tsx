@@ -10,11 +10,13 @@
  * only the presentation is KhalOS-native — a raised GlassCard body with DataRow
  * target/ID and an effect PillBadge.
  *
- * It is also the pack's **central role gate for mutations**: every action that
- * changes real state funnels through here, so a `live` effect additionally
- * requires the `operate` capability (`platform-dev` and up). Below that role the
- * confirm control is disabled and the reason is stated — a UI mirror of the
- * check the BFF enforces for real.
+ * It is also a **role gate for the mutations routed through it**: a `live` effect
+ * additionally requires the `operate` capability (`platform-dev` and up), so below
+ * that role the confirm control is disabled and the reason is stated — a UI mirror
+ * of the check the BFF enforces for real. This gates ONLY the actions that funnel
+ * through this dialog; it is not the pack's sole mutation gate. Read-tier pages
+ * that mutate outside a ConfirmDialog disable their own write affordances via
+ * `useCan`/`Gate`, and the BFF remains the real authorization boundary.
  */
 import { DataRow, Dialog, GlassCard, Input } from '@khal-os/ui';
 import { useId, useState } from 'react';

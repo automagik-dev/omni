@@ -11,6 +11,7 @@
 import { Badge, Button, Note, PillBadge, SectionCard, StatusDot } from '@khal-os/ui';
 import { useState } from 'react';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
+import { requirementReason, useCan } from '../../auth';
 import { MutationResult, PageShell } from '../../components';
 import { SectionHead } from '../../components/ResourceDetail';
 import { T } from '../../components/tokens';
@@ -50,12 +51,17 @@ function VoiceCard({
   voice,
   isDefault,
   previewOpen,
+  canSetDefault,
+  setDefaultReason,
   onTogglePreview,
   onSetDefault,
 }: {
   voice: Voice;
   isDefault: boolean;
   previewOpen: boolean;
+  /** Whether the current role may write the platform default (operate+). */
+  canSetDefault: boolean;
+  setDefaultReason: string;
   onTogglePreview: () => void;
   onSetDefault: () => void;
 }) {
@@ -106,7 +112,13 @@ function VoiceCard({
               {previewOpen ? 'Hide preview' : 'Preview'}
             </Button>
           )}
-          <Button size="small" variant="secondary" disabled={isDefault} onClick={onSetDefault}>
+          <Button
+            size="small"
+            variant="secondary"
+            disabled={isDefault || !canSetDefault}
+            title={canSetDefault ? undefined : setDefaultReason}
+            onClick={onSetDefault}
+          >
             {isDefault ? 'Current default' : 'Set default'}
           </Button>
         </div>
@@ -123,6 +135,9 @@ function VoiceCard({
 export function TtsVoicesPage() {
   const { ext } = useOmniClient();
   const [previewOf, setPreviewOf] = useState<string | null>(null);
+  // Writing the platform default voice is an operational write — `member` cannot.
+  const canSetDefault = useCan('operate');
+  const setDefaultReason = requirementReason('operate');
 
   const voices = useOmniQuery(['tts', 'voices'], () => ext.messages.ttsVoices());
   const currentDefault = useOmniQuery(['settings', DEFAULT_KEY], () =>
@@ -189,6 +204,8 @@ export function TtsVoicesPage() {
                 voice={v}
                 isDefault={String(defaultValue) === id}
                 previewOpen={previewOf === id}
+                canSetDefault={canSetDefault}
+                setDefaultReason={setDefaultReason}
                 onTogglePreview={() => setPreviewOf(previewOf === id ? null : id)}
                 onSetDefault={() => setDefault.mutate(id)}
               />

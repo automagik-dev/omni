@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { z } from 'zod';
 import type { PersonRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
+import { requirementReason, useCan } from '../../auth';
 import {
   type ColumnDef,
   ConfirmDialog,
@@ -43,6 +44,11 @@ export function PersonsPage() {
   const [search, setSearch] = useState('');
   const [submitted, setSubmitted] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Editing a profile is an operational write — a read-only `member` may search,
+  // read presence, and view the timeline, but not PATCH. (Identity ops stay gated
+  // by their ConfirmDialog, which already enforces `operate` on its live effect.)
+  const canOperate = useCan('operate');
+  const operateReason = requirementReason('operate');
 
   // Identity-op form state (never auto-run; operator confirms each).
   const [linkA, setLinkA] = useState('');
@@ -149,8 +155,14 @@ export function PersonsPage() {
                   avatarUrl: selected?.avatarUrl ?? undefined,
                 }}
                 submitLabel="Save profile"
+                disabled={!canOperate}
                 onSubmit={(data) => patch.mutate({ id: selectedId, body: { ...data } })}
               />
+              {!canOperate && (
+                <Note type="default" label="Read-only role">
+                  {operateReason}
+                </Note>
+              )}
               {(patch.readBackData || patch.error) && (
                 <div style={{ marginTop: 12 }}>
                   <MutationResult

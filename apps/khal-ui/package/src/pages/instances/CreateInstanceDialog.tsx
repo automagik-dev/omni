@@ -9,6 +9,7 @@ import { Button, Dialog, Note, Spinner } from '@khal-os/ui';
 import { useState } from 'react';
 import { z } from 'zod';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
+import { requirementReason, useCan } from '../../auth';
 import { SchemaForm } from '../../components/SchemaForm';
 import { T } from '../../components/tokens';
 import { useOmniQuery } from '../../hooks/useOmniQuery';
@@ -63,6 +64,9 @@ export function CreateInstanceDialog({
   const [channel, setChannel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // Creating an instance is an operational write — a read-only `member` cannot.
+  const canCreate = useCan('operate');
+  const createReason = requirementReason('operate');
 
   const reset = () => {
     setChannel(null);
@@ -71,7 +75,7 @@ export function CreateInstanceDialog({
   };
 
   const submit = async (values: Record<string, unknown>) => {
-    if (!channel) return;
+    if (!channel || !canCreate) return;
     setPending(true);
     setError(null);
     try {
@@ -146,10 +150,11 @@ export function CreateInstanceDialog({
               </Button>
             </div>
             {error && <Note type="error">{error}</Note>}
+            {!canCreate && <Note type="warning">{createReason}</Note>}
             <SchemaForm
               schema={createSchemaFor(channel)}
               submitLabel={pending ? 'Creating…' : 'Create instance'}
-              disabled={pending}
+              disabled={pending || !canCreate}
               onSubmit={(data) => void submit(data as Record<string, unknown>)}
             />
           </div>

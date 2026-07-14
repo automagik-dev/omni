@@ -319,6 +319,9 @@ export function useAgentState(chatId: string | null, candidateAgentId: string | 
   }
 
   const streamPath = chatId ? ext.agentState.streamPath({ chatId }) : '';
+  // Identity on SSE: `EventSource` cannot set an `Authorization` header, so this
+  // stream is authenticated by the browser-attached same-origin `khal-session`
+  // cookie — the alternative credential the BFF's `validateKhalSession` accepts.
   const { degraded, connected } = useSse(streamPath, {
     enabled: Boolean(chatId),
     events: ['connected', 'agent.state.changed'],

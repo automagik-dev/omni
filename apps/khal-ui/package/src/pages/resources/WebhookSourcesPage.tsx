@@ -9,6 +9,7 @@ import { Badge, Button, Input, SectionCard, Toggle } from '@khal-os/ui';
 import { useState } from 'react';
 import type { WebhookSourceRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
+import { requirementReason, useCan } from '../../auth';
 import {
   type ColumnDef,
   ConfirmDialog,
@@ -30,6 +31,10 @@ export function WebhookSourcesPage() {
   const [description, setDescription] = useState('');
   const [enabled, setEnabled] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Create + enable/disable are operational writes — a read-only `member` may see
+  // this page but not mutate. (Delete stays gated by its ConfirmDialog below.)
+  const canOperate = useCan('operate');
+  const operateReason = requirementReason('operate');
 
   const list = useOmniQuery(['webhook-sources', 'list'], () => ext.webhookSources.list());
   const detail = useOmniQuery(['webhook-sources', selectedId], () => ext.webhookSources.get(selectedId ?? ''), {
@@ -94,7 +99,8 @@ export function WebhookSourcesPage() {
           <Button
             size="small"
             variant="default"
-            disabled={!name || create.isPending}
+            disabled={!name || create.isPending || !canOperate}
+            title={canOperate ? undefined : operateReason}
             onClick={() => create.mutate(undefined)}
           >
             Create
@@ -125,6 +131,8 @@ export function WebhookSourcesPage() {
                 <Button
                   size="small"
                   variant="secondary"
+                  disabled={!canOperate}
+                  title={canOperate ? undefined : operateReason}
                   onClick={() => patch.mutate({ id: selectedId, enabled: !selected.enabled })}
                 >
                   {selected.enabled ? 'Disable' : 'Enable'}

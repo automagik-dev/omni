@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { z } from 'zod';
 import type { ConversationRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
+import { requirementReason, useCan } from '../../auth';
 import {
   type ColumnDef,
   ConfirmDialog,
@@ -36,6 +37,10 @@ export function ConversationsPage() {
   const { ext } = useOmniClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Create + edit are operational writes — a read-only `member` may browse the
+  // records but not mutate. (Delete stays gated by its ConfirmDialog below.)
+  const canOperate = useCan('operate');
+  const operateReason = requirementReason('operate');
 
   const list = useOmniQuery(['conversations', 'list'], () => ext.conversations.list({ limit: 200 }));
   const detail = useOmniQuery(['conversations', selectedId], () => ext.conversations.get(selectedId ?? ''), {
@@ -101,7 +106,17 @@ export function ConversationsPage() {
         <div style={{ marginBottom: 10 }}>
           <SectionHead>New conversation</SectionHead>
         </div>
-        <SchemaForm schema={editSchema} submitLabel="Create" onSubmit={(data) => create.mutate({ ...data })} />
+        <SchemaForm
+          schema={editSchema}
+          submitLabel="Create"
+          disabled={!canOperate}
+          onSubmit={(data) => create.mutate({ ...data })}
+        />
+        {!canOperate && (
+          <Note type="default" label="Read-only role">
+            {operateReason}
+          </Note>
+        )}
         {(create.data || create.error) && (
           <div style={{ marginTop: 12 }}>
             <MutationResult
@@ -143,6 +158,7 @@ export function ConversationsPage() {
                 schema={editSchema}
                 value={{ title: selected?.title ?? undefined, summary: selected?.summary ?? undefined }}
                 submitLabel="Save"
+                disabled={!canOperate}
                 onSubmit={(data) => patch.mutate({ id: selectedId, body: { ...data } })}
               />
               {(patch.readBackData || patch.error) && (

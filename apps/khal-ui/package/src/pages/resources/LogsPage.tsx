@@ -50,6 +50,9 @@ export function LogsPage() {
     () => ext.logs.streamPath({ level, ...(modules ? { modules } : {}) }),
     [ext, level, modules],
   );
+  // Identity on SSE: `EventSource` cannot set an `Authorization` header, so this
+  // stream is authenticated by the browser-attached same-origin `khal-session`
+  // cookie — the alternative credential the BFF's `validateKhalSession` accepts.
   const sse = useSse(streamPath, { enabled: live, heartbeatMs: 0, events: ['log', 'connected'], max: 200 });
 
   const recent = useOmniQuery(['logs', 'recent', level, modules], () =>

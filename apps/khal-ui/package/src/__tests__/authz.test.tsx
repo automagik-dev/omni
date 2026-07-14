@@ -1,15 +1,27 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { KhalAuthContext } from '@khal-os/sdk/app';
 import type { KhalAuth, Role } from '@khal-os/sdk/app';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { omniExt } from '../api/ext';
 import { visibleNavGroups } from '../app/nav-visibility';
+import { OmniClientProvider } from '../app/providers/OmniClientProvider';
 import { SITEMAP } from '../app/sitemap';
 import { RequireCapability } from '../auth/RequireCapability';
-import { type Capability, can, isKnownRoleSlug, routeCapability, sessionRole } from '../auth/capabilities';
+import {
+  type Capability,
+  can,
+  isKnownRoleSlug,
+  requirementReason,
+  routeCapability,
+  sessionRole,
+} from '../auth/capabilities';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { AgentStatePanel } from '../pages/agents/AgentStatePanel';
 import { ActionButton } from '../pages/instances/components';
+import { ConversationsPage } from '../pages/resources/ConversationsPage';
+import { WebhookSourcesPage } from '../pages/resources/WebhookSourcesPage';
 
 /**
  * Role-based gating is defense in depth over the BFF boundary. These tests
@@ -229,6 +241,59 @@ describe('ConfirmDialog (central mutation gate)', () => {
     const html = render(auth('platform-dev'));
     expect(html).not.toContain('Not permitted for your role');
     expect(html).toContain('to confirm');
+  });
+});
+
+// ── Read-tier page write affordances (defense in depth) ─────────────────────────
+
+/**
+ * Mutating controls on read-tier pages (create/edit/toggle/write) must not be
+ * live for a `member`. These pages read live data through TanStack Query and the
+ * Omni `ext` layer, so each renders under a QueryClient + OmniClientProvider. The
+ * gate surfaces the same denial copy as the rest of the pack, keyed on the role
+ * requirement — present for `member`, absent for `platform-dev`.
+ */
+function renderPage(value: KhalAuth | null, el: ReactElement): string {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return renderToStaticMarkup(
+    <KhalAuthContext.Provider value={value}>
+      <QueryClientProvider client={qc}>
+        <OmniClientProvider bffBase="/omni">{el}</OmniClientProvider>
+      </QueryClientProvider>
+    </KhalAuthContext.Provider>,
+  );
+}
+
+const OPERATE_REASON = requirementReason('operate');
+
+describe('read-tier write affordances require operate', () => {
+  test('WebhookSourcesPage create is role-blocked for member, not for platform-dev', () => {
+    expect(renderPage(auth('member'), <WebhookSourcesPage />)).toContain(OPERATE_REASON);
+    expect(renderPage(auth('platform-dev'), <WebhookSourcesPage />)).not.toContain(OPERATE_REASON);
+  });
+
+  test('WebhookSourcesPage create is also blocked for a null session (fail closed)', () => {
+    expect(renderPage(null, <WebhookSourcesPage />)).toContain(OPERATE_REASON);
+  });
+
+  test('ConversationsPage create form is disabled with the reason for member only', () => {
+    const memberHtml = renderPage(auth('member'), <ConversationsPage />);
+    expect(memberHtml).toContain(OPERATE_REASON);
+    expect(memberHtml).toContain('disabled=""');
+    expect(renderPage(auth('platform-dev'), <ConversationsPage />)).not.toContain(OPERATE_REASON);
+  });
+
+  test('AgentStatePanel write is role-blocked for member, not for platform-dev', () => {
+    // Agent id supplied + locked; the write button is additionally role-gated.
+    expect(renderPage(auth('member'), <AgentStatePanel agentId="a-1" lockAgentId />)).toContain(OPERATE_REASON);
+    expect(renderPage(auth('platform-dev'), <AgentStatePanel agentId="a-1" lockAgentId />)).not.toContain(
+      OPERATE_REASON,
+    );
+  });
+
+  test('AgentStatePanel keeps the read control ungated (read-only effect)', () => {
+    // The "Read state" button is present for a member — reads are never role-gated.
+    expect(renderPage(auth('member'), <AgentStatePanel agentId="a-1" lockAgentId />)).toContain('Read state');
   });
 });
 
