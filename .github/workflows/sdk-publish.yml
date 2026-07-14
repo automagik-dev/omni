@@ -1,0 +1,90 @@
+name: SDK Publish
+
+# Manually-dispatched publish of the client SDK (packages/sdk) to public npm
+# under Apache-2.0. The SDK is generated from the OpenAPI spec and consumed by
+# the CLI in-repo via the workspace; this workflow lets the enterprise pack and
+# third parties depend on a versioned, published package instead of a
+# `file:../../../packages/sdk` reference.
+#
+# Trigger contract — operator-invoked workflow_dispatch ONLY. There is no
+# push/tag trigger: the CLI's own npm publish (version.yml, @automagik/omni via
+# OIDC) is a separate, unrelated pipeline. Keeping the SDK publish manual avoids
+# racing version.yml and lets the operator gate the very first publish behind a
+# dry-run.
+#
+# Auth — NODE_AUTH_TOKEN is sourced from the NPM_TOKEN repo secret (already
+# present). The CLI publishes via npm OIDC Trusted Publishing; the SDK cannot
+# reuse that path until a trusted-publisher entry for @omni/sdk exists on
+# npmjs.org, so this workflow uses the classic automation-token path. Once the
+# npm scope is confirmed and a trusted publisher is registered, this step can be
+# switched to OIDC (drop NODE_AUTH_TOKEN, keep id-token: write).
+#
+# SCOPE NOTE: the package name is @omni/sdk (from packages/sdk/package.json).
+# The @omni npm scope must be confirmed owned by us (or the pre-decided fallback
+# @namastex/omni-sdk adopted) before the first non-dry-run dispatch succeeds.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dist_tag:
+        description: 'npm dist-tag (latest for stable, next for dev/pre-release)'
+        required: false
+        type: choice
+        default: latest
+        options:
+          - latest
+          - next
+          - homolog
+      dry_run:
+        description: 'Dry run (npm publish --dry-run — no upload). Leave ON for the first invocation to verify the tarball.'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write   # reserved for a future switch to npm OIDC Trusted Publishing
+
+concurrency:
+  group: sdk-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build & publish @omni/sdk
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3  # v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node (npm registry auth)
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build SDK
+        run: bunx turbo run build --filter=@omni/sdk
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "false"
+          HUSKY: "0"
+          DIST_TAG: ${{ inputs.dist_tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          cd packages/sdk
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "DRY RUN — inspecting tarball, no upload"
+            npm publish --access public --tag "${DIST_TAG}" --dry-run
+          else
+            npm publish --access public --tag "${DIST_TAG}"
+          fi
