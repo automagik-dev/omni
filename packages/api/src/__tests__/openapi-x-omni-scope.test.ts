@@ -20,6 +20,9 @@ describe('openapi x-omni-scope extension', () => {
     expect(operationScope('get', '/agents')).toBe('agents:read');
     expect(operationScope('post', '/messages/send/media')).toBe('messages:send');
     expect(operationScope('get', '/instances/:id')).toBe('instances:read');
+    // Anchor: auth/validate must register relative to the server prefix so its
+    // documented path matches the SCOPE_MAP key and carries the scope annotation.
+    expect(operationScope('post', '/auth/validate')).toBe('auth:validate');
   });
 
   it('every documented operation with a SCOPE_MAP entry carries x-omni-scope', () => {
@@ -42,6 +45,8 @@ describe('openapi x-omni-scope extension', () => {
       }
     }
 
-    expect(checked).toBeGreaterThan(0);
+    // Lower bound guards against a regression where the sweep silently annotates
+    // nothing (e.g. a path-registration change that stops matching SCOPE_MAP keys).
+    expect(checked).toBeGreaterThanOrEqual(110);
   });
 });

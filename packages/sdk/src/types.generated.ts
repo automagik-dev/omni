@@ -56,7 +56,7 @@ export interface paths {
         patch: operations["updateAgent"];
         trace?: never;
     };
-    "/api/v2/auth/validate": {
+    "/auth/validate": {
         parameters: {
             query?: never;
             header?: never;
