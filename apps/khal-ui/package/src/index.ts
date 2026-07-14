@@ -1,5 +1,9 @@
 export { default as manifest } from './manifest';
 
+// Install-scope contract (khal-app.json allowedScopes/defaultScope, enforced).
+export { ALLOWED_SCOPES, DEFAULT_SCOPE, isScopeAllowed, resolveScope } from './scope';
+export type { AppScope } from './scope';
+
 // View entry (KHAL host loads this) + the app root it renders.
 export { MainView } from './views/main/MainView';
 export { OmniAdminApp } from './app/OmniAdminApp';

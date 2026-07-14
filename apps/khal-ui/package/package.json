@@ -31,14 +31,14 @@
     "zod": "^3.24.2"
   },
   "peerDependencies": {
-    "@khal-os/sdk": "^1.0.0 || ^2.0.0",
-    "@khal-os/ui": "^2.0.0",
+    "@khal-os/sdk": "^2.0.111",
+    "@khal-os/ui": "^2.0.111",
     "react": "^19.0.0"
   },
   "devDependencies": {
-    "@khal-os/sdk": "^2.0.111",
-    "@khal-os/types": "^2.2.63",
-    "@khal-os/ui": "^2.0.111",
+    "@khal-os/sdk": "2.0.111",
+    "@khal-os/types": "2.2.63",
+    "@khal-os/ui": "2.0.111",
     "@types/bun": "^1.1.42",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { validateManifest } from '@khal-os/types';
 import manifest from '../../../khal-app.json';
+import { ALLOWED_SCOPES, DEFAULT_SCOPE, resolveScope } from '../scope';
 
 describe('khal-app.json manifest', () => {
   test('validates against @khal-os/types validateManifest', () => {
@@ -28,8 +29,24 @@ describe('khal-app.json manifest', () => {
     expect(result.settings?.secrets).toContain('OMNI_API_KEY');
   });
 
-  test('requests only nats publish/subscribe permissions', () => {
+  // Omni's NATS bus is internal to Omni: the pack talks to the Omni backend
+  // over HTTP/SSE via its BFF and never connects to KHAL's NATS. Declaring
+  // nats:* would be a false claim on the host, so the manifest declares none.
+  test('requests no host permissions (never touches KHAL NATS)', () => {
     const result = validateManifest(manifest);
-    expect(result.permissions).toEqual(['nats:publish', 'nats:subscribe']);
+    expect(result.permissions ?? []).toEqual([]);
+    expect(JSON.stringify(manifest)).not.toContain('nats:');
+  });
+
+  test('declares scopes the pack actually honours', () => {
+    const result = validateManifest(manifest);
+    expect(result.allowedScopes).toEqual(['shared', 'user']);
+    expect(result.defaultScope).toBe('shared');
+    // The declaration is enforced, not decorative.
+    expect(ALLOWED_SCOPES).toEqual(['shared', 'user']);
+    expect(DEFAULT_SCOPE).toBe('shared');
+    expect(resolveScope(undefined)).toBe('shared');
+    expect(resolveScope('user')).toBe('user');
+    expect(() => resolveScope('org')).toThrow(/allowedScopes/);
   });
 });

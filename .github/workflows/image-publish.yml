@@ -258,6 +258,25 @@ jobs:
             echo "//git.namastex.io/api/packages/khal/npm/:_authToken=${KHAL_NPM_TOKEN}"
           } > "${RUNNER_TEMP}/khal.npmrc"
 
+      # Pack-contract gate. The main ci.yml `bun test` deliberately EXCLUDES
+      # apps/khal-ui (its @khal-os/* deps are private, so a token-less CI run
+      # cannot install them). This is the only job holding the token, so the
+      # khal-app.json contract (permissions / scopes, checked with
+      # @khal-os/types validateManifest) is enforced here — and it is blocking:
+      # a bad manifest fails the job before any image is built or pushed.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install khal-ui deps (@khal-os registry)
+        working-directory: apps/khal-ui
+        run: |
+          cat "${RUNNER_TEMP}/khal.npmrc" >> "${HOME}/.npmrc"
+          bun install --frozen-lockfile
+
+      - name: Validate pack manifest contract
+        working-directory: apps/khal-ui
+        run: bun test package/src/__tests__/manifest.test.ts
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
