@@ -10,7 +10,9 @@
 import { Icons, Input, KhalLogo, SidebarNav, ThemeSwitcher, Tooltip } from '@khal-os/ui';
 import { useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuthz } from '../auth/useAuthz';
 import { T } from '../components/tokens';
+import { visibleNavGroups } from './nav-visibility';
 import { SITEMAP } from './sitemap';
 
 /** Sidebar rail width — the OS silhouette's fixed left column. */
@@ -25,15 +27,22 @@ export function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const [query, setQuery] = useState('');
+  const { can } = useAuthz();
 
   const groups = useMemo(() => {
+    // Role first: a route the current identity may not open is never offered.
+    const allowed = visibleNavGroups(SITEMAP, can);
     const q = query.trim().toLowerCase();
-    if (!q) return SITEMAP;
-    return SITEMAP.map((group) => ({
-      ...group,
-      items: group.items.filter((item) => item.label.toLowerCase().includes(q) || item.path.toLowerCase().includes(q)),
-    })).filter((group) => group.items.length > 0);
-  }, [query]);
+    if (!q) return allowed;
+    return allowed
+      .map((group) => ({
+        ...group,
+        items: group.items.filter(
+          (item) => item.label.toLowerCase().includes(q) || item.path.toLowerCase().includes(q),
+        ),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [query, can]);
 
   return (
     <aside

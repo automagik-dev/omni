@@ -16,7 +16,11 @@ import { type ReactNode, useEffect } from 'react';
 export const DEV_USER: KhalAuth = {
   userId: 'harness-dev',
   orgId: 'harness-org',
-  role: 'platform-dev' satisfies Role,
+  // Highest role so the standalone harness can preview the *entire* console —
+  // including the admin-gated routes (keys, trust, settings) the pack's
+  // role gating now hides below `platform-admin`. No `token`: the harness has no
+  // host-issued JWT, which exercises the pack's "omit Authorization" path.
+  role: 'platform-owner' satisfies Role,
   permissions: ['*'],
   loading: false,
   email: 'dev@omni.local',

@@ -9,13 +9,26 @@
  * The safety logic (effect gate, confirm phrase, target/ID display) is unchanged;
  * only the presentation is KhalOS-native — a raised GlassCard body with DataRow
  * target/ID and an effect PillBadge.
+ *
+ * It is also the pack's **central role gate for mutations**: every action that
+ * changes real state funnels through here, so a `live` effect additionally
+ * requires the `operate` capability (`platform-dev` and up). Below that role the
+ * confirm control is disabled and the reason is stated — a UI mirror of the
+ * check the BFF enforces for real.
  */
 import { DataRow, Dialog, GlassCard, Input } from '@khal-os/ui';
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
+import { type Capability, requirementReason } from '../auth/capabilities';
+import { useCan } from '../auth/useAuthz';
 import { EffectBadge } from './EffectBadge';
 import { EFFECTS, type EffectLabel, confirmSatisfied } from './effect';
 import { T } from './tokens';
+
+/** The capability an effect implies when the caller does not name a stricter one. */
+export function effectCapability(effect: EffectLabel): Capability {
+  return EFFECTS[effect].mutating ? 'operate' : 'read';
+}
 
 export interface ConfirmDialogProps {
   open: boolean;
@@ -36,6 +49,8 @@ export interface ConfirmDialogProps {
   pending?: boolean;
   /** Block confirmation even when the phrase is satisfied (e.g. an invalid value in `description`). */
   confirmDisabled?: boolean;
+  /** Role tier this action needs. Defaults to {@link effectCapability} (live ⇒ `operate`). */
+  capability?: Capability;
 }
 
 export function ConfirmDialog({
@@ -52,12 +67,15 @@ export function ConfirmDialog({
   confirmLabel = 'Confirm',
   pending = false,
   confirmDisabled = false,
+  capability,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState('');
   const inputId = useId();
+  const required = capability ?? effectCapability(effect);
+  const allowed = useCan(required);
   const requireType = destructive ?? EFFECTS[effect].mutating;
   const phrase = confirmPhrase ?? targetName;
-  const canConfirm = !pending && !confirmDisabled && confirmSatisfied(typed, phrase, requireType);
+  const canConfirm = allowed && !pending && !confirmDisabled && confirmSatisfied(typed, phrase, requireType);
 
   return (
     <Dialog open={open} onClose={onClose}>
@@ -84,7 +102,13 @@ export function ConfirmDialog({
 
             {description && <div style={{ fontSize: 13, color: T.fg }}>{description}</div>}
 
-            {requireType && (
+            {!allowed && (
+              <div role="alert" style={{ fontSize: 13, color: T.danger, fontWeight: 600 }}>
+                Not permitted for your role. {requirementReason(required)}
+              </div>
+            )}
+
+            {allowed && requireType && (
               <label htmlFor={inputId} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <span style={{ fontSize: 12, color: T.muted }}>
                   Type <code style={{ color: T.fg, fontFamily: T.mono }}>{phrase}</code> to confirm

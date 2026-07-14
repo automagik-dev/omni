@@ -16,7 +16,10 @@ import {
   CommandList,
   CommandSeparator,
 } from '@khal-os/ui';
+import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuthz } from '../auth/useAuthz';
+import { visibleNavGroups } from './nav-visibility';
 import { useScope } from './providers/ScopeProvider';
 import { SITEMAP } from './sitemap';
 
@@ -28,6 +31,8 @@ export interface CommandPaletteProps {
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const navigate = useNavigate();
   const scope = useScope();
+  const { can } = useAuthz();
+  const groups = useMemo(() => visibleNavGroups(SITEMAP, can), [can]);
 
   const go = (path: string) => {
     onOpenChange(false);
@@ -55,7 +60,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           ))}
         </CommandGroup>
 
-        {SITEMAP.map((group) => (
+        {groups.map((group) => (
           <CommandGroup key={group.id} heading={group.title}>
             {group.items.map((item) => (
               <CommandItem key={item.path} value={`${group.title} ${item.label}`} onSelect={() => go(item.path)}>

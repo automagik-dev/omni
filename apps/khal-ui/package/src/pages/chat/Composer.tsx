@@ -25,6 +25,8 @@ import {
 import { useRef, useState } from 'react';
 import type { ChatRow } from '../../api/ext';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
+import { requirementReason } from '../../auth/capabilities';
+import { useCan } from '../../auth/useAuthz';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { MutationResult } from '../../components/MutationResult';
 import { SchemaForm } from '../../components/SchemaForm';
@@ -59,6 +61,9 @@ export function Composer({ chat, instanceId }: { chat: ChatRow; instanceId: stri
   const { client } = useOmniClient();
   const to = chat.id; // backend resolves a chat UUID to its platform JID
   const requiresConfirm = requiresSendConfirm(chat);
+  // Sending is an operational action — `member` (read-only console) can't send.
+  const canSend = useCan('operate');
+  const sendReason = requirementReason('operate');
 
   const [text, setText] = useState('');
   const [pendingText, setPendingText] = useState<string | null>(null);
@@ -85,6 +90,7 @@ export function Composer({ chat, instanceId }: { chat: ChatRow; instanceId: stri
   };
 
   const onSubmitText = () => {
+    if (!canSend) return;
     const value = text.trim();
     if (!value) return;
     if (requiresConfirm) {
@@ -112,6 +118,8 @@ export function Composer({ chat, instanceId }: { chat: ChatRow; instanceId: stri
               type="button"
               className="omni-iconbtn"
               aria-label="Attachments"
+              disabled={!canSend}
+              title={canSend ? undefined : sendReason}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -123,7 +131,8 @@ export function Composer({ chat, instanceId }: { chat: ChatRow; instanceId: stri
                 border: `1px solid ${T.border}`,
                 background: T.surface,
                 color: T.secondary,
-                cursor: 'pointer',
+                cursor: canSend ? 'pointer' : 'not-allowed',
+                opacity: canSend ? 1 : 0.5,
               }}
             >
               <Icons.Plus size={16} />
@@ -191,7 +200,13 @@ export function Composer({ chat, instanceId }: { chat: ChatRow; instanceId: stri
           />
         </div>
 
-        <Button typeName="button" variant="default" onClick={onSubmitText} disabled={!text.trim()}>
+        <Button
+          typeName="button"
+          variant="default"
+          onClick={onSubmitText}
+          disabled={!text.trim() || !canSend}
+          title={canSend ? undefined : sendReason}
+        >
           Send
         </Button>
       </div>

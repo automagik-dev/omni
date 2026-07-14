@@ -10,7 +10,9 @@
  */
 import { Button, SectionCard } from '@khal-os/ui';
 import { type ReactNode, useState } from 'react';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { requirementReason } from '../../auth/capabilities';
+import { useCan } from '../../auth/useAuthz';
+import { ConfirmDialog, effectCapability } from '../../components/ConfirmDialog';
 import { LiveTestResult, type LiveTestStatus } from '../../components/LiveTestResult';
 import { SectionHead } from '../../components/ResourceDetail';
 import { EFFECTS, type EffectLabel } from '../../components/effect';
@@ -146,6 +148,12 @@ export function ActionButton({
   const [evidence, setEvidence] = useState<unknown>();
   const [latency, setLatency] = useState<number | undefined>();
   const gated = EFFECTS[effect].mutating;
+  // Role gate: a live action needs `operate`. Below that the button is disabled
+  // with the reason in its tooltip — the ConfirmDialog re-checks it regardless.
+  const required = effectCapability(effect);
+  const allowed = useCan(required);
+  const roleReason = allowed ? undefined : requirementReason(required);
+  const blockedReason = disabledReason ?? roleReason;
   // Destructive actions read as error-toned by default; callers can still override.
   const btnVariant = variant ?? (destructive ? 'error' : 'secondary');
 
@@ -168,18 +176,18 @@ export function ActionButton({
   };
 
   const onClick = () => {
-    if (disabled || disabledReason) return;
+    if (disabled || blockedReason) return;
     if (gated) setOpen(true);
     else void execute();
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div title={disabledReason}>
+      <div title={blockedReason}>
         <Button
           size={size}
           variant={btnVariant}
-          disabled={disabled || Boolean(disabledReason) || status === 'pending'}
+          disabled={disabled || Boolean(blockedReason) || status === 'pending'}
           onClick={onClick}
         >
           {status === 'pending' ? 'Working…' : label}

@@ -11,6 +11,7 @@ import { createOmniAdminClient } from '../../api/client';
  */
 import type { OmniExt } from '../../api/ext';
 import { omniExt } from '../../api/ext';
+import { useKhalToken } from '../../auth/useAuthz';
 
 export interface OmniClientContextValue {
   client: OmniAdminClient;
@@ -30,14 +31,17 @@ export interface OmniClientProviderProps {
 }
 
 export function OmniClientProvider({ children, bffBase = '/omni', diagPath = '/diag' }: OmniClientProviderProps) {
+  // The KHAL identity token (when the host issues one) is forwarded to the BFF
+  // as `Authorization: Bearer <token>`. Absent (standalone harness) ⇒ omitted.
+  const token = useKhalToken();
   const value = useMemo<OmniClientContextValue>(
     () => ({
-      client: createOmniAdminClient(bffBase),
-      ext: omniExt(bffBase),
+      client: createOmniAdminClient(bffBase, token),
+      ext: omniExt(bffBase, token),
       bffBase,
       diagPath,
     }),
-    [bffBase, diagPath],
+    [bffBase, diagPath, token],
   );
   return <OmniClientContext.Provider value={value}>{children}</OmniClientContext.Provider>;
 }

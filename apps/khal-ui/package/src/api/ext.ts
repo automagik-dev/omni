@@ -917,12 +917,17 @@ function buildQuery(params?: Record<string, string | number | boolean | undefine
   return s ? `?${s}` : '';
 }
 
-async function request<T>(base: string, method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(base: string, method: string, path: string, body?: unknown, token?: string): Promise<T> {
   const init: RequestInit = { method };
+  const headers: Record<string, string> = {};
   if (body !== undefined) {
     init.body = JSON.stringify(body);
-    init.headers = { 'Content-Type': 'application/json' };
+    headers['Content-Type'] = 'application/json';
   }
+  // Forward the KHAL identity so the BFF can verify the caller (defense in
+  // depth). Absent (standalone harness) ⇒ the header is simply omitted.
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (Object.keys(headers).length > 0) init.headers = headers;
   const res = await fetch(`${base}/api/v2${path}`, init);
   const text = await res.text();
   const json: unknown = text ? JSON.parse(text) : undefined;
@@ -938,13 +943,17 @@ async function request<T>(base: string, method: string, path: string, body?: unk
 /**
  * Factory for the off-spec Omni surface, bound to a BFF base
  * (default `/omni`, proxied by Vite in the harness).
+ *
+ * @param base  BFF mount (default `/omni`).
+ * @param token Raw KHAL platform JWT from `useKhalAuth()?.token`, forwarded as
+ *   `Authorization: Bearer <token>`. Omitted when the host supplies none.
  */
-export function omniExt(base = '/omni') {
-  const get = <T>(path: string) => request<T>(base, 'GET', path);
-  const post = <T>(path: string, body?: unknown) => request<T>(base, 'POST', path, body);
-  const put = <T>(path: string, body?: unknown) => request<T>(base, 'PUT', path, body);
-  const patch = <T>(path: string, body?: unknown) => request<T>(base, 'PATCH', path, body);
-  const del = <T>(path: string, body?: unknown) => request<T>(base, 'DELETE', path, body);
+export function omniExt(base = '/omni', token?: string) {
+  const get = <T>(path: string) => request<T>(base, 'GET', path, undefined, token);
+  const post = <T>(path: string, body?: unknown) => request<T>(base, 'POST', path, body, token);
+  const put = <T>(path: string, body?: unknown) => request<T>(base, 'PUT', path, body, token);
+  const patch = <T>(path: string, body?: unknown) => request<T>(base, 'PATCH', path, body, token);
+  const del = <T>(path: string, body?: unknown) => request<T>(base, 'DELETE', path, body, token);
   const enc = encodeURIComponent;
 
   return {
@@ -1286,7 +1295,9 @@ export function omniExt(base = '/omni') {
     metrics: {
       /** Prometheus exposition text (through the BFF). */
       text: async () => {
-        const res = await fetch(`${base}/api/v2/metrics`, { headers: { accept: 'text/plain' } });
+        const headers: Record<string, string> = { accept: 'text/plain' };
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const res = await fetch(`${base}/api/v2/metrics`, { headers });
         return res.text();
       },
     },
