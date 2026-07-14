@@ -9,6 +9,9 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
+  "dependencies": {
+    "@khal-os/sdk": "2.0.111"
+  },
   "devDependencies": {
     "@types/bun": "^1.1.42",
     "typescript": "^5.7.3"

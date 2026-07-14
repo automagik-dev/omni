@@ -15,14 +15,15 @@
  */
 
 import { resolve, sep } from 'node:path';
+import type { ConsoleAuth } from './auth';
+import type { FetchLike } from './console-keys';
+
+export type { FetchLike };
 
 const ALLOW_PREFIX = '/api/v2/';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_CORS_ORIGINS = ['http://localhost:5174'];
 const HOP_BY_HOP = ['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive'];
-
-/** Minimal fetch call signature — avoids `typeof fetch`'s `preconnect` member so tests can inject a plain function. */
-export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export interface BffConfig {
   /** Omni API key. Injected as x-api-key; never echoed. */
@@ -43,6 +44,21 @@ export interface BffConfig {
   publicDir?: string;
   /** Injectable fetch, for tests. */
   fetchImpl?: FetchLike;
+  /**
+   * Console auth enforcement (CONTRACT §4). Default `false` → the legacy
+   * single-key path: `/omni/api/v2/*` requires no token and is proxied with
+   * `apiKey`, so today's tokenless dev harness and deployment keep working.
+   * When `true`, every `/omni/api/v2/*` request is token-gated fail-closed
+   * (verify KHAL session → pin org → resolve role → mint a per-user key) and
+   * proxied with that per-user key instead of `apiKey`.
+   *
+   * ⚠️ Flipping this ON is gated on Group 6 (real pack-in-host delivery that
+   * attaches `useKhalAuth().token`). The current delivery vehicle ships no
+   * token, so enabling enforcement against it = 100% 401 outage (CONTRACT §4.0).
+   */
+  authEnforce?: boolean;
+  /** Console auth policy. REQUIRED when `authEnforce` is true; ignored otherwise. */
+  consoleAuth?: ConsoleAuth;
 }
 
 interface ErrorEnvelope {
@@ -64,6 +80,11 @@ export function createBff(config: BffConfig): Bff {
   const omniPrefix = config.omniPrefix ?? '/omni';
   const publicDir = config.publicDir ? resolve(config.publicDir) : undefined;
   const doFetch = config.fetchImpl ?? fetch;
+  const authEnforce = config.authEnforce ?? false;
+  const consoleAuth = config.consoleAuth;
+  if (authEnforce && !consoleAuth) {
+    throw new Error('authEnforce is enabled but no consoleAuth policy was provided.');
+  }
 
   function corsHeaders(req: Request): Record<string, string> {
     const origin = req.headers.get('origin');
@@ -84,11 +105,16 @@ export function createBff(config: BffConfig): Bff {
     });
   }
 
-  function upstreamHeaders(req: Request): Headers {
+  function upstreamHeaders(req: Request, apiKey: string): Headers {
     const headers = new Headers(req.headers);
     for (const h of HOP_BY_HOP) headers.delete(h);
+    // Strip any auth the browser sent — the BFF is the sole authority on the
+    // upstream credential. Drop the KHAL bearer/cookie too so a per-user key
+    // (or the god-key, flag OFF) is the ONLY thing omni-api sees.
     headers.delete('x-api-key');
-    headers.set('x-api-key', config.apiKey);
+    headers.delete('authorization');
+    headers.delete('cookie');
+    headers.set('x-api-key', apiKey);
     headers.set('accept-encoding', 'identity');
     return headers;
   }
@@ -101,6 +127,20 @@ export function createBff(config: BffConfig): Bff {
     const rest = url.pathname.slice(omniPrefix.length);
     if (!rest.startsWith(ALLOW_PREFIX)) {
       return jsonError(req, 403, 'FORBIDDEN_PATH', `Only ${ALLOW_PREFIX}* is reachable through the BFF.`);
+    }
+
+    // Policy enforcement point (flag ON): verify the KHAL session, pin the org,
+    // resolve the role, and mint/reuse a per-user key. Fail closed on anything
+    // short of a fully authorized session — no god-key fallback. Reads only
+    // headers, so `req.body` streams through untouched below. Flag OFF keeps the
+    // legacy single-key behaviour (no token required).
+    let injectedKey = config.apiKey;
+    if (authEnforce && consoleAuth) {
+      const auth = await consoleAuth.authenticate(req);
+      if (!auth.ok) {
+        return jsonError(req, auth.status, auth.code, auth.message, auth.upstreamStatus);
+      }
+      injectedKey = auth.apiKey;
     }
 
     const target = `${baseUrl}${rest}${url.search}`;
@@ -118,7 +158,7 @@ export function createBff(config: BffConfig): Bff {
 
     const init: StreamingRequestInit = {
       method: req.method,
-      headers: upstreamHeaders(req),
+      headers: upstreamHeaders(req, injectedKey),
       redirect: 'manual',
       signal: controller.signal,
     };
