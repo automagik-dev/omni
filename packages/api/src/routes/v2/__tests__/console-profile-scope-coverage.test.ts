@@ -7,9 +7,10 @@
  *   - Every route the Omni Admin UI can invoke must be reachable under
  *     `console-admin` — i.e. no missing scope. The route list is NOT
  *     hand-transcribed: it is driven from the machine-readable capability
- *     inventory (`apps/khal-ui/package/src/capabilities/capabilities.json`,
- *     generated from `SCOPE_MAP` by build-capability-inventory.ts), and every
- *     capability is pushed through the REAL `scopeEnforcerMiddleware`.
+ *     inventory (the enterprise capability inventory, generated from
+ *     `SCOPE_MAP` by build-capability-inventory.ts and vendored here as a
+ *     fixture), and every capability is pushed through the REAL
+ *     `scopeEnforcerMiddleware`.
  *
  * The `/trust/*`, `/handoffs/*`, `/follow-up/*`, and `/voice/*` families are now
  * mapped into SCOPE_MAP (Group 2 HIGH-2), so `console-admin` reaches them. The
@@ -50,10 +51,10 @@ const INTENTIONALLY_DARK: ReadonlySet<string> = new Set([
   'POST /messages/sticker',
 ]);
 
-const INVENTORY_PATH = join(
-  import.meta.dir,
-  '../../../../../../apps/khal-ui/package/src/capabilities/capabilities.json',
-);
+// Vendored copy of the enterprise capability inventory (generated from
+// SCOPE_MAP by build-capability-inventory.ts). Kept in-tree so this suite is
+// self-contained and does not reach into the enterprise UI package.
+const INVENTORY_PATH = join(import.meta.dir, 'capabilities-inventory.fixture.json');
 
 interface Capability {
   key: string;

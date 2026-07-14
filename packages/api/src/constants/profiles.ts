@@ -101,16 +101,16 @@ export const COWORKER_DEFAULT_DENYLIST_PRESET_KEY = 'khal-os-core';
  * path, so `resolveProfile()` / `verbsToScopes()` need no changes.
  *
  * The three scope tiers below are DERIVED from the machine-readable capability
- * inventory (`apps/khal-ui/package/src/capabilities/capabilities.json`, itself
- * generated from `SCOPE_MAP`). Their union is exactly the 59 distinct scopes the
+ * inventory (the enterprise capability inventory, itself generated from
+ * `SCOPE_MAP`). Their union is exactly the 59 distinct scopes the
  * admin console can invoke — no more, no less; the coverage test in
  * `routes/v2/__tests__/console-profile-scope-coverage.test.ts` enforces both
  * directions against the inventory, so a new console route that lands in
  * SCOPE_MAP fails the suite until it is placed in a tier here.
  *
  * Tier placement for the trust / handoffs / voice / follow-up families
- * (mapped into SCOPE_MAP alongside this change) mirrors the pack's own
- * affordance gating in `apps/khal-ui/package/src/auth/capabilities.ts`:
+ * (mapped into SCOPE_MAP alongside this change) mirrors the enterprise pack's
+ * own affordance gating in its capability inventory:
  *   - reads (`trust:read`, `handoffs:read`, `voice:read`, `follow-up:read`) →
  *     viewer, so a read view never 403s for the role the pack shows it to;
  *   - operational writes (`voice:write`, `follow-up:write`) → operator;
