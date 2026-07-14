@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { omniExt } from '../api/ext';
+import type { InstanceRow } from '../api/ext';
 import { visibleNavGroups } from '../app/nav-visibility';
 import { OmniClientProvider } from '../app/providers/OmniClientProvider';
 import { SITEMAP } from '../app/sitemap';
@@ -19,8 +20,12 @@ import {
 } from '../auth/capabilities';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AgentStatePanel } from '../pages/agents/AgentStatePanel';
+import { CreateInstanceDialog } from '../pages/instances/CreateInstanceDialog';
 import { ActionButton } from '../pages/instances/components';
+import { ConfigTab } from '../pages/instances/tabs/ConfigTab';
 import { ConversationsPage } from '../pages/resources/ConversationsPage';
+import { PersonsPage } from '../pages/resources/PersonsPage';
+import { TtsVoicesPage } from '../pages/resources/TtsVoicesPage';
 import { WebhookSourcesPage } from '../pages/resources/WebhookSourcesPage';
 
 /**
@@ -253,8 +258,9 @@ describe('ConfirmDialog (central mutation gate)', () => {
  * gate surfaces the same denial copy as the rest of the pack, keyed on the role
  * requirement — present for `member`, absent for `platform-dev`.
  */
-function renderPage(value: KhalAuth | null, el: ReactElement): string {
+function renderPage(value: KhalAuth | null, el: ReactElement, seed?: (qc: QueryClient) => void): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  seed?.(qc);
   return renderToStaticMarkup(
     <KhalAuthContext.Provider value={value}>
       <QueryClientProvider client={qc}>
@@ -294,6 +300,40 @@ describe('read-tier write affordances require operate', () => {
   test('AgentStatePanel keeps the read control ungated (read-only effect)', () => {
     // The "Read state" button is present for a member — reads are never role-gated.
     expect(renderPage(auth('member'), <AgentStatePanel agentId="a-1" lockAgentId />)).toContain('Read state');
+  });
+
+  test('CreateInstanceDialog create form is disabled with the reason for member only', () => {
+    // Open with a channel already chosen so the create form (not the picker) renders.
+    const dialog = <CreateInstanceDialog open initialChannel="whatsapp" onClose={() => {}} onCreated={() => {}} />;
+    const memberHtml = renderPage(auth('member'), dialog);
+    expect(memberHtml).toContain(OPERATE_REASON);
+    expect(memberHtml).toContain('disabled=""');
+    expect(renderPage(auth('platform-dev'), dialog)).not.toContain(OPERATE_REASON);
+  });
+
+  test('TtsVoicesPage set-default is role-blocked for member, not for platform-dev', () => {
+    // Seed the voice catalog so a VoiceCard (with its gated "Set default") renders.
+    const seed = (qc: QueryClient) =>
+      qc.setQueryData(['tts', 'voices'], { data: { voices: [{ id: 'v1', name: 'Aria' }] } });
+    expect(renderPage(auth('member'), <TtsVoicesPage />, seed)).toContain(OPERATE_REASON);
+    expect(renderPage(auth('platform-dev'), <TtsVoicesPage />, seed)).not.toContain(OPERATE_REASON);
+  });
+
+  test('PersonsPage profile save is disabled with the reason for member only', () => {
+    // Open with a person selected so the profile edit form renders.
+    const memberHtml = renderPage(auth('member'), <PersonsPage initialSelectedId="p-1" />);
+    expect(memberHtml).toContain(OPERATE_REASON);
+    expect(memberHtml).toContain('disabled=""');
+    expect(renderPage(auth('platform-dev'), <PersonsPage initialSelectedId="p-1" />)).not.toContain(OPERATE_REASON);
+  });
+
+  test('ConfigTab save forms are role-blocked for member, not for platform-dev', () => {
+    const instance = { id: 'i1', name: 'Test', channel: 'whatsapp' } as unknown as InstanceRow;
+    const tab = <ConfigTab instance={instance} isProduction={false} refetchInstance={() => {}} />;
+    const memberHtml = renderPage(auth('member'), tab);
+    expect(memberHtml).toContain(OPERATE_REASON);
+    expect(memberHtml).toContain('disabled=""');
+    expect(renderPage(auth('platform-dev'), tab)).not.toContain(OPERATE_REASON);
   });
 });
 

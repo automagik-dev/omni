@@ -39,11 +39,11 @@ const profileSchema = z.object({
 
 type IdentityOp = 'link' | 'unlink' | 'merge' | null;
 
-export function PersonsPage() {
+export function PersonsPage({ initialSelectedId }: { initialSelectedId?: string } = {}) {
   const { ext } = useOmniClient();
   const [search, setSearch] = useState('');
   const [submitted, setSubmitted] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
   // Editing a profile is an operational write — a read-only `member` may search,
   // read presence, and view the timeline, but not PATCH. (Identity ops stay gated
   // by their ConfirmDialog, which already enforces `operate` on its live effect.)

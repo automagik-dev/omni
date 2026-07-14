@@ -52,16 +52,19 @@ export function CreateInstanceDialog({
   open,
   onClose,
   onCreated,
+  initialChannel,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: (id: string) => void;
+  /** Optionally open with a channel already chosen (deep-link / test entry). */
+  initialChannel?: string;
 }) {
   const { ext } = useOmniClient();
   const channels = useOmniQuery(['instances', 'supported-channels'], () => ext.instances.supportedChannels(), {
     enabled: open,
   });
-  const [channel, setChannel] = useState<string | null>(null);
+  const [channel, setChannel] = useState<string | null>(initialChannel ?? null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   // Creating an instance is an operational write — a read-only `member` cannot.

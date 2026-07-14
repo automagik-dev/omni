@@ -7,6 +7,7 @@
  */
 import { Button, DataRow, MetricDisplay, ProgressBar, SectionCard, Spinner, StatusDot } from '@khal-os/ui';
 import { useOmniClient } from '../../app/providers/OmniClientProvider';
+import { useKhalToken } from '../../auth';
 import { FreshnessBadge, formatAge } from '../../components/FreshnessBadge';
 import { PageShell } from '../../components/PageShell';
 import { SectionHead } from '../../components/ResourceDetail';
@@ -30,12 +31,18 @@ interface ConsumersResponse {
 
 export function HealthPage() {
   const { client, bffBase } = useOmniClient();
+  const token = useKhalToken();
   const { diag, observedAt, refresh } = useDiag(10_000);
   const health = useOmniQuery(['system', 'health'], () => client.system.health(), { refetchInterval: 15_000 });
   const consumers = useOmniQuery(
-    ['health', 'consumers'],
+    // Key on the token so a login/logout re-polls under the new identity.
+    ['health', 'consumers', token ?? null],
     async () => {
-      const res = await fetch(`${bffBase}/api/v2/health/consumers`, { headers: { accept: 'application/json' } });
+      // Forward the KHAL identity the same way the `ext` layer does — a bearer
+      // when the host issued one, omitted (never `Bearer undefined`) otherwise.
+      const headers: Record<string, string> = { accept: 'application/json' };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch(`${bffBase}/api/v2/health/consumers`, { headers });
       return (await res.json()) as ConsumersResponse;
     },
     { refetchInterval: 15_000 },

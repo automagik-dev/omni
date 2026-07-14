@@ -12,6 +12,7 @@ import { Note } from '@khal-os/ui';
 import { useState } from 'react';
 import { z } from 'zod';
 import { useOmniClient } from '../../../app/providers/OmniClientProvider';
+import { requirementReason, useCan } from '../../../auth';
 import { JsonInspector } from '../../../components/JsonInspector';
 import { MutationResult } from '../../../components/MutationResult';
 import { SchemaForm } from '../../../components/SchemaForm';
@@ -74,11 +75,15 @@ function FollowUpPanel({
 }) {
   const { ext } = useOmniClient();
   const guard = isProduction ? PRODUCTION_GUARD_REASON : undefined;
+  // Saving follow-up config is an operational write — a read-only `member` cannot.
+  const canOperate = useCan('operate');
+  const operateReason = requirementReason('operate');
   const followUp = useOmniQuery(['instances', instanceId, 'follow-up'], () => ext.followUp.getForInstance(instanceId));
   const [saved, setSaved] = useState<Record<string, unknown> | null>(null);
   const current = (followUp.data?.data ?? {}) as Record<string, unknown>;
 
   const save = async (data: Record<string, unknown>) => {
+    if (!canOperate) return;
     const body: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(data)) {
       if (v !== undefined && v !== '') body[k] = v;
@@ -95,11 +100,17 @@ function FollowUpPanel({
         schema={followUpSchema}
         value={current}
         preview={isProduction}
+        disabled={!canOperate}
         submitLabel="Save follow-up"
         onSubmit={(data) => {
-          if (!guard) void save(data as Record<string, unknown>);
+          if (!guard && canOperate) void save(data as Record<string, unknown>);
         }}
       />
+      {!canOperate && (
+        <Note type="default" label="Read-only role">
+          {operateReason}
+        </Note>
+      )}
       <ActionButton
         label="Clear follow-up"
         effect="live"
@@ -140,6 +151,9 @@ function ConfigSectionForm({
   instance: Record<string, unknown> & { id: string; name: string };
 } & Pick<InstanceTabProps, 'isProduction' | 'refetchInstance'>) {
   const { ext } = useOmniClient();
+  // Patching instance config is an operational write — a read-only `member` cannot.
+  const canOperate = useCan('operate');
+  const operateReason = requirementReason('operate');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ request: Record<string, unknown>; before: unknown; after: unknown } | null>(
@@ -149,6 +163,7 @@ function ConfigSectionForm({
   const current = sliceValues(instance, section.keys);
 
   const onSubmit = async (data: unknown) => {
+    if (!canOperate) return;
     const body = minimalPatch(data as Record<string, unknown>, instance, section.keys);
     if (Object.keys(body).length === 0) {
       setError('No changes to save.');
@@ -179,10 +194,15 @@ function ConfigSectionForm({
         schema={section.schema}
         value={current}
         preview={isProduction}
-        disabled={pending}
+        disabled={pending || !canOperate}
         submitLabel={pending ? 'Saving…' : 'Save section'}
         onSubmit={(data) => void onSubmit(data)}
       />
+      {!canOperate && (
+        <Note type="default" label="Read-only role">
+          {operateReason}
+        </Note>
+      )}
       {error && (
         <span style={{ fontSize: 12, color: error === 'No changes to save.' ? T.muted : T.danger }}>{error}</span>
       )}
