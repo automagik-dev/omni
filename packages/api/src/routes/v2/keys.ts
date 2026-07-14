@@ -18,8 +18,22 @@ export const keysRoutes = new Hono<{ Variables: AppVariables }>();
  * Non-admin profiles — `admin` is explicitly excluded at the route layer so
  * HTTP callers can never mint a god-key regardless of scope grants. Admin
  * keys are only mintable via the CLI's TTY-gated path.
+ *
+ * The three `console-*` profiles ARE HTTP-mintable by a `keys:write` caller:
+ * the khal-ui BFF mints a per-user console key on every session, so minting
+ * must work over HTTP. They are safe to mint because none of them carries the
+ * `*` wildcard — each resolves to an explicit scope set bounded by SCOPE_MAP
+ * (see `constants/profiles.ts`), unlike `admin` which is unbounded.
  */
-const NON_ADMIN_PROFILES = ['cs', 'personal', 'scout', 'coworker'] as const;
+const NON_ADMIN_PROFILES = [
+  'cs',
+  'personal',
+  'scout',
+  'coworker',
+  'console-viewer',
+  'console-operator',
+  'console-admin',
+] as const;
 type NonAdminProfile = (typeof NON_ADMIN_PROFILES)[number];
 
 // ============================================================================
@@ -51,7 +65,10 @@ const createKeySchema = z
     profile: z
       .enum(NON_ADMIN_PROFILES)
       .optional()
-      .describe('Profile template: cs, personal, scout, coworker. admin is CLI-only and rejected here.'),
+      .describe(
+        'Profile template: cs, personal, scout, coworker, console-viewer, console-operator, console-admin. ' +
+          'admin is CLI-only and rejected here.',
+      ),
     overrides: profileOverridesSchema.optional().describe('Tenant overrides merged on top of the profile template'),
     chatAllowlist: z.array(z.string()).optional().describe('Chats this key may target (profile-aware semantics)'),
     instanceAllowlist: z.array(z.string().uuid()).optional().describe('Instances this key may target'),
