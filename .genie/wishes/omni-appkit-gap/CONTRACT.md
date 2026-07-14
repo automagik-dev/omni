@@ -1,6 +1,6 @@
 # omni-appkit-gap — Group 1: KHAL identity-token contract & role taxonomy
 
-Status: **discovery complete — no app-kit change required (see BLOCKING FINDING section)**
+Status: **discovery complete — no app-kit change required; gate ruling = CLEARED WITH HARD CONDITIONS (see §4)**
 Date: 2026-07-13
 Evidence repos:
 - app-kit (read-only): `/Users/feliperosa/workspace/app-kit`, branch `feat/claude-design-native` @ `cb6dd65`.
@@ -68,7 +68,8 @@ Verifier: `@khal-os/sdk/server` → `validateKhalSession()` —
 | Expiry checks | `exp` / `nbf` against injectable clock | `:139-140`, `:181` |
 | Required claims | `userId` (or `sub` fallback), `orgId`, `role`, `permissions[]` — missing any ⇒ `null` | `:146-154` (`coerceSession`) |
 | Optional claims | `email`, `name`, `picture` passed through | `:157-159` |
-| Failure mode | returns `null` for *every* failure (no creds, bad signature, expired, missing claims) → caller maps to **401** | `:163-168` |
+| Failure mode | returns `null` for *every* failure → caller maps to **401**: no secret `:175`, no creds `:179`, bad signature / bad `alg` / expired `:183` (via `verifyHs256`), missing claims `:185` (via `coerceSession`). Docstring: `:163-168` | `:175`, `:179`, `:183`, `:185` |
+| **Not** validated | **no `iss`, no `aud`, no `kid`, no org check.** `verifyHs256` (`:110-143`) checks only `alg`/`typ`/`exp`/`nbf`; `coerceSession` (`:145-161`) only requires `orgId` to *exist* (`:148`, `:154`) — it never checks its value | `:110-143`, `:145-161` |
 | Returned shape | `KhalSession { userId, orgId, role, permissions[], email?, name?, picture? }` | `:23-31` |
 
 Provenance of the mechanism — `git show -s 6fd628d` ("feat(sdk): add @khal-os/sdk/server
@@ -99,9 +100,11 @@ tar -xzOf khal-os-types-2.2.63.tgz package/dist/index.d.ts → interface KhalAut
 - Hook: `useKhalAuth(): KhalAuth | null` — `packages/os-sdk/src/app/auth.ts:13-15`, reading
   `KhalAuthContext` (`packages/os-sdk/src/app/auth-context.ts:10,16-18`). Returns `null` while
   resolving / unauthenticated (`auth.ts:11`).
-- The raw JWT is `useKhalAuth()?.token` (`packages/types/src/auth.ts:16`). The frontend attaches it as
-  `Authorization: Bearer <token>` on its same-origin `/omni/*` fetches — that is the field's documented
-  purpose (`types/src/auth.ts:13-15`, commit `170f2ce`).
+- The raw JWT is `useKhalAuth()?.token` (`packages/types/src/auth.ts:16`). The frontend **will have to**
+  attach it as `Authorization: Bearer <token>` on its same-origin `/omni/*` fetches — that is the field's
+  documented purpose (`types/src/auth.ts:13-15`, commit `170f2ce`). **This is required future behavior,
+  not current behavior:** `rg "useKhalAuth|KhalAuth|@khal-os/sdk" omni:apps/khal-ui/package/src` returns
+  **zero hits** — the pack reads no auth today and attaches no Authorization header (see §4.0).
 - Cookie path: the browser would send `khal-session` automatically **only if** the host sets that
   cookie on an origin/path that covers the pack's `/omni/*` calls. Nothing in app-kit sets that cookie
   (`rg "khal-session"` hits only `packages/os-sdk/src/server/index.ts:46,52` and its test) — it is
@@ -149,7 +152,17 @@ Exactly **four** roles, ordered least → most privileged. There is no `operator
 | `viewer` | `member` | `roles.ts:27` |
 | `user` | `member` | `roles.ts:28` |
 | `dev` | `platform-dev` | `roles.ts:30` |
-| anything else / empty | **`member`** (fail-closed to least privilege) | `roles.ts:41-45` |
+| anything else / empty | **`member`** (least privilege *on the ladder* — but see the fail-open warning below) | `roles.ts:41-45` |
+
+> **⚠️ `member` is fail-closed on the role ladder but FAIL-OPEN as a security property.**
+> `normalizeRole` maps **any** unrecognized string — a typo, a future `org-guest`, an unseen WorkOS role —
+> to `member` (`roles.ts:41-45`), and §2.3 maps `member` → `console-viewer` = **read access to every
+> conversation in the tenant**. An unknown principal therefore does not fail closed to *no access*; it
+> fails **open to read-everything**. **Required decision (Group 4):** the recommended posture is to
+> normalize for *comparison* only and gate key-minting on **exact membership in `ROLE_HIERARCHY`** —
+> mint **no key (401)** for any role slug that is not an exact canonical role or a listed alias above.
+> If we instead accept "any authenticated KHAL org member may read all Omni conversations," that must be
+> recorded here as an explicitly owned decision with a human owner — not inherited by default.
 
 `normalizeRole(role)` (`roles.ts:41-45`) is the only correct way to read `session.role` — it is a free
 `string` in both `KhalAuth` (`types/src/auth.ts:5`) and `KhalSession`
@@ -168,7 +181,8 @@ yet** — they are net-new templates for Groups 2/3 to add to `PROFILES` (and to
 
 | KHAL role (canonical) | Hierarchy idx | Omni key profile | Rationale |
 |---|---|---|---|
-| `member` | 0 | `console-viewer` | Read-only console. Buckets: `read`, `context` minus `use`. Also the **fail-closed default** for any unrecognized/absent role (`roles.ts:41-45`). |
+| `member` | 0 | `console-viewer` | Read-only console. Buckets: `read`, `context` minus `use`. **Only for an *exact* `member`/alias match** — do NOT let `normalizeRole`'s catch-all land unknown slugs here (that is fail-open read-everything; see the warning in §2.2). |
+| *unrecognized / absent role slug* | — | **no key minted → 401** (recommended) | `normalizeRole` would silently coerce it to `member` (`roles.ts:41-45`). Gate key-minting on exact `ROLE_HIERARCHY`/alias membership instead. |
 | `platform-dev` | 1 | `console-operator` | Day-to-day operator: read + send + turn (`read`, `context`, `outgoing`, `turn`, `multimodal_in`, `multimodal_out`). No key/tenant administration. |
 | `platform-admin` | 2 | `console-admin` | Full console incl. key management / admin routes (`omni:packages/api/src/routes/v2/keys.ts`). |
 | `platform-owner` | 3 | `console-admin` | Highest KHAL role; ≥ `platform-admin` by `hasMinRole` (`roles.ts:48-50`). Same profile — no wider Omni surface exists above `console-admin`. If Groups 2/3 later need an owner-only capability, split then, not now. |
@@ -221,17 +235,86 @@ is npm-token/auth plumbing for `@khal-os/*`, **not** a pack registry — it play
 | D1 | **`desktop` block missing** (`icon`, `categories[]`, `comment`) | HIGH — fails validator A, passes B | `validate-manifest.ts:57-62,179-191`; omni manifest has no `desktop` key |
 | D2 | `services[0].runtime: "bun"` is **not in `VALID_RUNTIMES = ['node','python']`** | MEDIUM — fails validator A. Note the official scaffold `packages/app-kit/templates/app/khal-app.json:24` ships the *same* violation, so this is a stale-schema-vs-reality conflict to raise with app-kit, not necessarily an omni fix | `validate-manifest.ts:11-12,223-227` |
 | D3 | No `x-khal-deploy` / `requires` block (template has both) | NONE (optional) — but means the manifest declares no deploy topology; omni deploys via its own helm chart today | `install.ts:234-235`; template `khal-app.json` |
-| D4 | Group 4 will add a `KHAL_SESSION_SECRET` env var (`type: secret`, `visibility: vault`) to `env[]` so the host provisions the HMAC secret to the BFF | N/A (new) | `os-sdk/src/server/index.ts:44-45,174-175`; env schema `validate-manifest.ts:280-329` |
+| D4 | Group 4 will add a `KHAL_SESSION_SECRET` env var (`type: secret`, `visibility: vault`) to `env[]`. **The host does NOT provision it.** `install.ts:201` defines `PLATFORM_MANAGED_ENV_KEYS = new Set(['KHAL_NATS_URL','KHAL_ORG_ID'])` — the explicit registry of what the platform injects — and `KHAL_SESSION_SECRET` is **not in it** (its only other use is `install.ts:614`, to *exempt* platform keys from `.env.example` declaration checks). Declaring it in `env[]` therefore only makes it a *prompted/vault* value; **a human must obtain KHAL core's HMAC signing key and place it in Omni's vault.** → **Tracked action: "Obtain/derive the pack's session-signing secret from KHAL core — owner: `<human>`"** (see §4.2) | **HIGH (unowned dependency)** | `install.ts:201,614`; `os-sdk/src/server/index.ts:44-45,174-175`; env schema `validate-manifest.ts:280-329` |
 | — | All 8 install-required fields present (`kind`,`id`,`name`,`version`,`icon`,`description`,`author`,`permissions`); `views[]` present and well-formed; no unsupported top-level keys | OK | `install.ts:578`; omni manifest |
 
 ---
 
-## 4. BLOCKING FINDING
+## 4. Gate ruling — **CLEARED WITH HARD CONDITIONS**
 
-**No blocking finding. Wave 3 (Group 4, the BFF) is CLEARED to proceed.**
+**No app-kit BLOCKING finding: the SDK contract is complete and needs zero app-kit changes.**
+**But there IS a delivery-vehicle blocker (§4.0): enforcement must ship flag-gated, default OFF.**
 
-A server-verifiable identity token exists, is already published in the SDK versions this pack pins, and
-requires **zero app-kit changes**:
+Ruling for Wave 3 (Group 4, the BFF):
+
+- ✅ Group 4 **may** write and unit-test `validateKhalSession` enforcement now, against **self-signed
+  HS256 tokens** — the token/verifier/role contract is fully specified in §§1–2 and needs nothing from
+  app-kit.
+- ⛔ Group 4 **MUST** ship that enforcement path **behind a feature flag, default OFF**, with the legacy
+  path intact when the flag is off.
+- ⛔ **Pack-in-host delivery (Group 6) is a HARD PREREQUISITE for turning the flag ON.** Enabling
+  enforcement before Group 6 lands is a guaranteed total console outage (§4.0).
+- ⛔ The mandatory hardening in §4.1 (org pinning) and §4.2 (trust model / secret ownership) is in scope
+  for Group 4, not deferrable.
+
+### 4.0 ⛔ Current omni delivery vehicle has NO KHAL host — enforcement today = 100% outage
+
+The doc above notes the KHAL-OS-core host isn't in the checkout. Worse, and verifiable **entirely inside
+the omni repo**: in what omni actually ships today, the KHAL host **is not there at all**.
+
+1. **The deployed console is the standalone Vite harness, not a pack installed in a KHAL OS host.**
+   `omni:deploy/Dockerfile.admin-ui:51` builds `bun run --filter '@omni/khal-ui-dev' build` and
+   `:63` copies `apps/khal-ui/dev/dist` into the image's `./public`. The image serves the **dev harness**.
+2. **That harness fakes auth with a hardcoded user and provides NO token.**
+   `omni:apps/khal-ui/dev/src/sdk-shim.tsx:51` mounts `<KhalAuthContext.Provider value={DEV_USER}>`, and
+   `DEV_USER` (`:16-25`) is `{ role: 'platform-dev', permissions: ['*'], … }` with **no `token` field at
+   all**. Nothing mints or forwards a JWT.
+3. **The pack never reads auth anyway.**
+   `rg "useKhalAuth|KhalAuth|@khal-os/sdk" omni:apps/khal-ui/package/src` → **zero hits**. Even if a token
+   existed, no code would attach a Bearer header.
+
+**Consequence:** if Group 4 lands `validateKhalSession` enforcement against today's deployment, every
+request carries no credential → `validateKhalSession` returns `null` at `server/index.ts:179` → **401 for
+every user → total console outage.** Hence: flag-gated, default OFF; Group 6 (real pack-in-host delivery,
+with the frontend attaching `useKhalAuth()?.token`) is the hard prerequisite for flipping it on.
+
+### 4.1 ⛔ MANDATORY (Group 4): pin `orgId` — the token alone does not scope to Omni
+
+`verifyHs256` (`server/index.ts:110-143`) validates only `alg`/`typ`/`exp`/`nbf`. `coerceSession`
+(`:145-161`) only requires `orgId` to **exist** (`:148`, `:154`) — it never checks its **value**. There is
+**no `iss`, no `aud`, no `kid`** check anywhere. With a platform-wide shared secret, a session minted for a
+**different org** or a **different pack** verifies successfully against Omni's BFF and lands on at least
+`console-viewer` = read access to this tenant's conversations.
+
+**Requirement:** immediately after `validateKhalSession` returns a session, the BFF **MUST** assert
+`session.orgId === <Omni's expected KHAL org>` (env-pinned allowlist) and return **401** otherwise. This is
+not optional hardening; without it the verifier is an authentication check with no tenant binding.
+
+### 4.2 ⛔ Trust model: HS256 + shared secret partially DEFEATS this wish's own goal
+
+This wish exists to remove a shared god-key. Be explicit about what replaces it: **HS256 is symmetric.**
+The Omni BFF pod would hold KHAL core's **signing** key, not a verification-only key. Anyone with read
+access to that pod's env can **mint** a JWT for **any** `userId` / `orgId` / `role` — including
+`platform-owner` — and that forged token is valid at **every other pack sharing the secret**. That is a
+strictly **larger** blast radius than the Omni-scoped god-key it is meant to replace.
+
+**Required resolution — one of, before the flag is turned on:**
+1. **Pack-scoped secret** (preferred): KHAL core signs with a per-pack secret, or adds an `aud` claim the
+   BFF pins alongside `orgId` (§4.1). Then a leaked Omni secret forges only Omni-scoped tokens.
+2. **Asymmetric / JWKS verification** — file an app-kit request (no such path exists today:
+   `rg -i "jwks|jwtVerify|createRemoteJWKSet|jose"` over app-kit → **zero hits**), giving the BFF a
+   verify-only public key.
+3. If neither is available, record it here as an **explicitly accepted residual risk with a named human
+   owner** — it must not be inherited silently.
+
+**Tracked dependency (from D4):** *"Obtain/derive the pack's session-signing secret from KHAL core — owner:
+`<human>`."* `install.ts:201` (`PLATFORM_MANAGED_ENV_KEYS = {'KHAL_NATS_URL','KHAL_ORG_ID'}`) proves the
+platform does **not** inject `KHAL_SESSION_SECRET`; a human must copy KHAL core's HMAC signing key into
+Omni's vault. Until an owner is named, this is an invisible config step, not a plan.
+
+### 4.3 What IS settled (no app-kit change required)
+
+A server-verifiable identity token exists and is already published in the SDK versions this pack pins:
 
 - **Token verification** = HS256 JWT via `validateKhalSession()` from `@khal-os/sdk/server`
   (`packages/os-sdk/src/server/index.ts:170-186`), presented as `Authorization: Bearer <jwt>`
@@ -240,8 +323,9 @@ requires **zero app-kit changes**:
   published `@khal-os/sdk@2.0.111` tarball (`dist/server/index.{js,cjs,d.ts}`).
 
 Two **host-side prerequisites** are *not* verifiable from the app-kit checkout (the KhalAuthProvider and
-the JWT minter live in the KHAL OS core/kernel repo, which is not present). They are configuration
-risks for Group 4's live validation, **not** code blockers — state them plainly rather than assume:
+the JWT minter live in the KHAL OS core/kernel repo, which is not present). They do not block *writing and
+unit-testing* the verifier against self-signed tokens, but each is a **hard gate on flipping the
+enforcement flag ON** (§4.0) — state them plainly rather than assume:
 
 1. **The host must actually populate `KhalAuth.token` (or set the `khal-session` cookie) for this
    installed pack.** Evidence that it does exists only as the SDK's own contract text
@@ -259,6 +343,13 @@ risks for Group 4's live validation, **not** code blockers — state them plainl
    (`server/index.ts:174-175`) → the console fails closed (401), which is the correct failure mode but
    would look like a total outage.
 
-Fail-closed posture Group 4 must implement: no session ⇒ 401 and **no** Omni key minted; unrecognized
-role ⇒ `normalizeRole` → `member` → `console-viewer` (`os-sdk/src/app/roles.ts:41-45`); never trust
-`session.permissions[]` as an Omni scope source (§1.4).
+### 4.4 Fail-closed posture Group 4 must implement
+
+- No session ⇒ **401**, **no** Omni key minted.
+- `session.orgId` not in the env-pinned allowlist ⇒ **401** (§4.1).
+- Role slug not an **exact** member of `ROLE_HIERARCHY` or its alias table ⇒ **401 / no key minted**.
+  Do **not** rely on `normalizeRole`'s catch-all (`os-sdk/src/app/roles.ts:41-45`) as the security
+  boundary: it coerces unknown slugs to `member` → `console-viewer` = read-everything (§2.2 warning).
+  Use `normalizeRole` for *ordinal comparison*, gate *key-minting* on exact membership.
+- Never trust `session.permissions[]` as an Omni scope source (§1.4).
+- The whole enforcement path stays **flag-gated, default OFF** until Group 6 lands (§4.0).
