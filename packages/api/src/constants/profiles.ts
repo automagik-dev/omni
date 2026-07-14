@@ -30,7 +30,6 @@ export type ProfileName =
 
 /** The lock-free, platform-wide profiles minted for the Omni Admin Console. */
 export const CONSOLE_PROFILES = ['console-viewer', 'console-operator', 'console-admin'] as const;
-export type ConsoleProfileName = (typeof CONSOLE_PROFILES)[number];
 
 export type LockRequirement = 'chatAllowlist' | 'instanceAllowlist' | 'outboundRecipientAllowlist';
 
@@ -128,7 +127,7 @@ export const COWORKER_DEFAULT_DENYLIST_PRESET_KEY = 'khal-os-core';
  * that single scope covers both `GET /turns` and `POST /turns/:id/close`, so
  * granting read access to turns would hand a viewer a close button.
  */
-export const CONSOLE_READ_SCOPES = [
+const CONSOLE_READ_SCOPES = [
   'access:read',
   'agent-state:read',
   'agent-tasks:read',
@@ -166,7 +165,7 @@ export const CONSOLE_READ_SCOPES = [
  * jobs, retry dead letters, replay events, edit routes. Explicitly EXCLUDES
  * every administration scope (see `CONSOLE_ADMINISTRATION_SCOPES`).
  */
-export const CONSOLE_OPERATE_SCOPES = [
+const CONSOLE_OPERATE_SCOPES = [
   'agent-state:write',
   'agent-tasks:write',
   'automations:write',
@@ -196,7 +195,7 @@ export const CONSOLE_OPERATE_SCOPES = [
  * payload retention. Only `console-admin` (KHAL `platform-admin` /
  * `platform-owner`) gets these.
  */
-export const CONSOLE_ADMINISTRATION_SCOPES = [
+const CONSOLE_ADMINISTRATION_SCOPES = [
   'access:write',
   'agents:write',
   'keys:read',
