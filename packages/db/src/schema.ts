@@ -112,7 +112,19 @@ export type ApiKeyStatus = (typeof apiKeyStatuses)[number];
 
 // Profile templates that compose verb buckets + enforcement locks for API keys.
 // `null` keeps pre-profile keys working with legacy empty-allowlist-as-no-lock semantics.
-export const apiKeyProfiles = ['cs', 'personal', 'scout', 'coworker', 'admin'] as const;
+// The `console-*` profiles are lock-free platform-wide admin-console keys minted
+// per user by the admin UI's BFF (see packages/api/src/constants/profiles.ts).
+// The column is varchar(32), not a pg enum — widening this union needs no migration.
+export const apiKeyProfiles = [
+  'cs',
+  'personal',
+  'scout',
+  'coworker',
+  'admin',
+  'console-viewer',
+  'console-operator',
+  'console-admin',
+] as const;
 export type ApiKeyProfile = (typeof apiKeyProfiles)[number];
 
 // Tenant-editable overrides applied on top of a profile's bucket resolution.
