@@ -84,6 +84,11 @@ jobs:
       - name: Download NATS
         run: ./scripts/ensure-nats.sh
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
       - name: Install autopg v3
         # Use the current canonical pgserve distribution. `bunx pgserve@...`
         # installs the legacy npm wrapper; Omni's runtime resolver prefers
@@ -95,6 +100,7 @@ jobs:
         # embedded Postgres binary cache (ETXTBSY).
         env:
           GH_TOKEN: ${{ github.token }}
+          AUTOPG_VERSION: v3.0.7
         run: |
           bun add -g pm2
           curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash
@@ -250,6 +256,11 @@ jobs:
       - name: Download NATS
         run: ./scripts/ensure-nats.sh
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
       - name: Install autopg v3
         # Use the current canonical pgserve distribution. `bunx pgserve@...`
         # installs the legacy npm wrapper; Omni's runtime resolver prefers
@@ -261,6 +272,7 @@ jobs:
         # embedded Postgres binary cache (ETXTBSY).
         env:
           GH_TOKEN: ${{ github.token }}
+          AUTOPG_VERSION: v3.0.7
         run: |
           bun add -g pm2
           curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash
