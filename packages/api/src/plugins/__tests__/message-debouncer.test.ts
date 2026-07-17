@@ -579,4 +579,49 @@ describe('MessageDebouncer', () => {
       expect(byKey['inst-2:chat-1']).toBe(1);
     });
   });
+
+  describe('hasPending — stale-reply detection', () => {
+    it('reports pending messages buffered while a flush is in flight', async () => {
+      const pendingObservedDuringFlush: boolean[] = [];
+      let release: (() => void) | undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      debouncer = new MessageDebouncer(async (_chatKey, messages) => {
+        if (messages[0]?.payload.content?.text === 'first') {
+          // Hold the flush open so a second message lands in the buffer.
+          await gate;
+          pendingObservedDuringFlush.push(debouncer.hasPending('inst-1', 'chat-1'));
+        }
+      });
+
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('first'), disabledConfig);
+      await wait(20); // flush for 'first' is now in flight, awaiting the gate
+
+      expect(debouncer.hasPending('inst-1', 'chat-1')).toBe(false);
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('second'), disabledConfig);
+      expect(debouncer.hasPending('inst-1', 'chat-1')).toBe(true);
+
+      release?.();
+      await wait(30); // in-flight flush completes + finally re-flush drains 'second'
+
+      expect(pendingObservedDuringFlush).toEqual([true]);
+      expect(debouncer.hasPending('inst-1', 'chat-1')).toBe(false);
+    });
+
+    it('is scoped per instanceId:chatId', async () => {
+      debouncer = new MessageDebouncer(async (_chatKey, _messages) => {});
+
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('a'), fixedConfig);
+
+      expect(debouncer.hasPending('inst-1', 'chat-1')).toBe(true);
+      expect(debouncer.hasPending('inst-1', 'chat-2')).toBe(false);
+      expect(debouncer.hasPending('inst-2', 'chat-1')).toBe(false);
+
+      await wait(150); // fixed window elapses, buffer drains
+
+      expect(debouncer.hasPending('inst-1', 'chat-1')).toBe(false);
+    });
+  });
 });

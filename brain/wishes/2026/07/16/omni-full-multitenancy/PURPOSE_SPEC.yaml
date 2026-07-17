@@ -1,0 +1,44 @@
+schema_version: 1
+purpose_id: omni-full-multitenancy
+session_id: ps_74e1504c7ef87f09
+project: omni
+canonical_root: brain/wishes/2026/07/16/omni-full-multitenancy
+state: SPECIFIED
+public_name: "Omni Full Multitenancy"
+summary: >-
+  Turn Omni into a fail-closed multitenant platform where tenant administrators
+  can fully operate and delegate inside one tenant without cross-tenant or
+  platform-admin escape paths.
+created_at: 2026-07-16T21:28:26Z
+updated_at: 2026-07-16T22:22:33Z
+owner: Felipe Rosa
+mutation_policy: >-
+  Planning and read-only evidence only until human approval converts execution
+  groups into Genie tasks; production migration, deployment, credential
+  mutation, tenant onboarding, and destructive cleanup remain separately gated.
+binding:
+  platform: telegram
+  chat_id: null
+  topic_id: "27223"
+  live_report_message_id: null
+artifacts:
+  purpose_spec: brain/wishes/2026/07/16/omni-full-multitenancy/PURPOSE_SPEC.md
+  brainstorm_session: brain/wishes/2026/07/16/omni-full-multitenancy/BRAINSTORM_SESSION.md
+  ownership_matrix: brain/wishes/2026/07/16/omni-full-multitenancy/OWNERSHIP_MATRIX.md
+  purpose_wish_mirror: brain/wishes/2026/07/16/omni-full-multitenancy/WISH.md
+  genie_wish: .genie/wishes/omni-full-multitenancy/WISH.md
+  release_slos: brain/wishes/2026/07/16/omni-full-multitenancy/RELEASE_SLOS.yaml
+  artifact_validator: brain/wishes/2026/07/16/omni-full-multitenancy/validate-artifacts.mjs
+  status: brain/wishes/2026/07/16/omni-full-multitenancy/STATUS.md
+decisions:
+  - First-class tenants and immutable tenant context replace instance allowlists as the ownership boundary.
+  - Every tenant-owned row has non-null tenant_id, app predicates, composite tenant FKs, and PostgreSQL FORCE RLS.
+  - Tenant and platform credentials are separate classes; tenant admins cannot mint platform authority.
+  - Tenant context is transaction-local and preserved through HTTP, NATS, jobs, storage, caches, audit, and default-deny outbound egress.
+  - Migration is additive until a ledgered writer-fence secure floor, then reconciled, high-water marked, backed up, canaried, and roll-forward safe.
+  - Numeric release/revocation/custody thresholds live in RELEASE_SLOS.yaml; missing evidence fails.
+  - Production holds require canonical Ed25519-signed receipts from an isolated append-only approval authority, atomically compare-and-consumed by exact action tuple.
+  - Production backup, backfill, RLS, release, tenant mapping, and each credential mint require distinct immutable receipts.
+execution:
+  authorized: false
+  next_gate: Human approval before Genie task creation.

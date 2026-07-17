@@ -390,6 +390,31 @@ class ReactionDedup {
 const PRESENCE_DEFAULT_MIN_MS = 5_000; // quiet window after the user stops typing
 const PRESENCE_DEFAULT_MAX_WAIT_MS = 30_000; // hard cap under continuous typing
 
+/**
+ * Module-level handle to the message debouncer created in the plugin setup.
+ * Lets the dispatch paths ask, right before delivering an agent reply, whether
+ * newer inbound messages are already buffered for the chat (i.e. the reply was
+ * generated from a stale snapshot).
+ */
+let activeMessageDebouncer: MessageDebouncer | null = null;
+
+/** True when newer inbound messages are buffered for this chat than the batch that produced the current reply. */
+function hasPendingInbound(instanceId: string, chatId: string): boolean {
+  return activeMessageDebouncer?.hasPending(instanceId, chatId) ?? false;
+}
+
+/**
+ * Stale-reply gate (per-instance, default 'off'): with `messageSupersedeMode`
+ * set to 'discard', a reply that was generated while newer inbound arrived is
+ * dropped — the debouncer's finally-block re-flush dispatches the buffered
+ * messages immediately, so the follow-up run answers everything with full
+ * context instead of the user receiving an out-of-date reply first.
+ */
+function isReplySuperseded(instance: Instance | DispatchInstance, chatId: string): boolean {
+  const mode = (instance as { messageSupersedeMode?: string | null }).messageSupersedeMode ?? 'off';
+  return mode === 'discard' && hasPendingInbound(instance.id, chatId);
+}
+
 function getDebounceConfig(instance: Instance): DebounceConfig {
   const mode = instance.messageDebounceMode ?? 'disabled';
   const isPresence = mode === 'presence';
@@ -692,6 +717,24 @@ export async function triggerErrorHandoff(
  * native-handoff channels (Gupshup — special message + agent pause), otherwise
  * the plain {@link resolveDispatchErrorMessage} reply.
  */
+/**
+ * Trigger the customer-error handoff when the provider blocked a leaked error
+ * and substituted the customer-safe fallback — unless a handoff already fired
+ * during the run. Extracted from dispatchViaProvider to keep its complexity down.
+ */
+async function maybeTriggerErrorHandoff(
+  services: Services,
+  db: Database,
+  channel: ChannelType,
+  instance: DispatchInstance,
+  chatId: string,
+  customerErrorBlocked: boolean,
+  handoffTriggered: boolean,
+): Promise<boolean> {
+  if (!customerErrorBlocked || handoffTriggered) return false;
+  return triggerErrorHandoff(services, db, channel, instance, chatId, resolveErrorHandoffMessage());
+}
+
 async function handleDispatchFailure(
   services: Services,
   db: Database,
@@ -2677,23 +2720,28 @@ async function dispatchViaProvider(
       const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
       const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
 
+      // If newer inbound arrived while the agent was running, this reply was
+      // generated from a stale snapshot. With messageSupersedeMode='discard',
+      // drop it — the debouncer's finally-block re-flush dispatches the
+      // buffered messages right away, producing one reply with full context.
+      // Never discard when a handoff fired: that announcement must go out.
+      const supersededByNewerInbound = !handoffTriggered && isReplySuperseded(instance, chatId);
+
       // When the provider blocked a leaked error and substituted the customer-safe
       // fallback, route to a human on native-handoff channels (Gupshup) instead of
       // forwarding the generic fallback text. Non-handoff channels fall through and
       // send the fallback parts as before.
-      let errorHandoffDone = false;
-      if (result?.metadata.customerErrorBlocked === true && !handoffTriggered) {
-        errorHandoffDone = await triggerErrorHandoff(
-          services,
-          db,
-          channel,
-          instance,
-          chatId,
-          resolveErrorHandoffMessage(),
-        );
-      }
+      const errorHandoffDone = await maybeTriggerErrorHandoff(
+        services,
+        db,
+        channel,
+        instance,
+        chatId,
+        result?.metadata.customerErrorBlocked === true,
+        handoffTriggered,
+      );
 
-      if (result && result.parts.length > 0 && !handoffTriggered && !errorHandoffDone) {
+      if (result && result.parts.length > 0 && !handoffTriggered && !errorHandoffDone && !supersededByNewerInbound) {
         const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
         const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
         // Apply before_message_write hooks to each response part before sending
@@ -2737,6 +2785,13 @@ async function dispatchViaProvider(
         log.info('Agent response suppressed — handoff triggered during run', {
           instanceId: instance.id,
           chatId,
+        });
+      } else if (supersededByNewerInbound) {
+        log.info('Agent response discarded — superseded by newer inbound', {
+          instanceId: instance.id,
+          chatId,
+          parts: result?.parts.length ?? 0,
+          traceId,
         });
       }
 
@@ -2868,6 +2923,20 @@ async function dispatchViaLegacy(
   );
 
   const correlationId = messages[0]?.metadata.correlationId;
+
+  // Stale-reply gate — same semantics as the provider path: when newer inbound
+  // arrived during the run and messageSupersedeMode='discard', drop this reply
+  // and let the debouncer re-flush answer with full context.
+  if (isReplySuperseded(instance, chatId)) {
+    log.info('Agent response discarded — superseded by newer inbound', {
+      instanceId: instance.id,
+      chatId,
+      parts: result.parts.length,
+      traceId,
+    });
+    return;
+  }
+
   const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
   const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
 
@@ -5130,6 +5199,8 @@ export async function setupAgentDispatcher(
   }, 60_000);
 
   // Create debouncer for message events
+  // (registered module-wide so dispatch paths can consult pending buffers
+  //  for the stale-reply gate — see isReplySuperseded)
   const debouncer = new MessageDebouncer(async (_chatKey, messages) => {
     const firstMsg = messages[0];
     if (!firstMsg) return;
@@ -5173,6 +5244,7 @@ export async function setupAgentDispatcher(
 
     await processAgentResponse(services, instance, messages, triggerType, db, eventBus);
   });
+  activeMessageDebouncer = debouncer;
 
   try {
     // ========================================
