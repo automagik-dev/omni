@@ -131,7 +131,9 @@ export async function verifySignature(opts: {
   const { hostIdHeader, timestampHeader, signatureHeader, method, path, body, now, findHost } = opts;
 
   // No signature headers at all → bearer-only path; not our concern.
-  if (!hostIdHeader && !timestampHeader && !signatureHeader) {
+  // Header presence is independent from value truthiness: an empty-valued
+  // X-Genie header is still a signed-request attempt and must fail closed.
+  if (hostIdHeader === undefined && timestampHeader === undefined && signatureHeader === undefined) {
     return { status: 'no-signature' };
   }
 
@@ -209,8 +211,9 @@ export const genieSignatureMiddleware = createMiddleware<{ Variables: AppVariabl
   const timestampHeader = c.req.header(HEADER_TIMESTAMP);
   const signatureHeader = c.req.header(HEADER_SIGNATURE);
 
-  // Fast-path: no signature headers → skip work, fall through.
-  if (!hostIdHeader && !timestampHeader && !signatureHeader) {
+  // Fast-path only when all signature headers are truly absent. Fetch/Hono
+  // preserves present-but-empty headers as '', so truthiness would fail open.
+  if (hostIdHeader === undefined && timestampHeader === undefined && signatureHeader === undefined) {
     return next();
   }
 
