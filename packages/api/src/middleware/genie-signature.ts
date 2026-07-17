@@ -205,14 +205,6 @@ function pathFromRequest(url: URL): string {
  * `c.req.text()` returns the same string the signer hashed.
  */
 export const genieSignatureMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
-  const services = c.get('services');
-  if (!services?.genieHosts) {
-    // Service registry not initialized — let the request through; bearer
-    // auth will reject if needed. Don't fail closed for an internal-config
-    // hiccup.
-    return next();
-  }
-
   const hostIdHeader = c.req.header(HEADER_HOST_ID);
   const timestampHeader = c.req.header(HEADER_TIMESTAMP);
   const signatureHeader = c.req.header(HEADER_SIGNATURE);
@@ -220,6 +212,29 @@ export const genieSignatureMiddleware = createMiddleware<{ Variables: AppVariabl
   // Fast-path: no signature headers → skip work, fall through.
   if (!hostIdHeader && !timestampHeader && !signatureHeader) {
     return next();
+  }
+
+  const services = c.get('services');
+  if (!services?.genieHosts) {
+    // A request carrying any signature header asserts signed-host authority.
+    // If the verifier dependency is unavailable, rejecting is the only safe
+    // behavior: falling through would make the scope enforcer treat it as a
+    // bearer-only request and bypass host narrowing. Unsigned bearer requests
+    // already took the fast path above and retain their existing behavior.
+    log.warn('genie signature verification service unavailable', {
+      hostId: hostIdHeader,
+      method: c.req.method,
+      path: new URL(c.req.url).pathname,
+    });
+    return c.json(
+      {
+        error: {
+          code: 'GENIE_SIGNATURE_SERVICE_UNAVAILABLE',
+          message: 'Genie host signature verification is temporarily unavailable.',
+        },
+      },
+      503,
+    );
   }
 
   // Read the request body ONCE so we hash the same bytes the signer did.

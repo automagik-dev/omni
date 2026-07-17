@@ -84,6 +84,21 @@ describe('scope-enforcer — bearer-only path (no signature)', () => {
     const res = await app.request('/api/v2/agents');
     expect(res.status).toBe(403);
   });
+
+  test('signature headers without a verified signedBy context fail closed instead of degrading to bearer-only', async () => {
+    const app = mountWithCtx({ bearerScopes: ['*'] });
+    const res = await app.request('/api/v2/agents', {
+      headers: {
+        'x-genie-host-id': 'unverified-host',
+        'x-genie-timestamp': '2026-07-17T00:00:00.000Z',
+        'x-genie-signature': 'unverified-signature',
+      },
+    });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string; host?: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
+    expect(body.error.host).toBe('unverified-host');
+  });
 });
 
 describe('scope-enforcer — signed request, host wildcard (back-compat default)', () => {

@@ -6,6 +6,12 @@ export type SignedHostScopeContext =
   | { kind: 'valid'; hostId: string; scopes: string[] }
   | { kind: 'invalid'; hostId: string };
 
+const GENIE_SIGNATURE_HEADERS = ['x-genie-host-id', 'x-genie-timestamp', 'x-genie-signature'] as const;
+
+function hasAnyGenieSignatureHeader(c: Context<{ Variables: AppVariables }>): boolean {
+  return GENIE_SIGNATURE_HEADERS.some((header) => c.req.header(header) !== undefined);
+}
+
 /**
  * Parse optional Hono context into a strict authorization state.
  *
@@ -15,7 +21,17 @@ export type SignedHostScopeContext =
  */
 export function readSignedHostScopeContext(c: Context<{ Variables: AppVariables }>): SignedHostScopeContext {
   const hostId = c.get('signedBy');
-  if (!hostId) return { kind: 'unsigned' };
+  if (!hostId) {
+    // Signature headers assert a signed-host identity. If upstream signature
+    // verification did not produce `signedBy`, never downgrade that request
+    // to the bearer-only path — verification may have been unavailable or the
+    // middleware chain may have drifted. The signature middleware normally
+    // rejects first; this is the downstream authorization backstop.
+    if (hasAnyGenieSignatureHeader(c)) {
+      return { kind: 'invalid', hostId: c.req.header('x-genie-host-id') ?? 'unknown' };
+    }
+    return { kind: 'unsigned' };
+  }
 
   const scopes: unknown = c.get('signedByScopes');
   if (!Array.isArray(scopes) || !scopes.every((scope) => typeof scope === 'string')) {
