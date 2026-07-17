@@ -188,8 +188,24 @@ function normalizeOverrides(overrides: CreateKeyData['overrides']): ResolveProfi
  */
 function enforceScopeCeiling(c: Context<{ Variables: AppVariables }>, requestedScopes: string[]): Response | null {
   const callerScopes = c.get('apiKey')?.scopes ?? [];
-  const signedByScopes = c.get('signedBy') ? c.get('signedByScopes') : undefined;
-  const authorizerScopeSets = signedByScopes ? [callerScopes, signedByScopes] : [callerScopes];
+  const signedBy = c.get('signedBy');
+  const signedByScopes = c.get('signedByScopes');
+  const authorizerScopeSets: string[][] = [callerScopes];
+  if (signedBy) {
+    if (signedByScopes === undefined || signedByScopes === null) {
+      return c.json(
+        {
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Signing host scope context is missing.',
+            host: signedBy,
+          },
+        },
+        403,
+      );
+    }
+    authorizerScopeSets.push(signedByScopes);
+  }
   const exceeding = requestedScopes.filter((scope) =>
     authorizerScopeSets.some((authorizerScopes) => !ApiKeyService.scopeAllows(authorizerScopes, scope)),
   );

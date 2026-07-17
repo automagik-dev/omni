@@ -354,6 +354,25 @@ function lockDenyResponse(c: Context<{ Variables: AppVariables }>, lock: LockNam
   );
 }
 
+function rejectMissingSignedHostScopeContext(
+  c: Context<{ Variables: AppVariables }>,
+  signedBy: string | undefined,
+  signedByScopes: string[] | undefined,
+): Response | null {
+  if (!signedBy || (signedByScopes !== undefined && signedByScopes !== null)) return null;
+  log.warn(`DENIED: signedBy=${signedBy} route=${c.req.method.toUpperCase()} ${c.req.path} host-scopes=MISSING`);
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Signing host scope context is missing.',
+        host: signedBy,
+      },
+    },
+    403,
+  );
+}
+
 export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
   const apiKey = c.get('apiKey');
 
@@ -375,6 +394,13 @@ export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariable
 
   const signedBy = c.get('signedBy');
   const signedByScopes = c.get('signedByScopes');
+
+  // A verified signing identity without its authorization context is an
+  // invalid state. Never degrade to bearer-only permissions: a wildcard
+  // bearer would otherwise bypass per-host narrowing if upstream context
+  // population drifts or is reordered.
+  const missingHostScopeDenied = rejectMissingSignedHostScopeContext(c, signedBy, signedByScopes);
+  if (missingHostScopeDenied) return missingHostScopeDenied;
 
   const wildcard = ApiKeyService.scopeAllows(apiKey.scopes, '*');
 
@@ -429,8 +455,10 @@ export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariable
   //
   // The bearer's wildcard does NOT bypass this — wildcard means "the bearer
   // is unrestricted", but the signing host may still be locked down.
-  if (signedBy && signedByScopes) {
-    const hostWildcard = ApiKeyService.scopeAllows(signedByScopes, '*');
+  if (signedBy) {
+    // The fail-closed guard above proves this context exists for signed requests.
+    const hostScopes = signedByScopes as string[];
+    const hostWildcard = ApiKeyService.scopeAllows(hostScopes, '*');
     if (!hostWildcard) {
       // Resolve the route's required scope if we haven't already (wildcard
       // bearer skipped that step above).
@@ -452,9 +480,9 @@ export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariable
         );
       }
 
-      if (!ApiKeyService.scopeAllows(signedByScopes, needed)) {
+      if (!ApiKeyService.scopeAllows(hostScopes, needed)) {
         log.warn(
-          `DENIED: signedBy=${signedBy} route=${method} ${path} required=${needed} host-scopes=${signedByScopes.join(',')}`,
+          `DENIED: signedBy=${signedBy} route=${method} ${path} required=${needed} host-scopes=${hostScopes.join(',')}`,
         );
         return c.json(
           {

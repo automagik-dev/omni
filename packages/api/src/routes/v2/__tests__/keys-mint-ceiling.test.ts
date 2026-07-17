@@ -42,6 +42,13 @@ interface UpdatedKey {
   scopes?: string[];
 }
 
+interface MountOptions {
+  /** Simulate a verified signing host even when its scope context is missing. */
+  signedBy?: string;
+  /** Disable the general scope enforcer to exercise the route ceiling directly. */
+  withScopeEnforcer?: boolean;
+}
+
 /**
  * Mount the real scope enforcer + real keys routes behind a caller key with the
  * given scopes. `profile: null` + empty allowlists means the enforcer's
@@ -50,6 +57,7 @@ interface UpdatedKey {
 function mount(
   callerScopes: string[],
   signedByScopes?: string[],
+  options: MountOptions = {},
 ): {
   app: Hono<{ Variables: AppVariables }>;
   created: CreatedKey[];
@@ -84,13 +92,18 @@ function mount(
       instanceAllowlist: [],
       outboundRecipientAllowlist: [],
     } as never);
-    if (signedByScopes) {
-      c.set('signedBy', 'test-host');
+    const signedBy = options.signedBy ?? (signedByScopes !== undefined ? 'test-host' : undefined);
+    if (signedBy) {
+      c.set('signedBy', signedBy);
+    }
+    if (signedByScopes !== undefined) {
       c.set('signedByScopes', signedByScopes);
     }
     await next();
   });
-  app.use('*', scopeEnforcerMiddleware);
+  if (options.withScopeEnforcer !== false) {
+    app.use('*', scopeEnforcerMiddleware);
+  }
   app.route('/keys', keysRoutes);
 
   return { app, created, updated };
@@ -158,6 +171,19 @@ describe('POST /keys — mint scope ceiling', () => {
       const { status } = await postKey(app, { name: 'host-escalation', scopes: ['*'] });
 
       expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('missing signing-host scope context fails closed in the route ceiling during create', async () => {
+      const { app, created } = mount(['*'], undefined, {
+        signedBy: 'test-host',
+        withScopeEnforcer: false,
+      });
+
+      const { status, json } = await postKey(app, { name: 'missing-host-scopes', scopes: ['*'] });
+
+      expect(status).toBe(403);
+      expect((json as { error?: { code?: string } }).error?.code).toBe('FORBIDDEN');
       expect(created).toHaveLength(0);
     });
 
@@ -244,6 +270,19 @@ describe('PATCH /keys/:id — update scope ceiling', () => {
     const { status } = await patchKey(app, 'target', { scopes: ['*'] });
 
     expect(status).toBe(403);
+    expect(updated).toHaveLength(0);
+  });
+
+  test('missing signing-host scope context fails closed in the route ceiling during update', async () => {
+    const { app, updated } = mount(['*'], undefined, {
+      signedBy: 'test-host',
+      withScopeEnforcer: false,
+    });
+
+    const { status, json } = await patchKey(app, 'target', { scopes: ['*'] });
+
+    expect(status).toBe(403);
+    expect((json as { error?: { code?: string } }).error?.code).toBe('FORBIDDEN');
     expect(updated).toHaveLength(0);
   });
 

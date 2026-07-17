@@ -101,18 +101,21 @@ function loadPubkey(pubkeyB64Url: string): KeyObject {
   return createPublicKey({ key: spki, format: 'der', type: 'spki' });
 }
 
-interface VerificationOutcome {
-  status: 'verified' | 'no-signature' | 'invalid';
-  hostId?: string;
-  /**
-   * Per-host scopes from `genie_hosts.scopes`. Defaults to `['*']` on first
-   * handshake (backward compat with the bearer-only model). The scope-enforcer
-   * intersects this with the bearer key's scopes — both must allow the route.
-   * Empty array = "no permissions" → every scoped route denied.
-   */
-  hostScopes?: string[];
-  reason?: string;
-}
+type VerificationOutcome =
+  | {
+      status: 'verified';
+      hostId: string;
+      reason?: never;
+      /**
+       * Per-host scopes from `genie_hosts.scopes`. Defaults to `['*']` on first
+       * handshake (backward compat with the bearer-only model). The scope-enforcer
+       * intersects this with the bearer key's scopes — both must allow the route.
+       * Empty array = "no permissions" → every scoped route denied.
+       */
+      hostScopes: string[];
+    }
+  | { status: 'no-signature'; hostId?: never; hostScopes?: never; reason?: never }
+  | { status: 'invalid'; hostId?: never; hostScopes?: never; reason: string };
 
 /** Pure verifier — no I/O beyond the host lookup. Tested directly. */
 export async function verifySignature(opts: {
@@ -262,16 +265,14 @@ export const genieSignatureMiddleware = createMiddleware<{ Variables: AppVariabl
     );
   }
 
-  if (outcome.status === 'verified' && outcome.hostId) {
+  if (outcome.status === 'verified') {
     c.set('signedBy', outcome.hostId);
     // Per-host scopes consumed by scope-enforcer (Group 5). Always set so the
     // enforcer can distinguish "signed and unrestricted" (['*']) from "signed
     // and unscoped" — the former is the back-compat default; the latter
     // doesn't happen today but the enforcer needs the source of truth either
     // way.
-    if (outcome.hostScopes) {
-      c.set('signedByScopes', outcome.hostScopes);
-    }
+    c.set('signedByScopes', outcome.hostScopes);
     // Best-effort last-seen update; never blocks the request.
     services.genieHosts.touchLastSeen(outcome.hostId).catch((err: unknown) => {
       log.warn('touchLastSeen failed (non-fatal)', { hostId: outcome.hostId, err: String(err) });

@@ -212,17 +212,19 @@ describe('scope-enforcer — signed request, host narrowed (Group 5 intersection
 });
 
 describe('scope-enforcer — signed request without scopes set on context', () => {
-  test('signedBy set but signedByScopes absent → bearer-only behavior (no host gate)', async () => {
-    // Defensive: if some upstream sets `signedBy` without `signedByScopes`
-    // (shouldn't happen in production but the type allows it), we fall back
-    // to bearer-only enforcement rather than failing closed on a missing
-    // signal.
+  test('signedBy set but signedByScopes absent → fail closed', async () => {
+    // A verified signing identity without its authorization context must never
+    // degrade to bearer-only permissions. Otherwise a wildcard bearer can
+    // bypass host narrowing when upstream context population drifts.
     const app = mountWithCtx({
       bearerScopes: ['*'],
       signedBy: 'host-uuid',
       // signedByScopes intentionally omitted
     });
     const res = await app.request('/api/v2/agents');
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string; host?: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
+    expect(body.error.host).toBe('host-uuid');
   });
 });
