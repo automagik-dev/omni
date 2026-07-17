@@ -25,6 +25,7 @@ import { createMiddleware } from 'hono/factory';
 import type { LockRequirement, ProfileName } from '../constants/profiles';
 import { PROFILES } from '../constants/profiles';
 import { SCOPE_MAP } from '../constants/scopes';
+import { readSignedHostScopeContext } from '../lib/signed-host-scope-context';
 import { ApiKeyService } from '../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../types';
 
@@ -354,6 +355,20 @@ function lockDenyResponse(c: Context<{ Variables: AppVariables }>, lock: LockNam
   );
 }
 
+function invalidSignedHostScopeContextResponse(c: Context<{ Variables: AppVariables }>, hostId: string): Response {
+  log.warn(`DENIED: signedBy=${hostId} route=${c.req.method.toUpperCase()} ${c.req.path} host-scopes=INVALID`);
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Signing host scope context is missing.',
+        host: hostId,
+      },
+    },
+    403,
+  );
+}
+
 export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
   const apiKey = c.get('apiKey');
 
@@ -373,8 +388,12 @@ export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariable
   const method = c.req.method.toUpperCase();
   const path = c.req.path;
 
-  const signedBy = c.get('signedBy');
-  const signedByScopes = c.get('signedByScopes');
+  // A verified signing identity without its authorization context is an
+  // invalid state. Never degrade to bearer-only permissions: a wildcard
+  // bearer would otherwise bypass per-host narrowing if upstream context
+  // population drifts or is reordered.
+  const signedHost = readSignedHostScopeContext(c);
+  if (signedHost.kind === 'invalid') return invalidSignedHostScopeContextResponse(c, signedHost.hostId);
 
   const wildcard = ApiKeyService.scopeAllows(apiKey.scopes, '*');
 
@@ -429,8 +448,9 @@ export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariable
   //
   // The bearer's wildcard does NOT bypass this — wildcard means "the bearer
   // is unrestricted", but the signing host may still be locked down.
-  if (signedBy && signedByScopes) {
-    const hostWildcard = ApiKeyService.scopeAllows(signedByScopes, '*');
+  if (signedHost.kind === 'valid') {
+    const { hostId: signedBy, scopes: hostScopes } = signedHost;
+    const hostWildcard = ApiKeyService.scopeAllows(hostScopes, '*');
     if (!hostWildcard) {
       // Resolve the route's required scope if we haven't already (wildcard
       // bearer skipped that step above).
@@ -452,9 +472,9 @@ export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariable
         );
       }
 
-      if (!ApiKeyService.scopeAllows(signedByScopes, needed)) {
+      if (!ApiKeyService.scopeAllows(hostScopes, needed)) {
         log.warn(
-          `DENIED: signedBy=${signedBy} route=${method} ${path} required=${needed} host-scopes=${signedByScopes.join(',')}`,
+          `DENIED: signedBy=${signedBy} route=${method} ${path} required=${needed} host-scopes=${hostScopes.join(',')}`,
         );
         return c.json(
           {
