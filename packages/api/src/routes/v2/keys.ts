@@ -168,31 +168,37 @@ function normalizeOverrides(overrides: CreateKeyData['overrides']): ResolveProfi
 }
 
 /**
- * Least-privilege mint ceiling.
+ * Least-privilege scope ceiling for key-management writes.
  *
- * A caller may only mint a key whose scopes are a SUBSET of its OWN scopes.
- * `ApiKeyService.scopeAllows(callerScopes, requested)` is exactly the covering
- * relation we need:
- *   - a `*` caller (the real god-key / `admin` profile) covers every requested
- *     scope, so god-key minting and internal agent-provisioning keep working
- *     unchanged;
- *   - a concrete-scoped caller (e.g. `console-admin`) covers a requested scope
- *     it holds — or one under a `ns:*` it holds — but does NOT cover `*` or a
- *     `ns:*` super-scope it lacks. So a bounded caller can never escalate to a
- *     god key or a whole-namespace grant, even by minting a broader profile.
+ * A caller may only create or update a key whose scopes are a SUBSET of its
+ * OWN scopes. Signed requests are authorized by the intersection of the bearer
+ * and signing-host scopes, so the requested grant must be covered by BOTH.
+ * `ApiKeyService.scopeAllows(authorizerScopes, requested)` is exactly the
+ * covering relation we need:
+ *   - a `*` authorizer (the real god-key / `admin` profile) covers every
+ *     requested scope, so god-key minting and internal agent-provisioning keep
+ *     working unchanged;
+ *   - a concrete-scoped authorizer (e.g. `console-admin` or a narrowed signing
+ *     host) covers a requested scope it holds — or one under a `ns:*` it holds
+ *     — but does NOT cover `*` or a `ns:*` super-scope it lacks. So a bounded
+ *     authority can never escalate to a god key or a whole-namespace grant.
  *
  * Returns a 403 `Response` listing the disallowed scopes, or `null` when every
- * requested scope is within the caller's ceiling.
+ * requested scope is within every active authorizer's ceiling.
  */
-function enforceMintCeiling(c: Context<{ Variables: AppVariables }>, requestedScopes: string[]): Response | null {
+function enforceScopeCeiling(c: Context<{ Variables: AppVariables }>, requestedScopes: string[]): Response | null {
   const callerScopes = c.get('apiKey')?.scopes ?? [];
-  const exceeding = requestedScopes.filter((scope) => !ApiKeyService.scopeAllows(callerScopes, scope));
+  const signedByScopes = c.get('signedBy') ? c.get('signedByScopes') : undefined;
+  const authorizerScopeSets = signedByScopes ? [callerScopes, signedByScopes] : [callerScopes];
+  const exceeding = requestedScopes.filter((scope) =>
+    authorizerScopeSets.some((authorizerScopes) => !ApiKeyService.scopeAllows(authorizerScopes, scope)),
+  );
   if (exceeding.length === 0) return null;
   return c.json(
     {
       error: {
         code: 'FORBIDDEN',
-        message: `Cannot mint a key whose scopes exceed the caller's own. Disallowed: ${exceeding.join(', ')}`,
+        message: `Cannot grant scopes that exceed the caller's own. Disallowed: ${exceeding.join(', ')}`,
       },
     },
     403,
@@ -217,7 +223,7 @@ async function handleProfileCreate(
 
     // Enforce the mint ceiling on the RESOLVED profile scopes so a bounded
     // caller can't escalate by requesting a broader profile than it holds.
-    const ceilingDenied = enforceMintCeiling(c, resolved.scopes);
+    const ceilingDenied = enforceScopeCeiling(c, resolved.scopes);
     if (ceilingDenied) return ceilingDenied;
 
     const result = await services.apiKeys.create({
@@ -268,7 +274,7 @@ async function handleLegacyCreate(
   // Enforce the mint ceiling: the requested scopes must be a subset of the
   // caller's own. Blocks a `console-admin` (or any concrete-scoped) caller from
   // minting `['*']` / a `ns:*` super-scope and using it as a one-hop god key.
-  const ceilingDenied = enforceMintCeiling(c, data.scopes);
+  const ceilingDenied = enforceScopeCeiling(c, data.scopes);
   if (ceilingDenied) return ceilingDenied;
 
   const result = await services.apiKeys.create({
@@ -329,6 +335,14 @@ keysRoutes.patch('/:id', zValidator('json', updateKeySchema), async (c) => {
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
+
+  // Updating an existing key is another scope-grant path. Apply the same
+  // least-privilege ceiling as creation so a bounded keys:write caller cannot
+  // PATCH its own (or another) key into a wildcard or broader namespace grant.
+  if (data.scopes) {
+    const ceilingDenied = enforceScopeCeiling(c, data.scopes);
+    if (ceilingDenied) return ceilingDenied;
+  }
 
   try {
     const updated = await services.apiKeys.update(id, {
