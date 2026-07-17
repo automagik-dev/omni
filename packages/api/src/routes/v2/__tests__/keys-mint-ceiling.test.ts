@@ -1,20 +1,22 @@
 /**
- * Mint scope-ceiling enforcement (WISH omni-appkit-gap, Group 2 — HIGH-1).
+ * API-key scope-ceiling enforcement (WISH omni-appkit-gap, Group 2 — HIGH-1).
  *
  * Threat: `console-admin` holds `keys:write`, so the scope-enforcer admits its
- * `POST /keys` calls. Without a ceiling it could mint a `scopes: ['*']` key and
- * use it → a one-hop god key, defeating the wish's core promise that
- * `console-admin` is BOUNDED and is NOT the god key.
+ * key-management writes. Without a ceiling it could create or update a key to
+ * `scopes: ['*']` and use it → a one-hop god key, defeating the wish's core
+ * promise that `console-admin` is BOUNDED and is NOT the god key.
  *
  * Contract:
- *   - A caller may only mint a key whose scopes are a SUBSET of its own.
+ *   - A caller may only create or update a key whose scopes are a SUBSET of
+ *     its own. For signed requests the grant must be covered by BOTH the bearer
+ *     and signing-host scopes (their effective authorization intersection).
  *   - A concrete-scoped caller (e.g. `console-admin`) requesting `*`, a
  *     `namespace:*` super-scope it lacks, or any scope it does not hold → 403.
- *   - A `*`-scoped caller (real god key / `admin` profile) may still mint
+ *   - A `*`-scoped caller (real god key / `admin` profile) may still grant
  *     anything → 2xx (god-key / agent-provisioning unbroken).
- *   - The ceiling applies to BOTH the non-profile branch (raw `scopes`) and the
- *     profile branch (resolved profile scopes), so a bounded caller can't
- *     escalate by requesting a broader profile than it holds.
+ *   - The ceiling applies to the non-profile create branch (raw `scopes`), the
+ *     profile create branch (resolved profile scopes), and PATCH updates, so a
+ *     bounded caller cannot escalate through any key-management write path.
  *
  * These tests mount the REAL `scopeEnforcerMiddleware` in front of the REAL
  * keys routes (the existing mint tests omit it — reviewer LOW-2), so the proof
@@ -34,13 +36,27 @@ interface CreatedKey {
   profile?: string | null;
 }
 
+interface UpdatedKey {
+  id: string;
+  name?: string;
+  scopes?: string[];
+}
+
 /**
  * Mount the real scope enforcer + real keys routes behind a caller key with the
  * given scopes. `profile: null` + empty allowlists means the enforcer's
  * profile-aware locks are inactive, so only scope + ceiling checks decide.
  */
-function mount(callerScopes: string[]): { app: Hono<{ Variables: AppVariables }>; created: CreatedKey[] } {
+function mount(
+  callerScopes: string[],
+  signedByScopes?: string[],
+): {
+  app: Hono<{ Variables: AppVariables }>;
+  created: CreatedKey[];
+  updated: UpdatedKey[];
+} {
   const created: CreatedKey[] = [];
+  const updated: UpdatedKey[] = [];
   const app = new Hono<{ Variables: AppVariables }>();
 
   app.use('*', async (c, next) => {
@@ -49,6 +65,11 @@ function mount(callerScopes: string[]): { app: Hono<{ Variables: AppVariables }>
         create: mock(async (options: CreatedKey) => {
           created.push(options);
           return { key: { id: 'k_1', ...options }, plainTextKey: 'omni_test_key' };
+        }),
+        update: mock(async (id: string, options: Omit<UpdatedKey, 'id'>) => {
+          const row = { id, ...options };
+          updated.push(row);
+          return row;
         }),
       },
     } as never);
@@ -63,12 +84,16 @@ function mount(callerScopes: string[]): { app: Hono<{ Variables: AppVariables }>
       instanceAllowlist: [],
       outboundRecipientAllowlist: [],
     } as never);
+    if (signedByScopes) {
+      c.set('signedBy', 'test-host');
+      c.set('signedByScopes', signedByScopes);
+    }
     await next();
   });
   app.use('*', scopeEnforcerMiddleware);
   app.route('/keys', keysRoutes);
 
-  return { app, created };
+  return { app, created, updated };
 }
 
 async function postKey(
@@ -77,6 +102,19 @@ async function postKey(
 ): Promise<{ status: number; json: unknown }> {
   const res = await app.request('/keys', {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, json: await res.json().catch(() => null) };
+}
+
+async function patchKey(
+  app: Hono<{ Variables: AppVariables }>,
+  id: string,
+  body: unknown,
+): Promise<{ status: number; json: unknown }> {
+  const res = await app.request(`/keys/${id}`, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -109,6 +147,15 @@ describe('POST /keys — mint scope ceiling', () => {
       const { app, created } = mount(['keys:write', 'chats:read']);
 
       const { status } = await postKey(app, { name: 'over-reach', scopes: ['chats:read', 'instances:write'] });
+
+      expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('narrow signing-host scopes cap a wildcard bearer during create', async () => {
+      const { app, created } = mount(['*'], ['keys:write']);
+
+      const { status } = await postKey(app, { name: 'host-escalation', scopes: ['*'] });
 
       expect(status).toBe(403);
       expect(created).toHaveLength(0);
@@ -177,5 +224,71 @@ describe('POST /keys — mint scope ceiling', () => {
       expect((json as { error?: { code?: string } }).error?.code).toBe('FORBIDDEN');
       expect(created).toHaveLength(0);
     });
+  });
+});
+
+describe('PATCH /keys/:id — update scope ceiling', () => {
+  test('console-admin cannot update its own key to scopes: ["*"]', async () => {
+    const { app, updated } = mount([...CONSOLE_ADMIN_SCOPES]);
+
+    const { status, json } = await patchKey(app, 'minter', { scopes: ['*'] });
+
+    expect(status).toBe(403);
+    expect((json as { error?: { code?: string } }).error?.code).toBe('FORBIDDEN');
+    expect(updated).toHaveLength(0);
+  });
+
+  test('narrow signing-host scopes cap a wildcard bearer during update', async () => {
+    const { app, updated } = mount(['*'], ['keys:write']);
+
+    const { status } = await patchKey(app, 'target', { scopes: ['*'] });
+
+    expect(status).toBe(403);
+    expect(updated).toHaveLength(0);
+  });
+
+  test('bounded caller cannot update another key to a namespace super-scope it lacks', async () => {
+    const { app, updated } = mount(['keys:write', 'instances:read']);
+
+    const { status } = await patchKey(app, 'target', { scopes: ['instances:*'] });
+
+    expect(status).toBe(403);
+    expect(updated).toHaveLength(0);
+  });
+
+  test('bounded caller can update a key to a subset of its own scopes', async () => {
+    const { app, updated } = mount(['keys:write', 'chats:read', 'chats:write']);
+
+    const { status } = await patchKey(app, 'target', { scopes: ['chats:read'] });
+
+    expect(status).toBe(200);
+    expect(updated).toEqual([{ id: 'target', scopes: ['chats:read'] }]);
+  });
+
+  test('wildcard bearer can grant a scope covered by its narrowed signing host', async () => {
+    const { app, updated } = mount(['*'], ['keys:write', 'chats:read']);
+
+    const { status } = await patchKey(app, 'target', { scopes: ['chats:read'] });
+
+    expect(status).toBe(200);
+    expect(updated).toEqual([{ id: 'target', scopes: ['chats:read'] }]);
+  });
+
+  test('god key can update a key to scopes: ["*"]', async () => {
+    const { app, updated } = mount(['*']);
+
+    const { status } = await patchKey(app, 'target', { scopes: ['*'] });
+
+    expect(status).toBe(200);
+    expect(updated).toEqual([{ id: 'target', scopes: ['*'] }]);
+  });
+
+  test('metadata-only updates remain allowed for a keys:write caller', async () => {
+    const { app, updated } = mount(['keys:write']);
+
+    const { status } = await patchKey(app, 'target', { name: 'renamed-key' });
+
+    expect(status).toBe(200);
+    expect(updated).toEqual([{ id: 'target', name: 'renamed-key' }]);
   });
 });
