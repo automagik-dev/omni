@@ -221,6 +221,39 @@ function enforceScopeCeiling(c: Context<{ Variables: AppVariables }>, requestedS
   );
 }
 
+/**
+ * Least-privilege ceiling for legacy instance access on key-management writes.
+ *
+ * `instanceIds: null` means unrestricted access. A restricted caller may only
+ * grant a subset of its own instance IDs; it may not grant `null`, omit the
+ * field during creation (which persists as unrestricted), or name an instance
+ * outside its own restriction. Missing caller context is denied fail-closed.
+ */
+function enforceInstanceCeiling(
+  c: Context<{ Variables: AppVariables }>,
+  requestedInstanceIds: string[] | null,
+): Response | null {
+  const apiKey = c.get('apiKey');
+  if (apiKey?.instanceIds === null) return null;
+
+  const exceedsCaller =
+    !apiKey ||
+    !Array.isArray(apiKey.instanceIds) ||
+    requestedInstanceIds === null ||
+    requestedInstanceIds.some((instanceId) => !apiKey.instanceIds?.includes(instanceId));
+  if (!exceedsCaller) return null;
+
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: "Cannot grant instance access that exceeds the caller's own.",
+      },
+    },
+    403,
+  );
+}
+
 async function handleProfileCreate(
   c: Context<{ Variables: AppVariables }>,
   data: CreateKeyData,
@@ -241,6 +274,9 @@ async function handleProfileCreate(
     // caller can't escalate by requesting a broader profile than it holds.
     const ceilingDenied = enforceScopeCeiling(c, resolved.scopes);
     if (ceilingDenied) return ceilingDenied;
+
+    const instanceCeilingDenied = enforceInstanceCeiling(c, data.instanceIds ?? null);
+    if (instanceCeilingDenied) return instanceCeilingDenied;
 
     const result = await services.apiKeys.create({
       name: data.name,
@@ -292,6 +328,9 @@ async function handleLegacyCreate(
   // minting `['*']` / a `ns:*` super-scope and using it as a one-hop god key.
   const ceilingDenied = enforceScopeCeiling(c, data.scopes);
   if (ceilingDenied) return ceilingDenied;
+
+  const instanceCeilingDenied = enforceInstanceCeiling(c, data.instanceIds ?? null);
+  if (instanceCeilingDenied) return instanceCeilingDenied;
 
   const result = await services.apiKeys.create({
     name: data.name,
@@ -358,6 +397,10 @@ keysRoutes.patch('/:id', zValidator('json', updateKeySchema), async (c) => {
   if (data.scopes) {
     const ceilingDenied = enforceScopeCeiling(c, data.scopes);
     if (ceilingDenied) return ceilingDenied;
+  }
+  if (data.instanceIds !== undefined) {
+    const instanceCeilingDenied = enforceInstanceCeiling(c, data.instanceIds);
+    if (instanceCeilingDenied) return instanceCeilingDenied;
   }
 
   try {

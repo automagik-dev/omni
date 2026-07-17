@@ -1,5 +1,5 @@
 /**
- * API-key scope-ceiling enforcement (WISH omni-appkit-gap, Group 2 — HIGH-1).
+ * API-key authority-ceiling enforcement (WISH omni-appkit-gap, Group 2 — HIGH-1).
  *
  * Threat: `console-admin` holds `keys:write`, so the scope-enforcer admits its
  * key-management writes. Without a ceiling it could create or update a key to
@@ -17,6 +17,9 @@
  *   - The ceiling applies to the non-profile create branch (raw `scopes`), the
  *     profile create branch (resolved profile scopes), and PATCH updates, so a
  *     bounded caller cannot escalate through any key-management write path.
+ *   - Instance access is bounded independently: an unrestricted caller may
+ *     grant any `instanceIds`, while a restricted caller may grant only a
+ *     subset and may not use create omission or explicit `null` to grant all.
  *
  * These tests mount the REAL `scopeEnforcerMiddleware` in front of the REAL
  * keys routes (the existing mint tests omit it — reviewer LOW-2), so the proof
@@ -30,16 +33,21 @@ import { scopeEnforcerMiddleware } from '../../../middleware/scope-enforcer';
 import type { AppVariables } from '../../../types';
 import { keysRoutes } from '../keys';
 
+const INSTANCE_A = '11111111-1111-4111-8111-111111111111';
+const INSTANCE_B = '22222222-2222-4222-8222-222222222222';
+
 interface CreatedKey {
   name: string;
   scopes: string[];
   profile?: string | null;
+  instanceIds?: string[];
 }
 
 interface UpdatedKey {
   id: string;
   name?: string;
   scopes?: string[];
+  instanceIds?: string[] | null;
 }
 
 interface MountOptions {
@@ -47,6 +55,8 @@ interface MountOptions {
   signedBy?: string;
   /** Disable the general scope enforcer to exercise the route ceiling directly. */
   withScopeEnforcer?: boolean;
+  /** Legacy instance-access ceiling carried by the authenticated caller. */
+  callerInstanceIds?: string[] | null;
 }
 
 /**
@@ -85,7 +95,7 @@ function mount(
       id: 'minter',
       name: 'minter',
       scopes: callerScopes,
-      instanceIds: null,
+      instanceIds: options.callerInstanceIds ?? null,
       expiresAt: null,
       profile: null,
       chatAllowlist: [],
@@ -264,6 +274,82 @@ describe('POST /keys — mint scope ceiling', () => {
       expect(created).toHaveLength(0);
     });
   });
+
+  describe('instance access ceiling', () => {
+    test('restricted caller cannot omit instanceIds and mint an unrestricted legacy key', async () => {
+      const { app, created } = mount(['keys:write'], undefined, { callerInstanceIds: [INSTANCE_A] });
+
+      const { status, json } = await postKey(app, { name: 'unrestricted-child', scopes: ['keys:write'] });
+
+      expect(status).toBe(403);
+      expect((json as { error?: { code?: string } }).error?.code).toBe('FORBIDDEN');
+      expect(created).toHaveLength(0);
+    });
+
+    test('restricted caller cannot mint a key for an instance it cannot access', async () => {
+      const { app, created } = mount(['keys:write'], undefined, { callerInstanceIds: [INSTANCE_A] });
+
+      const { status } = await postKey(app, {
+        name: 'outside-instance',
+        scopes: ['keys:write'],
+        instanceIds: [INSTANCE_B],
+      });
+
+      expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('restricted caller cannot omit instanceIds through the profile create branch', async () => {
+      const { app, created } = mount([...CONSOLE_ADMIN_SCOPES], undefined, {
+        callerInstanceIds: [INSTANCE_A],
+      });
+
+      const { status } = await postKey(app, { name: 'profile-unrestricted', profile: 'console-admin' });
+
+      expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('restricted caller can mint a key for a subset of its own instances', async () => {
+      const { app, created } = mount(['keys:write'], undefined, {
+        callerInstanceIds: [INSTANCE_A, INSTANCE_B],
+      });
+
+      const { status } = await postKey(app, {
+        name: 'bounded-instance',
+        scopes: ['keys:write'],
+        instanceIds: [INSTANCE_A],
+      });
+
+      expect(status).toBe(201);
+      expect(created).toHaveLength(1);
+      expect(created[0]?.instanceIds).toEqual([INSTANCE_A]);
+    });
+
+    test('deny-all caller can mint only a deny-all instance subset', async () => {
+      const { app, created } = mount(['keys:write'], undefined, { callerInstanceIds: [] });
+
+      const { status } = await postKey(app, {
+        name: 'deny-all-child',
+        scopes: ['keys:write'],
+        instanceIds: [],
+      });
+
+      expect(status).toBe(201);
+      expect(created).toHaveLength(1);
+      expect(created[0]?.instanceIds).toEqual([]);
+    });
+
+    test('unrestricted caller can still omit instanceIds when minting a key', async () => {
+      const { app, created } = mount(['keys:write']);
+
+      const { status } = await postKey(app, { name: 'unrestricted-ok', scopes: ['keys:write'] });
+
+      expect(status).toBe(201);
+      expect(created).toHaveLength(1);
+      expect(created[0]?.instanceIds).toBeUndefined();
+    });
+  });
 });
 
 describe('PATCH /keys/:id — update scope ceiling', () => {
@@ -317,6 +403,54 @@ describe('PATCH /keys/:id — update scope ceiling', () => {
     expect(updated).toEqual([{ id: 'target', scopes: ['chats:read'] }]);
   });
 
+  test('restricted caller cannot update a key to unrestricted instance access', async () => {
+    const { app, updated } = mount(['keys:write'], undefined, { callerInstanceIds: [INSTANCE_A] });
+
+    const { status, json } = await patchKey(app, 'target', { instanceIds: null });
+
+    expect(status).toBe(403);
+    expect((json as { error?: { code?: string } }).error?.code).toBe('FORBIDDEN');
+    expect(updated).toHaveLength(0);
+  });
+
+  test('restricted caller cannot update a key to an instance it cannot access', async () => {
+    const { app, updated } = mount(['keys:write'], undefined, { callerInstanceIds: [INSTANCE_A] });
+
+    const { status } = await patchKey(app, 'target', { instanceIds: [INSTANCE_B] });
+
+    expect(status).toBe(403);
+    expect(updated).toHaveLength(0);
+  });
+
+  test('restricted caller can update a key to a subset of its own instances', async () => {
+    const { app, updated } = mount(['keys:write'], undefined, {
+      callerInstanceIds: [INSTANCE_A, INSTANCE_B],
+    });
+
+    const { status } = await patchKey(app, 'target', { instanceIds: [INSTANCE_A] });
+
+    expect(status).toBe(200);
+    expect(updated).toEqual([{ id: 'target', instanceIds: [INSTANCE_A] }]);
+  });
+
+  test('deny-all caller can update a key only to deny-all instance access', async () => {
+    const { app, updated } = mount(['keys:write'], undefined, { callerInstanceIds: [] });
+
+    const { status } = await patchKey(app, 'target', { instanceIds: [] });
+
+    expect(status).toBe(200);
+    expect(updated).toEqual([{ id: 'target', instanceIds: [] }]);
+  });
+
+  test('unrestricted caller can update a key to unrestricted instance access', async () => {
+    const { app, updated } = mount(['keys:write']);
+
+    const { status } = await patchKey(app, 'target', { instanceIds: null });
+
+    expect(status).toBe(200);
+    expect(updated).toEqual([{ id: 'target', instanceIds: null }]);
+  });
+
   test('wildcard bearer can grant a scope covered by its narrowed signing host', async () => {
     const { app, updated } = mount(['*'], ['keys:write', 'chats:read']);
 
@@ -335,8 +469,8 @@ describe('PATCH /keys/:id — update scope ceiling', () => {
     expect(updated).toEqual([{ id: 'target', scopes: ['*'] }]);
   });
 
-  test('metadata-only updates remain allowed for a keys:write caller', async () => {
-    const { app, updated } = mount(['keys:write']);
+  test('metadata-only updates remain allowed for an instance-restricted keys:write caller', async () => {
+    const { app, updated } = mount(['keys:write'], undefined, { callerInstanceIds: [INSTANCE_A] });
 
     const { status } = await patchKey(app, 'target', { name: 'renamed-key' });
 
