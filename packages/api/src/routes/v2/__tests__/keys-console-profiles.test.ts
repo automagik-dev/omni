@@ -43,8 +43,8 @@ function mountKeysRoutes(): { app: Hono<{ Variables: AppVariables }>; created: C
         }),
       },
     } as never);
-    // Caller is the platform primary/minting key (`*`). The mint ceiling
-    // (keys.ts `enforceMintCeiling`) requires the requested scopes to be a
+    // Caller is the platform primary/minting key (`*`). The scope ceiling
+    // (keys.ts `enforceScopeCeiling`) requires the requested scopes to be a
     // subset of the caller's own, and console profiles resolve to broad scope
     // sets — so the minter must legitimately hold those scopes. In production
     // the khal-ui BFF mints per-user console keys with the platform primary
