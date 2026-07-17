@@ -56,7 +56,7 @@ interface MountOptions {
  */
 function mount(
   callerScopes: string[],
-  signedByScopes?: string[],
+  signedByScopes?: string[] | null,
   options: MountOptions = {},
 ): {
   app: Hono<{ Variables: AppVariables }>;
@@ -97,7 +97,7 @@ function mount(
       c.set('signedBy', signedBy);
     }
     if (signedByScopes !== undefined) {
-      c.set('signedByScopes', signedByScopes);
+      c.set('signedByScopes', signedByScopes as never);
     }
     await next();
   });
@@ -181,6 +181,19 @@ describe('POST /keys — mint scope ceiling', () => {
       });
 
       const { status, json } = await postKey(app, { name: 'missing-host-scopes', scopes: ['*'] });
+
+      expect(status).toBe(403);
+      expect((json as { error?: { code?: string } }).error?.code).toBe('FORBIDDEN');
+      expect(created).toHaveLength(0);
+    });
+
+    test('null signing-host scope context fails closed in the route ceiling during create', async () => {
+      const { app, created } = mount(['*'], null, {
+        signedBy: 'test-host',
+        withScopeEnforcer: false,
+      });
+
+      const { status, json } = await postKey(app, { name: 'null-host-scopes', scopes: ['*'] });
 
       expect(status).toBe(403);
       expect((json as { error?: { code?: string } }).error?.code).toBe('FORBIDDEN');

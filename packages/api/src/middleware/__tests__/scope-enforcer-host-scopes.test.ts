@@ -29,7 +29,8 @@ import { scopeEnforcerMiddleware } from '../scope-enforcer';
 interface CtxOverrides {
   bearerScopes: string[];
   signedBy?: string;
-  signedByScopes?: string[];
+  /** `null` simulates malformed runtime context despite the production type. */
+  signedByScopes?: string[] | null;
 }
 
 /**
@@ -53,7 +54,7 @@ function mountWithCtx(overrides: CtxOverrides): Hono<{ Variables: AppVariables }
     };
     c.set('apiKey', apiKey);
     if (overrides.signedBy) c.set('signedBy', overrides.signedBy);
-    if (overrides.signedByScopes) c.set('signedByScopes', overrides.signedByScopes);
+    if (overrides.signedByScopes !== undefined) c.set('signedByScopes', overrides.signedByScopes as never);
     await next();
   });
   app.use('*', scopeEnforcerMiddleware);
@@ -220,6 +221,19 @@ describe('scope-enforcer — signed request without scopes set on context', () =
       bearerScopes: ['*'],
       signedBy: 'host-uuid',
       // signedByScopes intentionally omitted
+    });
+    const res = await app.request('/api/v2/agents');
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string; host?: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
+    expect(body.error.host).toBe('host-uuid');
+  });
+
+  test('signedBy set but signedByScopes is null at runtime → fail closed', async () => {
+    const app = mountWithCtx({
+      bearerScopes: ['*'],
+      signedBy: 'host-uuid',
+      signedByScopes: null,
     });
     const res = await app.request('/api/v2/agents');
     expect(res.status).toBe(403);

@@ -9,6 +9,7 @@ import { zValidator } from '@hono/zod-validator';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { ProfileResolutionError, type ResolveProfileInput, resolveProfile } from '../../lib/resolve-profile';
+import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
 import { optionalDateParam } from '../../schemas/date-query';
 import { ApiKeyService } from '../../services/api-keys';
 import type { AppVariables } from '../../types';
@@ -167,6 +168,20 @@ function normalizeOverrides(overrides: CreateKeyData['overrides']): ResolveProfi
   };
 }
 
+/** Return the common fail-closed response for malformed signed-host context. */
+function invalidSignedHostScopeContextResponse(c: Context<{ Variables: AppVariables }>, hostId: string): Response {
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Signing host scope context is missing.',
+        host: hostId,
+      },
+    },
+    403,
+  );
+}
+
 /**
  * Least-privilege scope ceiling for key-management writes.
  *
@@ -187,25 +202,10 @@ function normalizeOverrides(overrides: CreateKeyData['overrides']): ResolveProfi
  * requested scope is within every active authorizer's ceiling.
  */
 function enforceScopeCeiling(c: Context<{ Variables: AppVariables }>, requestedScopes: string[]): Response | null {
-  const callerScopes = c.get('apiKey')?.scopes ?? [];
-  const signedBy = c.get('signedBy');
-  const signedByScopes = c.get('signedByScopes');
-  const authorizerScopeSets: string[][] = [callerScopes];
-  if (signedBy) {
-    if (signedByScopes === undefined || signedByScopes === null) {
-      return c.json(
-        {
-          error: {
-            code: 'FORBIDDEN',
-            message: 'Signing host scope context is missing.',
-            host: signedBy,
-          },
-        },
-        403,
-      );
-    }
-    authorizerScopeSets.push(signedByScopes);
-  }
+  const authorizerScopeSets: string[][] = [c.get('apiKey')?.scopes ?? []];
+  const signedHost = readSignedHostScopeContext(c);
+  if (signedHost.kind === 'invalid') return invalidSignedHostScopeContextResponse(c, signedHost.hostId);
+  if (signedHost.kind === 'valid') authorizerScopeSets.push(signedHost.scopes);
   const exceeding = requestedScopes.filter((scope) =>
     authorizerScopeSets.some((authorizerScopes) => !ApiKeyService.scopeAllows(authorizerScopes, scope)),
   );
