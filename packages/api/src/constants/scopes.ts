@@ -153,6 +153,21 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /events/:id': 'events:read',
   'GET /events/by-sender/:senderId': 'events:read',
 
+  // --- follow-up (idle-chat follow-up config at /follow-up/{agents|instances|chats}/:id — issue #404) ---
+  'GET /follow-up/agents/:id': 'follow-up:read',
+  'PUT /follow-up/agents/:id': 'follow-up:write',
+  'DELETE /follow-up/agents/:id': 'follow-up:write',
+  'GET /follow-up/instances/:id': 'follow-up:read',
+  'PUT /follow-up/instances/:id': 'follow-up:write',
+  'DELETE /follow-up/instances/:id': 'follow-up:write',
+  'GET /follow-up/chats/:id': 'follow-up:read',
+  'PUT /follow-up/chats/:id': 'follow-up:write',
+  'DELETE /follow-up/chats/:id': 'follow-up:write',
+
+  // --- handoffs (handoff audit log) ---
+  'GET /handoffs': 'handoffs:read',
+  'GET /handoffs/:id': 'handoffs:read',
+
   // --- instances ---
   'GET /instances': 'instances:read',
   'GET /instances/supported-channels': 'instances:read',
@@ -309,6 +324,19 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /turns/:id/close': 'turns:admin',
   'POST /turns/close-all': 'turns:admin',
   'POST /turns/close': 'turns:close',
+
+  // --- trust (genie host fingerprint trust; omni-host-fingerprint-trust wish) ---
+  'POST /trust/handshake': 'trust:write',
+  'GET /trust/hosts': 'trust:read',
+  'GET /trust/hosts/:id': 'trust:read',
+  'PATCH /trust/hosts/:id': 'trust:write',
+  'DELETE /trust/hosts/:id': 'trust:write',
+
+  // --- voice (voice session management) ---
+  'POST /voice/join': 'voice:write',
+  'POST /voice/leave': 'voice:write',
+  'GET /voice/sessions': 'voice:read',
+  'GET /voice/sessions/:id': 'voice:read',
 
   // --- webhooks (mounted at root: /webhook-sources/..., /webhooks/:source, /events/trigger) ---
   'GET /webhook-sources': 'webhooks:read',

@@ -12,7 +12,7 @@
  * exactly once on process exit — no per-file teardown races.
  */
 
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 
 /**
  * Real `fetch`, captured at module-load time — before any test body runs.
@@ -101,90 +101,316 @@ export function uniqueBucket(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`.toLowerCase();
 }
 
-async function waitForReady(port: number): Promise<void> {
+type HarnessSignal = 'SIGINT' | 'SIGTERM' | 'SIGHUP';
+
+interface SyncCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+interface ProcessHooks {
+  readonly pid: number;
+  once(event: 'exit' | HarnessSignal, listener: () => void): void;
+  removeListener(event: HarnessSignal, listener: () => void): void;
+  kill(pid: number, signal: HarnessSignal): boolean;
+}
+
+export interface SharedMinioHarnessDependencies {
+  runSync(command: string[]): SyncCommandResult;
+  process: ProcessHooks;
+  readyFetch(url: string): Promise<{ ok: boolean }>;
+  now(): number;
+  sleep(ms: number): Promise<void>;
+  random(): number;
+  sessionId: string;
+  readinessTimeoutMs: number;
+  reportCleanupFailure(message: string): void;
+}
+
+function runSync(command: string[]): SyncCommandResult {
+  const result = Bun.spawnSync(command);
+  return {
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  };
+}
+
+const processHooks: ProcessHooks = {
+  get pid() {
+    return process.pid;
+  },
+  once(event, listener) {
+    process.once(event, listener);
+  },
+  removeListener(event, listener) {
+    process.removeListener(event, listener);
+  },
+  kill(pid, signal) {
+    return process.kill(pid, signal);
+  },
+};
+
+async function waitForReady(port: number, dependencies: SharedMinioHarnessDependencies): Promise<void> {
   // Single wait for the shared container. Generous deadline: on a loaded CI
   // runner (Blacksmith 4vcpu, full suite hammering the box) MinIO has been
   // observed to need well over 45s to serve its readiness probe.
-  const deadline = Date.now() + 120_000;
-  while (Date.now() < deadline) {
+  const deadline = dependencies.now() + dependencies.readinessTimeoutMs;
+  while (dependencies.now() < deadline) {
     try {
-      const res = await harnessFetch(`http://127.0.0.1:${port}/minio/health/ready`);
+      const res = await dependencies.readyFetch(`http://127.0.0.1:${port}/minio/health/ready`);
       if (res.ok) return;
     } catch {
       // not up yet
     }
-    await new Promise((r) => setTimeout(r, 500));
+    await dependencies.sleep(500);
   }
-  throw new Error('MinIO did not become ready within 120s');
+  throw new Error(`MinIO did not become ready within ${dependencies.readinessTimeoutMs / 1000}s`);
 }
 
 /** Container state + log tail for actionable CI failure messages. */
-function describeContainerFailure(containerId: string): string {
-  const state = Bun.spawnSync(['docker', 'inspect', '-f', '{{.State.Status}} exit={{.State.ExitCode}}', containerId]);
-  const logs = Bun.spawnSync(['docker', 'logs', '--tail', '15', containerId]);
-  const stateText = state.exitCode === 0 ? state.stdout.toString().trim() : 'container gone (--rm removed it)';
-  const logText = logs.exitCode === 0 ? `${logs.stdout.toString()}${logs.stderr.toString()}`.trim() : '(no logs)';
+function describeContainerFailure(containerId: string, run: SharedMinioHarnessDependencies['runSync']): string {
+  const state = run(['docker', 'inspect', '-f', '{{.State.Status}} exit={{.State.ExitCode}}', containerId]);
+  const logs = run(['docker', 'logs', '--tail', '15', containerId]);
+  const stateText = state.exitCode === 0 ? state.stdout.trim() : 'container gone (--rm removed it)';
+  const logText = logs.exitCode === 0 ? `${logs.stdout}${logs.stderr}`.trim() : '(no logs)';
   return `container state: ${stateText}\ncontainer logs:\n${logText}`;
 }
 
-let teardownRegistered = false;
-function registerTeardown(containerId: string): void {
-  if (teardownRegistered) return;
-  teardownRegistered = true;
-  let stopped = false;
-  const stop = () => {
-    if (stopped || !containerId) return;
-    stopped = true;
-    // Synchronous stop so it completes inside the process-exit handler; the
-    // container ran with `--rm`, so this also removes it.
-    Bun.spawnSync(['docker', 'stop', containerId]);
-  };
-  process.once('exit', stop);
-}
+export class MinioContainerLifecycle {
+  private readonly liveContainerIds = new Set<string>();
+  private handlersRegistered = false;
+  private launchInProgress = false;
+  private pendingSignal: HarnessSignal | undefined;
+  private signalReraised = false;
+  private readonly signalHandlers = new Map<HarnessSignal, () => void>();
 
-let sharedMinioPromise: Promise<SharedMinio> | undefined;
+  constructor(private readonly dependencies: SharedMinioHarnessDependencies) {}
 
-async function startSharedMinio(): Promise<SharedMinio> {
-  // Pre-pull explicitly so a cold image cache (fresh CI runner) cannot eat
-  // into the readiness budget or fail the run with an opaque timeout.
-  const pull = Bun.spawnSync(['docker', 'pull', 'minio/minio']);
-  if (pull.exitCode !== 0) {
-    throw new Error(`docker pull minio/minio failed: ${pull.stderr.toString()}`);
+  prepareForLaunch(): void {
+    this.registerHandlers();
+    if (this.pendingSignal) throw new Error(`Refusing to launch MinIO after ${this.pendingSignal}`);
+    if (this.launchInProgress) throw new Error('Refusing to launch MinIO while another launch is pending');
+
+    // A previous readiness failure may have left an exact ID tracked when its
+    // synchronous stop failed. Retry that cleanup, but never start another
+    // container until every previous ID has been successfully stopped.
+    this.cleanup();
+    if (this.liveContainerIds.size > 0) {
+      throw new Error(
+        `Refusing to launch MinIO while ${this.liveContainerIds.size} tracked container(s) still require cleanup`,
+      );
+    }
   }
 
-  // Random high port avoids collisions with a locally running MinIO.
-  const port = 20000 + Math.floor(Math.random() * 20000);
-  const proc = Bun.spawnSync([
-    'docker',
-    'run',
-    '--rm',
-    '-d',
-    '-p',
-    `${port}:9000`,
-    '-e',
-    `MINIO_ROOT_USER=${ACCESS_KEY}`,
-    '-e',
-    `MINIO_ROOT_PASSWORD=${SECRET_KEY}`,
-    'minio/minio',
-    'server',
-    '/data',
-  ]);
-  if (proc.exitCode !== 0) {
-    throw new Error(`docker run failed: ${proc.stderr.toString()}`);
+  beginLaunch(): void {
+    if (this.pendingSignal) throw new Error(`Refusing to launch MinIO after ${this.pendingSignal}`);
+    this.launchInProgress = true;
   }
-  const containerId = proc.stdout.toString().trim();
-  registerTeardown(containerId);
-  try {
-    await waitForReady(port);
-  } catch (error) {
-    // Say WHY readiness failed (crashed container? still booting? port issue?)
-    // instead of a bare timeout — this is what makes a red CI debuggable.
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)}\n${describeContainerFailure(containerId)}`,
+
+  track(containerId: string): void {
+    this.launchInProgress = false;
+    if (!containerId) {
+      this.reraisePendingSignal();
+      throw new Error('docker run returned an empty container ID');
+    }
+    this.liveContainerIds.add(containerId);
+
+    // Signal callbacks normally run after spawnSync returns. This also closes
+    // the narrower runtime race where a callback fires while the launch is in
+    // progress: defer re-raise until the returned ID is tracked and stopped.
+    if (this.pendingSignal) {
+      try {
+        this.cleanup();
+      } finally {
+        this.reraisePendingSignal();
+      }
+      throw new Error(`MinIO launch interrupted by ${this.pendingSignal}`);
+    }
+  }
+
+  abortLaunch(): void {
+    this.launchInProgress = false;
+    this.reraisePendingSignal();
+  }
+
+  stop(containerId: string): boolean {
+    if (!this.liveContainerIds.has(containerId)) return true;
+
+    // Synchronous stop is intentional: exit and signal handlers cannot await,
+    // and `--rm` removes exactly this tracked container after it stops.
+    let result: SyncCommandResult;
+    try {
+      result = this.dependencies.runSync(['docker', 'stop', '--time', '10', containerId]);
+    } catch (error) {
+      this.reportCleanupFailure(
+        `Failed to stop tracked MinIO test container ${containerId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
+    }
+    if (result.exitCode === 0) {
+      this.liveContainerIds.delete(containerId);
+      return true;
+    }
+
+    this.reportCleanupFailure(
+      `Failed to stop tracked MinIO test container ${containerId}: ${result.stderr.trim() || `exit ${result.exitCode}`}`,
     );
+    return false;
   }
-  return { endpoint: `http://127.0.0.1:${port}`, accessKey: ACCESS_KEY, secretKey: SECRET_KEY, region: REGION };
+
+  private cleanup = (): void => {
+    for (const containerId of [...this.liveContainerIds]) {
+      try {
+        this.stop(containerId);
+      } catch (error) {
+        // Cleanup is best-effort per exact ID. A faulty command adapter or
+        // reporter must not prevent later IDs from being attempted.
+        this.reportCleanupFailure(
+          `Unexpected cleanup failure for tracked MinIO test container ${containerId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  };
+
+  private reportCleanupFailure(message: string): void {
+    try {
+      this.dependencies.reportCleanupFailure(message);
+    } catch {
+      // Never let diagnostics suppress cleanup or native signal semantics.
+    }
+  }
+
+  private reraisePendingSignal(): void {
+    if (!this.pendingSignal || this.signalReraised) return;
+    this.signalReraised = true;
+    const signal = this.pendingSignal;
+    const handler = this.signalHandlers.get(signal);
+    if (handler) this.dependencies.process.removeListener(signal, handler);
+    this.dependencies.process.kill(this.dependencies.process.pid, signal);
+  }
+
+  private registerHandlers(): void {
+    if (this.handlersRegistered) return;
+    this.handlersRegistered = true;
+    this.dependencies.process.once('exit', this.cleanup);
+
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+      const handler = () => {
+        this.pendingSignal = signal;
+        try {
+          this.cleanup();
+        } finally {
+          // When docker run is still blocking, wait for its exact returned ID
+          // so `track` can stop it before preserving native signal semantics.
+          if (!this.launchInProgress) this.reraisePendingSignal();
+        }
+      };
+      this.signalHandlers.set(signal, handler);
+      this.dependencies.process.once(signal, handler);
+    }
+  }
 }
+
+export function createSharedMinioHarness(dependencies: SharedMinioHarnessDependencies): {
+  getSharedMinio(): Promise<SharedMinio>;
+} {
+  const lifecycle = new MinioContainerLifecycle(dependencies);
+  let sharedMinioPromise: Promise<SharedMinio> | undefined;
+
+  async function startSharedMinio(): Promise<SharedMinio> {
+    // Register signal/exit cleanup before any blocking Docker operation and
+    // fail closed if an earlier container has not been successfully stopped.
+    lifecycle.prepareForLaunch();
+
+    // Pre-pull explicitly so a cold image cache (fresh CI runner) cannot eat
+    // into the readiness budget or fail the run with an opaque timeout.
+    const pull = dependencies.runSync(['docker', 'pull', 'minio/minio']);
+    if (pull.exitCode !== 0) {
+      throw new Error(`docker pull minio/minio failed: ${pull.stderr}`);
+    }
+
+    // Random high port avoids collisions with a locally running MinIO.
+    const port = 20000 + Math.floor(dependencies.random() * 20000);
+    lifecycle.beginLaunch();
+    let proc: SyncCommandResult;
+    try {
+      proc = dependencies.runSync([
+        'docker',
+        'run',
+        '--rm',
+        '-d',
+        '--label',
+        'com.automagik.omni.test-harness=minio',
+        '--label',
+        `com.automagik.omni.test-session=${dependencies.sessionId}`,
+        '--cpus',
+        '1',
+        '--memory',
+        '512m',
+        '--pids-limit',
+        '256',
+        '--tmpfs',
+        '/data:rw,noexec,nosuid,size=256m',
+        '-p',
+        `${port}:9000`,
+        '-e',
+        `MINIO_ROOT_USER=${ACCESS_KEY}`,
+        '-e',
+        `MINIO_ROOT_PASSWORD=${SECRET_KEY}`,
+        'minio/minio',
+        'server',
+        '/data',
+      ]);
+    } catch (error) {
+      lifecycle.abortLaunch();
+      throw error;
+    }
+    if (proc.exitCode !== 0) {
+      lifecycle.abortLaunch();
+      throw new Error(`docker run failed: ${proc.stderr}`);
+    }
+    const containerId = proc.stdout.trim();
+    lifecycle.track(containerId);
+    try {
+      await waitForReady(port, dependencies);
+    } catch (error) {
+      // Capture diagnostics before `--rm` deletes the failed container, then
+      // synchronously stop it before another suite is allowed to retry.
+      const failure = describeContainerFailure(containerId, dependencies.runSync);
+      lifecycle.stop(containerId);
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\n${failure}`);
+    }
+    return { endpoint: `http://127.0.0.1:${port}`, accessKey: ACCESS_KEY, secretKey: SECRET_KEY, region: REGION };
+  }
+
+  return {
+    getSharedMinio() {
+      sharedMinioPromise ??= startSharedMinio().catch((error) => {
+        sharedMinioPromise = undefined;
+        throw error;
+      });
+      return sharedMinioPromise;
+    },
+  };
+}
+
+const sharedMinioHarness = createSharedMinioHarness({
+  runSync,
+  process: processHooks,
+  readyFetch: (url) => harnessFetch(url),
+  now: Date.now,
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  random: Math.random,
+  sessionId: `${process.pid}-${randomUUID()}`,
+  readinessTimeoutMs: 120_000,
+  reportCleanupFailure: (message) => console.error(message),
+});
 
 /**
  * Lazily start ONE shared `minio/minio` container for this test process and
@@ -195,9 +421,5 @@ async function startSharedMinio(): Promise<SharedMinio> {
  * cascades into instant failures for every other MinIO suite in the process.
  */
 export function getSharedMinio(): Promise<SharedMinio> {
-  sharedMinioPromise ??= startSharedMinio().catch((error) => {
-    sharedMinioPromise = undefined;
-    throw error;
-  });
-  return sharedMinioPromise;
+  return sharedMinioHarness.getSharedMinio();
 }

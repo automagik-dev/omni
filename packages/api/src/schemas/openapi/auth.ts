@@ -28,7 +28,11 @@ export function registerAuthSchemas(registry: OpenAPIRegistry): void {
   // Register paths
   registry.registerPath({
     method: 'post',
-    path: '/api/v2/auth/validate',
+    // Register relative to the `/api/v2` server URL, consistent with every other
+    // route. The prior absolute form baked in the prefix, which (a) produced a
+    // double-prefixed documented path and (b) kept annotateScopes from matching the
+    // SCOPE_MAP key `POST /auth/validate`, so x-omni-scope was never emitted here.
+    path: '/auth/validate',
     operationId: 'validateApiKey',
     tags: ['Auth'],
     summary: 'Validate API key',

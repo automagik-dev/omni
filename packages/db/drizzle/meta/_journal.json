@@ -274,6 +274,13 @@
       "when": 1778040000000,
       "tag": "0038_instances_allow_first_party",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1783900800000,
+      "tag": "0039_instances_message_supersede_mode",
+      "breakpoints": true
     }
   ]
 }

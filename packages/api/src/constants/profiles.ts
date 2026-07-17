@@ -18,7 +18,18 @@
 
 import type { Verb, VerbBucket } from './verbs';
 
-export type ProfileName = 'cs' | 'personal' | 'scout' | 'coworker' | 'admin';
+export type ProfileName =
+  | 'cs'
+  | 'personal'
+  | 'scout'
+  | 'coworker'
+  | 'admin'
+  | 'console-viewer'
+  | 'console-operator'
+  | 'console-admin';
+
+/** The lock-free, platform-wide profiles minted for the Omni Admin Console. */
+export const CONSOLE_PROFILES = ['console-viewer', 'console-operator', 'console-admin'] as const;
 
 export type LockRequirement = 'chatAllowlist' | 'instanceAllowlist' | 'outboundRecipientAllowlist';
 
@@ -77,6 +88,133 @@ export interface ProfileTemplate {
  * platform repo never ships consumer-specific secret-sauce taxonomies.
  */
 export const COWORKER_DEFAULT_DENYLIST_PRESET_KEY = 'khal-os-core';
+
+/**
+ * ── Console profiles ────────────────────────────────────────────────────────
+ *
+ * The four agent profiles above are *messaging-agent* profiles: they compose
+ * verb buckets and every one of them requires a lock (instance / chat /
+ * recipient allowlist). The Omni Admin Console is not an agent — it is a
+ * platform-wide operator surface with no single instance or chat to lock to,
+ * so console profiles are authored as raw scope sets with `requiresLocks: []`
+ * and no verb buckets. They ride the existing `defaultOverrides.extraScopes`
+ * path, so `resolveProfile()` / `verbsToScopes()` need no changes.
+ *
+ * The three scope tiers below are DERIVED from the machine-readable capability
+ * inventory (the enterprise capability inventory, itself generated from
+ * `SCOPE_MAP`). Their union is exactly the 59 distinct scopes the
+ * admin console can invoke — no more, no less; the coverage test in
+ * `routes/v2/__tests__/console-profile-scope-coverage.test.ts` enforces both
+ * directions against the inventory, so a new console route that lands in
+ * SCOPE_MAP fails the suite until it is placed in a tier here.
+ *
+ * Tier placement for the trust / handoffs / voice / follow-up families
+ * (mapped into SCOPE_MAP alongside this change) mirrors the enterprise pack's
+ * own affordance gating in its capability inventory:
+ *   - reads (`trust:read`, `handoffs:read`, `voice:read`, `follow-up:read`) →
+ *     viewer, so a read view never 403s for the role the pack shows it to;
+ *   - operational writes (`voice:write`, `follow-up:write`) → operator;
+ *   - `trust:write` (managing which genie hosts may connect — tenant
+ *     administration) → admin only, matching the pack's `ADMIN_ROUTES`
+ *     classification of the `/trust-hosts` page as `administer`.
+ */
+
+/**
+ * Tier 1 — read-only console. Every read scope the console invokes, plus
+ * `auth:validate` (the BFF validates its own minted key). `keys:read` is
+ * deliberately NOT here: the key inventory is a credential-administration
+ * surface and belongs to `console-admin` only. `turns:admin` is also absent —
+ * that single scope covers both `GET /turns` and `POST /turns/:id/close`, so
+ * granting read access to turns would hand a viewer a close button.
+ */
+const CONSOLE_READ_SCOPES = [
+  'access:read',
+  'agent-state:read',
+  'agent-tasks:read',
+  'agents:read',
+  'auth:validate',
+  'automations:read',
+  'batch-jobs:read',
+  'chats:read',
+  'context:read',
+  'conversations:read',
+  'dead-letters:read',
+  'event-ops:read',
+  'events:read',
+  'follow-up:read',
+  'handoffs:read',
+  'instances:read',
+  'journeys:read',
+  'logs:read',
+  'media:read',
+  'messages:read',
+  'metrics:read',
+  'payloads:read',
+  'persons:read',
+  'providers:read',
+  'routes:read',
+  'settings:read',
+  'trust:read',
+  'voice:read',
+  'webhooks:read',
+] as const;
+
+/**
+ * Tier 2 — day-2 operational writes layered on top of the read tier: send
+ * messages, drive chats and instances, close turns, run automations / batch
+ * jobs, retry dead letters, replay events, edit routes. Explicitly EXCLUDES
+ * every administration scope (see `CONSOLE_ADMINISTRATION_SCOPES`).
+ */
+const CONSOLE_OPERATE_SCOPES = [
+  'agent-state:write',
+  'agent-tasks:write',
+  'automations:write',
+  'batch-jobs:write',
+  'chats:write',
+  'context:write',
+  'conversations:write',
+  'dead-letters:write',
+  'event-ops:write',
+  'events:write',
+  'follow-up:write',
+  'instances:write',
+  'media:write',
+  'messages:send',
+  'messages:write',
+  'persons:write',
+  'routes:write',
+  'tts:synthesize',
+  'turns:admin',
+  'turns:close',
+  'voice:write',
+] as const;
+
+/**
+ * Tier 3 — administration: credentials (`keys:*`), authorization rules,
+ * platform settings, the provider and agent registries, webhook sources, and
+ * payload retention. Only `console-admin` (KHAL `platform-admin` /
+ * `platform-owner`) gets these.
+ */
+const CONSOLE_ADMINISTRATION_SCOPES = [
+  'access:write',
+  'agents:write',
+  'keys:read',
+  'keys:write',
+  'payloads:write',
+  'providers:write',
+  'settings:write',
+  'trust:write',
+  'webhooks:write',
+] as const;
+
+/** Resolved scope set per console profile (each tier is cumulative). */
+export const CONSOLE_VIEWER_SCOPES: string[] = [...CONSOLE_READ_SCOPES];
+export const CONSOLE_OPERATOR_SCOPES: string[] = [...CONSOLE_READ_SCOPES, ...CONSOLE_OPERATE_SCOPES];
+export const CONSOLE_ADMIN_SCOPES: string[] = [
+  ...CONSOLE_READ_SCOPES,
+  ...CONSOLE_OPERATE_SCOPES,
+  ...CONSOLE_ADMINISTRATION_SCOPES,
+];
 
 export const PROFILES: Record<ProfileName, ProfileTemplate> = {
   /**
@@ -144,5 +282,42 @@ export const PROFILES: Record<ProfileName, ProfileTemplate> = {
     buckets: ['outgoing', 'read', 'context', 'turn', 'multimodal_in', 'multimodal_out'],
     requiresLocks: [],
     adminOnlyFlag: true,
+  },
+
+  /**
+   * Console tier 1 — KHAL `member`. Read-only admin console. No locks: the
+   * console is platform-wide, so there is no instance/chat to lock it to.
+   */
+  'console-viewer': {
+    buckets: [],
+    requiresLocks: [],
+    defaultOverrides: {
+      extraScopes: CONSOLE_VIEWER_SCOPES,
+    },
+  },
+
+  /**
+   * Console tier 2 — KHAL `platform-dev`. Read + operate (send, turn, instance
+   * and chat operations). No key or tenant administration.
+   */
+  'console-operator': {
+    buckets: [],
+    requiresLocks: [],
+    defaultOverrides: {
+      extraScopes: CONSOLE_OPERATOR_SCOPES,
+    },
+  },
+
+  /**
+   * Console tier 3 — KHAL `platform-admin` / `platform-owner`. The full admin
+   * console surface, including key management. NOT the `admin` god key: it
+   * carries no `*` wildcard, so any route outside SCOPE_MAP stays denied.
+   */
+  'console-admin': {
+    buckets: [],
+    requiresLocks: [],
+    defaultOverrides: {
+      extraScopes: CONSOLE_ADMIN_SCOPES,
+    },
   },
 };

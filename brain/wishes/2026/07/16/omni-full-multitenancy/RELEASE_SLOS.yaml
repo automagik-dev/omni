@@ -1,0 +1,155 @@
+schema_version: 1
+wish: omni-full-multitenancy
+status: normative-draft-requires-g0-approval
+updated_at: 2026-07-16T22:22:33Z
+policy:
+  missing_measurement: fail
+  threshold_changes:
+    stricter: reviewed_pull_request
+    looser: architecture_change_and_human_security_approval
+  freeze_gate: G0
+
+workloads:
+  baseline:
+    source_commit: 739fd49f1cd31de759664c0dcd266f71c868e338
+    environment: production-like isolated staging restored from a redacted/restricted production snapshot
+    profile: version-controlled mixed HTTP, websocket, worker, NATS, media, search, and database workload
+  staging_soak:
+    minimum_duration_hours: 24
+    minimum_authenticated_operations: 100000
+  production_canary:
+    minimum_duration_hours: 4
+    minimum_authenticated_operations: 10000
+
+security:
+  cross_tenant_successes_max: 0
+  unexplained_authorization_shadow_mismatches_max: 0
+  tenantless_async_items_processed_max: 0
+  unknown_event_envelopes_processed_max: 0
+  unexpected_false_denial_rate_max: 0.001
+  secret_plaintext_occurrences_in_logs_traces_reports_ci_max: 0
+  egress_policy_bypass_successes_max: 0
+  private_metadata_control_plane_egress_successes_max: 0
+
+performance:
+  p95_latency_delta_percent_max: 10
+  p99_latency_delta_percent_max: 20
+  throughput_percent_of_baseline_min: 90
+  http_5xx_rate_delta_percentage_points_max: 0.10
+  worker_lag_p99_delta_percent_max: 10
+  database_error_rate_delta_percentage_points_max: 0.05
+
+revocation:
+  new_api_or_privileged_action_check: next_authorization_check
+  auth_cache_invalidation_seconds_max: 15
+  websocket_sse_channel_provider_session_termination_seconds_max: 30
+  queued_retry_delayed_dlq_check: every_dequeue_or_redrive_and_immediately_before_each_external_or_durable_side_effect
+  multi_effect_work_check: current_revocation_epoch_between_every_side_effect
+  inflight_privileged_work_revocation_seconds_max: 30
+  callback_token_check: every_use_against_current_revocation_epoch
+  presigned_url_ttl_seconds_max: 60
+  presigned_url_issue_or_refresh_after_revocation_max: 0
+
+credential_custody:
+  plaintext_file_mode: "0600"
+  allowed_plaintext_destinations: exact_paths_named_in_identity_specific_approval_receipt_only
+  vault_write_required: true
+  vault_readback_or_receipt_required: true
+  redacted_receipt_allowed_fields:
+    - credential_id
+    - prefix
+    - sha256_fragment
+    - tenant_id
+    - principal_id
+    - role
+    - scopes
+    - constraints
+    - created_at
+    - expires_at
+    - storage_paths_without_secret
+  plaintext_in_api_logs_shell_history_git_ci_max: 0
+
+approval_receipts:
+  immutable: true
+  single_use: true
+  maximum_validity_hours: 24
+  normal_production_approver_rule: one_explicit_approval_from_either_Felipe_Rosa_or_Leonardo_Cintra_BR
+  break_glass_approver_rule: explicit_dual_approval_from_Felipe_Rosa_and_Leonardo_Cintra_BR
+  task_materialization_approval_is_production_approval: false
+  authority:
+    producer: authenticated_isolated_approval_service
+    canonical_encoding: versioned_canonical_json
+    signature_algorithm: Ed25519
+    trusted_signer_registry_required: true
+    signer_status_and_revocation_epoch_checked_at_consumption: true
+    append_only_tamper_evident_event_log_required: true
+    executor_launcher_worker_issue_or_modify_capability: false
+    executor_launcher_worker_read_consume_capability_only: true
+    approval_event_lookup_against_authority_required: true
+  consumption:
+    operation: atomic_compare_and_consume_immediately_before_mutation
+    concurrency: exactly_one_consumer_may_win
+    consumed_on_downstream_failure: true
+    retry_requires_fresh_human_approval: true
+    consumed_event_and_action_result_immutable_audit_required: true
+  required_fields:
+    - receipt_id
+    - approval_event_id
+    - hold_type
+    - nonce
+    - audience
+    - policy_version
+    - environment
+    - exact_targets
+    - wish_id
+    - task_id
+    - commit_digest
+    - image_digest
+    - migration_digest
+    - schema_binary_event_writer_epochs
+    - evidence_bundle_digest
+    - approver_identity
+    - approval_authority_issuer
+    - signer_key_id
+    - signature
+    - approver_rule
+    - decision
+    - reason
+    - approved_at_utc
+    - expires_at_utc
+    - prerequisite_receipt_links
+  fail_closed_conditions:
+    - absent
+    - unsigned
+    - forged_approver_identity
+    - canonical_payload_tampering
+    - expired
+    - signer_revoked
+    - untrusted_or_stale_approval_event
+    - executor_or_worker_issued
+    - reused_or_concurrent_replay
+    - wrong_hold_type
+    - audience_mismatch
+    - target_mismatch
+    - digest_mismatch
+    - epoch_mismatch
+    - policy_version_mismatch
+    - approver_rule_mismatch
+    - atomic_consumption_unavailable
+
+release_evidence:
+  required:
+    - ownership_manifest
+    - route_resource_operation_matrix
+    - runtime_role_and_rls_receipt
+    - production_snapshot_restore_receipt
+    - mixed_version_epoch_matrix
+    - writer_fence_and_wal_lsn_receipt
+    - backfill_compensation_and_reconciliation_receipt
+    - two_tenant_adversarial_report
+    - egress_ssrf_rebinding_report
+    - revocation_propagation_report
+    - staging_soak_report
+    - production_canary_report
+    - credential_custody_report
+  absent_or_unverifiable: fail
