@@ -489,34 +489,39 @@ keysRoutes.patch('/:id', zValidator('json', updateKeySchema), async (c) => {
   const data = c.req.valid('json');
   const services = c.get('services');
 
-  // Updating an existing key is another scope-grant path. Apply the same
-  // least-privilege ceiling as creation so a bounded keys:write caller cannot
-  // PATCH its own (or another) key into a wildcard or broader namespace grant.
-  if (data.scopes) {
-    const ceilingDenied = enforceScopeCeiling(c, data.scopes);
-    if (ceilingDenied) return ceilingDenied;
-  }
-  if (data.instanceIds !== undefined) {
-    // instanceAllowlist/profile are immutable through this PATCH route, so read
-    // the target once and derive the authority it will have after applying the
-    // requested legacy restriction.
-    const current = await services.apiKeys.getById(id);
-    if (!current) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'API key not found' } }, 404);
-    }
-    const instanceCeilingDenied = enforceInstanceCeiling(c, {
-      instanceIds: data.instanceIds,
-      profile: current.profile,
-      instanceAllowlist: current.instanceAllowlist,
-    });
-    if (instanceCeilingDenied) return instanceCeilingDenied;
-  }
+  const updateOptions = {
+    ...data,
+    expiresAt: data.expiresAt === null ? null : data.expiresAt ? new Date(data.expiresAt) : undefined,
+  };
 
   try {
-    const updated = await services.apiKeys.update(id, {
-      ...data,
-      expiresAt: data.expiresAt === null ? null : data.expiresAt ? new Date(data.expiresAt) : undefined,
-    });
+    if (data.instanceIds !== undefined || data.scopes !== undefined) {
+      let authorityDenied: Response | null | undefined;
+      const result = await services.apiKeys.updateWithAuthorityGuard(id, updateOptions, (_current, next) => {
+        authorityDenied = enforceScopeCeiling(c, next.scopes);
+        if (authorityDenied) return false;
+
+        authorityDenied = enforceInstanceCeiling(c, {
+          instanceIds: next.instanceIds,
+          profile: next.profile,
+          instanceAllowlist: next.instanceAllowlist,
+        });
+        return authorityDenied == null;
+      });
+
+      if (result.status === 'denied') {
+        return (
+          authorityDenied ??
+          c.json({ error: { code: 'FORBIDDEN', message: 'API key authority exceeds caller authority' } }, 403)
+        );
+      }
+      if (result.status === 'not_found') {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'API key not found' } }, 404);
+      }
+      return c.json({ data: result.key });
+    }
+
+    const updated = await services.apiKeys.update(id, updateOptions);
 
     if (!updated) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'API key not found' } }, 404);

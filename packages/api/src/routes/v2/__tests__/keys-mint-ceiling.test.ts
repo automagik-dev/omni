@@ -30,9 +30,11 @@
  */
 
 import { describe, expect, mock, test } from 'bun:test';
+import type { ApiKey } from '@omni/db';
 import { Hono } from 'hono';
 import { CONSOLE_ADMIN_SCOPES } from '../../../constants/profiles';
 import { scopeEnforcerMiddleware } from '../../../middleware/scope-enforcer';
+import type { ApiKeyAuthorityGuard, UpdateApiKeyOptions } from '../../../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../../../types';
 import { keysRoutes } from '../keys';
 
@@ -66,6 +68,8 @@ interface MountOptions {
   callerProfile?: ApiKeyData['profile'];
   /** Profile-aware instance ceiling carried by the authenticated caller. */
   callerInstanceAllowlist?: string[];
+  /** Persisted target scopes retained when PATCH omits scopes. */
+  targetScopes?: string[];
   /** Persisted target profile used to derive post-PATCH effective authority. */
   targetProfile?: ApiKeyData['profile'];
   /** Persisted target legacy restriction used when PATCH omits instanceIds. */
@@ -104,10 +108,28 @@ function mount(
           updated.push(row);
           return row;
         }),
+        updateWithAuthorityGuard: mock(
+          async (id: string, updateOptions: UpdateApiKeyOptions, guard: ApiKeyAuthorityGuard) => {
+            const current = {
+              id,
+              name: 'target',
+              scopes: options.targetScopes ?? ['keys:write'],
+              instanceIds: options.targetInstanceIds ?? null,
+              profile: options.targetProfile ?? null,
+              instanceAllowlist: options.targetInstanceAllowlist ?? [],
+            } as ApiKey;
+            const next = { ...current, ...updateOptions } as ApiKey;
+            if (!(await guard(current, next))) return { status: 'denied' as const };
+
+            const row = { id, ...updateOptions } as UpdatedKey;
+            updated.push(row);
+            return { status: 'updated' as const, key: next };
+          },
+        ),
         getById: mock(async (id: string) => ({
           id,
           name: 'target',
-          scopes: ['keys:write'],
+          scopes: options.targetScopes ?? ['keys:write'],
           instanceIds: options.targetInstanceIds ?? null,
           expiresAt: null,
           profile: options.targetProfile ?? null,
@@ -595,6 +617,76 @@ describe('PATCH /keys/:id — update scope ceiling', () => {
 
     expect(status).toBe(200);
     expect(updated).toEqual([{ id: 'target', scopes: ['chats:read'] }]);
+  });
+
+  test('legacy-restricted caller cannot change scopes on an unrestricted target key', async () => {
+    const { app, updated } = mount(['keys:write'], undefined, {
+      callerInstanceIds: [INSTANCE_A],
+      targetInstanceIds: null,
+      withScopeEnforcer: false,
+    });
+
+    const { status } = await patchKey(app, 'target', { scopes: ['keys:write'] });
+
+    expect(status).toBe(403);
+    expect(updated).toHaveLength(0);
+  });
+
+  test('profile-restricted caller cannot change scopes on a target outside its instance authority', async () => {
+    const { app, updated } = mount(['*'], undefined, {
+      callerProfile: 'personal',
+      callerInstanceAllowlist: [INSTANCE_A],
+      targetProfile: 'personal',
+      targetInstanceAllowlist: [INSTANCE_B],
+      withScopeEnforcer: false,
+    });
+
+    const { status } = await patchKey(app, 'target', { scopes: ['keys:write'] });
+
+    expect(status).toBe(403);
+    expect(updated).toHaveLength(0);
+  });
+
+  test('instance-only PATCH cannot activate retained scopes the caller does not hold', async () => {
+    const { app, updated } = mount(['keys:write'], undefined, {
+      callerInstanceIds: [INSTANCE_A],
+      targetScopes: ['messages:send'],
+      targetInstanceIds: [],
+      withScopeEnforcer: false,
+    });
+
+    const { status } = await patchKey(app, 'target', { instanceIds: [INSTANCE_A] });
+
+    expect(status).toBe(403);
+    expect(updated).toHaveLength(0);
+  });
+
+  test('legacy-restricted caller can change scopes on a target within its instance authority', async () => {
+    const { app, updated } = mount(['keys:write', 'chats:read'], undefined, {
+      callerInstanceIds: [INSTANCE_A, INSTANCE_B],
+      targetInstanceIds: [INSTANCE_A],
+      withScopeEnforcer: false,
+    });
+
+    const { status } = await patchKey(app, 'target', { scopes: ['chats:read'] });
+
+    expect(status).toBe(200);
+    expect(updated).toEqual([{ id: 'target', scopes: ['chats:read'] }]);
+  });
+
+  test('profile-restricted caller can change scopes on a target within its instance authority', async () => {
+    const { app, updated } = mount(['*'], undefined, {
+      callerProfile: 'personal',
+      callerInstanceAllowlist: [INSTANCE_A],
+      targetProfile: 'personal',
+      targetInstanceAllowlist: [INSTANCE_A],
+      withScopeEnforcer: false,
+    });
+
+    const { status } = await patchKey(app, 'target', { scopes: ['keys:write'] });
+
+    expect(status).toBe(200);
+    expect(updated).toEqual([{ id: 'target', scopes: ['keys:write'] }]);
   });
 
   test('restricted caller cannot update a key to unrestricted instance access', async () => {
