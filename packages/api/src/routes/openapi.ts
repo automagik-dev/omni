@@ -8,6 +8,7 @@ import { OpenAPIRegistry, OpenApiGeneratorV3 } from '@asteasolutions/zod-to-open
 import { swaggerUI } from '@hono/swagger-ui';
 import { Hono } from 'hono';
 import type { OpenAPIObject } from 'openapi3-ts/oas30';
+import { SCOPE_MAP } from '../constants/scopes';
 import { apiTags, openApiInfo, securitySchemes } from '../lib/openapi';
 import type { AppVariables } from '../types';
 
@@ -72,13 +73,42 @@ registerVoiceSchemas(registry);
 
 const openapiRoutes = new Hono<{ Variables: AppVariables }>();
 
+const HTTP_METHODS = ['get', 'put', 'post', 'delete', 'patch', 'options', 'head', 'trace'] as const;
+
+/**
+ * Annotate every operation in the generated spec with `x-omni-scope`, read from
+ * SCOPE_MAP, so downstream capability tooling can derive required scopes without
+ * re-implementing the scope table. Data-driven: any SCOPE_MAP entry flows through
+ * automatically. OpenAPI path templates (`/agents/{id}`) are normalized to the
+ * Hono-style patterns SCOPE_MAP uses (`/agents/:id`).
+ */
+function annotateScopes(document: OpenAPIObject): void {
+  const paths = document.paths;
+  if (!paths) return;
+
+  for (const [pathKey, pathItem] of Object.entries(paths)) {
+    if (!pathItem) continue;
+    const honoPath = pathKey.replace(/\{([^}]+)\}/g, ':$1');
+
+    for (const method of HTTP_METHODS) {
+      const operation = (pathItem as Record<string, unknown>)[method];
+      if (!operation || typeof operation !== 'object') continue;
+
+      const scope = SCOPE_MAP[`${method.toUpperCase()} ${honoPath}`];
+      if (scope) {
+        (operation as Record<string, unknown>)['x-omni-scope'] = scope;
+      }
+    }
+  }
+}
+
 /**
  * Generate OpenAPI spec from registry
  */
 function generateOpenApiSpec() {
   const generator = new OpenApiGeneratorV3(registry.definitions);
 
-  return generator.generateDocument({
+  const document = generator.generateDocument({
     openapi: '3.0.3',
     info: openApiInfo,
     servers: [
@@ -94,6 +124,10 @@ function generateOpenApiSpec() {
     ],
     tags: apiTags,
   });
+
+  annotateScopes(document);
+
+  return document;
 }
 
 // Generate spec once for export and route handler

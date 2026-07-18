@@ -101,18 +101,21 @@ function loadPubkey(pubkeyB64Url: string): KeyObject {
   return createPublicKey({ key: spki, format: 'der', type: 'spki' });
 }
 
-interface VerificationOutcome {
-  status: 'verified' | 'no-signature' | 'invalid';
-  hostId?: string;
-  /**
-   * Per-host scopes from `genie_hosts.scopes`. Defaults to `['*']` on first
-   * handshake (backward compat with the bearer-only model). The scope-enforcer
-   * intersects this with the bearer key's scopes — both must allow the route.
-   * Empty array = "no permissions" → every scoped route denied.
-   */
-  hostScopes?: string[];
-  reason?: string;
-}
+type VerificationOutcome =
+  | {
+      status: 'verified';
+      hostId: string;
+      reason?: never;
+      /**
+       * Per-host scopes from `genie_hosts.scopes`. Defaults to `['*']` on first
+       * handshake (backward compat with the bearer-only model). The scope-enforcer
+       * intersects this with the bearer key's scopes — both must allow the route.
+       * Empty array = "no permissions" → every scoped route denied.
+       */
+      hostScopes: string[];
+    }
+  | { status: 'no-signature'; hostId?: never; hostScopes?: never; reason?: never }
+  | { status: 'invalid'; hostId?: never; hostScopes?: never; reason: string };
 
 /** Pure verifier — no I/O beyond the host lookup. Tested directly. */
 export async function verifySignature(opts: {
@@ -128,7 +131,9 @@ export async function verifySignature(opts: {
   const { hostIdHeader, timestampHeader, signatureHeader, method, path, body, now, findHost } = opts;
 
   // No signature headers at all → bearer-only path; not our concern.
-  if (!hostIdHeader && !timestampHeader && !signatureHeader) {
+  // Header presence is independent from value truthiness: an empty-valued
+  // X-Genie header is still a signed-request attempt and must fail closed.
+  if (hostIdHeader === undefined && timestampHeader === undefined && signatureHeader === undefined) {
     return { status: 'no-signature' };
   }
 
@@ -202,21 +207,37 @@ function pathFromRequest(url: URL): string {
  * `c.req.text()` returns the same string the signer hashed.
  */
 export const genieSignatureMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
-  const services = c.get('services');
-  if (!services?.genieHosts) {
-    // Service registry not initialized — let the request through; bearer
-    // auth will reject if needed. Don't fail closed for an internal-config
-    // hiccup.
-    return next();
-  }
-
   const hostIdHeader = c.req.header(HEADER_HOST_ID);
   const timestampHeader = c.req.header(HEADER_TIMESTAMP);
   const signatureHeader = c.req.header(HEADER_SIGNATURE);
 
-  // Fast-path: no signature headers → skip work, fall through.
-  if (!hostIdHeader && !timestampHeader && !signatureHeader) {
+  // Fast-path only when all signature headers are truly absent. Fetch/Hono
+  // preserves present-but-empty headers as '', so truthiness would fail open.
+  if (hostIdHeader === undefined && timestampHeader === undefined && signatureHeader === undefined) {
     return next();
+  }
+
+  const services = c.get('services');
+  if (!services?.genieHosts) {
+    // A request carrying any signature header asserts signed-host authority.
+    // If the verifier dependency is unavailable, rejecting is the only safe
+    // behavior: falling through would make the scope enforcer treat it as a
+    // bearer-only request and bypass host narrowing. Unsigned bearer requests
+    // already took the fast path above and retain their existing behavior.
+    log.warn('genie signature verification service unavailable', {
+      hostId: hostIdHeader,
+      method: c.req.method,
+      path: new URL(c.req.url).pathname,
+    });
+    return c.json(
+      {
+        error: {
+          code: 'GENIE_SIGNATURE_SERVICE_UNAVAILABLE',
+          message: 'Genie host signature verification is temporarily unavailable.',
+        },
+      },
+      503,
+    );
   }
 
   // Read the request body ONCE so we hash the same bytes the signer did.
@@ -262,16 +283,14 @@ export const genieSignatureMiddleware = createMiddleware<{ Variables: AppVariabl
     );
   }
 
-  if (outcome.status === 'verified' && outcome.hostId) {
+  if (outcome.status === 'verified') {
     c.set('signedBy', outcome.hostId);
     // Per-host scopes consumed by scope-enforcer (Group 5). Always set so the
     // enforcer can distinguish "signed and unrestricted" (['*']) from "signed
     // and unscoped" — the former is the back-compat default; the latter
     // doesn't happen today but the enforcer needs the source of truth either
     // way.
-    if (outcome.hostScopes) {
-      c.set('signedByScopes', outcome.hostScopes);
-    }
+    c.set('signedByScopes', outcome.hostScopes);
     // Best-effort last-seen update; never blocks the request.
     services.genieHosts.touchLastSeen(outcome.hostId).catch((err: unknown) => {
       log.warn('touchLastSeen failed (non-fatal)', { hostId: outcome.hostId, err: String(err) });

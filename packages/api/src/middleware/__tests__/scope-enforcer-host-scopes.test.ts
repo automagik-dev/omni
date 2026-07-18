@@ -29,7 +29,8 @@ import { scopeEnforcerMiddleware } from '../scope-enforcer';
 interface CtxOverrides {
   bearerScopes: string[];
   signedBy?: string;
-  signedByScopes?: string[];
+  /** `null` simulates malformed runtime context despite the production type. */
+  signedByScopes?: string[] | null;
 }
 
 /**
@@ -53,7 +54,7 @@ function mountWithCtx(overrides: CtxOverrides): Hono<{ Variables: AppVariables }
     };
     c.set('apiKey', apiKey);
     if (overrides.signedBy) c.set('signedBy', overrides.signedBy);
-    if (overrides.signedByScopes) c.set('signedByScopes', overrides.signedByScopes);
+    if (overrides.signedByScopes !== undefined) c.set('signedByScopes', overrides.signedByScopes as never);
     await next();
   });
   app.use('*', scopeEnforcerMiddleware);
@@ -82,6 +83,21 @@ describe('scope-enforcer — bearer-only path (no signature)', () => {
     const app = mountWithCtx({ bearerScopes: ['messages:read'] });
     const res = await app.request('/api/v2/agents');
     expect(res.status).toBe(403);
+  });
+
+  test('signature headers without a verified signedBy context fail closed instead of degrading to bearer-only', async () => {
+    const app = mountWithCtx({ bearerScopes: ['*'] });
+    const res = await app.request('/api/v2/agents', {
+      headers: {
+        'x-genie-host-id': 'unverified-host',
+        'x-genie-timestamp': '2026-07-17T00:00:00.000Z',
+        'x-genie-signature': 'unverified-signature',
+      },
+    });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string; host?: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
+    expect(body.error.host).toBe('unverified-host');
   });
 });
 
@@ -212,17 +228,32 @@ describe('scope-enforcer — signed request, host narrowed (Group 5 intersection
 });
 
 describe('scope-enforcer — signed request without scopes set on context', () => {
-  test('signedBy set but signedByScopes absent → bearer-only behavior (no host gate)', async () => {
-    // Defensive: if some upstream sets `signedBy` without `signedByScopes`
-    // (shouldn't happen in production but the type allows it), we fall back
-    // to bearer-only enforcement rather than failing closed on a missing
-    // signal.
+  test('signedBy set but signedByScopes absent → fail closed', async () => {
+    // A verified signing identity without its authorization context must never
+    // degrade to bearer-only permissions. Otherwise a wildcard bearer can
+    // bypass host narrowing when upstream context population drifts.
     const app = mountWithCtx({
       bearerScopes: ['*'],
       signedBy: 'host-uuid',
       // signedByScopes intentionally omitted
     });
     const res = await app.request('/api/v2/agents');
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string; host?: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
+    expect(body.error.host).toBe('host-uuid');
+  });
+
+  test('signedBy set but signedByScopes is null at runtime → fail closed', async () => {
+    const app = mountWithCtx({
+      bearerScopes: ['*'],
+      signedBy: 'host-uuid',
+      signedByScopes: null,
+    });
+    const res = await app.request('/api/v2/agents');
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string; host?: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
+    expect(body.error.host).toBe('host-uuid');
   });
 });

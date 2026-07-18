@@ -9,7 +9,9 @@ import { zValidator } from '@hono/zod-validator';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { ProfileResolutionError, type ResolveProfileInput, resolveProfile } from '../../lib/resolve-profile';
+import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
 import { optionalDateParam } from '../../schemas/date-query';
+import { ApiKeyService } from '../../services/api-keys';
 import type { AppVariables } from '../../types';
 
 export const keysRoutes = new Hono<{ Variables: AppVariables }>();
@@ -18,8 +20,22 @@ export const keysRoutes = new Hono<{ Variables: AppVariables }>();
  * Non-admin profiles — `admin` is explicitly excluded at the route layer so
  * HTTP callers can never mint a god-key regardless of scope grants. Admin
  * keys are only mintable via the CLI's TTY-gated path.
+ *
+ * The three `console-*` profiles ARE HTTP-mintable by a `keys:write` caller:
+ * the khal-ui BFF mints a per-user console key on every session, so minting
+ * must work over HTTP. They are safe to mint because none of them carries the
+ * `*` wildcard — each resolves to an explicit scope set bounded by SCOPE_MAP
+ * (see `constants/profiles.ts`), unlike `admin` which is unbounded.
  */
-const NON_ADMIN_PROFILES = ['cs', 'personal', 'scout', 'coworker'] as const;
+const NON_ADMIN_PROFILES = [
+  'cs',
+  'personal',
+  'scout',
+  'coworker',
+  'console-viewer',
+  'console-operator',
+  'console-admin',
+] as const;
 type NonAdminProfile = (typeof NON_ADMIN_PROFILES)[number];
 
 // ============================================================================
@@ -51,7 +67,10 @@ const createKeySchema = z
     profile: z
       .enum(NON_ADMIN_PROFILES)
       .optional()
-      .describe('Profile template: cs, personal, scout, coworker. admin is CLI-only and rejected here.'),
+      .describe(
+        'Profile template: cs, personal, scout, coworker, console-viewer, console-operator, console-admin. ' +
+          'admin is CLI-only and rejected here.',
+      ),
     overrides: profileOverridesSchema.optional().describe('Tenant overrides merged on top of the profile template'),
     chatAllowlist: z.array(z.string()).optional().describe('Chats this key may target (profile-aware semantics)'),
     instanceAllowlist: z.array(z.string().uuid()).optional().describe('Instances this key may target'),
@@ -105,12 +124,14 @@ const auditQuerySchema = z.object({
 keysRoutes.post(
   '/',
   async (c, next) => {
-    // Intentionally peek the raw body before zod so `profile: "admin"` is
-    // refused even if other fields would fail validation (e.g. missing name).
-    const raw = await c.req.raw
-      .clone()
-      .json()
-      .catch(() => null);
+    // Intentionally peek the body before zod so `profile: "admin"` is refused
+    // even if other fields would fail validation (e.g. missing name). Use the
+    // Hono-cached `c.req.json()` (not `c.req.raw.clone().json()`): the
+    // scope-enforcer middleware runs first in production and already consumed
+    // the raw body stream, so cloning the raw request yields an unusable body
+    // and the guard would silently fall through to zod. `c.req.json()` returns
+    // the cached parse and fires reliably regardless of upstream reads.
+    const raw = await c.req.json().catch(() => null);
     if (raw && typeof raw === 'object' && (raw as { profile?: unknown }).profile === 'admin') {
       return c.json(
         {
@@ -147,6 +168,92 @@ function normalizeOverrides(overrides: CreateKeyData['overrides']): ResolveProfi
   };
 }
 
+/** Return the common fail-closed response for malformed signed-host context. */
+function invalidSignedHostScopeContextResponse(c: Context<{ Variables: AppVariables }>, hostId: string): Response {
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Signing host scope context is missing.',
+        host: hostId,
+      },
+    },
+    403,
+  );
+}
+
+/**
+ * Least-privilege scope ceiling for key-management writes.
+ *
+ * A caller may only create or update a key whose scopes are a SUBSET of its
+ * OWN scopes. Signed requests are authorized by the intersection of the bearer
+ * and signing-host scopes, so the requested grant must be covered by BOTH.
+ * `ApiKeyService.scopeAllows(authorizerScopes, requested)` is exactly the
+ * covering relation we need:
+ *   - a `*` authorizer (the real god-key / `admin` profile) covers every
+ *     requested scope, so god-key minting and internal agent-provisioning keep
+ *     working unchanged;
+ *   - a concrete-scoped authorizer (e.g. `console-admin` or a narrowed signing
+ *     host) covers a requested scope it holds — or one under a `ns:*` it holds
+ *     — but does NOT cover `*` or a `ns:*` super-scope it lacks. So a bounded
+ *     authority can never escalate to a god key or a whole-namespace grant.
+ *
+ * Returns a 403 `Response` listing the disallowed scopes, or `null` when every
+ * requested scope is within every active authorizer's ceiling.
+ */
+function enforceScopeCeiling(c: Context<{ Variables: AppVariables }>, requestedScopes: string[]): Response | null {
+  const authorizerScopeSets: string[][] = [c.get('apiKey')?.scopes ?? []];
+  const signedHost = readSignedHostScopeContext(c);
+  if (signedHost.kind === 'invalid') return invalidSignedHostScopeContextResponse(c, signedHost.hostId);
+  if (signedHost.kind === 'valid') authorizerScopeSets.push(signedHost.scopes);
+  const exceeding = requestedScopes.filter((scope) =>
+    authorizerScopeSets.some((authorizerScopes) => !ApiKeyService.scopeAllows(authorizerScopes, scope)),
+  );
+  if (exceeding.length === 0) return null;
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: `Cannot grant scopes that exceed the caller's own. Disallowed: ${exceeding.join(', ')}`,
+      },
+    },
+    403,
+  );
+}
+
+/**
+ * Least-privilege ceiling for legacy instance access on key-management writes.
+ *
+ * `instanceIds: null` means unrestricted access. A restricted caller may only
+ * grant a subset of its own instance IDs; it may not grant `null`, omit the
+ * field during creation (which persists as unrestricted), or name an instance
+ * outside its own restriction. Missing caller context is denied fail-closed.
+ */
+function enforceInstanceCeiling(
+  c: Context<{ Variables: AppVariables }>,
+  requestedInstanceIds: string[] | null,
+): Response | null {
+  const apiKey = c.get('apiKey');
+  if (apiKey?.instanceIds === null) return null;
+
+  const exceedsCaller =
+    !apiKey ||
+    !Array.isArray(apiKey.instanceIds) ||
+    requestedInstanceIds === null ||
+    requestedInstanceIds.some((instanceId) => !apiKey.instanceIds?.includes(instanceId));
+  if (!exceedsCaller) return null;
+
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: "Cannot grant instance access that exceeds the caller's own.",
+      },
+    },
+    403,
+  );
+}
+
 async function handleProfileCreate(
   c: Context<{ Variables: AppVariables }>,
   data: CreateKeyData,
@@ -162,6 +269,14 @@ async function handleProfileCreate(
       overrides: normalizeOverrides(data.overrides),
       denylistPresetKey: data.denylistPresetKey,
     });
+
+    // Enforce the mint ceiling on the RESOLVED profile scopes so a bounded
+    // caller can't escalate by requesting a broader profile than it holds.
+    const ceilingDenied = enforceScopeCeiling(c, resolved.scopes);
+    if (ceilingDenied) return ceilingDenied;
+
+    const instanceCeilingDenied = enforceInstanceCeiling(c, data.instanceIds ?? null);
+    if (instanceCeilingDenied) return instanceCeilingDenied;
 
     const result = await services.apiKeys.create({
       name: data.name,
@@ -207,6 +322,15 @@ async function handleLegacyCreate(
       400,
     );
   }
+
+  // Enforce the mint ceiling: the requested scopes must be a subset of the
+  // caller's own. Blocks a `console-admin` (or any concrete-scoped) caller from
+  // minting `['*']` / a `ns:*` super-scope and using it as a one-hop god key.
+  const ceilingDenied = enforceScopeCeiling(c, data.scopes);
+  if (ceilingDenied) return ceilingDenied;
+
+  const instanceCeilingDenied = enforceInstanceCeiling(c, data.instanceIds ?? null);
+  if (instanceCeilingDenied) return instanceCeilingDenied;
 
   const result = await services.apiKeys.create({
     name: data.name,
@@ -266,6 +390,18 @@ keysRoutes.patch('/:id', zValidator('json', updateKeySchema), async (c) => {
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
+
+  // Updating an existing key is another scope-grant path. Apply the same
+  // least-privilege ceiling as creation so a bounded keys:write caller cannot
+  // PATCH its own (or another) key into a wildcard or broader namespace grant.
+  if (data.scopes) {
+    const ceilingDenied = enforceScopeCeiling(c, data.scopes);
+    if (ceilingDenied) return ceilingDenied;
+  }
+  if (data.instanceIds !== undefined) {
+    const instanceCeilingDenied = enforceInstanceCeiling(c, data.instanceIds);
+    if (instanceCeilingDenied) return instanceCeilingDenied;
+  }
 
   try {
     const updated = await services.apiKeys.update(id, {

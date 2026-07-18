@@ -137,6 +137,7 @@ function setup(
     random: () => 0.5,
     sessionId: 'session-123',
     readinessTimeoutMs: 1_000,
+    readyRequestTimeoutMs: 100,
     reportCleanupFailure: (message) => cleanupFailures.push(message),
   };
   const harness = createSharedMinioHarness(dependencies);
@@ -308,4 +309,30 @@ describe('shared MinIO harness cleanup', () => {
     ]);
     expect(fake.process.signals).toEqual([{ pid: 4242, signal: 'SIGTERM', listenerCount: 0, nativeExitCode: 143 }]);
   });
+
+  test('stops the failed container even when collecting readiness diagnostics throws', async () => {
+    const fake = setup(['container-diagnostics-throw'], { ready: false });
+    fake.docker.beforeCommand = (command) => {
+      if (command[1] === 'inspect') throw new Error('fake inspect failure');
+    };
+
+    await expect(fake.getSharedMinio()).rejects.toThrow('container diagnostics unavailable: fake inspect failure');
+
+    expect(fake.docker.operations('stop')).toEqual([['docker', 'stop', '--time', '10', 'container-diagnostics-throw']]);
+  });
+
+  test('bounds and aborts a readiness request that never settles', async () => {
+    const fake = setup(['container-hung-probe'], { ready: false });
+    let observedSignal: AbortSignal | undefined;
+    fake.dependencies.readyRequestTimeoutMs = 10;
+    fake.dependencies.readyFetch = (_url, options) => {
+      observedSignal = options?.signal;
+      return new Promise(() => {});
+    };
+
+    await expect(fake.getSharedMinio()).rejects.toThrow('MinIO did not become ready within 1s');
+
+    expect(observedSignal?.aborted).toBe(true);
+    expect(fake.docker.operations('stop')).toEqual([['docker', 'stop', '--time', '10', 'container-hung-probe']]);
+  }, 250);
 });
