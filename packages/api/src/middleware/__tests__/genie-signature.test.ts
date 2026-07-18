@@ -196,6 +196,26 @@ describe('verifySignature — header presence', () => {
     expect(outcome.status).toBe('no-signature');
   });
 
+  for (const [headerName, headers] of [
+    ['host-id', { hostIdHeader: '', timestampHeader: undefined, signatureHeader: undefined }],
+    ['timestamp', { hostIdHeader: undefined, timestampHeader: '', signatureHeader: undefined }],
+    ['signature', { hostIdHeader: undefined, timestampHeader: undefined, signatureHeader: '' }],
+  ] as const) {
+    test(`present-but-empty ${headerName} → status=invalid`, async () => {
+      const outcome = await verifySignature({
+        ...headers,
+        method: 'GET',
+        path: '/x',
+        body: '',
+        now: NOW,
+        findHost: async () => null,
+      });
+
+      expect(outcome.status).toBe('invalid');
+      expect(outcome.reason).toContain('partial');
+    });
+  }
+
   test('only host-id present → status=invalid (forge attempt)', async () => {
     const outcome = await verifySignature({
       hostIdHeader: 'host-1',

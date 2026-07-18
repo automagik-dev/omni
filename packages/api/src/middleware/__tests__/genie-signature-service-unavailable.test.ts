@@ -42,4 +42,19 @@ describe('genie-signature middleware — verifier service availability', () => {
 
     expect(res.status).toBe(503);
   });
+
+  for (const headerName of ['x-genie-host-id', 'x-genie-timestamp', 'x-genie-signature']) {
+    test(`present-but-empty ${headerName} fails closed when genieHosts is unavailable`, async () => {
+      const headers = new Headers();
+      headers.set(headerName, '');
+      expect(headers.has(headerName)).toBe(true);
+      expect(headers.get(headerName)).toBe('');
+
+      const res = await mountWithoutGenieHosts().request('/protected', { headers });
+
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('GENIE_SIGNATURE_SERVICE_UNAVAILABLE');
+    });
+  }
 });
