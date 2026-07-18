@@ -77,12 +77,12 @@ jobs:
         run: |
           set -euo pipefail
           PACKAGE_NAME="$(node -p "require('./packages/sdk/package.json').name")"
-          case "${GITHUB_REF_NAME}" in
-            dev) DIST_TAG="next" ;;
-            homolog) DIST_TAG="homolog" ;;
-            main) DIST_TAG="latest" ;;
+          case "${GITHUB_REF}" in
+            refs/heads/dev) DIST_TAG="next" ;;
+            refs/heads/homolog) DIST_TAG="homolog" ;;
+            refs/heads/main) DIST_TAG="latest" ;;
             *)
-              echo "::error::SDK publishing is restricted to dev, homolog, or main (got ${GITHUB_REF_NAME})"
+              echo "::error::SDK publishing is restricted to dev, homolog, or main branches (got ${GITHUB_REF})"
               exit 1
               ;;
           esac
@@ -100,7 +100,7 @@ jobs:
 
           echo "package_name=${PACKAGE_NAME}" >> "${GITHUB_OUTPUT}"
           echo "dist_tag=${DIST_TAG}" >> "${GITHUB_OUTPUT}"
-          echo "Resolved ${PACKAGE_NAME} from ${GITHUB_REF_NAME} to npm tag ${DIST_TAG} (dry_run=${DRY_RUN})"
+          echo "Resolved ${PACKAGE_NAME} from ${GITHUB_REF} to npm tag ${DIST_TAG} (dry_run=${DRY_RUN})"
 
       - name: Inspect npm package (dry run; no credential)
         if: ${{ inputs.dry_run == true }}
