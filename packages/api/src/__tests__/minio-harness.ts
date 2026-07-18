@@ -119,12 +119,13 @@ interface ProcessHooks {
 export interface SharedMinioHarnessDependencies {
   runSync(command: string[]): SyncCommandResult;
   process: ProcessHooks;
-  readyFetch(url: string): Promise<{ ok: boolean }>;
+  readyFetch(url: string, options: { signal: AbortSignal }): Promise<{ ok: boolean }>;
   now(): number;
   sleep(ms: number): Promise<void>;
   random(): number;
   sessionId: string;
   readinessTimeoutMs: number;
+  readyRequestTimeoutMs: number;
   reportCleanupFailure(message: string): void;
 }
 
@@ -152,6 +153,30 @@ const processHooks: ProcessHooks = {
   },
 };
 
+async function fetchReadyWithTimeout(
+  url: string,
+  timeoutMs: number,
+  dependencies: SharedMinioHarnessDependencies,
+): Promise<{ ok: boolean }> {
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      dependencies.readyFetch(url, { signal: controller.signal }),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          controller.abort();
+          reject(new Error(`MinIO readiness request timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    controller.abort();
+  }
+}
+
 async function waitForReady(port: number, dependencies: SharedMinioHarnessDependencies): Promise<void> {
   // Single wait for the shared container. Generous deadline: on a loaded CI
   // runner (Blacksmith 4vcpu, full suite hammering the box) MinIO has been
@@ -159,7 +184,13 @@ async function waitForReady(port: number, dependencies: SharedMinioHarnessDepend
   const deadline = dependencies.now() + dependencies.readinessTimeoutMs;
   while (dependencies.now() < deadline) {
     try {
-      const res = await dependencies.readyFetch(`http://127.0.0.1:${port}/minio/health/ready`);
+      const remainingMs = Math.max(1, deadline - dependencies.now());
+      const requestTimeoutMs = Math.min(dependencies.readyRequestTimeoutMs, remainingMs);
+      const res = await fetchReadyWithTimeout(
+        `http://127.0.0.1:${port}/minio/health/ready`,
+        requestTimeoutMs,
+        dependencies,
+      );
       if (res.ok) return;
     } catch {
       // not up yet
@@ -382,8 +413,16 @@ export function createSharedMinioHarness(dependencies: SharedMinioHarnessDepende
     } catch (error) {
       // Capture diagnostics before `--rm` deletes the failed container, then
       // synchronously stop it before another suite is allowed to retry.
-      const failure = describeContainerFailure(containerId, dependencies.runSync);
-      lifecycle.stop(containerId);
+      let failure: string;
+      try {
+        failure = describeContainerFailure(containerId, dependencies.runSync);
+      } catch (diagnosticError) {
+        failure = `container diagnostics unavailable: ${
+          diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)
+        }`;
+      } finally {
+        lifecycle.stop(containerId);
+      }
       throw new Error(`${error instanceof Error ? error.message : String(error)}\n${failure}`);
     }
     return { endpoint: `http://127.0.0.1:${port}`, accessKey: ACCESS_KEY, secretKey: SECRET_KEY, region: REGION };
@@ -403,12 +442,13 @@ export function createSharedMinioHarness(dependencies: SharedMinioHarnessDepende
 const sharedMinioHarness = createSharedMinioHarness({
   runSync,
   process: processHooks,
-  readyFetch: (url) => harnessFetch(url),
+  readyFetch: (url, options) => harnessFetch(url, options),
   now: Date.now,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   random: Math.random,
   sessionId: `${process.pid}-${randomUUID()}`,
   readinessTimeoutMs: 120_000,
+  readyRequestTimeoutMs: 5_000,
   reportCleanupFailure: (message) => console.error(message),
 });
 
