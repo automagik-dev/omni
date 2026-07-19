@@ -288,6 +288,78 @@ function isAuthoritySubset(requested: InstanceAuthority, allowed: InstanceAuthor
   return [...requested].every((instanceId) => allowed.has(instanceId));
 }
 
+interface ProfileAllowlistAuthorityInput {
+  profile: Exclude<ApiKeyData['profile'], undefined>;
+  chatAllowlist: readonly string[];
+  outboundRecipientAllowlist: readonly string[];
+}
+
+interface ProfileAllowlistAuthorities {
+  chat: InstanceAuthority;
+  outboundRecipient: InstanceAuthority;
+}
+
+function deriveProfileAllowlistAuthorities(input: ProfileAllowlistAuthorityInput): ProfileAllowlistAuthorities | null {
+  if (!isStringArray(input.chatAllowlist) || !isStringArray(input.outboundRecipientAllowlist)) return null;
+  if (input.profile !== null && (typeof input.profile !== 'string' || !KNOWN_API_KEY_PROFILES.has(input.profile))) {
+    return null;
+  }
+
+  return {
+    chat: isLockActive(input.profile, 'chatAllowlist', input.chatAllowlist) ? new Set(input.chatAllowlist) : null,
+    outboundRecipient: isLockActive(input.profile, 'outboundRecipientAllowlist', input.outboundRecipientAllowlist)
+      ? new Set(input.outboundRecipientAllowlist)
+      : null,
+  };
+}
+
+/** Bound profile-aware chat and outbound-recipient reach on every key write. */
+function enforceProfileAllowlistCeilings(
+  c: Context<{ Variables: AppVariables }>,
+  requestedAuthority: ProfileAllowlistAuthorityInput,
+): Response | null {
+  const apiKey = c.get('apiKey');
+  if (
+    !apiKey ||
+    apiKey.profile === undefined ||
+    !isStringArray(apiKey.chatAllowlist) ||
+    !isStringArray(apiKey.outboundRecipientAllowlist)
+  ) {
+    return c.json(
+      {
+        error: {
+          code: 'FORBIDDEN',
+          message: "Cannot grant chat or recipient access that exceeds the caller's own.",
+        },
+      },
+      403,
+    );
+  }
+
+  const callerAuthorities = deriveProfileAllowlistAuthorities({
+    profile: apiKey.profile,
+    chatAllowlist: apiKey.chatAllowlist,
+    outboundRecipientAllowlist: apiKey.outboundRecipientAllowlist,
+  });
+  const childAuthorities = deriveProfileAllowlistAuthorities(requestedAuthority);
+  const exceedsCaller =
+    callerAuthorities === null ||
+    childAuthorities === null ||
+    !isAuthoritySubset(childAuthorities.chat, callerAuthorities.chat) ||
+    !isAuthoritySubset(childAuthorities.outboundRecipient, callerAuthorities.outboundRecipient);
+
+  if (!exceedsCaller) return null;
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: "Cannot grant chat or recipient access that exceeds the caller's own.",
+      },
+    },
+    403,
+  );
+}
+
 /**
  * Least-privilege ceiling for instance access on key-management writes.
  *
@@ -367,6 +439,13 @@ async function handleProfileCreate(
     });
     if (instanceCeilingDenied) return instanceCeilingDenied;
 
+    const allowlistCeilingDenied = enforceProfileAllowlistCeilings(c, {
+      profile: resolved.profile,
+      chatAllowlist: resolved.chatAllowlist,
+      outboundRecipientAllowlist: resolved.outboundRecipientAllowlist,
+    });
+    if (allowlistCeilingDenied) return allowlistCeilingDenied;
+
     const result = await services.apiKeys.create({
       name: data.name,
       description: data.description,
@@ -424,6 +503,13 @@ async function handleLegacyCreate(
     instanceAllowlist: [],
   });
   if (instanceCeilingDenied) return instanceCeilingDenied;
+
+  const allowlistCeilingDenied = enforceProfileAllowlistCeilings(c, {
+    profile: null,
+    chatAllowlist: [],
+    outboundRecipientAllowlist: [],
+  });
+  if (allowlistCeilingDenied) return allowlistCeilingDenied;
 
   const result = await services.apiKeys.create({
     name: data.name,
@@ -499,6 +585,13 @@ keysRoutes.patch('/:id', zValidator('json', updateKeySchema), async (c) => {
         instanceIds: next.instanceIds,
         profile: next.profile,
         instanceAllowlist: next.instanceAllowlist,
+      });
+      if (authorityDenied) return false;
+
+      authorityDenied = enforceProfileAllowlistCeilings(c, {
+        profile: next.profile,
+        chatAllowlist: next.chatAllowlist,
+        outboundRecipientAllowlist: next.outboundRecipientAllowlist,
       });
       return authorityDenied == null;
     });
