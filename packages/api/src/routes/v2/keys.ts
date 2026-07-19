@@ -225,12 +225,9 @@ function enforceScopeCeiling(c: Context<{ Variables: AppVariables }>, requestedS
 
 /** `null` is unrestricted; an empty Set is an active deny-all restriction. */
 interface InstanceAuthorityInput {
-  /** Required property; runtime `undefined` is malformed and fails closed. */
-  instanceIds: readonly string[] | null | undefined;
-  /** Required property; runtime `undefined` is malformed and fails closed. */
-  profile: ApiKeyData['profile'];
-  /** Required property; runtime `undefined` is malformed and fails closed. */
-  instanceAllowlist: readonly string[] | undefined;
+  instanceIds: readonly string[] | null;
+  profile: Exclude<ApiKeyData['profile'], undefined>;
+  instanceAllowlist: readonly string[];
 }
 
 type InstanceAuthority = ReadonlySet<string> | null;
@@ -304,7 +301,7 @@ function enforceInstanceCeiling(
   requestedAuthority: InstanceAuthorityInput,
 ): Response | null {
   const apiKey = c.get('apiKey');
-  if (!apiKey) {
+  if (!apiKey || apiKey.profile === undefined || !isStringArray(apiKey.instanceAllowlist)) {
     return c.json(
       {
         error: {
