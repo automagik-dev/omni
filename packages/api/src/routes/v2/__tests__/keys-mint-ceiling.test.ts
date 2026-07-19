@@ -23,6 +23,10 @@
  *     routes that treat an empty legacy list as inactive. Unrestricted
  *     authority, contradictory restrictions, malformed context, and UUID case
  *     differences must not bypass any ceiling.
+ *   - Profile-aware `chatAllowlist` and `outboundRecipientAllowlist` grants are
+ *     independently bounded to the caller. A restricted caller cannot mint an
+ *     unrestricted/legacy child or mutate an out-of-authority target through a
+ *     metadata-only PATCH; malformed caller allowlist context fails closed.
  *
  * These tests mount the REAL `scopeEnforcerMiddleware` in front of the REAL
  * keys routes (the existing mint tests omit it — reviewer LOW-2), so the proof
@@ -47,7 +51,9 @@ interface CreatedKey {
   scopes: string[];
   profile?: string | null;
   instanceIds?: string[];
+  chatAllowlist?: string[];
   instanceAllowlist?: string[];
+  outboundRecipientAllowlist?: string[];
 }
 
 interface UpdatedKey {
@@ -68,10 +74,18 @@ interface MountOptions {
   callerProfile?: ApiKeyData['profile'];
   /** Profile-aware instance ceiling carried by the authenticated caller. */
   callerInstanceAllowlist?: string[];
+  /** Chat ceiling carried by the authenticated caller. */
+  callerChatAllowlist?: string[];
+  /** Outbound-recipient ceiling carried by the authenticated caller. */
+  callerOutboundRecipientAllowlist?: string[];
   /** Simulate malformed runtime context with the caller profile missing. */
   omitCallerProfile?: boolean;
+  /** Simulate malformed runtime context with the caller chat allowlist missing. */
+  omitCallerChatAllowlist?: boolean;
   /** Simulate malformed runtime context with the caller instance allowlist missing. */
   omitCallerInstanceAllowlist?: boolean;
+  /** Simulate malformed runtime context with the caller outbound allowlist missing. */
+  omitCallerOutboundRecipientAllowlist?: boolean;
   /** Persisted target scopes retained when PATCH omits scopes. */
   targetScopes?: string[];
   /** Persisted target profile used to derive post-PATCH effective authority. */
@@ -80,6 +94,10 @@ interface MountOptions {
   targetInstanceIds?: string[] | null;
   /** Persisted target profile-aware restriction retained across PATCH. */
   targetInstanceAllowlist?: string[];
+  /** Persisted target chat restriction retained across PATCH. */
+  targetChatAllowlist?: string[];
+  /** Persisted target outbound-recipient restriction retained across PATCH. */
+  targetOutboundRecipientAllowlist?: string[];
 }
 
 /**
@@ -120,7 +138,9 @@ function mount(
               scopes: options.targetScopes ?? ['keys:write'],
               instanceIds: options.targetInstanceIds ?? null,
               profile: options.targetProfile ?? null,
+              chatAllowlist: options.targetChatAllowlist ?? [],
               instanceAllowlist: options.targetInstanceAllowlist ?? [],
+              outboundRecipientAllowlist: options.targetOutboundRecipientAllowlist ?? [],
             } as ApiKey;
             const next = { ...current, ...updateOptions } as ApiKey;
             if (!(await guard(current, next))) return { status: 'denied' as const };
@@ -137,9 +157,9 @@ function mount(
           instanceIds: options.targetInstanceIds ?? null,
           expiresAt: null,
           profile: options.targetProfile ?? null,
-          chatAllowlist: [],
+          chatAllowlist: options.targetChatAllowlist ?? [],
           instanceAllowlist: options.targetInstanceAllowlist ?? [],
-          outboundRecipientAllowlist: [],
+          outboundRecipientAllowlist: options.targetOutboundRecipientAllowlist ?? [],
         })),
       },
     } as never);
@@ -150,9 +170,11 @@ function mount(
       instanceIds: options.callerInstanceIds ?? null,
       expiresAt: null,
       profile: options.omitCallerProfile ? undefined : (options.callerProfile ?? null),
-      chatAllowlist: [],
+      chatAllowlist: options.omitCallerChatAllowlist ? undefined : (options.callerChatAllowlist ?? []),
       instanceAllowlist: options.omitCallerInstanceAllowlist ? undefined : (options.callerInstanceAllowlist ?? []),
-      outboundRecipientAllowlist: [],
+      outboundRecipientAllowlist: options.omitCallerOutboundRecipientAllowlist
+        ? undefined
+        : (options.callerOutboundRecipientAllowlist ?? []),
     } as never);
     const signedBy = options.signedBy ?? (signedByScopes !== undefined ? 'test-host' : undefined);
     if (signedBy) {
@@ -602,6 +624,177 @@ describe('POST /keys — mint scope ceiling', () => {
       expect(created[0]?.instanceIds).toBeUndefined();
     });
   });
+
+  describe('chat and outbound-recipient ceilings', () => {
+    test('chat-restricted caller cannot mint a child key for another chat', async () => {
+      const { app, created } = mount(['*'], undefined, {
+        callerProfile: 'cs',
+        callerChatAllowlist: ['chat-a'],
+        callerInstanceAllowlist: [INSTANCE_A],
+        withScopeEnforcer: false,
+      });
+
+      const { status } = await postKey(app, {
+        name: 'cross-chat',
+        profile: 'cs',
+        chatAllowlist: ['chat-b'],
+        instanceAllowlist: [INSTANCE_A],
+      });
+
+      expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('chat-restricted caller can mint a child key for a subset of its chats', async () => {
+      const { app, created } = mount(['*'], undefined, {
+        callerProfile: 'cs',
+        callerChatAllowlist: ['chat-a', 'chat-b'],
+        callerInstanceAllowlist: [INSTANCE_A],
+        withScopeEnforcer: false,
+      });
+
+      const { status } = await postKey(app, {
+        name: 'chat-subset',
+        profile: 'cs',
+        chatAllowlist: ['chat-a'],
+        instanceAllowlist: [INSTANCE_A],
+      });
+
+      expect(status).toBe(201);
+      expect(created[0]?.chatAllowlist).toEqual(['chat-a']);
+    });
+
+    test('chat-restricted caller cannot mint a child whose chat lock is inactive', async () => {
+      const { app, created } = mount(['*'], undefined, {
+        callerProfile: 'cs',
+        callerChatAllowlist: ['chat-a'],
+        callerInstanceAllowlist: [INSTANCE_A],
+        withScopeEnforcer: false,
+      });
+
+      const { status } = await postKey(app, {
+        name: 'unrestricted-chat',
+        profile: 'personal',
+        instanceAllowlist: [INSTANCE_A],
+      });
+
+      expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('chat-restricted caller cannot mint an unrestricted legacy child key', async () => {
+      const { app, created } = mount(['*'], undefined, {
+        callerProfile: 'cs',
+        callerChatAllowlist: ['chat-a'],
+        callerInstanceAllowlist: [INSTANCE_A],
+        withScopeEnforcer: false,
+      });
+
+      const { status } = await postKey(app, {
+        name: 'legacy-chat-escape',
+        scopes: ['keys:write'],
+        instanceIds: [INSTANCE_A],
+      });
+
+      expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('outbound-restricted caller cannot mint a child key for another recipient', async () => {
+      const { app, created } = mount(['*'], undefined, {
+        callerProfile: 'scout',
+        callerOutboundRecipientAllowlist: ['owner-a@example.test'],
+        withScopeEnforcer: false,
+      });
+
+      const { status } = await postKey(app, {
+        name: 'cross-recipient',
+        profile: 'scout',
+        owner: 'owner-b@example.test',
+      });
+
+      expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('outbound-restricted caller can mint a child key for its own recipient', async () => {
+      const { app, created } = mount(['*'], undefined, {
+        callerProfile: 'scout',
+        callerOutboundRecipientAllowlist: ['owner-a@example.test'],
+        withScopeEnforcer: false,
+      });
+
+      const { status } = await postKey(app, {
+        name: 'recipient-subset',
+        profile: 'scout',
+        owner: 'owner-a@example.test',
+      });
+
+      expect(status).toBe(201);
+      expect(created[0]?.outboundRecipientAllowlist).toEqual(['owner-a@example.test']);
+    });
+
+    test('missing caller chat allowlist fails closed', async () => {
+      const { app, created } = mount(['*'], undefined, {
+        callerProfile: 'cs',
+        callerInstanceAllowlist: [INSTANCE_A],
+        omitCallerChatAllowlist: true,
+        withScopeEnforcer: false,
+      });
+
+      const { status } = await postKey(app, {
+        name: 'missing-caller-chat-context',
+        profile: 'cs',
+        chatAllowlist: ['chat-a'],
+        instanceAllowlist: [INSTANCE_A],
+      });
+
+      expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('missing caller outbound allowlist fails closed', async () => {
+      const { app, created } = mount(['*'], undefined, {
+        callerProfile: 'scout',
+        omitCallerOutboundRecipientAllowlist: true,
+        withScopeEnforcer: false,
+      });
+
+      const { status } = await postKey(app, {
+        name: 'missing-caller-outbound-context',
+        profile: 'scout',
+        owner: 'owner-a@example.test',
+      });
+
+      expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('unrestricted caller can still mint chat- and recipient-locked profiles', async () => {
+      const { app, created } = mount(['*']);
+
+      expect(
+        (
+          await postKey(app, {
+            name: 'unrestricted-chat-authorizer',
+            profile: 'cs',
+            chatAllowlist: ['chat-a'],
+            instanceAllowlist: [INSTANCE_A],
+          })
+        ).status,
+      ).toBe(201);
+      expect(
+        (
+          await postKey(app, {
+            name: 'unrestricted-recipient-authorizer',
+            profile: 'scout',
+            owner: 'owner-a@example.test',
+          })
+        ).status,
+      ).toBe(201);
+      expect(created).toHaveLength(2);
+    });
+  });
 });
 
 describe('PATCH /keys/:id — update scope ceiling', () => {
@@ -904,6 +1097,57 @@ describe('PATCH /keys/:id — update scope ceiling', () => {
     const { app, updated } = mount(['keys:write'], undefined, {
       callerInstanceIds: [INSTANCE_A],
       targetInstanceIds: [INSTANCE_A],
+    });
+
+    const { status } = await patchKey(app, 'target', { name: 'renamed-key' });
+
+    expect(status).toBe(200);
+    expect(updated).toEqual([{ id: 'target', name: 'renamed-key' }]);
+  });
+
+  test('chat-restricted caller cannot metadata-only update a target outside its chat authority', async () => {
+    const { app, updated } = mount(['*'], undefined, {
+      callerProfile: 'cs',
+      callerChatAllowlist: ['chat-a'],
+      callerInstanceAllowlist: [INSTANCE_A],
+      targetProfile: 'cs',
+      targetChatAllowlist: ['chat-b'],
+      targetInstanceAllowlist: [INSTANCE_A],
+      withScopeEnforcer: false,
+    });
+
+    const { status } = await patchKey(app, 'target', { name: 'renamed-key' });
+
+    expect(status).toBe(403);
+    expect(updated).toHaveLength(0);
+  });
+
+  test('outbound-restricted caller cannot metadata-only update a target outside its recipient authority', async () => {
+    const { app, updated } = mount(['*'], undefined, {
+      callerProfile: 'scout',
+      callerOutboundRecipientAllowlist: ['owner-a@example.test'],
+      targetProfile: 'scout',
+      targetOutboundRecipientAllowlist: ['owner-b@example.test'],
+      withScopeEnforcer: false,
+    });
+
+    const { status } = await patchKey(app, 'target', { name: 'renamed-key' });
+
+    expect(status).toBe(403);
+    expect(updated).toHaveLength(0);
+  });
+
+  test('metadata-only update remains allowed when chat and recipient targets are within caller authority', async () => {
+    const { app, updated } = mount(['*'], undefined, {
+      callerProfile: 'cs',
+      callerChatAllowlist: ['chat-a', 'chat-b'],
+      callerInstanceAllowlist: [INSTANCE_A],
+      callerOutboundRecipientAllowlist: ['owner-a@example.test'],
+      targetProfile: 'cs',
+      targetChatAllowlist: ['chat-a'],
+      targetInstanceAllowlist: [INSTANCE_A],
+      targetOutboundRecipientAllowlist: ['owner-a@example.test'],
+      withScopeEnforcer: false,
     });
 
     const { status } = await patchKey(app, 'target', { name: 'renamed-key' });
