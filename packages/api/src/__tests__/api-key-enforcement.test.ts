@@ -246,6 +246,68 @@ describeWithDb('API Key Enforcement', () => {
   });
 
   // ============================================================================
+  // Atomic authority-bearing updates
+  // ============================================================================
+
+  describe('ApiKeyService.updateWithAuthorityGuard()', () => {
+    test('serializes concurrent partial authority updates on the same key', async () => {
+      const created = await apiKeyService.create({
+        name: `authority-race-${Date.now()}`,
+        scopes: ['keys:write'],
+        instanceIds: ['11111111-1111-4111-8111-111111111111'],
+      });
+      cleanupIds.keys.push(created.key.id);
+
+      let releaseFirst!: () => void;
+      const firstMayCommit = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let firstGuardEntered!: () => void;
+      const firstIsLocked = new Promise<void>((resolve) => {
+        firstGuardEntered = resolve;
+      });
+
+      const firstUpdate = apiKeyService.updateWithAuthorityGuard(
+        created.key.id,
+        { scopes: ['messages:send'] },
+        async () => {
+          firstGuardEntered();
+          await firstMayCommit;
+          return true;
+        },
+      );
+
+      await firstIsLocked;
+
+      let secondGuardScopes: string[] | undefined;
+      const secondUpdate = apiKeyService.updateWithAuthorityGuard(
+        created.key.id,
+        { instanceIds: ['22222222-2222-4222-8222-222222222222'] },
+        (_current, next) => {
+          secondGuardScopes = next.scopes;
+          return !next.scopes.includes('messages:send');
+        },
+      );
+
+      // The second guard must not run against the stale row while the first
+      // transaction holds its lock.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(secondGuardScopes).toBeUndefined();
+
+      releaseFirst();
+      const [firstResult, secondResult] = await Promise.all([firstUpdate, secondUpdate]);
+
+      expect(firstResult.status).toBe('updated');
+      expect(secondResult.status).toBe('denied');
+      expect(secondGuardScopes).toEqual(['messages:send']);
+
+      const final = await apiKeyService.getById(created.key.id);
+      expect(final?.scopes).toEqual(['messages:send']);
+      expect(final?.instanceIds).toEqual(['11111111-1111-4111-8111-111111111111']);
+    });
+  });
+
+  // ============================================================================
   // API Key validation with IP
   // ============================================================================
 
