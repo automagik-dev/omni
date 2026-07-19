@@ -26,6 +26,10 @@ export default {
       message.startsWith(
         'feat(api): console-viewer/operator/admin key profiles + mint scope ceiling (OSS backend of #829) (#831)',
       ),
+    // PR #852 merge body: GitHub generated an immutable 135-character line.
+    // Source commits passed commitlint before merge; ignore this exact accepted merge commit
+    // so environment promotions can preserve dev ancestry without rewriting history.
+    (message: string) => message.startsWith('fix(api): enforce effective instance authority ceiling (#852)'),
     // Immutable khal-ui promotion commits with >100-char headers/body lines.
     (message: string) => message.startsWith('fix(deps): pin @types/react 18 hoist fallback'),
   ],
