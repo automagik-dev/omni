@@ -10,9 +10,10 @@ import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { ProfileResolutionError, type ResolveProfileInput, resolveProfile } from '../../lib/resolve-profile';
 import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
+import { isLockActive } from '../../middleware/scope-enforcer';
 import { optionalDateParam } from '../../schemas/date-query';
 import { ApiKeyService } from '../../services/api-keys';
-import type { AppVariables } from '../../types';
+import type { ApiKeyData, AppVariables } from '../../types';
 
 export const keysRoutes = new Hono<{ Variables: AppVariables }>();
 
@@ -37,6 +38,7 @@ const NON_ADMIN_PROFILES = [
   'console-admin',
 ] as const;
 type NonAdminProfile = (typeof NON_ADMIN_PROFILES)[number];
+const KNOWN_API_KEY_PROFILES = new Set<string>(['admin', ...NON_ADMIN_PROFILES]);
 
 // ============================================================================
 // SCHEMAS
@@ -221,26 +223,109 @@ function enforceScopeCeiling(c: Context<{ Variables: AppVariables }>, requestedS
   );
 }
 
+/** `null` is unrestricted; an empty Set is an active deny-all restriction. */
+interface InstanceAuthorityInput {
+  instanceIds: readonly string[] | null;
+  profile: Exclude<ApiKeyData['profile'], undefined>;
+  instanceAllowlist: readonly string[];
+}
+
+type InstanceAuthority = ReadonlySet<string> | null;
+
+interface DerivedInstanceAuthorities {
+  /** Authority on routes guarded only by the route-specific legacy guard. */
+  legacy: InstanceAuthority;
+  /** Authority on historical legacy routes that skip checks for an empty list. */
+  legacyEmptyInactive: InstanceAuthority;
+  /** Authority on routes where both legacy and profile-aware guards apply. */
+  effective: InstanceAuthority;
+  /** Authority on routes guarded only by the global profile-aware enforcer. */
+  profileAware: InstanceAuthority;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function normalizeInstanceIds(values: readonly string[]): ReadonlySet<string> {
+  // PostgreSQL uuid/uuid[] values are case-insensitive and persist in canonical
+  // lowercase form. Compare the same canonical representation before writing.
+  return new Set(values.map((value) => value.toLowerCase()));
+}
+
+function intersectAuthorities(left: InstanceAuthority, right: InstanceAuthority): InstanceAuthority {
+  if (left === null) return right;
+  if (right === null) return left;
+  return new Set([...left].filter((instanceId) => right.has(instanceId)));
+}
+
+function deriveInstanceAuthorities(input: InstanceAuthorityInput): DerivedInstanceAuthorities | null {
+  // Context is runtime data despite its TypeScript type. Any missing or
+  // malformed field is invalid rather than unrestricted, so writes fail closed.
+  if (input.instanceIds !== null && !isStringArray(input.instanceIds)) return null;
+  if (!isStringArray(input.instanceAllowlist)) return null;
+  if (input.profile !== null && (typeof input.profile !== 'string' || !KNOWN_API_KEY_PROFILES.has(input.profile))) {
+    return null;
+  }
+
+  const legacy = input.instanceIds === null ? null : normalizeInstanceIds(input.instanceIds);
+  const legacyEmptyInactive = input.instanceIds === null || input.instanceIds.length === 0 ? null : legacy;
+  const profileAware = isLockActive(input.profile, 'instanceAllowlist', input.instanceAllowlist)
+    ? normalizeInstanceIds(input.instanceAllowlist)
+    : null;
+
+  return {
+    legacy,
+    legacyEmptyInactive,
+    effective: intersectAuthorities(legacy, profileAware),
+    profileAware,
+  };
+}
+
+function isAuthoritySubset(requested: InstanceAuthority, allowed: InstanceAuthority): boolean {
+  if (allowed === null) return true;
+  if (requested === null) return false;
+  return [...requested].every((instanceId) => allowed.has(instanceId));
+}
+
 /**
- * Least-privilege ceiling for legacy instance access on key-management writes.
+ * Least-privilege ceiling for instance access on key-management writes.
  *
- * `instanceIds: null` means unrestricted access. A restricted caller may only
- * grant a subset of its own instance IDs; it may not grant `null`, omit the
- * field during creation (which persists as unrestricted), or name an instance
- * outside its own restriction. Missing caller context is denied fail-closed.
+ * Legacy-only, profile-aware-only, and combined guard surfaces all exist. Some
+ * historical legacy routes also skip checks for `instanceIds: []`, while the
+ * canonical helper treats it as deny-all. A single intersection comparison is
+ * therefore insufficient: bound every enforcement interpretation separately.
  */
 function enforceInstanceCeiling(
   c: Context<{ Variables: AppVariables }>,
-  requestedInstanceIds: string[] | null,
+  requestedAuthority: InstanceAuthorityInput,
 ): Response | null {
   const apiKey = c.get('apiKey');
-  if (apiKey?.instanceIds === null) return null;
+  if (!apiKey || apiKey.profile === undefined || !isStringArray(apiKey.instanceAllowlist)) {
+    return c.json(
+      {
+        error: {
+          code: 'FORBIDDEN',
+          message: "Cannot grant instance access that exceeds the caller's own.",
+        },
+      },
+      403,
+    );
+  }
+  const callerAuthorities = deriveInstanceAuthorities({
+    instanceIds: apiKey.instanceIds,
+    profile: apiKey.profile,
+    instanceAllowlist: apiKey.instanceAllowlist,
+  });
+  const childAuthorities = deriveInstanceAuthorities(requestedAuthority);
 
   const exceedsCaller =
-    !apiKey ||
-    !Array.isArray(apiKey.instanceIds) ||
-    requestedInstanceIds === null ||
-    requestedInstanceIds.some((instanceId) => !apiKey.instanceIds?.includes(instanceId));
+    callerAuthorities === null ||
+    childAuthorities === null ||
+    !isAuthoritySubset(childAuthorities.legacy, callerAuthorities.legacy) ||
+    !isAuthoritySubset(childAuthorities.legacyEmptyInactive, callerAuthorities.legacyEmptyInactive) ||
+    !isAuthoritySubset(childAuthorities.profileAware, callerAuthorities.profileAware) ||
+    !isAuthoritySubset(childAuthorities.effective, callerAuthorities.effective);
   if (!exceedsCaller) return null;
 
   return c.json(
@@ -275,7 +360,11 @@ async function handleProfileCreate(
     const ceilingDenied = enforceScopeCeiling(c, resolved.scopes);
     if (ceilingDenied) return ceilingDenied;
 
-    const instanceCeilingDenied = enforceInstanceCeiling(c, data.instanceIds ?? null);
+    const instanceCeilingDenied = enforceInstanceCeiling(c, {
+      instanceIds: data.instanceIds ?? null,
+      profile: resolved.profile,
+      instanceAllowlist: resolved.instanceAllowlist,
+    });
     if (instanceCeilingDenied) return instanceCeilingDenied;
 
     const result = await services.apiKeys.create({
@@ -329,7 +418,11 @@ async function handleLegacyCreate(
   const ceilingDenied = enforceScopeCeiling(c, data.scopes);
   if (ceilingDenied) return ceilingDenied;
 
-  const instanceCeilingDenied = enforceInstanceCeiling(c, data.instanceIds ?? null);
+  const instanceCeilingDenied = enforceInstanceCeiling(c, {
+    instanceIds: data.instanceIds ?? null,
+    profile: null,
+    instanceAllowlist: [],
+  });
   if (instanceCeilingDenied) return instanceCeilingDenied;
 
   const result = await services.apiKeys.create({
@@ -391,23 +484,39 @@ keysRoutes.patch('/:id', zValidator('json', updateKeySchema), async (c) => {
   const data = c.req.valid('json');
   const services = c.get('services');
 
-  // Updating an existing key is another scope-grant path. Apply the same
-  // least-privilege ceiling as creation so a bounded keys:write caller cannot
-  // PATCH its own (or another) key into a wildcard or broader namespace grant.
-  if (data.scopes) {
-    const ceilingDenied = enforceScopeCeiling(c, data.scopes);
-    if (ceilingDenied) return ceilingDenied;
-  }
-  if (data.instanceIds !== undefined) {
-    const instanceCeilingDenied = enforceInstanceCeiling(c, data.instanceIds);
-    if (instanceCeilingDenied) return instanceCeilingDenied;
-  }
+  const updateOptions = {
+    ...data,
+    expiresAt: data.expiresAt === null ? null : data.expiresAt ? new Date(data.expiresAt) : undefined,
+  };
 
   try {
-    const updated = await services.apiKeys.update(id, {
-      ...data,
-      expiresAt: data.expiresAt === null ? null : data.expiresAt ? new Date(data.expiresAt) : undefined,
-    });
+    if (data.instanceIds !== undefined || data.scopes !== undefined) {
+      let authorityDenied: Response | null | undefined;
+      const result = await services.apiKeys.updateWithAuthorityGuard(id, updateOptions, (_current, next) => {
+        authorityDenied = enforceScopeCeiling(c, next.scopes);
+        if (authorityDenied) return false;
+
+        authorityDenied = enforceInstanceCeiling(c, {
+          instanceIds: next.instanceIds,
+          profile: next.profile,
+          instanceAllowlist: next.instanceAllowlist,
+        });
+        return authorityDenied == null;
+      });
+
+      if (result.status === 'denied') {
+        return (
+          authorityDenied ??
+          c.json({ error: { code: 'FORBIDDEN', message: 'API key authority exceeds caller authority' } }, 403)
+        );
+      }
+      if (result.status === 'not_found') {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'API key not found' } }, 404);
+      }
+      return c.json({ data: result.key });
+    }
+
+    const updated = await services.apiKeys.update(id, updateOptions);
 
     if (!updated) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'API key not found' } }, 404);
