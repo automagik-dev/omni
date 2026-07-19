@@ -57,6 +57,10 @@ function mountKeysRoutes(): { app: Hono<{ Variables: AppVariables }>; created: C
       scopes: ['*'],
       instanceIds: null,
       expiresAt: null,
+      profile: null,
+      chatAllowlist: [],
+      instanceAllowlist: [],
+      outboundRecipientAllowlist: [],
     } as never);
     await next();
   });
