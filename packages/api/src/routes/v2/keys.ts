@@ -225,9 +225,12 @@ function enforceScopeCeiling(c: Context<{ Variables: AppVariables }>, requestedS
 
 /** `null` is unrestricted; an empty Set is an active deny-all restriction. */
 interface InstanceAuthorityInput {
-  instanceIds: readonly string[] | null;
-  profile?: ApiKeyData['profile'];
-  instanceAllowlist?: readonly string[];
+  /** Required property; runtime `undefined` is malformed and fails closed. */
+  instanceIds: readonly string[] | null | undefined;
+  /** Required property; runtime `undefined` is malformed and fails closed. */
+  profile: ApiKeyData['profile'];
+  /** Required property; runtime `undefined` is malformed and fails closed. */
+  instanceAllowlist: readonly string[] | undefined;
 }
 
 type InstanceAuthority = ReadonlySet<string> | null;
@@ -260,23 +263,18 @@ function intersectAuthorities(left: InstanceAuthority, right: InstanceAuthority)
 }
 
 function deriveInstanceAuthorities(input: InstanceAuthorityInput): DerivedInstanceAuthorities | null {
-  // Context is runtime data despite its TypeScript type. Any malformed field is
-  // invalid rather than unrestricted so the write path fails closed.
+  // Context is runtime data despite its TypeScript type. Any missing or
+  // malformed field is invalid rather than unrestricted, so writes fail closed.
   if (input.instanceIds !== null && !isStringArray(input.instanceIds)) return null;
-  if (input.instanceAllowlist !== undefined && !isStringArray(input.instanceAllowlist)) return null;
-  if (
-    input.profile !== undefined &&
-    input.profile !== null &&
-    (typeof input.profile !== 'string' || !KNOWN_API_KEY_PROFILES.has(input.profile))
-  ) {
+  if (!isStringArray(input.instanceAllowlist)) return null;
+  if (input.profile !== null && (typeof input.profile !== 'string' || !KNOWN_API_KEY_PROFILES.has(input.profile))) {
     return null;
   }
 
   const legacy = input.instanceIds === null ? null : normalizeInstanceIds(input.instanceIds);
   const legacyEmptyInactive = input.instanceIds === null || input.instanceIds.length === 0 ? null : legacy;
-  const instanceAllowlist = input.instanceAllowlist ?? [];
-  const profileAware = isLockActive(input.profile, 'instanceAllowlist', instanceAllowlist)
-    ? normalizeInstanceIds(instanceAllowlist)
+  const profileAware = isLockActive(input.profile, 'instanceAllowlist', input.instanceAllowlist)
+    ? normalizeInstanceIds(input.instanceAllowlist)
     : null;
 
   return {
