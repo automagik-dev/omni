@@ -68,6 +68,10 @@ interface MountOptions {
   callerProfile?: ApiKeyData['profile'];
   /** Profile-aware instance ceiling carried by the authenticated caller. */
   callerInstanceAllowlist?: string[];
+  /** Simulate malformed runtime context with the caller profile missing. */
+  omitCallerProfile?: boolean;
+  /** Simulate malformed runtime context with the caller instance allowlist missing. */
+  omitCallerInstanceAllowlist?: boolean;
   /** Persisted target scopes retained when PATCH omits scopes. */
   targetScopes?: string[];
   /** Persisted target profile used to derive post-PATCH effective authority. */
@@ -145,9 +149,9 @@ function mount(
       scopes: callerScopes,
       instanceIds: options.callerInstanceIds ?? null,
       expiresAt: null,
-      profile: options.callerProfile ?? null,
+      profile: options.omitCallerProfile ? undefined : (options.callerProfile ?? null),
       chatAllowlist: [],
-      instanceAllowlist: options.callerInstanceAllowlist ?? [],
+      instanceAllowlist: options.omitCallerInstanceAllowlist ? undefined : (options.callerInstanceAllowlist ?? []),
       outboundRecipientAllowlist: [],
     } as never);
     const signedBy = options.signedBy ?? (signedByScopes !== undefined ? 'test-host' : undefined);
@@ -471,6 +475,38 @@ describe('POST /keys — mint scope ceiling', () => {
 
       const { status } = await postKey(app, {
         name: 'deny-all-child-from-malformed-caller',
+        scopes: ['*'],
+        instanceIds: [],
+      });
+
+      expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('missing caller profile fails closed instead of becoming unrestricted', async () => {
+      const { app, created } = mount(['*'], undefined, {
+        omitCallerProfile: true,
+        withScopeEnforcer: false,
+      });
+
+      const { status } = await postKey(app, {
+        name: 'child-from-missing-profile-context',
+        scopes: ['*'],
+        instanceIds: [],
+      });
+
+      expect(status).toBe(403);
+      expect(created).toHaveLength(0);
+    });
+
+    test('missing caller instance allowlist fails closed instead of becoming unrestricted', async () => {
+      const { app, created } = mount(['*'], undefined, {
+        omitCallerInstanceAllowlist: true,
+        withScopeEnforcer: false,
+      });
+
+      const { status } = await postKey(app, {
+        name: 'child-from-missing-allowlist-context',
         scopes: ['*'],
         instanceIds: [],
       });
