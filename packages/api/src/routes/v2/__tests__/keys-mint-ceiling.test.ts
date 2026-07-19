@@ -891,8 +891,20 @@ describe('PATCH /keys/:id — update scope ceiling', () => {
     expect(updated).toEqual([{ id: 'target', scopes: ['*'] }]);
   });
 
-  test('metadata-only updates remain allowed for an instance-restricted keys:write caller', async () => {
+  test('restricted caller cannot metadata-only update an unrestricted target key', async () => {
     const { app, updated } = mount(['keys:write'], undefined, { callerInstanceIds: [INSTANCE_A] });
+
+    const { status } = await patchKey(app, 'target', { name: 'renamed-key' });
+
+    expect(status).toBe(403);
+    expect(updated).toHaveLength(0);
+  });
+
+  test('metadata-only updates remain allowed when the target is within the caller instance authority', async () => {
+    const { app, updated } = mount(['keys:write'], undefined, {
+      callerInstanceIds: [INSTANCE_A],
+      targetInstanceIds: [INSTANCE_A],
+    });
 
     const { status } = await patchKey(app, 'target', { name: 'renamed-key' });
 

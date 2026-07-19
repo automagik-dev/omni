@@ -490,39 +490,29 @@ keysRoutes.patch('/:id', zValidator('json', updateKeySchema), async (c) => {
   };
 
   try {
-    if (data.instanceIds !== undefined || data.scopes !== undefined) {
-      let authorityDenied: Response | null | undefined;
-      const result = await services.apiKeys.updateWithAuthorityGuard(id, updateOptions, (_current, next) => {
-        authorityDenied = enforceScopeCeiling(c, next.scopes);
-        if (authorityDenied) return false;
+    let authorityDenied: Response | null | undefined;
+    const result = await services.apiKeys.updateWithAuthorityGuard(id, updateOptions, (_current, next) => {
+      authorityDenied = enforceScopeCeiling(c, next.scopes);
+      if (authorityDenied) return false;
 
-        authorityDenied = enforceInstanceCeiling(c, {
-          instanceIds: next.instanceIds,
-          profile: next.profile,
-          instanceAllowlist: next.instanceAllowlist,
-        });
-        return authorityDenied == null;
+      authorityDenied = enforceInstanceCeiling(c, {
+        instanceIds: next.instanceIds,
+        profile: next.profile,
+        instanceAllowlist: next.instanceAllowlist,
       });
+      return authorityDenied == null;
+    });
 
-      if (result.status === 'denied') {
-        return (
-          authorityDenied ??
-          c.json({ error: { code: 'FORBIDDEN', message: 'API key authority exceeds caller authority' } }, 403)
-        );
-      }
-      if (result.status === 'not_found') {
-        return c.json({ error: { code: 'NOT_FOUND', message: 'API key not found' } }, 404);
-      }
-      return c.json({ data: result.key });
+    if (result.status === 'denied') {
+      return (
+        authorityDenied ??
+        c.json({ error: { code: 'FORBIDDEN', message: 'API key authority exceeds caller authority' } }, 403)
+      );
     }
-
-    const updated = await services.apiKeys.update(id, updateOptions);
-
-    if (!updated) {
+    if (result.status === 'not_found') {
       return c.json({ error: { code: 'NOT_FOUND', message: 'API key not found' } }, 404);
     }
-
-    return c.json({ data: updated });
+    return c.json({ data: result.key });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     if (message.includes('Cannot rename primary')) {
