@@ -1,18 +1,19 @@
 ---
 slug: omni-full-multitenancy
 title: "Omni full multitenancy: first-class tenant ownership, bounded tenant administration, and RLS"
-status: draft-awaiting-human-approval
+status: work-approved-g0-in-progress
 risk: critical
 created_at: 2026-07-16T21:28:26Z
-updated_at: 2026-07-16T22:22:33Z
+updated_at: 2026-07-20T19:46:44Z
 base_branch: dev
-base_commit: 739fd49f1cd31de759664c0dcd266f71c868e338
+base_commit: d6c400d05287bbf436ecd7e28c56c845b893afc9
 purpose_session: brain/wishes/2026/07/16/omni-full-multitenancy/PURPOSE_SPEC.md
 brainstorm_session: brain/wishes/2026/07/16/omni-full-multitenancy/BRAINSTORM_SESSION.md
 ownership_matrix: brain/wishes/2026/07/16/omni-full-multitenancy/OWNERSHIP_MATRIX.md
 release_slos: brain/wishes/2026/07/16/omni-full-multitenancy/RELEASE_SLOS.yaml
 artifact_validator: brain/wishes/2026/07/16/omni-full-multitenancy/validate-artifacts.mjs
-execution_authorized: false
+work_approval: brain/wishes/2026/07/16/omni-full-multitenancy/WORK_APPROVAL.md
+execution_authorized: true
 ---
 
 # WISH — Omni Full Multitenancy
@@ -252,7 +253,7 @@ Disabling RLS, restoring only the pre-migration snapshot while discarding post-s
 - Tenant hard delete is disabled; lifecycle ends at archived in this release.
 - Backup/restore rehearsals include the auth-plane store, tenant encryption key metadata/KMS grants, object-store versions, and queued work. A database restore without the matching encryption/auth/event state is not accepted as recoverable.
 
-## Execution groups (proposal only; no Genie tasks before approval)
+## Execution groups (G0-G8A approved for non-production work; H8/H9 remain non-executable)
 
 ### G0 — Architecture inventory and threat model
 
@@ -261,6 +262,8 @@ Disabling RLS, restoring only the pre-migration snapshot while discarding post-s
 
 - machine-readable ownership manifest for all 38 Drizzle tables plus non-Drizzle stores;
 - route/service/repository/event/job/storage/cache inventory;
+- refreshed current-state citations and complete table/non-DB inventory against the materialization base commit;
+- explicit `tenant|platform|split|quarantine` disposition and rename-or-derive decision for the existing caller-adjacent `executionContext.customer.tenantId`, `OMNI_TENANT_ID`, and agent-dispatcher `tenantId`/`tenant_id` surface; caller-supplied values never establish tenant authority;
 - ADRs for ownership classes, person split, RLS transaction context, platform-admin access, and key lineage;
 - explicit legacy mapping/quarantine decision table;
 - security threat model (IDOR, confused deputy, delegation, async, storage, outbound egress/SSRF, suspension/revocation, rollback);

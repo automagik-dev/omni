@@ -1,15 +1,17 @@
 ---
 slug: omni-full-multitenancy
-status: reviewed-awaiting-human-approval
-updated_at: 2026-07-16T22:30:10Z
-execution_authorized: false
+status: work-approved-g0-starting
+updated_at: 2026-07-20T19:46:44Z
+execution_authorized: true
 ---
 
 # Status — Omni Full Multitenancy
 
 ## Current phase
 
-Purpose/brainstorm/wish drafting and validation. No implementation tasks have been created and no production mutation has occurred.
+Felipe approved bounded `/work` materialization and non-production implementation through G8A. G0 is the only dispatchable group until its human/security gate passes. No production mutation is authorized or has occurred.
+
+Nine Genie task rows now exist for G0-G8A. All rows appear `ready` because Genie v5 does not persist the WISH dependency DAG; only G0 is authorized to dispatch. Exact task IDs, derived waves, and proof that no H8/H9 or production rows exist are recorded in `WORK_MATERIALIZATION.md`.
 
 ## Completed evidence collection
 
@@ -26,6 +28,9 @@ Purpose/brainstorm/wish drafting and validation. No implementation tasks have be
 - Focused artifact review returned **FAIL (0 critical, 6 high)**; first-round amendments added receipt-backed holds, writer fence/high-water/compensation, tenant-egress SSRF boundary, numeric revocation behavior, objective release SLOs, and root-relative artifact validation.
 - Fresh re-review returned **FAIL (0 critical, 3 high)**: self-asserted/replayable receipts, contradictory secure-floor/fence ordering, and already-dequeued revocation gaps. These were amended with an isolated append-only Ed25519 approval authority plus atomic compare-and-consume, a secure-floor marker before/atomically with the incompatible fence, and pre-side-effect/between-step epoch checks with a 30-second in-flight ceiling.
 - Final bounded re-review on WISH SHA `67b52d941196d4ae481b8270d33f58804f5f0d14bb8e0ccc3e1afbcd42c91938`: **PASS — 0 critical / 0 high**. No blocking amendment remains.
+- Claude Code `claude -p --model claude-fable-5` independently returned **SHIP** with no blocking findings against the frozen reviewed WISH and current `origin/dev` delta.
+- Felipe's bounded work approval is recorded in `WORK_APPROVAL.md`; it authorizes G0-G8A non-production work only and explicitly excludes every H8/H9 production action.
+- Materialization base refreshed to `origin/dev` at `d6c400d05287bbf436ecd7e28c56c845b893afc9`; G0 owns the full live citation/inventory refresh.
 
 ## Artifacts
 
@@ -35,6 +40,8 @@ Purpose/brainstorm/wish drafting and validation. No implementation tasks have be
 - `.genie/wishes/omni-full-multitenancy/WISH.md` — staged execution groups, receipt-backed holds, migration/rollback, Success Criteria, and QA Criteria.
 - `RELEASE_SLOS.yaml` — numeric security/performance/revocation/custody thresholds and approval-receipt schema.
 - `validate-artifacts.mjs` — repository-root artifact and WISH-mirror validator.
+- `WORK_APPROVAL.md` — exact bounded human authorization, reviewed hash, Fable conditions, and production exclusions.
+- `WORK_MATERIALIZATION.md` — exact G0-G8A task IDs, WISH-derived waves, and proof that production/hold nodes were not materialized.
 
 ## Active blocker
 
@@ -48,4 +55,4 @@ Production developer tenant credentials must not be minted until:
 
 ## Next human decision
 
-Felipe or Leonardo may now approve, revise, or reject conversion of the reviewed execution groups into Genie tasks. Approval authorizes task materialization only—not production access, migration, deployment, tenant mapping, credential mutation, or destructive cleanup.
+After G0 produces its ownership manifest, threat model, ADRs, refreshed source inventory, caller-adjacent `tenantId` disposition, and frozen release-evidence contract, Felipe or Leonardo must approve the G0 ownership/trust boundary before G1 may be dispatched. The current `/work` approval does not satisfy that gate or any H8/H9 receipt.
