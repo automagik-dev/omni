@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni",
-  "version": "2.260713.3",
+  "version": "2.260720.1",
   "description": "LLM-optimized CLI for Omni",
   "type": "module",
   "bin": {
@@ -54,6 +54,7 @@
   },
   "devDependencies": {
     "@omni/api": "workspace:*",
+    "@omni/channel-a2a": "workspace:*",
     "@omni/channel-discord": "workspace:*",
     "@omni/channel-gupshup": "workspace:*",
     "@omni/channel-sdk": "workspace:*",

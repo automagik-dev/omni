@@ -51,7 +51,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
       - name: Turbo remote cache
         uses: rharkor/caching-for-turbo@v2.2.1
@@ -84,6 +84,11 @@ jobs:
       - name: Download NATS
         run: ./scripts/ensure-nats.sh
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: 'v2.4.1'
+
       - name: Install autopg v3
         # Use the current canonical pgserve distribution. `bunx pgserve@...`
         # installs the legacy npm wrapper; Omni's runtime resolver prefers
@@ -95,6 +100,7 @@ jobs:
         # embedded Postgres binary cache (ETXTBSY).
         env:
           GH_TOKEN: ${{ github.token }}
+          AUTOPG_VERSION: v3.0.7
         run: |
           bun add -g pm2
           curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash
@@ -154,7 +160,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
       - name: Cache bun packages
         uses: actions/cache@v4
@@ -220,7 +226,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
       - name: Turbo remote cache
         uses: rharkor/caching-for-turbo@v2.2.1
@@ -250,6 +256,11 @@ jobs:
       - name: Download NATS
         run: ./scripts/ensure-nats.sh
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: 'v2.4.1'
+
       - name: Install autopg v3
         # Use the current canonical pgserve distribution. `bunx pgserve@...`
         # installs the legacy npm wrapper; Omni's runtime resolver prefers
@@ -261,6 +272,7 @@ jobs:
         # embedded Postgres binary cache (ETXTBSY).
         env:
           GH_TOKEN: ${{ github.token }}
+          AUTOPG_VERSION: v3.0.7
         run: |
           bun add -g pm2
           curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash

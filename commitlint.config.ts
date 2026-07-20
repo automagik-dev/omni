@@ -19,6 +19,26 @@ export default {
       message.startsWith(
         'ci(test): execute S3/MinIO integration suites in CI; ungate dispatcher local tests (PR #770 H8, MED-4) (#778)',
       ),
+    // PR #831 squash header/body: GitHub generated immutable lines over 100 chars.
+    // The source commits were linted before merge; ignore this exact accepted squash commit
+    // so environment promotion PRs can preserve dev ancestry without rewriting history.
+    (message: string) =>
+      message.startsWith(
+        'feat(api): console-viewer/operator/admin key profiles + mint scope ceiling (OSS backend of #829) (#831)',
+      ),
+    // PR #852 merge body: GitHub generated an immutable 135-character line.
+    // Source commits passed commitlint before merge; ignore this exact accepted merge commit
+    // so environment promotions can preserve dev ancestry without rewriting history.
+    (message: string) => message.startsWith('fix(api): enforce effective instance authority ceiling (#852)'),
+    // PR #858 merge body was supplied through the GitHub merge API as one immutable
+    // over-100-character line. Match the complete accepted message only.
+    (message: string) =>
+      message.trimEnd() ===
+      [
+        'fix(api): require strict instance authority inputs (#858)',
+        '',
+        'Make authority-helper inputs non-undefined and validate the broad runtime caller context before enforcement.',
+      ].join('\n'),
     // Immutable khal-ui promotion commits with >100-char headers/body lines.
     (message: string) => message.startsWith('fix(deps): pin @types/react 18 hoist fallback'),
   ],

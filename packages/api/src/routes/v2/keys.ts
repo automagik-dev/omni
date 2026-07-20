@@ -9,8 +9,11 @@ import { zValidator } from '@hono/zod-validator';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { ProfileResolutionError, type ResolveProfileInput, resolveProfile } from '../../lib/resolve-profile';
+import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
+import { isLockActive } from '../../middleware/scope-enforcer';
 import { optionalDateParam } from '../../schemas/date-query';
-import type { AppVariables } from '../../types';
+import { ApiKeyService } from '../../services/api-keys';
+import type { ApiKeyData, AppVariables } from '../../types';
 
 export const keysRoutes = new Hono<{ Variables: AppVariables }>();
 
@@ -18,9 +21,24 @@ export const keysRoutes = new Hono<{ Variables: AppVariables }>();
  * Non-admin profiles — `admin` is explicitly excluded at the route layer so
  * HTTP callers can never mint a god-key regardless of scope grants. Admin
  * keys are only mintable via the CLI's TTY-gated path.
+ *
+ * The three `console-*` profiles ARE HTTP-mintable by a `keys:write` caller:
+ * the khal-ui BFF mints a per-user console key on every session, so minting
+ * must work over HTTP. They are safe to mint because none of them carries the
+ * `*` wildcard — each resolves to an explicit scope set bounded by SCOPE_MAP
+ * (see `constants/profiles.ts`), unlike `admin` which is unbounded.
  */
-const NON_ADMIN_PROFILES = ['cs', 'personal', 'scout', 'coworker'] as const;
+const NON_ADMIN_PROFILES = [
+  'cs',
+  'personal',
+  'scout',
+  'coworker',
+  'console-viewer',
+  'console-operator',
+  'console-admin',
+] as const;
 type NonAdminProfile = (typeof NON_ADMIN_PROFILES)[number];
+const KNOWN_API_KEY_PROFILES = new Set<string>(['admin', ...NON_ADMIN_PROFILES]);
 
 // ============================================================================
 // SCHEMAS
@@ -51,7 +69,10 @@ const createKeySchema = z
     profile: z
       .enum(NON_ADMIN_PROFILES)
       .optional()
-      .describe('Profile template: cs, personal, scout, coworker. admin is CLI-only and rejected here.'),
+      .describe(
+        'Profile template: cs, personal, scout, coworker, console-viewer, console-operator, console-admin. ' +
+          'admin is CLI-only and rejected here.',
+      ),
     overrides: profileOverridesSchema.optional().describe('Tenant overrides merged on top of the profile template'),
     chatAllowlist: z.array(z.string()).optional().describe('Chats this key may target (profile-aware semantics)'),
     instanceAllowlist: z.array(z.string().uuid()).optional().describe('Instances this key may target'),
@@ -105,12 +126,14 @@ const auditQuerySchema = z.object({
 keysRoutes.post(
   '/',
   async (c, next) => {
-    // Intentionally peek the raw body before zod so `profile: "admin"` is
-    // refused even if other fields would fail validation (e.g. missing name).
-    const raw = await c.req.raw
-      .clone()
-      .json()
-      .catch(() => null);
+    // Intentionally peek the body before zod so `profile: "admin"` is refused
+    // even if other fields would fail validation (e.g. missing name). Use the
+    // Hono-cached `c.req.json()` (not `c.req.raw.clone().json()`): the
+    // scope-enforcer middleware runs first in production and already consumed
+    // the raw body stream, so cloning the raw request yields an unusable body
+    // and the guard would silently fall through to zod. `c.req.json()` returns
+    // the cached parse and fires reliably regardless of upstream reads.
+    const raw = await c.req.json().catch(() => null);
     if (raw && typeof raw === 'object' && (raw as { profile?: unknown }).profile === 'admin') {
       return c.json(
         {
@@ -147,6 +170,247 @@ function normalizeOverrides(overrides: CreateKeyData['overrides']): ResolveProfi
   };
 }
 
+/** Return the common fail-closed response for malformed signed-host context. */
+function invalidSignedHostScopeContextResponse(c: Context<{ Variables: AppVariables }>, hostId: string): Response {
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Signing host scope context is missing.',
+        host: hostId,
+      },
+    },
+    403,
+  );
+}
+
+/**
+ * Least-privilege scope ceiling for key-management writes.
+ *
+ * A caller may only create or update a key whose scopes are a SUBSET of its
+ * OWN scopes. Signed requests are authorized by the intersection of the bearer
+ * and signing-host scopes, so the requested grant must be covered by BOTH.
+ * `ApiKeyService.scopeAllows(authorizerScopes, requested)` is exactly the
+ * covering relation we need:
+ *   - a `*` authorizer (the real god-key / `admin` profile) covers every
+ *     requested scope, so god-key minting and internal agent-provisioning keep
+ *     working unchanged;
+ *   - a concrete-scoped authorizer (e.g. `console-admin` or a narrowed signing
+ *     host) covers a requested scope it holds — or one under a `ns:*` it holds
+ *     — but does NOT cover `*` or a `ns:*` super-scope it lacks. So a bounded
+ *     authority can never escalate to a god key or a whole-namespace grant.
+ *
+ * Returns a 403 `Response` listing the disallowed scopes, or `null` when every
+ * requested scope is within every active authorizer's ceiling.
+ */
+function enforceScopeCeiling(c: Context<{ Variables: AppVariables }>, requestedScopes: string[]): Response | null {
+  const authorizerScopeSets: string[][] = [c.get('apiKey')?.scopes ?? []];
+  const signedHost = readSignedHostScopeContext(c);
+  if (signedHost.kind === 'invalid') return invalidSignedHostScopeContextResponse(c, signedHost.hostId);
+  if (signedHost.kind === 'valid') authorizerScopeSets.push(signedHost.scopes);
+  const exceeding = requestedScopes.filter((scope) =>
+    authorizerScopeSets.some((authorizerScopes) => !ApiKeyService.scopeAllows(authorizerScopes, scope)),
+  );
+  if (exceeding.length === 0) return null;
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: `Cannot grant scopes that exceed the caller's own. Disallowed: ${exceeding.join(', ')}`,
+      },
+    },
+    403,
+  );
+}
+
+/** `null` is unrestricted; an empty Set is an active deny-all restriction. */
+interface InstanceAuthorityInput {
+  instanceIds: readonly string[] | null;
+  profile: Exclude<ApiKeyData['profile'], undefined>;
+  instanceAllowlist: readonly string[];
+}
+
+type InstanceAuthority = ReadonlySet<string> | null;
+
+interface DerivedInstanceAuthorities {
+  /** Authority on routes guarded only by the route-specific legacy guard. */
+  legacy: InstanceAuthority;
+  /** Authority on historical legacy routes that skip checks for an empty list. */
+  legacyEmptyInactive: InstanceAuthority;
+  /** Authority on routes where both legacy and profile-aware guards apply. */
+  effective: InstanceAuthority;
+  /** Authority on routes guarded only by the global profile-aware enforcer. */
+  profileAware: InstanceAuthority;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function normalizeInstanceIds(values: readonly string[]): ReadonlySet<string> {
+  // PostgreSQL uuid/uuid[] values are case-insensitive and persist in canonical
+  // lowercase form. Compare the same canonical representation before writing.
+  return new Set(values.map((value) => value.toLowerCase()));
+}
+
+function intersectAuthorities(left: InstanceAuthority, right: InstanceAuthority): InstanceAuthority {
+  if (left === null) return right;
+  if (right === null) return left;
+  return new Set([...left].filter((instanceId) => right.has(instanceId)));
+}
+
+function deriveInstanceAuthorities(input: InstanceAuthorityInput): DerivedInstanceAuthorities | null {
+  // Context is runtime data despite its TypeScript type. Any missing or
+  // malformed field is invalid rather than unrestricted, so writes fail closed.
+  if (input.instanceIds !== null && !isStringArray(input.instanceIds)) return null;
+  if (!isStringArray(input.instanceAllowlist)) return null;
+  if (input.profile !== null && (typeof input.profile !== 'string' || !KNOWN_API_KEY_PROFILES.has(input.profile))) {
+    return null;
+  }
+
+  const legacy = input.instanceIds === null ? null : normalizeInstanceIds(input.instanceIds);
+  const legacyEmptyInactive = input.instanceIds === null || input.instanceIds.length === 0 ? null : legacy;
+  const profileAware = isLockActive(input.profile, 'instanceAllowlist', input.instanceAllowlist)
+    ? normalizeInstanceIds(input.instanceAllowlist)
+    : null;
+
+  return {
+    legacy,
+    legacyEmptyInactive,
+    effective: intersectAuthorities(legacy, profileAware),
+    profileAware,
+  };
+}
+
+function isAuthoritySubset(requested: InstanceAuthority, allowed: InstanceAuthority): boolean {
+  if (allowed === null) return true;
+  if (requested === null) return false;
+  return [...requested].every((instanceId) => allowed.has(instanceId));
+}
+
+interface ProfileAllowlistAuthorityInput {
+  profile: Exclude<ApiKeyData['profile'], undefined>;
+  chatAllowlist: readonly string[];
+  outboundRecipientAllowlist: readonly string[];
+}
+
+interface ProfileAllowlistAuthorities {
+  chat: InstanceAuthority;
+  outboundRecipient: InstanceAuthority;
+}
+
+function deriveProfileAllowlistAuthorities(input: ProfileAllowlistAuthorityInput): ProfileAllowlistAuthorities | null {
+  if (!isStringArray(input.chatAllowlist) || !isStringArray(input.outboundRecipientAllowlist)) return null;
+  if (input.profile !== null && (typeof input.profile !== 'string' || !KNOWN_API_KEY_PROFILES.has(input.profile))) {
+    return null;
+  }
+
+  return {
+    chat: isLockActive(input.profile, 'chatAllowlist', input.chatAllowlist) ? new Set(input.chatAllowlist) : null,
+    outboundRecipient: isLockActive(input.profile, 'outboundRecipientAllowlist', input.outboundRecipientAllowlist)
+      ? new Set(input.outboundRecipientAllowlist)
+      : null,
+  };
+}
+
+/** Bound profile-aware chat and outbound-recipient reach on every key write. */
+function enforceProfileAllowlistCeilings(
+  c: Context<{ Variables: AppVariables }>,
+  requestedAuthority: ProfileAllowlistAuthorityInput,
+): Response | null {
+  const apiKey = c.get('apiKey');
+  if (
+    !apiKey ||
+    apiKey.profile === undefined ||
+    !isStringArray(apiKey.chatAllowlist) ||
+    !isStringArray(apiKey.outboundRecipientAllowlist)
+  ) {
+    return c.json(
+      {
+        error: {
+          code: 'FORBIDDEN',
+          message: "Cannot grant chat or recipient access that exceeds the caller's own.",
+        },
+      },
+      403,
+    );
+  }
+
+  const callerAuthorities = deriveProfileAllowlistAuthorities({
+    profile: apiKey.profile,
+    chatAllowlist: apiKey.chatAllowlist,
+    outboundRecipientAllowlist: apiKey.outboundRecipientAllowlist,
+  });
+  const childAuthorities = deriveProfileAllowlistAuthorities(requestedAuthority);
+  const exceedsCaller =
+    callerAuthorities === null ||
+    childAuthorities === null ||
+    !isAuthoritySubset(childAuthorities.chat, callerAuthorities.chat) ||
+    !isAuthoritySubset(childAuthorities.outboundRecipient, callerAuthorities.outboundRecipient);
+
+  if (!exceedsCaller) return null;
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: "Cannot grant chat or recipient access that exceeds the caller's own.",
+      },
+    },
+    403,
+  );
+}
+
+/**
+ * Least-privilege ceiling for instance access on key-management writes.
+ *
+ * Legacy-only, profile-aware-only, and combined guard surfaces all exist. Some
+ * historical legacy routes also skip checks for `instanceIds: []`, while the
+ * canonical helper treats it as deny-all. A single intersection comparison is
+ * therefore insufficient: bound every enforcement interpretation separately.
+ */
+function enforceInstanceCeiling(
+  c: Context<{ Variables: AppVariables }>,
+  requestedAuthority: InstanceAuthorityInput,
+): Response | null {
+  const apiKey = c.get('apiKey');
+  if (!apiKey || apiKey.profile === undefined || !isStringArray(apiKey.instanceAllowlist)) {
+    return c.json(
+      {
+        error: {
+          code: 'FORBIDDEN',
+          message: "Cannot grant instance access that exceeds the caller's own.",
+        },
+      },
+      403,
+    );
+  }
+  const callerAuthorities = deriveInstanceAuthorities({
+    instanceIds: apiKey.instanceIds,
+    profile: apiKey.profile,
+    instanceAllowlist: apiKey.instanceAllowlist,
+  });
+  const childAuthorities = deriveInstanceAuthorities(requestedAuthority);
+
+  const exceedsCaller =
+    callerAuthorities === null ||
+    childAuthorities === null ||
+    !isAuthoritySubset(childAuthorities.legacy, callerAuthorities.legacy) ||
+    !isAuthoritySubset(childAuthorities.legacyEmptyInactive, callerAuthorities.legacyEmptyInactive) ||
+    !isAuthoritySubset(childAuthorities.profileAware, callerAuthorities.profileAware) ||
+    !isAuthoritySubset(childAuthorities.effective, callerAuthorities.effective);
+  if (!exceedsCaller) return null;
+
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: "Cannot grant instance access that exceeds the caller's own.",
+      },
+    },
+    403,
+  );
+}
+
 async function handleProfileCreate(
   c: Context<{ Variables: AppVariables }>,
   data: CreateKeyData,
@@ -162,6 +426,25 @@ async function handleProfileCreate(
       overrides: normalizeOverrides(data.overrides),
       denylistPresetKey: data.denylistPresetKey,
     });
+
+    // Enforce the mint ceiling on the RESOLVED profile scopes so a bounded
+    // caller can't escalate by requesting a broader profile than it holds.
+    const ceilingDenied = enforceScopeCeiling(c, resolved.scopes);
+    if (ceilingDenied) return ceilingDenied;
+
+    const instanceCeilingDenied = enforceInstanceCeiling(c, {
+      instanceIds: data.instanceIds ?? null,
+      profile: resolved.profile,
+      instanceAllowlist: resolved.instanceAllowlist,
+    });
+    if (instanceCeilingDenied) return instanceCeilingDenied;
+
+    const allowlistCeilingDenied = enforceProfileAllowlistCeilings(c, {
+      profile: resolved.profile,
+      chatAllowlist: resolved.chatAllowlist,
+      outboundRecipientAllowlist: resolved.outboundRecipientAllowlist,
+    });
+    if (allowlistCeilingDenied) return allowlistCeilingDenied;
 
     const result = await services.apiKeys.create({
       name: data.name,
@@ -207,6 +490,26 @@ async function handleLegacyCreate(
       400,
     );
   }
+
+  // Enforce the mint ceiling: the requested scopes must be a subset of the
+  // caller's own. Blocks a `console-admin` (or any concrete-scoped) caller from
+  // minting `['*']` / a `ns:*` super-scope and using it as a one-hop god key.
+  const ceilingDenied = enforceScopeCeiling(c, data.scopes);
+  if (ceilingDenied) return ceilingDenied;
+
+  const instanceCeilingDenied = enforceInstanceCeiling(c, {
+    instanceIds: data.instanceIds ?? null,
+    profile: null,
+    instanceAllowlist: [],
+  });
+  if (instanceCeilingDenied) return instanceCeilingDenied;
+
+  const allowlistCeilingDenied = enforceProfileAllowlistCeilings(c, {
+    profile: null,
+    chatAllowlist: [],
+    outboundRecipientAllowlist: [],
+  });
+  if (allowlistCeilingDenied) return allowlistCeilingDenied;
 
   const result = await services.apiKeys.create({
     name: data.name,
@@ -267,17 +570,42 @@ keysRoutes.patch('/:id', zValidator('json', updateKeySchema), async (c) => {
   const data = c.req.valid('json');
   const services = c.get('services');
 
+  const updateOptions = {
+    ...data,
+    expiresAt: data.expiresAt === null ? null : data.expiresAt ? new Date(data.expiresAt) : undefined,
+  };
+
   try {
-    const updated = await services.apiKeys.update(id, {
-      ...data,
-      expiresAt: data.expiresAt === null ? null : data.expiresAt ? new Date(data.expiresAt) : undefined,
+    let authorityDenied: Response | null | undefined;
+    const result = await services.apiKeys.updateWithAuthorityGuard(id, updateOptions, (_current, next) => {
+      authorityDenied = enforceScopeCeiling(c, next.scopes);
+      if (authorityDenied) return false;
+
+      authorityDenied = enforceInstanceCeiling(c, {
+        instanceIds: next.instanceIds,
+        profile: next.profile,
+        instanceAllowlist: next.instanceAllowlist,
+      });
+      if (authorityDenied) return false;
+
+      authorityDenied = enforceProfileAllowlistCeilings(c, {
+        profile: next.profile,
+        chatAllowlist: next.chatAllowlist,
+        outboundRecipientAllowlist: next.outboundRecipientAllowlist,
+      });
+      return authorityDenied == null;
     });
 
-    if (!updated) {
+    if (result.status === 'denied') {
+      return (
+        authorityDenied ??
+        c.json({ error: { code: 'FORBIDDEN', message: 'API key authority exceeds caller authority' } }, 403)
+      );
+    }
+    if (result.status === 'not_found') {
       return c.json({ error: { code: 'NOT_FOUND', message: 'API key not found' } }, 404);
     }
-
-    return c.json({ data: updated });
+    return c.json({ data: result.key });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     if (message.includes('Cannot rename primary')) {

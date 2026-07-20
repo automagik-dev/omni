@@ -91,6 +91,17 @@ export class MessageDebouncer {
     this.restartTimer(chatKey, config);
   }
 
+  /**
+   * Whether messages are currently buffered for this chat — typically ones
+   * that arrived while a flush was in flight. The dispatcher uses this to
+   * detect that a reply it is about to deliver was generated from a stale
+   * snapshot (newer inbound exists) and may discard it; the finally-block
+   * re-flush then answers everything with full context.
+   */
+  hasPending(instanceId: string, chatId: string): boolean {
+    return (this.buffers.get(this.getChatKey(instanceId, chatId))?.length ?? 0) > 0;
+  }
+
   onUserTyping(instanceId: string, chatId: string, config: DebounceConfig): void {
     const chatKey = this.getChatKey(instanceId, chatId);
     // Don't restart the timer if this chat is currently being flushed — the

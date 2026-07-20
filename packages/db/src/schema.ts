@@ -63,6 +63,12 @@ export type DebounceMode = (typeof debounceMode)[number];
 export const splitDelayMode = ['disabled', 'fixed', 'randomized'] as const;
 export type SplitDelayMode = (typeof splitDelayMode)[number];
 
+// Policy for agent replies whose input snapshot is stale (newer inbound arrived
+// while the agent was running): 'off' delivers them (legacy behavior), 'discard'
+// drops them so the debouncer re-flush answers with full context.
+export const supersedeMode = ['off', 'discard'] as const;
+export type SupersedeMode = (typeof supersedeMode)[number];
+
 export const replyFilterMode = ['all', 'filtered'] as const;
 export type ReplyFilterMode = (typeof replyFilterMode)[number];
 
@@ -106,7 +112,19 @@ export type ApiKeyStatus = (typeof apiKeyStatuses)[number];
 
 // Profile templates that compose verb buckets + enforcement locks for API keys.
 // `null` keeps pre-profile keys working with legacy empty-allowlist-as-no-lock semantics.
-export const apiKeyProfiles = ['cs', 'personal', 'scout', 'coworker', 'admin'] as const;
+// The `console-*` profiles are lock-free platform-wide admin-console keys minted
+// per user by the admin UI's BFF (see packages/api/src/constants/profiles.ts).
+// The column is varchar(32), not a pg enum — widening this union needs no migration.
+export const apiKeyProfiles = [
+  'cs',
+  'personal',
+  'scout',
+  'coworker',
+  'admin',
+  'console-viewer',
+  'console-operator',
+  'console-admin',
+] as const;
 export type ApiKeyProfile = (typeof apiKeyProfiles)[number];
 
 // Tenant-editable overrides applied on top of a profile's bucket resolution.
@@ -760,6 +778,16 @@ export const instances = pgTable(
     messageDebounceRestartOnTyping: boolean('message_debounce_restart_on_typing').notNull().default(false),
     /** Hard cap (ms) for 'presence' mode — flush at firstBuffered + this even under continuous typing. NULL = no cap. */
     messageDebounceMaxWaitMs: integer('message_debounce_max_wait_ms'),
+    /**
+     * Stale-reply policy: what to do when newer inbound arrived while the agent
+     * was still processing the previous batch. 'off' delivers the (stale) reply
+     * as before; 'discard' drops it — the debouncer's re-flush then dispatches
+     * the buffered messages and produces one reply with full context.
+     */
+    messageSupersedeMode: varchar('message_supersede_mode', { length: 20 })
+      .notNull()
+      .default('off')
+      .$type<SupersedeMode>(),
 
     // ---- Smart Response Gate ----
     agentGateEnabled: boolean('agent_gate_enabled').notNull().default(false),

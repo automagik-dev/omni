@@ -90,6 +90,13 @@ export interface UpdateApiKeyOptions {
   contextMessageId?: string | null;
 }
 
+export type ApiKeyAuthorityGuard = (current: ApiKey, next: ApiKey) => boolean | Promise<boolean>;
+
+export type GuardedApiKeyUpdateResult =
+  | { status: 'updated'; key: ApiKey }
+  | { status: 'not_found' }
+  | { status: 'denied' };
+
 export class ApiKeyService {
   constructor(private db: Database) {}
 
@@ -308,6 +315,57 @@ export class ApiKeyService {
       throw new Error('Cannot rename primary API key');
     }
 
+    const updates = this.buildUpdateValues(options);
+
+    const [updated] = await this.db.update(apiKeys).set(updates).where(eq(apiKeys.id, id)).returning();
+
+    if (updated) {
+      await apiKeyCache.delete(CacheKeys.apiKey(updated.keyHash));
+      log.info('API key updated', { id, fields: Object.keys(options) });
+    }
+
+    return updated ?? null;
+  }
+
+  /**
+   * Atomically update an API key after validating its complete post-update
+   * authority. The target row remains locked from the initial read through the
+   * guard and write, so concurrent partial authority PATCHes cannot compose
+   * against the same stale snapshot.
+   */
+  async updateWithAuthorityGuard(
+    id: string,
+    options: UpdateApiKeyOptions,
+    guard: ApiKeyAuthorityGuard,
+  ): Promise<GuardedApiKeyUpdateResult> {
+    const result = await this.db.transaction(async (tx): Promise<GuardedApiKeyUpdateResult> => {
+      const [current] = await tx.select().from(apiKeys).where(eq(apiKeys.id, id)).limit(1).for('update');
+
+      if (!current) return { status: 'not_found' };
+
+      if (options.name !== undefined && current.name === PRIMARY_KEY_NAME) {
+        throw new Error('Cannot rename primary API key');
+      }
+
+      const updates = this.buildUpdateValues(options);
+      const next = { ...current, ...updates } as ApiKey;
+      if (!(await guard(current, next))) return { status: 'denied' };
+
+      const [updated] = await tx.update(apiKeys).set(updates).where(eq(apiKeys.id, id)).returning();
+      if (!updated) return { status: 'not_found' };
+
+      return { status: 'updated', key: updated };
+    });
+
+    if (result.status === 'updated') {
+      await apiKeyCache.delete(CacheKeys.apiKey(result.key.keyHash));
+      log.info('API key updated', { id, fields: Object.keys(options) });
+    }
+
+    return result;
+  }
+
+  private buildUpdateValues(options: UpdateApiKeyOptions): Record<string, unknown> {
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (options.name !== undefined) updates.name = options.name;
     if (options.description !== undefined) updates.description = options.description;
@@ -325,15 +383,7 @@ export class ApiKeyService {
     ) {
       updates.contextUpdatedAt = new Date();
     }
-
-    const [updated] = await this.db.update(apiKeys).set(updates).where(eq(apiKeys.id, id)).returning();
-
-    if (updated) {
-      await apiKeyCache.delete(CacheKeys.apiKey(updated.keyHash));
-      log.info('API key updated', { id, fields: Object.keys(options) });
-    }
-
-    return updated ?? null;
+    return updates;
   }
 
   /**
