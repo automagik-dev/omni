@@ -375,13 +375,34 @@ export class MessageService {
       return value;
     };
 
-    return (
-      rows
-        .map((message) => ({ message, score: score(message) }))
-        .sort(
-          (a, b) => b.score - a.score || b.message.platformTimestamp.getTime() - a.message.platformTimestamp.getTime(),
-        )[0]?.message ?? null
-    );
+    const ranked = rows
+      .map((message) => ({ message, score: score(message) }))
+      .sort(
+        (a, b) => b.score - a.score || b.message.platformTimestamp.getTime() - a.message.platformTimestamp.getTime(),
+      );
+
+    // Ambiguity guard: when two or more candidates tie at the top score AND
+    // were sent moments apart (same burst — e.g. two product cards delivered
+    // back to back), picking the newest is a coin flip: quoting the WRONG card
+    // silently corrupts the reply context downstream (the agent locks onto an
+    // option the customer never chose). Returning null is strictly safer — the
+    // agent sees no quote and asks which option was meant. Ties against much
+    // OLDER messages keep the recency preference (an hours-old duplicate is
+    // almost never the quote target; see the second-precision grace test).
+    const AMBIGUOUS_TIE_WINDOW_MS = 5 * 60_000;
+    const top = ranked[0];
+    if (!top) return null;
+    const ambiguousTie =
+      top.score > 0 &&
+      ranked.some(
+        (entry, index) =>
+          index > 0 &&
+          entry.score === top.score &&
+          Math.abs(top.message.platformTimestamp.getTime() - entry.message.platformTimestamp.getTime()) <=
+            AMBIGUOUS_TIE_WINDOW_MS,
+      );
+    if (ambiguousTie) return null;
+    return top.message;
   }
 
   /** Get multiple messages by external IDs in a single query */
