@@ -9,9 +9,22 @@ policy:
     looser: architecture_change_and_human_security_approval
   freeze_gate: G0
 
+# G0 review (2026-07-20): reviewed against OWNERSHIP_MANIFEST.yaml, SURFACE_INVENTORY.yaml,
+# and THREAT_MODEL.md. No numeric ceiling was loosened. Refreshed the baseline source_commit
+# to the materialization base and ADDED two fail-closed release_evidence items surfaced by the
+# threat model (restore-completeness T16, shared-runtime residual acceptance T18). All additions
+# tighten the contract; missing evidence remains a failure.
+g0_review:
+  reviewed_at: 2026-07-20
+  reviewer: engineer-complex-g0
+  loosened_any_ceiling: false
+  tightened:
+    - added release_evidence.restore_completeness_auth_key_object_queue_receipt
+    - added release_evidence.shared_runtime_residual_risk_acceptance
+
 workloads:
   baseline:
-    source_commit: 739fd49f1cd31de759664c0dcd266f71c868e338
+    source_commit: d6c400d05287bbf436ecd7e28c56c845b893afc9
     environment: production-like isolated staging restored from a redacted/restricted production snapshot
     profile: version-controlled mixed HTTP, websocket, worker, NATS, media, search, and database workload
   staging_soak:
@@ -152,4 +165,6 @@ release_evidence:
     - staging_soak_report
     - production_canary_report
     - credential_custody_report
+    - restore_completeness_auth_key_object_queue_receipt
+    - shared_runtime_residual_risk_acceptance
   absent_or_unverifiable: fail

@@ -5,7 +5,7 @@ approved_by: Felipe Rosa
 approved_at: 2026-07-20T19:46:44Z
 decision: approved
 reviewed_wish_sha256: 67b52d941196d4ae481b8270d33f58804f5f0d14bb8e0ccc3e1afbcd42c91938
-materialized_wish_sha256: 80188e4064d323a2183bbbe2876a7cb7a601e1c34a4b2d2fd21bc67e14a167ad
+materialized_wish_sha256: 4b83568a7b88c524f20d1b71878b525aa0850c9f61db3c13a559e4b60f88784b
 materialization_base_commit: d6c400d05287bbf436ecd7e28c56c845b893afc9
 fable_verdict: SHIP
 work_scope: G0-through-G8A-non-production
@@ -43,6 +43,7 @@ The Genie v5 task database does not enforce WISH dependency edges. A task row sh
 
 - Reviewed WISH SHA-256: `67b52d941196d4ae481b8270d33f58804f5f0d14bb8e0ccc3e1afbcd42c91938`
 - Materialized WISH SHA-256 after the four approved administrative/G0-condition amendments: `80188e4064d323a2183bbbe2876a7cb7a601e1c34a4b2d2fd21bc67e14a167ad`
+- Materialized WISH SHA-256 after the G0 live citation refresh (Fable conditions 2 and 3: caller-adjacent tenantId inventory item + current-state citations against the materialization base) and the corrected non-stale human-gate sentence: `4b83568a7b88c524f20d1b71878b525aa0850c9f61db3c13a559e4b60f88784b`
 - Claude Fable review: `/home/genie/evidence/omni-full-multitenancy/fable-review-20260720T160230-0300.md`
 - Frozen Fable evidence packet: `/home/genie/evidence/omni-full-multitenancy/fable-review-20260720T160230-0300.evidence-packet.txt`
 - Fable verdict: `SHIP`, zero blocking findings

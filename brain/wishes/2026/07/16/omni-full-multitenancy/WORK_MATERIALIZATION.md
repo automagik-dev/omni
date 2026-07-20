@@ -48,7 +48,8 @@ No task row was created for `H8.1`, `G8B`, `H8.2`, `G8C`, `H8.3`, `G8D`, `H8.4`,
 - Expected task count: 9
 - Forbidden production/hold task rows found: 0
 - Post-approval Claude Fable exact-slice gate: `SHIP`, no blocking findings
-- Materialized WISH SHA-256: `80188e4064d323a2183bbbe2876a7cb7a601e1c34a4b2d2fd21bc67e14a167ad`
+- Materialized WISH SHA-256 (at materialization): `80188e4064d323a2183bbbe2876a7cb7a601e1c34a4b2d2fd21bc67e14a167ad`
+- Materialized WISH SHA-256 (after G0 live citation refresh): `4b83568a7b88c524f20d1b71878b525aa0850c9f61db3c13a559e4b60f88784b`
 - Current base commit: `d6c400d05287bbf436ecd7e28c56c845b893afc9`
 
 ## Current gate
