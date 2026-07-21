@@ -13,6 +13,7 @@ import { WebhookService } from '../webhooks';
 function createMockSource(overrides: Partial<WebhookSource> = {}): WebhookSource {
   return {
     id: 'test-id-123',
+    tenantId: null,
     name: 'test-webhook',
     description: 'Test webhook source',
     expectedHeaders: null,
@@ -71,6 +72,7 @@ function createMockDatabase(initialSources: WebhookSource[] = []) {
       values: mock((data: NewWebhookSource) => {
         const newSource: WebhookSource = {
           id: `generated-${Date.now()}`,
+          tenantId: null,
           name: data.name,
           description: data.description ?? null,
           expectedHeaders: data.expectedHeaders ?? null,

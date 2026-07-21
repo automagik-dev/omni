@@ -14,6 +14,7 @@ import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJob
 import { relations, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
+  bigint,
   boolean,
   check,
   foreignKey,
@@ -365,8 +366,12 @@ export const agents = pgTable(
     followUpConfig: jsonb('follow_up_config').$type<FollowUpSequenceConfig>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('agents_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('agents_tenant_id_uq').on(table.tenantId, table.id),
     nameIdx: index('agents_name_idx').on(table.name),
     ownerIdx: index('agents_owner_idx').on(table.ownerId),
     providerIdx: index('agents_provider_idx').on(table.provider),
@@ -375,7 +380,13 @@ export const agents = pgTable(
 );
 
 export type Agent = typeof agents.$inferSelect;
-export type NewAgent = typeof agents.$inferInsert;
+/**
+ * Tenant ownership is NOT caller-settable. `tenant_id` is derived by the database
+ * BEFORE INSERT triggers introduced in migration 0041, never accepted from a
+ * caller, so it is omitted from every widened insert type below. The single
+ * ownership-root path (`instances`) is stamped through `tenancy-dual-write.ts`.
+ */
+export type NewAgent = Omit<typeof agents.$inferInsert, 'tenantId'>;
 
 // ============================================================================
 // AGENT ROUTES
@@ -447,8 +458,18 @@ export const agentRoutes = pgTable(
     // ---- Timestamps ----
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('agent_routes_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('agent_routes_tenant_id_uq').on(table.tenantId, table.id),
+    tenantChatRouteUq: uniqueIndex('agent_routes_tenant_chat_route_uq')
+      .on(table.tenantId, table.instanceId, table.chatId)
+      .where(sql`${table.tenantId} IS NOT NULL`),
+    tenantUserRouteUq: uniqueIndex('agent_routes_tenant_user_route_uq')
+      .on(table.tenantId, table.instanceId, table.personId)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     // Constraints
     scopeCheck: check(
       'scope_check',
@@ -505,8 +526,14 @@ export const agentSessions = pgTable(
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('agent_sessions_tenant_idx').on(table.tenantId),
+    tenantInstanceKeyUq: uniqueIndex('agent_sessions_tenant_instance_key_uq')
+      .on(table.tenantId, table.instanceId, table.sessionKey)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     // Unique constraint: one session per instance+key
     uniqueSession: uniqueIndex('agent_sessions_instance_key_idx').on(table.instanceId, table.sessionKey),
 
@@ -932,8 +959,15 @@ export const instances = pgTable(
     // ---- Timestamps ----
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('instances_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('instances_tenant_id_uq').on(table.tenantId, table.id),
+    tenantNameUq: uniqueIndex('instances_tenant_name_uq')
+      .on(table.tenantId, table.name)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     nameIdx: uniqueIndex('instances_name_idx').on(table.name),
     channelIdx: index('instances_channel_idx').on(table.channel),
     isActiveIdx: index('instances_is_active_idx').on(table.isActive),
@@ -964,8 +998,15 @@ export const persons = pgTable(
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('persons_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('persons_tenant_id_uq').on(table.tenantId, table.id),
+    tenantPhoneUq: uniqueIndex('persons_tenant_phone_uq')
+      .on(table.tenantId, table.primaryPhone)
+      .where(sql`${table.tenantId} IS NOT NULL AND ${table.primaryPhone} IS NOT NULL`),
     phoneIdx: uniqueIndex('persons_phone_idx').on(table.primaryPhone),
     emailIdx: index('persons_email_idx').on(table.primaryEmail),
     nameIdx: index('persons_name_idx').on(table.displayName),
@@ -1008,8 +1049,15 @@ export const platformIdentities = pgTable(
     // ---- Timestamps ----
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('platform_identities_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('platform_identities_tenant_id_uq').on(table.tenantId, table.id),
+    tenantChannelUserUq: uniqueIndex('platform_identities_tenant_channel_user_uq')
+      .on(table.tenantId, table.channel, table.instanceId, table.platformUserId)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     personIdx: index('platform_identities_person_idx').on(table.personId),
     agentIdx: index('platform_identities_agent_idx').on(table.agentId),
     channelIdx: index('platform_identities_channel_idx').on(table.channel),
@@ -1042,15 +1090,19 @@ export const conversations = pgTable(
     state: jsonb('state').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('conversations_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('conversations_tenant_id_uq').on(table.tenantId, table.id),
     createdAtIdx: index('conversations_created_at_idx').on(table.createdAt),
     updatedAtIdx: index('conversations_updated_at_idx').on(table.updatedAt),
   }),
 );
 
 export type Conversation = typeof conversations.$inferSelect;
-export type NewConversation = typeof conversations.$inferInsert;
+export type NewConversation = Omit<typeof conversations.$inferInsert, 'tenantId'>;
 
 // ============================================================================
 // CHATS (Unified Chat Model)
@@ -1111,8 +1163,15 @@ export const chats = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('chats_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('chats_tenant_id_uq').on(table.tenantId, table.id),
+    tenantInstanceExternalUq: uniqueIndex('chats_tenant_instance_external_uq')
+      .on(table.tenantId, table.instanceId, table.externalId)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     instanceExternalIdx: uniqueIndex('chats_instance_external_idx').on(table.instanceId, table.externalId),
     canonicalIdIdx: index('chats_canonical_id_idx').on(table.canonicalId),
     // Prevents duplicate canonical chats within an instance
@@ -1170,8 +1229,14 @@ export const chatParticipants = pgTable(
     // ---- Timestamps ----
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('chat_participants_tenant_idx').on(table.tenantId),
+    tenantChatUserUq: uniqueIndex('chat_participants_tenant_chat_user_uq')
+      .on(table.tenantId, table.chatId, table.platformUserId)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     chatUserIdx: uniqueIndex('chat_participants_chat_user_idx').on(table.chatId, table.platformUserId),
     chatIdx: index('chat_participants_chat_idx').on(table.chatId),
     personIdx: index('chat_participants_person_idx').on(table.personId),
@@ -1223,8 +1288,14 @@ export const omniGroups = pgTable(
     syncedAt: timestamp('synced_at', { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('omni_groups_tenant_idx').on(table.tenantId),
+    tenantInstanceExternalUq: uniqueIndex('omni_groups_tenant_instance_external_uq')
+      .on(table.tenantId, table.instanceId, table.externalId)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     instanceExternalIdx: uniqueIndex('omni_groups_instance_external_idx').on(table.instanceId, table.externalId),
     instanceIdx: index('omni_groups_instance_idx').on(table.instanceId),
     channelIdx: index('omni_groups_channel_idx').on(table.channel),
@@ -1340,8 +1411,15 @@ export const messages = pgTable(
     receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(), // When we got it
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('messages_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('messages_tenant_id_uq').on(table.tenantId, table.id),
+    tenantChatExternalUq: uniqueIndex('messages_tenant_chat_external_uq')
+      .on(table.tenantId, table.chatId, table.externalId)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     chatExternalIdx: uniqueIndex('messages_chat_external_idx').on(table.chatId, table.externalId),
     chatIdx: index('messages_chat_idx').on(table.chatId),
     senderPersonIdx: index('messages_sender_person_idx').on(table.senderPersonId),
@@ -1433,8 +1511,12 @@ export const omniEvents = pgTable(
     // ---- Metadata ----
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('omni_events_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('omni_events_tenant_id_uq').on(table.tenantId, table.id),
     externalIdIdx: index('omni_events_external_id_idx').on(table.externalId),
     channelIdx: index('omni_events_channel_idx').on(table.channel),
     instanceIdx: index('omni_events_instance_idx').on(table.instanceId),
@@ -1473,8 +1555,11 @@ export const handoffLogs = pgTable(
     handoffFields: jsonb('handoff_fields').$type<Record<string, unknown>>(), // structured fields for Gupshup flow variables
     sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
     metadata: jsonb('metadata').$type<Record<string, unknown>>(), // extensible
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('handoff_logs_tenant_idx').on(table.tenantId),
     instanceIdx: index('handoff_logs_instance_idx').on(table.instanceId),
     chatUuidIdx: index('handoff_logs_chat_uuid_idx').on(table.chatUuid),
     chatIdIdx: index('handoff_logs_chat_id_idx').on(table.chatId),
@@ -1536,8 +1621,11 @@ export const closeContactLogs = pgTable(
     escalated: boolean('escalated').notNull().default(false),
     sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
     metadata: jsonb('metadata').$type<Record<string, unknown>>(), // extensible
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('close_contact_logs_tenant_idx').on(table.tenantId),
     /** Hot path: recent-count query for escalation. */
     chatOutcomeSentAtIdx: index('close_contact_logs_chat_outcome_sent_at_idx').on(
       table.chatUuid,
@@ -1588,8 +1676,14 @@ export const accessRules = pgTable(
     // ---- Timestamps ----
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('access_rules_tenant_idx').on(table.tenantId),
+    tenantRuleUq: uniqueIndex('access_rules_tenant_rule_uq')
+      .on(table.tenantId, table.instanceId, table.phonePattern, table.ruleType)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     instanceIdx: index('access_rules_instance_idx').on(table.instanceId),
     phoneIdx: index('access_rules_phone_idx').on(table.phonePattern),
     ruleTypeIdx: index('access_rules_type_idx').on(table.ruleType),
@@ -1694,8 +1788,12 @@ export const batchJobs = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('batch_jobs_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('batch_jobs_tenant_id_uq').on(table.tenantId, table.id),
     statusIdx: index('batch_jobs_status_idx').on(table.status),
     instanceIdx: index('batch_jobs_instance_idx').on(table.instanceId),
     createdAtIdx: index('batch_jobs_created_at_idx').on(table.createdAt),
@@ -1765,8 +1863,11 @@ export const syncJobs = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('sync_jobs_tenant_idx').on(table.tenantId),
     instanceIdx: index('sync_jobs_instance_idx').on(table.instanceId),
     statusIdx: index('sync_jobs_status_idx').on(table.status),
     typeIdx: index('sync_jobs_type_idx').on(table.type),
@@ -1775,7 +1876,7 @@ export const syncJobs = pgTable(
 );
 
 export type SyncJob = typeof syncJobs.$inferSelect;
-export type NewSyncJob = typeof syncJobs.$inferInsert;
+export type NewSyncJob = Omit<typeof syncJobs.$inferInsert, 'tenantId'>;
 
 // ============================================================================
 // MEDIA CONTENT
@@ -1808,8 +1909,11 @@ export const mediaContent = pgTable(
     processingTimeMs: integer('processing_time_ms'),
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('media_content_tenant_idx').on(table.tenantId),
     eventIdx: index('media_content_event_idx').on(table.eventId),
     mediaIdx: index('media_content_media_idx').on(table.mediaId),
     batchJobIdx: index('media_content_batch_job_idx').on(table.batchJobId),
@@ -1835,8 +1939,14 @@ export const chatIdMappings = pgTable(
     phoneId: varchar('phone_id', { length: 255 }).notNull(), // @s.whatsapp.net format
     discoveredAt: timestamp('discovered_at', { withTimezone: true }).notNull().defaultNow(),
     discoveredFrom: varchar('discovered_from', { length: 50 }), // 'message_key' | 'sender_match' | 'manual'
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('chat_id_mappings_tenant_idx').on(table.tenantId),
+    tenantInstanceLidUq: uniqueIndex('chat_id_mappings_tenant_instance_lid_uq')
+      .on(table.tenantId, table.instanceId, table.lidId)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     instanceLidIdx: uniqueIndex('chat_id_mappings_instance_lid_idx').on(table.instanceId, table.lidId),
     instancePhoneIdx: index('chat_id_mappings_instance_phone_idx').on(table.instanceId, table.phoneId),
   }),
@@ -2098,37 +2208,37 @@ export type AgentProvider = typeof agentProviders.$inferSelect;
 export type NewAgentProvider = typeof agentProviders.$inferInsert;
 
 export type AgentRoute = typeof agentRoutes.$inferSelect;
-export type NewAgentRoute = typeof agentRoutes.$inferInsert;
+export type NewAgentRoute = Omit<typeof agentRoutes.$inferInsert, 'tenantId'>;
 
 export type AgentSession = typeof agentSessions.$inferSelect;
-export type NewAgentSession = typeof agentSessions.$inferInsert;
+export type NewAgentSession = Omit<typeof agentSessions.$inferInsert, 'tenantId'>;
 
 export type Instance = typeof instances.$inferSelect;
-export type NewInstance = typeof instances.$inferInsert;
+export type NewInstance = Omit<typeof instances.$inferInsert, 'tenantId'>;
 
 export type Person = typeof persons.$inferSelect;
-export type NewPerson = typeof persons.$inferInsert;
+export type NewPerson = Omit<typeof persons.$inferInsert, 'tenantId'>;
 
 export type PlatformIdentity = typeof platformIdentities.$inferSelect;
-export type NewPlatformIdentity = typeof platformIdentities.$inferInsert;
+export type NewPlatformIdentity = Omit<typeof platformIdentities.$inferInsert, 'tenantId'>;
 
 export type Chat = typeof chats.$inferSelect;
-export type NewChat = typeof chats.$inferInsert;
+export type NewChat = Omit<typeof chats.$inferInsert, 'tenantId'>;
 
 export type ChatParticipant = typeof chatParticipants.$inferSelect;
-export type NewChatParticipant = typeof chatParticipants.$inferInsert;
+export type NewChatParticipant = Omit<typeof chatParticipants.$inferInsert, 'tenantId'>;
 
 export type OmniGroup = typeof omniGroups.$inferSelect;
-export type NewOmniGroup = typeof omniGroups.$inferInsert;
+export type NewOmniGroup = Omit<typeof omniGroups.$inferInsert, 'tenantId'>;
 
 export type Message = typeof messages.$inferSelect;
-export type NewMessage = typeof messages.$inferInsert;
+export type NewMessage = Omit<typeof messages.$inferInsert, 'tenantId'>;
 
 export type OmniEvent = typeof omniEvents.$inferSelect;
-export type NewOmniEvent = typeof omniEvents.$inferInsert;
+export type NewOmniEvent = Omit<typeof omniEvents.$inferInsert, 'tenantId'>;
 
 export type AccessRule = typeof accessRules.$inferSelect;
-export type NewAccessRule = typeof accessRules.$inferInsert;
+export type NewAccessRule = Omit<typeof accessRules.$inferInsert, 'tenantId'>;
 
 export type GlobalSetting = typeof globalSettings.$inferSelect;
 export type NewGlobalSetting = typeof globalSettings.$inferInsert;
@@ -2137,13 +2247,13 @@ export type SettingChange = typeof settingChangeHistory.$inferSelect;
 export type NewSettingChange = typeof settingChangeHistory.$inferInsert;
 
 export type BatchJob = typeof batchJobs.$inferSelect;
-export type NewBatchJob = typeof batchJobs.$inferInsert;
+export type NewBatchJob = Omit<typeof batchJobs.$inferInsert, 'tenantId'>;
 
 export type MediaContent = typeof mediaContent.$inferSelect;
-export type NewMediaContent = typeof mediaContent.$inferInsert;
+export type NewMediaContent = Omit<typeof mediaContent.$inferInsert, 'tenantId'>;
 
 export type ChatIdMapping = typeof chatIdMappings.$inferSelect;
-export type NewChatIdMapping = typeof chatIdMappings.$inferInsert;
+export type NewChatIdMapping = Omit<typeof chatIdMappings.$inferInsert, 'tenantId'>;
 
 // ============================================================================
 // DEAD LETTER EVENTS (Event Ops)
@@ -2183,8 +2293,11 @@ export const deadLetterEvents = pgTable(
     lastRetryAt: timestamp('last_retry_at', { withTimezone: true }),
     resolvedAt: timestamp('resolved_at', { withTimezone: true }),
     resolvedBy: varchar('resolved_by', { length: 100 }), // manual resolution note
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('dead_letter_events_tenant_idx').on(table.tenantId),
     eventIdIdx: index('dead_letter_events_event_id_idx').on(table.eventId),
     eventTypeIdx: index('dead_letter_events_event_type_idx').on(table.eventType),
     statusIdx: index('dead_letter_events_status_idx').on(table.status),
@@ -2194,7 +2307,7 @@ export const deadLetterEvents = pgTable(
 );
 
 export type DeadLetterEvent = typeof deadLetterEvents.$inferSelect;
-export type NewDeadLetterEvent = typeof deadLetterEvents.$inferInsert;
+export type NewDeadLetterEvent = Omit<typeof deadLetterEvents.$inferInsert, 'tenantId'>;
 
 // ============================================================================
 // PAYLOAD STORAGE (Event Ops)
@@ -2261,8 +2374,11 @@ export const eventPayloads = pgTable(
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     deletedBy: varchar('deleted_by', { length: 100 }),
     deleteReason: varchar('delete_reason', { length: 255 }),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('event_payloads_tenant_idx').on(table.tenantId),
     eventIdIdx: index('event_payloads_event_id_idx').on(table.eventId),
     eventTypeIdx: index('event_payloads_event_type_idx').on(table.eventType),
     stageIdx: index('event_payloads_stage_idx').on(table.stage),
@@ -2273,7 +2389,7 @@ export const eventPayloads = pgTable(
 );
 
 export type EventPayload = typeof eventPayloads.$inferSelect;
-export type NewEventPayload = typeof eventPayloads.$inferInsert;
+export type NewEventPayload = Omit<typeof eventPayloads.$inferInsert, 'tenantId'>;
 
 // ============================================================================
 // WEBHOOK SOURCES (Events Ext)
@@ -2305,15 +2421,21 @@ export const webhookSources = pgTable(
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('webhook_sources_tenant_idx').on(table.tenantId),
+    tenantNameUq: uniqueIndex('webhook_sources_tenant_name_uq')
+      .on(table.tenantId, table.name)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     nameIdx: uniqueIndex('webhook_sources_name_idx').on(table.name),
     enabledIdx: index('webhook_sources_enabled_idx').on(table.enabled),
   }),
 );
 
 export type WebhookSource = typeof webhookSources.$inferSelect;
-export type NewWebhookSource = typeof webhookSources.$inferInsert;
+export type NewWebhookSource = Omit<typeof webhookSources.$inferInsert, 'tenantId'>;
 
 // ============================================================================
 // AUTOMATIONS (Events Ext)
@@ -2467,8 +2589,12 @@ export const automations = pgTable(
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('automations_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('automations_tenant_id_uq').on(table.tenantId, table.id),
     nameIdx: index('automations_name_idx').on(table.name),
     triggerIdx: index('automations_trigger_idx').on(table.triggerEventType),
     enabledIdx: index('automations_enabled_idx').on(table.enabled),
@@ -2477,7 +2603,7 @@ export const automations = pgTable(
 );
 
 export type Automation = typeof automations.$inferSelect;
-export type NewAutomation = typeof automations.$inferInsert;
+export type NewAutomation = Omit<typeof automations.$inferInsert, 'tenantId'>;
 
 /**
  * Automation execution status.
@@ -2524,8 +2650,11 @@ export const automationLogs = pgTable(
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('automation_logs_tenant_idx').on(table.tenantId),
     automationIdx: index('automation_logs_automation_idx').on(table.automationId),
     eventIdIdx: index('automation_logs_event_id_idx').on(table.eventId),
     statusIdx: index('automation_logs_status_idx').on(table.status),
@@ -2534,7 +2663,7 @@ export const automationLogs = pgTable(
 );
 
 export type AutomationLog = typeof automationLogs.$inferSelect;
-export type NewAutomationLog = typeof automationLogs.$inferInsert;
+export type NewAutomationLog = Omit<typeof automationLogs.$inferInsert, 'tenantId'>;
 
 // ============================================================================
 // CONSUMER OFFSETS (NATS sequence tracking)
@@ -2620,8 +2749,11 @@ export const triggerLogs = pgTable(
     /** Additional metadata */
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('trigger_logs_tenant_idx').on(table.tenantId),
     instanceIdx: index('trigger_logs_instance_idx').on(table.instanceId),
     traceIdx: index('trigger_logs_trace_idx').on(table.traceId),
     firedAtIdx: index('trigger_logs_fired_at_idx').on(table.firedAt),
@@ -2630,7 +2762,7 @@ export const triggerLogs = pgTable(
 );
 
 export type TriggerLog = typeof triggerLogs.$inferSelect;
-export type NewTriggerLog = typeof triggerLogs.$inferInsert;
+export type NewTriggerLog = Omit<typeof triggerLogs.$inferInsert, 'tenantId'>;
 
 export const triggerLogsRelations = relations(triggerLogs, ({ one }) => ({
   instance: one(instances, {
@@ -2717,8 +2849,12 @@ export const agentTasks = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('agent_tasks_tenant_idx').on(table.tenantId),
+    tenantIdUq: uniqueIndex('agent_tasks_tenant_id_uq').on(table.tenantId, table.id),
     agentIdIdx: index('agent_tasks_agent_id_idx').on(table.agentId),
     chatIdIdx: index('agent_tasks_chat_id_idx').on(table.chatId),
     conversationIdIdx: index('agent_tasks_conversation_id_idx').on(table.conversationId),
@@ -2730,7 +2866,7 @@ export const agentTasks = pgTable(
 );
 
 export type AgentTask = typeof agentTasks.$inferSelect;
-export type NewAgentTask = typeof agentTasks.$inferInsert;
+export type NewAgentTask = Omit<typeof agentTasks.$inferInsert, 'tenantId'>;
 
 export const agentTasksRelations = relations(agentTasks, ({ one, many }) => ({
   agent: one(agents, {
@@ -2811,8 +2947,11 @@ export const turns = pgTable(
 
     // ---- Extensibility ----
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('turns_tenant_idx').on(table.tenantId),
     instanceChatIdx: index('turns_instance_chat_idx').on(table.instanceId, table.chatId),
     statusIdx: index('turns_status_idx').on(table.status),
     apiKeyIdx: index('turns_api_key_idx').on(table.apiKeyId),
@@ -2823,7 +2962,7 @@ export const turns = pgTable(
 );
 
 export type Turn = typeof turns.$inferSelect;
-export type NewTurn = typeof turns.$inferInsert;
+export type NewTurn = Omit<typeof turns.$inferInsert, 'tenantId'>;
 
 export const turnsRelations = relations(turns, ({ one }) => ({
   instance: one(instances, {
@@ -2917,8 +3056,14 @@ export const chatFollowUpState = pgTable(
     // ---- Timestamps ----
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('chat_follow_up_state_tenant_idx').on(table.tenantId),
+    tenantChatInstanceUq: uniqueIndex('chat_follow_up_state_tenant_chat_instance_uq')
+      .on(table.tenantId, table.chatId, table.instanceId)
+      .where(sql`${table.tenantId} IS NOT NULL`),
     /** Sweeper scan: pick rows where nextFireAt is due and sequence is still armed. */
     sweeperIdx: index('chat_follow_up_state_sweeper_idx').on(table.nextFireAt, table.disarmReason),
     /** One active row per (chat, instance). */
@@ -2929,7 +3074,7 @@ export const chatFollowUpState = pgTable(
 );
 
 export type ChatFollowUpState = typeof chatFollowUpState.$inferSelect;
-export type NewChatFollowUpState = typeof chatFollowUpState.$inferInsert;
+export type NewChatFollowUpState = Omit<typeof chatFollowUpState.$inferInsert, 'tenantId'>;
 
 export const chatFollowUpStateRelations = relations(chatFollowUpState, ({ one }) => ({
   chat: one(chats, {
@@ -2971,15 +3116,18 @@ export const processedEvents = pgTable(
     eventId: varchar('event_id', { length: 255 }).notNull(),
     handler: varchar('handler', { length: 100 }).notNull(),
     processedAt: timestamp('processed_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    tenantIdx: index('processed_events_tenant_idx').on(table.tenantId),
     pk: primaryKey({ columns: [table.eventId, table.handler], name: 'processed_events_pk' }),
     processedAtIdx: index('processed_events_processed_at_idx').on(table.processedAt),
   }),
 );
 
 export type ProcessedEvent = typeof processedEvents.$inferSelect;
-export type NewProcessedEvent = typeof processedEvents.$inferInsert;
+export type NewProcessedEvent = Omit<typeof processedEvents.$inferInsert, 'tenantId'>;
 
 // ============================================================================
 // GENIE HOSTS — per-host fingerprint trust (omni-host-fingerprint-trust wish, D5)
@@ -3600,3 +3748,364 @@ export const platformAuditLogs = pgTable(
 );
 export type PlatformAuditLog = typeof platformAuditLogs.$inferSelect;
 export type NewPlatformAuditLog = typeof platformAuditLogs.$inferInsert;
+
+// ============================================================================
+// G2 SPLIT DESTINATIONS — additive schema contract only (migration 0041)
+//
+// G0 classifies seven legacy tables `split`. G1 delivered the key/auth/audit
+// split; these are the five remaining concepts. G2 creates the destinations
+// EMPTY: no legacy row is copied, no read or write path is switched, and no
+// legacy table gains an ambiguous nullable tenant owner. Cutover is G3/G4.
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// platform_provider_catalog — immutable, non-secret built-in provider catalog
+// ---------------------------------------------------------------------------
+export const platformProviderCatalog = pgTable(
+  'platform_provider_catalog',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    providerType: varchar('provider_type', { length: 50 }).notNull(),
+    displayName: varchar('display_name', { length: 255 }).notNull(),
+    description: text('description'),
+    capabilities: jsonb('capabilities').notNull().default(sql`'{}'::jsonb`),
+    configSchema: jsonb('config_schema'),
+    isBuiltin: boolean('is_builtin').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    providerTypeUq: uniqueIndex('platform_provider_catalog_type_uq').on(table.providerType),
+  }),
+);
+export type PlatformProviderCatalogEntry = typeof platformProviderCatalog.$inferSelect;
+export type NewPlatformProviderCatalogEntry = typeof platformProviderCatalog.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// tenant_provider_config — tenant-configured provider credentials/config
+// ---------------------------------------------------------------------------
+export const tenantProviderConfig = pgTable(
+  'tenant_provider_config',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    providerType: varchar('provider_type', { length: 50 }).notNull(),
+    name: varchar('name', { length: 255 }).notNull(),
+    baseUrl: text('base_url'),
+    config: jsonb('config').notNull().default(sql`'{}'::jsonb`),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantNameUq: uniqueIndex('tenant_provider_config_tenant_name_uq').on(table.tenantId, table.name),
+  }),
+);
+export type TenantProviderConfig = typeof tenantProviderConfig.$inferSelect;
+export type NewTenantProviderConfig = typeof tenantProviderConfig.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// platform_settings — platform runtime values, unreachable by tenant runtime
+// ---------------------------------------------------------------------------
+export const platformSettings = pgTable(
+  'platform_settings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    key: varchar('key', { length: 255 }).notNull(),
+    value: jsonb('value').notNull(),
+    description: text('description'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    keyUq: uniqueIndex('platform_settings_key_uq').on(table.key),
+  }),
+);
+export type PlatformSetting = typeof platformSettings.$inferSelect;
+export type NewPlatformSetting = typeof platformSettings.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// tenant_settings — tenant-scoped settings plane
+// ---------------------------------------------------------------------------
+export const tenantSettings = pgTable(
+  'tenant_settings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    key: varchar('key', { length: 255 }).notNull(),
+    value: jsonb('value').notNull(),
+    description: text('description'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantKeyUq: uniqueIndex('tenant_settings_tenant_key_uq').on(table.tenantId, table.key),
+  }),
+);
+export type TenantSetting = typeof tenantSettings.$inferSelect;
+export type NewTenantSetting = typeof tenantSettings.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// platform_setting_change_history — append-only history of platform settings
+// ---------------------------------------------------------------------------
+export const platformSettingChangeHistory = pgTable('platform_setting_change_history', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  settingId: uuid('setting_id').references((): AnyPgColumn => platformSettings.id, { onDelete: 'restrict' }),
+  key: varchar('key', { length: 255 }).notNull(),
+  oldValue: jsonb('old_value'),
+  newValue: jsonb('new_value'),
+  changedBy: varchar('changed_by', { length: 255 }),
+  reason: text('reason'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+export type PlatformSettingChange = typeof platformSettingChangeHistory.$inferSelect;
+export type NewPlatformSettingChange = typeof platformSettingChangeHistory.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// tenant_setting_change_history — append-only history of tenant settings
+// ---------------------------------------------------------------------------
+export const tenantSettingChangeHistory = pgTable(
+  'tenant_setting_change_history',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    settingId: uuid('setting_id').references((): AnyPgColumn => tenantSettings.id, { onDelete: 'restrict' }),
+    key: varchar('key', { length: 255 }).notNull(),
+    oldValue: jsonb('old_value'),
+    newValue: jsonb('new_value'),
+    changedBy: varchar('changed_by', { length: 255 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantIdx: index('tenant_setting_change_history_tenant_idx').on(table.tenantId),
+  }),
+);
+export type TenantSettingChange = typeof tenantSettingChangeHistory.$inferSelect;
+export type NewTenantSettingChange = typeof tenantSettingChangeHistory.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// platform_plugin_storage — platform-owned plugin state
+// ---------------------------------------------------------------------------
+export const platformPluginStorage = pgTable(
+  'platform_plugin_storage',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    pluginId: varchar('plugin_id', { length: 100 }).notNull(),
+    key: varchar('key', { length: 255 }).notNull(),
+    value: jsonb('value').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    pluginKeyUq: uniqueIndex('platform_plugin_storage_plugin_key_uq').on(table.pluginId, table.key),
+  }),
+);
+export type PlatformPluginStorageRow = typeof platformPluginStorage.$inferSelect;
+export type NewPlatformPluginStorageRow = typeof platformPluginStorage.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// tenant_plugin_storage — tenant-owned plugin state (no mixed keyspace)
+// ---------------------------------------------------------------------------
+export const tenantPluginStorage = pgTable(
+  'tenant_plugin_storage',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    pluginId: varchar('plugin_id', { length: 100 }).notNull(),
+    key: varchar('key', { length: 255 }).notNull(),
+    value: jsonb('value').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantPluginKeyUq: uniqueIndex('tenant_plugin_storage_tenant_plugin_key_uq').on(
+      table.tenantId,
+      table.pluginId,
+      table.key,
+    ),
+  }),
+);
+export type TenantPluginStorageRow = typeof tenantPluginStorage.$inferSelect;
+export type NewTenantPluginStorageRow = typeof tenantPluginStorage.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// platform_payload_storage_config — platform-owned payload backend config
+// ---------------------------------------------------------------------------
+export const platformPayloadStorageConfig = pgTable(
+  'platform_payload_storage_config',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventType: varchar('event_type', { length: 100 }).notNull(),
+    backend: varchar('backend', { length: 50 }).notNull(),
+    retentionDays: integer('retention_days'),
+    maxPayloadBytes: integer('max_payload_bytes'),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    eventTypeUq: uniqueIndex('platform_payload_storage_config_event_type_uq').on(table.eventType),
+  }),
+);
+export type PlatformPayloadStorageConfig = typeof platformPayloadStorageConfig.$inferSelect;
+export type NewPlatformPayloadStorageConfig = typeof platformPayloadStorageConfig.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// tenant_payload_storage_overrides — per-tenant retention/quota overrides
+// ---------------------------------------------------------------------------
+export const tenantPayloadStorageOverrides = pgTable(
+  'tenant_payload_storage_overrides',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    eventType: varchar('event_type', { length: 100 }).notNull(),
+    retentionDays: integer('retention_days'),
+    maxPayloadBytes: integer('max_payload_bytes'),
+    quotaBytes: bigint('quota_bytes', { mode: 'number' }),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantEventUq: uniqueIndex('tenant_payload_storage_overrides_tenant_event_uq').on(table.tenantId, table.eventType),
+  }),
+);
+export type TenantPayloadStorageOverride = typeof tenantPayloadStorageOverrides.$inferSelect;
+export type NewTenantPayloadStorageOverride = typeof tenantPayloadStorageOverrides.$inferInsert;
+
+// ============================================================================
+// G2 MIGRATION LEDGER — platform migration plane (WISH lines 185-190)
+// ============================================================================
+
+/**
+ * tenant_migration_ledger — the conjunctive ownership-decision record.
+ *
+ * A row is only a valid ownership decision when it carries source identity,
+ * target tenant, the decision rule, a redacted pre-image and post-image with
+ * checksums, an inverse OR an explicit compensating action, the WAL/LSN
+ * high-water mark, the writer epoch, status, ambiguity/quarantine state, the
+ * reconciliation receipt, and the attempt/checkpoint data an interrupted run
+ * needs to resume idempotently.
+ *
+ * The head row is mutable so a resume can advance status/attempt/checkpoint;
+ * every version is mirrored into `tenant_migration_ledger_history`, which is
+ * append-only at the database boundary.
+ *
+ * Images are REDACTED projections plus checksums. No plaintext credential,
+ * secret value, or unredacted sensitive payload is ever stored here.
+ *
+ * `wal_lsn_high_water` is `pg_lsn` in SQL; Drizzle has no `pg_lsn` type, so it
+ * is mapped as text (the wire representation is the same `X/Y` string).
+ */
+export const tenantMigrationLedger = pgTable(
+  'tenant_migration_ledger',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sourceTable: varchar('source_table', { length: 63 }).notNull(),
+    sourcePrimaryKey: jsonb('source_primary_key').notNull(),
+    /** RESTRICT: a tenant can never be cascade-deleted through its migration record. */
+    targetTenantId: uuid('target_tenant_id').references(() => tenants.id, { onDelete: 'restrict' }),
+    decisionRule: text('decision_rule').notNull(),
+    preImageRedacted: jsonb('pre_image_redacted').notNull(),
+    preImageChecksum: varchar('pre_image_checksum', { length: 64 }).notNull(),
+    postImageRedacted: jsonb('post_image_redacted'),
+    postImageChecksum: varchar('post_image_checksum', { length: 64 }),
+    inverseAction: jsonb('inverse_action'),
+    compensatingAction: jsonb('compensating_action'),
+    /** SQL type `pg_lsn`; carried as its canonical text form. */
+    walLsnHighWater: text('wal_lsn_high_water').notNull(),
+    writerEpoch: bigint('writer_epoch', { mode: 'number' }).notNull(),
+    status: varchar('status', { length: 20 }).notNull().default('planned'),
+    ambiguityState: varchar('ambiguity_state', { length: 20 }).notNull().default('none'),
+    reconciliationReceipt: jsonb('reconciliation_receipt'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    checkpoint: jsonb('checkpoint'),
+    redactionPolicy: varchar('redaction_policy', { length: 100 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    sourceUq: uniqueIndex('tenant_migration_ledger_source_uq').on(table.sourceTable, table.sourcePrimaryKey),
+    statusIdx: index('tenant_migration_ledger_status_idx').on(table.status),
+    tenantIdx: index('tenant_migration_ledger_tenant_idx')
+      .on(table.targetTenantId)
+      .where(sql`${table.targetTenantId} IS NOT NULL`),
+    statusCheck: check(
+      'tenant_migration_ledger_status_check',
+      sql`${table.status} IN ('planned', 'applied', 'compensated', 'failed', 'quarantined')`,
+    ),
+    ambiguityCheck: check(
+      'tenant_migration_ledger_ambiguity_check',
+      sql`${table.ambiguityState} IN ('none', 'ambiguous', 'quarantined')`,
+    ),
+    checksumsCheck: check(
+      'tenant_migration_ledger_checksums_check',
+      sql`${table.preImageChecksum} ~ '^[0-9a-f]{64}$' AND (${table.postImageChecksum} IS NULL OR ${table.postImageChecksum} ~ '^[0-9a-f]{64}$')`,
+    ),
+    /** Every decision must be reversible: an inverse, or an explicit compensating action. */
+    inverseOrCompensatingCheck: check(
+      'tenant_migration_ledger_inverse_or_compensating_check',
+      sql`${table.inverseAction} IS NOT NULL OR ${table.compensatingAction} IS NOT NULL`,
+    ),
+    /** An applied decision must name the tenant it assigned and carry its post-image. */
+    appliedCompletenessCheck: check(
+      'tenant_migration_ledger_applied_completeness_check',
+      sql`${table.status} <> 'applied' OR (${table.targetTenantId} IS NOT NULL AND ${table.postImageChecksum} IS NOT NULL AND ${table.reconciliationReceipt} IS NOT NULL)`,
+    ),
+    /** Ambiguity is never silently resolved into an assignment. */
+    quarantineCheck: check(
+      'tenant_migration_ledger_quarantine_check',
+      sql`${table.ambiguityState} = 'none' OR ${table.targetTenantId} IS NULL`,
+    ),
+    attemptsCheck: check('tenant_migration_ledger_attempts_check', sql`${table.attemptCount} >= 0`),
+    epochCheck: check('tenant_migration_ledger_epoch_check', sql`${table.writerEpoch} >= 0`),
+  }),
+);
+export type TenantMigrationLedgerRow = typeof tenantMigrationLedger.$inferSelect;
+export type NewTenantMigrationLedgerRow = typeof tenantMigrationLedger.$inferInsert;
+
+/**
+ * tenant_migration_ledger_history — append-only mirror of every ledger revision.
+ *
+ * Enforced append-only at the database boundary by BEFORE UPDATE/DELETE and
+ * BEFORE TRUNCATE triggers created in migration 0041.
+ */
+export const tenantMigrationLedgerHistory = pgTable(
+  'tenant_migration_ledger_history',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    ledgerId: uuid('ledger_id').notNull(),
+    revision: integer('revision').notNull(),
+    sourceTable: varchar('source_table', { length: 63 }).notNull(),
+    sourcePrimaryKey: jsonb('source_primary_key').notNull(),
+    /** No FK: the history must outlive any tenant row it references. */
+    targetTenantId: uuid('target_tenant_id'),
+    decisionRule: text('decision_rule').notNull(),
+    preImageChecksum: varchar('pre_image_checksum', { length: 64 }).notNull(),
+    postImageChecksum: varchar('post_image_checksum', { length: 64 }),
+    /** SQL type `pg_lsn`; carried as its canonical text form. */
+    walLsnHighWater: text('wal_lsn_high_water').notNull(),
+    writerEpoch: bigint('writer_epoch', { mode: 'number' }).notNull(),
+    status: varchar('status', { length: 20 }).notNull(),
+    ambiguityState: varchar('ambiguity_state', { length: 20 }).notNull(),
+    attemptCount: integer('attempt_count').notNull(),
+    checkpoint: jsonb('checkpoint'),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    revisionUq: uniqueIndex('tenant_migration_ledger_history_revision_uq').on(table.ledgerId, table.revision),
+    ledgerIdx: index('tenant_migration_ledger_history_ledger_idx').on(table.ledgerId),
+  }),
+);
+export type TenantMigrationLedgerHistoryRow = typeof tenantMigrationLedgerHistory.$inferSelect;
+export type NewTenantMigrationLedgerHistoryRow = typeof tenantMigrationLedgerHistory.$inferInsert;

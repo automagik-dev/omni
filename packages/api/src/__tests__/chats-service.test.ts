@@ -12,6 +12,7 @@ import { ChatService, isChatGroup, withIsGroup } from '../services/chats';
 function createMockChat(overrides: Partial<Chat>): Chat {
   return {
     id: 'chat-uuid',
+    tenantId: null,
     instanceId: 'test-instance',
     externalId: '553496835777@s.whatsapp.net',
     canonicalId: null,
