@@ -7,6 +7,7 @@ import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import type { ApiKeyProfile, ApiKeyProfileOverrides } from '@omni/db';
 import type { Services } from './services';
+import type { PlatformAuthContext } from './tenancy/auth-context';
 
 /**
  * API key data from validation
@@ -61,6 +62,13 @@ export interface AppVariables {
    * bearer-only or unsigned (in which case only the bearer's scopes apply).
    */
   signedByScopes?: string[];
+  /**
+   * Immutable platform-admin context set by `platformAuthMiddleware` on the
+   * multitenancy control-plane routes (wish: omni-full-multitenancy, G1).
+   * Present ONLY for authenticated platform-class credentials; never derived
+   * from caller headers/body/path. Absent on all legacy routes.
+   */
+  platformAuth?: PlatformAuthContext;
 }
 
 /**

@@ -16,6 +16,7 @@ import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -3050,3 +3051,552 @@ export const genieHosts = pgTable(
 
 export type GenieHost = typeof genieHosts.$inferSelect;
 export type NewGenieHost = typeof genieHosts.$inferInsert;
+
+// ============================================================================
+// MULTITENANCY CONTROL PLANE (wish: omni-full-multitenancy, Group G1)
+// ============================================================================
+//
+// Additive, off-by-default control plane. These tables establish first-class
+// tenant identity, principals/memberships, a bounded fixed-role registry, an
+// ISOLATED authentication credential index, separate platform credentials,
+// tenant key lineage/delegation foundations, and split tenant/platform audit
+// stores.
+//
+// Frozen G0 contract (ADR-0001/0003/0005/0006/0010, OWNERSHIP_MATRIX "New
+// ownership/control tables"): ownership classes are explicit, tenant routes
+// can NEVER enumerate the credential index, tenant credentials can NEVER hold
+// platform `*` authority, and there is NO hard tenant delete — foreign keys
+// use RESTRICT so nothing cascade-deletes a tenant or erases audit lineage.
+//
+// G1 is additive only. It does NOT add tenant_id to existing business tables
+// (G2), implement RLS/runtime roles (G3), or convert routes (G4/G5). Legacy
+// `api_keys` and all current behavior remain intact.
+// ----------------------------------------------------------------------------
+
+/** Tenant lifecycle. Hard delete is intentionally absent — lifecycle ends at `archived`. */
+export const tenantStatuses = ['active', 'suspended', 'archived'] as const;
+export type TenantStatus = (typeof tenantStatuses)[number];
+
+/** Principal is a stable human or service subject; it holds no tenant business data. */
+export const principalTypes = ['human', 'service'] as const;
+export type PrincipalType = (typeof principalTypes)[number];
+
+export const principalStatuses = ['active', 'disabled'] as const;
+export type PrincipalStatus = (typeof principalStatuses)[number];
+
+/** Fixed tenant roles. Exactly these four; none may grant/mint platform `*` authority. */
+export const tenantRoles = ['tenant-owner', 'tenant-admin', 'tenant-operator', 'tenant-viewer'] as const;
+export type TenantRole = (typeof tenantRoles)[number];
+
+export const membershipStatuses = ['active', 'disabled'] as const;
+export type MembershipStatus = (typeof membershipStatuses)[number];
+
+/** A credential is exactly one class. Class separation is enforced by CHECK constraints. */
+export const credentialClasses = ['tenant', 'platform'] as const;
+export type CredentialClass = (typeof credentialClasses)[number];
+
+export const authCredentialStatuses = ['active', 'revoked', 'expired'] as const;
+export type AuthCredentialStatus = (typeof authCredentialStatuses)[number];
+
+export const platformApiKeyStatuses = ['active', 'revoked'] as const;
+export type PlatformApiKeyStatus = (typeof platformApiKeyStatuses)[number];
+
+// ---------------------------------------------------------------------------
+// tenants — platform control plane
+// ---------------------------------------------------------------------------
+export const tenants = pgTable(
+  'tenants',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Immutable stable slug. Lowercase, DNS-like; unique platform-wide. */
+    slug: varchar('slug', { length: 63 }).notNull(),
+    displayName: varchar('display_name', { length: 255 }).notNull(),
+    status: varchar('status', { length: 20 }).notNull().default('active').$type<TenantStatus>(),
+    /** Policy epoch. Bumped on policy change; snapshotted into credentials for freshness. */
+    policyVersion: integer('policy_version').notNull().default(1),
+    /** Revocation epoch. Bumped on suspend/archive/mass-revoke; snapshotted into credentials. */
+    revocationEpoch: integer('revocation_epoch').notNull().default(0),
+    /** Mandatory per-tenant ceilings for every root/delegated credential. */
+    maxKeyTtlSeconds: integer('max_key_ttl_seconds').notNull(),
+    maxKeyRateLimit: integer('max_key_rate_limit').notNull(),
+    maxKeyBudget: integer('max_key_budget').notNull(),
+    /** Immutable creator lineage. Nullable for bootstrap/system-created tenants. */
+    createdByPrincipalId: uuid('created_by_principal_id').references((): AnyPgColumn => principals.id, {
+      onDelete: 'restrict',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    suspendedAt: timestamp('suspended_at', { withTimezone: true }),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+  },
+  (table) => ({
+    slugUq: uniqueIndex('tenants_slug_uq').on(table.slug),
+    statusIdx: index('tenants_status_idx').on(table.status),
+    statusCheck: check('tenants_status_check', sql`${table.status} IN ('active', 'suspended', 'archived')`),
+    slugFormatCheck: check('tenants_slug_format_check', sql`${table.slug} ~ '^[a-z0-9][a-z0-9-]*$'`),
+    epochsCheck: check('tenants_epochs_check', sql`${table.policyVersion} >= 1 AND ${table.revocationEpoch} >= 0`),
+    keyPolicyCheck: check(
+      'tenants_key_policy_check',
+      sql`${table.maxKeyTtlSeconds} > 0 AND ${table.maxKeyRateLimit} > 0 AND ${table.maxKeyBudget} > 0`,
+    ),
+  }),
+);
+export type Tenant = typeof tenants.$inferSelect;
+export type NewTenant = typeof tenants.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// principals — platform identity plane
+// ---------------------------------------------------------------------------
+export const principals = pgTable(
+  'principals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    type: varchar('type', { length: 20 }).notNull().$type<PrincipalType>(),
+    /** Stable subject identifier (e.g. external IdP subject or service name). Unique. */
+    subject: varchar('subject', { length: 255 }).notNull(),
+    displayName: varchar('display_name', { length: 255 }),
+    status: varchar('status', { length: 20 }).notNull().default('active').$type<PrincipalStatus>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    disabledAt: timestamp('disabled_at', { withTimezone: true }),
+  },
+  (table) => ({
+    subjectUq: uniqueIndex('principals_subject_uq').on(table.subject),
+    statusIdx: index('principals_status_idx').on(table.status),
+    typeCheck: check('principals_type_check', sql`${table.type} IN ('human', 'service')`),
+    statusCheck: check('principals_status_check', sql`${table.status} IN ('active', 'disabled')`),
+  }),
+);
+export type Principal = typeof principals.$inferSelect;
+export type NewPrincipal = typeof principals.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// tenant_memberships — principal ↔ tenant role relation
+// ---------------------------------------------------------------------------
+export const tenantMemberships = pgTable(
+  'tenant_memberships',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // RESTRICT: a tenant cannot be deleted while memberships exist (no cascade erase).
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    principalId: uuid('principal_id')
+      .notNull()
+      .references(() => principals.id, { onDelete: 'restrict' }),
+    role: varchar('role', { length: 32 }).notNull().$type<TenantRole>(),
+    status: varchar('status', { length: 20 }).notNull().default('active').$type<MembershipStatus>(),
+    invitedByPrincipalId: uuid('invited_by_principal_id').references((): AnyPgColumn => principals.id, {
+      onDelete: 'restrict',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    disabledAt: timestamp('disabled_at', { withTimezone: true }),
+  },
+  (table) => ({
+    tenantPrincipalUq: uniqueIndex('tenant_memberships_tenant_principal_uq').on(table.tenantId, table.principalId),
+    tenantIdUq: uniqueIndex('tenant_memberships_tenant_id_uq').on(table.tenantId, table.id),
+    tenantPrincipalIdUq: uniqueIndex('tenant_memberships_tenant_principal_id_uq').on(
+      table.tenantId,
+      table.principalId,
+      table.id,
+    ),
+    tenantIdx: index('tenant_memberships_tenant_idx').on(table.tenantId),
+    principalIdx: index('tenant_memberships_principal_idx').on(table.principalId),
+    roleCheck: check(
+      'tenant_memberships_role_check',
+      sql`${table.role} IN ('tenant-owner', 'tenant-admin', 'tenant-operator', 'tenant-viewer')`,
+    ),
+    statusCheck: check('tenant_memberships_status_check', sql`${table.status} IN ('active', 'disabled')`),
+  }),
+);
+export type TenantMembership = typeof tenantMemberships.$inferSelect;
+export type NewTenantMembership = typeof tenantMemberships.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// tenant_role_policies — fixed, bounded role ceiling registry (seed data)
+// ---------------------------------------------------------------------------
+// Reference/seed table pinning the bounded scope ceiling and delegation caps of
+// each fixed role. The runtime source of truth is the code constant
+// TENANT_ROLE_POLICIES; this table mirrors it for auditability. The
+// `max_scopes` CHECK guarantees at the schema level that NO role can ever carry
+// the platform `*` capability.
+export const tenantRolePolicies = pgTable(
+  'tenant_role_policies',
+  {
+    role: varchar('role', { length: 32 }).primaryKey().$type<TenantRole>(),
+    description: text('description').notNull(),
+    /** Bounded scope ceiling. CHECK forbids `*`. */
+    maxScopes: text('max_scopes').array().notNull(),
+    canManageMemberships: boolean('can_manage_memberships').notNull(),
+    canDelegateKeys: boolean('can_delegate_keys').notNull(),
+    maxDelegationDepth: integer('max_delegation_depth').notNull().default(1),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    roleCheck: check(
+      'tenant_role_policies_role_check',
+      sql`${table.role} IN ('tenant-owner', 'tenant-admin', 'tenant-operator', 'tenant-viewer')`,
+    ),
+    depthCheck: check('tenant_role_policies_depth_check', sql`${table.maxDelegationDepth} >= 0`),
+    noPlatformAuthorityCheck: check(
+      'tenant_role_policies_no_platform_authority_check',
+      sql`cardinality(${table.maxScopes}) > 0
+          AND array_position(${table.maxScopes}, NULL) IS NULL
+          AND NOT ('*' = ANY(${table.maxScopes}))
+          AND array_to_string(${table.maxScopes}, ',') !~ '(^|,)platform:'`,
+    ),
+    fixedCeilingCheck: check(
+      'tenant_role_policies_fixed_ceiling_check',
+      sql`(
+        ${table.role} = 'tenant-owner'
+        AND ${table.maxScopes} = ARRAY['tenant:*', 'keys:delegate']::text[]
+        AND ${table.canManageMemberships} AND ${table.canDelegateKeys} AND ${table.maxDelegationDepth} = 1
+      ) OR (
+        ${table.role} = 'tenant-admin'
+        AND ${table.maxScopes} = ARRAY['tenant:*', 'keys:delegate']::text[]
+        AND ${table.canManageMemberships} AND ${table.canDelegateKeys} AND ${table.maxDelegationDepth} = 1
+      ) OR (
+        ${table.role} = 'tenant-operator'
+        AND ${table.maxScopes} = ARRAY['tenant:read', 'tenant:write']::text[]
+        AND NOT ${table.canManageMemberships} AND NOT ${table.canDelegateKeys} AND ${table.maxDelegationDepth} = 0
+      ) OR (
+        ${table.role} = 'tenant-viewer'
+        AND ${table.maxScopes} = ARRAY['tenant:read']::text[]
+        AND NOT ${table.canManageMemberships} AND NOT ${table.canDelegateKeys} AND ${table.maxDelegationDepth} = 0
+      )`,
+    ),
+  }),
+);
+export type TenantRolePolicy = typeof tenantRolePolicies.$inferSelect;
+export type NewTenantRolePolicy = typeof tenantRolePolicies.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// platform_api_keys — platform credential class (break-glass / automation)
+// ---------------------------------------------------------------------------
+// Separate store kept out of the tenant key query path and the normal tenant
+// RLS context. Platform keys are the ONLY credentials that may carry platform
+// scopes (including `*`).
+export const platformApiKeys = pgTable(
+  'platform_api_keys',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: varchar('name', { length: 255 }).notNull(),
+    description: text('description'),
+    keyPrefix: varchar('key_prefix', { length: 12 }).notNull(),
+    keyHash: varchar('key_hash', { length: 64 }).notNull(),
+    scopes: text('scopes').array().notNull(),
+    status: varchar('status', { length: 20 }).notNull().default('active').$type<PlatformApiKeyStatus>(),
+    principalId: uuid('principal_id')
+      .notNull()
+      .references(() => principals.id, { onDelete: 'restrict' }),
+    createdByPrincipalId: uuid('created_by_principal_id').references((): AnyPgColumn => principals.id, {
+      onDelete: 'restrict',
+    }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedBy: varchar('revoked_by', { length: 255 }),
+    revokeReason: text('revoke_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    nameUq: uniqueIndex('platform_api_keys_name_uq').on(table.name),
+    keyHashUq: uniqueIndex('platform_api_keys_key_hash_uq').on(table.keyHash),
+    idPrincipalUq: uniqueIndex('platform_api_keys_id_principal_uq').on(table.id, table.principalId),
+    keyPrefixIdx: index('platform_api_keys_key_prefix_idx').on(table.keyPrefix),
+    statusIdx: index('platform_api_keys_status_idx').on(table.status),
+    statusCheck: check('platform_api_keys_status_check', sql`${table.status} IN ('active', 'revoked')`),
+  }),
+);
+export type PlatformApiKey = typeof platformApiKeys.$inferSelect;
+export type NewPlatformApiKey = typeof platformApiKeys.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// tenant_key_lineage — tenant-visible key metadata + delegation lineage
+// ---------------------------------------------------------------------------
+// Tenant class credential metadata. Carries immutable tenant binding, parent/
+// root/creator lineage, delegation depth, and an immutable ceiling snapshot.
+// The `scopes` CHECK guarantees a tenant key can NEVER hold platform `*`.
+export const tenantKeyLineage = pgTable(
+  'tenant_key_lineage',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // RESTRICT: never cascade-delete lineage when a tenant row is removed.
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    principalId: uuid('principal_id')
+      .notNull()
+      .references((): AnyPgColumn => principals.id, { onDelete: 'restrict' }),
+    membershipId: uuid('membership_id')
+      .notNull()
+      .references((): AnyPgColumn => tenantMemberships.id, { onDelete: 'restrict' }),
+    actorRole: varchar('actor_role', { length: 32 }).notNull().$type<TenantRole>(),
+    name: varchar('name', { length: 255 }).notNull(),
+    keyPrefix: varchar('key_prefix', { length: 12 }).notNull(),
+    /** Subset of parent effective scopes ∩ role ceiling. CHECK forbids `*`. */
+    scopes: text('scopes').array().notNull(),
+    resourceConstraints: jsonb('resource_constraints').notNull().default(sql`'{}'::jsonb`),
+    status: varchar('status', { length: 20 }).notNull().default('active').$type<AuthCredentialStatus>(),
+    /** Immutable parent lineage. Null = tenant root key (depth 0). */
+    parentKeyId: uuid('parent_key_id').references((): AnyPgColumn => tenantKeyLineage.id, { onDelete: 'restrict' }),
+    /** Lineage root id. Root key stores its own id. */
+    rootKeyId: uuid('root_key_id').notNull(),
+    /** Delegation depth. 0 = tenant root key; children increment. */
+    depth: integer('depth').notNull().default(0),
+    createdByPrincipalId: uuid('created_by_principal_id').references((): AnyPgColumn => principals.id, {
+      onDelete: 'restrict',
+    }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    rateLimit: integer('rate_limit'),
+    budget: integer('budget'),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokeReason: text('revoke_reason'),
+    revocationEpoch: integer('revocation_epoch').notNull().default(0),
+    /** Set by ancestor-revocation propagation. */
+    ancestorRevoked: boolean('ancestor_revoked').notNull().default(false),
+    /** Immutable ceiling snapshot captured at creation for audit/reproducibility. */
+    ceilingSnapshot: jsonb('ceiling_snapshot').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantIdUq: uniqueIndex('tenant_key_lineage_tenant_id_uq').on(table.tenantId, table.id),
+    authBindingUq: uniqueIndex('tenant_key_lineage_auth_binding_uq').on(
+      table.tenantId,
+      table.id,
+      table.principalId,
+      table.membershipId,
+      table.actorRole,
+    ),
+    tenantIdx: index('tenant_key_lineage_tenant_idx').on(table.tenantId),
+    parentIdx: index('tenant_key_lineage_parent_idx').on(table.parentKeyId),
+    rootIdx: index('tenant_key_lineage_root_idx').on(table.rootKeyId),
+    statusIdx: index('tenant_key_lineage_status_idx').on(table.status),
+    roleCheck: check(
+      'tenant_key_lineage_role_check',
+      sql`${table.actorRole} IN ('tenant-owner', 'tenant-admin', 'tenant-operator', 'tenant-viewer')`,
+    ),
+    statusCheck: check('tenant_key_lineage_status_check', sql`${table.status} IN ('active', 'revoked', 'expired')`),
+    depthCheck: check('tenant_key_lineage_depth_check', sql`${table.depth} >= 0`),
+    positiveLimitsCheck: check(
+      'tenant_key_lineage_positive_limits_check',
+      sql`(${table.rateLimit} IS NULL OR ${table.rateLimit} > 0) AND (${table.budget} IS NULL OR ${table.budget} > 0)`,
+    ),
+    principalMembershipPairCheck: check(
+      'tenant_key_lineage_principal_membership_pair_check',
+      sql`(${table.principalId} IS NULL AND ${table.membershipId} IS NULL)
+          OR (${table.principalId} IS NOT NULL AND ${table.membershipId} IS NOT NULL)`,
+    ),
+    depthShapeCheck: check(
+      'tenant_key_lineage_depth_shape_check',
+      sql`(${table.depth} = 0 AND ${table.parentKeyId} IS NULL AND ${table.rootKeyId} = ${table.id})
+          OR (${table.depth} = 1 AND ${table.parentKeyId} IS NOT NULL)`,
+    ),
+    noPlatformAuthorityCheck: check(
+      'tenant_key_lineage_no_platform_authority_check',
+      sql`cardinality(${table.scopes}) > 0
+          AND array_position(${table.scopes}, NULL) IS NULL
+          AND NOT ('*' = ANY(${table.scopes}))
+          AND array_to_string(${table.scopes}, ',') !~ '(^|,)platform:'`,
+    ),
+    parentTenantFk: foreignKey({
+      name: 'tenant_key_lineage_parent_tenant_fk',
+      columns: [table.tenantId, table.parentKeyId],
+      foreignColumns: [table.tenantId, table.id],
+    }).onDelete('restrict'),
+    rootTenantFk: foreignKey({
+      name: 'tenant_key_lineage_root_tenant_fk',
+      columns: [table.tenantId, table.rootKeyId],
+      foreignColumns: [table.tenantId, table.id],
+    }).onDelete('restrict'),
+    membershipPrincipalFk: foreignKey({
+      name: 'tenant_key_lineage_membership_principal_fk',
+      columns: [table.tenantId, table.principalId, table.membershipId],
+      foreignColumns: [tenantMemberships.tenantId, tenantMemberships.principalId, tenantMemberships.id],
+    }).onDelete('restrict'),
+  }),
+);
+export type TenantKeyLineage = typeof tenantKeyLineage.$inferSelect;
+export type NewTenantKeyLineage = typeof tenantKeyLineage.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// auth_credentials — ISOLATED authentication index (platform-owned)
+// ---------------------------------------------------------------------------
+// The minimal hash→context lookup used to establish immutable credential
+// context BEFORE any tenant transaction opens. Tenant data routes can NEVER
+// enumerate this table (no list path is exposed). Class separation and the
+// tenant-never-`*` rule are enforced by CHECK constraints, not app code alone.
+export const authCredentials = pgTable(
+  'auth_credentials',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    credentialClass: varchar('credential_class', { length: 20 }).notNull().$type<CredentialClass>(),
+    /** Indexed hash-equality lookup path. No plaintext, no secret-dependent branching. */
+    keyHash: varchar('key_hash', { length: 64 }).notNull(),
+    keyPrefix: varchar('key_prefix', { length: 12 }).notNull(),
+    // RESTRICT everywhere: no cascade deletes across the auth plane.
+    tenantId: uuid('tenant_id').references(() => tenants.id, { onDelete: 'restrict' }),
+    principalId: uuid('principal_id').references((): AnyPgColumn => principals.id, { onDelete: 'restrict' }),
+    membershipId: uuid('membership_id').references((): AnyPgColumn => tenantMemberships.id, {
+      onDelete: 'restrict',
+    }),
+    actorRole: varchar('actor_role', { length: 32 }).$type<TenantRole>(),
+    scopes: text('scopes').array().notNull(),
+    status: varchar('status', { length: 20 }).notNull().default('active').$type<AuthCredentialStatus>(),
+    /** Source metadata rows. Exactly one is set per class (CHECK-enforced). */
+    tenantKeyLineageId: uuid('tenant_key_lineage_id').references((): AnyPgColumn => tenantKeyLineage.id, {
+      onDelete: 'restrict',
+    }),
+    platformApiKeyId: uuid('platform_api_key_id').references((): AnyPgColumn => platformApiKeys.id, {
+      onDelete: 'restrict',
+    }),
+    /** Freshness snapshots compared against the live tenant epochs at lookup. */
+    policySnapshotVersion: integer('policy_snapshot_version').notNull().default(1),
+    revocationEpochSnapshot: integer('revocation_epoch_snapshot').notNull().default(0),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    keyHashUq: uniqueIndex('auth_credentials_key_hash_uq').on(table.keyHash),
+    tenantLineageUq: uniqueIndex('auth_credentials_tenant_lineage_uq').on(table.tenantKeyLineageId),
+    platformSourceUq: uniqueIndex('auth_credentials_platform_source_uq').on(table.platformApiKeyId),
+    classTenantIdx: index('auth_credentials_class_tenant_idx').on(table.credentialClass, table.tenantId),
+    classCheck: check('auth_credentials_class_check', sql`${table.credentialClass} IN ('tenant', 'platform')`),
+    statusCheck: check('auth_credentials_status_check', sql`${table.status} IN ('active', 'revoked', 'expired')`),
+    // Strong class separation: tenant class binds a tenant + lineage + role and
+    // no platform source; platform class binds a platform key and no tenant.
+    classSeparationCheck: check(
+      'auth_credentials_class_separation_check',
+      sql`(
+        ${table.credentialClass} = 'tenant'
+        AND ${table.tenantId} IS NOT NULL
+        AND ${table.tenantKeyLineageId} IS NOT NULL
+        AND ${table.actorRole} IS NOT NULL
+        AND ${table.principalId} IS NOT NULL
+        AND ${table.membershipId} IS NOT NULL
+        AND ${table.platformApiKeyId} IS NULL
+      ) OR (
+        ${table.credentialClass} = 'platform'
+        AND ${table.tenantId} IS NULL
+        AND ${table.platformApiKeyId} IS NOT NULL
+        AND ${table.principalId} IS NOT NULL
+        AND ${table.membershipId} IS NULL
+        AND ${table.tenantKeyLineageId} IS NULL
+        AND ${table.actorRole} IS NULL
+      )`,
+    ),
+    principalMembershipPairCheck: check(
+      'auth_credentials_principal_membership_pair_check',
+      sql`${table.credentialClass} <> 'tenant' OR (
+        (${table.principalId} IS NULL AND ${table.membershipId} IS NULL)
+        OR (${table.principalId} IS NOT NULL AND ${table.membershipId} IS NOT NULL)
+      )`,
+    ),
+    // A tenant-class credential can never carry platform `*` authority.
+    tenantNoWildcardCheck: check(
+      'auth_credentials_tenant_no_wildcard_check',
+      sql`${table.credentialClass} <> 'tenant' OR (
+        cardinality(${table.scopes}) > 0
+        AND array_position(${table.scopes}, NULL) IS NULL
+        AND NOT ('*' = ANY(${table.scopes}))
+        AND array_to_string(${table.scopes}, ',') !~ '(^|,)platform:'
+      )`,
+    ),
+    tenantLineageFk: foreignKey({
+      name: 'auth_credentials_tenant_lineage_fk',
+      columns: [table.tenantId, table.tenantKeyLineageId],
+      foreignColumns: [tenantKeyLineage.tenantId, tenantKeyLineage.id],
+    }).onDelete('restrict'),
+    tenantLineageBindingFk: foreignKey({
+      name: 'auth_credentials_tenant_lineage_binding_fk',
+      columns: [table.tenantId, table.tenantKeyLineageId, table.principalId, table.membershipId, table.actorRole],
+      foreignColumns: [
+        tenantKeyLineage.tenantId,
+        tenantKeyLineage.id,
+        tenantKeyLineage.principalId,
+        tenantKeyLineage.membershipId,
+        tenantKeyLineage.actorRole,
+      ],
+    }).onDelete('restrict'),
+    membershipPrincipalFk: foreignKey({
+      name: 'auth_credentials_membership_principal_fk',
+      columns: [table.tenantId, table.principalId, table.membershipId],
+      foreignColumns: [tenantMemberships.tenantId, tenantMemberships.principalId, tenantMemberships.id],
+    }).onDelete('restrict'),
+    platformSourcePrincipalFk: foreignKey({
+      name: 'auth_credentials_platform_source_principal_fk',
+      columns: [table.platformApiKeyId, table.principalId],
+      foreignColumns: [platformApiKeys.id, platformApiKeys.principalId],
+    }).onDelete('restrict'),
+  }),
+);
+export type AuthCredential = typeof authCredentials.$inferSelect;
+export type NewAuthCredential = typeof authCredentials.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// tenant_audit_logs — append-only, tenant-scoped audit store
+// ---------------------------------------------------------------------------
+export const tenantAuditLogs = pgTable(
+  'tenant_audit_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    actorPrincipalId: uuid('actor_principal_id').references((): AnyPgColumn => principals.id, {
+      onDelete: 'restrict',
+    }),
+    /** auth_credentials.id of the acting credential (no FK: audit must outlive credentials). */
+    actorCredentialId: uuid('actor_credential_id').notNull(),
+    action: varchar('action', { length: 100 }).notNull(),
+    targetType: varchar('target_type', { length: 100 }),
+    targetId: varchar('target_id', { length: 255 }),
+    requestId: varchar('request_id', { length: 100 }).notNull(),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    tenantIdx: index('tenant_audit_logs_tenant_idx').on(table.tenantId),
+    createdAtIdx: index('tenant_audit_logs_created_at_idx').on(table.createdAt),
+  }),
+);
+export type TenantAuditLog = typeof tenantAuditLogs.$inferSelect;
+export type NewTenantAuditLog = typeof tenantAuditLogs.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// platform_audit_logs — append-only platform-admin audit store
+// ---------------------------------------------------------------------------
+export const platformAuditLogs = pgTable(
+  'platform_audit_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    actorPrincipalId: uuid('actor_principal_id').references((): AnyPgColumn => principals.id, {
+      onDelete: 'restrict',
+    }),
+    /** platform_api_keys.id / auth_credentials.id of the actor (no FK: audit outlives credentials). */
+    actorCredentialId: uuid('actor_credential_id').notNull(),
+    action: varchar('action', { length: 100 }).notNull(),
+    /** RESTRICT: platform audit rows pin a target tenant and must not vanish with it. */
+    targetTenantId: uuid('target_tenant_id').references(() => tenants.id, { onDelete: 'restrict' }),
+    reason: text('reason').notNull(),
+    requestId: varchar('request_id', { length: 100 }).notNull(),
+    beforeMetadata: jsonb('before_metadata'),
+    afterMetadata: jsonb('after_metadata'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    targetTenantIdx: index('platform_audit_logs_target_tenant_idx').on(table.targetTenantId),
+    createdAtIdx: index('platform_audit_logs_created_at_idx').on(table.createdAt),
+    targetShapeCheck: check(
+      'platform_audit_logs_target_shape_check',
+      sql`${table.targetTenantId} IS NOT NULL OR ${table.action} = 'tenant.list'`,
+    ),
+  }),
+);
+export type PlatformAuditLog = typeof platformAuditLogs.$inferSelect;
+export type NewPlatformAuditLog = typeof platformAuditLogs.$inferInsert;

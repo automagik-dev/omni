@@ -28,6 +28,7 @@ import { AgentTaskService } from './agent-tasks';
 import { AgentService } from './agents';
 import { ApiKeyService } from './api-keys';
 import { AuditService } from './audit';
+import { AuthBootstrapService } from './auth-bootstrap';
 import { AutomationService } from './automations';
 import { BatchJobService } from './batch-jobs';
 import { ChatService } from './chats';
@@ -49,6 +50,8 @@ import { RouteResolver } from './route-resolver';
 import { RouteService } from './routes';
 import { SettingsService } from './settings';
 import { SyncJobService } from './sync-jobs';
+import { TenantControlPlaneService } from './tenant-control-plane';
+import { TenantKeyService } from './tenant-keys';
 import { TTSService } from './tts';
 import { TurnService } from './turns';
 import { WebhookService } from './webhooks';
@@ -87,6 +90,15 @@ export interface Services {
   followUpLifecycle: FollowUpLifecycleService;
   followUpSweeper: FollowUpSweeperService;
   genieHosts: GenieHostsService;
+  /**
+   * Multitenancy control plane (wish: omni-full-multitenancy, G1). These are
+   * always constructed (no DB I/O at construction) but their routes only mount
+   * when `OMNI_MULTITENANCY_ENABLED === "true"`. `authBootstrap` is the ONLY
+   * read path into the isolated `auth_credentials` index.
+   */
+  authBootstrap: AuthBootstrapService;
+  tenantControlPlane: TenantControlPlaneService;
+  tenantKeys: TenantKeyService;
   /**
    * Media storage service — computes stable keys and delegates to the active
    * backend (local disk or remote S3). Remote mode uses `presignedUrl` at
@@ -173,6 +185,9 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     followUpLifecycle,
     followUpSweeper,
     genieHosts: new GenieHostsService(db),
+    authBootstrap: new AuthBootstrapService(db),
+    tenantControlPlane: new TenantControlPlaneService(db),
+    tenantKeys: new TenantKeyService(db),
     mediaStorage: new MediaStorageService(db),
     eventBus,
   };

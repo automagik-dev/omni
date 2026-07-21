@@ -79,8 +79,10 @@ import { createWebhookAuthMiddleware } from './middleware/webhook-auth';
 import { getHealth, healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
+import { platformTenantRoutes } from './routes/v2/platform-tenants';
 import type { Services } from './services';
 import { resolveA2AAgentCard } from './services/a2a-discovery';
+import { isMultitenancyEnabled } from './tenancy/feature-flag';
 import type { AppVariables } from './types';
 
 /**
@@ -304,6 +306,17 @@ export function createApp(
 
     return plugin.handleWebhook(c.req.raw);
   });
+
+  // ── Multitenancy control plane — feature-flagged, OFF by default ────────────
+  // Mounted ONLY when OMNI_MULTITENANCY_ENABLED === "true". When off, this
+  // surface does not exist (404) and legacy route/auth behavior is untouched.
+  // These routes carry their OWN platform-class auth guard (platformAuthMiddleware)
+  // and deliberately bypass the legacy bearer authMiddleware / scope-enforcer so
+  // tenant/legacy keys can never reach the control plane.
+  if (isMultitenancyEnabled()) {
+    app.route('/api/v2/platform', platformTenantRoutes);
+    httpLog.info('Multitenancy control plane mounted at /api/v2/platform (OMNI_MULTITENANCY_ENABLED=true)');
+  }
 
   // Protected routes
   const protectedApp = new Hono<{ Variables: AppVariables }>();
