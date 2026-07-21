@@ -69,6 +69,7 @@ import { genieSignatureMiddleware } from './middleware/genie-signature';
 import { outputRedactorMiddleware } from './middleware/output-redactor';
 import { requireSignedInstanceMiddleware } from './middleware/require-signed-instance';
 import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
+import { tenancyMiddleware } from './middleware/tenancy';
 
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
@@ -320,6 +321,12 @@ export function createApp(
 
   // Protected routes
   const protectedApp = new Hono<{ Variables: AppVariables }>();
+  // Tenancy edge (wish: omni-full-multitenancy, G4). Runs BEFORE the legacy
+  // bearer auth so a tenant-class credential is recognised, given its immutable
+  // context, and wrapped in a tenant-stamped transaction for the whole chain.
+  // A credential the auth plane does not know falls straight through and the
+  // legacy path below behaves exactly as it did pre-G4.
+  protectedApp.use('*', tenancyMiddleware);
   protectedApp.use('*', authMiddleware);
   // Genie host signature verification (omni-host-fingerprint-trust group 4).
   // Runs BEFORE scope-enforcer so `signedBy`/`signedByScopes` are populated

@@ -7,7 +7,8 @@ import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import type { ApiKeyProfile, ApiKeyProfileOverrides } from '@omni/db';
 import type { Services } from './services';
-import type { PlatformAuthContext } from './tenancy/auth-context';
+import type { PlatformAuthContext, TenantAuthContext } from './tenancy/auth-context';
+import type { TenantSelectionSource } from './tenancy/request-auth';
 
 /**
  * API key data from validation
@@ -69,6 +70,23 @@ export interface AppVariables {
    * from caller headers/body/path. Absent on all legacy routes.
    */
   platformAuth?: PlatformAuthContext;
+  /**
+   * Immutable tenant context set ONCE by `tenancyMiddleware` at the edge
+   * (wish: omni-full-multitenancy, G4; ADR-0003). Present only when the
+   * presented credential was recognised as tenant-class by the auth plane —
+   * absent for every legacy-credential request, which is what makes its
+   * presence the discriminator between the two worlds.
+   *
+   * Downstream code must treat this as read-only: re-tenanting a request after
+   * the edge is exactly the attack the single-construction rule prevents.
+   */
+  authContext?: TenantAuthContext;
+  /**
+   * How the tenant was established: from the credential itself, or from an
+   * advisory hint that CONFIRMED the credential's own tenant and was
+   * re-validated against a live membership. Never `header`/`body`/`path`.
+   */
+  tenantSource?: TenantSelectionSource;
 }
 
 /**

@@ -20,6 +20,7 @@ import {
 import type { Database, OmniEvent } from '@omni/db';
 import { omniEvents } from '@omni/db';
 import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import type { DeadLetterService } from './dead-letters';
 import type { PayloadStoreService } from './payload-store';
 
@@ -69,8 +70,20 @@ export class EventOpsService {
   private replaySessions = new Map<string, ReplaySession>();
   private activeReplayId: string | null = null;
 
+  /**
+   * The handle every query in this service uses.
+   *
+   * Inside a tenant-scoped request this is the request's tenant-stamped
+   * transaction (wish: omni-full-multitenancy, G4 — see `tenancy/tenant-scope.ts`);
+   * for a legacy credential, a worker, or the CLI it is the ambient pool and
+   * the query issued is byte-for-byte the one issued before the conversion.
+   */
+  private get db(): Database {
+    return scopedHandle(this.pool);
+  }
+
   constructor(
-    private db: Database,
+    private readonly pool: Database,
     private eventBus: EventBus | null,
     private deadLetterService: DeadLetterService,
     private payloadStoreService: PayloadStoreService,
@@ -140,8 +153,16 @@ export class EventOpsService {
       }
     }
 
-    // Start replay in background
-    this.executeReplay(sessionId, options).catch((err) => {
+    // Start replay in background.
+    //
+    // `startReplay` may be running inside a tenant-scoped request transaction
+    // (POST /api/v2/event-ops/replay). The replay executor MUST NOT inherit that
+    // scope: it outlives the request, and by the time its batch queries run the
+    // request's transaction has committed and its pooled connection has been
+    // released — issuing a query on it would be a use-after-commit. Detaching
+    // pins the executor (and every query it makes via `this.db`) to the ambient
+    // pool, the worker-context path G5 will own.
+    runDetachedFromTenantScope(() => this.executeReplay(sessionId, options)).catch((err) => {
       log.error('Replay failed', { sessionId, error: String(err) });
     });
 

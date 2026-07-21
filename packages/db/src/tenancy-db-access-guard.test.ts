@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import {
   MIRRORED_RLS_EXCLUSIONS,
   PENDING_G4_CEILING,
+  PENDING_G5_CEILING,
   REGISTERED_DB_ACCESS,
   defaultClassFor,
   evaluateDbAccessGuard,
@@ -45,17 +46,27 @@ describe('db-access guard', () => {
     expect(report.stale).toEqual([]);
   });
 
-  test('every control-plane and migration-ddl exception carries a justification', () => {
+  test('every control-plane, migration-ddl, and G5-deferred entry carries a justification', () => {
     expect(report.unjustified).toEqual([]);
     for (const entry of REGISTERED_DB_ACCESS) {
-      if (entry.class === 'control-plane' || entry.class === 'migration-ddl') {
+      if (
+        entry.class === 'control-plane' ||
+        entry.class === 'migration-ddl' ||
+        entry.class === 'pending-G5-conversion'
+      ) {
         expect((entry.justification ?? '').length).toBeGreaterThan(40);
       }
     }
   });
 
-  test('exceptions fall only into the three authorised classes', () => {
-    const allowed = new Set(['tenant-boundary', 'control-plane', 'migration-ddl', 'pending-G4-conversion']);
+  test('exceptions fall only into the authorised classes', () => {
+    const allowed = new Set([
+      'tenant-boundary',
+      'control-plane',
+      'migration-ddl',
+      'pending-G4-conversion',
+      'pending-G5-conversion',
+    ]);
     for (const entry of REGISTERED_DB_ACCESS) expect(allowed.has(entry.class)).toBe(true);
   });
 
@@ -65,11 +76,56 @@ describe('db-access guard', () => {
     expect(report.counts['pending-G4-conversion']).toBeGreaterThan(0);
   });
 
-  test('the G3 boundary modules are classified as tenant-boundary, not as exceptions', () => {
+  test('the pending-G5 class is at or below its ceiling — G4 cannot grow its way out', () => {
+    // The point of capping a class G4 itself opened: without this, "convert" and
+    // "defer to G5" would be indistinguishable from the outside, and the G4
+    // number could be driven to zero purely by relabelling.
+    expect(report.counts['pending-G5-conversion']).toBeLessThanOrEqual(PENDING_G5_CEILING);
+  });
+
+  test('every G5 deferral names the async mechanism that owns its caller', () => {
+    const deferred = REGISTERED_DB_ACCESS.filter((e) => e.class === 'pending-G5-conversion');
+    expect(deferred.length).toBeGreaterThan(0);
+    for (const entry of deferred) {
+      // A deferral that cannot say WHY no request context exists is a hiding
+      // place for synchronous work, so the mechanism must be stated. The named
+      // mechanism is either a non-request caller (an eventBus consumer, a
+      // scheduler cron/interval, a storage path) or a request-spawned but
+      // deliberately request-detached executor (fire-and-forget work that
+      // outlives the request and runs on the ambient pool). The bare word
+      // "background" is intentionally NOT accepted — it describes a symptom, not
+      // the mechanism, so a justification must name the detaching act itself.
+      expect(entry.justification).toMatch(
+        /consumer|cron|setInterval|scheduled|interval|storage path|fire-and-forget|detached/i,
+      );
+      expect(entry.justification).toContain('ADR-0008');
+    }
+  });
+
+  test('tenant-boundary is the G3 boundary modules plus the services G4 fully converted', () => {
+    // G3 could only claim this class for `tenancy/` itself. G4 converts service
+    // files, so the assertion widens — but only to services whose EVERY caller
+    // carries a request context. A service with a consumer or cron caller stays
+    // in a pending class, which is what keeps this from becoming "anything that
+    // has been edited".
     const boundary = REGISTERED_DB_ACCESS.filter((e) => e.class === 'tenant-boundary');
     expect(boundary.length).toBeGreaterThan(0);
+    const converted = new Set([
+      // Services whose every caller is request-context AND whose tables carry
+      // real G2 ownership. `conversations.ts` appears for its `chats` access
+      // only — its own table is `unowned`, so that site stays pending.
+      'packages/api/src/services/conversations.ts',
+      'packages/api/src/services/routes.ts',
+      'packages/api/src/services/events.ts',
+      'packages/api/src/services/agent-tasks.ts',
+      'packages/api/src/services/agents.ts',
+      // Route handlers that query directly; scoped by the edge rebinding
+      // `c.get('db')` to the request transaction.
+      'packages/api/src/routes/v2/handoffs.ts',
+      'packages/api/src/routes/v2/messages.ts',
+    ]);
     for (const entry of boundary) {
-      expect(entry.file.startsWith('packages/api/src/tenancy/')).toBe(true);
+      expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);
     }
   });
 

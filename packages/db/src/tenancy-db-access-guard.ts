@@ -19,7 +19,7 @@
  * reason a new unscoped writer cannot land silently, which is the same stance
  * `tenancy-writer-coverage.ts` takes for G2 and the same ratchet mechanic.
  *
- * THE FOUR CLASSES
+ * THE FIVE CLASSES
  * ----------------
  *   * `tenant-boundary` — reached only through `withTenantTransaction`. The
  *     target state for every tenant-scoped site.
@@ -32,6 +32,22 @@
  *     convert, because G4 owns route-wide conversion. This class EXISTS TO
  *     SHRINK. `PENDING_G4_CEILING` is the count at the end of G3 and the test
  *     fails if it grows, so G4 can only ratchet it down.
+ *   * `pending-G5-conversion` — sites whose remaining unscoped caller has NO
+ *     HTTP request context to take a tenant from: a NATS/eventBus consumer, a
+ *     cron or `setInterval` loop, a plugin lifecycle hook, or a storage path
+ *     reached only from one of those. Establishing a tenant for these requires
+ *     the async/worker context semantics G5 owns (ADR-0008), so they cannot be
+ *     closed here. This class is NOT a quieter synonym for "unconverted": a
+ *     site belongs here only when the async mechanism is NAMED in its
+ *     justification, and like its G4 sibling it exists to shrink, under its own
+ *     ceiling.
+ *
+ * A note on the two `pending-*` classes and dual-caller sites: several services
+ * are called BOTH from a route and from a consumer. Converting the route path
+ * does not make such a site converted — its worker caller still reaches the
+ * ambient pool — so it is classified `pending-G5-conversion`, not
+ * `tenant-boundary`. Only a site whose every caller carries a request context
+ * earns `tenant-boundary`.
  *
  * WHY A DENYLIST OF SITES RATHER THAN A LINT RULE
  * -----------------------------------------------
@@ -47,7 +63,12 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { RLS_EXCLUSIONS, RLS_TENANT_TABLES, type RlsExclusion } from './tenancy-rls';
 
-export type DbAccessClass = 'tenant-boundary' | 'control-plane' | 'migration-ddl' | 'pending-G4-conversion';
+export type DbAccessClass =
+  | 'tenant-boundary'
+  | 'control-plane'
+  | 'migration-ddl'
+  | 'pending-G4-conversion'
+  | 'pending-G5-conversion';
 
 export interface DbAccessSite {
   /** Repository-relative path. */
@@ -58,7 +79,11 @@ export interface DbAccessSite {
 
 export interface RegisteredDbAccess extends DbAccessSite {
   readonly class: DbAccessClass;
-  /** Required for `control-plane` and `migration-ddl`: why no tenant context applies. */
+  /**
+   * Required for `control-plane` and `migration-ddl` (why no tenant context
+   * applies) and for `pending-G5-conversion` (which async mechanism owns the
+   * remaining unscoped caller).
+   */
   readonly justification?: string;
 }
 
@@ -188,9 +213,12 @@ export function evaluateDbAccessGuard(
 
   const unregistered = scanned.filter((site) => !registered.has(key(site)));
   const stale = registry.filter((entry) => !found.has(key(entry)));
+  // `pending-G5-conversion` is held to the same standard as an exemption class:
+  // deferring a site to G5 is a CLAIM that no request context can reach it, and
+  // an unjustified claim is how a synchronous site would hide from this group.
   const unjustified = registry.filter(
     (entry) =>
-      (entry.class === 'control-plane' || entry.class === 'migration-ddl') &&
+      (entry.class === 'control-plane' || entry.class === 'migration-ddl' || entry.class === 'pending-G5-conversion') &&
       (entry.justification ?? '').trim().length === 0,
   );
 
@@ -199,6 +227,7 @@ export function evaluateDbAccessGuard(
     'control-plane': 0,
     'migration-ddl': 0,
     'pending-G4-conversion': 0,
+    'pending-G5-conversion': 0,
   };
   for (const entry of registry) counts[entry.class] += 1;
 
@@ -277,16 +306,45 @@ export function defaultClassFor(site: DbAccessSite): { class: DbAccessClass; jus
 
 /**
  * Ceiling for the `pending-G4-conversion` class, fixed at the end of G3 and
- * ratcheted down by each G4 leg (73 at the end of G3; 72 after the G4
+ * ratcheted down by each G4 leg: 73 at the end of G3, 72 after the leg-1
  * public-surface privacy fix removed the unauthenticated instance-count
- * aggregation from `routes/health.ts`).
+ * aggregation from `routes/health.ts`, and 24 after leg 2 converted the
+ * synchronous service surface.
+ *
+ * The 24 that remain are NOT unconverted plumbing. They are, in full:
+ *   * 6 sites on tables G2 classifies as `unowned`, where the blocker is the
+ *     G6 ownership backfill rather than anything G4 can reach — see their
+ *     justifications;
+ *   * 8 CLI and channel-plugin sites, left here deliberately rather than being
+ *     waved through as `control-plane` (the test below enforces that);
+ *   * 10 route/service sites whose disposition is recorded in the G4 handoff.
  *
  * The guard fails when the count EXCEEDS this. It does not fail when the count
  * falls: G4's job is to drive it toward zero, and every conversion should be
  * able to land without also editing this constant. When G4 lowers it, lower the
  * ceiling with it so the ratchet keeps its grip.
  */
-export const PENDING_G4_CEILING = 72;
+export const PENDING_G4_CEILING = 20;
+
+/**
+ * Ceiling for the `pending-G5-conversion` class.
+ *
+ * Opened by G4 at 43, in two groups:
+ *
+ *   * 22 sites whose ONLY caller is asynchronous — a NATS consumer, a
+ *     cron/interval loop, or a worker-constructed storage path. G4 never had a
+ *     request to convert.
+ *   * 21 sites in services G4 DID convert, whose route path now runs inside the
+ *     tenant transaction but which are also called from a consumer or the
+ *     scheduler. A site is only as converted as its least-scoped caller, so
+ *     these keep a pending class rather than being counted as finished. Their
+ *     justifications say so explicitly.
+ *
+ * The class is a ratchet, not an amnesty. It is capped from the moment it is
+ * created so that G4 cannot grow it to make its own number look better, and G5
+ * drives it to zero.
+ */
+export const PENDING_G5_CEILING = 43;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -411,12 +469,20 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/lib/idempotency.ts',
     table: 'processed_events',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/agent-dispatcher.ts',
     table: 'agent_sessions',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/agent-dispatcher.ts',
@@ -426,57 +492,101 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/plugins/agent-dispatcher.ts',
     table: 'handoff_logs',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/agent-dispatcher.ts',
     table: 'instances',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/event-listeners.ts',
     table: 'chat_id_mappings',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/event-listeners.ts',
     table: 'chats',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/event-listeners.ts',
     table: 'instances',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/event-persistence.ts',
     table: 'chats',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/event-persistence.ts',
     table: 'omni_events',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/instance-monitor.ts',
     table: 'instances',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from a scheduled/interval loop (scheduler cron or setInterval), which runs on a timer with no ' +
+      'request and no credential. Tenant context for periodic work requires the G5 worker-context semantics ' +
+      '(ADR-0008).',
   },
   {
     file: 'packages/api/src/plugins/media-processor.ts',
     table: 'media_content',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/media-processor.ts',
     table: 'messages',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/media-processor.ts',
     table: 'omni_events',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/session-cleaner.ts',
@@ -491,57 +601,89 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/plugins/session-storage.ts',
     table: 'agent_sessions',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'A storage path constructed and invoked only from within the agent-dispatch consumer, and so inherits that ' +
+      'absence of request context. Converting it requires the async storage context of ADR-0008 (G5).',
   },
   {
     file: 'packages/api/src/plugins/sync-worker.ts',
     table: 'messages',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/sync-worker.ts',
     table: 'omni_groups',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/routes/v2/handoffs.ts',
     table: 'handoff_logs',
-    class: 'pending-G4-conversion',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/routes/v2/instances.ts',
     table: 'platform_identities',
     class: 'pending-G4-conversion',
+    justification:
+      'No database access at this site: the scanner matched the phrase "from platform_identities" inside two ' +
+      'explanatory comments (instances.ts:1788, :1888). Left in this class rather than exempted, because narrowing ' +
+      'the scanner to ignore comments would cost real coverage to remove a harmless entry. OPEN QUESTION: retire by ' +
+      'making the scanner comment-aware, not by reclassifying.',
   },
   {
     file: 'packages/api/src/routes/v2/messages.ts',
     table: 'close_contact_logs',
-    class: 'pending-G4-conversion',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/routes/v2/messages.ts',
     table: 'handoff_logs',
-    class: 'pending-G4-conversion',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/access.ts',
     table: 'access_rules',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/access.ts',
     table: 'instances',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/agent-replay.ts',
     table: 'instances',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/agent-replay.ts',
     table: 'messages',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/agent-runner.ts',
@@ -551,22 +693,26 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/agent-runner.ts',
     table: 'persons',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/services/agent-tasks.ts',
     table: 'agent_tasks',
-    class: 'pending-G4-conversion',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/agents.ts',
     table: 'agents',
-    class: 'pending-G4-conversion',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/agents.ts',
     table: 'instances',
-    class: 'pending-G4-conversion',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/auth-bootstrap.ts',
@@ -585,77 +731,144 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/automations.ts',
     table: 'automation_logs',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/automations.ts',
     table: 'automations',
     class: 'pending-G4-conversion',
+    justification:
+      'G2 classifies this table as `unowned` (tenancy-ownership.ts): its G0 rule names a parent that is not a ' +
+      'column in the live schema, so tenant_id stays NULL until the G6 backfill decides ownership. The route path ' +
+      'runs inside the tenant transaction, but under forced RLS the tenant-equality predicate matches no row at ' +
+      'all, so the site cannot be called converted. OPEN QUESTION for G6, proven by the unowned-tables block in ' +
+      'two-tenant-adversarial-postgres.test.ts.',
   },
   {
     file: 'packages/api/src/services/batch-jobs.ts',
     table: 'batch_jobs',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Two paths reach this service. The route-facing create/list/get paths run inside the request tenant ' +
+      'transaction and are scoped. The background job executor is a worker-context path: it is spawned ' +
+      'fire-and-forget and DELIBERATELY detached from the request scope (tenant-scope.ts runDetachedFromTenantScope), ' +
+      'because it outlives the request transaction and must run on the ambient pool to avoid a use-after-commit. ' +
+      'Converting that worker path to its own tenant scope needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/batch-jobs.ts',
     table: 'media_content',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Two paths reach this service. The route-facing create/list/get paths run inside the request tenant ' +
+      'transaction and are scoped. The background job executor is a worker-context path: it is spawned ' +
+      'fire-and-forget and DELIBERATELY detached from the request scope (tenant-scope.ts runDetachedFromTenantScope), ' +
+      'because it outlives the request transaction and must run on the ambient pool to avoid a use-after-commit. ' +
+      'Converting that worker path to its own tenant scope needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/batch-jobs.ts',
     table: 'messages',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Two paths reach this service. The route-facing create/list/get paths run inside the request tenant ' +
+      'transaction and are scoped. The background job executor is a worker-context path: it is spawned ' +
+      'fire-and-forget and DELIBERATELY detached from the request scope (tenant-scope.ts runDetachedFromTenantScope), ' +
+      'because it outlives the request transaction and must run on the ambient pool to avoid a use-after-commit. ' +
+      'Converting that worker path to its own tenant scope needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/chats.ts',
     table: 'chat_id_mappings',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/chats.ts',
     table: 'chat_participants',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/chats.ts',
     table: 'chats',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/chats.ts',
     table: 'omni_groups',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/conversations.ts',
     table: 'chats',
-    class: 'pending-G4-conversion',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/conversations.ts',
     table: 'conversations',
     class: 'pending-G4-conversion',
+    justification:
+      'G2 classifies this table as `unowned` (tenancy-ownership.ts): its G0 rule names a parent that is not a ' +
+      'column in the live schema, so tenant_id stays NULL until the G6 backfill decides ownership. The route path ' +
+      'runs inside the tenant transaction, but under forced RLS the tenant-equality predicate matches no row at ' +
+      'all, so the site cannot be called converted. OPEN QUESTION for G6, proven by the unowned-tables block in ' +
+      'two-tenant-adversarial-postgres.test.ts.',
   },
   {
     file: 'packages/api/src/services/dead-letters.ts',
     table: 'dead_letter_events',
     class: 'pending-G4-conversion',
+    justification:
+      'G2 classifies this table as `unowned` (tenancy-ownership.ts): its G0 rule names a parent that is not a ' +
+      'column in the live schema, so tenant_id stays NULL until the G6 backfill decides ownership. The route path ' +
+      'runs inside the tenant transaction, but under forced RLS the tenant-equality predicate matches no row at ' +
+      'all, so the site cannot be called converted. OPEN QUESTION for G6, proven by the unowned-tables block in ' +
+      'two-tenant-adversarial-postgres.test.ts.',
   },
   {
     file: 'packages/api/src/services/event-ops.ts',
     table: 'omni_events',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Two paths reach this service. The route-facing startReplay count/metrics paths run inside the request tenant ' +
+      'transaction and are scoped. The background replay executor is a worker-context path: it is spawned ' +
+      'fire-and-forget and DELIBERATELY request-detached from the request scope (tenant-scope.ts ' +
+      'runDetachedFromTenantScope), because it outlives the request transaction and must run on the ambient pool to ' +
+      'avoid a use-after-commit. Converting that worker path to its own tenant scope needs the G5 async context ' +
+      '(ADR-0008).',
   },
   {
     file: 'packages/api/src/services/events.ts',
     table: 'omni_events',
-    class: 'pending-G4-conversion',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/follow-up-lifecycle.ts',
     table: 'agents',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/services/follow-up-lifecycle.ts',
@@ -665,72 +878,128 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/follow-up-lifecycle.ts',
     table: 'chats',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/services/follow-up-lifecycle.ts',
     table: 'instances',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/services/follow-up-sweeper.ts',
     table: 'chat_follow_up_state',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from a scheduled/interval loop (scheduler cron or setInterval), which runs on a timer with no ' +
+      'request and no credential. Tenant context for periodic work requires the G5 worker-context semantics ' +
+      '(ADR-0008).',
   },
   {
     file: 'packages/api/src/services/instances.ts',
     table: 'instances',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/media-storage.ts',
     table: 'messages',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/messages.ts',
     table: 'chats',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/messages.ts',
     table: 'messages',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/payload-store.ts',
     table: 'event_payloads',
     class: 'pending-G4-conversion',
+    justification:
+      'G2 classifies this table as `unowned` (tenancy-ownership.ts): its G0 rule names a parent that is not a ' +
+      'column in the live schema, so tenant_id stays NULL until the G6 backfill decides ownership. The route path ' +
+      'runs inside the tenant transaction, but under forced RLS the tenant-equality predicate matches no row at ' +
+      'all, so the site cannot be called converted. OPEN QUESTION for G6, proven by the unowned-tables block in ' +
+      'two-tenant-adversarial-postgres.test.ts.',
   },
   {
     file: 'packages/api/src/services/persons.ts',
     table: 'chat_id_mappings',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/persons.ts',
     table: 'persons',
     class: 'pending-G4-conversion',
+    justification:
+      'G2 classifies this table as `unowned` (tenancy-ownership.ts): its G0 rule names a parent that is not a ' +
+      'column in the live schema, so tenant_id stays NULL until the G6 backfill decides ownership. The route path ' +
+      'runs inside the tenant transaction, but under forced RLS the tenant-equality predicate matches no row at ' +
+      'all, so the site cannot be called converted. OPEN QUESTION for G6, proven by the unowned-tables block in ' +
+      'two-tenant-adversarial-postgres.test.ts.',
   },
   {
     file: 'packages/api/src/services/persons.ts',
     table: 'platform_identities',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/route-resolver.ts',
     table: 'agent_routes',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
+      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
+      'propagation ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/services/routes.ts',
     table: 'agent_routes',
-    class: 'pending-G4-conversion',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/sync-jobs.ts',
     table: 'sync_jobs',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/tenant-control-plane.ts',
@@ -763,12 +1032,22 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/turns.ts',
     table: 'turns',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
+      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
+      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
     file: 'packages/api/src/services/webhooks.ts',
     table: 'webhook_sources',
     class: 'pending-G4-conversion',
+    justification:
+      'G2 classifies this table as `unowned` (tenancy-ownership.ts): its G0 rule names a parent that is not a ' +
+      'column in the live schema, so tenant_id stays NULL until the G6 backfill decides ownership. The route path ' +
+      'runs inside the tenant transaction, but under forced RLS the tenant-equality predicate matches no row at ' +
+      'all, so the site cannot be called converted. OPEN QUESTION for G6, proven by the unowned-tables block in ' +
+      'two-tenant-adversarial-postgres.test.ts.',
   },
   {
     file: 'packages/api/src/tenancy/auth-plane-connection.ts',
@@ -802,41 +1081,67 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     file: 'packages/channel-a2a/src/agent-card.ts',
     table: 'agents',
     class: 'pending-G4-conversion',
+    justification:
+      'No database access at this site: the scanner matched a table name inside a doc comment (agent-card.ts:73). ' +
+      'OPEN QUESTION: retire by making the scanner comment-aware, not by reclassifying.',
   },
   {
     file: 'packages/channel-discord/src/senders/reaction.ts',
     table: 'messages',
     class: 'pending-G4-conversion',
+    justification:
+      'No database access at this site: `messages` here is the discord.js `TextChannel.messages` client API, not ' +
+      'the messages table. OPEN QUESTION: retire by disambiguating the scanner, not by reclassifying.',
   },
   {
     file: 'packages/channel-whatsapp/src/plugin.ts',
     table: 'chats',
     class: 'pending-G4-conversion',
+    justification:
+      'No database access at this site: `chats` here names the Baileys `chats.upsert`/`chats.update` socket events, ' +
+      'not the chats table. OPEN QUESTION: retire by disambiguating the scanner, not by reclassifying.',
   },
   {
     file: 'packages/cli/src/commands/channels.ts',
     table: 'instances',
     class: 'pending-G4-conversion',
+    justification:
+      'No database access at this site: the CLI reaches instances over HTTP (`client.instances.list`), so it ' +
+      'inherits whatever scoping the API applied. OPEN QUESTION: retire by disambiguating the scanner, not by ' +
+      'reclassifying.',
   },
   {
     file: 'packages/cli/src/commands/completions.ts',
     table: 'chats',
     class: 'pending-G4-conversion',
+    justification:
+      'No database access at this site: these are literal word lists for shell completion. OPEN QUESTION: retire by ' +
+      'disambiguating the scanner, not by reclassifying.',
   },
   {
     file: 'packages/cli/src/commands/completions.ts',
     table: 'instances',
     class: 'pending-G4-conversion',
+    justification:
+      'No database access at this site: these are literal word lists for shell completion. OPEN QUESTION: retire by ' +
+      'disambiguating the scanner, not by reclassifying.',
   },
   {
     file: 'packages/cli/src/commands/completions.ts',
     table: 'persons',
     class: 'pending-G4-conversion',
+    justification:
+      'No database access at this site: these are literal word lists for shell completion. OPEN QUESTION: retire by ' +
+      'disambiguating the scanner, not by reclassifying.',
   },
   {
     file: 'packages/cli/src/commands/keys.ts',
     table: '*',
     class: 'pending-G4-conversion',
+    justification:
+      'A real `createDb()` in an operator CLI process with no HTTP request and no tenant credential. NOT waved ' +
+      'through as control-plane: it can write tenant rows outside the boundary. OPEN QUESTION for the ' +
+      'operator-surface inventory — whether this command can run under a tenant credential at all.',
   },
   {
     file: 'packages/db/scripts/apply-rls-enforcement.ts',

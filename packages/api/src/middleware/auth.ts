@@ -14,6 +14,17 @@ import type { ApiKeyData, AppVariables } from '../types';
  * Authorization: Bearer <omni-api-key>.
  */
 export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
+  // The tenancy edge (wish: omni-full-multitenancy, G4) already authenticated
+  // this request against the auth plane and projected the tenant context into
+  // `apiKey` for the authorization middlewares downstream. Re-validating the
+  // secret here would look it up in `api_keys`, where a tenant credential does
+  // not exist, and 401 a legitimately authenticated request.
+  //
+  // In the default (flag-off) world `authContext` is never set, so this branch
+  // is unreachable and the legacy path below is entered on every request
+  // exactly as it was before G4.
+  if (c.get('authContext')) return next();
+
   const apiKey =
     c.req.header('x-api-key') ?? c.req.query('api_key') ?? c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
 
