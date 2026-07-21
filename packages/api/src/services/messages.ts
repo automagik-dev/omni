@@ -24,6 +24,21 @@ import {
 } from '@omni/db';
 import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
 
+import { sanitizeText } from '../utils/utf8';
+
+// Pre-processed media text (extraction / vision / transcription) can carry NUL
+// bytes; Postgres text columns reject 0x00, so strip them before any write.
+function sanitizeMediaText(data: Partial<NewMessage>): Partial<NewMessage> {
+  const out: Partial<NewMessage> = { ...data };
+  if (typeof out.transcription === 'string') out.transcription = sanitizeText(out.transcription) ?? '';
+  if (typeof out.imageDescription === 'string') out.imageDescription = sanitizeText(out.imageDescription) ?? '';
+  if (typeof out.videoDescription === 'string') out.videoDescription = sanitizeText(out.videoDescription) ?? '';
+  if (typeof out.documentExtraction === 'string') {
+    out.documentExtraction = sanitizeText(out.documentExtraction) ?? '';
+  }
+  return out;
+}
+
 export interface ListMessagesOptions {
   chatId?: string;
   instanceIds?: string[];
@@ -422,10 +437,10 @@ export class MessageService {
           mediaLocalPath: options.mediaLocalPath,
           mediaMetadata: options.mediaMetadata,
           // Pre-processed content
-          transcription: options.transcription,
-          imageDescription: options.imageDescription,
-          videoDescription: options.videoDescription,
-          documentExtraction: options.documentExtraction,
+          transcription: sanitizeText(options.transcription),
+          imageDescription: sanitizeText(options.imageDescription),
+          videoDescription: sanitizeText(options.videoDescription),
+          documentExtraction: sanitizeText(options.documentExtraction),
           // Reply/Forward
           replyToMessageId: options.replyToMessageId,
           replyToExternalId: options.replyToExternalId,
@@ -545,7 +560,7 @@ export class MessageService {
   async update(id: string, data: Partial<NewMessage>): Promise<Message> {
     const [updated] = await this.db
       .update(messages)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...sanitizeMediaText(data), updatedAt: new Date() })
       .where(eq(messages.id, id))
       .returning();
 
@@ -755,7 +770,7 @@ export class MessageService {
   async updateTranscription(id: string, transcription: string): Promise<Message> {
     const [updated] = await this.db
       .update(messages)
-      .set({ transcription, updatedAt: new Date() })
+      .set({ transcription: sanitizeText(transcription) ?? '', updatedAt: new Date() })
       .where(eq(messages.id, id))
       .returning();
 
@@ -772,7 +787,7 @@ export class MessageService {
   async updateImageDescription(id: string, description: string): Promise<Message> {
     const [updated] = await this.db
       .update(messages)
-      .set({ imageDescription: description, updatedAt: new Date() })
+      .set({ imageDescription: sanitizeText(description) ?? '', updatedAt: new Date() })
       .where(eq(messages.id, id))
       .returning();
 
@@ -789,7 +804,7 @@ export class MessageService {
   async updateVideoDescription(id: string, description: string): Promise<Message> {
     const [updated] = await this.db
       .update(messages)
-      .set({ videoDescription: description, updatedAt: new Date() })
+      .set({ videoDescription: sanitizeText(description) ?? '', updatedAt: new Date() })
       .where(eq(messages.id, id))
       .returning();
 
@@ -806,7 +821,7 @@ export class MessageService {
   async updateDocumentExtraction(id: string, extraction: string): Promise<Message> {
     const [updated] = await this.db
       .update(messages)
-      .set({ documentExtraction: extraction, updatedAt: new Date() })
+      .set({ documentExtraction: sanitizeText(extraction) ?? '', updatedAt: new Date() })
       .where(eq(messages.id, id))
       .returning();
 
