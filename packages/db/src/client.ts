@@ -92,6 +92,37 @@ export function createDb(config?: Partial<DbConfig>) {
 export type Database = ReturnType<typeof createDb>;
 
 /**
+ * An INDEPENDENT pool with its own lifecycle.
+ *
+ * `createDb` writes its client into the module-level `sqlClient` so that
+ * `closeDb()` can drain it — which means the second call replaces the first,
+ * and only the last pool is ever closed. That is fine for the single
+ * application pool, and wrong for anything that needs more than one at a time:
+ * the G3 enforcement work runs a provisioner, a DDL, a runtime, and an
+ * auth-plane connection side by side (ADR-0003/0004), and each must be closable
+ * on its own.
+ *
+ * The singleton is deliberately untouched, so no existing caller changes
+ * behaviour.
+ */
+export function createDbHandle(config?: Partial<DbConfig>): { db: Database; close: () => Promise<void> } {
+  const url = config?.url ?? getDefaultDatabaseUrl();
+  const ssl = resolveSslConfig(config?.sslCaFile);
+  const client = postgres(url, {
+    max: config?.maxConnections ?? 10,
+    idle_timeout: config?.idleTimeout ?? 20,
+    connect_timeout: config?.connectTimeout ?? 10,
+    ...(ssl ? { ssl } : {}),
+  });
+  return {
+    db: drizzle(client, { schema }) as Database,
+    close: async () => {
+      await client.end({ timeout: 5 });
+    },
+  };
+}
+
+/**
  * Singleton database instance
  */
 let dbInstance: Database | null = null;

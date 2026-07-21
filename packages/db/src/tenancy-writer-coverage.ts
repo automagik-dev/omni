@@ -180,6 +180,7 @@ export const REGISTERED_WRITERS: readonly RegisteredWriter[] = [
   { file: 'packages/api/src/services/sync-jobs.ts', table: 'sync_jobs', coverage: 'db-derived' },
   { file: 'packages/api/src/services/turns.ts', table: 'turns', coverage: 'db-derived' },
   { file: 'packages/api/src/services/webhooks.ts', table: 'webhook_sources', coverage: 'db-unowned' },
+  { file: 'packages/api/src/tenancy/tenant-repository.ts', table: 'instances', coverage: 'trusted-root' },
   { file: 'packages/db/scripts/backfill-chat-names.ts', table: 'chats', coverage: 'db-derived' },
   { file: 'packages/db/scripts/backfill-conversations.ts', table: 'chats', coverage: 'db-derived' },
   { file: 'packages/db/scripts/backfill-conversations.ts', table: 'conversations', coverage: 'db-unowned' },
