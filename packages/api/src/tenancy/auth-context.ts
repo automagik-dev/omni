@@ -20,6 +20,20 @@ export interface TenantAuthContext {
   readonly credentialId: string;
   /** Always present for tenant-class credentials; immutable for the request. */
   readonly tenantId: string;
+  /**
+   * The tenant's stable slug, carried so the authenticated exposure surface
+   * (`POST /auth/validate`, WISH "Compatibility") can name the tenant in the
+   * form humans use without a second lookup — which it could not do anyway,
+   * since `tenants` is an AUTH-PLANE table and the runtime role cannot read it
+   * (`tenancy-roles.ts` AUTH_PLANE_TABLES). `resolveTenantContext` already
+   * loads the tenant row for its freshness check, so this costs no extra query.
+   *
+   * Optional in the TYPE, invariant in production: every context built by
+   * `auth-bootstrap.ts` carries it (pinned by a test there), and only
+   * hand-built test fixtures omit it. Consumers must treat an absent slug as
+   * "unknown" and publish null — never derive or guess one.
+   */
+  readonly tenantSlug?: string | null;
   readonly actorRole: TenantRole;
   readonly scopes: readonly string[];
   readonly membershipId: string;

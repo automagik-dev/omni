@@ -184,6 +184,10 @@ export class AuthBootstrapService {
         principalId,
         credentialId: credential.id,
         tenantId,
+        // From the tenant row already loaded above for the freshness check. The
+        // runtime role cannot read `tenants`, so this is the only place the
+        // slug can enter a request's context.
+        tenantSlug: tenant.slug,
         actorRole,
         scopes: [...credential.scopes],
         membershipId,

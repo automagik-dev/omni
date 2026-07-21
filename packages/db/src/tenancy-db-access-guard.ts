@@ -1191,12 +1191,14 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'ADR-0003 auth-plane bootstrap, and the ONE CLI site that earns this class. Leg 2 left the open question ' +
       '"can this command run under a tenant credential at all"; tracing it closes the question as no, by ' +
       'construction. The `createDb()` at keys.ts:169 is reached only from `handleAdminCreate` (:121) and its handle ' +
-      'is passed to nothing but `ApiKeyService` (:170), which writes `auth_credentials` — auth-plane state, not ' +
-      'tenant business data. It is what MINTS the first credential, so no tenant credential can exist to run it ' +
-      'under, and under enforcement the runtime role is REVOKEd on that table while the command itself refuses ' +
-      'outright (:143, the Success-Criterion-19 god-key rule). It is inventoried as operator surface in ' +
-      'SURFACE_INVENTORY `cli_admin_bootstrap`, which is the WISH condition for this class. Every other `keys` ' +
-      'subcommand goes over HTTP and touches no database.',
+      'is passed to nothing but `ApiKeyService` (:170), which writes the LEGACY `api_keys` table — credential ' +
+      'state, not tenant business data, and deliberately not `auth_credentials`, so the G3 runtime REVOKE does ' +
+      'not apply to it and is NOT what protects this site. Two things do. First, this command is what MINTS THE ' +
+      'FIRST credential on a fresh deployment, so no tenant credential can exist to run it under and there is ' +
+      'nothing for a tenant scope to be derived from. Second, under enforcement the command refuses ' +
+      'outright (:143, the Success-Criterion-19 god-key rule), so the enforced world cannot reach the write at ' +
+      'all. It is inventoried as operator surface in SURFACE_INVENTORY `cli_admin_bootstrap`, which is the WISH ' +
+      'condition for this class. Every other `keys` subcommand goes over HTTP and touches no database.',
   },
   {
     file: 'packages/db/scripts/apply-rls-enforcement.ts',

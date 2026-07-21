@@ -21,7 +21,9 @@ import { fileURLToPath } from 'node:url';
 import {
   type DbAccessClass,
   PENDING_G4_CEILING,
+  PENDING_G5_CEILING,
   REGISTERED_DB_ACCESS,
+  TOTAL_PENDING_CEILING,
   defaultClassFor,
   evaluateDbAccessGuard,
   scanDbAccessSites,
@@ -62,15 +64,46 @@ if (process.argv.includes('--write')) {
 }
 
 const pending = report.counts['pending-G4-conversion'];
-const overCeiling = pending > PENDING_G4_CEILING;
+const deferred = report.counts['pending-G5-conversion'];
+const totalPending = pending + deferred;
 
-if (report.unregistered.length === 0 && report.stale.length === 0 && report.unjustified.length === 0 && !overCeiling) {
+/**
+ * All THREE ceilings, not just the G4 one (leg-3 review LOW-2).
+ *
+ * The test suite already checked all three, but the CLI is what a developer and
+ * CI actually run, and a guard that reports OK while a ceiling is breached
+ * teaches people to trust the wrong signal. `TOTAL_PENDING_CEILING` matters
+ * most: it is the only one of the three that cannot be satisfied by moving a
+ * site from one pending class to the other, so it is the number that makes
+ * relabelling visible.
+ */
+const breaches: string[] = [];
+if (pending > PENDING_G4_CEILING) {
+  breaches.push(`pending-G4-conversion count ${pending} exceeds ceiling ${PENDING_G4_CEILING}`);
+}
+if (deferred > PENDING_G5_CEILING) {
+  breaches.push(`pending-G5-conversion count ${deferred} exceeds ceiling ${PENDING_G5_CEILING}`);
+}
+if (totalPending > TOTAL_PENDING_CEILING) {
+  breaches.push(
+    `total pending count ${totalPending} exceeds ceiling ${TOTAL_PENDING_CEILING} (this one cannot be fixed by reclassifying — a site has to be converted or proven not to be db access)`,
+  );
+}
+
+if (
+  report.unregistered.length === 0 &&
+  report.stale.length === 0 &&
+  report.unjustified.length === 0 &&
+  breaches.length === 0
+) {
   console.log(
     `db-access guard OK — ${found.length} sites: ` +
       `${report.counts['tenant-boundary']} tenant-boundary, ` +
       `${report.counts['control-plane']} control-plane, ` +
       `${report.counts['migration-ddl']} migration-ddl, ` +
-      `${pending} pending-G4-conversion (ceiling ${PENDING_G4_CEILING})`,
+      `${pending} pending-G4-conversion (ceiling ${PENDING_G4_CEILING}), ` +
+      `${deferred} pending-G5-conversion (ceiling ${PENDING_G5_CEILING}), ` +
+      `${totalPending} total pending (ceiling ${TOTAL_PENDING_CEILING})`,
   );
   process.exit(0);
 }
@@ -87,8 +120,6 @@ if (report.unjustified.length > 0) {
   console.error('UNJUSTIFIED control-plane / migration-ddl exceptions:');
   for (const s of report.unjustified) console.error(`  ${s.file} -> ${s.table} (${s.class})`);
 }
-if (overCeiling) {
-  console.error(`pending-G4-conversion count ${pending} exceeds ceiling ${PENDING_G4_CEILING}`);
-}
+for (const breach of breaches) console.error(breach);
 console.error('\nRun: bun run scripts/check-db-access.ts --write, then classify the diff.');
 process.exit(1);

@@ -51,6 +51,7 @@
 import { createMiddleware } from 'hono/factory';
 import type { AuthContext, TenantAuthContext } from '../tenancy/auth-context';
 import { isMultitenancyEnabled } from '../tenancy/feature-flag';
+import { projectTenantScopes } from '../tenancy/scope-projection';
 import { runInTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import type { ApiKeyData, AppVariables } from '../types';
 
@@ -83,6 +84,15 @@ function presentedSecret(header: (name: string) => string | undefined, query: (n
  * can only ever NARROW: it is intersected into a boundary it cannot widen,
  * since a legacy allowlist naming another tenant's instance still cannot read
  * that instance through the scoped transaction.
+ *
+ * `scopes` is the one field that is not a straight copy. The context carries
+ * the ROLE-CEILING vocabulary (`tenant:read`, `keys:delegate`) — the only thing
+ * `TenantKeyService` will mint — while `scope-enforcer` authorizes against
+ * `SCOPE_MAP`'s (`instances:read`, `messages:send`). Copying the raw names
+ * through would hand `ApiKeyService.scopeAllows` strings it never vetted, and
+ * would 403 every tenant credential on every tenant-scoped route. See
+ * `tenancy/scope-projection.ts` for why the translation cannot widen anything:
+ * a scope decides which verb on which kind of resource, never whose data.
  */
 function projectTenantApiKey(context: TenantAuthContext): ApiKeyData {
   const constraint = (name: string): string[] | undefined => {
@@ -93,7 +103,7 @@ function projectTenantApiKey(context: TenantAuthContext): ApiKeyData {
   return {
     id: context.credentialId,
     name: `tenant:${context.actorRole}`,
-    scopes: [...context.scopes],
+    scopes: projectTenantScopes(context.scopes),
     instanceIds: constraint('instanceIds') ?? null,
     expiresAt: context.expiresAt,
     profile: null,

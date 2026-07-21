@@ -25,7 +25,7 @@ import { registerAccessSchemas } from '../schemas/openapi/access';
 import { registerRouteSchemas } from '../schemas/openapi/agent-routes';
 // Import schema registrations to populate the registry
 import { registerAgentSchemas } from '../schemas/openapi/agents';
-import { registerAuthSchemas } from '../schemas/openapi/auth';
+import { CREDENTIAL_EXPOSURE_FIELDS, registerAuthSchemas } from '../schemas/openapi/auth';
 import { registerAutomationSchemas } from '../schemas/openapi/automations';
 import { registerCommonSchemas } from '../schemas/openapi/common';
 import { registerConversationSchemas } from '../schemas/openapi/conversations';
@@ -103,6 +103,24 @@ function annotateScopes(document: OpenAPIObject): void {
 }
 
 /**
+ * Publish the credential-class exposure contract on `POST /auth/validate`
+ * (wish: omni-full-multitenancy, Group G4; WISH "Compatibility").
+ *
+ * Emitted as a post-processing annotation for the same reason `x-omni-scope`
+ * is: the list is derived from the schema that actually shapes the response
+ * (`CREDENTIAL_EXPOSURE_FIELDS`), so the document cannot drift from the code by
+ * someone editing one and not the other. A consumer — or a security reviewer —
+ * can read this one array to see every fact the API will tell a caller about
+ * its own credential, and `__tests__/openapi-credential-exposure.test.ts`
+ * asserts that array against the schema and against a "no key material" rule.
+ */
+function annotateCredentialExposure(document: OpenAPIObject): void {
+  const operation = (document.paths?.['/auth/validate'] as Record<string, unknown> | undefined)?.post;
+  if (!operation || typeof operation !== 'object') return;
+  (operation as Record<string, unknown>)['x-omni-credential-exposure'] = [...CREDENTIAL_EXPOSURE_FIELDS];
+}
+
+/**
  * Generate OpenAPI spec from registry
  */
 function generateOpenApiSpec() {
@@ -126,6 +144,7 @@ function generateOpenApiSpec() {
   });
 
   annotateScopes(document);
+  annotateCredentialExposure(document);
 
   return document;
 }

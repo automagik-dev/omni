@@ -8,6 +8,7 @@ import type { OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getOptionalClient } from '../client.js';
 import { getConfigDir, hasAuth, loadConfig } from '../config.js';
+import { credentialStatusFields } from '../lib/credential-status.js';
 import * as output from '../output.js';
 import { capturePm2, isPm2Available } from '../pm2.js';
 import { CLI_VERSION_HEADER, SERVER_VERSION_HEADER, VERSION, formatStatusVersionHint } from '../version.js';
@@ -129,6 +130,9 @@ async function validateAuthKey(statusInfo: Record<string, unknown>, client: Omni
     statusInfo.keyName = auth.keyName;
     statusInfo.keyPrefix = auth.keyPrefix;
     statusInfo.scopes = auth.scopes;
+    // Empty for a legacy credential, so legacy output keeps exactly its
+    // pre-G4 fields (wish: omni-full-multitenancy, Group G4).
+    Object.assign(statusInfo, credentialStatusFields(auth));
   } catch {
     statusInfo.keyValid = false;
   }

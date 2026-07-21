@@ -39,7 +39,11 @@ function tenantContext(tenantId: string, overrides: Partial<Record<string, unkno
     credentialId: 'credential-1',
     tenantId,
     actorRole: 'tenant-admin',
-    scopes: ['messages:read', 'messages:write'],
+    // The ROLE-CEILING vocabulary, which is the only thing `TenantKeyService`
+    // will mint (wish: omni-full-multitenancy, G4). The fixture previously used
+    // legacy scope names here; no real tenant credential can carry those, so
+    // the harness was proving a shape that could not occur.
+    scopes: ['tenant:read', 'keys:delegate'],
     membershipId: 'membership-1',
     resourceConstraints: {},
     expiresAt: null,
@@ -159,12 +163,48 @@ describe('tenancy edge — tenant world (flag on)', () => {
     const res = await app.request('/probe', { headers: { 'x-api-key': 'tenant-key' } });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      scopedTenant: TENANT_A,
-      contextTenant: TENANT_A,
-      apiKeyId: 'credential-1',
-      scopes: ['messages:read', 'messages:write'],
-    });
+    const body = (await res.json()) as { scopedTenant: string; contextTenant: string; apiKeyId: string };
+    expect(body.scopedTenant).toBe(TENANT_A);
+    expect(body.contextTenant).toBe(TENANT_A);
+    expect(body.apiKeyId).toBe('credential-1');
+  });
+
+  /**
+   * The projected `apiKey` is what `scope-enforcer` authorizes against, and the
+   * two vocabularies do not overlap: a tenant credential carries `tenant:read`,
+   * a route requires `instances:read`. Before the projection existed, every
+   * tenant credential was 403'd on every tenant-scoped route — the WISH's
+   * Compatibility contract could not hold. These pin the translation at the
+   * edge; `scope-projection.test.ts` pins the mapping itself.
+   */
+  test('role-ceiling scopes are projected into the vocabulary the routes enforce', async () => {
+    const app = harness(async () => ({ ok: true, context: tenantContext(TENANT_A), tenantSource: 'credential' }));
+    const res = await app.request('/probe', { headers: { 'x-api-key': 'tenant-key' } });
+
+    const { scopes } = (await res.json()) as { scopes: string[] };
+    expect(scopes).toContain('instances:read');
+    expect(scopes).toContain('messages:read');
+    // `keys:delegate` is held, so the delegation surface is reachable...
+    expect(scopes).toContain('keys:write');
+    // ...but `tenant:read` is not `tenant:write`, so nothing mutates.
+    expect(scopes).not.toContain('instances:write');
+    expect(scopes).not.toContain('messages:send');
+  });
+
+  test('the raw role-ceiling names never reach the enforcer', async () => {
+    // They would be evaluated by `ApiKeyService.scopeAllows`, a rulebook that
+    // never vetted them — `tenant:*` would read as a namespace wildcard there.
+    const app = harness(async () => ({
+      ok: true,
+      context: tenantContext(TENANT_A, { scopes: ['tenant:*'] }),
+      tenantSource: 'credential',
+    }));
+    const res = await app.request('/probe', { headers: { 'x-api-key': 'tenant-key' } });
+
+    const { scopes } = (await res.json()) as { scopes: string[] };
+    expect(scopes).not.toContain('tenant:*');
+    expect(scopes).not.toContain('tenant:read');
+    expect(scopes).not.toContain('*');
   });
 
   test('the scope is torn down after the response', async () => {
