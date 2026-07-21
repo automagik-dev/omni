@@ -63,6 +63,25 @@ describe('route ownership coverage gate', () => {
   it('reports the acknowledged routes as still-open work rather than as covered', () => {
     expect(report.acknowledged.sort()).toEqual(UNDECLARED_ACKNOWLEDGED.map((a) => a.route).sort());
   });
+
+  it('has driven the acknowledged ratchet to its stop', () => {
+    // G4's completion criterion. Asserted rather than merely commented so that
+    // raising the ceiling again is a deliberate, reviewed edit to a test that
+    // says why the ratchet moved backwards — not a one-character change.
+    expect(UNDECLARED_ACKNOWLEDGED_CEILING).toBe(0);
+    expect(UNDECLARED_ACKNOWLEDGED).toHaveLength(0);
+    expect(report.undeclared).toEqual([]);
+  });
+
+  it('declares the observability read surface platform-admin, not tenant-scoped', () => {
+    // The last three routes to leave the acknowledged list. Their exposure is
+    // cross-tenant by construction, so a regression to `tenant-scoped` would be
+    // a false claim of isolation rather than a missing declaration.
+    for (const route of ['GET /api/v2/metrics', 'GET /api/v2/logs/recent', 'GET /api/v2/logs/stream']) {
+      const declaration = ROUTE_OWNERSHIP.find((d) => d.route === route);
+      expect(declaration?.class).toBe('platform-admin');
+    }
+  });
 });
 
 describe('route ownership gate fails closed', () => {

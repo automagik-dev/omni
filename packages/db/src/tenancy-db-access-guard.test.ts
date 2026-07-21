@@ -16,6 +16,7 @@ import {
   PENDING_G4_CEILING,
   PENDING_G5_CEILING,
   REGISTERED_DB_ACCESS,
+  TOTAL_PENDING_CEILING,
   defaultClassFor,
   evaluateDbAccessGuard,
   scanDbAccessSites,
@@ -83,6 +84,16 @@ describe('db-access guard', () => {
     expect(report.counts['pending-G5-conversion']).toBeLessThanOrEqual(PENDING_G5_CEILING);
   });
 
+  test('total pending work never grows — the ratchet reclassification cannot game', () => {
+    // The per-class caps are individually gameable in one direction: moving a
+    // site from G4 to G5 lowers one and raises the other, and leg 3 did raise
+    // the G5 cap. This is the invariant that makes such a move honest, because
+    // relabelling cannot lower it. Only converting a site, or proving it was
+    // never database access, can.
+    const totalPending = report.counts['pending-G4-conversion'] + report.counts['pending-G5-conversion'];
+    expect(totalPending).toBeLessThanOrEqual(TOTAL_PENDING_CEILING);
+  });
+
   test('every G5 deferral names the async mechanism that owns its caller', () => {
     const deferred = REGISTERED_DB_ACCESS.filter((e) => e.class === 'pending-G5-conversion');
     expect(deferred.length).toBeGreaterThan(0);
@@ -138,15 +149,41 @@ describe('db-access guard', () => {
     }
   });
 
-  test('the CLI and channel plugins are NOT waved through as control-plane', () => {
-    // They write tenant rows outside the boundary. Calling that "control-plane"
-    // because it is convenient is exactly the silent exemption this guard
-    // exists to prevent.
+  test('a CLI or channel site is control-plane only on the WISH operator-surface grounds', () => {
+    // Originally a blanket ban: every CLI/channel site had to stay
+    // pending-G4-conversion. That was the right default while the class was
+    // untested, but it was too strong to be true — the WISH allows CLI operator
+    // tooling to be control-plane "only when it cannot run under a tenant
+    // credential and is inventoried as operator surface", and the auth-plane key
+    // bootstrap meets both conditions by construction (it mints the FIRST
+    // credential, so there is no tenant credential to run it under).
+    //
+    // So the ban becomes a bar. What the original test was really protecting is
+    // that the class is never taken for CONVENIENCE, and a justification forced
+    // to cite both WISH conditions cannot be written casually.
     for (const entry of REGISTERED_DB_ACCESS) {
-      if (entry.file.startsWith('packages/cli/') || entry.file.startsWith('packages/channel-')) {
-        expect(entry.class).toBe('pending-G4-conversion');
+      if (!entry.file.startsWith('packages/cli/') && !entry.file.startsWith('packages/channel-')) continue;
+      if (entry.class === 'control-plane') {
+        expect(entry.justification).toContain('ADR-0003');
+        // Condition 1: inventoried as operator surface.
+        expect(entry.justification).toContain('SURFACE_INVENTORY');
+        // Condition 2: cannot run under a tenant credential.
+        expect(entry.justification).toMatch(/no tenant credential can exist|cannot run under a tenant credential/i);
+        continue;
       }
+      // Everything else keeps the original default: no quiet exemptions.
+      expect(entry.class).toBe('pending-G4-conversion');
     }
+  });
+
+  test('exactly one CLI site holds control-plane, so the bar cannot erode unnoticed', () => {
+    // A count, deliberately. If a second CLI site ever takes this class the test
+    // fails and someone has to argue it on the record, which is the whole point
+    // of having replaced a ban with a bar.
+    const cliControlPlane = REGISTERED_DB_ACCESS.filter(
+      (e) => e.file.startsWith('packages/cli/') && e.class === 'control-plane',
+    );
+    expect(cliControlPlane.map((e) => e.file)).toEqual(['packages/cli/src/commands/keys.ts']);
   });
 
   test('a new unregistered direct-db call site fails the guard', () => {
@@ -174,6 +211,50 @@ describe('db-access guard', () => {
     rmSync(scratchDir, { recursive: true, force: true });
     // And the guard goes quiet again once the site is gone.
     expect(evaluateDbAccessGuard(scanDbAccessSites(packagesDir, repoRoot)).unregistered).toEqual([]);
+  });
+
+  test('the raw-SQL scanner reads code, not prose — and still catches real SQL in a template literal', () => {
+    // The raw-SQL pattern had two precision defects that manufactured phantom
+    // debt: it had no leading word boundary, so `__fish_seen_subcommand_from
+    // instances` in a shell-completion string scanned as "FROM instances"; and
+    // it read comments, so English prose like "sourced from chats.upsert"
+    // scanned as "FROM chats". Eight registry entries were these, not queries.
+    //
+    // The fix must buy precision WITHOUT costing recall: real raw SQL lives in
+    // template literals, so strings are still scanned. The last seeded case is
+    // the one that must keep failing the guard.
+    mkdirSync(scratchDir, { recursive: true });
+    const seeded = join(scratchDir, 'prose-and-sql.ts');
+    writeFileSync(
+      seeded,
+      [
+        '/** Enrich contacts that have no name from platform_identities (GH #307) */',
+        '// Last-known unread count per JID — sourced from chats.upsert events.',
+        '/*',
+        ' * Handles adding and removing reactions from messages.',
+        ' */',
+        'export const completion = `complete -n "__fish_seen_subcommand_from instances" -a list`;',
+        'export const notSql = "delete from the cache when persons change";',
+        'export async function real(db: { execute: (q: unknown) => Promise<unknown> }) {',
+        '  return db.execute(`SELECT id FROM conversations WHERE tenant_id = $1`);',
+        '}',
+        '',
+      ].join('\n'),
+    );
+
+    const tables = scanDbAccessSites(packagesDir, repoRoot)
+      .filter((s) => s.file.endsWith('prose-and-sql.ts'))
+      .map((s) => s.table);
+    rmSync(scratchDir, { recursive: true, force: true });
+
+    // Prose, comments, and shell-completion strings are not database access.
+    expect(tables).not.toContain('platform_identities');
+    expect(tables).not.toContain('chats');
+    expect(tables).not.toContain('messages');
+    expect(tables).not.toContain('instances');
+    // Recall is intact: a real `FROM conversations` in a template literal is
+    // still a site, and would still fail the guard unregistered.
+    expect(tables).toContain('conversations');
   });
 
   test('a newly discovered site defaults to pending-G4-conversion, not to an exemption', () => {

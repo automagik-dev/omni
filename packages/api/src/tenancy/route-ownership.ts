@@ -629,6 +629,31 @@ const TRUST_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/trust/handshake',
 ];
 
+/**
+ * Observability read surface (OWNERSHIP_MANIFEST `metrics_observability`,
+ * disposition: platform). Its evidence list names exactly these implementations
+ * — `routes/v2/metrics.ts` and the `core/src/logger/buffer.ts` ring buffer these
+ * log routes read — so the disposition is decided at G0, not deferred to G5.
+ *
+ * What G5 still owns is the SINK: bounded tenant labels, redaction, and the
+ * audit/trace tenant context. That is a conversion question. Who may reach the
+ * endpoint is an ownership question, and it is this gate's to answer.
+ */
+const OBSERVABILITY_ROUTES: readonly RouteKey[] = [
+  'GET /api/v2/logs/recent',
+  'GET /api/v2/logs/stream',
+  'GET /api/v2/metrics',
+];
+
+const OBSERVABILITY_JUSTIFICATION =
+  'Process-level observability aggregated across every tenant the deployment serves: Prometheus counters and ' +
+  'the in-process log ring buffer. There is no per-tenant row to scope, and the values themselves are ' +
+  'cross-tenant, so `tenant-scoped` would be false and `control-plane` would understate the exposure. ' +
+  'OWNERSHIP_MANIFEST class `metrics_observability` fixes the disposition as platform, with verification ' +
+  'target "metrics do not leak per-tenant existence" — hence platform-admin: a tenant-class credential ' +
+  'cannot address it. G5 still owns the sink-side work (bounded tenant labels, redaction, audit/trace ' +
+  'tenant context); this declaration settles reachability, which is what the coverage gate asks.';
+
 /** The committed registry the gate checks against. */
 export const ROUTE_OWNERSHIP: readonly RouteOwnershipDeclaration[] = [
   ...TENANT_SCOPED_ROUTES.map((route) => ({ route, class: 'tenant-scoped' as const })),
@@ -648,6 +673,11 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnershipDeclaration[] = [
     class: 'control-plane' as const,
     justification: TRUST_ROUTE_JUSTIFICATION,
   })),
+  ...OBSERVABILITY_ROUTES.map((route) => ({
+    route,
+    class: 'platform-admin' as const,
+    justification: OBSERVABILITY_JUSTIFICATION,
+  })),
   ...PUBLIC_PRIVACY_CONTRACTS,
 ];
 
@@ -658,28 +688,17 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnershipDeclaration[] = [
  * This list EXISTS TO SHRINK. It is an explicit inventory rather than a count
  * so a newly added route cannot fall into it: a new route is simply undeclared,
  * and undeclared is a hard failure.
+ *
+ * NOW EMPTY: every registered route carries an explicit declaration. The last
+ * three entries were the observability read surface (metrics + the two log-ring
+ * routes), closed against OWNERSHIP_MANIFEST `metrics_observability`
+ * (disposition: platform) rather than deferred — see OBSERVABILITY_JUSTIFICATION.
+ *
+ * Keep the type and the ceiling even at zero: they are what makes the NEXT
+ * unplaceable route state its open question in writing instead of quietly
+ * acquiring a wrong class.
  */
-export const UNDECLARED_ACKNOWLEDGED: readonly AcknowledgedUndeclaredRoute[] = [
-  {
-    route: 'GET /api/v2/metrics',
-    openQuestion:
-      'Process-level Prometheus counters aggregated across every tenant a deployment serves. Not tenant-scoped ' +
-      '(there is no per-tenant row to scope) and not honestly control-plane while a tenant-class credential can ' +
-      'still address it. Declaring it platform-admin is the likely answer but it changes who may reach an ' +
-      'endpoint that legacy callers use today, and the observability surface is G5’s to convert.',
-  },
-  {
-    route: 'GET /api/v2/logs/recent',
-    openQuestion:
-      'In-process log ring buffer. It holds no tenant rows, but the log lines themselves are cross-tenant, so ' +
-      '`control-plane` would understate the exposure and `tenant-scoped` would be false. Needs the G5 ' +
-      'observability decision (redact-and-scope vs platform-admin only).',
-  },
-  {
-    route: 'GET /api/v2/logs/stream',
-    openQuestion: 'SSE variant of GET /api/v2/logs/recent; same open question.',
-  },
-];
+export const UNDECLARED_ACKNOWLEDGED: readonly AcknowledgedUndeclaredRoute[] = [];
 
 /**
  * Ceiling for the acknowledged list, fixed at the end of the G4 leg that set it.
@@ -687,5 +706,10 @@ export const UNDECLARED_ACKNOWLEDGED: readonly AcknowledgedUndeclaredRoute[] = [
  * The gate fails when the acknowledged list EXCEEDS this. It does not fail when
  * the list shrinks: lower the ceiling with it so the ratchet keeps its grip.
  * G4 is complete when this reaches 0.
+ *
+ * It has reached 0. At zero the ratchet is at its stop: any future acknowledged
+ * entry exceeds the ceiling and fails the gate, so an undeclarable route can no
+ * longer be parked here — it must be declared or the ceiling must be raised in
+ * a reviewed commit, which is exactly the conversation that should happen.
  */
-export const UNDECLARED_ACKNOWLEDGED_CEILING = 3;
+export const UNDECLARED_ACKNOWLEDGED_CEILING = 0;

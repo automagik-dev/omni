@@ -156,6 +156,28 @@ const SINGLETON_CALL = /\b(?:getDb|createDb|createDbHandle|createPostgresClient)
 export const MIRRORED_RLS_EXCLUSIONS: readonly RlsExclusion[] = RLS_EXCLUSIONS;
 
 /**
+ * Blank out `//` and block comments, preserving offsets and newlines.
+ *
+ * The raw-SQL pattern below looks for English-shaped SQL (`FROM chats`), and
+ * English prose is shaped exactly the same way: "sourced from chats.upsert",
+ * "removing reactions from messages", "no name from platform_identities". Eight
+ * entries in the registry were comments rather than queries — phantom debt that
+ * made the conversion backlog look larger than it was, which is its own kind of
+ * dishonesty in a number this group reports on.
+ *
+ * STRINGS ARE DELIBERATELY NOT STRIPPED. Real raw SQL lives in template
+ * literals, so removing strings would trade a precision bug for a recall bug,
+ * and a guard that misses a real query is far worse than one that over-reports.
+ * String false positives are handled by requiring a word boundary instead.
+ *
+ * Replacement preserves length so any future line-numbered diagnostic still
+ * points at the right place.
+ */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, (comment) => comment.replace(/[^\n]/g, ' '));
+}
+
+/**
  * Scan `packagesDir` for database access sites.
  *
  * Keyed by (file, table) rather than by line, so unrelated edits above a call
@@ -167,8 +189,12 @@ export function scanDbAccessSites(packagesDir: string, repoRoot: string): DbAcce
 
   const drizzleNames = [...RLS_DRIZZLE_TO_TABLE.keys()];
   const builder = new RegExp(`\\.(?:from|insert|update|delete)\\(\\s*(${drizzleNames.join('|')})\\s*[),]`, 'g');
+  // The leading `\b` is load-bearing: without it, `__fish_seen_subcommand_from
+  // instances` in the CLI's shell-completion script matched as `FROM instances`
+  // and booked three phantom sites against `packages/cli/src/commands/
+  // completions.ts`, a file with no database import at all.
   const rawSql = new RegExp(
-    `(?:from|insert\\s+into|update|delete\\s+from)\\s+"?(${RLS_TENANT_TABLES.join('|')})"?\\b`,
+    `\\b(?:from|insert\\s+into|update|delete\\s+from)\\s+"?(${RLS_TENANT_TABLES.join('|')})"?\\b`,
     'gi',
   );
 
@@ -176,7 +202,7 @@ export function scanDbAccessSites(packagesDir: string, repoRoot: string): DbAcce
   for (const file of files) {
     const rel = relative(repoRoot, file);
     if (SKIP_FILES.has(rel)) continue;
-    const source = readFileSync(file, 'utf-8');
+    const source = stripComments(readFileSync(file, 'utf-8'));
 
     for (const match of source.matchAll(builder)) {
       const table = RLS_DRIZZLE_TO_TABLE.get(match[1] as string);
@@ -308,23 +334,43 @@ export function defaultClassFor(site: DbAccessSite): { class: DbAccessClass; jus
  * Ceiling for the `pending-G4-conversion` class, fixed at the end of G3 and
  * ratcheted down by each G4 leg: 73 at the end of G3, 72 after the leg-1
  * public-surface privacy fix removed the unauthenticated instance-count
- * aggregation from `routes/health.ts`, and 24 after leg 2 converted the
- * synchronous service surface.
+ * aggregation from `routes/health.ts`, 24 after leg 2 converted the synchronous
+ * service surface, 20 once leg 2's review settled, and 6 after leg 3.
  *
- * The 24 that remain are NOT unconverted plumbing. They are, in full:
- *   * 6 sites on tables G2 classifies as `unowned`, where the blocker is the
- *     G6 ownership backfill rather than anything G4 can reach — see their
- *     justifications;
- *   * 8 CLI and channel-plugin sites, left here deliberately rather than being
- *     waved through as `control-plane` (the test below enforces that);
- *   * 10 route/service sites whose disposition is recorded in the G4 handoff.
+ * Leg 3 removed 14, and it matters HOW, because only five of those were a
+ * judgement call:
+ *   * 8 were never database access at all. The raw-SQL pattern was reading
+ *     comments and had no leading word boundary, so English prose ("sourced
+ *     from chats.upsert") and a shell-completion string
+ *     ("__fish_seen_subcommand_from instances") scanned as queries. Leg 2 had
+ *     already diagnosed these and recorded the fix as "make the scanner
+ *     comment-aware, not reclassify"; `stripComments` did that. The same
+ *     correction also retired a phantom site that had been counted as
+ *     `tenant-boundary`, so the fix cost a converted point as well as removing
+ *     debt — which is the evidence that it was a correction and not a shortcut.
+ *   * 5 moved to `pending-G5-conversion` on traced evidence that every
+ *     remaining caller is a NATS consumer or a cron/interval, with the call
+ *     sites named in each justification. In all five cases a SIBLING site in
+ *     the same file was already deferred for those same callers.
+ *   * 1 (`cli/src/commands/keys.ts`) became `control-plane` — the auth-plane
+ *     bootstrap, on the WISH's operator-surface grounds.
+ *
+ * The 6 that remain are one coherent group, not a miscellany: every one is a
+ * site on a table G2 classifies as `unowned` (automations, conversations,
+ * dead_letter_events, event_payloads, persons, webhook_sources). Their blocker
+ * is the G6 ownership backfill — `tenant_id` stays NULL until G6 decides
+ * ownership — so they are NOT convertible by G4 and NOT deferrable to G5
+ * either, since several have perfectly good request contexts. Forcing them into
+ * a class that reads as "async work" to make this number reach zero would be
+ * exactly the dishonesty the class exists to prevent. They stay here, named, as
+ * the G4 handoff's open item.
  *
  * The guard fails when the count EXCEEDS this. It does not fail when the count
  * falls: G4's job is to drive it toward zero, and every conversion should be
  * able to land without also editing this constant. When G4 lowers it, lower the
  * ceiling with it so the ratchet keeps its grip.
  */
-export const PENDING_G4_CEILING = 20;
+export const PENDING_G4_CEILING = 6;
 
 /**
  * Ceiling for the `pending-G5-conversion` class.
@@ -343,8 +389,41 @@ export const PENDING_G4_CEILING = 20;
  * The class is a ratchet, not an amnesty. It is capped from the moment it is
  * created so that G4 cannot grow it to make its own number look better, and G5
  * drives it to zero.
+ *
+ * RAISED TO 48 BY LEG 3, and this is the one number in this file that has ever
+ * moved in the wrong direction, so it should be read sceptically.
+ *
+ * Five sites moved here from `pending-G4-conversion`. Each is on a table G2
+ * owns properly (agents, chat_participants, instances, chat_follow_up_state),
+ * so none is hiding an ownership problem, and each justification names the
+ * consumer or cron call sites by file and line rather than asserting
+ * "background". Two are async-ONLY (`agent-runner.ts`'s instance lookup has
+ * zero HTTP callers; the dispatcher's `agents` reads sit behind
+ * `eventBus.subscribe`), and three are dual-caller sites whose route path leg 2
+ * converted but whose consumer path still reaches the ambient pool — which this
+ * file's own header rule already classifies as G5, not as converted. In every
+ * one of the five, a sibling site in the SAME file was already deferred for the
+ * same callers; these were simply missed.
+ *
+ * The honest check on a raised cap is not the cap itself but the TOTAL, since
+ * relabelling moves a site between the two pending classes without changing it.
+ * `TOTAL_PENDING_CEILING` below is that check, and it went DOWN.
  */
-export const PENDING_G5_CEILING = 43;
+export const PENDING_G5_CEILING = 48;
+
+/**
+ * Ceiling on `pending-G4-conversion` + `pending-G5-conversion` combined.
+ *
+ * This is the number that cannot be gamed by reclassification, and it is the
+ * one to read first. Moving a site from G4 to G5 leaves it untouched; only
+ * converting a site, or proving it was never database access, lowers this.
+ *
+ * 63 at the end of leg 2 (20 + 43). 54 after leg 3 (6 + 48): 8 phantom sites
+ * retired by the scanner-precision fix and 1 real site closed as the auth-plane
+ * bootstrap. The 5 G4→G5 moves changed it by exactly zero, which is the
+ * property that makes them checkable rather than merely argued.
+ */
+export const TOTAL_PENDING_CEILING = 54;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -487,7 +566,14 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/plugins/agent-dispatcher.ts',
     table: 'agents',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'No HTTP caller exists. Both accesses — `dispatchViaTurnBasedProvider` (agent-dispatcher.ts:2453) and ' +
+      '`applyAgentFkOverrides` (:4190) — are reached only through the eventBus/NATS consumer registered by ' +
+      '`setupAgentDispatcher` (:5253), and `applyAgentFkOverrides` additionally from the `session-cleaner` durable ' +
+      'consumer (session-cleaner.ts:135). A consumer callback carries no credential to derive a tenant from, so ' +
+      'this needs the async message-context propagation ADR-0008 assigns to G5. Its sibling site in this same file ' +
+      '(`agent_sessions`) was already classified this way for the same callers.',
   },
   {
     file: 'packages/api/src/plugins/agent-dispatcher.ts',
@@ -591,12 +677,22 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/plugins/session-cleaner.ts',
     table: 'agents',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      '`clearAgentSession` (session-cleaner.ts:97) is reached from the `message.received` NATS consumer registered ' +
+      'at :305 AND from `routes/v2/chats.ts:1043`. A site is only as scoped as its least-scoped caller, so the ' +
+      'route path being converted does not settle it: the durable `session-cleaner` consumer still reaches this ' +
+      'query on the ambient pool, which is the async message-context problem ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/session-cleaner.ts',
     table: 'chat_participants',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      '`resolveCleanupPersonId` (session-cleaner.ts:72) is called only from `clearAgentSession` (:107) and so ' +
+      'inherits its callers exactly: the durable `session-cleaner` NATS consumer (:305) plus ' +
+      '`routes/v2/chats.ts:1043`. Deferred with its parent for the one reason — the consumer callback has no ' +
+      'request context — that ADR-0008 assigns to G5.',
   },
   {
     file: 'packages/api/src/plugins/session-storage.ts',
@@ -628,16 +724,6 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     file: 'packages/api/src/routes/v2/handoffs.ts',
     table: 'handoff_logs',
     class: 'tenant-boundary',
-  },
-  {
-    file: 'packages/api/src/routes/v2/instances.ts',
-    table: 'platform_identities',
-    class: 'pending-G4-conversion',
-    justification:
-      'No database access at this site: the scanner matched the phrase "from platform_identities" inside two ' +
-      'explanatory comments (instances.ts:1788, :1888). Left in this class rather than exempted, because narrowing ' +
-      'the scanner to ignore comments would cost real coverage to remove a harmless entry. OPEN QUESTION: retire by ' +
-      'making the scanner comment-aware, not by reclassifying.',
   },
   {
     file: 'packages/api/src/routes/v2/messages.ts',
@@ -688,7 +774,13 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/agent-runner.ts',
     table: 'instances',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      '`getInstanceWithProvider` (agent-runner.ts:363) has ZERO HTTP callers. Every caller is an eventBus/NATS ' +
+      'consumer: session-cleaner.ts:89, agent-dispatcher.ts:4793/:4996/:5218/:5480, and agent-responder.ts:547/' +
+      ':626/:692. With no request anywhere in its call graph there was never a tenant for G4 to derive; it needs ' +
+      'the consumer message-context ADR-0008 assigns to G5. The sibling `persons` site in this same file was ' +
+      'already classified this way.',
   },
   {
     file: 'packages/api/src/services/agent-runner.ts',
@@ -709,11 +801,11 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'agents',
     class: 'tenant-boundary',
   },
-  {
-    file: 'packages/api/src/services/agents.ts',
-    table: 'instances',
-    class: 'tenant-boundary',
-  },
+  // `packages/api/src/services/agents.ts -> instances` also stood here and was
+  // also a comment ("Backfill Agent rows from instances."). It had been counted
+  // as `tenant-boundary`, so retiring it LOWERS the converted count by one. That
+  // direction matters: the scanner fix is a correction, not a way to make this
+  // group's numbers look better, and it was allowed to cost a point.
   {
     file: 'packages/api/src/services/auth-bootstrap.ts',
     table: 'tenant_key_lineage',
@@ -873,7 +965,14 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/follow-up-lifecycle.ts',
     table: 'chat_follow_up_state',
-    class: 'pending-G4-conversion',
+    class: 'pending-G5-conversion',
+    justification:
+      'The lifecycle writes (follow-up-lifecycle.ts:286, :428, :525, :585) are reached from the follow-up NATS ' +
+      'hooks (`setupFollowUpHooks` subscriptions, follow-up-hooks.ts:54/:86/:128/:149/:169), from the ' +
+      '`follow-up-sweeper` cron running every 15 seconds (scheduler.ts:221), and from the session-cleaner and ' +
+      'agent-dispatcher consumers — alongside real routes. The timer and consumer callers have no request context, ' +
+      'which is the ADR-0008 async problem G5 owns. `follow-up-sweeper.ts` writing this same table was already ' +
+      'deferred for the identical reason.',
   },
   {
     file: 'packages/api/src/services/follow-up-lifecycle.ts',
@@ -1077,71 +1176,27 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'instances',
     class: 'tenant-boundary',
   },
-  {
-    file: 'packages/channel-a2a/src/agent-card.ts',
-    table: 'agents',
-    class: 'pending-G4-conversion',
-    justification:
-      'No database access at this site: the scanner matched a table name inside a doc comment (agent-card.ts:73). ' +
-      'OPEN QUESTION: retire by making the scanner comment-aware, not by reclassifying.',
-  },
-  {
-    file: 'packages/channel-discord/src/senders/reaction.ts',
-    table: 'messages',
-    class: 'pending-G4-conversion',
-    justification:
-      'No database access at this site: `messages` here is the discord.js `TextChannel.messages` client API, not ' +
-      'the messages table. OPEN QUESTION: retire by disambiguating the scanner, not by reclassifying.',
-  },
-  {
-    file: 'packages/channel-whatsapp/src/plugin.ts',
-    table: 'chats',
-    class: 'pending-G4-conversion',
-    justification:
-      'No database access at this site: `chats` here names the Baileys `chats.upsert`/`chats.update` socket events, ' +
-      'not the chats table. OPEN QUESTION: retire by disambiguating the scanner, not by reclassifying.',
-  },
-  {
-    file: 'packages/cli/src/commands/channels.ts',
-    table: 'instances',
-    class: 'pending-G4-conversion',
-    justification:
-      'No database access at this site: the CLI reaches instances over HTTP (`client.instances.list`), so it ' +
-      'inherits whatever scoping the API applied. OPEN QUESTION: retire by disambiguating the scanner, not by ' +
-      'reclassifying.',
-  },
-  {
-    file: 'packages/cli/src/commands/completions.ts',
-    table: 'chats',
-    class: 'pending-G4-conversion',
-    justification:
-      'No database access at this site: these are literal word lists for shell completion. OPEN QUESTION: retire by ' +
-      'disambiguating the scanner, not by reclassifying.',
-  },
-  {
-    file: 'packages/cli/src/commands/completions.ts',
-    table: 'instances',
-    class: 'pending-G4-conversion',
-    justification:
-      'No database access at this site: these are literal word lists for shell completion. OPEN QUESTION: retire by ' +
-      'disambiguating the scanner, not by reclassifying.',
-  },
-  {
-    file: 'packages/cli/src/commands/completions.ts',
-    table: 'persons',
-    class: 'pending-G4-conversion',
-    justification:
-      'No database access at this site: these are literal word lists for shell completion. OPEN QUESTION: retire by ' +
-      'disambiguating the scanner, not by reclassifying.',
-  },
+  // The seven channel/CLI entries that stood here were never database access:
+  // table names in doc comments, the discord.js `TextChannel.messages` client
+  // API, Baileys `chats.upsert` socket events, and shell-completion word lists.
+  // Leg 2 recorded the open question as "retire by making the scanner
+  // comment-aware, not by reclassifying"; `stripComments` plus the raw-SQL
+  // word-boundary did exactly that, so the sites no longer scan and the guard's
+  // own staleness check removed them.
   {
     file: 'packages/cli/src/commands/keys.ts',
     table: '*',
-    class: 'pending-G4-conversion',
+    class: 'control-plane',
     justification:
-      'A real `createDb()` in an operator CLI process with no HTTP request and no tenant credential. NOT waved ' +
-      'through as control-plane: it can write tenant rows outside the boundary. OPEN QUESTION for the ' +
-      'operator-surface inventory — whether this command can run under a tenant credential at all.',
+      'ADR-0003 auth-plane bootstrap, and the ONE CLI site that earns this class. Leg 2 left the open question ' +
+      '"can this command run under a tenant credential at all"; tracing it closes the question as no, by ' +
+      'construction. The `createDb()` at keys.ts:169 is reached only from `handleAdminCreate` (:121) and its handle ' +
+      'is passed to nothing but `ApiKeyService` (:170), which writes `auth_credentials` — auth-plane state, not ' +
+      'tenant business data. It is what MINTS the first credential, so no tenant credential can exist to run it ' +
+      'under, and under enforcement the runtime role is REVOKEd on that table while the command itself refuses ' +
+      'outright (:143, the Success-Criterion-19 god-key rule). It is inventoried as operator surface in ' +
+      'SURFACE_INVENTORY `cli_admin_bootstrap`, which is the WISH condition for this class. Every other `keys` ' +
+      'subcommand goes over HTTP and touches no database.',
   },
   {
     file: 'packages/db/scripts/apply-rls-enforcement.ts',

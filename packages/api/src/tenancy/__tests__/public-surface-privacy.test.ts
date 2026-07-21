@@ -160,6 +160,35 @@ describe.each(WORLDS.map((flag) => [flag === 'true' ? 'tenant mode on' : 'legacy
       expect(scalars(body)).not.toContain(1);
     });
 
+    test('GET /health/consumers reveals no connection state when the query fails', async () => {
+      // The success path was scrubbed; the failure path still handed an
+      // anonymous caller the raw driver message. A connection error names the
+      // host, port, database, and role — connection state, which the WISH
+      // forbids on a public surface just as plainly as it forbids offsets.
+      const app = new Hono<{ Variables: AppVariables }>();
+      app.use('*', async (c, next) => {
+        c.set('db', {
+          select: () => ({
+            from: async () => {
+              throw new Error(
+                'connection to server at "omni-db.internal" (10.0.3.7), port 5432 failed: role "omni_runtime" does not exist',
+              );
+            },
+          }),
+        } as unknown as AppVariables['db']);
+        await next();
+      });
+      app.route('/api/v2', healthRoutes);
+
+      const res = await app.request('/api/v2/health/consumers');
+      const serialized = JSON.stringify(await res.json());
+
+      expect(res.status).toBe(500);
+      for (const leaked of ['omni-db.internal', '10.0.3.7', '5432', 'omni_runtime']) {
+        expect(serialized).not.toContain(leaked);
+      }
+    });
+
     test('GET /_internal/health exposes no tenant-derived value', async () => {
       const res = await publicApp().request('/api/v2/_internal/health');
       const body = (await res.json()) as Record<string, unknown>;

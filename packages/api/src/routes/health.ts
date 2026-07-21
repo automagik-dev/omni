@@ -33,6 +33,7 @@
  * over time into a throughput estimate.
  */
 
+import { createLogger } from '@omni/core';
 import { consumerOffsets } from '@omni/db';
 import { sql } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
@@ -40,6 +41,7 @@ import packageJson from '../../package.json';
 import { arePluginsDegraded, getPluginsDegradedReason } from '../plugin-state';
 import type { AppVariables, HealthCheck, HealthResponse } from '../types';
 
+const healthLog = createLogger('health');
 const VERSION = packageJson.version;
 const startTime = Date.now();
 
@@ -198,12 +200,14 @@ healthRoutes.get('/health/consumers', async (c) => {
       freshness: freshnessFor(oldest),
     });
   } catch (error) {
-    return c.json(
-      {
-        status: 'error',
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      500,
-    );
+    // The driver's message names the host, port, database, and role. That is
+    // connection state, which this file's privacy contract forbids returning to
+    // an anonymous caller just as plainly as it forbids the offsets themselves.
+    // The probe only needs to know that offset tracking is not answering; the
+    // detail goes to the operator's logs.
+    healthLog.error('consumer offset health check failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return c.json({ status: 'error' }, 500);
   }
 });
