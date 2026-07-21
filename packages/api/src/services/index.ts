@@ -21,6 +21,8 @@ import { OpenAiImageGenProvider } from '../providers/openai/imagegen';
 import { OpenAiSttProvider } from '../providers/openai/stt';
 import { OpenAiTtsProvider } from '../providers/openai/tts';
 import { providerRegistry } from '../providers/registry';
+import { type AuthPlaneConnection, resolveAuthPlaneConnection } from '../tenancy/auth-plane-connection';
+import { MembershipSelectionService, RequestAuthenticator } from '../tenancy/request-auth';
 import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
 import { AgentStateService } from './agent-state';
@@ -97,6 +99,16 @@ export interface Services {
    * read path into the isolated `auth_credentials` index.
    */
   authBootstrap: AuthBootstrapService;
+  /**
+   * The one construction point for a request's auth context (ADR-0003). Reads
+   * on the auth-plane connection, which under enforcement is the auth-plane
+   * ROLE's own pool — the runtime role holds no privilege on `auth_credentials`
+   * and no membership in the `omni_auth_plane` marker, so a runtime-backed
+   * authenticator would reject every confirming tenant hint.
+   */
+  requestAuthenticator: RequestAuthenticator;
+  /** How the auth plane is connected. Surfaced for startup logging and probes. */
+  authPlane: AuthPlaneConnection;
   tenantControlPlane: TenantControlPlaneService;
   tenantKeys: TenantKeyService;
   /**
@@ -150,6 +162,15 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   // defer per-row arming to the central lifecycle gates. Built outside
   // the literal to avoid forward-referencing `services.X` inside its own
   // initializer.
+  // ADR-0003: the auth plane reads on its own identity under enforcement and on
+  // the runtime handle in legacy mode (see tenancy/auth-plane-connection.ts).
+  // Constructed before the service literal so the bootstrap service and the
+  // membership re-validator provably share ONE connection — two handles here
+  // would mean a credential and its membership could be read on different
+  // identities.
+  const authPlane = resolveAuthPlaneConnection(db);
+  const authBootstrap = new AuthBootstrapService(authPlane.db);
+
   const followUpLifecycle = new FollowUpLifecycleService(db, eventBus);
   const followUpSweeper = new FollowUpSweeperService(db, eventBus);
   followUpSweeper.setLifecycle(followUpLifecycle);
@@ -185,7 +206,9 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     followUpLifecycle,
     followUpSweeper,
     genieHosts: new GenieHostsService(db),
-    authBootstrap: new AuthBootstrapService(db),
+    authBootstrap,
+    requestAuthenticator: new RequestAuthenticator(authBootstrap, new MembershipSelectionService(authPlane.db)),
+    authPlane,
     tenantControlPlane: new TenantControlPlaneService(db),
     tenantKeys: new TenantKeyService(db),
     mediaStorage: new MediaStorageService(db),

@@ -84,6 +84,29 @@ export function resolveEnforcedBootIdentities(
   return { runtimeUrl, ddlUrl, authPlaneUrl: env[AUTH_PLANE_URL_ENV_VAR] ?? null };
 }
 
+/**
+ * Remove the DDL connection string from the process environment once enforced
+ * boot has finished with it (G3 review carry-forward L3).
+ *
+ * G3 already closed the DDL connection before the server listened, so the
+ * process held no OPEN handle capable of DDL. What it still held was the
+ * credential itself, sitting in `process.env` where any later code path — a
+ * plugin, a diagnostic endpoint, an error reporter serializing the environment
+ * — could read or forward it. ADR-0004's "migration credentials are unavailable
+ * to the application process after boot" reads more strictly than "the socket is
+ * shut": this closes the gap.
+ *
+ * Legacy mode is untouched. There is no DDL identity on that path, nothing is
+ * deleted, and the function is never called.
+ *
+ * @returns whether a value was actually removed, so the caller can log/assert.
+ */
+export function scrubDdlCredential(env: Record<string, string | undefined> = process.env): boolean {
+  if (env[DDL_URL_ENV_VAR] === undefined) return false;
+  delete env[DDL_URL_ENV_VAR];
+  return true;
+}
+
 export interface RuntimeIdentityReport {
   readonly currentUser: string;
   readonly attributes: RoleAttributes;

@@ -49,7 +49,12 @@ const packagesDir = join(repoRoot, 'packages');
  * All of them are set to the SAME disposable URL. Each suite creates its own
  * database underneath it, so they do not collide.
  */
-const POSTGRES_URL_VARS = ['OMNI_G1_POSTGRES_URL', 'OMNI_G2_POSTGRES_URL', 'OMNI_G3_POSTGRES_URL'] as const;
+const POSTGRES_URL_VARS = [
+  'OMNI_G1_POSTGRES_URL',
+  'OMNI_G2_POSTGRES_URL',
+  'OMNI_G3_POSTGRES_URL',
+  'OMNI_G4_POSTGRES_URL',
+] as const;
 
 /** Discover the suites the gate is responsible for. */
 function findPostgresSuites(dir: string, out: string[] = []): string[] {
@@ -100,7 +105,8 @@ const binaries = resolvePgBinaries();
 const env: Record<string, string> = { ...(process.env as Record<string, string>) };
 for (const variable of POSTGRES_URL_VARS) env[variable] = url;
 // The suites shell out to psql; point them at whichever client we resolved.
-for (const variable of ['OMNI_G1_PSQL_BIN', 'OMNI_G2_PSQL_BIN', 'OMNI_G3_PSQL_BIN']) env[variable] = binaries.psql;
+for (const variable of ['OMNI_G1_PSQL_BIN', 'OMNI_G2_PSQL_BIN', 'OMNI_G3_PSQL_BIN', 'OMNI_G4_PSQL_BIN'])
+  env[variable] = binaries.psql;
 
 let exitCode = 1;
 try {

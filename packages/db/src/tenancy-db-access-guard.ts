@@ -45,7 +45,7 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { RLS_TENANT_TABLES } from './tenancy-rls';
+import { RLS_EXCLUSIONS, RLS_TENANT_TABLES, type RlsExclusion } from './tenancy-rls';
 
 export type DbAccessClass = 'tenant-boundary' | 'control-plane' | 'migration-ddl' | 'pending-G4-conversion';
 
@@ -108,8 +108,27 @@ export const RLS_DRIZZLE_TO_TABLE: ReadonlyMap<string, string> = new Map(
   RLS_TENANT_TABLES.map((table) => [drizzleNameFor(table), table]),
 );
 
-/** Bare pool/singleton acquisition. Recorded against table `*`. */
-const SINGLETON_CALL = /\b(?:getDb|createDb|createPostgresClient)\s*\(/g;
+/**
+ * Bare pool/singleton acquisition. Recorded against table `*`.
+ *
+ * `createDbHandle` was added by G3 (independent, individually closable pools)
+ * and originally escaped this regex — a guard losing coverage to a new
+ * primitive is precisely the failure mode it exists to prevent, so it is named
+ * explicitly here rather than matched by a loose prefix (G3 review finding L2).
+ */
+const SINGLETON_CALL = /\b(?:getDb|createDb|createDbHandle|createPostgresClient)\s*\(/g;
+
+/**
+ * Verbatim mirror of `RLS_EXCLUSIONS` from `tenancy-rls.ts`.
+ *
+ * Those three tables carry a `tenant_id` and are deliberately NOT tenant-RLS
+ * tables, so the scanner above never sees them and this registry would
+ * otherwise be silently incomplete as an answer to "who may touch the
+ * database". The mirror is re-exported rather than re-worded, and the guard
+ * test asserts deep equality against the source list, so the two cannot drift
+ * (G3 review finding L4).
+ */
+export const MIRRORED_RLS_EXCLUSIONS: readonly RlsExclusion[] = RLS_EXCLUSIONS;
 
 /**
  * Scan `packagesDir` for database access sites.
@@ -233,6 +252,10 @@ export function defaultClassFor(site: DbAccessSite): { class: DbAccessClass; jus
     'packages/api/src/services/tenant-keys.ts':
       'ADR-0003 child-key creation. Crosses into the auth plane through a transactionally enforced service ' +
       'boundary with actor freshness re-validated under row locks (transactional-auth.ts).',
+    'packages/api/src/tenancy/auth-plane-connection.ts':
+      'ADR-0003 isolated auth plane. Opens the auth-plane ROLE\u2019s own pool under enforcement so the credential ' +
+      'index and the pre-context membership re-validation are read on an identity that may read them; returns the ' +
+      'runtime handle unchanged in legacy mode. Pre-context by definition.',
     'packages/api/src/tenancy/request-auth.ts':
       'ADR-0003 auth-plane membership re-validation at tenant-selection time. Pre-context by definition.',
     'packages/api/src/index.ts':
@@ -253,14 +276,17 @@ export function defaultClassFor(site: DbAccessSite): { class: DbAccessClass; jus
 }
 
 /**
- * Ceiling for the `pending-G4-conversion` class, fixed at the end of G3.
+ * Ceiling for the `pending-G4-conversion` class, fixed at the end of G3 and
+ * ratcheted down by each G4 leg (73 at the end of G3; 72 after the G4
+ * public-surface privacy fix removed the unauthenticated instance-count
+ * aggregation from `routes/health.ts`).
  *
  * The guard fails when the count EXCEEDS this. It does not fail when the count
  * falls: G4's job is to drive it toward zero, and every conversion should be
  * able to land without also editing this constant. When G4 lowers it, lower the
  * ceiling with it so the ratchet keeps its grip.
  */
-export const PENDING_G4_CEILING = 73;
+export const PENDING_G4_CEILING = 72;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -475,11 +501,6 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/plugins/sync-worker.ts',
     table: 'omni_groups',
-    class: 'pending-G4-conversion',
-  },
-  {
-    file: 'packages/api/src/routes/health.ts',
-    table: 'instances',
     class: 'pending-G4-conversion',
   },
   {
@@ -750,6 +771,13 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'pending-G4-conversion',
   },
   {
+    file: 'packages/api/src/tenancy/auth-plane-connection.ts',
+    table: '*',
+    class: 'control-plane',
+    justification:
+      'ADR-0003 isolated auth plane. Opens the auth-plane role\u2019s own pool under enforcement so the credential index and the pre-context membership re-validation are read on an identity that may read them; returns the runtime handle unchanged in legacy mode. Pre-context by definition.',
+  },
+  {
     file: 'packages/api/src/tenancy/platform-target-tenant.ts',
     table: 'tenant_audit_logs',
     class: 'tenant-boundary',
@@ -809,6 +837,13 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     file: 'packages/cli/src/commands/keys.ts',
     table: '*',
     class: 'pending-G4-conversion',
+  },
+  {
+    file: 'packages/db/scripts/apply-rls-enforcement.ts',
+    table: '*',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
   },
   {
     file: 'packages/db/scripts/backfill-chat-names.ts',

@@ -94,14 +94,9 @@ export interface HealthResponse {
     nats: HealthCheck;
     plugins?: HealthCheck;
   };
-  instances?: {
-    total: number;
-    /** Rows with instances.isActive = true (DB flag, not live socket state). */
-    active: number;
-    /** Live connected instances reported by channel plugins. */
-    connected: number;
-    byChannel: Record<string, number>;
-  };
+  // Instance inventory is deliberately absent — /health is unauthenticated and
+  // counts/per-channel breakdowns are tenant inventory (wish:
+  // omni-full-multitenancy, G4).
 }
 
 /**

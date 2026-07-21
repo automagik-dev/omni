@@ -37,6 +37,7 @@ import {
   instances,
   resolveEnforcedBootIdentities,
   resolveEnforcementMode,
+  scrubDdlCredential,
   verifyCriticalColumns,
 } from '@omni/db';
 import * as Sentry from '@sentry/bun';
@@ -697,6 +698,12 @@ async function runStartupMigrations(db: Database, enforced: EnforcedBootIdentiti
     ]);
   } finally {
     await ddlHandle?.close().catch(() => undefined);
+    // The connection is shut AND the credential is gone from the environment
+    // (G3 review carry-forward L3). Only on the enforced path: legacy mode has
+    // no DDL identity and nothing is removed.
+    if (enforced && scrubDdlCredential()) {
+      log.info('DDL credential scrubbed from process environment');
+    }
   }
 }
 
@@ -757,8 +764,18 @@ async function main() {
   const enforcedIdentities = enforcementMode === 'enforced' ? resolveEnforcedBootIdentities() : null;
   const databaseUrl = enforcedIdentities ? enforcedIdentities.runtimeUrl : getDefaultDatabaseUrl();
 
-  // Create database connection
-  log.info('Connecting to database', { enforcementMode });
+  // Create database connection.
+  //
+  // The log line is byte-identical to the pre-G3 legacy line (G3 review finding
+  // L1): a legacy boot must not gain even an observability field, because
+  // "contract-identical legacy behavior" includes what a log scraper sees. The
+  // `enforcementMode` field is emitted only on the enforced path, where it is
+  // new behavior anyway.
+  if (enforcementMode === 'enforced') {
+    log.info('Connecting to database', { enforcementMode });
+  } else {
+    log.info('Connecting to database');
+  }
   const db = createDb({ url: databaseUrl });
   globalDbRef = db;
 

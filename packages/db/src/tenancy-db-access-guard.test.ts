@@ -12,13 +12,14 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  MIRRORED_RLS_EXCLUSIONS,
   PENDING_G4_CEILING,
   REGISTERED_DB_ACCESS,
   defaultClassFor,
   evaluateDbAccessGuard,
   scanDbAccessSites,
 } from './tenancy-db-access-guard';
-import { RLS_TENANT_TABLES } from './tenancy-rls';
+import { RLS_EXCLUSIONS, RLS_TENANT_TABLES } from './tenancy-rls';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');
@@ -123,6 +124,52 @@ describe('db-access guard', () => {
     const fresh = defaultClassFor({ file: 'packages/api/src/services/brand-new.ts', table: 'messages' });
     expect(fresh.class).toBe('pending-G4-conversion');
     expect(fresh.justification).toBeUndefined();
+  });
+
+  test('the scanner catches createDbHandle, not only getDb/createDb (G3 review L2)', () => {
+    mkdirSync(scratchDir, { recursive: true });
+    const seeded = join(scratchDir, 'rogue-handle.ts');
+    writeFileSync(
+      seeded,
+      [
+        "import { createDbHandle } from '@omni/db';",
+        'export function leak() {',
+        '  return createDbHandle({ url: process.env.SOMETHING ?? "" });',
+        '}',
+        '',
+      ].join('\n'),
+    );
+
+    const files = evaluateDbAccessGuard(scanDbAccessSites(packagesDir, repoRoot)).unregistered.map(
+      (s) => `${s.file}::${s.table}`,
+    );
+    rmSync(scratchDir, { recursive: true, force: true });
+
+    // `createDbHandle` hands out a pool handle with no tenant context attached,
+    // exactly as `getDb`/`createDb` do. It was added after the original regex
+    // was written, which is how a guard silently loses coverage.
+    expect(files).toContain('packages/db/src/__g3_access_scratch__/rogue-handle.ts::*');
+  });
+
+  test('every real createDbHandle call site is registered (G3 review L2)', () => {
+    const handleSites = REGISTERED_DB_ACCESS.filter(
+      (e) => e.table === '*' && e.file === 'packages/db/scripts/apply-rls-enforcement.ts',
+    );
+    expect(handleSites.length).toBe(1);
+    expect(handleSites[0]?.class).toBe('migration-ddl');
+  });
+
+  test('the RLS exclusion justifications are mirrored here, verbatim (G3 review L4)', () => {
+    // The exclusions live in `tenancy-rls.ts` because that is where the DDL is
+    // generated. A reader auditing *this* file — the inventory of who may touch
+    // the database — must not have to know that a second, differently shaped
+    // list exists elsewhere. Mirrored rather than re-worded so a divergence is a
+    // test failure instead of a discrepancy nobody notices.
+    expect(MIRRORED_RLS_EXCLUSIONS).toEqual(RLS_EXCLUSIONS);
+    for (const exclusion of MIRRORED_RLS_EXCLUSIONS) {
+      expect(RLS_TENANT_TABLES).not.toContain(exclusion.table);
+      expect(exclusion.justification.length).toBeGreaterThan(40);
+    }
   });
 
   test('the scanner covers every RLS table name', () => {

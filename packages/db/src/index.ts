@@ -31,9 +31,11 @@ export type { EnforcementState, EnforcementStateReport, TenancyRoleNames } from 
 export { AUTH_PLANE_TABLES, applyTenancyRoles, readRoleAttributes, roleAttributeViolations } from './tenancy-roles';
 export type { RoleAttributes, TenancyRolePasswords } from './tenancy-roles';
 export {
+  ENFORCEMENT_ENV_VAR,
   EnforcementStartupError,
   assertEnforcedRuntimeIdentity,
   resolveEnforcedBootIdentities,
+  scrubDdlCredential,
   resolveEnforcementMode,
 } from './tenancy-startup';
 export type { DbEnforcementMode, EnforcedBootIdentities, RuntimeIdentityReport } from './tenancy-startup';
