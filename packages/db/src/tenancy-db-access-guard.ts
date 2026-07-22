@@ -408,8 +408,15 @@ export const PENDING_G4_CEILING = 6;
  * The honest check on a raised cap is not the cap itself but the TOTAL, since
  * relabelling moves a site between the two pending classes without changing it.
  * `TOTAL_PENDING_CEILING` below is that check, and it went DOWN.
+ *
+ * LOWERED TO 46 BY G5 LEG A. The two `event-persistence.ts` sites (`chats`,
+ * `omni_events`) converted: their consumer handlers now establish a worker
+ * tenant scope from the versioned envelope's trusted tenant
+ * (tenancy/worker-tenant-context.ts) and run their DB work through
+ * `scopedHandle`, so every caller — the only callers are those NATS consumers —
+ * now reaches a tenant transaction. They became `tenant-boundary`.
  */
-export const PENDING_G5_CEILING = 48;
+export const PENDING_G5_CEILING = 46;
 
 /**
  * Ceiling on `pending-G4-conversion` + `pending-G5-conversion` combined.
@@ -422,8 +429,11 @@ export const PENDING_G5_CEILING = 48;
  * retired by the scanner-precision fix and 1 real site closed as the auth-plane
  * bootstrap. The 5 G4→G5 moves changed it by exactly zero, which is the
  * property that makes them checkable rather than merely argued.
+ *
+ * 52 after G5 leg A (6 + 46): the two `event-persistence.ts` consumer sites were
+ * CONVERTED, not relabelled — the only move that lowers this number.
  */
-export const TOTAL_PENDING_CEILING = 54;
+export const TOTAL_PENDING_CEILING = 52;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -621,22 +631,22 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'propagation ADR-0008 assigns to G5.',
   },
   {
+    // G5-CONVERTED. Both handlers now wrap their DB work in
+    // `runConsumerInTenantContext` (tenancy/worker-tenant-context.ts): a
+    // versioned envelope's trusted tenant opens a fresh worker tenant scope, and
+    // `scopedHandle(db)` returns that transaction, so this `chats` lookup is
+    // RLS-scoped exactly as a converted route service. A legacy envelope runs on
+    // the ambient pool byte-identically; a quarantined one never reaches the
+    // handler (subscription.ts rejects it first).
     file: 'packages/api/src/plugins/event-persistence.ts',
     table: 'chats',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
+    // G5-CONVERTED — see the sibling `chats` entry above.
     file: 'packages/api/src/plugins/event-persistence.ts',
     table: 'omni_events',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/plugins/instance-monitor.ts',

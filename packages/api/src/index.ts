@@ -22,7 +22,14 @@ import './tracing';
  */
 
 import { type ChannelRegistry, isVoiceCapable } from '@omni/channel-sdk';
-import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
+import {
+  type EventBus,
+  configureLogging,
+  connectEventBus,
+  createLogger,
+  enableDefaultMetrics,
+  setEnvelopeTenantResolver,
+} from '@omni/core';
 import type { Database, DbEnforcementMode, EnforcedBootIdentities } from '@omni/db';
 import {
   API_CRITICAL_COLUMNS,
@@ -82,6 +89,7 @@ import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartb
 import { ApiKeyService } from './services/api-keys';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
+import { currentTenantScope } from './tenancy/tenant-scope';
 import { printStartupBanner } from './utils/startup-banner';
 
 // Configuration
@@ -138,6 +146,14 @@ async function connectToNats(db: Database): Promise<EventBus | null> {
     });
     globalEventBus = eventBus;
     natsLog.info('Connected to NATS');
+
+    // Versioned tenant-aware envelope (G5, ADR-0008): stamp the request's tenant
+    // onto every request-originated publish, so consumers can validate it. Reads
+    // the per-request tenant scope; returns null off-scope (workers, flag-off),
+    // where nothing is stamped and publishes stay legacy/byte-identical. A worker
+    // republish must pass an explicit `metadata.tenantId` — this resolver never
+    // lends an ambient tenant across the request→worker boundary.
+    setEnvelopeTenantResolver(() => currentTenantScope()?.tenantId ?? null);
 
     // Set up event listeners
     await setupQrCodeListener(eventBus);

@@ -113,12 +113,13 @@ describe('db-access guard', () => {
     }
   });
 
-  test('tenant-boundary is the G3 boundary modules plus the services G4 fully converted', () => {
+  test('tenant-boundary is the G3 boundary modules plus the services G4/G5 fully converted', () => {
     // G3 could only claim this class for `tenancy/` itself. G4 converts service
     // files, so the assertion widens — but only to services whose EVERY caller
     // carries a request context. A service with a consumer or cron caller stays
     // in a pending class, which is what keeps this from becoming "anything that
-    // has been edited".
+    // has been edited". G5 widens it once more, to CONSUMER files whose worker
+    // callers now establish a tenant scope from the versioned envelope.
     const boundary = REGISTERED_DB_ACCESS.filter((e) => e.class === 'tenant-boundary');
     expect(boundary.length).toBeGreaterThan(0);
     const converted = new Set([
@@ -134,6 +135,11 @@ describe('db-access guard', () => {
       // `c.get('db')` to the request transaction.
       'packages/api/src/routes/v2/handoffs.ts',
       'packages/api/src/routes/v2/messages.ts',
+      // G5 leg A: consumer-only plugin whose NATS handlers now open a worker
+      // tenant scope from the envelope (tenancy/worker-tenant-context.ts) before
+      // any DB work. Its only callers are those consumers, so every caller is
+      // now scoped.
+      'packages/api/src/plugins/event-persistence.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

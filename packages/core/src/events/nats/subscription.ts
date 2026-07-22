@@ -12,6 +12,7 @@ import type { ConsumerMessages, JsMsg } from 'nats';
 import type { ZodSchema, z } from 'zod';
 import { createLogger } from '../../logger';
 import type { GenericEventHandler, SubscribeOptions, Subscription } from '../bus';
+import { type EnvelopeClassification, classifyEnvelope } from '../envelope';
 import type { EventType, GenericEventPayload, OmniEvent } from '../types';
 import { DEFAULT_CONSUMER_CONFIG, calculateBackoffDelay } from './consumer';
 import { eventRegistry } from './registry';
@@ -75,6 +76,19 @@ export interface SubscriptionWrapperOptions extends SubscribeOptions {
   handler: GenericEventHandler;
   /** Optional callback when event processing fails permanently */
   onDeadLetter?: (event: OmniEvent, error: Error, retryCount: number) => Promise<void>;
+  /**
+   * Optional callback when an envelope is QUARANTINED by consumer validation
+   * (G5, ADR-0008) — an unknown envelope version or a missing/ambiguous/forged
+   * tenant. Distinct from `onDeadLetter`: a quarantine is a rejection BEFORE
+   * processing (the handler never ran and never will for this envelope), so it
+   * is termed immediately with no retry and no poison-loop. The classification's
+   * `reason` and the envelope's trusted `tenantId` (when present) travel to this
+   * hook so the alert can name both without logging payload secrets.
+   */
+  onQuarantine?: (
+    event: OmniEvent,
+    classification: Extract<EnvelopeClassification, { world: 'quarantine' }>,
+  ) => Promise<void>;
 }
 
 /**
@@ -89,6 +103,7 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
     retryDelayMs = DEFAULT_CONSUMER_CONFIG.retryDelayMs,
     concurrency = 1,
     onDeadLetter,
+    onQuarantine,
   } = options;
 
   const subscriptionId = crypto.randomUUID();
@@ -158,6 +173,36 @@ export function createSubscription(options: SubscriptionWrapperOptions): Subscri
     } catch (parseError) {
       // Can't parse message, terminate it (don't retry)
       log.error('Failed to parse message', { subscriptionId, error: String(parseError) });
+      msg.term();
+      return;
+    }
+
+    // Consumer envelope validation (G5, ADR-0008) — BEFORE any handler runs.
+    //
+    // A quarantined envelope (unknown version, or a missing/ambiguous/forged
+    // tenant) is rejected here: termed with no retry, routed to the quarantine
+    // hook, never handled. There is no global-processing fallback. A `legacy`
+    // envelope (no version marker, no tenant) or a `tenant` envelope proceeds
+    // exactly as before — so a flag-off deployment, which stamps nothing, sees
+    // byte-identical behaviour.
+    const classification = classifyEnvelope(event.metadata);
+    if (classification.world === 'quarantine') {
+      log.error('Envelope quarantined by consumer validation', {
+        subscriptionId,
+        eventType: event.type,
+        eventId: event.id,
+        reason: classification.reason,
+        // Trusted tenant only — never the payload.
+        tenantId: event.metadata.tenantId ?? null,
+      });
+      if (onQuarantine) {
+        try {
+          await onQuarantine(event, classification);
+        } catch (qError) {
+          log.error('Quarantine handler failed', { subscriptionId, error: String(qError) });
+        }
+      }
+      // A bad envelope will not become good on redelivery — term, do not nak.
       msg.term();
       return;
     }
