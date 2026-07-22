@@ -4,7 +4,9 @@
  * Actions are the "do Y" part of "when X happens, do Y".
  */
 
+import { brokeredFetch } from '../egress';
 import type { EventBus } from '../events/bus';
+import { resolveAmbientTenantId } from '../events/envelope';
 import type { CustomEventType, GenericEventPayload } from '../events/types';
 import { createLogger } from '../logger';
 import { type TemplateContext, substituteTemplate, substituteTemplateObject } from './templates';
@@ -138,11 +140,21 @@ async function executeWebhookAction(
 
     logger.debug(`Webhook ${method} ${url}`, { method, url, waitForResponse: config.waitForResponse });
 
-    const response = await fetch(url, {
+    // ADR-0009: tenant-controlled egress goes through the audited egress broker.
+    // With no tenant policy bound (flag-off / no tenant scope) this is a
+    // byte-identical passthrough to the previous raw `fetch`; with a bound policy
+    // it enforces the default-deny SSRF broker. The `egress` marker carries the
+    // audit context; the request init is otherwise unchanged.
+    const response = await brokeredFetch(url, {
       method,
       headers,
       body: method !== 'GET' ? body : undefined,
       signal: AbortSignal.timeout(config.timeoutMs ?? 30000),
+      egress: {
+        tenantId: resolveAmbientTenantId() ?? '(unbound)',
+        actorCredentialId: null,
+        integration: 'automations.webhook',
+      },
     });
 
     if (!config.waitForResponse) {

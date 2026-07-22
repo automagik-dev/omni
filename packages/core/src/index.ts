@@ -72,3 +72,7 @@ export * from './tracing';
 
 // Hooks
 export * from './hooks';
+
+// Tenant-egress broker (ADR-0009). The architecture guard beside it is a
+// dev/test tool and is intentionally NOT re-exported from the package root.
+export * from './egress';
