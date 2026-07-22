@@ -11,10 +11,10 @@
  * - Reply context extraction
  */
 
-import { describe, expect, it } from 'bun:test';
+import { beforeEach, describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { GupshupSimplifiedWebhookSchema, handleGupshupWebhook, parseSimplifiedWebhook } from '../handlers/webhooks';
+import { GupshupSimplifiedWebhookSchema, handleGupshupWebhook, parseSimplifiedWebhook, resetCrossIdDedupeState } from '../handlers/webhooks';
 import { GUPSHUP_WEBHOOK_METRIC } from '../observability';
 import type { GupshupPlugin } from '../plugin';
 
@@ -828,5 +828,103 @@ describe('handleGupshupWebhook — simplified payload dispatches like native', (
     expect(received).toHaveLength(1);
     expect(received[0]?.content.text).toBe('oi quero plano');
     expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unrecognized shape'))).toHaveLength(0);
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────
+// Cross-id duplicate suppression
+// ─────────────────────────────────────────────────────────────
+
+describe('Gupshup cross-id duplicate suppression', () => {
+  beforeEach(() => {
+    resetCrossIdDedupeState();
+  });
+
+  function textPayload(id: string, text: string) {
+    return makePayload({
+      type: 'text',
+      text,
+      from: BASE.sender,
+      timestamp: 1776273477,
+      id,
+      raw: { payload: { text } },
+    });
+  }
+
+  it('drops a same-text redelivery under a different external id within the window', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('gs-entry-1776273477001', 'my daughter is 3 years old')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('wamid.NATIVE_REDELIVERY_001', 'my daughter is 3 years old')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('gs-entry-1776273477001');
+  });
+
+  it('keeps short quick answers even when repeated', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    await handleGupshupWebhook(makeWebhookRequest(textPayload('gs-entry-1776273477002', 'ok')), plugin, 'inst-gs-xid', undefined, dedupeCache);
+    await handleGupshupWebhook(makeWebhookRequest(textPayload('wamid.SHORT_002', 'ok')), plugin, 'inst-gs-xid', undefined, dedupeCache);
+
+    expect(received).toHaveLength(2);
+  });
+
+  it('keeps different texts from the same chat', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    await handleGupshupWebhook(makeWebhookRequest(textPayload('gs-entry-1776273477003', 'first message here')), plugin, 'inst-gs-xid', undefined, dedupeCache);
+    await handleGupshupWebhook(makeWebhookRequest(textPayload('wamid.OTHER_003', 'a different message')), plugin, 'inst-gs-xid', undefined, dedupeCache);
+
+    expect(received).toHaveLength(2);
+  });
+
+  it('drops a relay media-URL echo right after a native media message', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    await handleGupshupWebhook(
+      makeWebhookRequest(
+        makePayload({
+          type: 'image',
+          url: 'https://filemanager.gupshup.io/wa/media/972665975453585?download=false',
+          contentType: 'image/jpeg',
+          from: BASE.sender,
+          timestamp: 1776273929,
+          id: 'wamid.MEDIA_NATIVE_004',
+          mediaId: '972665975453585',
+        }),
+      ),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('gs-entry-1776273930111', 'https://filemanager.gupshup.io/wa/media/972665975453585?download=false&fileName=Doc.pdf')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('wamid.MEDIA_NATIVE_004');
   });
 });
