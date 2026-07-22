@@ -55,6 +55,10 @@ export {
 // Metrics
 export * from './metrics';
 
+// Observability sink — redacted tenant fields for audit logs and traces (G5;
+// ADR-0008). The bounded/redacted metric-label counterpart travels with ./metrics.
+export * from './observability';
+
 // Automations
 export * from './automations';
 
