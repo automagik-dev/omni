@@ -52,6 +52,10 @@ const CHAT_A = '66666666-6666-4666-8666-6666666666ca';
 const CHAT_B = '66666666-6666-4666-8666-6666666666cb';
 const MESSAGE_A = '77777777-7777-4777-8777-7777777777ca';
 const MESSAGE_B = '77777777-7777-4777-8777-7777777777cb';
+// A dedicated A-owned message for the savepoint protective-path test, so it is
+// independent of the ordering of the two containment tests above (which mutate
+// MESSAGE_A).
+const MESSAGE_PROT = '77777777-7777-4777-8777-7777777777cc';
 const EVENT_A = '88888888-8888-4888-8888-8888888888ca';
 const EVENT_B = '88888888-8888-4888-8888-8888888888cb';
 
@@ -172,7 +176,8 @@ postgresDescribe('two-tenant media-processor containment (real PostgreSQL)', () 
       INSERT INTO messages (id, chat_id, external_id, source, message_type, platform_timestamp, tenant_id)
       VALUES
         ('${MESSAGE_A}', '${CHAT_A}', 'msg-a', 'realtime', 'audio', '${SHARED_TIMESTAMP}', '${TENANT_A}'),
-        ('${MESSAGE_B}', '${CHAT_B}', 'msg-b', 'realtime', 'audio', '${SHARED_TIMESTAMP}', '${TENANT_B}');
+        ('${MESSAGE_B}', '${CHAT_B}', 'msg-b', 'realtime', 'audio', '${SHARED_TIMESTAMP}', '${TENANT_B}'),
+        ('${MESSAGE_PROT}', '${CHAT_A}', 'msg-prot', 'realtime', 'audio', '${SHARED_TIMESTAMP}', '${TENANT_A}');
 
       INSERT INTO omni_events (id, instance_id, channel, event_type, external_id, tenant_id)
       VALUES
@@ -227,5 +232,37 @@ postgresDescribe('two-tenant media-processor containment (real PostgreSQL)', () 
     expect(await transcriptionForTenant(TENANT_A, MESSAGE_A)).toEqual(['hello from A']);
     expect((await mediaForTenant(TENANT_A, MESSAGE_A)).length).toBe(1);
     expect((await mediaForTenant(TENANT_B, MESSAGE_A)).length).toBe(0);
+  });
+
+  test('a NON-tenant failure of the audit insert does not roll back the committed message write (savepoint)', async () => {
+    // The protective-path proof the two containment tests above do NOT give.
+    //
+    // Under A's OWN scope, force ONLY the non-critical `media_content` insert to
+    // fail for a reason that has nothing to do with tenancy — a `language` code
+    // longer than its `varchar(10)` column — while the CRITICAL
+    // `messages.transcription` update succeeds. `persistProcessingResult`
+    // isolates that insert in a SAVEPOINT (`tx.transaction()`), so the failure
+    // must roll back only the audit row and leave the message write committed.
+    //
+    // Without the savepoint the value-too-long error would abort the whole worker
+    // transaction and the transcription would be lost. That regression is
+    // otherwise invisible (the aborted-commit-throws behaviour is
+    // postgres.js-driver-dependent), so this is the test that catches it.
+    // eventId is left undefined so the ONLY failing statement is the audit
+    // insert, not an FK resolution.
+    const poisoned = transcription('committed under A despite a failed audit row');
+    (poisoned as { language?: string }).language = 'pt-BR-this-code-is-far-too-long'; // > varchar(10)
+
+    await runInWorkerTenantScope(runtimeDb, TENANT_A, () =>
+      mediaProcessorTest.persistProcessingResult(ctx, MESSAGE_PROT, undefined, poisoned, 'audio'),
+    );
+
+    // The critical write COMMITTED under A.
+    expect(await transcriptionForTenant(TENANT_A, MESSAGE_PROT)).toEqual([
+      'committed under A despite a failed audit row',
+    ]);
+    // The failed audit insert left NO media_content row — the savepoint rolled it
+    // back without poisoning the surrounding transaction.
+    expect((await mediaForTenant(TENANT_A, MESSAGE_PROT)).length).toBe(0);
   });
 });

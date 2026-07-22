@@ -8,13 +8,15 @@
  */
 
 import type { ChannelRegistry, FetchHistoryOptions, HistorySyncMessage } from '@omni/channel-sdk';
-import type { EventBus } from '@omni/core';
+import type { EventBus, OmniEvent } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 import type { Database, SyncJobConfig, SyncJobProgress, SyncJobType } from '@omni/db';
 import { omniGroups } from '@omni/db';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Services } from '../services';
+import { scopedHandle } from '../tenancy/tenant-scope';
+import { runConsumerInTenantContext } from '../tenancy/worker-tenant-context';
 import { validateContactPhone } from '../utils/phone';
 
 const log = createLogger('sync-worker');
@@ -99,6 +101,29 @@ function parseSyncDepth(depth?: string): Date | undefined {
  */
 let db: Database | null = null;
 
+/**
+ * The envelope carried by the `sync.started` work item. Its trusted tenant (or
+ * `legacy`, flag-off) scopes each per-item DB block below.
+ */
+type SyncEnvelope = Pick<OmniEvent, 'metadata'>;
+
+/**
+ * Run ONE per-item DB block under the work item's worker tenant scope.
+ *
+ * G5 worker-context boundary (ADR-0008): a converted consumer wraps each DISCRETE
+ * DB block — never the whole `fetchHistory`/`fetchContacts`/`fetchGroups` job,
+ * which awaits long-running channel I/O and must not hold a tenant transaction —
+ * so `scopedHandle(db)` inside the block returns the worker transaction. A legacy
+ * envelope runs the block on the ambient pool byte-identically; a quarantined one
+ * is refused before any DB work. When no `db` handle was injected (unit setups
+ * that never touch tenant tables) the block runs directly, exactly as before.
+ */
+function inSyncWorkerScope<T>(envelope: SyncEnvelope, fn: () => Promise<T>): Promise<T> {
+  const handle = db;
+  if (!handle) return fn();
+  return runConsumerInTenantContext(handle, envelope, fn);
+}
+
 export async function setupSyncWorker(
   eventBus: EventBus,
   services: Services,
@@ -131,24 +156,30 @@ export async function setupSyncWorker(
 
           const channelType = instance.channel;
 
-          // Process based on job type
+          // Process based on job type. The `event` (versioned envelope) threads
+          // through so each processor can scope its per-item DB blocks to the
+          // work item's trusted tenant.
           switch (type) {
             case 'messages':
-              await processMessageSync(jobId, instanceId, channelType, config, services, channelRegistry);
+              await processMessageSync(jobId, instanceId, channelType, config, services, channelRegistry, event);
               break;
             case 'profile':
               // Profile sync is handled by ProfileSyncService, just mark complete
               await services.syncJobs.complete(jobId);
               break;
             case 'contacts':
+              // Not scoped this leg: its only tenant-table write is `persons`,
+              // which G2 classifies `unowned` (tenant_id stays NULL until the G6
+              // backfill), so there is no registered sync-worker site here to
+              // ratchet. Left byte-identical.
               await processContactsSync(jobId, instanceId, channelType, config, services, channelRegistry);
               break;
             case 'groups':
-              await processGroupsSync(jobId, instanceId, channelType, config, services, channelRegistry);
+              await processGroupsSync(jobId, instanceId, channelType, config, services, channelRegistry, event);
               break;
             case 'all':
               // All sync - process each type
-              await processMessageSync(jobId, instanceId, channelType, config, services, channelRegistry);
+              await processMessageSync(jobId, instanceId, channelType, config, services, channelRegistry, event);
               break;
             case 'history-push':
               // Progress/completion is driven by tracker subscribers, not the worker
@@ -182,19 +213,17 @@ export async function setupSyncWorker(
  * Gets the oldest message per chat to use as anchor points
  */
 async function buildWhatsAppAnchors(
+  database: Database,
   instanceId: string,
-  _services: Services,
 ): Promise<
   Array<{ chatJid: string; messageKey: { remoteJid: string; id: string; fromMe: boolean }; timestamp: number }>
 > {
-  if (!db) {
-    log.warn('Database not available for building anchors');
-    return [];
-  }
-
   // Query oldest message per chat that has a raw_payload with key
-  // Using raw SQL for the complex DISTINCT ON query
-  const result = await db.execute(sql`
+  // Using raw SQL for the complex DISTINCT ON query. `scopedHandle` returns the
+  // worker tenant transaction when this read runs inside a per-item worker scope
+  // (see `inSyncWorkerScope`), and the ambient pool otherwise (byte-identical to
+  // pre-G5).
+  const result = await scopedHandle(database).execute(sql`
     WITH oldest_messages AS (
       SELECT DISTINCT ON (c.external_id)
         c.external_id as chat_jid,
@@ -361,11 +390,16 @@ async function processMessageSync(
   config: SyncJobConfig,
   services: Services,
   channelRegistry: ChannelRegistry,
+  envelope: SyncEnvelope,
 ): Promise<void> {
   const plugin = channelRegistry.get(channelType);
   if (!plugin) {
     throw new Error(`No plugin found for channel type: ${channelType}`);
   }
+
+  // Non-null db handle for the per-item worker scopes below. When absent (unit
+  // setups that never touch tenant tables) the blocks run unscoped, as before.
+  const handle = db;
 
   // Check if plugin supports fetchHistory
   if (!('fetchHistory' in plugin) || typeof plugin.fetchHistory !== 'function') {
@@ -395,14 +429,16 @@ async function processMessageSync(
   let anchors: WAnchor[] = [];
 
   if (channelType === 'whatsapp-baileys' && config.chatJids?.length) {
-    // Per-chat active sync: build anchors for the specific requested chats only
-    const dbAnchors = await buildWhatsAppAnchors(instanceId, services);
+    // Per-chat active sync: build anchors for the specific requested chats only.
+    // The DB anchor read runs in a per-item worker scope so it only sees the
+    // work item's tenant's messages/chats under enforcement.
+    const dbAnchors = handle ? await inSyncWorkerScope(envelope, () => buildWhatsAppAnchors(handle, instanceId)) : [];
     anchors = await resolveWhatsAppAnchors(jobId, instanceId, config, plugin, dbAnchors, services);
     log.info('WhatsApp per-chat active sync', { jobId, anchorCount: anchors.length, chatJids: config.chatJids });
   } else if (channelType === 'whatsapp-baileys') {
     // Default sync: discover all known chats from DB + Baileys volatile cache.
     // Using DB ensures chats survive restarts even when Baileys cache is empty.
-    const dbAnchors = await buildWhatsAppAnchors(instanceId, services);
+    const dbAnchors = handle ? await inSyncWorkerScope(envelope, () => buildWhatsAppAnchors(handle, instanceId)) : [];
     const discoveredAnchors = await discoverAnchorsFromPlugin(jobId, instanceId, plugin, dbAnchors, services);
     anchors = [...dbAnchors, ...discoveredAnchors];
     if (anchors.length > 0) {
@@ -433,43 +469,49 @@ async function processMessageSync(
       });
     },
     onMessage: async (msg: HistorySyncMessage) => {
-      // Rate limit
+      // Rate limit — OUTSIDE the worker scope, so no tenant transaction is held
+      // across the sleep.
       await rateLimiter.wait();
 
       fetched++;
 
       try {
-        // Find or create chat
-        const { chat } = await services.chats.findOrCreate(instanceId, msg.chatId, {
-          chatType: 'dm', // Default, will be updated
-          channel: channelType as 'whatsapp-baileys' | 'discord',
+        // Each synced message is one work item: its find-or-create + de-dupe
+        // check + insert run inside a fresh per-item worker tenant scope so the
+        // row lands under the work item's tenant (legacy envelope → ambient pool,
+        // byte-identical). The counters are updated OUTSIDE the scope.
+        const outcome = await inSyncWorkerScope(envelope, async (): Promise<'duplicate' | 'stored'> => {
+          // Find or create chat
+          const { chat } = await services.chats.findOrCreate(instanceId, msg.chatId, {
+            chatType: 'dm', // Default, will be updated
+            channel: channelType as 'whatsapp-baileys' | 'discord',
+          });
+
+          // Check for duplicates
+          const existing = await services.messages.getByExternalId(chat.id, msg.externalId);
+          if (existing) return 'duplicate';
+
+          // Create message
+          await services.messages.create({
+            chatId: chat.id,
+            externalId: msg.externalId,
+            source: 'sync',
+            messageType: mapContentType(msg.content.type),
+            textContent: msg.content.text ?? msg.content.caption,
+            platformTimestamp: msg.timestamp,
+            hasMedia: ['audio', 'image', 'video', 'document', 'sticker'].includes(msg.content.type),
+            mediaMimeType: msg.content.mimeType,
+            mediaUrl: msg.content.mediaUrl,
+            mediaLocalPath: msg.content.localPath,
+            senderPlatformUserId: msg.from,
+            isFromMe: msg.isFromMe,
+            rawPayload: msg.rawPayload as Record<string, unknown>,
+          });
+          return 'stored';
         });
 
-        // Check for duplicates
-        const existing = await services.messages.getByExternalId(chat.id, msg.externalId);
-        if (existing) {
-          duplicates++;
-          return;
-        }
-
-        // Create message
-        await services.messages.create({
-          chatId: chat.id,
-          externalId: msg.externalId,
-          source: 'sync',
-          messageType: mapContentType(msg.content.type),
-          textContent: msg.content.text ?? msg.content.caption,
-          platformTimestamp: msg.timestamp,
-          hasMedia: ['audio', 'image', 'video', 'document', 'sticker'].includes(msg.content.type),
-          mediaMimeType: msg.content.mimeType,
-          mediaUrl: msg.content.mediaUrl,
-          mediaLocalPath: msg.content.localPath,
-          senderPlatformUserId: msg.from,
-          isFromMe: msg.isFromMe,
-          rawPayload: msg.rawPayload as Record<string, unknown>,
-        });
-
-        stored++;
+        if (outcome === 'duplicate') duplicates++;
+        else stored++;
       } catch (error) {
         log.warn('Failed to store synced message', {
           externalId: msg.externalId,
@@ -696,6 +738,80 @@ async function processContactsSync(
   });
 }
 
+/** Shape of a WhatsApp group emitted by the channel plugin's fetchGroups. */
+type SyncedGroupInput = {
+  externalId: string;
+  name?: string;
+  description?: string;
+  memberCount?: number;
+  iconUrl?: string;
+  ownerId?: string;
+  createdBy?: string;
+  createdAt?: Date;
+  isReadOnly?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+/**
+ * Upsert ONE synced WhatsApp group. Extracted from the `onGroup` callback so it
+ * is a testable seam: it reads/writes `omni_groups` through `scopedHandle`, so
+ * inside a per-item worker scope it is the worker's tenant transaction and the
+ * insert is RLS-stamped/checked; on the ambient pool it is byte-identical to
+ * pre-G5. Errors propagate to the caller, which keeps the sync-loop's
+ * log-and-continue behaviour.
+ */
+async function upsertSyncedGroup(
+  database: Database,
+  instanceId: string,
+  channelType: ChannelType,
+  g: SyncedGroupInput,
+): Promise<'stored' | 'updated'> {
+  const sdb = scopedHandle(database);
+  // Check if group already exists
+  const [existing] = await sdb
+    .select()
+    .from(omniGroups)
+    .where(and(eq(omniGroups.instanceId, instanceId), eq(omniGroups.externalId, g.externalId)))
+    .limit(1);
+
+  if (existing) {
+    // Update existing group
+    await sdb
+      .update(omniGroups)
+      .set({
+        name: g.name,
+        description: g.description,
+        iconUrl: g.iconUrl,
+        memberCount: g.memberCount,
+        ownerId: g.ownerId,
+        isReadOnly: g.isReadOnly ?? false,
+        platformMetadata: g.metadata,
+        syncedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(omniGroups.id, existing.id));
+    return 'updated';
+  }
+
+  // Create new group
+  await sdb.insert(omniGroups).values({
+    instanceId,
+    externalId: g.externalId,
+    channel: channelType,
+    name: g.name,
+    description: g.description,
+    iconUrl: g.iconUrl,
+    memberCount: g.memberCount,
+    ownerId: g.ownerId,
+    createdBy: g.createdBy,
+    isReadOnly: g.isReadOnly ?? false,
+    isCommunity: false,
+    platformMetadata: g.metadata,
+    syncedAt: new Date(),
+  });
+  return 'stored';
+}
+
 /**
  * Process groups sync
  */
@@ -706,6 +822,7 @@ async function processGroupsSync(
   _config: SyncJobConfig,
   services: Services,
   channelRegistry: ChannelRegistry,
+  envelope: SyncEnvelope,
 ): Promise<void> {
   const plugin = channelRegistry.get(channelType);
   if (!plugin) {
@@ -749,63 +866,16 @@ async function processGroupsSync(
     onGroup: async (group: unknown) => {
       fetched++;
 
-      const g = group as {
-        externalId: string;
-        name?: string;
-        description?: string;
-        memberCount?: number;
-        iconUrl?: string;
-        ownerId?: string;
-        createdBy?: string;
-        createdAt?: Date;
-        isReadOnly?: boolean;
-        metadata?: Record<string, unknown>;
-      };
+      const g = group as SyncedGroupInput;
 
       try {
-        // Check if group already exists
-        const [existing] = await database
-          .select()
-          .from(omniGroups)
-          .where(and(eq(omniGroups.instanceId, instanceId), eq(omniGroups.externalId, g.externalId)))
-          .limit(1);
-
-        if (existing) {
-          // Update existing group
-          await database
-            .update(omniGroups)
-            .set({
-              name: g.name,
-              description: g.description,
-              iconUrl: g.iconUrl,
-              memberCount: g.memberCount,
-              ownerId: g.ownerId,
-              isReadOnly: g.isReadOnly ?? false,
-              platformMetadata: g.metadata,
-              syncedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(eq(omniGroups.id, existing.id));
-          updated++;
-        } else {
-          // Create new group
-          await database.insert(omniGroups).values({
-            instanceId,
-            externalId: g.externalId,
-            channel: channelType,
-            name: g.name,
-            description: g.description,
-            iconUrl: g.iconUrl,
-            memberCount: g.memberCount,
-            ownerId: g.ownerId,
-            createdBy: g.createdBy,
-            isReadOnly: g.isReadOnly ?? false,
-            isCommunity: false,
-            platformMetadata: g.metadata,
-            syncedAt: new Date(),
-          });
-          stored++;
-        }
+        // One group = one work item, upserted inside a fresh per-item worker
+        // tenant scope; counters are updated OUTSIDE the scope.
+        const outcome = await inSyncWorkerScope(envelope, () =>
+          upsertSyncedGroup(database, instanceId, channelType, g),
+        );
+        if (outcome === 'updated') updated++;
+        else stored++;
       } catch (error) {
         log.warn('Failed to store synced group', {
           externalId: g.externalId,
@@ -829,32 +899,39 @@ async function processGroupsSync(
       };
 
       try {
-        // Check if guild already exists
-        const [existing] = await database
-          .select()
-          .from(omniGroups)
-          .where(and(eq(omniGroups.instanceId, instanceId), eq(omniGroups.externalId, g.externalId)))
-          .limit(1);
+        // One guild = one work item, upserted inside a fresh per-item worker
+        // tenant scope; `scopedHandle` returns the worker transaction (ambient
+        // pool when unscoped, byte-identical). Discord's field mapping differs
+        // from WhatsApp groups (no createdBy, isReadOnly always false), so it is
+        // kept inline rather than sharing `upsertSyncedGroup`.
+        const outcome = await inSyncWorkerScope(envelope, async (): Promise<'stored' | 'updated'> => {
+          const sdb = scopedHandle(database);
+          // Check if guild already exists
+          const [existing] = await sdb
+            .select()
+            .from(omniGroups)
+            .where(and(eq(omniGroups.instanceId, instanceId), eq(omniGroups.externalId, g.externalId)))
+            .limit(1);
 
-        if (existing) {
-          // Update existing guild
-          await database
-            .update(omniGroups)
-            .set({
-              name: g.name,
-              description: g.description,
-              iconUrl: g.iconUrl,
-              memberCount: g.memberCount,
-              ownerId: g.ownerId,
-              platformMetadata: g.metadata,
-              syncedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(eq(omniGroups.id, existing.id));
-          updated++;
-        } else {
+          if (existing) {
+            // Update existing guild
+            await sdb
+              .update(omniGroups)
+              .set({
+                name: g.name,
+                description: g.description,
+                iconUrl: g.iconUrl,
+                memberCount: g.memberCount,
+                ownerId: g.ownerId,
+                platformMetadata: g.metadata,
+                syncedAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(eq(omniGroups.id, existing.id));
+            return 'updated';
+          }
           // Create new guild
-          await database.insert(omniGroups).values({
+          await sdb.insert(omniGroups).values({
             instanceId,
             externalId: g.externalId,
             channel: channelType,
@@ -868,8 +945,10 @@ async function processGroupsSync(
             platformMetadata: g.metadata,
             syncedAt: new Date(),
           });
-          stored++;
-        }
+          return 'stored';
+        });
+        if (outcome === 'updated') updated++;
+        else stored++;
       } catch (error) {
         log.warn('Failed to store synced guild', {
           externalId: g.externalId,
@@ -1082,3 +1161,13 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
     throw error;
   }
 }
+
+/**
+ * Test-only seams: the two `omni_groups`/`messages` DB-access sites, exposed so
+ * the two-tenant real-PostgreSQL suite can drive them directly under a worker
+ * tenant scope (the same shape the media-processor suite uses).
+ */
+export const __test__ = {
+  buildWhatsAppAnchors,
+  upsertSyncedGroup,
+};

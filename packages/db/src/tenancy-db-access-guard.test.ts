@@ -144,6 +144,11 @@ describe('db-access guard', () => {
       // into `processMessageMedia`, whose DB blocks run through
       // `runConsumerInTenantContext` + `scopedHandle`. Consumer-only callers.
       'packages/api/src/plugins/media-processor.ts',
+      // G5 leg B pt2: the sync-worker `sync.started` consumer scopes each discrete
+      // per-item DB block (anchor read, group/guild upsert) through
+      // `runConsumerInTenantContext` + `scopedHandle`. Consumer-only callers, and
+      // both tables derive tenant from the `instances` root.
+      'packages/api/src/plugins/sync-worker.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

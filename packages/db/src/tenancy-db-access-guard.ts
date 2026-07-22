@@ -422,8 +422,20 @@ export const PENDING_G4_CEILING = 6;
  * `runConsumerInTenantContext` + `scopedHandle` while the media download/AI work
  * stays outside the transaction. All three were consumer-only sites, so every
  * caller now reaches a tenant transaction; they became `tenant-boundary`.
+ *
+ * LOWERED TO 41 BY G5 LEG B pt2. The two `sync-worker.ts` sites (`messages` via
+ * `buildWhatsAppAnchors`, `omni_groups` via `upsertSyncedGroup`/`onGuild`)
+ * converted: the `sync.started` consumer threads its envelope into each processor,
+ * which scopes each DISCRETE per-item DB block through `runConsumerInTenantContext`
+ * + `scopedHandle` (never the long `fetchHistory`/`fetchGroups` job). Both tables
+ * derive their tenant from the `instances` root, so RLS scopes them; consumer-only
+ * callers → `tenant-boundary`. (`session-cleaner.ts`'s `agents`/`chat_participants`
+ * were NOT converted this leg: both derive their tenant from `owner_id`/`person_id`
+ * -> `persons`, and `persons` is G2-`unowned`, so the fail-closed derivation trigger
+ * leaves their `tenant_id` NULL until the G6 `persons` backfill — they stay pending,
+ * blocked on G6, see the handoff.)
  */
-export const PENDING_G5_CEILING = 43;
+export const PENDING_G5_CEILING = 41;
 
 /**
  * Ceiling on `pending-G4-conversion` + `pending-G5-conversion` combined.
@@ -442,8 +454,11 @@ export const PENDING_G5_CEILING = 43;
  *
  * 49 after G5 leg B (6 + 43): the three `media-processor.ts` consumer sites were
  * CONVERTED, not relabelled.
+ *
+ * 47 after G5 leg B pt2 (6 + 41): the two `sync-worker.ts` consumer sites were
+ * CONVERTED, not relabelled.
  */
-export const TOTAL_PENDING_CEILING = 49;
+export const TOTAL_PENDING_CEILING = 47;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -725,22 +740,29 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'absence of request context. Converting it requires the async storage context of ADR-0008 (G5).',
   },
   {
+    // G5-CONVERTED (leg B pt2). The `sync.started` consumer threads its versioned
+    // envelope into `processMessageSync`, which scopes the anchor read
+    // `buildWhatsAppAnchors` (this `messages` site) through
+    // `runConsumerInTenantContext` + `scopedHandle` as a discrete per-item DB
+    // block — NOT the long `fetchHistory` job it precedes. Its only callers are
+    // that consumer, so every caller now reaches a tenant transaction. `messages`
+    // derives its tenant from the `instances` root, so RLS scopes it (proven in
+    // sync-worker-two-tenant-postgres.test.ts). Legacy envelope → ambient pool,
+    // byte-identical.
     file: 'packages/api/src/plugins/sync-worker.ts',
     table: 'messages',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
+    // G5-CONVERTED (leg B pt2). The per-group/per-guild upsert (`upsertSyncedGroup`
+    // and the inline Discord `onGuild` block) now runs inside
+    // `runConsumerInTenantContext` + `scopedHandle` — one worker tenant scope per
+    // work item, never across the `fetchGroups`/`fetchGuilds` job. `omni_groups`
+    // derives its tenant from the required `instances` root, so the insert is
+    // RLS-stamped/checked (proven in sync-worker-two-tenant-postgres.test.ts).
     file: 'packages/api/src/plugins/sync-worker.ts',
     table: 'omni_groups',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/routes/v2/handoffs.ts',
