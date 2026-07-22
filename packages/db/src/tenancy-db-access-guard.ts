@@ -415,8 +415,15 @@ export const PENDING_G4_CEILING = 6;
  * (tenancy/worker-tenant-context.ts) and run their DB work through
  * `scopedHandle`, so every caller — the only callers are those NATS consumers —
  * now reaches a tenant transaction. They became `tenant-boundary`.
+ *
+ * LOWERED TO 43 BY G5 LEG B. The three `media-processor.ts` sites (`media_content`,
+ * `messages`, `omni_events`) converted: the `message.received` consumer threads
+ * its versioned envelope into `processMessageMedia`, whose DB blocks run inside
+ * `runConsumerInTenantContext` + `scopedHandle` while the media download/AI work
+ * stays outside the transaction. All three were consumer-only sites, so every
+ * caller now reaches a tenant transaction; they became `tenant-boundary`.
  */
-export const PENDING_G5_CEILING = 46;
+export const PENDING_G5_CEILING = 43;
 
 /**
  * Ceiling on `pending-G4-conversion` + `pending-G5-conversion` combined.
@@ -432,8 +439,11 @@ export const PENDING_G5_CEILING = 46;
  *
  * 52 after G5 leg A (6 + 46): the two `event-persistence.ts` consumer sites were
  * CONVERTED, not relabelled — the only move that lowers this number.
+ *
+ * 49 after G5 leg B (6 + 43): the three `media-processor.ts` consumer sites were
+ * CONVERTED, not relabelled.
  */
-export const TOTAL_PENDING_CEILING = 52;
+export const TOTAL_PENDING_CEILING = 49;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -658,31 +668,33 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       '(ADR-0008).',
   },
   {
+    // G5-CONVERTED (leg B). The `message.received` consumer now passes its
+    // versioned envelope into `processMessageMedia`, whose two DB blocks —
+    // `persistProcessingResult` (this `media_content` insert + the `messages`
+    // content write) and the error-marker `messages` update — run inside
+    // `runConsumerInTenantContext`, so `scopedHandle(ctx.db)` returns the worker
+    // transaction and this insert is RLS-scoped. The media download + AI work
+    // stay OUTSIDE the transaction (no tx across network I/O). A legacy envelope
+    // runs on the ambient pool byte-identically; a quarantined one is refused.
     file: 'packages/api/src/plugins/media-processor.ts',
     table: 'media_content',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
+    // G5-CONVERTED (leg B) — see the sibling `media_content` entry above. Both
+    // the success content write and the failure marker go through
+    // `scopedHandle(ctx.db)` inside the worker tenant scope.
     file: 'packages/api/src/plugins/media-processor.ts',
     table: 'messages',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
+    // G5-CONVERTED (leg B) — the `media_content` FK existence check
+    // (`resolveSafeMediaContentEventId`) now reads `omni_events` through
+    // `scopedHandle(ctx.db)` within the same worker scope as the insert it feeds.
     file: 'packages/api/src/plugins/media-processor.ts',
     table: 'omni_events',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/plugins/session-cleaner.ts',

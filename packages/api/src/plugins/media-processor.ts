@@ -16,7 +16,7 @@
  * @see media-processing-realtime wish
  */
 
-import type { ChannelType, EventBus, MessageReceivedPayload } from '@omni/core';
+import type { ChannelType, EventBus, MessageReceivedPayload, OmniEvent } from '@omni/core';
 import { createLogger, isValidUuid } from '@omni/core';
 import type { Database } from '@omni/db';
 import { mediaContent, messages, omniEvents } from '@omni/db';
@@ -30,6 +30,8 @@ import {
 import { eq } from 'drizzle-orm';
 import type { Services } from '../services';
 import { MediaStorageService } from '../services/media-storage';
+import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { runConsumerInTenantContext } from '../tenancy/worker-tenant-context';
 
 const log = createLogger('media-processor');
 
@@ -272,7 +274,7 @@ async function resolveSafeMediaContentEventId(
 
   while (true) {
     try {
-      const [event] = await ctx.db
+      const [event] = await scopedHandle(ctx.db)
         .select({ id: omniEvents.id })
         .from(omniEvents)
         .where(eq(omniEvents.id, eventId))
@@ -307,18 +309,28 @@ async function persistProcessingResult(
   if (result.content) {
     const updateField = getContentFieldForType(result.processingType, contentType);
     if (updateField) {
-      await ctx.db
+      await scopedHandle(ctx.db)
         .update(messages)
         .set({ [updateField]: result.content })
         .where(eq(messages.id, messageId));
     }
   }
 
-  // Store result in media_content table (non-critical analytics/audit record)
+  // Store result in media_content table (non-critical analytics/audit record).
+  //
+  // When this runs inside a worker tenant scope, the message update above and
+  // this insert share ONE transaction, so a failed insert (an RLS/FK rejection,
+  // an ambiguous derivation) would abort the transaction and roll back the
+  // CRITICAL message content write. On the legacy ambient pool each statement is
+  // its own implicit transaction, so a failed audit insert never touched the
+  // already-committed message update. To preserve that priority under a scope we
+  // isolate the insert in a SAVEPOINT (`tx.transaction()` nests as one): a
+  // failure rolls back only the audit row. Outside a scope the insert runs
+  // exactly as before — byte-identical to pre-G5.
   try {
     const safeEventId = await resolveSafeMediaContentEventId(ctx, eventId);
-
-    await ctx.db.insert(mediaContent).values({
+    const sdb = scopedHandle(ctx.db);
+    const row = {
       eventId: safeEventId,
       mediaId: messageId,
       processingType: result.processingType,
@@ -330,7 +342,14 @@ async function persistProcessingResult(
       tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
       costUsd: result.costCents != null ? String(Math.round(result.costCents)) : null,
       processingTimeMs: result.processingTimeMs,
-    });
+    };
+    if (currentTenantScope()) {
+      await sdb.transaction(async (sp) => {
+        await sp.insert(mediaContent).values(row);
+      });
+    } else {
+      await sdb.insert(mediaContent).values(row);
+    }
   } catch (error) {
     log.warn('Failed to insert media_content record (non-critical)', {
       messageId,
@@ -357,6 +376,11 @@ async function processMessageMedia(
   ctx: MediaProcessorContext,
   payload: MessageReceivedPayload,
   metadata: { instanceId: string; eventId?: string; channelType?: ChannelType },
+  // The versioned envelope of the message.received event this work item processes.
+  // Its trusted tenant (or `legacy`, flag-off) scopes every DB write below via
+  // `runConsumerInTenantContext`; the media download/AI work stays OUTSIDE the
+  // tenant transaction so no transaction is held across network I/O.
+  envelope: Pick<OmniEvent, 'metadata'>,
 ): Promise<void> {
   const { instanceId, eventId } = metadata;
   const { content, externalId } = payload;
@@ -405,10 +429,12 @@ async function processMessageMedia(
     const errorColumn = getContentFieldForType(processingType, content.type);
     if (errorColumn) {
       const marker = `[error: media processing failed — ${reason}]`;
-      await ctx.db
-        .update(messages)
-        .set({ [errorColumn]: marker })
-        .where(eq(messages.id, media.messageId));
+      await runConsumerInTenantContext(ctx.db, envelope, async () => {
+        await scopedHandle(ctx.db)
+          .update(messages)
+          .set({ [errorColumn]: marker })
+          .where(eq(messages.id, media.messageId));
+      });
     }
 
     // Publish media.processing.failed event (dedicated failure event)
@@ -440,7 +466,9 @@ async function processMessageMedia(
     return;
   }
 
-  await persistProcessingResult(ctx, media.messageId, eventId, result, content.type);
+  await runConsumerInTenantContext(ctx.db, envelope, () =>
+    persistProcessingResult(ctx, media.messageId, eventId, result, content.type),
+  );
 
   log.info('Media processing complete', {
     messageId: media.messageId,
@@ -606,11 +634,16 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
       if (!shouldProcess(payload.content.type)) return;
 
       try {
-        await processMessageMedia(ctx, payload, {
-          instanceId: metadata.instanceId,
-          eventId: event.id,
-          channelType: metadata.channelType,
-        });
+        await processMessageMedia(
+          ctx,
+          payload,
+          {
+            instanceId: metadata.instanceId,
+            eventId: event.id,
+            channelType: metadata.channelType,
+          },
+          event,
+        );
       } catch (error) {
         log.error('Failed to process media', {
           externalId: payload.externalId,
