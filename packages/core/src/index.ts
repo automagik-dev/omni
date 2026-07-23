@@ -59,6 +59,11 @@ export * from './metrics';
 // ADR-0008). The bounded/redacted metric-label counterpart travels with ./metrics.
 export * from './observability';
 
+// Tenant-bound secret sealing — credential/session-secret encryption with a
+// per-tenant key + tenant-as-AAD binding (G5; ADR-0008;
+// OWNERSHIP_MANIFEST `filesystem_session_state`).
+export * from './secrets';
+
 // Automations
 export * from './automations';
 
