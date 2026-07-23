@@ -90,7 +90,9 @@ import { ApiKeyService } from './services/api-keys';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
 import { currentTenantScope } from './tenancy/tenant-scope';
+import { startStreamRevocationSweeper } from './tenancy/tenant-stream-subscriptions';
 import { printStartupBanner } from './utils/startup-banner';
+import { resolveInstanceTenantId } from './ws/voice-instance-ownership';
 
 // Configuration
 const PORT = Number.parseInt(process.env.API_PORT ?? '8882', 10);
@@ -99,6 +101,7 @@ const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
 
 import { VoiceStreamRegistry, parseVoiceStreamParams, transcodeAudioFrame } from './ws/voice';
 import type { VoiceStreamClient } from './ws/voice';
+import { type VoiceUpgradeDeps, authorizeVoiceUpgrade } from './ws/voice-upgrade-authorization';
 
 // Voice stream WebSocket registry (global singleton)
 const voiceStreamRegistry = new VoiceStreamRegistry();
@@ -275,17 +278,31 @@ function startBunServer(app: App) {
           }
         }
 
-        // Validate session exists via VoiceCapable interface
-        const voicePlugin = globalChannelRegistry
-          ?.getAll()
-          .find((p) => isVoiceCapable(p) && p.voiceSession(params.sessionId));
-        if (!voicePlugin) {
-          ws.close(4004, `Voice session ${params.sessionId} not found`);
+        // G5 deliverable (e): tenant-authorized upgrade. Flag-off this is the
+        // pre-G5 "does the session exist" decision, byte-identical and with no
+        // tenancy lookup; flag-on the connection's tenant is derived from the
+        // CREDENTIAL and the session's instance must be owned by it.
+        const decision = await authorizeVoiceUpgrade(
+          { apiKey: params.apiKey, sessionId: params.sessionId },
+          voiceUpgradeDeps(),
+        );
+        if (!decision.ok) {
+          if (decision.reason === 'session_not_found') {
+            ws.close(4004, `Voice session ${params.sessionId} not found`);
+          } else if (decision.reason === 'unauthenticated') {
+            ws.close(4004, 'Invalid API key');
+          } else {
+            // Cross-tenant / unowned: refuse WITHOUT disclosing whether the
+            // session exists — the refusal must not become an existence oracle.
+            ws.close(4004, `Voice session ${params.sessionId} not found`);
+          }
           return;
         }
 
         const client: VoiceStreamClient = {
           params,
+          tenantId: decision.tenantId,
+          revocationEpoch: decision.revocationEpoch,
           send: (data) => {
             try {
               ws.send(data as string | ArrayBuffer | Uint8Array);
@@ -293,7 +310,17 @@ function startBunServer(app: App) {
               // Client slow or disconnected
             }
           },
+          close: (reason) => {
+            try {
+              ws.close(4003, reason);
+            } catch {
+              // Already gone
+            }
+          },
         };
+        // Bind the session to its trusted owner so the audio fan-out is narrowed
+        // to this tenant even if another tenant holds a session with the same id.
+        if (decision.tenantId) voiceStreamRegistry.bindSession(params.sessionId, decision.tenantId);
         voiceStreamRegistry.add(ws, client);
         ws.send(JSON.stringify({ type: 'session_ready', sessionId: params.sessionId }));
       },
@@ -333,7 +360,14 @@ function startBunServer(app: App) {
         }
       },
       close(ws) {
+        const sessionId = voiceStreamRegistry.get(ws)?.params.sessionId;
         voiceStreamRegistry.remove(ws);
+        // Drop the session→tenant binding only once the session itself is gone,
+        // so a reconnecting client is still narrowed to its own tenant.
+        if (sessionId) {
+          const stillLive = globalChannelRegistry?.getAll().some((p) => isVoiceCapable(p) && p.voiceSession(sessionId));
+          if (!stillLive) voiceStreamRegistry.unbindSession(sessionId);
+        }
       },
     },
   });
@@ -341,6 +375,47 @@ function startBunServer(app: App) {
 
 // Database reference for WS auth (set during startup)
 let globalDbRef: Database | null = null;
+
+/**
+ * Services reference for WS tenant authorization (set during startup).
+ *
+ * G5 deliverable (e): the voice upgrade lives in `Bun.serve`'s raw `fetch`,
+ * before Hono, so it cannot reach the tenancy middleware's context. It resolves
+ * the connection's tenant itself, through the SAME auth plane the HTTP edge uses
+ * (`services.authBootstrap`) and the same ownership root (`instances`).
+ */
+let globalServicesRef: ReturnType<typeof createApp>['services'] | null = null;
+
+/** The revocation sweeper for live voice sockets; stopped on shutdown. */
+let globalStreamSweeper: { stop: () => void } | null = null;
+
+/**
+ * The tenancy derivations the voice upgrade needs, all trusted — the credential
+ * index for the tenant, the live plugin session for the instance, and the
+ * `instances` ownership root (read inside the credential tenant's own scope, so
+ * RLS decides visibility) for the resource owner.
+ */
+function voiceUpgradeDeps(): VoiceUpgradeDeps {
+  return {
+    resolveCredentialTenant: async (apiKey) => {
+      const services = globalServicesRef;
+      if (!services) return null;
+      const result = await services.authBootstrap.lookupBySecret(apiKey, `voice-ws-${crypto.randomUUID()}`);
+      if (!result.ok || result.context.credentialClass !== 'tenant') return null;
+      return { tenantId: result.context.tenantId, revocationEpoch: result.context.revocationEpoch };
+    },
+    resolveSessionInstanceId: (sessionId) => {
+      const plugin = globalChannelRegistry?.getAll().find((p) => isVoiceCapable(p) && p.voiceSession(sessionId));
+      if (!plugin || !isVoiceCapable(plugin)) return null;
+      return plugin.voiceSession(sessionId)?.instanceId ?? null;
+    },
+    resolveInstanceTenantId: async (instanceId, tenantId) => {
+      const db = globalDbRef;
+      if (!db) return null;
+      return resolveInstanceTenantId(db, instanceId, tenantId);
+    },
+  };
+}
 
 /**
  * Set up graceful shutdown handlers
@@ -372,6 +447,12 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
 
       shutdownLog.info('Stopping HTTP server');
       server.stop();
+
+      if (globalStreamSweeper) {
+        shutdownLog.info('Stopping stream revocation sweeper');
+        globalStreamSweeper.stop();
+        globalStreamSweeper = null;
+      }
 
       if (globalDispatcherCleanup) {
         shutdownLog.info('Stopping agent dispatcher');
@@ -889,6 +970,11 @@ async function main() {
 
   // Create app and get services
   const { app, services } = createApp(db, eventBus, globalChannelRegistry);
+  globalServicesRef = services;
+
+  // G5 deliverable (e): terminate a revoked tenant's live voice sockets inside
+  // the RELEASE_SLOS ceiling. Flag-off this starts no timer at all.
+  globalStreamSweeper = startStreamRevocationSweeper(services.authPlane.db, voiceStreamRegistry.streamRegistry);
 
   // Seed default settings
   try {

@@ -683,6 +683,19 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'tenant-boundary',
   },
   {
+    // G5-NEW (leg E, deliverable (e)). The voice WebSocket upgrade runs in
+    // `Bun.serve`'s raw `fetch`, BEFORE Hono, so it has no request scope; it
+    // resolves the session's instance owner itself inside
+    // `runInWorkerTenantScope` for the CREDENTIAL's tenant, reading through
+    // `scopedHandle`. Under enforcement RLS decides visibility, so a foreign
+    // instance never resolves. Deliberately NOT folded into `index.ts`, whose
+    // `instances` site is registered `control-plane` for process startup — a
+    // tenant-boundary read must not inherit that exemption.
+    file: 'packages/api/src/ws/voice-instance-ownership.ts',
+    table: 'instances',
+    class: 'tenant-boundary',
+  },
+  {
     // G5-CONVERTED (leg B pt3). The `custom.lid-mapping.batch` consumer runs
     // each mapping insert through `scopedHandle` inside its own per-item
     // worker scope (`runConsumerInTenantContext`), mirroring the per-statement

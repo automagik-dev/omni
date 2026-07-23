@@ -178,6 +178,14 @@ describe('db-access guard', () => {
       // detaching and scopes each `omni_events` batch read, revalidating tenant
       // admissibility at dequeue and before each durable side-effect batch.
       'packages/api/src/services/event-ops.ts',
+      // G5 leg F (deliverable (e)): the voice WebSocket upgrade's ownership
+      // read. It runs in `Bun.serve`'s raw `fetch`, before Hono, so it has no
+      // request scope; it opens its OWN worker scope for the CREDENTIAL's tenant
+      // and reads `instances` through `scopedHandle`. Its only caller is that
+      // upgrade path, which derives the tenant from the auth plane — never from
+      // the URL. Split out of `index.ts` precisely so it could NOT inherit that
+      // file's `control-plane` startup exemption.
+      'packages/api/src/ws/voice-instance-ownership.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);
