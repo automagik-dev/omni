@@ -704,9 +704,14 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'tenant-boundary',
   },
   {
-    // G5-CONVERTED (leg B) — the `media_content` FK existence check
-    // (`resolveSafeMediaContentEventId`) now reads `omni_events` through
-    // `scopedHandle(ctx.db)` within the same worker scope as the insert it feeds.
+    // G5-CONVERTED (leg B; refined run6/carry-forward #2). The `media_content` FK
+    // existence check (`resolveSafeMediaContentEventId`) reads `omni_events`
+    // through `scopedHandle(ctx.db)` inside a worker tenant scope
+    // (`runConsumerInTenantContext`), so this stays a tenant-boundary. Run6 moved
+    // that read into its OWN short worker scope(s) resolved BEFORE the persist
+    // scope, so the <=250ms poll no longer holds the persist transaction open
+    // across its sleeps — the read remains scoped (a plain ambient read would
+    // regress this to pending AND, under RLS, resolve nothing).
     file: 'packages/api/src/plugins/media-processor.ts',
     table: 'omni_events',
     class: 'tenant-boundary',

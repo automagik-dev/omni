@@ -17,7 +17,7 @@
  */
 
 import type { ChannelType, EventBus, MessageReceivedPayload, OmniEvent } from '@omni/core';
-import { createLogger, isValidUuid } from '@omni/core';
+import { classifyEnvelope, createLogger, isValidUuid } from '@omni/core';
 import type { Database } from '@omni/db';
 import { mediaContent, messages, omniEvents } from '@omni/db';
 import {
@@ -86,6 +86,18 @@ function shouldProcess(contentType: string | undefined): boolean {
 
 function isUuid(value: string | undefined): value is string {
   return typeof value === 'string' && isValidUuid(value);
+}
+
+/**
+ * The trusted tenant for a tenant-context storage write, or undefined for a
+ * legacy/flag-off (or non-tenant) envelope. Read from the versioned envelope the
+ * producer stamped (never a payload/request field), so a tenant-prefixed object
+ * key is emitted only for a genuine tenant-context write and a legacy envelope
+ * keeps the byte-identical pre-G5 key layout (ADR-0008).
+ */
+function envelopeTenantId(envelope: Pick<OmniEvent, 'metadata'>): string | undefined {
+  const classification = classifyEnvelope(envelope.metadata);
+  return classification.world === 'tenant' ? classification.tenantId : undefined;
 }
 
 /**
@@ -174,6 +186,7 @@ async function downloadMediaFromUrl(
   mimeType: string,
   platformTimestamp: Date | undefined,
   channelType?: ChannelType,
+  trustedTenantId?: string,
 ): Promise<string | null> {
   const fetchOptions = await buildFetchOptions(ctx, instanceId, channelType);
   try {
@@ -184,6 +197,7 @@ async function downloadMediaFromUrl(
       mimeType,
       platformTimestamp,
       fetchOptions,
+      trustedTenantId,
     );
     await ctx.mediaStorage.updateMessageLocalPath(messageId, result.localPath);
     log.debug('Downloaded media from URL', { messageId, filePath: result.localPath });
@@ -206,6 +220,7 @@ async function resolveMediaPath(
   content: MessageReceivedPayload['content'],
   mimeType: string,
   channelType?: ChannelType,
+  trustedTenantId?: string,
 ): Promise<MediaResolution | null> {
   // Wait briefly for message-persistence to create the DB row (race condition:
   // both media-processor and message-persistence subscribe to message.received)
@@ -245,6 +260,7 @@ async function resolveMediaPath(
       mimeType,
       message.platformTimestamp ?? undefined,
       channelType,
+      trustedTenantId,
     );
     if (!filePath) return null;
   }
@@ -262,9 +278,11 @@ async function resolveMediaPath(
 
 async function resolveSafeMediaContentEventId(
   ctx: MediaProcessorContext,
+  envelope: Pick<OmniEvent, 'metadata'>,
   eventId: string | undefined,
 ): Promise<string | null> {
   if (!isUuid(eventId)) return null;
+  const id = eventId;
 
   // media_content is audit/replay metadata, so do not block media.processed for long.
   // Event persistence runs concurrently with this processor and should normally win within milliseconds.
@@ -273,21 +291,32 @@ async function resolveSafeMediaContentEventId(
   const deadline = Date.now() + maxWaitMs;
 
   while (true) {
+    // Carry-forward #2: each existence check runs in its OWN short worker tenant
+    // scope, resolved BEFORE the persist scope opens. The <=250ms poll therefore
+    // never holds the persist transaction open across its `setTimeout` sleeps —
+    // the sleeps happen between scopes, on no open transaction. The `omni_events`
+    // read still runs under a worker scope through `scopedHandle`, so the site
+    // stays a tenant-boundary: a plain ambient read would both regress that
+    // classification AND, under RLS, see nothing (the FK would never resolve).
+    let found: string | null;
     try {
-      const [event] = await scopedHandle(ctx.db)
-        .select({ id: omniEvents.id })
-        .from(omniEvents)
-        .where(eq(omniEvents.id, eventId))
-        .limit(1);
-
-      if (event) return event.id;
+      found = await runConsumerInTenantContext(ctx.db, envelope, async () => {
+        const [event] = await scopedHandle(ctx.db)
+          .select({ id: omniEvents.id })
+          .from(omniEvents)
+          .where(eq(omniEvents.id, id))
+          .limit(1);
+        return event?.id ?? null;
+      });
     } catch (error) {
-      log.debug('Failed to validate media_content event FK', { eventId, error: String(error) });
+      log.debug('Failed to validate media_content event FK', { eventId: id, error: String(error) });
       return null;
     }
 
+    if (found) return found;
+
     if (Date.now() >= deadline) {
-      log.debug('Skipping media_content event FK; omni_event not found', { eventId });
+      log.debug('Skipping media_content event FK; omni_event not found', { eventId: id });
       return null;
     }
 
@@ -301,7 +330,11 @@ async function resolveSafeMediaContentEventId(
 async function persistProcessingResult(
   ctx: MediaProcessorContext,
   messageId: string,
-  eventId: string | undefined,
+  // The media_content FK, already resolved (carry-forward #2) in its OWN short
+  // worker scope BEFORE this persist scope opened — so the <=250ms omni_events
+  // existence poll never holds this transaction open across its sleeps. `null`
+  // means "no safe FK" (missing/unresolvable event); the row is stored FK-less.
+  safeEventId: string | null | undefined,
   result: Awaited<ReturnType<MediaProcessingService['process']>>,
   contentType?: string,
 ): Promise<void> {
@@ -328,10 +361,9 @@ async function persistProcessingResult(
   // failure rolls back only the audit row. Outside a scope the insert runs
   // exactly as before — byte-identical to pre-G5.
   try {
-    const safeEventId = await resolveSafeMediaContentEventId(ctx, eventId);
     const sdb = scopedHandle(ctx.db);
     const row = {
-      eventId: safeEventId,
+      eventId: safeEventId ?? null,
       mediaId: messageId,
       processingType: result.processingType,
       content: result.content ?? '',
@@ -385,6 +417,10 @@ async function processMessageMedia(
   const { instanceId, eventId } = metadata;
   const { content, externalId } = payload;
   const mimeType = getMimeType(content);
+  // The trusted tenant for any object this work item stores (ADR-0008), read
+  // from the versioned envelope — undefined for a legacy envelope, which keeps
+  // the byte-identical pre-G5 key layout.
+  const trustedTenantId = envelopeTenantId(envelope);
 
   if (!mimeType || !ctx.mediaService.canProcess(mimeType)) {
     log.debug('MIME type not processable or missing', { mimeType, externalId });
@@ -399,6 +435,7 @@ async function processMessageMedia(
     content,
     mimeType,
     metadata.channelType,
+    trustedTenantId,
   );
   if (!media) return;
 
@@ -466,8 +503,13 @@ async function processMessageMedia(
     return;
   }
 
+  // Carry-forward #2: resolve the media_content FK in its OWN short worker
+  // scope(s) FIRST — the <=250ms omni_events poll runs and releases here, so the
+  // persist scope below never holds its transaction open across the poll's sleeps.
+  const safeEventId = await resolveSafeMediaContentEventId(ctx, envelope, eventId);
+
   await runConsumerInTenantContext(ctx.db, envelope, () =>
-    persistProcessingResult(ctx, media.messageId, eventId, result, content.type),
+    persistProcessingResult(ctx, media.messageId, safeEventId, result, content.type),
   );
 
   log.info('Media processing complete', {

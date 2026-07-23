@@ -126,6 +126,38 @@ function getExtensionFromMime(mimeType: string): string {
   return mimeToExt[mimeType] ?? '.bin';
 }
 
+/**
+ * The presigned-URL lifetime ceiling for TENANT-CONTEXT URLs, sourced from
+ * `RELEASE_SLOS.yaml` `revocation.presigned_url_ttl_seconds_max`. A tenant-bound
+ * URL may never outlive this window, so a revoked tenant's already-minted URL
+ * self-expires inside the revocation-propagation ceiling and no post-revocation
+ * refresh can extend it. DUAL-WORLD: legacy/flag-off presigns carry no tenant to
+ * bind, so they are unaffected and keep the backend's own default TTL.
+ */
+export const PRESIGNED_URL_TTL_CEILING_SECONDS = 60;
+
+/** RFC-4122 shape — the only value admissible as a tenant-context key segment. */
+const KEY_SEGMENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Guard a path segment used to build a TENANT-CONTEXT object key or presign
+ * prefix. Every segment of a tenant-prefixed key must be a well-formed UUID,
+ * which serves two invariants at once:
+ *
+ *   * Trusted derivation — the tenant/instance/message come from the verified
+ *     worker scope/envelope (ADR-0008), never a request- or attacker-controllable
+ *     field, so a well-formed UUID is exactly the shape a trusted producer stamps.
+ *   * Traversal safety — a UUID contains no `/`, `\`, `.`, or `..`, so the
+ *     composed key can never escape its `tenants/<tenantId>/instances/<instanceId>/`
+ *     prefix (fail-closed: a non-UUID segment throws rather than write to an
+ *     unpredictable location).
+ */
+function assertTenantKeySegment(value: string, label: string): void {
+  if (typeof value !== 'string' || !KEY_SEGMENT_UUID.test(value)) {
+    throw new Error(`media-storage: refusing a non-UUID ${label} for a tenant-context object key`);
+  }
+}
+
 export class MediaStorageService {
   private basePath: string;
   private backend: MediaStorageBackend;
@@ -160,29 +192,64 @@ export class MediaStorageService {
 
   /**
    * Build the stable relative storage key for media.
-   * Format: {instanceId}/{YYYY-MM}/{messageId}.{ext}
+   *
+   * Legacy layout: `{instanceId}/{YYYY-MM}/{messageId}.{ext}`.
+   * Tenant-context layout (when `trustedTenantId` is supplied):
+   *   `tenants/{tenantId}/instances/{instanceId}/{YYYY-MM}/{messageId}.{ext}`.
    *
    * This key is both the local relative path and the S3 object key — it is what
    * gets recorded on the message row and never an expiring URL.
+   *
+   * `trustedTenantId` is derived by the CALLER from the verified worker
+   * scope/envelope (ADR-0008), never from a payload or request field. When
+   * present, the object is partitioned under a per-tenant prefix and every
+   * segment is UUID-validated, so the key is traversal-safe by construction.
+   * DUAL-WORLD: with no trusted tenant the key is byte-identical to pre-G5, and
+   * reads of already-stored legacy keys are unaffected — the stored reference is
+   * used verbatim, so migration of existing objects to the tenant prefix is a
+   * SEPARATE later backfill, not this path.
    */
-  buildKey(instanceId: string, messageId: string, mimeType?: string, timestamp?: Date): string {
+  buildKey(
+    instanceId: string,
+    messageId: string,
+    mimeType?: string,
+    timestamp?: Date,
+    trustedTenantId?: string,
+  ): string {
     const date = timestamp ?? new Date();
     const yearMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
     const ext = mimeType ? getExtensionFromMime(mimeType) : '.bin';
+
+    if (trustedTenantId !== undefined) {
+      assertTenantKeySegment(trustedTenantId, 'tenantId');
+      assertTenantKeySegment(instanceId, 'instanceId');
+      assertTenantKeySegment(messageId, 'messageId');
+      return join('tenants', trustedTenantId, 'instances', instanceId, yearMonth, `${messageId}${ext}`);
+    }
 
     return join(instanceId, yearMonth, `${messageId}${ext}`);
   }
 
   /**
    * Build the absolute local storage path for media (local backend only).
-   * Format: {basePath}/{instanceId}/{YYYY-MM}/{messageId}.{ext}
+   * Mirrors {@link buildKey}: `{basePath}/{key}` for whichever layout applies.
    */
-  buildPath(instanceId: string, messageId: string, mimeType?: string, timestamp?: Date): string {
-    return join(this.basePath, this.buildKey(instanceId, messageId, mimeType, timestamp));
+  buildPath(
+    instanceId: string,
+    messageId: string,
+    mimeType?: string,
+    timestamp?: Date,
+    trustedTenantId?: string,
+  ): string {
+    return join(this.basePath, this.buildKey(instanceId, messageId, mimeType, timestamp, trustedTenantId));
   }
 
   /**
-   * Store media from base64 data
+   * Store media from base64 data.
+   *
+   * `trustedTenantId` (derived by the caller from the verified worker
+   * scope/envelope) tenant-prefixes the object key; omit it for legacy/flag-off
+   * writes, which stay byte-identical.
    */
   async storeFromBase64(
     instanceId: string,
@@ -190,9 +257,10 @@ export class MediaStorageService {
     base64Data: string,
     mimeType?: string,
     timestamp?: Date,
+    trustedTenantId?: string,
   ): Promise<StoredMediaResult> {
     const buffer = Buffer.from(base64Data, 'base64');
-    const key = this.buildKey(instanceId, messageId, mimeType, timestamp);
+    const key = this.buildKey(instanceId, messageId, mimeType, timestamp, trustedTenantId);
     const result = await this.backend.store({ key, buffer, mimeType });
 
     log.debug('Stored media from base64', { messageId, reference: result.reference, size: result.size });
@@ -205,7 +273,11 @@ export class MediaStorageService {
   }
 
   /**
-   * Store media from buffer
+   * Store media from buffer.
+   *
+   * `trustedTenantId` (derived by the caller from the verified worker
+   * scope/envelope) tenant-prefixes the object key; omit it for legacy/flag-off
+   * writes, which stay byte-identical.
    */
   async storeFromBuffer(
     instanceId: string,
@@ -213,8 +285,9 @@ export class MediaStorageService {
     buffer: Buffer,
     mimeType?: string,
     timestamp?: Date,
+    trustedTenantId?: string,
   ): Promise<StoredMediaResult> {
-    const key = this.buildKey(instanceId, messageId, mimeType, timestamp);
+    const key = this.buildKey(instanceId, messageId, mimeType, timestamp, trustedTenantId);
     const result = await this.backend.store({ key, buffer, mimeType });
 
     log.debug('Stored media from buffer', { messageId, reference: result.reference, size: result.size });
@@ -236,6 +309,7 @@ export class MediaStorageService {
     mimeType?: string,
     timestamp?: Date,
     fetchOptions?: MediaFetchOptions,
+    trustedTenantId?: string,
   ): Promise<StoredMediaResult> {
     // Fetch the media (fetchOptions allows callers to supply auth headers, e.g.
     // Slack bot token). The fetch is SSRF-guarded: private/metadata targets are
@@ -255,7 +329,7 @@ export class MediaStorageService {
 
     const contentType = mimeType ?? responseContentType;
 
-    return this.storeFromBuffer(instanceId, messageId, buffer, contentType, timestamp);
+    return this.storeFromBuffer(instanceId, messageId, buffer, contentType, timestamp, trustedTenantId);
   }
 
   /**
@@ -391,9 +465,38 @@ export class MediaStorageService {
   /**
    * Presign a time-limited GET URL for a stored reference (remote mode only).
    * Throws in local mode. Consumed by remote-mode URL emission (Group 2).
+   *
+   * DUAL-WORLD legacy path: a presign with NO trusted tenant is byte-identical to
+   * pre-G5 — the backend applies its own default TTL and there is no tenant
+   * binding (a flag-off deployment has no tenant to bind).
+   *
+   * Tenant-context path (`trustedTenantId` supplied, derived from the verified
+   * worker scope/envelope): the URL is bound to tenant + object + expiry per
+   * ADR-0008:
+   *   * tenant + object — a tenant may presign ONLY objects under its own
+   *     `tenants/<tenantId>/` prefix; a foreign- or legacy-keyed reference is
+   *     refused (the authorization decision, made against the trusted tenant, not
+   *     a caller claim);
+   *   * expiry — the lifetime is clamped to {@link PRESIGNED_URL_TTL_CEILING_SECONDS}
+   *     (RELEASE_SLOS ≤ 60s), so a tenant-bound URL can never outlive the
+   *     revocation-propagation window and no post-revocation refresh can extend it.
+   *
+   * (The full synthetic-epoch revocation-ceiling proof — issue/refresh refused
+   * against a bumped epoch — is G5 deliverable (c); this method enforces the
+   * bound-lifetime half of that contract.)
    */
-  async presignedUrl(reference: string, ttlSeconds?: number): Promise<string> {
-    return this.backend.presignedUrl(reference, ttlSeconds);
+  async presignedUrl(reference: string, ttlSeconds?: number, trustedTenantId?: string): Promise<string> {
+    if (trustedTenantId === undefined) {
+      return this.backend.presignedUrl(reference, ttlSeconds);
+    }
+
+    assertTenantKeySegment(trustedTenantId, 'tenantId');
+    const tenantPrefix = `${join('tenants', trustedTenantId)}/`;
+    if (!reference.startsWith(tenantPrefix)) {
+      throw new Error('media-storage: refusing to presign an object outside the requesting tenant prefix');
+    }
+    const effectiveTtl = Math.min(ttlSeconds ?? PRESIGNED_URL_TTL_CEILING_SECONDS, PRESIGNED_URL_TTL_CEILING_SECONDS);
+    return this.backend.presignedUrl(reference, effectiveTtl);
   }
 
   /**
