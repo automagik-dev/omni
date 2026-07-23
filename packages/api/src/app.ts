@@ -363,7 +363,11 @@ export function createApp(
     : packagesUiPath && existsSync(packagesUiPath)
       ? packagesUiPath
       : cwdUiPath; // fallback to cwd path even if not exists
-  const serveUI = existsSync(uiDistPath);
+  // OMNI_FORCE_UI_ROUTES makes registration independent of the filesystem so the
+  // route-ownership gate enumerates the same surface whether or not the UI bundle
+  // has been built. Enumeration-only: it is set (and restored) inside
+  // enumerateRegisteredRoutes, never in a serving configuration.
+  const serveUI = process.env.OMNI_FORCE_UI_ROUTES === 'true' || existsSync(uiDistPath);
 
   if (serveUI) {
     httpLog.info('Serving UI from apps/ui/dist');

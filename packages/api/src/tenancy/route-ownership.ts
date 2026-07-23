@@ -73,12 +73,19 @@ export interface AcknowledgedUndeclaredRoute {
   readonly openQuestion: string;
 }
 
-/** Flag combinations that change the registered route set. */
+/**
+ * Flag combinations that change the registered route set.
+ *
+ * OMNI_FORCE_UI_ROUTES is pinned on in every combination: the UI static routes
+ * normally register only when apps/ui/dist exists on disk, and the enumerated
+ * surface must be the union -- independent of whether the UI bundle happens to
+ * be built in this checkout (CI's typecheck builds it; a bare checkout has not).
+ */
 const FLAG_COMBINATIONS: readonly Record<string, string>[] = [
-  { A2A_ENABLED: 'true', OMNI_MULTITENANCY_ENABLED: 'true' },
-  { A2A_ENABLED: 'true', OMNI_MULTITENANCY_ENABLED: '' },
-  { A2A_ENABLED: '', OMNI_MULTITENANCY_ENABLED: 'true' },
-  { A2A_ENABLED: '', OMNI_MULTITENANCY_ENABLED: '' },
+  { A2A_ENABLED: 'true', OMNI_MULTITENANCY_ENABLED: 'true', OMNI_FORCE_UI_ROUTES: 'true' },
+  { A2A_ENABLED: 'true', OMNI_MULTITENANCY_ENABLED: '', OMNI_FORCE_UI_ROUTES: 'true' },
+  { A2A_ENABLED: '', OMNI_MULTITENANCY_ENABLED: 'true', OMNI_FORCE_UI_ROUTES: 'true' },
+  { A2A_ENABLED: '', OMNI_MULTITENANCY_ENABLED: '', OMNI_FORCE_UI_ROUTES: 'true' },
 ];
 
 /**
@@ -95,6 +102,7 @@ export function enumerateRegisteredRoutes(
   const restore = {
     A2A_ENABLED: process.env.A2A_ENABLED,
     OMNI_MULTITENANCY_ENABLED: process.env.OMNI_MULTITENANCY_ENABLED,
+    OMNI_FORCE_UI_ROUTES: process.env.OMNI_FORCE_UI_ROUTES,
   };
   try {
     for (const combo of FLAG_COMBINATIONS) {
@@ -171,6 +179,32 @@ export function evaluateRouteOwnership(
  * something a feature flag may protect.
  */
 const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
+  {
+    route: 'GET /favicon.svg',
+    class: 'public-by-contract',
+    justification:
+      'Static browser icon from the built UI bundle (registered only when apps/ui/dist exists, or under the ' +
+      'enumeration-only OMNI_FORCE_UI_ROUTES override). Serves a fixed asset file byte-for-byte. Exposes NO ' +
+      'tenant data, inventory, identifiers, or connection state — the response is identical for every caller.',
+  },
+  {
+    route: 'GET /favicon.ico',
+    class: 'public-by-contract',
+    justification:
+      'Static browser icon from the built UI bundle (registered only when apps/ui/dist exists, or under the ' +
+      'enumeration-only OMNI_FORCE_UI_ROUTES override). Serves a fixed asset file byte-for-byte. Exposes NO ' +
+      'tenant data, inventory, identifiers, or connection state — the response is identical for every caller.',
+  },
+  {
+    route: 'GET /*',
+    class: 'public-by-contract',
+    justification:
+      'SPA fallback for the built UI: serves the static index.html for any non-/api path so client-side ' +
+      'routing works, and returns a plain 404 JSON for unmatched /api paths. Registered only when apps/ui/dist ' +
+      'exists (or under the enumeration-only OMNI_FORCE_UI_ROUTES override). The HTML is the same fixed bundle ' +
+      'for every caller; it embeds NO tenant data, counts, identifiers, connection state, or existence oracle — ' +
+      'all data the UI shows is fetched later through the authenticated /api surface.',
+  },
   {
     route: 'GET /health',
     class: 'public-by-contract',
