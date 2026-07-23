@@ -86,6 +86,7 @@ export const TenantInstanceRepository = {
   },
 };
 
+/** Chat reads under a tenant transaction; consumer-side callers arrive with G5. @public */
 export const TenantChatRepository = {
   async list(tx: TenantTx): Promise<Chat[]> {
     return tx.select().from(chats);

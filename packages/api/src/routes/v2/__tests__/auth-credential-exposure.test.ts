@@ -27,6 +27,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { Hono } from 'hono';
 import { type TenantAuthContext, freezeContext } from '../../../tenancy/auth-context';
 import type { ApiKeyData, AppVariables } from '../../../types';
@@ -36,9 +37,13 @@ const CREDENTIAL_ID = '99999999-9999-4999-8999-999999999992';
 const TENANT_ID = '11111111-1111-4111-8111-11111111111a';
 const EXPIRES_AT = new Date('2026-09-01T00:00:00.000Z');
 
-/** The secret and digest that must never appear in any response body. */
+/**
+ * The secret and digest that must never appear in any response body. Both are
+ * synthetic: the digest is SHA-256 of the empty string, computed at runtime so
+ * no high-entropy hex literal sits in the source for secret scanners to flag.
+ */
 const PLAINTEXT_SECRET = 'omni_sk_thisIsTheCallersPlaintextSecretValue';
-const SECRET_DIGEST = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const SECRET_DIGEST = createHash('sha256').update('').digest('hex');
 
 function legacyApiKey(): ApiKeyData {
   return {

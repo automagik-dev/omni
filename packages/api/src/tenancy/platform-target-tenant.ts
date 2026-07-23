@@ -28,6 +28,7 @@ import { tenantAuditLogs } from '@omni/db';
 import { type PlatformAuthContext, bindPlatformOperation } from './auth-context';
 import { type TenantTx, withTenantTransaction } from './tenant-transaction';
 
+/** Exported so callers can instanceof-match platform target-tenant denials. @public */
 export class PlatformTargetTenantError extends Error {
   readonly code = 'platform_target_denied';
   constructor(message: string) {

@@ -32,6 +32,7 @@ export type DbEnforcementMode = 'legacy' | 'enforced';
 export const ENFORCEMENT_ENV_VAR = 'OMNI_DB_ENFORCEMENT';
 export const RUNTIME_URL_ENV_VAR = 'OMNI_DB_RUNTIME_URL';
 export const DDL_URL_ENV_VAR = 'OMNI_DB_DDL_URL';
+/** Consumed by the G5 auth-plane connection wiring. @public */
 export const AUTH_PLANE_URL_ENV_VAR = 'OMNI_DB_AUTH_PLANE_URL';
 
 /**
