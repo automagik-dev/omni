@@ -14,7 +14,12 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { GupshupSimplifiedWebhookSchema, handleGupshupWebhook, parseSimplifiedWebhook, resetCrossIdDedupeState } from '../handlers/webhooks';
+import {
+  GupshupSimplifiedWebhookSchema,
+  handleGupshupWebhook,
+  parseSimplifiedWebhook,
+  resetCrossIdDedupeState,
+} from '../handlers/webhooks';
 import { GUPSHUP_WEBHOOK_METRIC } from '../observability';
 import type { GupshupPlugin } from '../plugin';
 
@@ -831,7 +836,6 @@ describe('handleGupshupWebhook — simplified payload dispatches like native', (
   });
 });
 
-
 // ─────────────────────────────────────────────────────────────
 // Cross-id duplicate suppression
 // ─────────────────────────────────────────────────────────────
@@ -879,8 +883,20 @@ describe('Gupshup cross-id duplicate suppression', () => {
     const { plugin, received } = makeHandlerHarness();
     const dedupeCache = createInboundDedupeCache();
 
-    await handleGupshupWebhook(makeWebhookRequest(textPayload('gs-entry-1776273477002', 'ok')), plugin, 'inst-gs-xid', undefined, dedupeCache);
-    await handleGupshupWebhook(makeWebhookRequest(textPayload('wamid.SHORT_002', 'ok')), plugin, 'inst-gs-xid', undefined, dedupeCache);
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('gs-entry-1776273477002', 'ok')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('wamid.SHORT_002', 'ok')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
 
     expect(received).toHaveLength(2);
   });
@@ -889,8 +905,20 @@ describe('Gupshup cross-id duplicate suppression', () => {
     const { plugin, received } = makeHandlerHarness();
     const dedupeCache = createInboundDedupeCache();
 
-    await handleGupshupWebhook(makeWebhookRequest(textPayload('gs-entry-1776273477003', 'first message here')), plugin, 'inst-gs-xid', undefined, dedupeCache);
-    await handleGupshupWebhook(makeWebhookRequest(textPayload('wamid.OTHER_003', 'a different message')), plugin, 'inst-gs-xid', undefined, dedupeCache);
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('gs-entry-1776273477003', 'first message here')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('wamid.OTHER_003', 'a different message')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
 
     expect(received).toHaveLength(2);
   });
@@ -917,7 +945,12 @@ describe('Gupshup cross-id duplicate suppression', () => {
       dedupeCache,
     );
     await handleGupshupWebhook(
-      makeWebhookRequest(textPayload('gs-entry-1776273930111', 'https://filemanager.gupshup.io/wa/media/972665975453585?download=false&fileName=Doc.pdf')),
+      makeWebhookRequest(
+        textPayload(
+          'gs-entry-1776273930111',
+          'https://filemanager.gupshup.io/wa/media/972665975453585?download=false&fileName=Doc.pdf',
+        ),
+      ),
       plugin,
       'inst-gs-xid',
       undefined,
