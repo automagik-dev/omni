@@ -149,6 +149,22 @@ describe('db-access guard', () => {
       // `runConsumerInTenantContext` + `scopedHandle`. Consumer-only callers, and
       // both tables derive tenant from the `instances` root.
       'packages/api/src/plugins/sync-worker.ts',
+      // G5 leg B pt3: the connection/LID/contact-names/unread listeners scope
+      // each discrete (per-item, for the batch loops) DB block through
+      // `runConsumerInTenantContext` + `scopedHandle`. Consumer-only callers;
+      // the one cross-tenant access (the connection gauge) was split into
+      // `connection-gauge.ts`, which stays pending under its own entry.
+      'packages/api/src/plugins/event-listeners.ts',
+      // G5 leg C2: the dispatcher's per-thread markers, handoff audit insert,
+      // and self-send enumeration (tenant-keyed cache) run through
+      // `runDispatchDb` → worker scope + `scopedHandle`, keyed by the
+      // envelope-derived DispatchMetadata tenant. Its `agents` site alone
+      // stays pending (G6 persons backfill + session-cleaner caller).
+      'packages/api/src/plugins/agent-dispatcher.ts',
+      // G5 leg C2: `resolve()` scopes its `agent_routes` read from the
+      // threaded envelope tenant and tenant-keys its LRU cache. Its only
+      // callers are the dispatcher consumer paths above.
+      'packages/api/src/services/route-resolver.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

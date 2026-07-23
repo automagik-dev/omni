@@ -434,8 +434,31 @@ export const PENDING_G4_CEILING = 6;
  * -> `persons`, and `persons` is G2-`unowned`, so the fail-closed derivation trigger
  * leaves their `tenant_id` NULL until the G6 `persons` backfill — they stay pending,
  * blocked on G6, see the handoff.)
+ *
+ * LOWERED TO 39 BY G5 LEG B pt3. The three `event-listeners.ts` sites
+ * (`instances` connect/disconnect state, `chat_id_mappings` LID batch, `chats`
+ * contact-names/unread) converted: each handler runs its DISCRETE DB block
+ * through `runConsumerInTenantContext` + `scopedHandle` (per-item scopes for
+ * the batch loops, mirroring their previous per-statement transactions). The
+ * one access that could not convert — the CROSS-tenant connection gauge —
+ * moved to `connection-gauge.ts` and re-registered pending (+1), so the net is
+ * 41 - 3 + 1 = 39 with the un-convertible read still visible as debt.
+ *
+ * LOWERED TO 36 BY G5 LEG C2. Three of the four `agent-dispatcher.ts` sites
+ * (`agent_sessions` per-thread markers, `handoff_logs` audit insert,
+ * `instances` self-send enumeration + tenant-keyed cache) converted: each
+ * discrete DB block runs through `runDispatchDb` → `runInWorkerTenantScope` +
+ * `scopedHandle`, keyed by the envelope-derived `DispatchMetadata.
+ * trustedTenantId` stamped at the subscription boundary — never a payload
+ * claim. The fourth (`agents`) is converted IN CODE but stays pending: its
+ * rows are NULL-tenant until the G6 `persons` backfill and session-cleaner
+ * still calls it tenant-less (see its entry).
+ *
+ * LOWERED TO 35, same leg: the `route-resolver.ts` `agent_routes` site
+ * converted — `resolve()` scopes its read from the threaded envelope tenant
+ * and tenant-keys its LRU cache. Consumer-only (dispatcher) callers.
  */
-export const PENDING_G5_CEILING = 41;
+export const PENDING_G5_CEILING = 35;
 
 /**
  * Ceiling on `pending-G4-conversion` + `pending-G5-conversion` combined.
@@ -457,8 +480,19 @@ export const PENDING_G5_CEILING = 41;
  *
  * 47 after G5 leg B pt2 (6 + 41): the two `sync-worker.ts` consumer sites were
  * CONVERTED, not relabelled.
+ *
+ * 45 after G5 leg B pt3 (6 + 39): the three `event-listeners.ts` consumer sites
+ * were CONVERTED; the cross-tenant connection gauge those handlers also called
+ * was split into `connection-gauge.ts` and re-registered pending (+1), so the
+ * net -2 is real conversion, not relabelling.
+ *
+ * 42 after G5 leg C2 (6 + 36): three `agent-dispatcher.ts` consumer sites were
+ * CONVERTED, not relabelled (`agents` stays pending on the G6 persons
+ * backfill).
+ *
+ * 41 after the same leg's `route-resolver.ts` conversion (6 + 35).
  */
-export const TOTAL_PENDING_CEILING = 47;
+export const TOTAL_PENDING_CEILING = 41;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -590,70 +624,91 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'propagation ADR-0008 assigns to G5.',
   },
   {
+    // G5-CONVERTED (leg C2). The per-thread init marker (check/mark pair) runs
+    // through `scopedHandle` inside a short worker scope keyed by the
+    // envelope-derived `DispatchMetadata.trustedTenantId` (`runDispatchDb`).
+    // Consumer-only callers; a legacy envelope runs on the ambient pool
+    // byte-identically.
     file: 'packages/api/src/plugins/agent-dispatcher.ts',
     table: 'agent_sessions',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/plugins/agent-dispatcher.ts',
     table: 'agents',
     class: 'pending-G5-conversion',
     justification:
-      'No HTTP caller exists. Both accesses — `dispatchViaTurnBasedProvider` (agent-dispatcher.ts:2453) and ' +
-      '`applyAgentFkOverrides` (:4190) — are reached only through the eventBus/NATS consumer registered by ' +
-      '`setupAgentDispatcher` (:5253), and `applyAgentFkOverrides` additionally from the `session-cleaner` durable ' +
-      'consumer (session-cleaner.ts:135). A consumer callback carries no credential to derive a tenant from, so ' +
-      'this needs the async message-context propagation ADR-0008 assigns to G5. Its sibling site in this same file ' +
-      '(`agent_sessions`) was already classified this way for the same callers.',
+      'CONVERTED IN CODE but honestly still pending, twice over. Both accesses — the turn-based agent lookup and ' +
+      '`applyAgentFkOverrides` — now run through `scopedHandle` inside a short worker scope from the envelope-derived ' +
+      'tenant (`runDispatchDb`), and its NATS-consumer callers all thread that tenant. What keeps the class: (a) the ' +
+      '`session-cleaner` durable consumer (session-cleaner.ts:135) still calls `applyAgentFkOverrides` with no ' +
+      'tenant — its conversion is blocked on the G6 `persons` backfill; and (b) `agents` itself derives its tenant ' +
+      'via owner_id -> persons (G2-unowned), so the derivation trigger leaves every row NULL-tenant until that same ' +
+      'backfill — a scoped read finds nothing yet. Flips to tenant-boundary when G6 lands and session-cleaner ' +
+      'converts; the async mechanism is the ADR-0008 consumer context above.',
   },
   {
+    // G5-CONVERTED (leg C2). The error-handoff audit insert
+    // (`persistErrorHandoffSideEffects`) runs through `scopedHandle` inside a
+    // short worker scope keyed by the envelope-derived tenant; the derivation
+    // trigger stamps the tenant from the instance, so a scope aimed at a
+    // foreign chat is refused by the WITH CHECK. Consumer-only callers.
     file: 'packages/api/src/plugins/agent-dispatcher.ts',
     table: 'handoff_logs',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
+    // G5-CONVERTED (leg C2). The self-send-guard enumeration
+    // (`listActiveOwnerIdentifiers`) runs scoped under the envelope tenant with
+    // a TENANT-KEYED cache (a global cache would serve one tenant's owner
+    // identifiers to another inside the TTL); the legacy path keeps the global
+    // cache and ambient read byte-identically. Consumer-only caller
+    // (`shouldProcessMessage` in the message.received consumer).
     file: 'packages/api/src/plugins/agent-dispatcher.ts',
     table: 'instances',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
+    // G5-CONVERTED (leg B pt3). The `custom.lid-mapping.batch` consumer runs
+    // each mapping insert through `scopedHandle` inside its own per-item
+    // worker scope (`runConsumerInTenantContext`), mirroring the per-statement
+    // implicit transactions the loop had before. Consumer-only site, so every
+    // caller now reaches a tenant transaction; legacy envelopes run on the
+    // ambient pool byte-identically.
     file: 'packages/api/src/plugins/event-listeners.ts',
     table: 'chat_id_mappings',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
+    // G5-CONVERTED (leg B pt3) — see the sibling `chat_id_mappings` entry.
+    // The contact-names rename (`updateChatName`) and the unread-count sync
+    // both run through `scopedHandle` inside the envelope's worker scope.
     file: 'packages/api/src/plugins/event-listeners.ts',
     table: 'chats',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
+    // G5-CONVERTED (leg B pt3) — see the sibling `chat_id_mappings` entry.
+    // The connect/disconnect state updates run through `scopedHandle` inside
+    // the envelope's worker scope. The one access that could NOT convert — the
+    // cross-tenant connection gauge — moved to `connection-gauge.ts` with its
+    // own pending registration below, so it cannot hide behind this site.
     file: 'packages/api/src/plugins/event-listeners.ts',
+    table: 'instances',
+    class: 'tenant-boundary',
+  },
+  {
+    file: 'packages/api/src/plugins/connection-gauge.ts',
     table: 'instances',
     class: 'pending-G5-conversion',
     justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+      'Called fire-and-forget from the connect/disconnect eventBus consumer handlers in event-listeners.ts, from ' +
+      'which it was extracted during the ADR-0008 G5 conversion of that file. It is a platform-wide observability ' +
+      'aggregate (active instances per channel, NO tenant labels), so the worker tenant scope those consumers now ' +
+      'establish can by definition not compute it, and under RLS enforcement the ambient runtime-role read returns ' +
+      'nothing — the gauge needs an observability-plane read credential or a per-tenant emission design. OPEN ' +
+      'QUESTION for the orchestrator: control-plane reclassification vs. G8A deployment-scope credential; until ' +
+      'decided this stays pending rather than silently reclassified.',
   },
   {
     // G5-CONVERTED. Both handlers now wrap their DB work in
@@ -1127,13 +1182,15 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
   },
   {
+    // G5-CONVERTED (leg C2). `resolve()` takes the envelope-derived
+    // `trustedTenantId` its dispatcher-consumer callers thread through
+    // `DispatchMetadata`; the read runs through `scopedHandle` inside a short
+    // worker scope AND the LRU cache key includes the tenant, so a foreign
+    // scope's negative entry cannot shadow a tenant's real route. Consumer-only
+    // callers; legacy lookups keep the pre-G5 key and ambient read.
     file: 'packages/api/src/services/route-resolver.ts',
     table: 'agent_routes',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/routes.ts',

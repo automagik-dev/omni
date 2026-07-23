@@ -234,6 +234,43 @@ postgresDescribe('two-tenant media-processor containment (real PostgreSQL)', () 
     expect((await mediaForTenant(TENANT_B, MESSAGE_A)).length).toBe(0);
   });
 
+  test('CF#2: the media_content FK resolves inside a worker tenant scope — A resolves, B sees nothing', async () => {
+    // The FK existence check reads `omni_events` through `scopedHandle` inside
+    // `runConsumerInTenantContext`. Under A's envelope the RLS-visible row
+    // resolves; under B's envelope the SAME id is invisible, so the poll
+    // expires and the FK is refused (null) instead of resolved cross-tenant.
+    // This is also the load-bearing probe for the scope itself: an ambient
+    // (unscoped) read under the runtime role sees NO rows at all, so reverting
+    // the conversion turns the A case null and fails this test.
+    const envelopeA = { metadata: { correlationId: 'cf2-a', envelopeVersion: 1, tenantId: TENANT_A } };
+    const envelopeB = { metadata: { correlationId: 'cf2-b', envelopeVersion: 1, tenantId: TENANT_B } };
+
+    expect(await mediaProcessorTest.resolveSafeMediaContentEventId(ctx, envelopeA, EVENT_A)).toBe(EVENT_A);
+    expect(await mediaProcessorTest.resolveSafeMediaContentEventId(ctx, envelopeB, EVENT_A)).toBeNull();
+  }, 10_000);
+
+  test('CF#2 choreography: the FK poll never holds a transaction across its sleeps', async () => {
+    // `runtimeDb` has a POOL OF ONE connection. If the <=250ms poll wrapped its
+    // sleeps inside one open transaction, that connection would stay reserved
+    // for the whole window and a concurrent worker write could not even BEGIN
+    // until the poll finished — so the poll would win this race. With each
+    // existence check in its OWN short scope (the CF#2 contract), the
+    // connection frees during the first sleep and the write finishes in
+    // milliseconds, far inside the poll's 250ms floor.
+    const envelopeB = { metadata: { correlationId: 'cf2-b', envelopeVersion: 1, tenantId: TENANT_B } };
+    // B polling for A's (invisible) event runs the full window.
+    const poll = mediaProcessorTest.resolveSafeMediaContentEventId(ctx, envelopeB, EVENT_A).then(() => 'poll' as const);
+    const write = runInWorkerTenantScope(runtimeDb, TENANT_A, async () => {
+      await scopedHandle(runtimeDb)
+        .update(messages)
+        .set({ transcription: 'hello from A' })
+        .where(eq(messages.id, MESSAGE_A));
+    }).then(() => 'write' as const);
+
+    expect(await Promise.race([poll, write])).toBe('write');
+    expect(await poll).toBe('poll'); // and the poll still terminates cleanly
+  }, 10_000);
+
   test('a NON-tenant failure of the audit insert does not roll back the committed message write (savepoint)', async () => {
     // The protective-path proof the two containment tests above do NOT give.
     //

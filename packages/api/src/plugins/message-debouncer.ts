@@ -26,6 +26,15 @@ export interface DispatchMetadata {
   personId?: string;
   platformIdentityId?: string;
   traceId: string;
+  /**
+   * Trusted tenant for this message, derived by the subscription handler from
+   * the versioned envelope (`classifyEnvelope` over producer-stamped metadata —
+   * wish: omni-full-multitenancy G5, ADR-0008), NEVER from the caller-facing
+   * payload. Undefined for legacy-world envelopes, whose downstream handling
+   * stays byte-identical to pre-G5. Consumed by tenant-bound presigning and,
+   * as conversion proceeds, by the dispatcher's worker tenant scope.
+   */
+  trustedTenantId?: string;
   /** Original NATS event correlationId for journey tracking */
   correlationId?: string;
   /** Whether this message is being journey-tracked (has timings) */

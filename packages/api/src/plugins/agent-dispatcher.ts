@@ -40,6 +40,7 @@ import {
   type BeforeMessageWriteContext,
   ClaudeCodeAgentProvider,
   type EventBus,
+  type EventMetadata,
   type IAgentProvider,
   InMemorySessionActivityStore,
   JOURNEY_STAGES,
@@ -57,6 +58,7 @@ import {
   type StreamDelta,
   WebhookAgentProvider,
   checkSessionReset,
+  classifyEnvelope,
   createLogger,
   createProviderClient,
   executeHooks,
@@ -87,6 +89,8 @@ import type { MediaStorageService } from '../services/media-storage';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import type { ResolvedRoute } from '../services/route-resolver';
 import { publishTurnOpen } from '../services/turn-events';
+import { scopedHandle } from '../tenancy/tenant-scope';
+import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
 import { fetchMediaUrl } from '../utils/safe-media-fetch';
 import { AgentDispatchLimiter, loadAgentDispatchLimiterConfig } from './agent-dispatch-limiter';
 import { getPlugin } from './loader';
@@ -646,6 +650,7 @@ export async function triggerErrorHandoff(
   instance: DispatchInstance,
   chatId: string,
   message: string,
+  trustedTenantId?: string,
 ): Promise<boolean> {
   const plugin = await getPlugin(channel);
   if (plugin?.capabilities?.canHandoff !== true) return false;
@@ -677,27 +682,76 @@ export async function triggerErrorHandoff(
     return false;
   }
 
-  // Step 2 — persist side-effects (pause + disarm + audit) best-effort. The
-  // message already reached the user, so a failure here must NOT flip the result
-  // to false — that would make the caller send a SECOND (plain error) message.
+  await persistErrorHandoffSideEffects(
+    services,
+    db,
+    channel,
+    instance,
+    chatId,
+    message,
+    sendResult?.messageId,
+    trustedTenantId,
+  );
+
+  log.info('agent_dispatch_error_handoff', { instanceId: instance.id, chatId, channel });
+  return true;
+}
+
+/**
+ * Step 2 of the error handoff — persist side-effects (pause + disarm + audit)
+ * best-effort. The message already reached the user, so a failure here must
+ * NOT propagate — that would make the caller send a SECOND (plain error)
+ * message.
+ *
+ * Tenant boundary (G5, ADR-0008): the chat lookup + pause write run in one
+ * short worker scope and the audit insert in another, both keyed by the
+ * envelope-derived `trustedTenantId`. The follow-up disarm sits BETWEEN them
+ * un-wrapped: it publishes events through its own service (its scoping is that
+ * service's conversion), and holding a dispatch transaction across an event
+ * publish is exactly what {@link runDispatchDb} forbids. A legacy message
+ * (`trustedTenantId` undefined) runs every step on the ambient pool
+ * byte-identically.
+ */
+async function persistErrorHandoffSideEffects(
+  services: Services,
+  db: Database,
+  channel: ChannelType,
+  instance: DispatchInstance,
+  chatId: string,
+  message: string,
+  sentMessageId: string | null | undefined,
+  trustedTenantId?: string,
+): Promise<void> {
   try {
-    const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
+    const chat = await runDispatchDb(db, trustedTenantId, async () => {
+      const found = await services.chats.findByExternalIdSmart(instance.id, chatId);
+      if (!found) return null;
+      const settings = (found.settings as Record<string, unknown> | null) ?? {};
+      await services.chats.update(found.id, { settings: { ...settings, agentPaused: true } });
+      return found;
+    });
     if (chat) {
-      const settings = (chat.settings as Record<string, unknown> | null) ?? {};
-      await services.chats.update(chat.id, { settings: { ...settings, agentPaused: true } });
       await services.followUpLifecycle.disarm({ chatId: chat.id, instanceId: instance.id, reason: 'handoff' });
-      await db.insert(handoffLogs).values({
-        instanceId: instance.id,
-        chatUuid: chat.id,
-        chatId,
-        toPhone: chatId,
-        text: message,
-        extraInfo: null,
-        agentId: instance.agentId ?? null,
-        externalMessageId: sendResult?.messageId ?? null,
-        handoffFields: null,
-        sentAt: new Date(),
-        metadata: { instanceChannel: channel, channelHandoffSupported: true, motivoHandoff: 'agent_dispatch_error' },
+      await runDispatchDb(db, trustedTenantId, async () => {
+        await scopedHandle(db)
+          .insert(handoffLogs)
+          .values({
+            instanceId: instance.id,
+            chatUuid: chat.id,
+            chatId,
+            toPhone: chatId,
+            text: message,
+            extraInfo: null,
+            agentId: instance.agentId ?? null,
+            externalMessageId: sentMessageId ?? null,
+            handoffFields: null,
+            sentAt: new Date(),
+            metadata: {
+              instanceChannel: channel,
+              channelHandoffSupported: true,
+              motivoHandoff: 'agent_dispatch_error',
+            },
+          });
       });
     }
   } catch (err) {
@@ -707,9 +761,6 @@ export async function triggerErrorHandoff(
       error: String(err),
     });
   }
-
-  log.info('agent_dispatch_error_handoff', { instanceId: instance.id, chatId, channel });
-  return true;
 }
 
 /**
@@ -730,9 +781,10 @@ async function maybeTriggerErrorHandoff(
   chatId: string,
   customerErrorBlocked: boolean,
   handoffTriggered: boolean,
+  trustedTenantId?: string,
 ): Promise<boolean> {
   if (!customerErrorBlocked || handoffTriggered) return false;
-  return triggerErrorHandoff(services, db, channel, instance, chatId, resolveErrorHandoffMessage());
+  return triggerErrorHandoff(services, db, channel, instance, chatId, resolveErrorHandoffMessage(), trustedTenantId);
 }
 
 async function handleDispatchFailure(
@@ -742,8 +794,17 @@ async function handleDispatchFailure(
   instance: DispatchInstance,
   chatId: string,
   error: unknown,
+  trustedTenantId?: string,
 ): Promise<void> {
-  const handedOff = await triggerErrorHandoff(services, db, channel, instance, chatId, resolveErrorHandoffMessage());
+  const handedOff = await triggerErrorHandoff(
+    services,
+    db,
+    channel,
+    instance,
+    chatId,
+    resolveErrorHandoffMessage(),
+    trustedTenantId,
+  );
   if (handedOff) return;
   // Per-instance override tier is null until the `agentErrorMessage` column
   // lands (see resolveDispatchErrorMessage note) — env + default for now.
@@ -927,6 +988,49 @@ function resolveMediaPath(mediaUrl: string): string | null {
 }
 
 /**
+ * Derive the trusted tenant a dispatch runs under from the inbound envelope
+ * (wish: omni-full-multitenancy G5; ADR-0008).
+ *
+ * Classifies the producer-stamped metadata — never the caller-facing payload:
+ *   * `tenant` → the trusted tenant id, threaded through `DispatchMetadata`
+ *     into tenant-bound presigning (and, as conversion proceeds, the worker
+ *     tenant scope);
+ *   * `legacy` → `undefined`: downstream behavior stays byte-identical to
+ *     pre-G5;
+ *   * `quarantine` → throws. The subscription layer terms quarantined
+ *     envelopes before any handler runs, so this is defence in depth — if one
+ *     slips through, deriving "no tenant" would process it globally, exactly
+ *     the fallback ADR-0008 forbids. The handler's catch logs and drops it.
+ */
+function trustedDispatchTenant(metadata: EventMetadata): string | undefined {
+  const classification = classifyEnvelope(metadata);
+  if (classification.world === 'quarantine') {
+    throw new Error(`agent-dispatcher: refusing to dispatch a quarantined envelope (${classification.reason})`);
+  }
+  return classification.world === 'tenant' ? classification.tenantId : undefined;
+}
+
+/**
+ * Run one DISCRETE dispatch DB block in the message's world (G5, ADR-0008).
+ *
+ * `trustedTenantId` is the envelope-derived tenant carried on
+ * `DispatchMetadata` ({@link trustedDispatchTenant} — quarantine was already
+ * refused at the subscription boundary):
+ *   * tenant world → a fresh SHORT worker tenant scope wraps exactly this
+ *     block; `scopedHandle(db)` inside `fn` returns its transaction;
+ *   * legacy world (`undefined`) → `fn` runs directly on the ambient pool,
+ *     byte-identical to pre-G5.
+ *
+ * The dispatch pipeline interleaves DB work with the LONG agent call, media
+ * waits, and channel sends, so a scope must never wrap more than one discrete
+ * DB block — the G4 leg-2 rule that a worker transaction never outlives its
+ * work item, applied at block granularity.
+ */
+function runDispatchDb<T>(db: Database, trustedTenantId: string | undefined, fn: () => Promise<T>): Promise<T> {
+  return trustedTenantId === undefined ? fn() : runInWorkerTenantScope(db, trustedTenantId, fn);
+}
+
+/**
  * Resolve a stored media reference (`messages.mediaLocalPath`) into the string
  * handed to the agent alongside processed text.
  *
@@ -935,17 +1039,25 @@ function resolveMediaPath(mediaUrl: string): string | null {
  * - `remote` mode: the reference is an S3 key, presigned into a time-limited
  *   GET URL at dispatch time (TTL from config) — never a stored expiring URL.
  *
+ * `trustedTenantId` (envelope-derived via {@link trustedDispatchTenant}) binds
+ * the presign to tenant + object + expiry (ADR-0008): `MediaStorageService`
+ * refuses references outside the tenant's own prefix and clamps the TTL to the
+ * 60s ceiling. A refusal degrades gracefully — the dispatch continues without
+ * a media URL rather than minting an unbound one. Undefined (legacy world)
+ * keeps the presign call byte-identical to pre-G5.
+ *
  * `mediaStorage` is optional so unit tests with a partial `services` mock fall
  * back to local resolution.
  */
 async function resolveDispatchMediaPath(
   mediaStorage: MediaStorageService | undefined,
   reference: string | null | undefined,
+  trustedTenantId?: string,
 ): Promise<string | null> {
   if (!reference) return null;
   if (mediaStorage?.getStorageMode?.() === 'remote') {
     try {
-      return await mediaStorage.presignedUrl(reference);
+      return await mediaStorage.presignedUrl(reference, undefined, trustedTenantId);
     } catch (error) {
       log.warn('Failed to presign processed media URL', { error: String(error) });
       return null;
@@ -980,7 +1092,10 @@ async function remoteMediaFile(
   // Audio (and any non-path type) stays URL-less in remote mode.
   if (!key || !type || !allowedTypes.includes(type)) return null;
   try {
-    return { url: await mediaStorage.presignedUrl(key), mimeType };
+    // Tenant-bound presign (ADR-0008): each message carries its own
+    // envelope-derived trusted tenant; legacy messages carry none and the
+    // presign call stays byte-identical to pre-G5.
+    return { url: await mediaStorage.presignedUrl(key, undefined, m.metadata.trustedTenantId), mimeType };
   } catch (error) {
     log.warn('Failed to presign media URL for dispatch', { error: String(error) });
     return null;
@@ -1124,6 +1239,7 @@ async function recoverProcessedMediaAfterTimeout(
   chatRecordId: string,
   externalId: string,
   column: string,
+  trustedTenantId?: string,
 ): Promise<{ content: string; localPath: string | null } | null> {
   const refreshed = await services.messages.getByExternalId(chatRecordId, externalId);
   if (!refreshed) return null;
@@ -1131,7 +1247,11 @@ async function recoverProcessedMediaAfterTimeout(
   if (recovered === 'pending' || recovered === 'error') return null;
   return {
     content: recovered.content,
-    localPath: await resolveDispatchMediaPath(services.mediaStorage, refreshed.mediaLocalPath as string | null),
+    localPath: await resolveDispatchMediaPath(
+      services.mediaStorage,
+      refreshed.mediaLocalPath as string | null,
+      trustedTenantId,
+    ),
   };
 }
 
@@ -1145,6 +1265,7 @@ async function awaitMediaProcessing(
   chatId: string,
   externalId: string,
   contentType: string,
+  trustedTenantId?: string,
 ): Promise<{ content: string | null; localPath: string | null }> {
   const column = getProcessedColumn(contentType);
   if (!column) return MEDIA_WAIT_NULL;
@@ -1173,7 +1294,11 @@ async function awaitMediaProcessing(
   if (existing !== 'pending') {
     return {
       content: existing.content,
-      localPath: await resolveDispatchMediaPath(services.mediaStorage, msg.mediaLocalPath as string | null),
+      localPath: await resolveDispatchMediaPath(
+        services.mediaStorage,
+        msg.mediaLocalPath as string | null,
+        trustedTenantId,
+      ),
     };
   }
 
@@ -1182,7 +1307,11 @@ async function awaitMediaProcessing(
   if (cached) {
     mediaResultCache.delete(msg.id);
     if (!cached.content || cached.error) return MEDIA_WAIT_NULL;
-    const localPath = await resolveDispatchMediaPath(services.mediaStorage, msg.mediaLocalPath as string | null);
+    const localPath = await resolveDispatchMediaPath(
+      services.mediaStorage,
+      msg.mediaLocalPath as string | null,
+      trustedTenantId,
+    );
     return { content: cached.content, localPath };
   }
 
@@ -1200,7 +1329,7 @@ async function awaitMediaProcessing(
       msgId: msg.id,
       error: String(error),
     });
-    const recovered = await recoverProcessedMediaAfterTimeout(services, chat.id, externalId, column);
+    const recovered = await recoverProcessedMediaAfterTimeout(services, chat.id, externalId, column, trustedTenantId);
     if (recovered) return recovered;
     return MEDIA_WAIT_NULL;
   }
@@ -1209,7 +1338,11 @@ async function awaitMediaProcessing(
 
   // Re-read message for localPath (media storage may have updated it)
   const updated = await services.messages.getByExternalId(chat.id, externalId);
-  const localPath = await resolveDispatchMediaPath(services.mediaStorage, updated?.mediaLocalPath as string | null);
+  const localPath = await resolveDispatchMediaPath(
+    services.mediaStorage,
+    updated?.mediaLocalPath as string | null,
+    trustedTenantId,
+  );
   return { content: result.content, localPath };
 }
 
@@ -1442,7 +1575,14 @@ async function collectProcessedMedia(
 
     let result: { content: string | null; localPath: string | null };
     try {
-      result = await awaitMediaProcessing(services, instance.id, m.payload.chatId, m.payload.externalId, contentType);
+      result = await awaitMediaProcessing(
+        services,
+        instance.id,
+        m.payload.chatId,
+        m.payload.externalId,
+        contentType,
+        m.metadata.trustedTenantId,
+      );
     } catch (error) {
       log.warn('Media await failed', { externalId: m.payload.externalId, error: String(error) });
       result = MEDIA_WAIT_NULL;
@@ -2446,14 +2586,19 @@ async function dispatchViaTurnBasedProvider(
 ): Promise<boolean> {
   const messageId = messages[0]?.payload.externalId ?? '';
 
-  // Look up agent record for scoped key name
+  // Look up agent record for scoped key name. Discrete DB block in the
+  // message's world (G5, ADR-0008): tenant envelopes read through a short
+  // worker scope, legacy ones on the ambient pool byte-identically.
   let agentRecord: { id: string; name: string } | undefined;
   if (instance.agentId) {
-    const [row] = await db
-      .select({ id: agents.id, name: agents.name })
-      .from(agents)
-      .where(eq(agents.id, instance.agentId))
-      .limit(1);
+    const agentFkId = instance.agentId;
+    const [row] = await runDispatchDb(db, messages[0]?.metadata.trustedTenantId, () =>
+      scopedHandle(db)
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(eq(agents.id, agentFkId))
+        .limit(1),
+    );
     agentRecord = row;
   }
   if (!agentRecord) {
@@ -2739,6 +2884,7 @@ async function dispatchViaProvider(
         chatId,
         result?.metadata.customerErrorBlocked === true,
         handoffTriggered,
+        messages[0]?.metadata.trustedTenantId,
       );
 
       if (result && result.parts.length > 0 && !handoffTriggered && !errorHandoffDone && !supersededByNewerInbound) {
@@ -3118,13 +3264,22 @@ async function handleSessionReset(
  * Check whether a per_thread session has been initialized for this instance/thread.
  * Uses the agentSessions table with a dedicated 'thread_init:' key prefix.
  */
-async function checkPerThreadSessionExists(db: Database, instanceId: string, sessionId: string): Promise<boolean> {
+async function checkPerThreadSessionExists(
+  db: Database,
+  instanceId: string,
+  sessionId: string,
+  trustedTenantId?: string,
+): Promise<boolean> {
   const initKey = `thread_init:${sessionId}`;
-  const result = await db
-    .select({ instanceId: agentSessions.instanceId })
-    .from(agentSessions)
-    .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, initKey)))
-    .limit(1);
+  // Discrete DB block in the message's world (G5, ADR-0008): under a tenant
+  // envelope the check can only be satisfied by the tenant's OWN marker row.
+  const result = await runDispatchDb(db, trustedTenantId, () =>
+    scopedHandle(db)
+      .select({ instanceId: agentSessions.instanceId })
+      .from(agentSessions)
+      .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, initKey)))
+      .limit(1),
+  );
   return result.length > 0;
 }
 
@@ -3132,22 +3287,32 @@ async function checkPerThreadSessionExists(db: Database, instanceId: string, ses
  * Mark a per_thread session as initialized in the DB.
  * Called after the first lazy-init dispatch so subsequent triggers skip history fetch.
  */
-async function markPerThreadSessionInitialized(db: Database, instanceId: string, sessionId: string): Promise<void> {
+async function markPerThreadSessionInitialized(
+  db: Database,
+  instanceId: string,
+  sessionId: string,
+  trustedTenantId?: string,
+): Promise<void> {
   const initKey = `thread_init:${sessionId}`;
   const now = new Date();
-  await db
-    .insert(agentSessions)
-    .values({
-      instanceId,
-      sessionKey: initKey,
-      providerSessionData: { initialized: true, initializedAt: now.toISOString() },
-      lastUsedAt: now,
-      expiresAt: null,
-    })
-    .onConflictDoUpdate({
-      target: [agentSessions.instanceId, agentSessions.sessionKey],
-      set: { lastUsedAt: now, updatedAt: now },
-    });
+  // Discrete DB block in the message's world (G5, ADR-0008): the derivation
+  // trigger stamps the tenant from the instance, and a scope aimed at another
+  // tenant's instance is refused by the WITH CHECK rather than trusted.
+  await runDispatchDb(db, trustedTenantId, async () => {
+    await scopedHandle(db)
+      .insert(agentSessions)
+      .values({
+        instanceId,
+        sessionKey: initKey,
+        providerSessionData: { initialized: true, initializedAt: now.toISOString() },
+        lastUsedAt: now,
+        expiresAt: null,
+      })
+      .onConflictDoUpdate({
+        target: [agentSessions.instanceId, agentSessions.sessionKey],
+        set: { lastUsedAt: now, updatedAt: now },
+      });
+  });
   log.info('per_thread session initialized', { instanceId, sessionId });
 }
 
@@ -3362,6 +3527,7 @@ async function handlePerThreadLazyInit(
   threadId: string,
   sessionId: string,
   db: Database,
+  trustedTenantId?: string,
 ): Promise<string[]> {
   log.info('per_thread lazy init', {
     instanceId: instance.id,
@@ -3375,7 +3541,7 @@ async function handlePerThreadLazyInit(
 
   // Persist the init marker so subsequent triggers skip history fetch
   try {
-    await markPerThreadSessionInitialized(db, instance.id, sessionId);
+    await markPerThreadSessionInitialized(db, instance.id, sessionId, trustedTenantId);
   } catch (err) {
     log.warn('Failed to mark per_thread session initialized', {
       error: String(err),
@@ -3405,9 +3571,10 @@ async function resolvePerThreadExtraContext(
   const rawThreadId = (firstMessage.payload.rawPayload as Record<string, unknown>)?.threadId as string | undefined;
   if (strategy !== 'per_thread' || !rawThreadId) return undefined;
   const sessionId = computeSessionId('per_thread', senderId, chatId, rawThreadId);
-  const sessionExists = await checkPerThreadSessionExists(db, instance.id, sessionId);
+  const trustedTenantId = firstMessage.metadata.trustedTenantId;
+  const sessionExists = await checkPerThreadSessionExists(db, instance.id, sessionId, trustedTenantId);
   if (sessionExists) return undefined;
-  return handlePerThreadLazyInit(services, instance, channel, chatId, rawThreadId, sessionId, db);
+  return handlePerThreadLazyInit(services, instance, channel, chatId, rawThreadId, sessionId, db, trustedTenantId);
 }
 
 /**
@@ -3765,7 +3932,7 @@ async function processAgentResponse(
       error: String(error),
       traceId,
     });
-    await handleDispatchFailure(services, db, channel, instance, chatId, error);
+    await handleDispatchFailure(services, db, channel, instance, chatId, error, firstMessage.metadata.trustedTenantId);
   } finally {
     ackHandle.remove();
   }
@@ -4184,19 +4351,27 @@ export async function applyAgentFkOverrides(
   db: Database,
   agentFkId: string,
   effectiveInstance: DispatchInstance,
+  trustedTenantId?: string,
 ): Promise<void> {
-  const [agentRow] = await db
-    .select({
-      id: agents.id,
-      name: agents.name,
-      agentProviderId: agents.agentProviderId,
-      agentType: agents.agentType,
-      metadata: agents.metadata,
-      configPath: agents.configPath,
-    })
-    .from(agents)
-    .where(eq(agents.id, agentFkId))
-    .limit(1);
+  // Discrete DB block in the message's world (G5, ADR-0008): a tenant envelope
+  // reads through a short worker scope — a forged cross-tenant agentId then
+  // resolves nothing and stamps nothing — while a legacy caller (including the
+  // still-pending session-cleaner path, which passes no tenant) runs on the
+  // ambient pool byte-identically.
+  const [agentRow] = await runDispatchDb(db, trustedTenantId, () =>
+    scopedHandle(db)
+      .select({
+        id: agents.id,
+        name: agents.name,
+        agentProviderId: agents.agentProviderId,
+        agentType: agents.agentType,
+        metadata: agents.metadata,
+        configPath: agents.configPath,
+      })
+      .from(agents)
+      .where(eq(agents.id, agentFkId))
+      .limit(1),
+  );
 
   if (!agentRow) return;
 
@@ -4259,10 +4434,11 @@ function mergeRouteOverrides(instance: Instance, route: ResolvedRoute): Dispatch
 async function applyInstanceFkAndReturn(
   db: Database,
   instance: Instance,
+  trustedTenantId?: string,
 ): Promise<{ instance: DispatchInstance; routeId: null }> {
   if (!instance.agentId) return { instance, routeId: null };
   const effectiveInstance: DispatchInstance = { ...instance };
-  await applyAgentFkOverrides(db, instance.agentId, effectiveInstance);
+  await applyAgentFkOverrides(db, instance.agentId, effectiveInstance, trustedTenantId);
   return { instance: effectiveInstance, routeId: null };
 }
 
@@ -4278,15 +4454,16 @@ async function resolveEffectiveInstance(
   instance: Instance,
   chatId: string | undefined,
   personId?: string,
+  trustedTenantId?: string,
 ): Promise<{ instance: DispatchInstance; routeId: string | null }> {
   // If chatId is undefined (chat not found in DB), skip chat-scoped route resolution
   // and return instance defaults. This is the safe path for LID-only chats.
   if (!chatId) {
     log.debug('No internal chatId — using instance default agent', { instanceId: instance.id, personId });
-    return applyInstanceFkAndReturn(db, instance);
+    return applyInstanceFkAndReturn(db, instance, trustedTenantId);
   }
   // Resolve route (chat > user > null)
-  const route = await services.routeResolver.resolve(instance.id, chatId, personId);
+  const route = await services.routeResolver.resolve(instance.id, chatId, personId, trustedTenantId);
 
   if (!route) {
     // No route matched - use instance defaults.
@@ -4301,7 +4478,7 @@ async function resolveEffectiveInstance(
   // Route-level agentId takes priority; fall back to instance-level agentId.
   const effectiveAgentFkId = route.agentId ?? instance.agentId;
   if (effectiveAgentFkId) {
-    await applyAgentFkOverrides(db, effectiveAgentFkId, effectiveInstance);
+    await applyAgentFkOverrides(db, effectiveAgentFkId, effectiveInstance, trustedTenantId);
   }
 
   log.debug('Route resolved and merged', {
@@ -4349,6 +4526,7 @@ async function processReactionTrigger(
     baseInstance,
     internalChatId,
     reactionPersonId,
+    metadata.trustedTenantId,
   );
 
   log.info('Dispatching reaction trigger', {
@@ -4621,10 +4799,11 @@ async function resolveEffectiveReplyFilter(
   instanceId: string,
   chatId: string,
   defaultFilter: Instance['agentReplyFilter'],
+  trustedTenantId?: string,
 ): Promise<Instance['agentReplyFilter']> {
   const chat = await chatsService.findByExternalIdSmart(instanceId, chatId);
   if (!chat?.id) return defaultFilter;
-  const route = await routeResolver.resolve(instanceId, chat.id);
+  const route = await routeResolver.resolve(instanceId, chat.id, undefined, trustedTenantId);
   return (route?.agentReplyFilter as Instance['agentReplyFilter']) ?? defaultFilter;
 }
 
@@ -4732,9 +4911,45 @@ export function isFirstPartyInstanceSender(
 const ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS = 10_000;
 let cachedActiveOwnerIdentifiers: Array<string | null> | null = null;
 let cachedActiveOwnerIdentifiersAt = 0;
+/**
+ * Tenant-keyed variant of the owner-identifier cache (G5, ADR-0008; WISH
+ * "cache keys include tenant identity"). A GLOBAL cache here would serve
+ * tenant A's identifiers to tenant B inside the TTL — a cross-tenant
+ * identifier leak AND wrong self-send gating. Bounded by the number of active
+ * tenants in the process, entries overwritten on expiry.
+ */
+const tenantCachedActiveOwnerIdentifiers = new Map<string, { ids: Array<string | null>; at: number }>();
 
-async function listActiveOwnerIdentifiers(db: Database): Promise<Array<string | null>> {
+/** @internal test hook — clears both worlds' caches. */
+function resetActiveOwnerIdentifiersCache(): void {
+  cachedActiveOwnerIdentifiers = null;
+  cachedActiveOwnerIdentifiersAt = 0;
+  tenantCachedActiveOwnerIdentifiers.clear();
+}
+
+async function listActiveOwnerIdentifiers(db: Database, trustedTenantId?: string): Promise<Array<string | null>> {
   const now = Date.now();
+
+  // Tenant world (G5): the enumeration runs inside a short worker scope, so it
+  // sees — and the self-send guard therefore considers — only the tenant's own
+  // instances. Cross-tenant "self"-sends are two independent parties, not a
+  // loop, so per-tenant is the CORRECT guard semantics under multitenancy.
+  if (trustedTenantId !== undefined) {
+    const cached = tenantCachedActiveOwnerIdentifiers.get(trustedTenantId);
+    if (cached && now - cached.at < ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS) return cached.ids;
+    const rows = await runInWorkerTenantScope(db, trustedTenantId, () =>
+      scopedHandle(db)
+        .select({ ownerIdentifier: instances.ownerIdentifier })
+        .from(instances)
+        .where(eq(instances.isActive, true)),
+    );
+    if (!Array.isArray(rows)) return [];
+    const ids = rows.map((row) => row.ownerIdentifier);
+    tenantCachedActiveOwnerIdentifiers.set(trustedTenantId, { ids, at: now });
+    return ids;
+  }
+
+  // Legacy world: byte-identical pre-G5 path, global cache and ambient read.
   if (cachedActiveOwnerIdentifiers && now - cachedActiveOwnerIdentifiersAt < ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS) {
     return cachedActiveOwnerIdentifiers;
   }
@@ -4764,6 +4979,7 @@ async function shouldProcessMessage(
   db: Database,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
+  trustedTenantId?: string,
 ): Promise<Instance | null> {
   if (!metadata.instanceId) {
     log.debug('No instanceId in metadata', { from: payload.from, chatId: payload.chatId });
@@ -4801,7 +5017,7 @@ async function shouldProcessMessage(
   // "assistant" instance can reply to messages from their own personal number
   // (another instance's owner). The separate "message from self" self-skip
   // above is unaffected — an instance still never replies to its own outbound.
-  const activeOwnerIdentifiers = await listActiveOwnerIdentifiers(db);
+  const activeOwnerIdentifiers = await listActiveOwnerIdentifiers(db, trustedTenantId);
   if (
     !instance.allowFirstParty &&
     isFirstPartyInstanceSender(payload, instance.ownerIdentifier, activeOwnerIdentifiers)
@@ -4874,6 +5090,7 @@ async function shouldProcessMessage(
     instance.id,
     payload.chatId,
     instance.agentReplyFilter,
+    trustedTenantId,
   );
 
   // #371: null filter now means "allow all" instead of silently dropping every
@@ -5222,7 +5439,14 @@ export async function setupAgentDispatcher(
       }
       const externalChatId = firstMsg.payload.chatId;
       const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
-      const resolved = await resolveEffectiveInstance(services, db, baseInstance, chat?.id, firstMsg.metadata.personId);
+      const resolved = await resolveEffectiveInstance(
+        services,
+        db,
+        baseInstance,
+        chat?.id,
+        firstMsg.metadata.personId,
+        firstMsg.metadata.trustedTenantId,
+      );
       instance = resolved.instance;
     }
 
@@ -5261,6 +5485,11 @@ export async function setupAgentDispatcher(
         // agent dispatches on the customer side.
         await withIdempotency(db, event.id, 'agent-dispatcher-msg', async () => {
           try {
+            // Envelope-derived trusted tenant (G5, ADR-0008): stamped from
+            // producer metadata, never the payload; undefined for legacy
+            // envelopes (byte-identical world); throws on quarantine — caught
+            // below, so a bad envelope is dropped, never processed globally.
+            const trustedTenantId = trustedDispatchTenant(metadata);
             const instance = await shouldProcessMessage(
               agentRunner,
               accessService,
@@ -5270,6 +5499,7 @@ export async function setupAgentDispatcher(
               db,
               payload,
               metadata,
+              trustedTenantId,
             );
             if (!instance) return;
 
@@ -5296,6 +5526,7 @@ export async function setupAgentDispatcher(
               instance,
               chat?.id,
               earlyPersonId,
+              trustedTenantId,
             );
 
             const debounceConfig = getDebounceConfig(resolved);
@@ -5328,6 +5559,9 @@ export async function setupAgentDispatcher(
                   journeyTracked: metadata.timings != null,
                   resolvedInstance: resolved,
                   routeId,
+                  // Envelope-derived trusted tenant (G5, ADR-0008) — hoisted
+                  // above, before the shouldProcessMessage gate.
+                  trustedTenantId,
                 },
                 timestamp: event.timestamp,
               },
@@ -5382,6 +5616,9 @@ export async function setupAgentDispatcher(
                 personId: metadata.personId,
                 platformIdentityId: metadata.platformIdentityId,
                 traceId,
+                // Envelope-derived trusted tenant (G5, ADR-0008) — producer
+                // metadata only; throws on quarantine, caught below.
+                trustedTenantId: trustedDispatchTenant(metadata),
               },
               event,
               db,
@@ -5439,6 +5676,9 @@ export async function setupAgentDispatcher(
                 personId: metadata.personId,
                 platformIdentityId: metadata.platformIdentityId,
                 traceId,
+                // Envelope-derived trusted tenant (G5, ADR-0008) — producer
+                // metadata only; throws on quarantine, caught below.
+                trustedTenantId: trustedDispatchTenant(metadata),
               },
               event,
               db,
@@ -5490,6 +5730,7 @@ export async function setupAgentDispatcher(
               baseInstance,
               chat?.id,
               typingPersonId,
+              trustedDispatchTenant(metadata),
             );
 
             const debounceConfig = getDebounceConfig(resolved);
@@ -5637,6 +5878,12 @@ export const __test__ = {
   extractMediaFiles,
   formatProcessedMedia,
   resolveDispatchMediaPath,
+  trustedDispatchTenant,
+  checkPerThreadSessionExists,
+  markPerThreadSessionInitialized,
+  listActiveOwnerIdentifiers,
+  resetActiveOwnerIdentifiersCache,
+  persistErrorHandoffSideEffects,
   MEDIA_WAIT_NULL,
   extractA2ACustomerContext,
   resolveCustomerContext,
