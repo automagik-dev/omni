@@ -731,7 +731,15 @@ async function persistErrorHandoffSideEffects(
       return found;
     });
     if (chat) {
-      await services.followUpLifecycle.disarm({ chatId: chat.id, instanceId: instance.id, reason: 'handoff' });
+      // The disarm THREADS the trusted tenant instead of being wrapped: the
+      // lifecycle scopes its own DB blocks from `tenantId` and publishes
+      // between them (G5 conversion of follow-up-lifecycle.ts).
+      await services.followUpLifecycle.disarm({
+        chatId: chat.id,
+        instanceId: instance.id,
+        reason: 'handoff',
+        tenantId: trustedTenantId ?? null,
+      });
       await runDispatchDb(db, trustedTenantId, async () => {
         await scopedHandle(db)
           .insert(handoffLogs)

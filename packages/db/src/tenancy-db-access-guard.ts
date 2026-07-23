@@ -457,8 +457,19 @@ export const PENDING_G4_CEILING = 6;
  * LOWERED TO 35, same leg: the `route-resolver.ts` `agent_routes` site
  * converted — `resolve()` scopes its read from the threaded envelope tenant
  * and tenant-keys its LRU cache. Consumer-only (dispatcher) callers.
+ *
+ * LOWERED TO 30 BY G5 LEG E. Five sites CONVERTED (not relabelled): the
+ * follow-up cluster — `follow-up-lifecycle.ts` (`chat_follow_up_state`, `chats`,
+ * `instances`) and `follow-up-sweeper.ts` (`chat_follow_up_state`) — plus
+ * `event-ops.ts` (`omni_events`). The lifecycle now scopes every discrete DB
+ * block from a caller-threaded trusted tenant (hooks/sweeper/dispatcher/
+ * session-cleaner/automation-gate/routes all establish it); the sweeper cron
+ * enumerates active tenants on the auth-plane connection and runs per-tenant
+ * scoped passes; the event replay executor captures its tenant before detaching
+ * and scopes each batch read with dequeue-time revalidation.
+ * (`follow-up-lifecycle.ts::agents` stays pending on the G6 persons backfill.)
  */
-export const PENDING_G5_CEILING = 35;
+export const PENDING_G5_CEILING = 30;
 
 /**
  * Ceiling on `pending-G4-conversion` + `pending-G5-conversion` combined.
@@ -491,8 +502,11 @@ export const PENDING_G5_CEILING = 35;
  * backfill).
  *
  * 41 after the same leg's `route-resolver.ts` conversion (6 + 35).
+ *
+ * 36 after G5 leg E (6 + 30): the follow-up cluster's four sites and
+ * `event-ops.ts`'s `omni_events` were CONVERTED, not relabelled.
  */
-export const TOTAL_PENDING_CEILING = 41;
+export const TOTAL_PENDING_CEILING = 36;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -1041,16 +1055,18 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'two-tenant-adversarial-postgres.test.ts.',
   },
   {
+    // G5-CONVERTED. Both paths now reach a tenant transaction. The route-facing
+    // `getMetrics`/`startReplay` count run inside the request scope. The
+    // background replay executor is STILL request-detached (it outlives the
+    // request), but `startReplay` now captures the trusted tenant BEFORE
+    // detaching and threads it as a VALUE into `executeReplay`, whose every
+    // `omni_events` batch read runs in its OWN short worker scope
+    // (`runTenantWorkDb`). It revalidates the tenant is still admissible at
+    // dequeue and before each durable side-effect batch. A legacy replay
+    // (null tenant) reads ambient byte-identically.
     file: 'packages/api/src/services/event-ops.ts',
     table: 'omni_events',
-    class: 'pending-G5-conversion',
-    justification:
-      'Two paths reach this service. The route-facing startReplay count/metrics paths run inside the request tenant ' +
-      'transaction and are scoped. The background replay executor is a worker-context path: it is spawned ' +
-      'fire-and-forget and DELIBERATELY request-detached from the request scope (tenant-scope.ts ' +
-      'runDetachedFromTenantScope), because it outlives the request transaction and must run on the ambient pool to ' +
-      'avoid a use-after-commit. Converting that worker path to its own tenant scope needs the G5 async context ' +
-      '(ADR-0008).',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/events.ts',
@@ -1062,48 +1078,56 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'agents',
     class: 'pending-G5-conversion',
     justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+      'CONVERTED IN CODE but honestly still pending, blocked on G6. The `agents` read in `resolveConfig` now runs ' +
+      'inside the same `workDb(trustedTenantId, …)` block as its sibling `chats`/`instances` sites (which flipped ' +
+      'to tenant-boundary this leg): the ADR-0008 async mechanism — the follow-up eventBus consumer hooks and the ' +
+      'follow-up-sweeper cron — threads a trusted tenant into every caller. What keeps the class: `agents` derives ' +
+      'its tenant via owner_id -> persons, and `persons` is G2-`unowned`, so the fail-closed derivation trigger ' +
+      'leaves every `agents` row NULL-tenant until the G6 persons backfill — a scoped read finds no config row yet. ' +
+      'Flips to tenant-boundary when G6 lands.',
   },
   {
+    // G5-CONVERTED. Every entry into `FollowUpLifecycleService` now establishes
+    // tenant context: `armForOutbound`/`armForInbound`/`disarm`/
+    // `touchInboundTimestamp`/`resolveConfig`/`evaluateIdleTimeoutFreshness`
+    // each run their discrete DB blocks through `workDb(trustedTenantId, …)` /
+    // `repoFor(trustedTenantId)`. The callers thread that trusted tenant: the
+    // follow-up hooks (`trustedTenantOf(event)`), the sweeper (per-tenant world),
+    // the agent-dispatcher (`runDispatchDb` envelope tenant), the session-cleaner
+    // (envelope tenant), the automation-engine idle-timeout gate (envelope
+    // tenant), and real routes (their request scope, via `workDb`'s passthrough).
+    // Publishes sit BETWEEN scoped blocks, never inside one. Legacy work threads
+    // null → ambient byte-identical.
     file: 'packages/api/src/services/follow-up-lifecycle.ts',
     table: 'chat_follow_up_state',
-    class: 'pending-G5-conversion',
-    justification:
-      'The lifecycle writes (follow-up-lifecycle.ts:286, :428, :525, :585) are reached from the follow-up NATS ' +
-      'hooks (`setupFollowUpHooks` subscriptions, follow-up-hooks.ts:54/:86/:128/:149/:169), from the ' +
-      '`follow-up-sweeper` cron running every 15 seconds (scheduler.ts:221), and from the session-cleaner and ' +
-      'agent-dispatcher consumers — alongside real routes. The timer and consumer callers have no request context, ' +
-      'which is the ADR-0008 async problem G5 owns. `follow-up-sweeper.ts` writing this same table was already ' +
-      'deferred for the identical reason.',
+    class: 'tenant-boundary',
   },
   {
+    // G5-CONVERTED (see the chat_follow_up_state entry above). The `chats` reads
+    // in `resolveConfig`/`isInActiveCloseState` run through the same
+    // `workDb(trustedTenantId, …)` blocks; all entry points scope.
     file: 'packages/api/src/services/follow-up-lifecycle.ts',
     table: 'chats',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
+    // G5-CONVERTED (see the chat_follow_up_state entry above). The `instances`
+    // read in `resolveConfig` runs through the same scoped block.
     file: 'packages/api/src/services/follow-up-lifecycle.ts',
     table: 'instances',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from an eventBus/NATS consumer callback, which has no HTTP request and therefore no credential ' +
-      'to derive a tenant from. Establishing tenant context for a consumer requires the async message-context ' +
-      'propagation ADR-0008 assigns to G5.',
+    class: 'tenant-boundary',
   },
   {
+    // G5-CONVERTED. The sweeper is a cron: flag-off it runs one ambient pass
+    // byte-identical; flag-on it enumerates active tenants on the auth-plane
+    // connection (periodic-tenant-work.ts) and runs one pass per tenant, each
+    // claim/fire/disarm DB block in its own short worker scope with an explicit
+    // `tenant_id = $tenant` predicate, plus a transitional NULL-tenant pass that
+    // is SKIPPED under enforcement (where the mixed state cannot exist). A
+    // suspended tenant drops out of the enumeration at the next tick.
     file: 'packages/api/src/services/follow-up-sweeper.ts',
     table: 'chat_follow_up_state',
-    class: 'pending-G5-conversion',
-    justification:
-      'Reached only from a scheduled/interval loop (scheduler cron or setInterval), which runs on a timer with no ' +
-      'request and no credential. Tenant context for periodic work requires the G5 worker-context semantics ' +
-      '(ADR-0008).',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/instances.ts',

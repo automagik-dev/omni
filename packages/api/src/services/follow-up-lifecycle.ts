@@ -40,6 +40,8 @@ import {
 } from '@omni/db';
 import { and, eq, isNull, notInArray, or, sql } from 'drizzle-orm';
 import { isChatInActiveCloseState } from '../lib/close-contact-state';
+import { scopedHandle } from '../tenancy/tenant-scope';
+import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 
 const log = createLogger('follow-up-lifecycle');
 
@@ -100,17 +102,48 @@ function readChatFollowUpConfig(row: Chat | null | undefined): FollowUpSequenceC
 }
 
 export class FollowUpLifecycleService {
-  private readonly repo: FollowUpLifecycleRepo;
-
   constructor(
-    private db: Database,
+    private pool: Database,
     private eventBus: EventBus | null,
     private logger: Logger = log,
-  ) {
-    this.repo = {
-      upsertArmed: async (input) => this.upsertArmed(input),
+  ) {}
+
+  /**
+   * The handle every query in this service must use (G4/G5 conversion). Inside
+   * a scope — a request transaction or a worker scope opened by
+   * {@link workDb} — this is that scope's tenant transaction; otherwise it is
+   * the ambient pool, byte-identical to the pre-conversion behavior.
+   */
+  private get db(): Database {
+    return scopedHandle(this.pool);
+  }
+
+  /**
+   * Run one discrete DB block in the right world (G5, ADR-0008). The lifecycle
+   * both writes the database AND publishes events, so its worker callers
+   * cannot wrap whole method calls in a scope — a worker transaction held
+   * across a publish would make the event a pre-commit side effect. Instead
+   * they THREAD the trusted tenant (from the consumed envelope or a loaded
+   * resource's persisted ownership, never a payload claim) via the optional
+   * `tenantId` on each input, and each DB block scopes itself; publishes stay
+   * between blocks and stamp the same tenant explicitly.
+   */
+  private workDb<T>(trustedTenantId: string | null | undefined, fn: () => Promise<T>): Promise<T> {
+    return runTenantWorkDb(this.pool, trustedTenantId, fn);
+  }
+
+  /**
+   * Repo bound to one work item's trusted tenant: each repo call is its own
+   * short scoped transaction; a legacy work item (no tenant) gets the exact
+   * pre-G5 ambient behavior.
+   */
+  private repoFor(trustedTenantId: string | null | undefined): FollowUpLifecycleRepo {
+    return {
+      upsertArmed: async (input) => this.workDb(trustedTenantId, () => this.upsertArmed(input)),
       disarmActive: async (input) =>
-        this.disarmActive(input.chatId, input.instanceId, input.reason, input.at, input.lastInboundCustomerMessageAt),
+        this.workDb(trustedTenantId, () =>
+          this.disarmActive(input.chatId, input.instanceId, input.reason, input.at, input.lastInboundCustomerMessageAt),
+        ),
     };
   }
 
@@ -123,16 +156,22 @@ export class FollowUpLifecycleService {
     chatId: string,
     instanceId: string,
     agentId: string | null,
+    trustedTenantId?: string | null,
   ): Promise<FollowUpSequenceConfig | null> {
-    const [chat] = await this.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
-    const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
-    const agent = agentId ? (await this.db.select().from(agents).where(eq(agents.id, agentId)).limit(1))[0] : undefined;
-
-    const inputs: FollowUpConfigInputs = {
-      chat: readChatFollowUpConfig(chat),
-      instance: readInstanceFollowUpConfig(instance),
-      agent: readAgentFollowUpConfig(agent),
-    };
+    // One short scope for the three config reads — no publish happens between
+    // them, so a single transaction per resolution is the tight fit.
+    const inputs = await this.workDb(trustedTenantId, async (): Promise<FollowUpConfigInputs> => {
+      const [chat] = await this.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+      const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
+      const agent = agentId
+        ? (await this.db.select().from(agents).where(eq(agents.id, agentId)).limit(1))[0]
+        : undefined;
+      return {
+        chat: readChatFollowUpConfig(chat),
+        instance: readInstanceFollowUpConfig(instance),
+        agent: readAgentFollowUpConfig(agent),
+      };
+    });
 
     return resolveFollowUpConfig(inputs);
   }
@@ -142,11 +181,13 @@ export class FollowUpLifecycleService {
    */
   async armForOutbound(input: Omit<ArmSequenceInput, 'config'> & { config?: FollowUpSequenceConfig }): Promise<void> {
     if (!this.eventBus) return;
+    const tenantId = input.tenantId ?? null;
 
     // Close-contact guard — see `isInActiveCloseState` for the rationale.
-    if (await this.isInActiveCloseState(input.chatId, input.instanceId)) return;
+    if (await this.workDb(tenantId, () => this.isInActiveCloseState(input.chatId, input.instanceId))) return;
 
-    const config = input.config ?? (await this.resolveConfig(input.chatId, input.instanceId, input.agentId ?? null));
+    const config =
+      input.config ?? (await this.resolveConfig(input.chatId, input.instanceId, input.agentId ?? null, tenantId));
     if (!config || config.enabled === false) return;
 
     // Refuse to arm when the triggering message is already older than the
@@ -170,17 +211,18 @@ export class FollowUpLifecycleService {
       }
     }
 
-    if (await this.shouldRefuseForTerminalDisarm(input)) return;
+    if (await this.workDb(tenantId, () => this.shouldRefuseForTerminalDisarm(input))) return;
 
     try {
       await armSequence(
-        { repo: this.repo, eventBus: this.eventBus, logger: this.logger },
+        { repo: this.repoFor(tenantId), eventBus: this.eventBus, logger: this.logger },
         {
           chatId: input.chatId,
           instanceId: input.instanceId,
           agentId: input.agentId ?? null,
           config,
           lastAgentMessageAt: input.lastAgentMessageAt,
+          tenantId,
         },
       );
     } catch (err) {
@@ -224,32 +266,38 @@ export class FollowUpLifecycleService {
     agentId: string | null;
     config?: FollowUpSequenceConfig;
     lastInboundCustomerMessageAt: Date;
+    /** Trusted tenant of the work item (G5) — see {@link workDb}. */
+    tenantId?: string | null;
   }): Promise<void> {
     if (!this.eventBus) return;
+    const tenantId = input.tenantId ?? null;
 
-    if (await this.isInActiveCloseState(input.chatId, input.instanceId)) return;
+    if (await this.workDb(tenantId, () => this.isInActiveCloseState(input.chatId, input.instanceId))) return;
 
-    const config = input.config ?? (await this.resolveConfig(input.chatId, input.instanceId, input.agentId));
+    const config = input.config ?? (await this.resolveConfig(input.chatId, input.instanceId, input.agentId, tenantId));
     if (!config || config.enabled === false) return;
 
     if (
-      await this.shouldRefuseForTerminalDisarm({
-        chatId: input.chatId,
-        instanceId: input.instanceId,
-        lastAgentMessageAt: input.lastInboundCustomerMessageAt,
-      })
+      await this.workDb(tenantId, () =>
+        this.shouldRefuseForTerminalDisarm({
+          chatId: input.chatId,
+          instanceId: input.instanceId,
+          lastAgentMessageAt: input.lastInboundCustomerMessageAt,
+        }),
+      )
     ) {
       return;
     }
 
     try {
       await armSequence(
-        { repo: this.repo, eventBus: this.eventBus, logger: this.logger },
+        { repo: this.repoFor(tenantId), eventBus: this.eventBus, logger: this.logger },
         {
           chatId: input.chatId,
           instanceId: input.instanceId,
           agentId: input.agentId,
           config,
+          tenantId,
           // Anchor the schedule on the inbound timestamp. The persisted
           // `lastAgentMessageAt` will reflect this; that's intentional —
           // `nextFireAt = inbound + intervalsMinutes[0]` is what matters
@@ -280,12 +328,20 @@ export class FollowUpLifecycleService {
    * No-op when no row exists yet — the first outbound agent message will
    * create one.
    */
-  async touchInboundTimestamp(input: { chatId: string; instanceId: string; at: Date }): Promise<void> {
+  async touchInboundTimestamp(input: {
+    chatId: string;
+    instanceId: string;
+    at: Date;
+    /** Trusted tenant of the work item (G5) — see {@link workDb}. */
+    tenantId?: string | null;
+  }): Promise<void> {
     try {
-      await this.db
-        .update(chatFollowUpState)
-        .set({ lastInboundCustomerMessageAt: input.at, updatedAt: input.at })
-        .where(and(eq(chatFollowUpState.chatId, input.chatId), eq(chatFollowUpState.instanceId, input.instanceId)));
+      await this.workDb(input.tenantId, async () => {
+        await this.db
+          .update(chatFollowUpState)
+          .set({ lastInboundCustomerMessageAt: input.at, updatedAt: input.at })
+          .where(and(eq(chatFollowUpState.chatId, input.chatId), eq(chatFollowUpState.instanceId, input.instanceId)));
+      });
     } catch (err) {
       this.logger.warn('follow-up lifecycle: touchInboundTimestamp failed', {
         chatId: input.chatId,
@@ -303,7 +359,10 @@ export class FollowUpLifecycleService {
     if (!this.eventBus) return;
 
     try {
-      await disarmSequence({ repo: this.repo, eventBus: this.eventBus, logger: this.logger }, input);
+      // `input.tenantId` is the caller-threaded TRUSTED tenant (envelope or
+      // persisted ownership) — `repoFor` scopes the write, `disarmSequence`
+      // stamps the `follow_up.disarmed` envelope with the same value.
+      await disarmSequence({ repo: this.repoFor(input.tenantId), eventBus: this.eventBus, logger: this.logger }, input);
     } catch (err) {
       this.logger.error('follow-up lifecycle: disarm failed', {
         chatId: input.chatId,
@@ -485,11 +544,12 @@ export class FollowUpLifecycleService {
     chatId: string,
     instanceId: string,
     eventSequenceIndex: number | null,
+    trustedTenantId?: string | null,
   ): Promise<{ skip: boolean; reason?: string }> {
-    if (await this.isInActiveCloseState(chatId, instanceId)) {
+    if (await this.workDb(trustedTenantId, () => this.isInActiveCloseState(chatId, instanceId))) {
       return { skip: true, reason: 'chat_closed' };
     }
-    const row = await this.readExistingRow(chatId, instanceId);
+    const row = await this.workDb(trustedTenantId, () => this.readExistingRow(chatId, instanceId));
     if (row?.disarmReason) {
       return { skip: true, reason: `disarmed_${row.disarmReason}` };
     }

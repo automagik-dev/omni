@@ -66,6 +66,9 @@ export class AutomationService {
       chatId: string,
       instanceId: string,
       eventSequenceIndex: number | null,
+      // Trusted tenant of the consumed envelope (G5, ADR-0008) — threaded by
+      // the engine from the producer-stamped metadata; null for legacy.
+      trustedTenantId?: string | null,
     ) => Promise<{ skip: boolean; reason?: string }>;
   }): Promise<void> {
     if (!this.eventBus) {

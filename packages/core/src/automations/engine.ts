@@ -9,6 +9,7 @@
  */
 
 import type { EventBus, Subscription } from '../events/bus';
+import { classifyEnvelope } from '../events/envelope';
 import type { EventType, GenericEventPayload, OmniEvent } from '../events/types';
 import { generateId } from '../ids';
 import { createLogger } from '../logger';
@@ -360,7 +361,20 @@ export class AutomationEngine {
     const eventSequenceIndex = typeof payload?.sequenceIndex === 'number' ? payload.sequenceIndex : null;
 
     try {
-      const verdict = await this.deps.staleIdleTimeoutGate(chatId, payloadInstanceId, eventSequenceIndex);
+      // Thread the envelope's trusted tenant (G5): the gate's DB reads scope
+      // themselves from it. A legacy envelope threads null and the gate reads
+      // ambient exactly as before. A quarantine-class envelope never reaches
+      // here (the subscription layer terms it before any handler runs); if one
+      // does, classify refuses a tenant and the gate stays unscoped rather
+      // than trusting a malformed claim.
+      const classification = classifyEnvelope(event.metadata);
+      const trustedTenantId = classification.world === 'tenant' ? classification.tenantId : null;
+      const verdict = await this.deps.staleIdleTimeoutGate(
+        chatId,
+        payloadInstanceId,
+        eventSequenceIndex,
+        trustedTenantId,
+      );
       if (verdict.skip) {
         logger.info('Skipping stale chat.idle_timeout event', {
           eventId: event.id,

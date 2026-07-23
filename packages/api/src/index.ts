@@ -595,8 +595,13 @@ async function setupEventBusServices(
       // sweeper published the event, or whose chat is in active close-contact
       // state. Fail-open on errors so a flaky DB doesn't drop legitimate
       // events.
-      staleIdleTimeoutGate: async (chatId, instanceId, eventSequenceIndex) => {
-        return services.followUpLifecycle.evaluateIdleTimeoutFreshness(chatId, instanceId, eventSequenceIndex);
+      staleIdleTimeoutGate: async (chatId, instanceId, eventSequenceIndex, trustedTenantId) => {
+        return services.followUpLifecycle.evaluateIdleTimeoutFreshness(
+          chatId,
+          instanceId,
+          eventSequenceIndex,
+          trustedTenantId,
+        );
       },
     });
   } catch (error) {
@@ -612,7 +617,7 @@ async function setupEventBusServices(
 
   // Follow-up lifecycle hooks (arm on outbound agent msg, disarm on reply/handoff/archive)
   try {
-    await setupFollowUpHooks(eventBus, services);
+    await setupFollowUpHooks(eventBus, services, db);
   } catch (error) {
     log.error('Failed to set up follow-up hooks', { error: String(error) });
   }

@@ -98,6 +98,12 @@ export interface ActionDependencies {
     chatId: string,
     instanceId: string,
     eventSequenceIndex: number | null,
+    /**
+     * Trusted tenant of the consumed envelope (G5, ADR-0008) — the engine
+     * classifies the event's producer-stamped metadata and threads the result;
+     * `null` for a legacy envelope. The gate scopes its DB reads from it.
+     */
+    trustedTenantId?: string | null,
   ) => Promise<{ skip: boolean; reason?: string }>;
 }
 

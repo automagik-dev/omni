@@ -165,6 +165,19 @@ describe('db-access guard', () => {
       // threaded envelope tenant and tenant-keys its LRU cache. Its only
       // callers are the dispatcher consumer paths above.
       'packages/api/src/services/route-resolver.ts',
+      // G5 leg E: the follow-up lifecycle scopes every discrete DB block from a
+      // caller-threaded trusted tenant (hooks/sweeper/dispatcher/session-cleaner/
+      // automation-gate/routes all establish it), publishing between blocks. Its
+      // `agents` site alone stays pending (G6 persons backfill).
+      'packages/api/src/services/follow-up-lifecycle.ts',
+      // G5 leg E: the sweeper cron enumerates active tenants on the auth-plane
+      // connection and runs per-tenant scoped passes (plus a transitional
+      // NULL-tenant pass skipped under enforcement).
+      'packages/api/src/services/follow-up-sweeper.ts',
+      // G5 leg E: the event-replay executor captures its trusted tenant before
+      // detaching and scopes each `omni_events` batch read, revalidating tenant
+      // admissibility at dequeue and before each durable side-effect batch.
+      'packages/api/src/services/event-ops.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

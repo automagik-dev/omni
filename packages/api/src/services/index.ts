@@ -174,6 +174,19 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   const followUpLifecycle = new FollowUpLifecycleService(db, eventBus);
   const followUpSweeper = new FollowUpSweeperService(db, eventBus);
   followUpSweeper.setLifecycle(followUpLifecycle);
+  // G5: the sweeper's multitenancy fan-out enumerates active tenants on the
+  // auth-plane read connection — the one runtime-process identity that may
+  // read `tenants` under enforcement (periodic-tenant-work.ts).
+  followUpSweeper.setAuthPlane(authPlane.db);
+
+  // G5: the detached executors (batch-job media retrofill, event replay)
+  // revalidate their work item's tenant at dequeue on the auth-plane read
+  // connection — the one runtime-process identity that may read `tenants` under
+  // enforcement (periodic-tenant-work.ts `isTenantWorkAdmissible`).
+  const eventOps = new EventOpsService(db, eventBus, deadLetters, payloadStore);
+  eventOps.setAuthPlane(authPlane.db);
+  const batchJobs = new BatchJobService(db, eventBus, settings);
+  batchJobs.setAuthPlane(authPlane.db);
 
   return {
     agents: new AgentService(db, eventBus),
@@ -192,13 +205,13 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     routeResolver,
     deadLetters,
     payloadStore,
-    eventOps: new EventOpsService(db, eventBus, deadLetters, payloadStore),
+    eventOps,
     webhooks: new WebhookService(db, eventBus),
     automations: new AutomationService(db, eventBus),
     chats: new ChatService(db, eventBus),
     messages: new MessageService(db, eventBus),
     syncJobs: new SyncJobService(db, eventBus),
-    batchJobs: new BatchJobService(db, eventBus, settings),
+    batchJobs,
     agentRunner: new AgentRunnerService(db),
     tts,
     turns: new TurnService(db),

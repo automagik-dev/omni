@@ -136,6 +136,35 @@ export async function runInWorkerTenantScope<T>(
 }
 
 /**
+ * The threaded-tenant bridge: run one DISCRETE DB block of a work item in the
+ * right world from an explicitly threaded trusted tenant.
+ *
+ * This is the generalization of the dispatcher's `runDispatchDb` for services
+ * whose worker callers thread a tenant instead of wrapping the whole call —
+ * required wherever a method both writes the database AND publishes events,
+ * because holding a worker transaction across a publish would make the event a
+ * pre-commit side effect (a phantom on rollback). The caller derives
+ * `trustedTenantId` from its envelope (`classifyEnvelope`) or the loaded
+ * resource's persisted ownership, NEVER from a payload claim, and the method
+ * wraps each DB block individually, publishing between blocks.
+ *
+ *   * tenant threaded → the block runs in its own worker tenant scope
+ *     (detached, tenant-stamped, exactly one transaction for the block);
+ *   * nothing threaded → the block runs as the caller found it: inside an
+ *     active request scope it stays on that scope's transaction via
+ *     `scopedHandle`, and on a legacy worker path it hits the ambient pool
+ *     byte-identically.
+ */
+export async function runTenantWorkDb<T>(
+  db: Database,
+  trustedTenantId: string | null | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!trustedTenantId) return fn();
+  return runInWorkerTenantScope(db, trustedTenantId, fn);
+}
+
+/**
  * The consumer bridge: run an event handler's DB work in the right world.
  *
  * Classifies the inbound envelope and:
