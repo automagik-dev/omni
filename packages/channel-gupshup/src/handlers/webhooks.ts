@@ -460,6 +460,102 @@ export async function handleGupshupWebhook(
 // Inbound message
 // ─────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────
+// Cross-id duplicate suppression
+// ─────────────────────────────────────────────────────────────
+//
+// Some Gupshup routings deliver the same user message twice: once as the
+// native event (wamid external id) and once re-posted by an entry-flow relay
+// under a synthetic id (`gs-entry-<ms>`), typically seconds apart. The
+// id-based dedupe below cannot catch that pair (the ids differ), so the
+// duplicate becomes a second inbound — re-triggering agent processing and
+// superseding a reply still in flight for the first delivery (the first
+// reply is discarded and never reaches the user). Two suppression rules,
+// both scoped to a short window and failing open:
+//
+//   1. Same chat + same normalized text under a different external id.
+//      Texts of <= 3 chars are exempt ("ok"/"yes"-style quick answers repeat
+//      legitimately).
+//   2. A relay text that is just a filemanager media URL arriving right
+//      after a native media message from the same chat (the relay's
+//      "media echo" of an already-delivered attachment).
+
+const CROSS_ID_WINDOW_MS = 60_000;
+const FILEMANAGER_URL_RE = /^https:\/\/filemanager\.gupshup\.io\/\S+$/;
+const recentTextByChat = new Map<string, { ts: number; id: string }>();
+const recentMediaByChat = new Map<string, { ts: number; id: string }>();
+
+/** Test-only: clears the cross-id suppression state between test cases. */
+export function resetCrossIdDedupeState(): void {
+  recentTextByChat.clear();
+  recentMediaByChat.clear();
+}
+
+function pruneExpiredCrossIdEntries(now: number): void {
+  for (const map of [recentTextByChat, recentMediaByChat]) {
+    for (const [key, value] of map) {
+      if (now - value.ts > CROSS_ID_WINDOW_MS * 1.5) map.delete(key);
+    }
+  }
+}
+
+function isRelayMediaEcho(chatKey: string, messageId: string, bodyText: string, now: number): string | null {
+  if (!messageId.startsWith('gs-entry-') || !FILEMANAGER_URL_RE.test(bodyText)) return null;
+  const lastMedia = recentMediaByChat.get(chatKey);
+  if (lastMedia && now - lastMedia.ts <= CROSS_ID_WINDOW_MS) return lastMedia.id;
+  return null;
+}
+
+function isDuplicateTextRedelivery(chatKey: string, messageId: string, bodyText: string, now: number): string | null {
+  const normalized = bodyText.toLowerCase().replace(/\s+/g, ' ');
+  if (normalized.length <= 3) return null; // "ok"/"yes"-style quick answers legitimately repeat
+  const textKey = `${chatKey}:${normalized}`;
+  const prev = recentTextByChat.get(textKey);
+  if (prev && prev.id !== messageId && now - prev.ts <= CROSS_ID_WINDOW_MS) return prev.id;
+  if (!prev || prev.id === messageId) recentTextByChat.set(textKey, { ts: now, id: messageId });
+  return null;
+}
+
+function isCrossIdDuplicate(
+  instanceId: string,
+  msg: { id: string; text?: string; type?: string; raw?: { type?: string } },
+  from: string,
+  logger: import('@omni/core').Logger,
+): boolean {
+  const now = Date.now();
+  pruneExpiredCrossIdEntries(now);
+
+  const chatKey = `${instanceId}:${from.trim()}`;
+  const rawType = msg.type ?? msg.raw?.type ?? '';
+  const bodyText = (msg.text ?? '').trim();
+
+  if (rawType !== 'text' || !bodyText) {
+    if (rawType && rawType !== 'text') recentMediaByChat.set(chatKey, { ts: now, id: msg.id });
+    return false;
+  }
+
+  const echoOf = isRelayMediaEcho(chatKey, msg.id, bodyText, now);
+  if (echoOf) {
+    logger.info('gupshup cross-id dedupe: relay media echo dropped', {
+      instanceId,
+      messageId: msg.id,
+      mediaMessageId: echoOf,
+    });
+    return true;
+  }
+
+  const duplicateOf = isDuplicateTextRedelivery(chatKey, msg.id, bodyText, now);
+  if (duplicateOf) {
+    logger.info('gupshup cross-id dedupe: duplicate content dropped', {
+      instanceId,
+      messageId: msg.id,
+      firstMessageId: duplicateOf,
+    });
+    return true;
+  }
+  return false;
+}
+
 async function processInboundMessage(
   plugin: GupshupPlugin,
   instanceId: string,
@@ -473,6 +569,11 @@ async function processInboundMessage(
   // Dedupe by sender phone + message ID
   const dedupeKey = `${from.trim()}:${msg.id}`;
   if (dedupeCache.isDuplicate(instanceId, dedupeKey, 'gupshup', plugin.getLogger() as import('@omni/core').Logger)) {
+    return false;
+  }
+
+  // Cross-id duplicate suppression (relay redeliveries under synthetic ids).
+  if (isCrossIdDuplicate(instanceId, msg, from, plugin.getLogger() as import('@omni/core').Logger)) {
     return false;
   }
 

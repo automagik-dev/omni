@@ -25,6 +25,21 @@ import {
 import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
+import { sanitizeText } from '../utils/utf8';
+
+// Pre-processed media text (extraction / vision / transcription) can carry NUL
+// bytes; Postgres text columns reject 0x00, so strip them before any write.
+function sanitizeMediaText(data: Partial<NewMessage>): Partial<NewMessage> {
+  const out: Partial<NewMessage> = { ...data };
+  if (typeof out.transcription === 'string') out.transcription = sanitizeText(out.transcription) ?? '';
+  if (typeof out.imageDescription === 'string') out.imageDescription = sanitizeText(out.imageDescription) ?? '';
+  if (typeof out.videoDescription === 'string') out.videoDescription = sanitizeText(out.videoDescription) ?? '';
+  if (typeof out.documentExtraction === 'string') {
+    out.documentExtraction = sanitizeText(out.documentExtraction) ?? '';
+  }
+  return out;
+}
+
 export interface ListMessagesOptions {
   chatId?: string;
   instanceIds?: string[];
@@ -388,13 +403,34 @@ export class MessageService {
       return value;
     };
 
-    return (
-      rows
-        .map((message) => ({ message, score: score(message) }))
-        .sort(
-          (a, b) => b.score - a.score || b.message.platformTimestamp.getTime() - a.message.platformTimestamp.getTime(),
-        )[0]?.message ?? null
-    );
+    const ranked = rows
+      .map((message) => ({ message, score: score(message) }))
+      .sort(
+        (a, b) => b.score - a.score || b.message.platformTimestamp.getTime() - a.message.platformTimestamp.getTime(),
+      );
+
+    // Ambiguity guard: when two or more candidates tie at the top score AND
+    // were sent moments apart (same burst — e.g. two product cards delivered
+    // back to back), picking the newest is a coin flip: quoting the WRONG card
+    // silently corrupts the reply context downstream (the agent locks onto an
+    // option the customer never chose). Returning null is strictly safer — the
+    // agent sees no quote and asks which option was meant. Ties against much
+    // OLDER messages keep the recency preference (an hours-old duplicate is
+    // almost never the quote target; see the second-precision grace test).
+    const AMBIGUOUS_TIE_WINDOW_MS = 5 * 60_000;
+    const top = ranked[0];
+    if (!top) return null;
+    const ambiguousTie =
+      top.score > 0 &&
+      ranked.some(
+        (entry, index) =>
+          index > 0 &&
+          entry.score === top.score &&
+          Math.abs(top.message.platformTimestamp.getTime() - entry.message.platformTimestamp.getTime()) <=
+            AMBIGUOUS_TIE_WINDOW_MS,
+      );
+    if (ambiguousTie) return null;
+    return top.message;
   }
 
   /** Get multiple messages by external IDs in a single query */
@@ -435,10 +471,10 @@ export class MessageService {
           mediaLocalPath: options.mediaLocalPath,
           mediaMetadata: options.mediaMetadata,
           // Pre-processed content
-          transcription: options.transcription,
-          imageDescription: options.imageDescription,
-          videoDescription: options.videoDescription,
-          documentExtraction: options.documentExtraction,
+          transcription: sanitizeText(options.transcription),
+          imageDescription: sanitizeText(options.imageDescription),
+          videoDescription: sanitizeText(options.videoDescription),
+          documentExtraction: sanitizeText(options.documentExtraction),
           // Reply/Forward
           replyToMessageId: options.replyToMessageId,
           replyToExternalId: options.replyToExternalId,
@@ -558,7 +594,7 @@ export class MessageService {
   async update(id: string, data: Partial<NewMessage>): Promise<Message> {
     const [updated] = await this.db
       .update(messages)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...sanitizeMediaText(data), updatedAt: new Date() })
       .where(eq(messages.id, id))
       .returning();
 
@@ -768,7 +804,7 @@ export class MessageService {
   async updateTranscription(id: string, transcription: string): Promise<Message> {
     const [updated] = await this.db
       .update(messages)
-      .set({ transcription, updatedAt: new Date() })
+      .set({ transcription: sanitizeText(transcription) ?? '', updatedAt: new Date() })
       .where(eq(messages.id, id))
       .returning();
 
@@ -785,7 +821,7 @@ export class MessageService {
   async updateImageDescription(id: string, description: string): Promise<Message> {
     const [updated] = await this.db
       .update(messages)
-      .set({ imageDescription: description, updatedAt: new Date() })
+      .set({ imageDescription: sanitizeText(description) ?? '', updatedAt: new Date() })
       .where(eq(messages.id, id))
       .returning();
 
@@ -802,7 +838,7 @@ export class MessageService {
   async updateVideoDescription(id: string, description: string): Promise<Message> {
     const [updated] = await this.db
       .update(messages)
-      .set({ videoDescription: description, updatedAt: new Date() })
+      .set({ videoDescription: sanitizeText(description) ?? '', updatedAt: new Date() })
       .where(eq(messages.id, id))
       .returning();
 
@@ -819,7 +855,7 @@ export class MessageService {
   async updateDocumentExtraction(id: string, extraction: string): Promise<Message> {
     const [updated] = await this.db
       .update(messages)
-      .set({ documentExtraction: extraction, updatedAt: new Date() })
+      .set({ documentExtraction: sanitizeText(extraction) ?? '', updatedAt: new Date() })
       .where(eq(messages.id, id))
       .returning();
 
