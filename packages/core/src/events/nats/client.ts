@@ -23,7 +23,7 @@ import {
   headers as natsHeaders,
 } from 'nats';
 import { createLogger } from '../../logger';
-import { CURRENT_ENVELOPE_VERSION, isStampableTenantId, resolveAmbientTenantId } from '../envelope';
+import { CURRENT_ENVELOPE_VERSION, resolvePublishTenantId } from '../envelope';
 
 const log = createLogger('nats');
 
@@ -240,13 +240,14 @@ export class NatsEventBus implements EventBus {
     const eventId = crypto.randomUUID();
     const timestamp = Date.now();
 
-    // Versioned tenant-aware envelope (G5, ADR-0008). An explicit
-    // `metadata.tenantId` (a worker/consumer republish, derived from the loaded
-    // resource) wins; otherwise the request-scope resolver supplies it. When
-    // NEITHER yields a tenant — every flag-off publish, and every publish with
-    // no active tenant context — both fields stay undefined and the envelope is
-    // `legacy`, i.e. byte-identical to pre-G5.
-    const tenantId = isStampableTenantId(metadata?.tenantId) ? metadata.tenantId : resolveAmbientTenantId();
+    // Versioned tenant-aware envelope (G5, ADR-0008). One decision, three
+    // sources in trust order — explicit republish tenant, then the request
+    // scope, then the named instance's PERSISTED owner (the channel-plugin
+    // producer path, which has neither of the first two). When none yields a
+    // tenant — every flag-off publish, and every publish naming no known
+    // instance — both fields stay undefined and the envelope is `legacy`, i.e.
+    // byte-identical to pre-G5.
+    const tenantId = resolvePublishTenantId(metadata?.tenantId, metadata?.instanceId);
 
     const event: OmniEvent = {
       id: eventId,

@@ -174,6 +174,25 @@ export class MediaStorageService {
     return scopedHandle(this.pool);
   }
 
+  /**
+   * The revocation gate a tenant-context presign must pass (G5 deliverable (c);
+   * RELEASE_SLOS `presigned_url_issue_or_refresh_after_revocation_max: 0`).
+   *
+   * Wired by `services/index.ts` to `isTenantWorkAdmissible` on the auth-plane
+   * read connection — the same trusted, non-caller-controlled `tenants.status`
+   * read the batch-job and replay executors use for their dequeue gates. Null
+   * until wired, which is why a tenant-context presign fails CLOSED without it.
+   */
+  private tenantAdmissible: ((tenantId: string) => Promise<boolean>) | null = null;
+
+  /**
+   * Inject the revocation gate. Tests inject a synthetic epoch through this,
+   * which is what lets the ceiling be proven without a wall clock.
+   */
+  setTenantAdmissibilityCheck(check: (tenantId: string) => Promise<boolean>): void {
+    this.tenantAdmissible = check;
+  }
+
   constructor(
     private readonly pool: Database,
     basePath?: string,
@@ -314,7 +333,11 @@ export class MediaStorageService {
     // Fetch the media (fetchOptions allows callers to supply auth headers, e.g.
     // Slack bot token). The fetch is SSRF-guarded: private/metadata targets are
     // rejected before connecting, on the initial URL and on every redirect hop.
-    const response = await fetchMediaUrl(url, fetchOptions);
+    // In a tenant context the `OMNI_MEDIA_URL_GUARD=off` escape hatch is
+    // SUBSUMED (G5 deliverable (b), ADR-0009): the media URL comes from a
+    // tenant-controlled payload, so no per-deployment flag may open private
+    // ranges to it. Legacy callers pass no tenant and keep the hatch.
+    const response = await fetchMediaUrl(url, { ...fetchOptions, trustedTenantId });
     if (!response.ok) {
       throw new Error(`Failed to download media: ${response.status}`);
     }
@@ -481,12 +504,20 @@ export class MediaStorageService {
    *     (RELEASE_SLOS ≤ 60s), so a tenant-bound URL can never outlive the
    *     revocation-propagation window and no post-revocation refresh can extend it.
    *
-   * (The full synthetic-epoch revocation-ceiling proof — issue/refresh refused
-   * against a bumped epoch — is G5 deliverable (c); this method enforces the
-   * bound-lifetime half of that contract.)
+   *   * the authorization decision — the presign is REFUSED once the tenant is
+   *     revoked (suspended/archived), which is the other, independent half of
+   *     the RELEASE_SLOS pair: a clamped TTL bounds how long ONE url lives, but
+   *     `presigned_url_issue_or_refresh_after_revocation_max: 0` says a revoked
+   *     tenant issues NONE — without the gate it could mint a fresh 60-second
+   *     URL forever and every one would be "inside the ceiling".
+   *
+   * Proven against synthetic epochs in `presign-revocation-ceiling.test.ts`; no
+   * production timing is claimed anywhere in that contract.
    */
   async presignedUrl(reference: string, ttlSeconds?: number, trustedTenantId?: string): Promise<string> {
     if (trustedTenantId === undefined) {
+      // Legacy/flag-off: no tenant exists to revoke, so no gate and no clamp —
+      // byte-identical to pre-G5.
       return this.backend.presignedUrl(reference, ttlSeconds);
     }
 
@@ -495,6 +526,18 @@ export class MediaStorageService {
     if (!reference.startsWith(tenantPrefix)) {
       throw new Error('media-storage: refusing to presign an object outside the requesting tenant prefix');
     }
+
+    // Fail CLOSED when no gate is wired: the multitenancy world always wires one
+    // (`services/index.ts`), so its absence under a tenant-context presign is a
+    // misconfiguration we must not mint an unguarded URL through — the same
+    // stance `batch-jobs.ts` takes for a tenant job with no auth-plane handle.
+    if (!this.tenantAdmissible) {
+      throw new Error('media-storage: refusing to presign — no tenant revocation check is wired');
+    }
+    if (!(await this.tenantAdmissible(trustedTenantId))) {
+      throw new Error('media-storage: refusing to presign for a revoked tenant');
+    }
+
     const effectiveTtl = Math.min(ttlSeconds ?? PRESIGNED_URL_TTL_CEILING_SECONDS, PRESIGNED_URL_TTL_CEILING_SECONDS);
     return this.backend.presignedUrl(reference, effectiveTtl);
   }

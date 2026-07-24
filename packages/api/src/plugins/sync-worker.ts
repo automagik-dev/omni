@@ -9,7 +9,7 @@
 
 import type { ChannelRegistry, FetchHistoryOptions, HistorySyncMessage } from '@omni/channel-sdk';
 import type { EventBus, OmniEvent } from '@omni/core';
-import { createLogger } from '@omni/core';
+import { classifyEnvelope, createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 import type { Database, SyncJobConfig, SyncJobProgress, SyncJobType } from '@omni/db';
 import { omniGroups } from '@omni/db';
@@ -124,6 +124,26 @@ function inSyncWorkerScope<T>(envelope: SyncEnvelope, fn: () => Promise<T>): Pro
   return runConsumerInTenantContext(handle, envelope, fn);
 }
 
+/**
+ * The work item's trusted tenant, for the JOB-TABLE writes that cannot be
+ * wrapped in `inSyncWorkerScope` (G5, ADR-0008).
+ *
+ * `SyncJobService` both writes `sync_jobs` AND publishes `sync.*`, so a scope
+ * wrapped around a whole `start`/`complete`/`fail` call would hold a worker
+ * transaction across the publish — a pre-commit side effect. The service instead
+ * takes a THREADED tenant and scopes each of its own discrete DB blocks; this is
+ * what threads it. Read only from producer-stamped envelope metadata, never from
+ * payload. `null` for a legacy envelope (the ambient, byte-identical path);
+ * throws on a quarantined one, which the subscription layer already refused.
+ */
+function trustedSyncTenant(envelope: SyncEnvelope): string | null {
+  const classification = classifyEnvelope(envelope.metadata);
+  if (classification.world === 'quarantine') {
+    throw new Error(`sync-worker: refusing a quarantined envelope (${classification.reason})`);
+  }
+  return classification.world === 'tenant' ? classification.tenantId : null;
+}
+
 export async function setupSyncWorker(
   eventBus: EventBus,
   services: Services,
@@ -144,9 +164,14 @@ export async function setupSyncWorker(
 
         log.info('Processing sync job', { jobId, instanceId, type });
 
+        // Classify ONCE, before any work: a quarantined envelope must do no job
+        // work at all, and the throw must escape rather than be swallowed into a
+        // `syncJobs.fail` below.
+        const jobTenantId = trustedSyncTenant(event);
+
         try {
           // Start the job
-          await services.syncJobs.start(jobId);
+          await services.syncJobs.start(jobId, jobTenantId);
 
           // Get instance to determine channel type
           const instance = await services.instances.getById(instanceId);
@@ -165,14 +190,14 @@ export async function setupSyncWorker(
               break;
             case 'profile':
               // Profile sync is handled by ProfileSyncService, just mark complete
-              await services.syncJobs.complete(jobId);
+              await services.syncJobs.complete(jobId, jobTenantId);
               break;
             case 'contacts':
               // Not scoped this leg: its only tenant-table write is `persons`,
               // which G2 classifies `unowned` (tenant_id stays NULL until the G6
               // backfill), so there is no registered sync-worker site here to
               // ratchet. Left byte-identical.
-              await processContactsSync(jobId, instanceId, channelType, config, services, channelRegistry);
+              await processContactsSync(jobId, instanceId, channelType, config, services, channelRegistry, event);
               break;
             case 'groups':
               await processGroupsSync(jobId, instanceId, channelType, config, services, channelRegistry, event);
@@ -186,12 +211,12 @@ export async function setupSyncWorker(
               break;
             default:
               log.warn('Unknown sync type', { jobId, type });
-              await services.syncJobs.fail(jobId, `Unknown sync type: ${type}`);
+              await services.syncJobs.fail(jobId, `Unknown sync type: ${type}`, jobTenantId);
           }
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           log.error('Sync job failed', { jobId, error: errorMessage });
-          await services.syncJobs.fail(jobId, errorMessage);
+          await services.syncJobs.fail(jobId, errorMessage, jobTenantId);
         }
       },
       {
@@ -401,10 +426,14 @@ async function processMessageSync(
   // setups that never touch tenant tables) the blocks run unscoped, as before.
   const handle = db;
 
+  // The `sync_jobs` writes below are threaded rather than wrapped — see
+  // `trustedSyncTenant`.
+  const jobTenantId = trustedSyncTenant(envelope);
+
   // Check if plugin supports fetchHistory
   if (!('fetchHistory' in plugin) || typeof plugin.fetchHistory !== 'function') {
     log.warn('Plugin does not support fetchHistory', { channelType });
-    await services.syncJobs.complete(jobId);
+    await services.syncJobs.complete(jobId, jobTenantId);
     return;
   }
 
@@ -461,12 +490,16 @@ async function processMessageSync(
     count: 100, // Messages per chat (recursive fetching will get more)
     anchors: anchors.length > 0 ? anchors : undefined,
     onProgress: async (count: number, progress?: number) => {
-      await services.syncJobs.updateProgress(jobId, {
-        fetched: count,
-        stored,
-        duplicates,
-        totalEstimated: progress ? Math.round(count / (progress / 100)) : undefined,
-      });
+      await services.syncJobs.updateProgress(
+        jobId,
+        {
+          fetched: count,
+          stored,
+          duplicates,
+          totalEstimated: progress ? Math.round(count / (progress / 100)) : undefined,
+        },
+        jobTenantId,
+      );
     },
     onMessage: async (msg: HistorySyncMessage) => {
       // Rate limit — OUTSIDE the worker scope, so no tenant transaction is held
@@ -530,16 +563,20 @@ async function processMessageSync(
   await plugin.fetchHistory(instanceId, fetchOptions);
 
   // Update final progress
-  await services.syncJobs.updateProgress(jobId, {
-    fetched,
-    stored,
-    duplicates,
-  });
+  await services.syncJobs.updateProgress(
+    jobId,
+    {
+      fetched,
+      stored,
+      duplicates,
+    },
+    jobTenantId,
+  );
 
   await queueMediaBackfillAfterSync(services, config, instanceId, jobId, stored);
 
   // Complete the job
-  await services.syncJobs.complete(jobId);
+  await services.syncJobs.complete(jobId, jobTenantId);
 
   log.info('Message sync completed', {
     jobId,
@@ -630,16 +667,24 @@ async function processContactsSync(
   config: SyncJobConfig,
   services: Services,
   channelRegistry: ChannelRegistry,
+  envelope: SyncEnvelope,
 ): Promise<void> {
   const plugin = channelRegistry.get(channelType);
   if (!plugin) {
     throw new Error(`No plugin found for channel type: ${channelType}`);
   }
 
+  // The envelope reaches this processor for its `sync_jobs` bookkeeping ONLY.
+  // The contact ingestion itself is deliberately left unscoped: its tenant-table
+  // write is `persons`, which G2 classifies `unowned` (tenant_id stays NULL until
+  // the G6 backfill), so there is no registered site here to convert and a scope
+  // would find nothing. The job table is owned and is scoped.
+  const jobTenantId = trustedSyncTenant(envelope);
+
   // Check if plugin supports fetchContacts
   if (!('fetchContacts' in plugin) || typeof plugin.fetchContacts !== 'function') {
     log.warn('Plugin does not support fetchContacts', { channelType });
-    await services.syncJobs.complete(jobId);
+    await services.syncJobs.complete(jobId, jobTenantId);
     return;
   }
 
@@ -656,11 +701,15 @@ async function processContactsSync(
   // Build fetch options based on channel type
   const fetchOptions: Record<string, unknown> = {
     onProgress: async (count: number) => {
-      await services.syncJobs.updateProgress(jobId, {
-        fetched: count,
-        stored,
-        duplicates: 0,
-      });
+      await services.syncJobs.updateProgress(
+        jobId,
+        {
+          fetched: count,
+          stored,
+          duplicates: 0,
+        },
+        jobTenantId,
+      );
     },
     onContact: async (contact: unknown) => {
       fetched++;
@@ -721,14 +770,18 @@ async function processContactsSync(
   await plugin.fetchContacts(instanceId, fetchOptions);
 
   // Update final progress
-  await services.syncJobs.updateProgress(jobId, {
-    fetched,
-    stored,
-    duplicates: 0,
-  });
+  await services.syncJobs.updateProgress(
+    jobId,
+    {
+      fetched,
+      stored,
+      duplicates: 0,
+    },
+    jobTenantId,
+  );
 
   // Complete the job
-  await services.syncJobs.complete(jobId);
+  await services.syncJobs.complete(jobId, jobTenantId);
 
   log.info('Contacts sync completed', {
     jobId,
@@ -829,11 +882,16 @@ async function processGroupsSync(
     throw new Error(`No plugin found for channel type: ${channelType}`);
   }
 
+  // The `sync_jobs` writes below are threaded rather than wrapped — see
+  // `trustedSyncTenant`. The per-group `omni_groups` upserts keep their own
+  // per-item `inSyncWorkerScope` (leg B pt2).
+  const jobTenantId = trustedSyncTenant(envelope);
+
   // Check if plugin supports fetchGroups (WhatsApp) or fetchGuilds (Discord)
   const fetchMethod = channelType === 'discord' ? 'fetchGuilds' : 'fetchGroups';
   if (!(fetchMethod in plugin) || typeof plugin[fetchMethod as keyof typeof plugin] !== 'function') {
     log.warn(`Plugin does not support ${fetchMethod}`, { channelType });
-    await services.syncJobs.complete(jobId);
+    await services.syncJobs.complete(jobId, jobTenantId);
     return;
   }
 
@@ -857,11 +915,15 @@ async function processGroupsSync(
   // Build fetch options
   const fetchOptions: Record<string, unknown> = {
     onProgress: async (count: number) => {
-      await services.syncJobs.updateProgress(jobId, {
-        fetched: count,
-        stored,
-        duplicates: updated,
-      });
+      await services.syncJobs.updateProgress(
+        jobId,
+        {
+          fetched: count,
+          stored,
+          duplicates: updated,
+        },
+        jobTenantId,
+      );
     },
     onGroup: async (group: unknown) => {
       fetched++;
@@ -966,14 +1028,18 @@ async function processGroupsSync(
   await fetchFn.call(plugin, instanceId, fetchOptions);
 
   // Update final progress
-  await services.syncJobs.updateProgress(jobId, {
-    fetched,
-    stored,
-    duplicates: updated,
-  });
+  await services.syncJobs.updateProgress(
+    jobId,
+    {
+      fetched,
+      stored,
+      duplicates: updated,
+    },
+    jobTenantId,
+  );
 
   // Complete the job
-  await services.syncJobs.complete(jobId);
+  await services.syncJobs.complete(jobId, jobTenantId);
 
   log.info('Groups sync completed', {
     jobId,
@@ -1000,10 +1066,16 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
       async (event) => {
         const { instanceId, channelType } = event.payload;
 
+        // The `instance.connected` envelope's trusted tenant (G5, ADR-0008).
+        // Since the ownership registry seeds channel-plugin publishes, a
+        // plugin-originated reconnect now carries the instance's persisted
+        // tenant here; a legacy envelope threads null and runs ambient.
+        const jobTenantId = trustedSyncTenant(event);
+
         try {
           // Reuse an already-running history-push job for this instance instead of
           // creating a duplicate on every reconnect.
-          if (await services.syncJobs.hasActiveJob(instanceId, 'history-push')) {
+          if (await services.syncJobs.hasActiveJob(instanceId, 'history-push', jobTenantId)) {
             historyPushLog.debug('Active history-push job already exists — skipping create', {
               instanceId,
               channel: channelType,
@@ -1016,10 +1088,11 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
             instanceId,
             channelType,
             type: 'history-push',
+            tenantId: jobTenantId,
           });
 
           // Immediately start the job (set status to running)
-          await services.syncJobs.start(job.id);
+          await services.syncJobs.start(job.id, jobTenantId);
 
           historyPushLog.info('Created history-push sync job', {
             jobId: job.id,
@@ -1053,9 +1126,11 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
         // Only handle history-push progress events (from WhatsApp plugin)
         if (payload.jobType !== 'history-push' || !payload.instanceId) return;
 
+        const jobTenantId = trustedSyncTenant(event);
+
         try {
           // Find the active history-push job for this instance
-          const activeJobs = await services.syncJobs.getActiveForInstance(payload.instanceId);
+          const activeJobs = await services.syncJobs.getActiveForInstance(payload.instanceId, jobTenantId);
           const historyPushJob = activeJobs.find((j) => j.type === 'history-push');
 
           if (!historyPushJob) {
@@ -1080,7 +1155,7 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
 
           if (Object.keys(update).length === 0) return;
 
-          await services.syncJobs.updateProgress(historyPushJob.id, update);
+          await services.syncJobs.updateProgress(historyPushJob.id, update, jobTenantId);
 
           historyPushLog.debug('Updated history-push progress', {
             jobId: historyPushJob.id,
@@ -1114,9 +1189,11 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
         // Only handle history-push completed events (from WhatsApp plugin)
         if (payload.jobType !== 'history-push' || !payload.instanceId) return;
 
+        const jobTenantId = trustedSyncTenant(event);
+
         try {
           // Find the active history-push job for this instance
-          const activeJobs = await services.syncJobs.getActiveForInstance(payload.instanceId);
+          const activeJobs = await services.syncJobs.getActiveForInstance(payload.instanceId, jobTenantId);
           const historyPushJob = activeJobs.find((j) => j.type === 'history-push');
 
           if (!historyPushJob) {
@@ -1127,15 +1204,19 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
           }
 
           // Update final progress
-          await services.syncJobs.updateProgress(historyPushJob.id, {
-            fetched: payload.totalFetched ?? 0,
-            stored: 0,
-            duplicates: 0,
-            mediaDownloaded: 0,
-          });
+          await services.syncJobs.updateProgress(
+            historyPushJob.id,
+            {
+              fetched: payload.totalFetched ?? 0,
+              stored: 0,
+              duplicates: 0,
+              mediaDownloaded: 0,
+            },
+            jobTenantId,
+          );
 
           // Mark completed
-          await services.syncJobs.complete(historyPushJob.id);
+          await services.syncJobs.complete(historyPushJob.id, jobTenantId);
 
           historyPushLog.info('History-push sync completed', {
             jobId: historyPushJob.id,

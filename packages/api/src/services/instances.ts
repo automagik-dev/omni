@@ -7,6 +7,7 @@ import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type ChannelType, type Instance, type NewInstance, instances } from '@omni/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import { forgetInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
 export interface ListInstancesOptions {
@@ -79,6 +80,14 @@ export class InstanceService {
       items.pop();
     }
 
+    // G5 (ADR-0008): every `instances` row this service loads teaches the
+    // ownership registry, so a channel plugin's later scope-less publish for
+    // that instance can stamp a TRUSTED tenant instead of falling back to a
+    // legacy envelope. The tenant comes from the persisted row, never a caller
+    // claim; a NULL tenant (flag-off) teaches nothing. See
+    // `tenancy/instance-owner-registry.ts`.
+    rememberInstanceOwners(items);
+
     const lastItem = items[items.length - 1];
     return {
       items,
@@ -91,7 +100,9 @@ export class InstanceService {
    * List all active instances
    */
   async listActive(): Promise<Instance[]> {
-    return this.db.select().from(instances).where(eq(instances.isActive, true));
+    const rows = await this.db.select().from(instances).where(eq(instances.isActive, true));
+    rememberInstanceOwners(rows);
+    return rows;
   }
 
   /**
@@ -104,6 +115,7 @@ export class InstanceService {
       throw new NotFoundError('Instance', id);
     }
 
+    rememberInstanceOwners([result]);
     return result;
   }
 
@@ -129,6 +141,12 @@ export class InstanceService {
     if (!created) {
       throw new Error('Failed to create instance');
     }
+
+    // Teach the ownership registry BEFORE the publish below: this is the first
+    // moment the instance exists, and the `instance.connected` consumers
+    // (history-push tracker, event-listeners) derive their worker tenant from
+    // the envelope this publish stamps.
+    rememberInstanceOwners([created]);
 
     if (this.eventBus) {
       await this.eventBus.publish('instance.connected', {
@@ -157,6 +175,7 @@ export class InstanceService {
       throw new NotFoundError('Instance', id);
     }
 
+    rememberInstanceOwners([updated]);
     return updated;
   }
 
@@ -201,6 +220,10 @@ export class InstanceService {
     if (!result.length) {
       throw new NotFoundError('Instance', id);
     }
+
+    // The instance is gone; drop its ownership entry so the registry stays
+    // bounded by what actually exists.
+    forgetInstanceOwner(id);
 
     if (this.eventBus) {
       await this.eventBus.publish('instance.disconnected', {

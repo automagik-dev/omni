@@ -294,7 +294,13 @@ export const REGISTERED_EGRESS: readonly RegisteredEgress[] = [
     sites: 1,
     justification:
       'The existing SSRF-guarded media fetch primitive: deny-lists private/reserved ranges and revalidates every ' +
-      'redirect hop. Transitional; the broker generalises it. Its escape hatch is named in the G5 handoff.',
+      'redirect hop. Transitional; the broker generalises it. ITS ESCAPE HATCH IS NOW SUBSUMED FOR TENANT ' +
+      'CONTEXTS (G5 deliverable (b)): `OMNI_MEDIA_URL_GUARD=off` is ignored when a `trustedTenantId` is supplied, ' +
+      'on the initial URL and on every redirect hop, so no per-deployment flag can open private ranges to a ' +
+      'tenant-controlled media URL. All three production callers thread that tenant from persisted ownership or ' +
+      'the request scope (media-storage `storeFromUrl`, the dispatcher history-media chain, routes/v2/messages). ' +
+      'A caller passing NO tenant keeps the pre-G5 hatch, which is the single-tenant deployment the hatch was ' +
+      'written for. Proven in media-guard-tenant-subsumption.test.ts.',
   },
 
   // --- platform-vendor: compile-time-fixed vendor/first-party hosts --------

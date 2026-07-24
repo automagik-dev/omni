@@ -319,6 +319,13 @@ describe('MediaStorageService.presignedUrl tenant binding (G5 ADR-0008)', () => 
   it('tenant-context presign of an own-prefix object clamps TTL to the 60s ceiling', async () => {
     const { backend, presigns } = capturingBackend();
     const service = new MediaStorageService(fakeDb, undefined, backend);
+    // TOUCHED by the later G5 leg that added the revocation gate: a
+    // tenant-context presign now also requires an admissibility check, and fails
+    // CLOSED without one. This test is about the TTL clamp, so it declares the
+    // tenant admissible and leaves every TTL assertion below unchanged. The gate
+    // itself is proven against synthetic epochs in
+    // `presign-revocation-ceiling.test.ts`.
+    service.setTenantAdmissibilityCheck(async () => true);
     await service.presignedUrl(tenantKey(TENANT_A), 3600, TENANT_A); // over ceiling → clamped
     await service.presignedUrl(tenantKey(TENANT_A), undefined, TENANT_A); // default → ceiling
     await service.presignedUrl(tenantKey(TENANT_A), 30, TENANT_A); // under ceiling → kept

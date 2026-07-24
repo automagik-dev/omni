@@ -13,13 +13,31 @@
  * OPENS it under that tenant on read — a session sealed for tenant A cannot be
  * decrypted under tenant B.
  *
- * DUAL WORLD. Sealing is entirely opt-in and gated twice: the caller passes no
- * `resolveTenantId` (the default), or no master key is configured. In either
- * case the blob is stored and read as legacy plaintext `{ sessionId }` —
- * byte-identical to pre-G5. Reads are transitional: a legacy plaintext row and a
- * sealed row can coexist, and each is handled on its own shape. The single
- * production caller (`agent-dispatcher`) passes no resolver today, so runtime
- * behavior is unchanged until the API layer wires a tenant resolver + key.
+ * TENANT-SCOPED DB ACCESS
+ * -----------------------
+ * The store is constructed inside the agent dispatcher and reached only from a
+ * NATS consumer, so it has no request scope to inherit — that is why its
+ * `agent_sessions` site was `pending-G5-conversion`. When a `resolveTenantId` is
+ * supplied, every discrete DB block now runs inside its own short worker tenant
+ * scope (`runTenantWorkDb`) and reads through `scopedHandle`, so RLS decides
+ * visibility: a session key that exists under two tenants resolves to each
+ * tenant's OWN row, and a write aimed at another tenant's instance is refused by
+ * the `agent_sessions` WITH CHECK (its tenant derives from the required
+ * `instances` parent).
+ *
+ * The DB scope is deliberately independent of the sealing key — see `scopeFor`.
+ *
+ * DUAL WORLD. Both behaviors are opt-in on the SAME switch, `resolveTenantId`.
+ * With no resolver (the legacy shape) no scope opens, `scopedHandle` returns the
+ * ambient pool, and the blob is stored and read as legacy plaintext
+ * `{ sessionId }` — byte-identical to pre-G5. Sealing is gated once more, on a
+ * configured master key. Reads are transitional: a legacy plaintext row and a
+ * sealed row can coexist, and each is handled on its own shape.
+ *
+ * The production caller (`agent-dispatcher`) supplies the resolver from the
+ * DISPATCH INSTANCE's persisted `tenantId` — the ownership root G2 defined,
+ * loaded from the database, never a payload claim — which is null in the
+ * flag-off world and therefore changes nothing there.
  */
 
 import type { SessionStorage } from '@omni/core';
@@ -27,6 +45,8 @@ import { isSealedSecret, isTenantSecretSealingEnabled, openTenantSecretJson, sea
 import type { Database } from '@omni/db';
 import { agentSessions } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
+import { scopedHandle } from '../tenancy/tenant-scope';
+import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 
 function scopeSessionKey(providerId: string, sessionKey: string): string {
   return `provider:${providerId}:session:${sessionKey}`;
@@ -63,7 +83,26 @@ export function createSessionStorage(
   const { resolveTenantId } = options;
 
   /**
-   * Resolve the tenant for `instanceId` only when sealing could apply. Returns
+   * The tenant this store's DB work runs under (G5, ADR-0008) — the store is
+   * constructed inside the agent dispatcher and reached only from a consumer, so
+   * it has no request scope to inherit and must establish its own.
+   *
+   * Deliberately NOT gated on `isTenantSecretSealingEnabled()`: the DB boundary
+   * and the secret-sealing boundary are independent decisions. A deployment that
+   * has multitenancy but no session-secret master key still needs its
+   * `agent_sessions` reads scoped; conflating the two would make the tenant
+   * boundary depend on whether a key happens to be configured.
+   *
+   * Returns null when no resolver was supplied — the legacy shape, where no
+   * scope opens and every query runs on the ambient pool byte-identically.
+   */
+  async function scopeFor(instanceId: string): Promise<string | null> {
+    if (!resolveTenantId) return null;
+    return (await resolveTenantId(instanceId)) ?? null;
+  }
+
+  /**
+   * Resolve the tenant for `instanceId` only when SEALING could apply. Returns
    * null (→ legacy plaintext path) when there is no resolver or no key.
    */
   async function tenantFor(instanceId: string): Promise<string | null> {
@@ -103,36 +142,41 @@ export function createSessionStorage(
   return {
     async getSession(instanceId: string, sessionKey: string) {
       const scopedSessionKey = scopeSessionKey(providerId, sessionKey);
-      const [session] = await db
-        .select({
-          providerSessionData: agentSessions.providerSessionData,
-          lastUsedAt: agentSessions.lastUsedAt,
-          expiresAt: agentSessions.expiresAt,
-        })
-        .from(agentSessions)
-        .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey)))
-        .limit(1);
+      const scopeTenant = await scopeFor(instanceId);
+
+      // ONE discrete DB block: the lookup plus the two staleness deletes it may
+      // trigger are a single work item, and the transaction closes before the
+      // (pure, non-DB) unsealing below.
+      const session = await runTenantWorkDb(db, scopeTenant, async () => {
+        const [row] = await scopedHandle(db)
+          .select({
+            providerSessionData: agentSessions.providerSessionData,
+            lastUsedAt: agentSessions.lastUsedAt,
+            expiresAt: agentSessions.expiresAt,
+          })
+          .from(agentSessions)
+          .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey)))
+          .limit(1);
+
+        if (!row) return null;
+
+        const now = new Date();
+        const hardExpired = !!row.expiresAt && row.expiresAt < now;
+        // Sessions older than the threshold are likely zombie/stale. Resuming a
+        // killed or terminal-owned session causes agents to stop mid-reply.
+        const tooOld = !!row.lastUsedAt && now.getTime() - row.lastUsedAt.getTime() > maxSessionAgeMs;
+
+        if (hardExpired || tooOld) {
+          await scopedHandle(db)
+            .delete(agentSessions)
+            .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey)));
+          return null;
+        }
+
+        return row;
+      });
 
       if (!session) return null;
-
-      const now = new Date();
-
-      // Check hard expiry
-      if (session.expiresAt && session.expiresAt < now) {
-        await db
-          .delete(agentSessions)
-          .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey)));
-        return null;
-      }
-
-      // Check max age — sessions older than the threshold are likely zombie/stale.
-      // Resuming a killed or terminal-owned session causes agents to stop mid-reply.
-      if (session.lastUsedAt && now.getTime() - session.lastUsedAt.getTime() > maxSessionAgeMs) {
-        await db
-          .delete(agentSessions)
-          .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey)));
-        return null;
-      }
 
       const sessionId = await readSessionId(instanceId, session.providerSessionData);
       if (!sessionId) return null;
@@ -146,33 +190,41 @@ export function createSessionStorage(
     async upsertSession(instanceId: string, sessionKey: string, sessionId: string, expiresAt: Date | null) {
       const scopedSessionKey = scopeSessionKey(providerId, sessionKey);
       const now = new Date();
+      // Sealing is pure crypto — kept OUTSIDE the transaction so the worker scope
+      // spans nothing but the write itself.
       const providerSessionData = await buildSessionData(instanceId, sessionId);
+      const scopeTenant = await scopeFor(instanceId);
 
-      await db
-        .insert(agentSessions)
-        .values({
-          instanceId,
-          sessionKey: scopedSessionKey,
-          providerSessionData,
-          lastUsedAt: now,
-          expiresAt,
-        })
-        .onConflictDoUpdate({
-          target: [agentSessions.instanceId, agentSessions.sessionKey],
-          set: {
+      await runTenantWorkDb(db, scopeTenant, () =>
+        scopedHandle(db)
+          .insert(agentSessions)
+          .values({
+            instanceId,
+            sessionKey: scopedSessionKey,
             providerSessionData,
             lastUsedAt: now,
             expiresAt,
-            updatedAt: now,
-          },
-        });
+          })
+          .onConflictDoUpdate({
+            target: [agentSessions.instanceId, agentSessions.sessionKey],
+            set: {
+              providerSessionData,
+              lastUsedAt: now,
+              expiresAt,
+              updatedAt: now,
+            },
+          }),
+      );
     },
 
     async deleteSession(instanceId: string, sessionKey: string) {
       const scopedSessionKey = scopeSessionKey(providerId, sessionKey);
-      await db
-        .delete(agentSessions)
-        .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey)));
+      const scopeTenant = await scopeFor(instanceId);
+      await runTenantWorkDb(db, scopeTenant, () =>
+        scopedHandle(db)
+          .delete(agentSessions)
+          .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, scopedSessionKey))),
+      );
     },
   };
 }

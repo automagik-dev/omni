@@ -186,6 +186,27 @@ describe('db-access guard', () => {
       // the URL. Split out of `index.ts` precisely so it could NOT inherit that
       // file's `control-plane` startup exemption.
       'packages/api/src/ws/voice-instance-ownership.ts',
+      // G5 leg G: `getInstanceWithProvider` — the lookup every dispatch path
+      // starts from, with zero HTTP callers — reads through `scopedHandle`, and
+      // its consumer callers (session-cleaner's `runTenantWorkDb`, the four
+      // agent-dispatcher `runDispatchDb` sites) each open a short worker scope
+      // from the envelope's trusted tenant.
+      'packages/api/src/services/agent-runner.ts',
+      // G5 leg G: the cleanup path's participant read runs through
+      // `scopedHandle` inside the world its callers already threaded.
+      // `chat_participants` roots at `instances` via its REQUIRED `chat_id`, so
+      // it does not wait on the G6 `persons` backfill.
+      'packages/api/src/plugins/session-cleaner.ts',
+      // G5 leg G (deliverable (g)): every discrete `agent_sessions` block runs
+      // in a worker scope for the tenant the store's resolver returns, which the
+      // dispatcher supplies from the LOADED instance's persisted `tenantId`.
+      'packages/api/src/plugins/session-storage.ts',
+      // G5 leg G: `SyncJobService` takes a THREADED trusted tenant per discrete
+      // DB block (threaded, not caller-wrapped, because every mutation also
+      // publishes). All four worker callers thread it: the per-tenant cron
+      // fan-out, the `sync.started` consumer, the history-push tracker, and the
+      // post-reconnect backfill.
+      'packages/api/src/services/sync-jobs.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

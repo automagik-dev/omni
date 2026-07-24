@@ -12,6 +12,7 @@ import type { Database } from '@omni/db';
 import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 
+import { rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { createLogger } from './logger';
 
 const logger = createLogger({ module: 'instance-monitor' });
@@ -25,6 +26,8 @@ interface InstanceInfo {
   name: string;
   channel: string;
   ownerIdentifier: string | null;
+  /** Persisted ownership (G2 root), carried so the sweep can seed the registry. */
+  tenantId: string | null;
 }
 
 interface ReconnectState {
@@ -391,15 +394,23 @@ export class InstanceMonitor {
    * Fetch all active instances from database
    */
   private async fetchActiveInstances(): Promise<InstanceInfo[]> {
-    return this.db
+    const rows = await this.db
       .select({
         id: instances.id,
         name: instances.name,
         channel: instances.channel,
         ownerIdentifier: instances.ownerIdentifier,
+        tenantId: instances.tenantId,
       })
       .from(instances)
       .where(eq(instances.isActive, true));
+
+    // G5 (ADR-0008): this health-check sweep is one of the few places the
+    // process loads EVERY active instance row, so it is a natural place to
+    // teach the ownership registry that lets channel-plugin publishes stamp a
+    // trusted tenant. See `tenancy/instance-owner-registry.ts`.
+    rememberInstanceOwners(rows);
+    return rows;
   }
 
   /**
@@ -610,6 +621,7 @@ export class InstanceMonitor {
     twilioValidateSignature?: boolean | null;
   } | null> {
     const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
+    if (instance) rememberInstanceOwners([instance]);
     return instance ?? null;
   }
 
@@ -678,6 +690,13 @@ export async function reconnectWithPool(
   const { maxConcurrent = 3, delayBetweenMs = 500 } = options;
 
   const activeInstances = await db.select().from(instances).where(eq(instances.isActive, true));
+
+  // G5 (ADR-0008): the startup reconnect is the FIRST bulk load of instance
+  // rows in the process, and it happens before any channel plugin can emit —
+  // so seeding the ownership registry here is what makes the very first
+  // `message.received` of a boot carry a trusted tenant rather than a legacy
+  // envelope.
+  rememberInstanceOwners(activeInstances);
 
   logger.info('Starting pooled reconnection', {
     instanceCount: activeInstances.length,

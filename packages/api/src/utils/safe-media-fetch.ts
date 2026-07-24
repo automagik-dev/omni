@@ -29,6 +29,16 @@
  * (NOT the scheme check) for deployments that intentionally fetch media from
  * private hosts (e.g. a lab MinIO serving media URLs on RFC1918). Default is
  * enforced.
+ *
+ * THE ESCAPE HATCH IS SUBSUMED IN A TENANT CONTEXT (G5 deliverable (b);
+ * ADR-0009). In a single-tenant deployment the hatch is an operator's decision
+ * about their own network, and G5 does not touch it. In a multi-tenant one the
+ * URL being fetched came from a TENANT-CONTROLLED payload, so the same switch
+ * would let any tenant reach loopback, RFC1918, and the cloud metadata endpoint
+ * on the shared host — a per-deployment flag must never be able to lower one
+ * tenant's isolation from another. When a `trustedTenantId` is supplied the
+ * hatch is therefore IGNORED and private ranges are denied regardless of the
+ * environment. Passing no tenant keeps the pre-G5 behavior byte-identical.
  */
 
 import { lookup } from 'node:dns/promises';
@@ -46,8 +56,15 @@ export type AddressLookup = (hostname: string) => Promise<Array<{ address: strin
 
 const defaultLookup: AddressLookup = async (hostname) => lookup(hostname, { all: true });
 
-/** Private-range checks are on unless explicitly switched off. */
-export function isMediaUrlGuardEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+/**
+ * Private-range checks are on unless explicitly switched off — EXCEPT in a
+ * tenant context, where the switch does not apply at all (see the module
+ * header). `trustedTenantId` must come from a verified worker scope/envelope,
+ * never a caller claim; its mere PRESENCE is what removes the hatch, so a
+ * forged value could only ever make the policy stricter.
+ */
+export function isMediaUrlGuardEnabled(env: NodeJS.ProcessEnv = process.env, trustedTenantId?: string): boolean {
+  if (trustedTenantId !== undefined) return true;
   return env.OMNI_MEDIA_URL_GUARD?.trim().toLowerCase() !== 'off';
 }
 
@@ -92,12 +109,13 @@ export async function assertSafeMediaUrl(
   url: URL,
   resolveAddresses: AddressLookup = defaultLookup,
   env: NodeJS.ProcessEnv = process.env,
+  trustedTenantId?: string,
 ): Promise<void> {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new UnsafeMediaUrlError(url.toString(), `scheme ${url.protocol} is not allowed`);
   }
 
-  if (!isMediaUrlGuardEnabled(env)) return;
+  if (!isMediaUrlGuardEnabled(env, trustedTenantId)) return;
 
   // URL keeps IPv6 literals bracketed ([::1]) — strip for the family check.
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
@@ -125,6 +143,14 @@ export async function assertSafeMediaUrl(
 }
 
 export interface MediaFetchOptions extends RequestInit {
+  /**
+   * The verified tenant this fetch is performed for (G5, ADR-0009). Supplying it
+   * SUBSUMES the `OMNI_MEDIA_URL_GUARD=off` escape hatch for this call and every
+   * redirect hop it follows. Derived from a worker scope/envelope, never a
+   * payload claim. Omitted on the legacy/flag-off path, which stays
+   * byte-identical.
+   */
+  trustedTenantId?: string;
   /**
    * Host suffixes where Authorization should be preserved across manual
    * redirects. Fetch strips Authorization on cross-origin redirects; some
@@ -165,10 +191,10 @@ function headersWithOptionalAuthorization(
  * files.slack.com → files-pri.slack.com).
  */
 export async function fetchMediaUrl(url: string, fetchOptions?: MediaFetchOptions): Promise<Response> {
-  const { preserveAuthRedirectHostSuffixes, ...init } = fetchOptions ?? {};
+  const { preserveAuthRedirectHostSuffixes, trustedTenantId, ...init } = fetchOptions ?? {};
 
   let currentUrl = new URL(url);
-  await assertSafeMediaUrl(currentUrl);
+  await assertSafeMediaUrl(currentUrl, defaultLookup, process.env, trustedTenantId);
   let currentHeaders = new Headers(init.headers);
 
   for (let redirects = 0; redirects <= MAX_MEDIA_REDIRECTS; redirects++) {
@@ -184,7 +210,9 @@ export async function fetchMediaUrl(url: string, fetchOptions?: MediaFetchOption
     if (!location) return response;
 
     const nextUrl: URL = new URL(location, currentUrl);
-    await assertSafeMediaUrl(nextUrl);
+    // Every hop is revalidated under the SAME tenant context, so a redirect
+    // cannot be used to re-acquire the escape hatch mid-chain.
+    await assertSafeMediaUrl(nextUrl, defaultLookup, process.env, trustedTenantId);
 
     const preserveAuthorization =
       nextUrl.origin === currentUrl.origin ||

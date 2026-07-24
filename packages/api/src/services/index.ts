@@ -22,6 +22,7 @@ import { OpenAiSttProvider } from '../providers/openai/stt';
 import { OpenAiTtsProvider } from '../providers/openai/tts';
 import { providerRegistry } from '../providers/registry';
 import { type AuthPlaneConnection, resolveAuthPlaneConnection } from '../tenancy/auth-plane-connection';
+import { isTenantWorkAdmissible } from '../tenancy/periodic-tenant-work';
 import { MembershipSelectionService, RequestAuthenticator } from '../tenancy/request-auth';
 import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
@@ -125,6 +126,16 @@ export interface Services {
    * payload is built from route-level state the service doesn't see.
    */
   eventBus: EventBus | null;
+  /**
+   * The runtime connection POOL these services were built on (G5, ADR-0008).
+   *
+   * Exposed for the periodic/cron surface: a cron has no request scope, so it
+   * must OPEN one per tenant (`tenancy/periodic-tenant-work.ts`), and opening a
+   * scope requires the same pool the services read through — `authPlane.db` is
+   * NOT interchangeable, since under enforcement it is a different role's pool.
+   * Request-path code must keep using the services, never this handle.
+   */
+  db: Database;
 }
 
 /**
@@ -188,6 +199,14 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   const batchJobs = new BatchJobService(db, eventBus, settings);
   batchJobs.setAuthPlane(authPlane.db);
 
+  // G5 deliverable (c): a tenant-context presign is REFUSED once the tenant is
+  // revoked (RELEASE_SLOS `presigned_url_issue_or_refresh_after_revocation_max:
+  // 0`). The clamped TTL bounds one URL's life; this bounds how many a revoked
+  // tenant can mint, which is zero. Same auth-plane `tenants.status` read the
+  // dequeue gates use. Without this wiring a tenant presign fails closed.
+  const mediaStorage = new MediaStorageService(db);
+  mediaStorage.setTenantAdmissibilityCheck((tenantId) => isTenantWorkAdmissible(authPlane.db, tenantId));
+
   return {
     agents: new AgentService(db, eventBus),
     agentState: new AgentStateService(eventBus),
@@ -224,8 +243,9 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     authPlane,
     tenantControlPlane: new TenantControlPlaneService(db),
     tenantKeys: new TenantKeyService(db),
-    mediaStorage: new MediaStorageService(db),
+    mediaStorage,
     eventBus,
+    db,
   };
 }
 

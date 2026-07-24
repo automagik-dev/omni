@@ -15,6 +15,7 @@ import { and, eq } from 'drizzle-orm';
 import { withIdempotency } from '../lib/idempotency';
 import type { Services } from '../services';
 import { type ResolvedAgentSessionIdentity, resolveKhalSessionId } from '../services/agent-session-identity';
+import { scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { applyAgentFkOverrides, resolveProvider } from './agent-dispatcher';
 import { getPlugin } from './loader';
@@ -67,6 +68,24 @@ async function sendMessage(services: Services, instanceId: string, chatId: strin
 }
 
 /**
+ * The `chat_participants` read of the cleanup path, extracted so the two-tenant
+ * probe can exercise the EXACT query the consumer issues rather than a replica
+ * of it. Callers supply the world (see `resolveCleanupPersonId`).
+ */
+async function readChatParticipant(
+  db: Database,
+  chatId: string,
+  platformUserId: string,
+): Promise<{ personId: string | null } | undefined> {
+  const [participant] = await scopedHandle(db)
+    .select({ personId: chatParticipants.personId })
+    .from(chatParticipants)
+    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.platformUserId, platformUserId)))
+    .limit(1);
+  return participant;
+}
+
+/**
  * Clear agent session for the given user and chat.
  * Tries IAgentProvider.resetSession() first (supports OpenClaw, Webhook, etc.),
  * falls back to direct AgnoOS client for legacy.
@@ -90,16 +109,13 @@ async function resolveCleanupPersonId(
   );
   if (!dbChat?.id) return undefined;
 
-  // The chat_participants read is a registered `pending-G5-conversion` site
-  // (blocked on the G6 persons backfill); the CALLER scope is established here
-  // so it lands in the right world once the query switches to `scopedHandle`.
-  const [participant] = await runTenantWorkDb(db, trustedTenantId, () =>
-    db
-      .select({ personId: chatParticipants.personId })
-      .from(chatParticipants)
-      .where(and(eq(chatParticipants.chatId, dbChat.id), eq(chatParticipants.platformUserId, from)))
-      .limit(1),
-  );
+  // G5-CONVERTED. The participant read runs through `scopedHandle` inside the
+  // same threaded world as the chat lookup above. `chat_participants` derives its
+  // tenant from the REQUIRED `chat_id` parent, so it is owned by the `instances`
+  // root and RLS scopes it — it does NOT need the G6 `persons` backfill, even
+  // though `person_id` is the column being read (the column's VALUE is opaque
+  // here; only the ROW's visibility is at stake).
+  const participant = await runTenantWorkDb(db, trustedTenantId, () => readChatParticipant(db, dbChat.id, from));
 
   return participant?.personId ?? undefined;
 }
@@ -399,3 +415,6 @@ export async function setupSessionCleaner(eventBus: EventBus, services: Services
     throw error;
   }
 }
+
+/** Seams the two-tenant containment probe drives directly. Not a public API. */
+export const __test__ = { readChatParticipant };

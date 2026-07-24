@@ -14,7 +14,7 @@
  */
 
 import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni/core';
-import { createLogger } from '@omni/core';
+import { classifyEnvelope, createLogger } from '@omni/core';
 import type { ChannelType, ChatType, MessageType } from '@omni/db';
 import * as Sentry from '@sentry/bun';
 import { sentryEnabled } from '../lib/sentry-scrub';
@@ -1089,7 +1089,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
                 gapMinutes,
               });
 
-              // Create a sync job (inserts DB row + publishes sync.started event)
+              // Create a sync job (inserts DB row + publishes sync.started event).
+              // The job is created for the RECONNECTED INSTANCE's tenant, taken
+              // from the `instance.connected` envelope the producer stamped
+              // (G5, ADR-0008) — never from the payload. A legacy envelope
+              // threads null and the create runs ambient, byte-identically.
+              const reconnectClassification = classifyEnvelope(event.metadata);
               const job = await services.syncJobs.create({
                 instanceId,
                 channelType,
@@ -1098,6 +1103,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
                   since: lastMessageAt.toISOString(),
                   until: new Date().toISOString(),
                 },
+                tenantId: reconnectClassification.world === 'tenant' ? reconnectClassification.tenantId : null,
               });
 
               log.info('Post-reconnect backfill triggered', {

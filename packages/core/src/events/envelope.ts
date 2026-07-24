@@ -92,7 +92,16 @@ export type EnvelopeClassification =
  * the payload — the trust boundary is that a tenant is derived by the producer,
  * not asserted by whatever data the event carries.
  */
-export function classifyEnvelope(metadata: EventMetadata): EnvelopeClassification {
+export function classifyEnvelope(metadata: EventMetadata | null | undefined): EnvelopeClassification {
+  // An envelope with NO metadata object at all carries no version and no tenant
+  // — which is precisely the definition of `legacy`, not of a corruption. It is
+  // deliberately not quarantined: quarantine is for a versioned envelope whose
+  // tenant is missing/ambiguous, or a tenant claim with no version contract, and
+  // this is neither. Throwing here would let one shapeless message kill a
+  // consumer outright, which is a strictly worse failure than processing it on
+  // the same legacy path it took before G5.
+  if (metadata === null || metadata === undefined) return { world: 'legacy' };
+
   const { envelopeVersion, tenantId } = metadata;
 
   if (envelopeVersion === undefined || envelopeVersion === null) {
@@ -166,4 +175,75 @@ export function resolveAmbientTenantId(): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The PLUGIN-PRODUCER seam (G5, ADR-0008).
+ *
+ * The resolver above carries a REQUEST-originated tenant. The dominant traffic
+ * path has no request: `BaseChannelPlugin.publishEventInternal` emits
+ * `message.received`, `instance.connected`, `reaction.*` and friends from a
+ * socket callback, so without this seam every real channel event stamps nothing
+ * and classifies `legacy` — and the consumers G5 converted never enter the
+ * tenant world at all.
+ *
+ * ADR-0008 names the derivation for exactly this case: "Publishers derive tenant
+ * from authenticated/LOADED RESOURCES, never caller claims", and this module's
+ * subject rationale above already relies on it — instances carry their tenant
+ * (G2, `instances.tenant_id`), so a publish that names an instance can derive
+ * that instance's PERSISTED owner.
+ *
+ * The API layer registers a resolver backed by an ownership registry populated
+ * from `instances` rows it has already loaded (startup reconnect, instance
+ * create/update, the monitor's per-instance fetch). It is deliberately
+ * SYNCHRONOUS: a publish must not grow a database round trip, and the mapping is
+ * immutable in practice — an instance's tenant is its ownership ROOT and does
+ * not change. Tenant SUSPENSION is not this seam's job; it is enforced at
+ * dequeue and before side effects (`isTenantWorkAdmissible`).
+ *
+ * Flag-off nothing registers, so this returns null and every envelope stays
+ * legacy/byte-identical — the same dual-world shape as the ambient resolver.
+ */
+let instanceOwnerTenantResolver: ((instanceId: string) => string | null | undefined) | null = null;
+
+export function setEnvelopeInstanceTenantResolver(
+  resolver: ((instanceId: string) => string | null | undefined) | null,
+): void {
+  instanceOwnerTenantResolver = resolver;
+}
+
+export function resolveInstanceOwnerTenantId(instanceId: string | undefined | null): string | null {
+  if (!instanceOwnerTenantResolver || !instanceId) return null;
+  try {
+    const tenantId = instanceOwnerTenantResolver(instanceId);
+    return isStampableTenantId(tenantId) ? tenantId : null;
+  } catch {
+    // A broken registry must degrade to `legacy` — never fail the publish, and
+    // never fall through to something less trustworthy.
+    return null;
+  }
+}
+
+/**
+ * The single decision every publisher makes about which tenant to stamp.
+ *
+ * Precedence, most-trusted first:
+ *   1. `explicitTenantId` — a worker/consumer republish that already derived the
+ *      tenant from ITS OWN loaded resource or consumed envelope. A non-UUID
+ *      value is not a claim this function honours; it falls through rather than
+ *      poisoning the envelope.
+ *   2. the REQUEST scope — the authenticated caller's tenant, which the edge
+ *      validated before the handler ran.
+ *   3. the INSTANCE OWNER registry — the plugin/worker case, derived from the
+ *      instance's persisted ownership.
+ *
+ * Returns null when none applies: the envelope then carries neither field and is
+ * `legacy`, exactly as before G5.
+ */
+export function resolvePublishTenantId(
+  explicitTenantId: unknown,
+  instanceId: string | undefined | null,
+): string | null {
+  if (isStampableTenantId(explicitTenantId)) return explicitTenantId;
+  return resolveAmbientTenantId() ?? resolveInstanceOwnerTenantId(instanceId);
 }

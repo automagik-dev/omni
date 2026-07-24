@@ -89,6 +89,7 @@ import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartb
 import { ApiKeyService } from './services/api-keys';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
+import { installInstanceOwnerResolver } from './tenancy/instance-owner-registry';
 import { currentTenantScope } from './tenancy/tenant-scope';
 import { startStreamRevocationSweeper } from './tenancy/tenant-stream-subscriptions';
 import { printStartupBanner } from './utils/startup-banner';
@@ -157,6 +158,16 @@ async function connectToNats(db: Database): Promise<EventBus | null> {
     // republish must pass an explicit `metadata.tenantId` — this resolver never
     // lends an ambient tenant across the request→worker boundary.
     setEnvelopeTenantResolver(() => currentTenantScope()?.tenantId ?? null);
+
+    // ...and the PRODUCER-side derivation for publishes that have no request at
+    // all — every channel-plugin emit (`message.received`, `instance.connected`,
+    // `reaction.*`). Those name an instanceId, and `instances` is the ownership
+    // root, so the tenant comes from the instance's PERSISTED row via the
+    // ownership registry the instance-loading paths populate. Without this the
+    // dominant traffic path stamps nothing and every consumer G5 converted stays
+    // on its legacy branch. Flag-off the registry is empty (NULL tenants teach
+    // it nothing), so publishes remain byte-identical.
+    installInstanceOwnerResolver();
 
     // Set up event listeners
     await setupQrCodeListener(eventBus);

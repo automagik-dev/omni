@@ -32,11 +32,23 @@ afterEach(() => setTenantSecretMasterKey(null));
  * persisted `providerSessionData` verbatim so a test can inspect the bytes at
  * rest, and serves it back to `getSession` unchanged — exactly the storage
  * fidelity the sealing contract depends on.
+ *
+ * TOUCHED BY THE LATER G5 LEG that scoped this store's DB access. Supplying a
+ * `resolveTenantId` now opens a worker tenant TRANSACTION around each discrete
+ * DB block (ADR-0008), so the stub has to model that boundary or the
+ * resolver-present cases below cannot run at all. The `transaction` here is the
+ * minimum honest model — it hands the same handle to the callback, which is what
+ * a real Drizzle transaction does from the query builder's point of view — and
+ * it does NOT weaken any assertion: the sealing/cross-tenant expectations are
+ * unchanged, and real transactional isolation is proven separately against
+ * PostgreSQL in `session-cluster-two-tenant-postgres.test.ts`.
  */
 function makeFakeDb() {
   const rows = new Map<string, { providerSessionData: unknown; lastUsedAt: Date; expiresAt: Date | null }>();
   let pendingValues: { instanceId: string; sessionKey: string; providerSessionData: unknown } | null = null;
   const db = {
+    transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(db),
+    execute: async () => undefined,
     insert: () => ({
       values: (v: { instanceId: string; sessionKey: string; providerSessionData: unknown }) => {
         pendingValues = v;

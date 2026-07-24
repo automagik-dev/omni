@@ -21,6 +21,7 @@ import type { AgentReplyFilter, AgentSessionStrategy, ChannelType, Instance } fr
 import type { Database } from '@omni/db';
 import { agentProviders, instances, persons } from '@omni/db';
 import { eq } from 'drizzle-orm';
+import { scopedHandle } from '../tenancy/tenant-scope';
 
 const log = createLogger('agent-runner');
 
@@ -357,10 +358,29 @@ export class AgentRunnerService {
   }
 
   /**
-   * Get full instance config with provider details
+   * Get full instance config with provider details.
+   *
+   * TENANT BOUNDARY (G5, ADR-0008). This is the lookup EVERY dispatch path
+   * starts from and it has zero HTTP callers — every caller is a NATS consumer.
+   * The read now goes through `scopedHandle`, so:
+   *
+   *   * inside a worker tenant scope (the converted consumers, which open one
+   *     from their envelope-derived tenant) it runs on that tenant-stamped
+   *     transaction and RLS decides visibility — a forged/foreign instanceId
+   *     resolves to `null` and the dispatch simply has nothing to act on;
+   *   * with no scope active — a legacy envelope, or the deprecated
+   *     `agent-responder` path — `scopedHandle` returns the ambient pool and the
+   *     query issued is byte-for-byte the pre-G5 one.
+   *
+   * `null` therefore means "not visible to this tenant" as well as "absent", and
+   * every caller already treats `null` as "skip".
    */
   async getInstanceWithProvider(instanceId: string): Promise<Instance | null> {
-    const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
+    const [instance] = await scopedHandle(this.db)
+      .select()
+      .from(instances)
+      .where(eq(instances.id, instanceId))
+      .limit(1);
 
     return instance ?? null;
   }

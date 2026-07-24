@@ -3346,12 +3346,16 @@ function mimeToContentType(mimeType: string): 'audio' | 'image' | 'video' | 'doc
  * Download a URL to a temp file and return the local path.
  * Returns null on any error (graceful degradation).
  */
-async function downloadToTempFile(url: string, mimeType: string): Promise<string | null> {
+async function downloadToTempFile(url: string, mimeType: string, trustedTenantId?: string): Promise<string | null> {
   try {
     // SSRF-guarded: rejects private/metadata targets (initial URL and every
     // redirect hop) before connecting — history-sync mediaUrl values originate
-    // from channel payloads, not from operator config.
-    const res = await fetchMediaUrl(url);
+    // from channel payloads, not from operator config. In a tenant context the
+    // `OMNI_MEDIA_URL_GUARD=off` escape hatch is SUBSUMED (G5 deliverable (b),
+    // ADR-0009): this URL is tenant-controlled, so no per-deployment flag may
+    // open private ranges to it. `trustedTenantId` comes from the LOADED
+    // instance's persisted ownership, never a payload claim.
+    const res = await fetchMediaUrl(url, { trustedTenantId });
     if (!res.ok) return null;
 
     const buffer = Buffer.from(await res.arrayBuffer());
@@ -3372,12 +3376,13 @@ async function processMediaFile(
   msg: HistorySyncMessage,
   mimeType: string,
   mediaService: ReturnType<typeof createMediaProcessingService> | null,
+  trustedTenantId?: string,
 ): Promise<string | null> {
   let localPath = msg.content.localPath ?? null;
   let ownedTempFile = false;
 
   if (!localPath && msg.content.mediaUrl && mediaService) {
-    localPath = await downloadToTempFile(msg.content.mediaUrl, mimeType);
+    localPath = await downloadToTempFile(msg.content.mediaUrl, mimeType, trustedTenantId);
     if (localPath) ownedTempFile = true;
   }
 
@@ -3420,6 +3425,7 @@ async function processHistoryMessage(
   mediaService: ReturnType<typeof createMediaProcessingService> | null,
   reactFn: ((msgId: string, emoji: string) => Promise<void>) | null,
   unreactFn: ((msgId: string, emoji: string) => Promise<void>) | null,
+  trustedTenantId?: string,
 ): Promise<string> {
   const timeStr = msg.timestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
   const header = `[${msg.from ?? 'Unknown'} - ${timeStr}]`;
@@ -3435,7 +3441,7 @@ async function processHistoryMessage(
 
   if (reactFn) reactFn(msg.externalId, startEmoji).catch(() => {});
 
-  const processedContent = await processMediaFile(msg, mimeType, mediaService);
+  const processedContent = await processMediaFile(msg, mimeType, mediaService, trustedTenantId);
 
   // Always remove start emoji; add done emoji only on success
   if (unreactFn) unreactFn(msg.externalId, startEmoji).catch(() => {});
@@ -3507,7 +3513,12 @@ async function fetchAndProcessThreadHistory(
   // Process in batches to cap concurrency
   for (let i = 0; i < mediaMessages.length; i += CONCURRENCY) {
     const batch = mediaMessages.slice(i, i + CONCURRENCY);
-    const results = await Promise.all(batch.map((msg) => processHistoryMessage(msg, mediaService, reactFn, unreactFn)));
+    const results = await Promise.all(
+      // The instance row's persisted `tenantId` is the ownership root (G2) — the
+      // trusted derivation that subsumes the media escape hatch for these
+      // tenant-controlled history URLs. Null in the flag-off world.
+      batch.map((msg) => processHistoryMessage(msg, mediaService, reactFn, unreactFn, instance.tenantId ?? undefined)),
+    );
     contextMessages.push(...results);
   }
 
@@ -4081,7 +4092,12 @@ function createClaudeCodeProviderInstance(
       maxTurns: schemaConfig.maxTurns as number | undefined,
       pathToClaudeCodeExecutable: schemaConfig.pathToClaudeCodeExecutable as string | undefined,
     },
-    createSessionStorage(db, provider.id),
+    // G5 (ADR-0008): the session store is reached only from this consumer, so it
+    // establishes its own tenant scope from the LOADED instance's persisted
+    // ownership — `instances.tenantId` is the G2 ownership root, read from the
+    // database, never asserted by a payload. Null in the flag-off world, where
+    // the store keeps its pre-G5 ambient/plaintext path byte-identically.
+    createSessionStorage(db, provider.id, undefined, { resolveTenantId: () => instance.tenantId ?? null }),
     {
       timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 600) as number) * 1000,
       enableAutoSplit: instance.enableAutoSplit ?? true,
@@ -5014,7 +5030,13 @@ async function shouldProcessMessage(
     return null;
   }
 
-  const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
+  // Discrete DB block in the message's world (G5, ADR-0008): a tenant envelope
+  // reads the instance through a short worker scope, so a forged/foreign
+  // instanceId resolves to nothing and dispatch stops here. A legacy envelope
+  // (no tenant) runs on the ambient pool byte-identically.
+  const instance = await runDispatchDb(db, trustedTenantId, () =>
+    agentRunner.getInstanceWithProvider(metadata.instanceId as string),
+  );
   if (!instance?.agentId) {
     log.debug('Instance has no agentId', { instanceId: metadata.instanceId });
     return null;
@@ -5215,10 +5237,21 @@ async function shouldProcessReaction(
   payload: ReactionReceivedPayload,
   metadata: { instanceId?: string; channelType?: string },
   eventType: 'reaction.received' | 'reaction.removed' = 'reaction.received',
+  db?: Database,
+  trustedTenantId?: string,
 ): Promise<Instance | null> {
   if (!metadata.instanceId) return null;
 
-  const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
+  // Discrete DB block in the reaction's world (G5, ADR-0008) — see the sibling
+  // block in `shouldProcessMessage`. `db` is optional only because the unit
+  // tests call this guard directly with no handle; without one there is nothing
+  // to open a scope on and the read stays ambient, exactly as before.
+  const instance =
+    db && trustedTenantId !== undefined
+      ? await runDispatchDb(db, trustedTenantId, () =>
+          agentRunner.getInstanceWithProvider(metadata.instanceId as string),
+        )
+      : await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentId) return null;
 
   if (!instanceTriggersOnEvent(instance, eventType)) return null;
@@ -5439,8 +5472,11 @@ export async function setupAgentDispatcher(
     if (firstMsg.metadata.resolvedInstance) {
       instance = firstMsg.metadata.resolvedInstance as DispatchInstance;
     } else {
-      // Fallback: resolve now if metadata doesn't carry it (shouldn't happen in normal flow)
-      const baseInstance = await agentRunner.getInstanceWithProvider(instanceId);
+      // Fallback: resolve now if metadata doesn't carry it (shouldn't happen in normal flow).
+      // Discrete DB block in the buffered message's world (G5, ADR-0008).
+      const baseInstance = await runDispatchDb(db, firstMsg.metadata.trustedTenantId, () =>
+        agentRunner.getInstanceWithProvider(instanceId),
+      );
       if (!baseInstance) {
         log.warn('Instance not found for debounced messages', { instanceId });
         return;
@@ -5609,7 +5645,16 @@ export async function setupAgentDispatcher(
         // for the same reaction event.
         await withIdempotency(db, event.id, 'agent-dispatcher-reaction', async () => {
           try {
-            const instance = await shouldProcessReaction(agentRunner, accessService, reactionDedup, payload, metadata);
+            const instance = await shouldProcessReaction(
+              agentRunner,
+              accessService,
+              reactionDedup,
+              payload,
+              metadata,
+              'reaction.received',
+              db,
+              trustedDispatchTenant(metadata),
+            );
             if (!instance) return;
 
             const traceId = metadata.traceId ?? generateCorrelationId('trc');
@@ -5669,6 +5714,8 @@ export async function setupAgentDispatcher(
               payload,
               metadata,
               'reaction.removed',
+              db,
+              trustedDispatchTenant(metadata),
             );
             if (!instance) return;
 
@@ -5725,7 +5772,10 @@ export async function setupAgentDispatcher(
         // timer on a stale typing event.
         await withIdempotency(db, event.id, 'agent-dispatcher-typing', async () => {
           try {
-            const baseInstance = await agentRunner.getInstanceWithProvider(metadata.instanceId as string);
+            // Discrete DB block in the typing event's world (G5, ADR-0008).
+            const baseInstance = await runDispatchDb(db, trustedDispatchTenant(metadata), () =>
+              agentRunner.getInstanceWithProvider(metadata.instanceId as string),
+            );
             if (!baseInstance?.agentId) return;
 
             // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
