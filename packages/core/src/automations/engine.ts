@@ -15,7 +15,13 @@ import { generateId } from '../ids';
 import { createLogger } from '../logger';
 import { type ActionDependencies, executeActions } from './actions';
 import { evaluateConditionsWithDetails } from './conditions';
-import { type ConversationKey, DebounceManager, type DebouncedMessage, buildConversationKey } from './debounce';
+import {
+  type ConversationKey,
+  type DebounceEnvelopeStamp,
+  DebounceManager,
+  type DebouncedMessage,
+  buildConversationKey,
+} from './debounce';
 import { type TemplateContext, createTemplateContext } from './templates';
 import type { ActionExecutionResult, Automation, AutomationLogStatus, DebounceConfig, NewAutomationLog } from './types';
 
@@ -52,8 +58,15 @@ export interface ExecutionResult {
 
 /**
  * Callback for logging execution results
+ *
+ * `trustedTenantId` is the executed event's classified envelope tenant (G5,
+ * ADR-0008) — `null` for a legacy envelope or a refused quarantine. The
+ * API-side logger currently CANNOT scope its `automation_logs` write with it:
+ * that table derives its tenant from the G2-`unowned` `automations` parent,
+ * so scoping is G6-gated — but the value is threaded now so the G6 unblock is
+ * a service-side change only.
  */
-export type ExecutionLogger = (log: NewAutomationLog) => Promise<void>;
+export type ExecutionLogger = (log: NewAutomationLog, trustedTenantId?: string | null) => Promise<void>;
 
 /**
  * Configuration for the automation engine
@@ -463,6 +476,22 @@ export class AutomationEngine {
       return;
     }
 
+    // Classify the envelope BEFORE the event enters a window (G5, ADR-0008):
+    // the flush callback builds a SYNTHETIC event, so the window must carry the
+    // producer-stamped world or a debounced tenant automation would silently
+    // degrade to legacy at flush. A quarantine-class envelope never enters a
+    // window — it goes through the immediate path, whose central refusal in
+    // `executeAutomation` logs it without running any action.
+    const classification = classifyEnvelope(event.metadata);
+    if (classification.world === 'quarantine') {
+      await this.handleImmediate(automation, event);
+      return;
+    }
+    const stamp: DebounceEnvelopeStamp | null =
+      classification.world === 'tenant'
+        ? { envelopeVersion: classification.envelopeVersion, tenantId: classification.tenantId }
+        : null;
+
     // Build debounced message
     const content = payload.content as { type: string; text?: string } | undefined;
     const message: DebouncedMessage = {
@@ -472,7 +501,7 @@ export class AutomationEngine {
       payload,
     };
 
-    manager.addMessage(key, message, from, instanceId);
+    manager.addMessage(key, message, from, instanceId, stamp);
   }
 
   /**
@@ -494,6 +523,7 @@ export class AutomationEngine {
       messages: DebouncedMessage[],
       from: { id: string; name?: string },
       instanceId: string,
+      stamp: DebounceEnvelopeStamp | null,
     ) => {
       // Get the last message (should always exist since callback only fires with messages)
       const lastMessage = messages[messages.length - 1];
@@ -515,7 +545,10 @@ export class AutomationEngine {
         },
       });
 
-      // Create a synthetic event
+      // Create a synthetic event. The window's envelope stamp (G5) is carried
+      // onto the synthetic metadata — same fields, same version the producer
+      // stamped — so `executeAutomation`'s classification sees exactly the
+      // world the original events belonged to. A legacy window stamps nothing.
       const syntheticEvent: OmniEvent = {
         id: generateId(),
         type: automation.triggerEventType as EventType,
@@ -523,6 +556,7 @@ export class AutomationEngine {
         metadata: {
           correlationId: generateId(),
           instanceId,
+          ...(stamp ? { envelopeVersion: stamp.envelopeVersion, tenantId: stamp.tenantId } : {}),
         },
         timestamp: Date.now(),
       };
@@ -602,7 +636,37 @@ export class AutomationEngine {
     const start = Date.now();
     queue.activeCount++;
 
+    // Classify the envelope ONCE for the whole execution (G5, ADR-0008). The
+    // trusted tenant is read from producer-stamped METADATA — the payload can
+    // carry any claim it likes and it never reaches this decision.
+    const classification = classifyEnvelope(event.metadata);
+    const trustedTenantId = classification.world === 'tenant' ? classification.tenantId : null;
+
     try {
+      if (classification.world === 'quarantine') {
+        // Defence in depth: the subscription layer already refuses quarantined
+        // envelopes before any handler runs. If one reaches here anyway,
+        // executing its actions "globally" is exactly the fallback ADR-0008
+        // forbids — refuse, log, alert.
+        logger.error('Refusing to execute automation for a quarantine-class envelope', {
+          automationId: automation.id,
+          eventId: event.id,
+          reason: classification.reason,
+        });
+        const result: ExecutionResult = {
+          automationId: automation.id,
+          automationName: automation.name,
+          eventId: event.id,
+          status: 'failed',
+          conditionsMatched: false,
+          actionsExecuted: [],
+          error: `refused quarantine-class envelope (${classification.reason})`,
+          executionTimeMs: Date.now() - start,
+        };
+        await this.logExecution(result, null);
+        return result;
+      }
+
       // Evaluate conditions — merge metadata so conditions can reference
       // fields like instanceId, channelType, correlationId etc.
       const conditionPayload = {
@@ -626,15 +690,16 @@ export class AutomationEngine {
           executionTimeMs: Date.now() - start,
         };
 
-        await this.logExecution(result);
+        await this.logExecution(result, trustedTenantId);
         return result;
       }
 
-      // Execute actions
+      // Execute actions, threading the envelope's trusted tenant (null = legacy).
       const actionsExecuted = await executeActions(
         automation.actions as Parameters<typeof executeActions>[0],
         context,
         this.deps,
+        trustedTenantId,
       );
 
       // Determine overall status
@@ -651,7 +716,7 @@ export class AutomationEngine {
         executionTimeMs: Date.now() - start,
       };
 
-      await this.logExecution(result);
+      await this.logExecution(result, trustedTenantId);
       return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -667,7 +732,7 @@ export class AutomationEngine {
         executionTimeMs: Date.now() - start,
       };
 
-      await this.logExecution(result);
+      await this.logExecution(result, trustedTenantId);
       return result;
     } finally {
       queue.activeCount--;
@@ -686,17 +751,20 @@ export class AutomationEngine {
   /**
    * Log execution result
    */
-  private async logExecution(result: ExecutionResult): Promise<void> {
+  private async logExecution(result: ExecutionResult, trustedTenantId: string | null = null): Promise<void> {
     if (this.logger) {
-      await this.logger({
-        automationId: result.automationId,
-        eventId: result.eventId,
-        status: result.status,
-        conditionsMatched: result.conditionsMatched,
-        actionsExecuted: result.actionsExecuted,
-        error: result.error,
-        executionTimeMs: result.executionTimeMs,
-      });
+      await this.logger(
+        {
+          automationId: result.automationId,
+          eventId: result.eventId,
+          status: result.status,
+          conditionsMatched: result.conditionsMatched,
+          actionsExecuted: result.actionsExecuted,
+          error: result.error,
+          executionTimeMs: result.executionTimeMs,
+        },
+        trustedTenantId,
+      );
     }
 
     logger.info('Automation executed', {

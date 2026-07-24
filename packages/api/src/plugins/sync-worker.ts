@@ -15,6 +15,8 @@ import type { Database, SyncJobConfig, SyncJobProgress, SyncJobType } from '@omn
 import { omniGroups } from '@omni/db';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Services } from '../services';
+import { InflightRevocationError, createInflightRevocationMonitor } from '../tenancy/inflight-revocation';
+import { isTenantWorkAdmissible } from '../tenancy/periodic-tenant-work';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runConsumerInTenantContext } from '../tenancy/worker-tenant-context';
 import { validateContactPhone } from '../utils/phone';
@@ -144,6 +146,21 @@ function trustedSyncTenant(envelope: SyncEnvelope): string | null {
   return classification.world === 'tenant' ? classification.tenantId : null;
 }
 
+/**
+ * The in-flight revocation gate for a sync job (G5, deliverable (c);
+ * RELEASE_SLOS `inflight_privileged_work_revocation_seconds_max`). A message
+ * backfill can run for minutes, so each processor calls the monitor per work
+ * item: the first call doubles as dequeue-time revalidation, later calls
+ * re-check the auth plane at the bounded cadence. Legacy jobs (null tenant)
+ * never check — byte-identical.
+ */
+function jobRevocationMonitor(services: Services, jobTenantId: string | null) {
+  return createInflightRevocationMonitor({
+    tenantId: jobTenantId,
+    check: (tenantId) => isTenantWorkAdmissible(services.authPlane.db, tenantId),
+  });
+}
+
 export async function setupSyncWorker(
   eventBus: EventBus,
   services: Services,
@@ -173,8 +190,13 @@ export async function setupSyncWorker(
           // Start the job
           await services.syncJobs.start(jobId, jobTenantId);
 
-          // Get instance to determine channel type
-          const instance = await services.instances.getById(instanceId);
+          // Get instance to determine channel type. One discrete scoped read
+          // (G5, ADR-0008): a tenant-world job runs it in a short worker scope
+          // via the envelope's classified world; a legacy job reads the
+          // ambient pool byte-identically. Without this wrap the read was the
+          // handler's ONE bare `instances` access between `syncJobs.start`
+          // and the scoped per-item loop.
+          const instance = await inSyncWorkerScope(event, () => services.instances.getById(instanceId));
           if (!instance) {
             throw new Error(`Instance ${instanceId} not found`);
           }
@@ -434,6 +456,14 @@ async function processMessageSync(
   // `trustedSyncTenant`.
   const jobTenantId = trustedSyncTenant(envelope);
 
+  // In-flight revocation gate (RELEASE_SLOS inflight ceiling): the first call
+  // is the dequeue-time revalidation — it runs before ANY anchor read or
+  // message store; per-message calls below observe a mid-flight revocation at
+  // the bounded cadence. Sticky: once refused, the rest of the fetch drops.
+  const revocation = jobRevocationMonitor(services, jobTenantId);
+  await revocation.assertAdmissible();
+  let inflightRevoked: InflightRevocationError | null = null;
+
   // Check if plugin supports fetchHistory
   if (!('fetchHistory' in plugin) || typeof plugin.fetchHistory !== 'function') {
     log.warn('Plugin does not support fetchHistory', { channelType });
@@ -494,6 +524,7 @@ async function processMessageSync(
     count: 100, // Messages per chat (recursive fetching will get more)
     anchors: anchors.length > 0 ? anchors : undefined,
     onProgress: async (count: number, progress?: number) => {
+      if (inflightRevoked) return; // no durable side effects after the flip
       await services.syncJobs.updateProgress(
         jobId,
         {
@@ -506,6 +537,21 @@ async function processMessageSync(
       );
     },
     onMessage: async (msg: HistorySyncMessage) => {
+      // The per-item revocation gate, BEFORE the try below: its refusal must
+      // stop the store, not be swallowed by the per-message error handler. The
+      // channel plugin may keep feeding messages after the flip — they are
+      // dropped here without side effects, and the job fails after the fetch.
+      if (inflightRevoked) return;
+      try {
+        await revocation.assertAdmissible();
+      } catch (error) {
+        if (error instanceof InflightRevocationError) {
+          inflightRevoked = error;
+          return;
+        }
+        throw error;
+      }
+
       // Rate limit — OUTSIDE the worker scope, so no tenant transaction is held
       // across the sleep.
       await rateLimiter.wait();
@@ -565,6 +611,9 @@ async function processMessageSync(
 
   // Call fetchHistory
   await plugin.fetchHistory(instanceId, fetchOptions);
+
+  // A revocation observed mid-flight fails the job — never "completed".
+  if (inflightRevoked) throw inflightRevoked;
 
   // Update final progress
   await services.syncJobs.updateProgress(
@@ -694,6 +743,11 @@ async function processContactsSync(
   // would find nothing. The job table is owned and is scoped.
   const jobTenantId = trustedSyncTenant(envelope);
 
+  // In-flight revocation gate — same contract as processMessageSync.
+  const revocation = jobRevocationMonitor(services, jobTenantId);
+  await revocation.assertAdmissible();
+  let inflightRevoked: InflightRevocationError | null = null;
+
   // Check if plugin supports fetchContacts
   if (!('fetchContacts' in plugin) || typeof plugin.fetchContacts !== 'function') {
     log.warn('Plugin does not support fetchContacts', { channelType });
@@ -725,6 +779,17 @@ async function processContactsSync(
       );
     },
     onContact: async (contact: unknown) => {
+      if (inflightRevoked) return;
+      try {
+        await revocation.assertAdmissible();
+      } catch (error) {
+        if (error instanceof InflightRevocationError) {
+          inflightRevoked = error;
+          return;
+        }
+        throw error;
+      }
+
       fetched++;
 
       const c = contact as {
@@ -786,6 +851,9 @@ async function processContactsSync(
 
   // Call fetchContacts
   await plugin.fetchContacts(instanceId, fetchOptions);
+
+  // A revocation observed mid-flight fails the job — never "completed".
+  if (inflightRevoked) throw inflightRevoked;
 
   // Update final progress
   await services.syncJobs.updateProgress(
@@ -905,6 +973,11 @@ async function processGroupsSync(
   // per-item `inSyncWorkerScope` (leg B pt2).
   const jobTenantId = trustedSyncTenant(envelope);
 
+  // In-flight revocation gate — same contract as processMessageSync.
+  const revocation = jobRevocationMonitor(services, jobTenantId);
+  await revocation.assertAdmissible();
+  let inflightRevoked: InflightRevocationError | null = null;
+
   // Check if plugin supports fetchGroups (WhatsApp) or fetchGuilds (Discord)
   const fetchMethod = channelType === 'discord' ? 'fetchGuilds' : 'fetchGroups';
   if (!(fetchMethod in plugin) || typeof plugin[fetchMethod as keyof typeof plugin] !== 'function') {
@@ -944,6 +1017,16 @@ async function processGroupsSync(
       );
     },
     onGroup: async (group: unknown) => {
+      if (inflightRevoked) return;
+      try {
+        await revocation.assertAdmissible();
+      } catch (error) {
+        if (error instanceof InflightRevocationError) {
+          inflightRevoked = error;
+          return;
+        }
+        throw error;
+      }
       fetched++;
 
       const g = group as SyncedGroupInput;
@@ -1044,6 +1127,9 @@ async function processGroupsSync(
     options: Record<string, unknown>,
   ) => Promise<void>;
   await fetchFn.call(plugin, instanceId, fetchOptions);
+
+  // A revocation observed mid-flight fails the job — never "completed".
+  if (inflightRevoked) throw inflightRevoked;
 
   // Update final progress
   await services.syncJobs.updateProgress(

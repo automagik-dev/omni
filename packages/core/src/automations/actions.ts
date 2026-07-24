@@ -60,15 +60,28 @@ export interface AgentCallContext {
 
 /**
  * Dependencies needed by action executors
+ *
+ * TENANT THREADING (G5, ADR-0008): the engine classifies each consumed
+ * envelope (`classifyEnvelope`) and threads the producer-stamped trusted
+ * tenant into `sendMessage` / `callAgent` as the trailing `trustedTenantId`
+ * argument — `null` for a legacy envelope. The value is derived from envelope
+ * METADATA, never from the event payload, and the callback implementations
+ * (packages/api `automation-actions.ts`) scope their DB blocks with it. A
+ * caller that threads nothing (the route-side manual `execute`, existing
+ * tests) leaves it `undefined` and the callbacks behave exactly as before.
  */
 export interface ActionDependencies {
   eventBus: EventBus | null;
-  sendMessage?: (instanceId: string, to: string, content: string) => Promise<void>;
+  sendMessage?: (instanceId: string, to: string, content: string, trustedTenantId?: string | null) => Promise<void>;
   /**
    * Call an AI agent and return the response.
    * The response is stored in variables for use in subsequent actions.
    */
-  callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
+  callAgent?: (
+    context: AgentCallContext,
+    config: CallAgentActionConfig,
+    trustedTenantId?: string | null,
+  ) => Promise<AgentRunResult>;
   /**
    * Optional consumer-side stale-event gate. Invoked by the engine for
    * `chat.idle_timeout` events before matching automations execute.
@@ -135,6 +148,7 @@ async function executeWebhookAction(
   config: WebhookActionConfig,
   context: TemplateContext,
   _deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
     const url = substituteTemplate(config.url, context);
@@ -151,13 +165,19 @@ async function executeWebhookAction(
     // byte-identical passthrough to the previous raw `fetch`; with a bound policy
     // it enforces the default-deny SSRF broker. The `egress` marker carries the
     // audit context; the request init is otherwise unchanged.
+    //
+    // G5 tenant threading: a consumer-side execution binds the CONSUMED
+    // envelope's trusted tenant (threaded by the engine), so the broker can
+    // resolve that tenant's policy; the request-side ambient resolver only
+    // applies when no envelope tenant exists. A legacy envelope threads null
+    // and the marker stays `(unbound)` — passthrough, byte-identical.
     const response = await brokeredFetch(url, {
       method,
       headers,
       body: method !== 'GET' ? body : undefined,
       signal: AbortSignal.timeout(config.timeoutMs ?? 30000),
       egress: {
-        tenantId: resolveAmbientTenantId() ?? '(unbound)',
+        tenantId: trustedTenantId ?? resolveAmbientTenantId() ?? '(unbound)',
         actorCredentialId: null,
         integration: 'automations.webhook',
       },
@@ -190,6 +210,7 @@ async function executeSendMessageAction(
   config: SendMessageActionConfig,
   context: TemplateContext,
   deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
     if (!deps.sendMessage) {
@@ -216,7 +237,7 @@ async function executeSendMessageAction(
 
     logger.debug('Sending message', { instanceId, to, contentLength: content.length });
 
-    await deps.sendMessage(instanceId, to, content);
+    await deps.sendMessage(instanceId, to, content, trustedTenantId);
 
     return {
       success: true,
@@ -239,6 +260,7 @@ async function executeEmitEventAction(
   config: EmitEventActionConfig,
   context: TemplateContext,
   deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
     if (!deps.eventBus) {
@@ -260,9 +282,16 @@ async function executeEmitEventAction(
 
     logger.debug('Emitting event', { eventType });
 
+    // G5 (ADR-0008): a tenant-world execution threads its trusted tenant into
+    // the re-publish metadata, so the publisher seam
+    // (`resolvePublishTenantId`, explicit-tenant precedence) stamps the NEXT
+    // hop's envelope — a consumer chain never silently drops back to the
+    // legacy world. With nothing threaded the metadata is unchanged and the
+    // publish stays byte-identical.
     const result = await deps.eventBus.publishGeneric(eventType, payload, {
       correlationId: (context.payload.correlationId as string) ?? undefined,
       source: 'automation',
+      ...(trustedTenantId ? { tenantId: trustedTenantId } : {}),
     });
 
     return {
@@ -403,6 +432,7 @@ async function executeCallAgentAction(
   config: CallAgentActionConfig,
   context: TemplateContext,
   deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   if (!deps.callAgent) {
     return { success: false, error: 'callAgent dependency not provided' };
@@ -424,7 +454,9 @@ async function executeCallAgentAction(
   });
 
   try {
-    const result = await deps.callAgent(agentContext, config);
+    // `agentContext` is payload-derived; the trusted tenant travels as its own
+    // argument so the trust boundary stays visible at the callback signature.
+    const result = await deps.callAgent(agentContext, config, trustedTenantId);
 
     logger.info('Agent call completed', {
       runId: result.metadata.runId,
@@ -455,6 +487,7 @@ export async function executeAction(
   action: AutomationAction,
   context: TemplateContext,
   deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<ActionExecutionResult> {
   const start = Date.now();
 
@@ -462,19 +495,19 @@ export async function executeAction(
 
   switch (action.type) {
     case 'webhook':
-      result = await executeWebhookAction(action.config, context, deps);
+      result = await executeWebhookAction(action.config, context, deps, trustedTenantId);
       break;
     case 'send_message':
-      result = await executeSendMessageAction(action.config, context, deps);
+      result = await executeSendMessageAction(action.config, context, deps, trustedTenantId);
       break;
     case 'emit_event':
-      result = await executeEmitEventAction(action.config, context, deps);
+      result = await executeEmitEventAction(action.config, context, deps, trustedTenantId);
       break;
     case 'log':
       result = await executeLogAction(action.config, context, deps);
       break;
     case 'call_agent':
-      result = await executeCallAgentAction(action.config, context, deps);
+      result = await executeCallAgentAction(action.config, context, deps, trustedTenantId);
       break;
     default:
       // TypeScript should catch this, but just in case
@@ -502,6 +535,7 @@ export async function executeActions(
   actions: AutomationAction[],
   context: TemplateContext,
   deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<ActionExecutionResult[]> {
   const results: ActionExecutionResult[] = [];
   const variables = { ...context.variables };
@@ -513,7 +547,7 @@ export async function executeActions(
       variables,
     };
 
-    const result = await executeAction(action, actionContext, deps);
+    const result = await executeAction(action, actionContext, deps, trustedTenantId);
     results.push(result);
 
     // Store response as variable if configured (for webhook and call_agent)

@@ -33,7 +33,6 @@ import {
 import type { Database, DbEnforcementMode, EnforcedBootIdentities } from '@omni/db';
 import {
   API_CRITICAL_COLUMNS,
-  agents,
   applyMigrations,
   assertEnforcedRuntimeIdentity,
   closeDb,
@@ -48,7 +47,7 @@ import {
   verifyCriticalColumns,
 } from '@omni/db';
 import * as Sentry from '@sentry/bun';
-import { eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 
 // Configure logging at startup
 configureLogging({
@@ -83,7 +82,7 @@ import {
   setupSessionCleaner,
   setupSyncWorker,
 } from './plugins';
-import { getPlugin } from './plugins/loader';
+import { buildAutomationEngineDeps } from './plugins/automation-actions';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
 import { ApiKeyService } from './services/api-keys';
@@ -518,46 +517,6 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
   process.on('SIGTERM', shutdown);
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Resolve chat UUID → channel-native external_id for a call_agent invocation.
- *
- * Symmetric with the send_message action (above) which already auto-resolves
- * UUIDs for the same reason: system-initiated events (chat.idle_timeout) emit
- * payload.chatId as the internal chats.id UUID, but the seller dispatch path
- * carries the external_id (e.g. WA phone). Without resolution, the agent
- * runner's computeSessionId produces session_ids that diverge from sessions
- * created by the seller path.
- *
- * Also resolves senderId — extractAgentCallContext falls back senderId=chatId
- * when payload.from/senderId are absent (follow-up events).
- *
- * On missing chat row, logs a warning and falls through with the raw UUID so
- * the call still runs (avoids hard-failing the automation action).
- */
-async function resolveCallAgentChatIds(
-  services: ReturnType<typeof createApp>['services'],
-  ctx: { chatId: string; senderId: string; instanceId: string },
-): Promise<{ chatId: string; senderId: string }> {
-  if (!UUID_RE.test(ctx.chatId)) {
-    return { chatId: ctx.chatId, senderId: ctx.senderId };
-  }
-  try {
-    const chat = await services.chats.getById(ctx.chatId, { includeHidden: true });
-    return {
-      chatId: chat.externalId,
-      senderId: ctx.senderId === ctx.chatId ? chat.externalId : ctx.senderId,
-    };
-  } catch {
-    log.warn('call_agent: chat UUID not resolvable, using raw value (session may diverge)', {
-      chatId: ctx.chatId,
-      instanceId: ctx.instanceId,
-    });
-    return { chatId: ctx.chatId, senderId: ctx.senderId };
-  }
-}
-
 /**
  * Setup event bus related services (plugins, persistence, workers)
  * Extracted to reduce main() complexity
@@ -593,109 +552,13 @@ async function setupEventBusServices(
     log.error('Failed to set up agent dispatcher', { error: String(error) });
   }
 
-  // Automation engine (subscribes to NATS events and evaluates rules)
+  // Automation engine (subscribes to NATS events and evaluates rules).
+  // The action callbacks live in `plugins/automation-actions.ts` — a worker
+  // surface (G5, ADR-0008): the engine threads each consumed envelope's
+  // trusted tenant into them, and their DB blocks scope themselves with
+  // `runTenantWorkDb` (legacy envelopes run ambient, byte-identically).
   try {
-    await services.automations.startEngine({
-      sendMessage: async (instanceId, to, content) => {
-        const instance = await services.instances.getById(instanceId);
-        if (!instance) throw new Error(`Instance not found: ${instanceId}`);
-        const plugin = await getPlugin(instance.channel);
-        if (!plugin) throw new Error(`No plugin for channel: ${instance.channel}`);
-        // Resolve internal chat UUID → channel-native external_id (e.g. WA JID).
-        // Automation payloads carry chat UUIDs; plugins expect channel JIDs.
-        let recipient = to;
-        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(to)) {
-          try {
-            const chat = await services.chats.getById(to, { includeHidden: true });
-            recipient = chat.externalId;
-          } catch {
-            throw new Error(`Chat not found for UUID: ${to}`);
-          }
-        }
-        await plugin.sendMessage(instanceId, { to: recipient, content: { type: 'text', text: content } });
-      },
-      callAgent: async (ctx, cfg) => {
-        const instance = await services.instances.getById(ctx.instanceId);
-        if (!instance) throw new Error(`Instance not found: ${ctx.instanceId}`);
-
-        // System-initiated events (chat.idle_timeout) emit payload.chatId as
-        // the internal chats.id UUID; the seller dispatch path carries the
-        // channel-native external_id. Resolve UUID → external_id so the
-        // computed session_id matches sessions created by the seller path.
-        const { chatId: resolvedChatId, senderId: resolvedSenderId } = await resolveCallAgentChatIds(services, ctx);
-
-        const agentFkId = ctx.agentId ?? instance.agentId;
-        if (!agentFkId) throw new Error(`No agent configured for instance ${instance.id}`);
-
-        const [agentRow] = await db
-          .select({
-            name: agents.name,
-            agentProviderId: agents.agentProviderId,
-            agentType: agents.agentType,
-            metadata: agents.metadata,
-            configPath: agents.configPath,
-          })
-          .from(agents)
-          .where(eq(agents.id, agentFkId))
-          .limit(1);
-        if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
-
-        const typeMap: Record<string, 'agent' | 'team' | 'workflow'> = {
-          assistant: 'agent',
-          tool: 'agent',
-          workflow: 'workflow',
-          team: 'team',
-        };
-        const providerAgentId =
-          ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??
-          agentRow.configPath ??
-          agentRow.name;
-
-        const runInstance = {
-          ...instance,
-          agentProviderId: agentRow.agentProviderId ?? null,
-          agentType: cfg.agentType ?? typeMap[agentRow.agentType] ?? 'agent',
-          agentInternalId: providerAgentId,
-          agentSessionStrategy: cfg.sessionStrategy ?? instance.agentSessionStrategy,
-          agentPrefixSenderName: cfg.prefixSenderName ?? instance.agentPrefixSenderName,
-          agentTimeout: cfg.timeoutMs ? Math.ceil(cfg.timeoutMs / 1000) : instance.agentTimeout,
-        };
-
-        // Honor instance.agentStreamMode — sync mode waits for the full agent run
-        // before sending anything (11-14s on some providers); stream mode returns
-        // progressively. See issue #410.
-        const result = await services.agentRunner.runOrStream({
-          instance: runInstance,
-          chatId: resolvedChatId,
-          senderId: resolvedSenderId,
-          senderName: ctx.senderName,
-          chatType: 'dm',
-          messages: ctx.messages,
-        });
-        return {
-          parts: result.parts,
-          fullResponse: result.parts.join('\n'),
-          metadata: {
-            runId: result.metadata.runId,
-            sessionId: result.metadata.sessionId,
-            status: result.metadata.status,
-          },
-        };
-      },
-      // Consumer-side stale-event gate — see engine.handleEvent comment.
-      // Skips chat.idle_timeout events whose row has been disarmed since the
-      // sweeper published the event, or whose chat is in active close-contact
-      // state. Fail-open on errors so a flaky DB doesn't drop legitimate
-      // events.
-      staleIdleTimeoutGate: async (chatId, instanceId, eventSequenceIndex, trustedTenantId) => {
-        return services.followUpLifecycle.evaluateIdleTimeoutFreshness(
-          chatId,
-          instanceId,
-          eventSequenceIndex,
-          trustedTenantId,
-        );
-      },
-    });
+    await services.automations.startEngine(buildAutomationEngineDeps(services, db));
   } catch (error) {
     log.error('Failed to start automation engine', { error: String(error) });
   }

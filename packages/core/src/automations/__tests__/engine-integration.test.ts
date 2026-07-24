@@ -94,10 +94,13 @@ describe('Full automation flow with real WhatsApp payloads', () => {
       expect(results).toHaveLength(1);
       expect(getFixture(results, 0).status).toBe('success');
       expect(mockSendMessage).toHaveBeenCalledTimes(1);
+      // Trailing `undefined` = trustedTenantId (G5): a direct `executeActions`
+      // call with nothing threaded stays in the legacy world.
       expect(mockSendMessage).toHaveBeenCalledWith(
         instanceId,
         '5511999990001@s.whatsapp.net',
         'Thanks for your message: "Buenas como q tão as coisas aí"',
+        undefined,
       );
     });
 
@@ -263,7 +266,12 @@ describe('Full automation flow with real WhatsApp payloads', () => {
         expect(getFixture(results, 1).status).toBe('success');
 
         // Verify the agent response was passed to send_message
-        expect(mockSendMessage).toHaveBeenCalledWith(instanceId, '5511999990001@s.whatsapp.net', 'Hello from agent!');
+        expect(mockSendMessage).toHaveBeenCalledWith(
+          instanceId,
+          '5511999990001@s.whatsapp.net',
+          'Hello from agent!',
+          undefined,
+        );
       } finally {
         globalThis.fetch = originalFetch;
       }

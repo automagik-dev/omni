@@ -568,6 +568,16 @@ export const PENDING_G5_CEILING = 20;
  * 26 after G5 leg H (6 + 20): the six `chats`/`messages`/`persons` service sites
  * were CONVERTED by scoping their callers, not relabelled. No site moved between
  * the two pending classes this leg, and no new pending site was opened.
+ *
+ * STILL 26 after G5 leg I (6 + 20), and the flat number deserves scepticism, so
+ * here is its anatomy: `chats.ts::chats` was CONVERTED (-1) by scoping its last
+ * unscoped caller (the automation-engine callbacks, plus the sync-worker and
+ * session-cleaner instance reads along the way), and the callbacks' direct
+ * `agents` read — which had been hiding under `index.ts`'s control-plane
+ * STARTUP entry since G4 — was extracted to `automation-actions.ts` and
+ * honestly registered pending (+1) on the same G6 `agents` gate as the
+ * dispatcher and session-cleaner sites. Net zero by count; strictly better by
+ * honesty: a consumer read no longer wears a bootstrap exemption.
  */
 export const TOTAL_PENDING_CEILING = 26;
 
@@ -679,13 +689,6 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   },
   {
     file: 'packages/api/src/index.ts',
-    table: 'agents',
-    class: 'control-plane',
-    justification:
-      'Process startup: migrate-on-boot, schema-drift verification, and the boot banner. WISH "Public and bootstrap surfaces" classifies startup as a control-plane operation with an explicit credential class.',
-  },
-  {
-    file: 'packages/api/src/index.ts',
     table: 'instances',
     class: 'control-plane',
     justification:
@@ -715,14 +718,14 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'agents',
     class: 'pending-G5-conversion',
     justification:
-      'CONVERTED IN CODE but honestly still pending, twice over. Both accesses — the turn-based agent lookup and ' +
+      'CONVERTED IN CODE but honestly still pending. Both accesses — the turn-based agent lookup and ' +
       '`applyAgentFkOverrides` — now run through `scopedHandle` inside a short worker scope from the envelope-derived ' +
-      'tenant (`runDispatchDb`), and its NATS-consumer callers all thread that tenant. What keeps the class: (a) the ' +
-      '`session-cleaner` durable consumer (session-cleaner.ts:135) still calls `applyAgentFkOverrides` with no ' +
-      'tenant — its conversion is blocked on the G6 `persons` backfill; and (b) `agents` itself derives its tenant ' +
-      'via owner_id -> persons (G2-unowned), so the derivation trigger leaves every row NULL-tenant until that same ' +
-      'backfill — a scoped read finds nothing yet. Flips to tenant-boundary when G6 lands and session-cleaner ' +
-      'converts; the async mechanism is the ADR-0008 consumer context above.',
+      'tenant (`runDispatchDb`), and its NATS-consumer callers all thread that tenant (the `session-cleaner` caller ' +
+      'threads it too since its own conversion — the earlier session-cleaner.ts:135 no-tenant clause is closed, ' +
+      'run13 accuracy fix). What keeps the class: `agents` itself derives its tenant via owner_id -> persons ' +
+      '(G2-unowned), so the derivation trigger leaves every row NULL-tenant until the G6 backfill — a scoped read ' +
+      'finds nothing yet. Flips to tenant-boundary when G6 lands; the async mechanism is the ADR-0008 consumer ' +
+      'context above.',
   },
   {
     // G5-CONVERTED (leg C2). The error-handoff audit insert
@@ -744,6 +747,30 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     file: 'packages/api/src/plugins/agent-dispatcher.ts',
     table: 'instances',
     class: 'tenant-boundary',
+  },
+  {
+    // G5 leg I (run13). The automation engine's `call_agent` callback resolves
+    // the agent row directly; it lived inline in `index.ts`, where the scanner
+    // filed it under that file's `control-plane` STARTUP entry — a consumer
+    // read hiding under a bootstrap exemption. Extracted here, it now runs
+    // through `scopedHandle` inside a short worker scope for the tenant the
+    // engine threads from the consumed envelope (legacy envelopes read the
+    // ambient pool byte-identically), and the engine is its only caller.
+    // CONVERTED IN CODE but honestly still pending: `agents` derives its
+    // tenant via owner_id -> persons (G2-unowned), so the derivation trigger
+    // leaves every row NULL-tenant until the G6 backfill — under enforcement a
+    // scoped read finds nothing and `call_agent` fails closed ("Agent not
+    // found", proven in automation-actions-two-tenant-postgres.test.ts).
+    // Flips to tenant-boundary when G6 lands, same gate as the
+    // agent-dispatcher and session-cleaner `agents` sites.
+    file: 'packages/api/src/plugins/automation-actions.ts',
+    table: 'agents',
+    class: 'pending-G5-conversion',
+    justification:
+      'Converted in code (engine-threaded envelope tenant, scopedHandle worker scope, caller-complete) but the ' +
+      '`agents` table derives tenant via owner_id -> persons (G2-unowned): rows stay NULL-tenant until the G6 ' +
+      'persons backfill, so a scoped read finds nothing under enforcement. Same G6 gate as the dispatcher and ' +
+      'session-cleaner `agents` sites; the async mechanism is the ADR-0008 consumer context.',
   },
   {
     // G5-NEW (leg E, deliverable (e)). The voice WebSocket upgrade runs in
@@ -1036,9 +1063,13 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'automation_logs',
     class: 'pending-G5-conversion',
     justification:
-      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
-      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
-      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
+      "Written by the automation engine's execution logger from its NATS consumer callback (and by the route-side " +
+      'manual execute). The engine now THREADS the consumed envelope tenant to the logger (run13), but the service ' +
+      'deliberately does not scope the write yet: `automation_logs` derives its tenant from the REQUIRED ' +
+      '`automation_id` parent and `automations` is G2-unowned (tenant_id NULL until the G6 backfill), so a ' +
+      'worker-scoped insert would fail the strict RLS WITH CHECK and destroy the execution log. G6-gated; when ' +
+      'the backfill lands, wrap the logger callback in runTenantWorkDb (the ADR-0008 consumer context) — the ' +
+      'threading is already in place.',
   },
   {
     file: 'packages/api/src/services/automations.ts',
@@ -1115,11 +1146,16 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/chats.ts',
     table: 'chats',
-    class: 'pending-G5-conversion',
+    class: 'tenant-boundary',
     justification:
-      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
-      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
-      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
+      'CONVERTED (leg I, run13). The service was scope-aware since G4 (`scopedHandle` getter); what remained was ' +
+      'its last unscoped caller — the automation-engine action callbacks, extracted to ' +
+      'plugins/automation-actions.ts, which now wrap their `chats.getById` resolution in `runTenantWorkDb` with ' +
+      'the tenant the engine threads from the consumed envelope (including debounce-window carry). Verified ' +
+      'caller-by-caller: routes (request transaction), message-persistence/agent-dispatcher/media-processor/' +
+      'sync-worker/session-cleaner/follow-up-hooks (worker scopes, legs G-H), and the callbacks (leg I). ' +
+      'trpc/router.ts calls NO chats method. Cross-tenant refusal proven on real RLS in ' +
+      'automation-actions-two-tenant-postgres.test.ts.',
   },
   {
     file: 'packages/api/src/services/chats.ts',
@@ -1237,9 +1273,15 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'instances',
     class: 'pending-G5-conversion',
     justification:
-      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
-      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
-      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
+      'Route paths run inside the request transaction, and leg I (run13) scoped the biggest worker callers: the ' +
+      'automation-engine callbacks (automation-actions.ts, engine-threaded envelope tenant), the sync-worker ' +
+      'channel-type lookup (inSyncWorkerScope), and the session-cleaner confirmation send (runTenantWorkDb). ' +
+      'What still reaches this site unscoped in the tenant world: (a) turn-monitor.ts per-tick `getById` — its ' +
+      'conversion belongs to the turns surface (turns.ts::turns, same leg); (b) the scheduler unread-count-refresh ' +
+      'cron `listActive` — a per-instance cron that should adopt the runForEachActiveTenantRow fan-out; (c) ' +
+      'trpc/router.ts, the exported-but-unmounted synchronous edge with no tenant boundary, held for the same ' +
+      'open decision as persons.ts::platform_identities. A site is only as scoped as its least-scoped caller; ' +
+      'the remaining conversions are the ADR-0008 async-context work above.',
   },
   {
     file: 'packages/api/src/services/media-storage.ts',

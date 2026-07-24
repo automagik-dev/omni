@@ -18,7 +18,7 @@ import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type AccessMode, type AccessRule, type NewAccessRule, type RuleType, accessRules, instances } from '@omni/db';
 import { type SQL, and, count, desc, eq, gt, isNull, ne, or, sql } from 'drizzle-orm';
-import { CacheKeys } from '../cache/cache-keys';
+import { CacheKeys, CacheTTL, authCacheTtlMs } from '../cache/cache-keys';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
 /** Default pairing request expiry: 1 hour */
@@ -201,7 +201,12 @@ export class AccessService {
     const matchingRule = rules.find((rule) => this.ruleMatches(rule, platformUserId));
     const result = this.evaluateMode(accessMode, matchingRule);
 
-    await this.cache?.set(cacheKey, result);
+    // G5 (RELEASE_SLOS auth_cache_invalidation_seconds_max): an allow/deny
+    // decision is cached authorization state — clamped to the revocation
+    // ceiling when multitenancy is enabled; the legacy 5-minute TTL flag-off
+    // (the explicit argument equals the cache's default, so flag-off behavior
+    // is unchanged).
+    await this.cache?.set(cacheKey, result, authCacheTtlMs(CacheTTL.ACCESS_CHECK));
     await this.publishResult(instanceId, platformUserId, result);
 
     return result;

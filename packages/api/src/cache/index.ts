@@ -5,4 +5,11 @@
  * For multi-instance deployments, use a Redis-backed cache implementation.
  */
 
-export { CacheKeys, CacheTTL, apiKeyCache, type CachedApiKey } from './cache-keys';
+export {
+  AUTH_CACHE_INVALIDATION_CEILING_SECONDS,
+  CacheKeys,
+  CacheTTL,
+  apiKeyCache,
+  authCacheTtlMs,
+  type CachedApiKey,
+} from './cache-keys';

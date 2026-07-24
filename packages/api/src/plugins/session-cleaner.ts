@@ -53,10 +53,23 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
 }
 
 /**
- * Send a message via channel plugin
+ * Send a message via channel plugin.
+ *
+ * The instance lookup is one discrete scoped read (G5, ADR-0008): the
+ * consumer caller threads the envelope tenant so a tenant-world cleanup
+ * resolves the channel under a short worker scope; nothing threaded reads the
+ * ambient pool byte-identically. The plugin network call stays OUTSIDE the
+ * scope — a worker transaction must never span a channel send.
  */
-async function sendMessage(services: Services, instanceId: string, chatId: string, text: string): Promise<void> {
-  const instance = await services.instances.getById(instanceId);
+async function sendMessage(
+  services: Services,
+  db: Database,
+  instanceId: string,
+  chatId: string,
+  text: string,
+  trustedTenantId?: string | null,
+): Promise<void> {
+  const instance = await runTenantWorkDb(db, trustedTenantId, () => services.instances.getById(instanceId));
   const channel = instance.channel as ChannelType;
   const plugin = await getPlugin(channel);
   if (plugin) {
@@ -361,7 +374,14 @@ export async function runTrashEmojiCleanup(
 
     // Send confirmation message
     try {
-      await sendMessage(services, instanceId, chatId, '✅ Conversa limpa! Sua sessão com o assistente foi resetada.');
+      await sendMessage(
+        services,
+        db,
+        instanceId,
+        chatId,
+        '✅ Conversa limpa! Sua sessão com o assistente foi resetada.',
+        tenantId,
+      );
       log.info('Sent session cleared confirmation', { instanceId, chatId });
     } catch (sendError) {
       log.error('Failed to send confirmation message', { instanceId, chatId, error: String(sendError) });
@@ -385,7 +405,7 @@ export async function runTrashEmojiCleanup(
 
     // Send error message
     try {
-      await sendMessage(services, instanceId, chatId, '❌ Erro ao limpar sessão. Tente novamente.');
+      await sendMessage(services, db, instanceId, chatId, '❌ Erro ao limpar sessão. Tente novamente.', tenantId);
     } catch (sendError) {
       log.error('Failed to send error message', { instanceId, chatId, error: String(sendError) });
     }

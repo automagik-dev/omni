@@ -218,9 +218,12 @@ describe('db-access guard', () => {
       // (`inSyncWorkerScope`) were brought inside a scope too. Paths that POLL
       // for another consumer's commit scope each ATTEMPT separately — a single
       // spanning transaction could never see the row it waits for.
-      // `chats.ts::chats`, `instances.ts::instances` and
-      // `persons.ts::platform_identities` keep their own pending entries; the
-      // other sites in these three files are converted.
+      // `instances.ts::instances` and `persons.ts::platform_identities` keep
+      // their own pending entries; the other sites in these three files are
+      // converted. `chats.ts::chats` joined the converted set in leg I (run13)
+      // when the automation-engine callbacks — its last unscoped caller —
+      // moved to `plugins/automation-actions.ts` and began scoping their
+      // resolution reads from the engine-threaded envelope tenant.
       'packages/api/src/services/chats.ts',
       'packages/api/src/services/messages.ts',
       'packages/api/src/services/persons.ts',
