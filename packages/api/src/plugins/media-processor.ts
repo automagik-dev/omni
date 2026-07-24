@@ -31,7 +31,7 @@ import { eq } from 'drizzle-orm';
 import type { Services } from '../services';
 import { MediaStorageService } from '../services/media-storage';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
-import { runConsumerInTenantContext } from '../tenancy/worker-tenant-context';
+import { runConsumerInTenantContext, runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
 
 const log = createLogger('media-processor');
 
@@ -101,6 +101,25 @@ function envelopeTenantId(envelope: Pick<OmniEvent, 'metadata'>): string | undef
 }
 
 /**
+ * Run one DISCRETE media-processing DB block in the message's world (G5,
+ * ADR-0008).
+ *
+ * The counterpart of the dispatcher's `runDispatchDb`. Media processing
+ * interleaves DB reads with long downloads, AI transcription and NATS publishes,
+ * so a scope must never wrap more than one discrete block — the G4 leg-2 rule
+ * that a worker transaction never outlives its work item, applied at block
+ * granularity. The chat/message lookups below additionally POLL for
+ * message-persistence's commit, which a single spanning transaction could never
+ * observe; each attempt therefore opens and closes its own scope.
+ *
+ * `undefined` is the legacy world: `fn` runs on the ambient pool, byte-identical
+ * to pre-G5.
+ */
+function runMediaDb<T>(ctx: MediaProcessorContext, trustedTenantId: string | undefined, fn: () => Promise<T>) {
+  return trustedTenantId === undefined ? fn() : runInWorkerTenantScope(ctx.db, trustedTenantId, fn);
+}
+
+/**
  * Get MIME type from content or infer from type
  */
 function getMimeType(content: MessageReceivedPayload['content']): string | undefined {
@@ -160,10 +179,11 @@ async function buildFetchOptions(
   ctx: MediaProcessorContext,
   instanceId: string,
   channelType?: ChannelType,
+  trustedTenantId?: string,
 ): Promise<RequestInit | undefined> {
   if (channelType !== 'slack') return undefined;
   try {
-    const instance = await ctx.services.instances.getById(instanceId);
+    const instance = await runMediaDb(ctx, trustedTenantId, () => ctx.services.instances.getById(instanceId));
     const slackBotToken = (instance as Record<string, unknown>).slackBotToken as string | undefined;
     if (slackBotToken) {
       return { headers: { Authorization: `Bearer ${slackBotToken}` } };
@@ -188,7 +208,7 @@ async function downloadMediaFromUrl(
   channelType?: ChannelType,
   trustedTenantId?: string,
 ): Promise<string | null> {
-  const fetchOptions = await buildFetchOptions(ctx, instanceId, channelType);
+  const fetchOptions = await buildFetchOptions(ctx, instanceId, channelType, trustedTenantId);
   try {
     const result = await ctx.mediaStorage.storeFromUrl(
       instanceId,
@@ -229,20 +249,23 @@ async function resolveMediaPath(
   const deadline = Date.now() + maxWaitMs;
 
   // Use smart lookup to handle LID/phone JID resolution
-  let chat = await ctx.services.chats.findByExternalIdSmart(instanceId, chatId);
+  let chat = await runMediaDb(ctx, trustedTenantId, () => ctx.services.chats.findByExternalIdSmart(instanceId, chatId));
   while (!chat && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, pollMs));
-    chat = await ctx.services.chats.findByExternalIdSmart(instanceId, chatId);
+    chat = await runMediaDb(ctx, trustedTenantId, () => ctx.services.chats.findByExternalIdSmart(instanceId, chatId));
   }
   if (!chat) {
     log.debug('Chat not found, cannot process media', { chatId, externalId });
     return null;
   }
 
-  let message = await ctx.services.messages.getByExternalId(chat.id, externalId);
+  const chatDbId = chat.id;
+  let message = await runMediaDb(ctx, trustedTenantId, () =>
+    ctx.services.messages.getByExternalId(chatDbId, externalId),
+  );
   while (!message && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, pollMs));
-    message = await ctx.services.messages.getByExternalId(chat.id, externalId);
+    message = await runMediaDb(ctx, trustedTenantId, () => ctx.services.messages.getByExternalId(chatDbId, externalId));
   }
   if (!message) {
     log.debug('Message not found after waiting, cannot process media', { externalId });
@@ -546,11 +569,12 @@ async function publishMediaCrashEvents(
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: ChannelType },
   error: unknown,
+  trustedTenantId?: string,
 ): Promise<void> {
   try {
     const processingType = inferProcessingType(payload.content.type);
     const reason = `unexpected: ${String(error)}`;
-    const mediaId = await resolveMediaIdForCrash(ctx, metadata.instanceId ?? '', payload);
+    const mediaId = await resolveMediaIdForCrash(ctx, metadata.instanceId ?? '', payload, trustedTenantId);
     const meta = { instanceId: metadata.instanceId, channelType: metadata.channelType };
 
     await ctx.eventBus.publish(
@@ -590,13 +614,15 @@ async function resolveMediaIdForCrash(
   ctx: MediaProcessorContext,
   instanceId: string,
   payload: MessageReceivedPayload,
+  trustedTenantId?: string,
 ): Promise<string> {
   try {
-    const chat = await ctx.services.chats.findByExternalIdSmart(instanceId, payload.chatId);
-    if (chat) {
-      const msg = await ctx.services.messages.getByExternalId(chat.id, payload.externalId);
-      if (msg) return msg.id;
-    }
+    const msg = await runMediaDb(ctx, trustedTenantId, async () => {
+      const chat = await ctx.services.chats.findByExternalIdSmart(instanceId, payload.chatId);
+      if (!chat) return null;
+      return ctx.services.messages.getByExternalId(chat.id, payload.externalId);
+    });
+    if (msg) return msg.id;
   } catch (lookupError) {
     log.debug('Failed to resolve DB message UUID for crash handler, falling back to externalId', {
       error: String(lookupError),
@@ -691,7 +717,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
           externalId: payload.externalId,
           error: String(error),
         });
-        await publishMediaCrashEvents(ctx, event.id, payload, metadata, error);
+        await publishMediaCrashEvents(ctx, event.id, payload, metadata, error, envelopeTenantId(event));
       }
     },
     {

@@ -207,6 +207,23 @@ describe('db-access guard', () => {
       // fan-out, the `sync.started` consumer, the history-push tracker, and the
       // post-reconnect backfill.
       'packages/api/src/services/sync-jobs.ts',
+      // G5 leg H (the read-path leg): the `chats`/`messages`/`persons` services
+      // were already scope-aware (the `private get db()` -> `scopedHandle`
+      // getter, G4); what changed is that their LAST unscoped callers were
+      // converted. `message-persistence.ts` — the dominant inbound consumer —
+      // now wraps its five handlers in `runConsumerInTenantContext` and gives
+      // every fire-and-forget write it spawns its own `runTenantWorkDb` scope;
+      // the READ helpers of `agent-dispatcher.ts` (`runDispatchDb`),
+      // `media-processor.ts` (`runMediaDb`) and `sync-worker.ts`
+      // (`inSyncWorkerScope`) were brought inside a scope too. Paths that POLL
+      // for another consumer's commit scope each ATTEMPT separately — a single
+      // spanning transaction could never see the row it waits for.
+      // `chats.ts::chats`, `instances.ts::instances` and
+      // `persons.ts::platform_identities` keep their own pending entries; the
+      // other sites in these three files are converted.
+      'packages/api/src/services/chats.ts',
+      'packages/api/src/services/messages.ts',
+      'packages/api/src/services/persons.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

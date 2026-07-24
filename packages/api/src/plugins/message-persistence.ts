@@ -11,6 +11,48 @@
  * - message.delivered/read → update message delivery status
  *
  * @see unified-messages wish
+ *
+ * TENANT CONTEXT (G5, ADR-0008)
+ * -----------------------------
+ * This is the dominant inbound consumer: every message on every channel lands
+ * here and writes `chats`, `messages`, `chat_participants`, `chat_id_mappings`,
+ * `platform_identities` and `instances`. All five handlers are consumer-only —
+ * a NATS subscription, no request, no credential — so until this leg every one
+ * of those writes reached the ambient pool, which is why nine db-access-guard
+ * sites stayed `pending-G5-conversion` long after their route callers were
+ * scoped: a site is only as scoped as its least-scoped caller.
+ *
+ * Each handler now runs its AWAITED db work through
+ * `runConsumerInTenantContext(services.db, event, ...)`: the versioned envelope
+ * is classified once, and a producer-stamped trusted tenant opens one worker
+ * tenant transaction for the whole work item. The services read `scopedHandle`
+ * internally, so the same service code is RLS-policed here and on the routes. A
+ * legacy envelope (no version, no tenant) runs the identical body on the ambient
+ * pool exactly as before — the dual-world contract — and a quarantined envelope
+ * is refused at the top of the handler, before ANY write.
+ *
+ * THE G6 GATE ON `persons`
+ * -----------------------
+ * The sender-identity write is deliberately NOT part of the message transaction.
+ * `persons` is a G2-`unowned` table with no derivation, so under RLS enforcement
+ * its INSERT policy can never be satisfied until the G6 backfill assigns a
+ * `tenant_id`. Keeping that write inside the message transaction would let the
+ * G6 gate destroy the message; nesting a scope for it would hold two pooled
+ * connections at once. It therefore runs first, as its own work item, and
+ * degrades to unset identity FKs (all nullable) with a warning — in the TENANT
+ * world only. See `resolveSenderIdentityForWorkItem`.
+ *
+ * THE FIRE-AND-FORGET TRAP (G4 leg-2)
+ * -----------------------------------
+ * This handler spawns several unawaited writes — the LID mapping upserts, the
+ * chat/instance recency bumps, and the new-identity profile fetch. They outlive
+ * the handler, so they must NOT inherit its transaction: by the time their
+ * continuations run it is committed and its connection is back in the pool, and
+ * a query on it is a use-after-commit. Each therefore takes the trusted tenant
+ * threaded down from the handler and opens its OWN worker scope through
+ * `runTenantWorkDb`, which detaches before it stamps. Threading `null` (the
+ * legacy world) makes `runTenantWorkDb` a pass-through, so flag-off behaviour is
+ * byte-identical down to the call order.
  */
 
 import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni/core';
@@ -19,6 +61,11 @@ import type { ChannelType, ChatType, MessageType } from '@omni/db';
 import * as Sentry from '@sentry/bun';
 import { sentryEnabled } from '../lib/sentry-scrub';
 import type { Services } from '../services';
+import {
+  WorkerTenantContextError,
+  runConsumerInTenantContext,
+  runTenantWorkDb,
+} from '../tenancy/worker-tenant-context';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
 import { getPlugin } from './loader';
 
@@ -309,6 +356,7 @@ async function processSenderIdentity(
   payload: MessageReceivedPayload,
   metadata: { instanceId: string; personId?: string; platformIdentityId?: string; channelType?: string },
   channel: ChannelType,
+  trustedTenantId: string | null,
 ): Promise<IdentityResult> {
   // Return existing if already resolved
   if (metadata.platformIdentityId) {
@@ -351,10 +399,69 @@ async function processSenderIdentity(
       identityId: identity.id,
       personId: person?.id,
     });
-    fetchAndUpdateProfile(services, channel, metadata.instanceId, payload.from, identity.id).catch(() => {});
+    // Fire-and-forget: outlives the handler transaction, so it carries the
+    // trusted tenant and opens its own scope for the write (see module header).
+    fetchAndUpdateProfile(services, channel, metadata.instanceId, payload.from, identity.id, trustedTenantId).catch(
+      () => {},
+    );
   }
 
   return { personId: person?.id, platformIdentityId: identity.id };
+}
+
+/**
+ * Resolve the sender's identity as its OWN work item, BEFORE the message's
+ * persistence transaction opens (G5, ADR-0008; G6-gated).
+ *
+ * This is hoisted out of `handleMessageReceived` for one specific reason. The
+ * identity write touches `persons`, and `persons` is a G2-`unowned` table: it
+ * has no derivation, so its `tenant_id` stays NULL until the G6 backfill assigns
+ * one. Under RLS enforcement the `persons` INSERT policy is
+ * `tenant_id = omni_current_tenant_id()`, which a NULL can never satisfy — so a
+ * person cannot be created inside a tenant scope at all yet. (It cannot be
+ * created OUTSIDE one either: unscoped, `omni_current_tenant_id()` raises.)
+ * That is the same G6 gate that keeps `agent-runner.ts::persons` pending.
+ *
+ * Two consequences, both deliberate:
+ *
+ *   1. **Its own scope, never a nested one.** Running it inside the message
+ *      transaction would make its failure abort that transaction and LOSE the
+ *      message; running it as a nested `runInWorkerTenantScope` would hold two
+ *      pooled connections at once and can deadlock under pool pressure. Hoisting
+ *      it gives failure isolation with exactly one connection held at a time.
+ *   2. **Degrade, do not drop — but only in the tenant world.** When a tenant is
+ *      in play and the identity write is refused, the chat/message/participant
+ *      rows still land with the identity FKs left unset (all three are nullable)
+ *      and a warning is logged, rather than the whole message being lost to the
+ *      G6 gate. The LEGACY path is untouched: no tenant means the original call
+ *      with its original error propagation, byte-identical to pre-G5.
+ *
+ * Remove the degradation once G6 lands `persons.tenant_id`; the site is tracked
+ * as `persons.ts`-adjacent debt in the db-access registry.
+ */
+async function resolveSenderIdentityForWorkItem(
+  services: Services,
+  payload: MessageReceivedPayload,
+  metadata: { instanceId: string; personId?: string; platformIdentityId?: string; channelType?: string },
+  channel: ChannelType,
+  trustedTenantId: string | null,
+): Promise<IdentityResult> {
+  // Legacy world: exactly the pre-G5 call, exactly the pre-G5 error behaviour.
+  if (!trustedTenantId) return processSenderIdentity(services, payload, metadata, channel, null);
+
+  try {
+    return await runTenantWorkDb(services.db, trustedTenantId, () =>
+      processSenderIdentity(services, payload, metadata, channel, trustedTenantId),
+    );
+  } catch (error) {
+    log.warn('Sender identity unresolved for this message; persisting without identity links', {
+      instanceId: metadata.instanceId,
+      externalId: payload.externalId,
+      reason: 'persons has no tenant derivation until the G6 backfill (ADR-0008 / G6)',
+      error: String(error),
+    });
+    return { personId: metadata.personId, platformIdentityId: metadata.platformIdentityId };
+  }
 }
 
 /**
@@ -366,6 +473,7 @@ async function fetchAndUpdateProfile(
   instanceId: string,
   userId: string,
   identityId: string,
+  trustedTenantId: string | null,
 ): Promise<void> {
   try {
     const plugin = await getPlugin(channel);
@@ -378,7 +486,9 @@ async function fetchAndUpdateProfile(
 
     const profile = await fetchProfile.call(plugin, instanceId, userId);
     if (profile.avatarUrl || profile.bio || profile.platformData) {
-      await services.persons.updateIdentityProfile(identityId, profile);
+      await runTenantWorkDb(services.db, trustedTenantId, () =>
+        services.persons.updateIdentityProfile(identityId, profile),
+      );
       log.debug('Updated identity with profile data', {
         identityId,
         hasAvatar: !!profile.avatarUrl,
@@ -419,11 +529,15 @@ async function persistLidMappings(
   chatExternalId: string,
   instanceId: string,
   rawPayload: Record<string, unknown> | undefined,
+  trustedTenantId: string | null,
 ): Promise<void> {
   // Legacy path: phone-form chat, LID came from rawPayload.originalLidJid (pre-LID-first messages)
   const originalLidJid = rawPayload?.originalLidJid as string | undefined;
   if (originalLidJid && chatExternalId.endsWith('@s.whatsapp.net')) {
-    services.chats.upsertLidMapping(instanceId, originalLidJid, chatExternalId).catch((err) => {
+    // Unawaited: own worker scope, never the handler's transaction.
+    runTenantWorkDb(services.db, trustedTenantId, () =>
+      services.chats.upsertLidMapping(instanceId, originalLidJid, chatExternalId),
+    ).catch((err) => {
       log.debug('Failed to persist LID mapping (non-critical)', { error: String(err) });
     });
     if (!chat.canonicalId) {
@@ -436,7 +550,10 @@ async function persistLidMappings(
   // Without this, phone-based lookups after restart miss the chat and create duplicate threads.
   const resolvedPhoneJid = rawPayload?.resolvedPhoneJid as string | undefined;
   if (chatExternalId.endsWith('@lid') && resolvedPhoneJid) {
-    services.chats.upsertLidMapping(instanceId, chatExternalId, resolvedPhoneJid).catch((err) => {
+    // Unawaited: own worker scope, never the handler's transaction.
+    runTenantWorkDb(services.db, trustedTenantId, () =>
+      services.chats.upsertLidMapping(instanceId, chatExternalId, resolvedPhoneJid),
+    ).catch((err) => {
       log.debug('Failed to persist LID↔phone mapping for LID-canonical chat (non-critical)', { error: String(err) });
     });
     if (!chat.canonicalId) {
@@ -471,6 +588,7 @@ async function postProcessChat(
   rawPayload: Record<string, unknown> | undefined,
   isFromMe: boolean,
   chatName: string | undefined,
+  trustedTenantId: string | null,
 ): Promise<void> {
   // Populate canonicalId ONLY if not already set
   // (Usually set during creation, but handle legacy chats or edge cases)
@@ -479,7 +597,7 @@ async function postProcessChat(
     chat.canonicalId = chatExternalId;
   }
 
-  await persistLidMappings(services, chat, chatExternalId, instanceId, rawPayload);
+  await persistLidMappings(services, chat, chatExternalId, instanceId, rawPayload, trustedTenantId);
 
   // Update chat name if missing, stale, or changed (e.g. Discord thread/channel renames)
   // For outbound DMs: also resolve from rawPayload (recipientName, verifiedBizName)
@@ -570,17 +688,24 @@ function maybeUpdateRecency(
   rawPayload: Record<string, unknown> | undefined,
   payload: MessageReceivedPayload,
   platformTimestamp: Date,
+  trustedTenantId: string | null,
 ): void {
   // Edits should not bump recency.
   if (rawPayload?.isEdited === true) return;
 
   const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
   const isFromMe = rawPayload?.isFromMe === true;
-  services.chats.updateLastMessage(chatId, preview, platformTimestamp, isFromMe).catch((error) => {
+  // Both writes are unawaited and outlive the handler transaction, so each opens
+  // its own worker scope rather than inheriting one that is about to commit.
+  runTenantWorkDb(services.db, trustedTenantId, () =>
+    services.chats.updateLastMessage(chatId, preview, platformTimestamp, isFromMe),
+  ).catch((error) => {
     log.debug('Failed to update chat lastMessage (non-critical)', { error: String(error) });
   });
 
-  services.instances.updateLastMessageAt(instanceId, platformTimestamp).catch((error) => {
+  runTenantWorkDb(services.db, trustedTenantId, () =>
+    services.instances.updateLastMessageAt(instanceId, platformTimestamp),
+  ).catch((error) => {
     log.debug('Failed to update instance lastMessageAt (non-critical)', { error: String(error) });
   });
 }
@@ -604,13 +729,17 @@ async function resolveOrCreateChat(
   effectiveName: string | undefined,
   canonicalId: string | undefined,
   rawPayload: Record<string, unknown> | undefined,
+  trustedTenantId: string | null,
 ): ReturnType<typeof services.chats.findOrCreate> {
   const resolvedPhoneJid = rawPayload?.resolvedPhoneJid as string | undefined;
   if (chatExternalId.endsWith('@lid') && resolvedPhoneJid) {
     return services.chats.findByExternalIdSmart(instanceId, resolvedPhoneJid).then((phoneChat) => {
       if (phoneChat) {
-        // Persist mapping so subsequent LID lookups also route to this phone chat
-        services.chats.upsertLidMapping(instanceId, chatExternalId, resolvedPhoneJid).catch((err) => {
+        // Persist mapping so subsequent LID lookups also route to this phone chat.
+        // Unawaited: own worker scope, never the handler's transaction.
+        runTenantWorkDb(services.db, trustedTenantId, () =>
+          services.chats.upsertLidMapping(instanceId, chatExternalId, resolvedPhoneJid),
+        ).catch((err) => {
           log.debug('Failed to persist LID mapping during chat pre-check (non-critical)', { error: String(err) });
         });
         return { chat: phoneChat, created: false };
@@ -639,6 +768,8 @@ async function handleMessageReceived(
   payload: MessageReceivedPayload,
   metadata: MessageMetadata,
   eventTimestamp: number,
+  trustedTenantId: string | null,
+  identity: IdentityResult,
 ): Promise<void> {
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
   const isHistorySync = metadata.ingestMode === 'history-sync';
@@ -672,6 +803,7 @@ async function handleMessageReceived(
     effectiveName,
     canonicalId,
     rawPayload,
+    trustedTenantId,
   );
 
   // Post-process chat: canonicalId, LID mapping, name updates
@@ -686,10 +818,12 @@ async function handleMessageReceived(
     rawPayload,
     isFromMe,
     chatName,
+    trustedTenantId,
   );
 
-  // Step 2: Process sender identity (before participant, so we have IDs)
-  const { personId, platformIdentityId } = await processSenderIdentity(services, payload, metadata, channel);
+  // Step 2: sender identity, resolved by the caller in its OWN work item before
+  // this transaction opened (see `resolveSenderIdentityForWorkItem`).
+  const { personId, platformIdentityId } = identity;
 
   // Step 3: Find or create participant (with identity links)
   const participantResult = await maybeFindOrCreateParticipant(
@@ -771,6 +905,7 @@ async function handleMessageReceived(
     rawPayload,
     payload,
     platformTimestamp ?? new Date(eventTimestamp),
+    trustedTenantId,
   );
 }
 
@@ -824,12 +959,36 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           return;
         }
 
+        // The trusted tenant for this work item, read from the producer-stamped
+        // envelope and NEVER from the payload (G5, ADR-0008). It is threaded into
+        // the handler so the fire-and-forget writes it spawns can open their own
+        // scopes; the awaited work is wrapped below.
+        const classification = classifyEnvelope(metadata);
+        // Refused HERE, not merely inside `runConsumerInTenantContext` below:
+        // the identity resolution is hoisted ahead of that call, so the
+        // quarantine check has to come ahead of BOTH or a malformed envelope
+        // would get one write in before being rejected.
+        if (classification.world === 'quarantine') {
+          throw new WorkerTenantContextError(`refusing to process a quarantined envelope (${classification.reason})`);
+        }
+        const trustedTenantId = classification.world === 'tenant' ? classification.tenantId : null;
+        // Captured before the closure below: TypeScript drops the narrowing from
+        // the `!metadata.instanceId` guard across a callback boundary.
+        const instanceId = metadata.instanceId;
+
         try {
-          await handleMessageReceived(
+          const workMetadata = { ...metadata, instanceId };
+          // Resolved BEFORE the persistence transaction opens — its own work
+          // item, its own scope, G6-gated (see the function's header).
+          const identity = await resolveSenderIdentityForWorkItem(
             services,
             payload,
-            { ...metadata, instanceId: metadata.instanceId },
-            event.timestamp,
+            workMetadata,
+            (metadata.channelType ?? 'whatsapp') as ChannelType,
+            trustedTenantId,
+          );
+          await runConsumerInTenantContext(services.db, event, () =>
+            handleMessageReceived(services, payload, workMetadata, event.timestamp, trustedTenantId, identity),
           );
           // Sentry metric: message received count by channel
           if (sentryEnabled()) {
@@ -879,34 +1038,43 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
           const chatExternalId = truncate(payload.chatId, 255) ?? payload.chatId;
           const messageExternalId = truncate(payload.externalId, 255) ?? payload.externalId;
 
-          // Find or create chat
-          const { chat } = await services.chats.findOrCreate(metadata.instanceId, chatExternalId, {
-            chatType: inferChatType(payload.chatId),
-            channel: (metadata.channelType ?? 'whatsapp') as ChannelType,
-          });
+          const sentInstanceId = metadata.instanceId;
+          const sentClassification = classifyEnvelope(metadata);
+          const sentTenantId = sentClassification.world === 'tenant' ? sentClassification.tenantId : null;
 
-          const sentContent = buildSentMessageContentFields(payload);
+          // The chat + message writes are one work item: one worker transaction.
+          const { chat, message, created } = await runConsumerInTenantContext(services.db, event, async () => {
+            // Find or create chat
+            const { chat } = await services.chats.findOrCreate(sentInstanceId, chatExternalId, {
+              chatType: inferChatType(payload.chatId),
+              channel: (metadata.channelType ?? 'whatsapp') as ChannelType,
+            });
 
-          // Create message (sent by us)
-          const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
-            source: 'realtime',
-            messageType: mapContentType(payload.content.type),
-            textContent: sentContent.textContent,
-            platformTimestamp: new Date(event.timestamp),
-            // Sender info (from us)
-            senderPersonId: metadata.personId,
-            senderPlatformIdentityId: metadata.platformIdentityId,
-            isFromMe: true,
-            senderAgentId: (payload as MessageSentPayload & { senderAgentId?: string }).senderAgentId ?? null,
-            // Media
-            hasMedia: sentContent.hasMedia,
-            mediaMimeType: sentContent.mediaMimeType,
-            mediaUrl: sentContent.mediaUrl,
-            mediaLocalPath: sentContent.mediaLocalPath,
-            mediaMetadata: sentContent.mediaMetadata,
-            rawPayload: sentContent.rawPayload,
-            // Reply info - truncate varchar(255) fields
-            replyToExternalId: truncate(payload.replyToId, 255),
+            const sentContent = buildSentMessageContentFields(payload);
+
+            // Create message (sent by us)
+            const { message, created } = await services.messages.findOrCreate(chat.id, messageExternalId, {
+              source: 'realtime',
+              messageType: mapContentType(payload.content.type),
+              textContent: sentContent.textContent,
+              platformTimestamp: new Date(event.timestamp),
+              // Sender info (from us)
+              senderPersonId: metadata.personId,
+              senderPlatformIdentityId: metadata.platformIdentityId,
+              isFromMe: true,
+              senderAgentId: (payload as MessageSentPayload & { senderAgentId?: string }).senderAgentId ?? null,
+              // Media
+              hasMedia: sentContent.hasMedia,
+              mediaMimeType: sentContent.mediaMimeType,
+              mediaUrl: sentContent.mediaUrl,
+              mediaLocalPath: sentContent.mediaLocalPath,
+              mediaMetadata: sentContent.mediaMetadata,
+              rawPayload: sentContent.rawPayload,
+              // Reply info - truncate varchar(255) fields
+              replyToExternalId: truncate(payload.replyToId, 255),
+            });
+
+            return { chat, message, created };
           });
 
           if (created) {
@@ -919,14 +1087,15 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
 
           // Update chat recency — marks lastMessageFromMe=true so the chat no longer
           // shows as pending/attention-needing after we send a reply.
-          services.chats
-            .updateLastMessage(
+          // Unawaited: own worker scope, never the transaction that just committed.
+          runTenantWorkDb(services.db, sentTenantId, () =>
+            services.chats.updateLastMessage(
               chat.id,
               sanitizeText(buildSentChatPreview(payload)) ?? '',
               new Date(event.timestamp),
               true,
-            )
-            .catch((err: unknown) => log.debug('Failed to update chat recency (sent)', { error: String(err) }));
+            ),
+          ).catch((err: unknown) => log.debug('Failed to update chat recency (sent)', { error: String(err) }));
 
           // Track consumer offset after successful processing
           if (metadata.streamSequence) {
@@ -967,24 +1136,28 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
 
           // Skip internal WhatsApp JIDs (device sync, broadcasts, newsletters)
           if (isInternalWhatsAppJid(payload.chatId)) return;
+          const deliveredInstanceId = metadata.instanceId;
 
-          // Find the chat (use smart lookup to handle LID/phone JID resolution)
-          const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
-          if (!chat) {
-            log.debug('Chat not found for message.delivered', { chatId: payload.chatId });
-            return;
-          }
+          // Lookup + status update are one work item: one worker transaction.
+          await runConsumerInTenantContext(services.db, event, async () => {
+            // Find the chat (use smart lookup to handle LID/phone JID resolution)
+            const chat = await services.chats.findByExternalIdSmart(deliveredInstanceId, payload.chatId);
+            if (!chat) {
+              log.debug('Chat not found for message.delivered', { chatId: payload.chatId });
+              return;
+            }
 
-          // Find the message
-          const message = await services.messages.getByExternalId(chat.id, payload.externalId);
-          if (!message) {
-            log.debug('Message not found for message.delivered', { externalId: payload.externalId });
-            return;
-          }
+            // Find the message
+            const message = await services.messages.getByExternalId(chat.id, payload.externalId);
+            if (!message) {
+              log.debug('Message not found for message.delivered', { externalId: payload.externalId });
+              return;
+            }
 
-          // Update delivery status
-          await services.messages.updateDeliveryStatus(message.id, 'delivered');
-          log.debug('Updated message delivery status', { messageId: message.id, status: 'delivered' });
+            // Update delivery status
+            await services.messages.updateDeliveryStatus(message.id, 'delivered');
+            log.debug('Updated message delivery status', { messageId: message.id, status: 'delivered' });
+          });
         } catch (error) {
           log.error('Failed to update delivery status', {
             externalId: payload.externalId,
@@ -1016,24 +1189,28 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
 
           // Skip internal WhatsApp JIDs (device sync, broadcasts, newsletters)
           if (isInternalWhatsAppJid(payload.chatId)) return;
+          const readInstanceId = metadata.instanceId;
 
-          // Find the chat (use smart lookup to handle LID/phone JID resolution)
-          const chat = await services.chats.findByExternalIdSmart(metadata.instanceId, payload.chatId);
-          if (!chat) {
-            log.debug('Chat not found for message.read', { chatId: payload.chatId });
-            return;
-          }
+          // Lookup + status update are one work item: one worker transaction.
+          await runConsumerInTenantContext(services.db, event, async () => {
+            // Find the chat (use smart lookup to handle LID/phone JID resolution)
+            const chat = await services.chats.findByExternalIdSmart(readInstanceId, payload.chatId);
+            if (!chat) {
+              log.debug('Chat not found for message.read', { chatId: payload.chatId });
+              return;
+            }
 
-          // Find the message
-          const message = await services.messages.getByExternalId(chat.id, payload.externalId);
-          if (!message) {
-            log.debug('Message not found for message.read', { externalId: payload.externalId });
-            return;
-          }
+            // Find the message
+            const message = await services.messages.getByExternalId(chat.id, payload.externalId);
+            if (!message) {
+              log.debug('Message not found for message.read', { externalId: payload.externalId });
+              return;
+            }
 
-          // Update delivery status to read
-          await services.messages.updateDeliveryStatus(message.id, 'read');
-          log.debug('Updated message delivery status', { messageId: message.id, status: 'read' });
+            // Update delivery status to read
+            await services.messages.updateDeliveryStatus(message.id, 'read');
+            log.debug('Updated message delivery status', { messageId: message.id, status: 'read' });
+          });
         } catch (error) {
           log.error('Failed to update read status', {
             externalId: payload.externalId,
@@ -1060,8 +1237,22 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         const instanceId = payload.instanceId;
         if (!instanceId) return;
 
+        // Classified once for the whole handler: the `instances` read below runs
+        // in a worker scope, while `syncJobs.create` (which PUBLISHES) stays
+        // outside it — holding a transaction across a publish would make the
+        // event a pre-commit side effect (a phantom on rollback).
+        const reconnectClassification = classifyEnvelope(event.metadata);
+        const reconnectTenantId = reconnectClassification.world === 'tenant' ? reconnectClassification.tenantId : null;
+        if (reconnectClassification.world === 'quarantine') {
+          throw new Error(
+            `message-persistence: refusing a quarantined instance.connected envelope (${reconnectClassification.reason})`,
+          );
+        }
+
         try {
-          const lastMessageAt = await services.instances.getLastMessageAt(instanceId);
+          const lastMessageAt = await runTenantWorkDb(services.db, reconnectTenantId, () =>
+            services.instances.getLastMessageAt(instanceId),
+          );
           if (!lastMessageAt) return;
 
           const gapMs = Date.now() - lastMessageAt.getTime();
@@ -1094,7 +1285,6 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               // from the `instance.connected` envelope the producer stamped
               // (G5, ADR-0008) — never from the payload. A legacy envelope
               // threads null and the create runs ambient, byte-identically.
-              const reconnectClassification = classifyEnvelope(event.metadata);
               const job = await services.syncJobs.create({
                 instanceId,
                 channelType,
@@ -1103,7 +1293,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
                   since: lastMessageAt.toISOString(),
                   until: new Date().toISOString(),
                 },
-                tenantId: reconnectClassification.world === 'tenant' ? reconnectClassification.tenantId : null,
+                tenantId: reconnectTenantId,
               });
 
               log.info('Post-reconnect backfill triggered', {

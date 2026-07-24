@@ -1249,7 +1249,9 @@ async function recoverProcessedMediaAfterTimeout(
   column: string,
   trustedTenantId?: string,
 ): Promise<{ content: string; localPath: string | null } | null> {
-  const refreshed = await services.messages.getByExternalId(chatRecordId, externalId);
+  const refreshed = await runDispatchDb(services.db, trustedTenantId, () =>
+    services.messages.getByExternalId(chatRecordId, externalId),
+  );
   if (!refreshed) return null;
   const recovered = checkProcessedColumn(refreshed, column);
   if (recovered === 'pending' || recovered === 'error') return null;
@@ -1281,13 +1283,20 @@ async function awaitMediaProcessing(
   // Wait briefly for message-persistence to create the DB rows (race condition:
   // both media-processor and agent-dispatcher subscribe to message.received,
   // and the dispatcher's debounce may fire before persistence completes).
-  const chat = await waitForRecord(() => services.chats.findByExternalIdSmart(instanceId, chatId));
+  // Each poll attempt opens and closes its OWN short scope (G5, ADR-0008): this
+  // waits for another consumer's commit, which a single spanning transaction
+  // could never observe.
+  const chat = await waitForRecord(() =>
+    runDispatchDb(services.db, trustedTenantId, () => services.chats.findByExternalIdSmart(instanceId, chatId)),
+  );
   if (!chat) {
     log.warn('Chat not found for media wait', { instanceId, chatId });
     return MEDIA_WAIT_NULL;
   }
 
-  const msg = await waitForRecord(() => services.messages.getByExternalId(chat.id, externalId));
+  const msg = await waitForRecord(() =>
+    runDispatchDb(services.db, trustedTenantId, () => services.messages.getByExternalId(chat.id, externalId)),
+  );
   if (!msg) {
     log.warn('Message not found for media wait after retries', { instanceId, chatId, externalId });
     return MEDIA_WAIT_NULL;
@@ -1345,7 +1354,9 @@ async function awaitMediaProcessing(
   if (!result.content || result.error) return MEDIA_WAIT_NULL;
 
   // Re-read message for localPath (media storage may have updated it)
-  const updated = await services.messages.getByExternalId(chat.id, externalId);
+  const updated = await runDispatchDb(services.db, trustedTenantId, () =>
+    services.messages.getByExternalId(chat.id, externalId),
+  );
   const localPath = await resolveDispatchMediaPath(
     services.mediaStorage,
     updated?.mediaLocalPath as string | null,
@@ -1423,6 +1434,13 @@ type MessageAliasLookup = Services['messages'] & {
 interface QuotedLookupOptions {
   inboundAt?: Date;
   inboundText?: string;
+  /**
+   * Envelope-derived trusted tenant (G5, ADR-0008). Carried in the options bag
+   * rather than as a positional parameter because this function is exported and
+   * called from several places; `undefined` is the legacy world and leaves the
+   * lookup byte-identical to pre-G5.
+   */
+  trustedTenantId?: string;
 }
 
 function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
@@ -1469,10 +1487,14 @@ export async function resolveQuotedMessage(
   options: QuotedLookupOptions = {},
 ): Promise<string | null> {
   try {
-    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
-    if (!chat) return null;
-
-    const quoted = await lookupQuotedMessage(services.messages, chat.id, replyToId, providerAliases, options);
+    // One discrete read block — chat lookup plus the quoted-message lookup — in
+    // the envelope's world (G5, ADR-0008). Pure reads, no publish, so a single
+    // short scope is correct.
+    const quoted = await runDispatchDb(services.db, options.trustedTenantId, async () => {
+      const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+      if (!chat) return null;
+      return lookupQuotedMessage(services.messages, chat.id, replyToId, providerAliases, options);
+    });
     if (!quoted) return null;
 
     const sender = quoted.senderDisplayName ?? quoted.senderPlatformUserId ?? (quoted.isFromMe ? 'You' : 'unknown');
@@ -1662,6 +1684,7 @@ async function prependQuotedContext(
     const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId, providerAliases, {
       inboundAt: extractInboundPlatformDate(rawPayload),
       inboundText: m.payload.content?.text,
+      trustedTenantId: m.metadata.trustedTenantId,
     });
     if (!quotedText) continue;
 
@@ -1684,14 +1707,17 @@ async function resolveContactName(
   instanceId: string,
   jid: string,
   cacheMap: Map<string, string>,
+  trustedTenantId?: string,
 ): Promise<string | null> {
   // Try cache first (fast path)
   const cachedName = cacheMap.get(jid);
   if (cachedName) return cachedName;
 
-  // Cache miss → query database
+  // Cache miss → query database, in the envelope's world (G5, ADR-0008)
   try {
-    const chat = await services.chats.findByExternalIdSmart(instanceId, jid);
+    const chat = await runDispatchDb(services.db, trustedTenantId, () =>
+      services.chats.findByExternalIdSmart(instanceId, jid),
+    );
     if (chat?.name) {
       log.debug('Contact name from DB fallback', { jid, name: chat.name });
       return chat.name;
@@ -1720,6 +1746,7 @@ async function applyJidMentionReplacement(
   jidToName: Map<string, string>,
   text: string,
   stats: MentionStats,
+  trustedTenantId?: string,
 ): Promise<string> {
   // Extract phone number from JID (supports @s.whatsapp.net, @lid, and device IDs like :3@s.whatsapp.net)
   const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid|:[\d]+@s\.whatsapp\.net)$/);
@@ -1728,7 +1755,7 @@ async function applyJidMentionReplacement(
     return text;
   }
 
-  const contactName = await resolveContactName(services, instanceId, jid, jidToName);
+  const contactName = await resolveContactName(services, instanceId, jid, jidToName, trustedTenantId);
   if (!contactName) {
     stats.unresolved++;
     return text;
@@ -1750,6 +1777,7 @@ async function replaceMentionsWithContactNames(
   text: string,
   mentionedJids: string[] | undefined,
   mentionedContacts: Array<{ jid: string; name?: string }> | undefined,
+  trustedTenantId?: string,
 ): Promise<string> {
   if (!mentionedJids?.length) return text;
 
@@ -1760,7 +1788,15 @@ async function replaceMentionsWithContactNames(
   let replacedText = text;
 
   for (const jid of mentionedJids) {
-    replacedText = await applyJidMentionReplacement(services, instanceId, jid, jidToName, replacedText, stats);
+    replacedText = await applyJidMentionReplacement(
+      services,
+      instanceId,
+      jid,
+      jidToName,
+      replacedText,
+      stats,
+      trustedTenantId,
+    );
   }
 
   log.debug('Mention replacement complete', {
@@ -1821,6 +1857,7 @@ async function prepareAgentContent(
       entry.text,
       mentionData.mentionedJids,
       mentionData.mentionedContacts,
+      messages[0]?.metadata.trustedTenantId,
     );
   }
 
@@ -1856,12 +1893,18 @@ async function resolvePersonId(
   instanceId: string,
   senderId: string,
   metadataPersonId?: string,
+  trustedTenantId?: string,
 ): Promise<string | undefined> {
   if (metadataPersonId) return metadataPersonId;
   if (!senderId) return undefined;
 
   for (let attempt = 0; attempt < 10; attempt++) {
-    const identity = await services.persons.getIdentityByPlatformId(channel, instanceId, senderId);
+    // Each attempt is its OWN short scope: this polls for another consumer's
+    // commit, so one transaction spanning the loop would pin a snapshot that can
+    // never contain the row it is waiting for — and would outlive its work item.
+    const identity = await runDispatchDb(services.db, trustedTenantId, () =>
+      services.persons.getIdentityByPlatformId(channel, instanceId, senderId),
+    );
     if (identity?.personId) return identity.personId;
     await sleep(200);
   }
@@ -1918,12 +1961,13 @@ async function resolveCustomerContext(
   services: Services,
   personId: string | undefined,
   externalContext?: OmniCustomerContext,
+  trustedTenantId?: string,
 ): Promise<OmniCustomerContext | undefined> {
   let storedContext: OmniCustomerContext | undefined;
 
   if (personId) {
     try {
-      const person = await services.persons.getById(personId);
+      const person = await runDispatchDb(services.db, trustedTenantId, () => services.persons.getById(personId));
       if (person && isRecord(person.metadata)) {
         storedContext = customerContextFromRecord(person.metadata);
       }
@@ -1946,9 +1990,12 @@ async function fetchSenderMetadata(
   channel: ChannelType,
   instanceId: string,
   senderId: string,
+  trustedTenantId?: string,
 ): Promise<{ avatarUrl?: string; platformUsername?: string }> {
   try {
-    const identity = await services.persons.getIdentityByPlatformId(channel, instanceId, senderId);
+    const identity = await runDispatchDb(services.db, trustedTenantId, () =>
+      services.persons.getIdentityByPlatformId(channel, instanceId, senderId),
+    );
     return {
       avatarUrl: identity?.profilePicUrl ?? undefined,
       platformUsername: identity?.platformUsername ?? undefined,
@@ -1967,11 +2014,14 @@ async function fetchChatMetadata(
   instanceId: string,
   chatId: string,
   chatType: string,
+  trustedTenantId?: string,
 ): Promise<{ chatName?: string; participantCount?: number }> {
   if (chatType !== 'group') return {};
 
   try {
-    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+    const chat = await runDispatchDb(services.db, trustedTenantId, () =>
+      services.chats.findByExternalIdSmart(instanceId, chatId),
+    );
     return {
       chatName: chat?.name ?? undefined,
       participantCount: chat?.participantCount ?? undefined,
@@ -2320,7 +2370,13 @@ async function dispatchViaStreamingProvider(
   const replyToId = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
 
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
-  const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
+  const dbContextMessages = await buildContextMessages(
+    services,
+    instance,
+    chatId,
+    currentMessageIds,
+    messages[0]?.metadata.trustedTenantId,
+  );
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
   const triggerFiles = toTriggerFiles(mediaFiles);
 
@@ -2344,6 +2400,7 @@ async function dispatchViaStreamingProvider(
     services,
     personId,
     extractA2ACustomerContext(messages, channel),
+    messages[0]?.metadata.trustedTenantId,
   );
   const trigger = buildMessageTrigger(
     traceId,
@@ -2472,27 +2529,35 @@ async function buildContextMessages(
   instance: Instance,
   chatId: string,
   currentMessageIds: string[],
+  trustedTenantId?: string,
 ): Promise<string[]> {
   try {
     // Per-instance configurable limit, capped at 200 (0 = disabled)
     const historyLimit = Math.min(Math.max(instance.groupHistorySize ?? 50, 0), 200);
     if (historyLimit === 0) return [];
 
-    // chatId here is the external JID, not internal UUID
-    const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
-    if (!chat) {
+    // One discrete read block in the envelope's world (G5, ADR-0008): the chat
+    // lookup and the history query it parameterises.
+    const loaded = await runDispatchDb(services.db, trustedTenantId, async () => {
+      // chatId here is the external JID, not internal UUID
+      const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
+      if (!chat) return null;
+
+      // DMs use a smaller context window (cap at 20) to keep context focused
+      const effectiveLimit = chat.chatType === 'group' ? historyLimit : Math.min(historyLimit, DM_HISTORY_LIMIT);
+
+      // Query recent messages (configurable limit, ordered by timestamp desc by default)
+      // Use the internal chat.id (UUID) for the query
+      const messagesResult = await services.messages.list({
+        chatId: chat.id,
+        limit: effectiveLimit,
+      });
+      return { chat, messagesResult };
+    });
+    if (!loaded) {
       return [];
     }
-
-    // DMs use a smaller context window (cap at 20) to keep context focused
-    const effectiveLimit = chat.chatType === 'group' ? historyLimit : Math.min(historyLimit, DM_HISTORY_LIMIT);
-
-    // Query recent messages (configurable limit, ordered by timestamp desc by default)
-    // Use the internal chat.id (UUID) for the query
-    const messagesResult = await services.messages.list({
-      chatId: chat.id,
-      limit: effectiveLimit,
-    });
+    const { chat, messagesResult } = loaded;
 
     const recentMessages = messagesResult.items;
 
@@ -2623,22 +2688,27 @@ async function dispatchViaTurnBasedProvider(
   }
 
   // Open turn (turns.chat_id is text, accepts external JID)
-  const turn = await services.turns.open({
-    instanceId: instance.id,
-    chatId,
-    messageId,
-    agentId: agentRecord.id,
-    apiKeyId: scopedKey.id,
-  });
+  const turn = await runDispatchDb(db, messages[0]?.metadata.trustedTenantId, () =>
+    services.turns.open({
+      instanceId: instance.id,
+      chatId,
+      messageId,
+      agentId: agentRecord.id,
+      apiKeyId: scopedKey.id,
+    }),
+  );
 
   // Resolve internal UUIDs for the API key context columns (uuid types).
   // chatId is an external JID (e.g. "54958418317348@lid") and messageId is an
   // external WhatsApp ID (e.g. "3BB06F44A03A3AE78E5B") — neither is a valid UUID.
   // The api_keys context columns are uuid-typed, so we must resolve to internal IDs.
-  const contextChat = await services.chats.findByExternalIdSmart(instance.id, chatId);
-  const contextChatId = contextChat?.id ?? null;
-  const contextMsg =
-    contextChat && messageId ? await services.messages.getByExternalId(contextChat.id, messageId) : null;
+  const { contextChatId, contextMsg } = await runDispatchDb(db, messages[0]?.metadata.trustedTenantId, async () => {
+    const contextChat = await services.chats.findByExternalIdSmart(instance.id, chatId);
+    return {
+      contextChatId: contextChat?.id ?? null,
+      contextMsg: contextChat && messageId ? await services.messages.getByExternalId(contextChat.id, messageId) : null,
+    };
+  });
 
   // Set context on the scoped key so verb commands resolve to this chat
   await services.apiKeys.update(scopedKey.id, {
@@ -2763,7 +2833,13 @@ async function dispatchViaProvider(
 
   // Build context messages for group and DM conversations (messages since last bot response)
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
-  const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
+  const dbContextMessages = await buildContextMessages(
+    services,
+    instance,
+    chatId,
+    currentMessageIds,
+    messages[0]?.metadata.trustedTenantId,
+  );
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
   const triggerFiles = toTriggerFiles(mediaFiles);
 
@@ -2784,6 +2860,7 @@ async function dispatchViaProvider(
     services,
     personId,
     extractA2ACustomerContext(messages, channel),
+    messages[0]?.metadata.trustedTenantId,
   );
   const trigger = buildMessageTrigger(
     traceId,
@@ -2870,7 +2947,9 @@ async function dispatchViaProvider(
 
       // If the agent triggered a handoff during this run (agentPaused: true),
       // suppress the response — the handoff message already notified the user.
-      const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
+      const chatAfterRun = await runDispatchDb(db, messages[0]?.metadata.trustedTenantId, () =>
+        services.chats.findByExternalIdSmart(instance.id, chatId),
+      );
       const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
 
       // If newer inbound arrived while the agent was running, this reply was
@@ -3008,8 +3087,15 @@ async function dispatchViaLegacy(
     channel,
     instance.id,
     senderId,
+    messages[0]?.metadata.trustedTenantId,
   );
-  const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, chatId, chatType);
+  const { chatName, participantCount } = await fetchChatMetadata(
+    services,
+    instance.id,
+    chatId,
+    chatType,
+    messages[0]?.metadata.trustedTenantId,
+  );
 
   // Fire before_agent_start hooks (observational for v1 — mutations logged but not applied)
   // TODO: wire mutated context values back once DEC-5 allowlist infra (provider/agentId validation) exists
@@ -3740,6 +3826,7 @@ async function applyCloseContactGate(
   instanceId: string,
   chatId: string,
   chatSettings: ChatSettingsForGate | null,
+  trustedTenantId?: string,
 ): Promise<'skip' | 'reopened' | 'pass'> {
   if (chatSettings?.closed === true) {
     log.debug('Chat closed (terminal), skipping dispatch', {
@@ -3771,14 +3858,16 @@ async function applyCloseContactGate(
   // explicitly cleared. Report `reopened` so the handoff gate ignores any
   // stale flag.
   try {
-    await services.chats.update(chatRecordId, {
-      settings: {
-        ...(chatSettings as Record<string, unknown>),
-        agentPaused: false,
-        closeUntil: null,
-        agentResumedAt: new Date().toISOString(),
-      } as Record<string, unknown>,
-    });
+    await runDispatchDb(services.db, trustedTenantId, () =>
+      services.chats.update(chatRecordId, {
+        settings: {
+          ...(chatSettings as Record<string, unknown>),
+          agentPaused: false,
+          closeUntil: null,
+          agentResumedAt: new Date().toISOString(),
+        } as Record<string, unknown>,
+      }),
+    );
     log.info('Close cooldown expired, state cleaned', {
       instanceId,
       chatId,
@@ -3825,8 +3914,19 @@ async function processAgentResponse(
     buildAckConfig(instance),
   );
 
+  // The envelope-derived tenant for this whole dispatch (G5, ADR-0008); every
+  // discrete DB block below runs in its world.
+  const dispatchTenantId = firstMessage.metadata.trustedTenantId;
+
   // Resolve person ID (waits for message-persistence to create identity)
-  const personId = await resolvePersonId(services, channel, instance.id, senderId, firstMessage.metadata.personId);
+  const personId = await resolvePersonId(
+    services,
+    channel,
+    instance.id,
+    senderId,
+    firstMessage.metadata.personId,
+    dispatchTenantId,
+  );
   if (!personId) {
     log.warn('Could not resolve person ID, skipping agent', { instanceId: instance.id, chatId, senderId });
     ackHandle.remove();
@@ -3835,10 +3935,19 @@ async function processAgentResponse(
 
   // ── Close-contact gate — runs BEFORE the handoff/agentPaused gate ──
   // See applyCloseContactGate() for the full semantics.
-  const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const chatRecord = await runDispatchDb(db, dispatchTenantId, () =>
+    services.chats.findByExternalIdSmart(instance.id, chatId),
+  );
   const chatSettings = chatRecord?.settings as ChatSettingsForGate | null;
 
-  const gateResult = await applyCloseContactGate(services, chatRecord?.id ?? null, instance.id, chatId, chatSettings);
+  const gateResult = await applyCloseContactGate(
+    services,
+    chatRecord?.id ?? null,
+    instance.id,
+    chatId,
+    chatSettings,
+    dispatchTenantId,
+  );
   if (gateResult === 'skip') {
     ackHandle.remove();
     return;
@@ -4536,8 +4645,10 @@ async function processReactionTrigger(
   const channel = (metadata.channelType ?? baseInstance.channel) as ChannelType;
   const externalChatId = payload.chatId;
 
-  // Look up internal chat UUID for route resolution
-  const chat = await services.chats.findByExternalIdSmart(baseInstance.id, externalChatId);
+  // Look up internal chat UUID for route resolution, in the envelope's world
+  const chat = await runDispatchDb(db, metadata.trustedTenantId, () =>
+    services.chats.findByExternalIdSmart(baseInstance.id, externalChatId),
+  );
   const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
 
   // Resolve person ID for route matching (metadata.personId may not be set yet)
@@ -4582,7 +4693,12 @@ async function processReactionTrigger(
         personId: effectivePersonId,
         rawPayload: payload.rawPayload as Record<string, unknown> | undefined,
       }).sessionId;
-      const customerContext = await resolveCustomerContext(services, effectivePersonId);
+      const customerContext = await resolveCustomerContext(
+        services,
+        effectivePersonId,
+        undefined,
+        metadata.trustedTenantId,
+      );
 
       const trigger: AgentTrigger = {
         traceId: metadata.traceId,
@@ -4654,8 +4770,15 @@ async function processReactionTrigger(
       channel,
       instance.id,
       payload.from,
+      metadata.trustedTenantId,
     );
-    const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, externalChatId, chatType);
+    const { chatName, participantCount } = await fetchChatMetadata(
+      services,
+      instance.id,
+      externalChatId,
+      chatType,
+      metadata.trustedTenantId,
+    );
 
     const result = await services.agentRunner.run({
       instance,
@@ -4757,6 +4880,8 @@ async function isLidMatchingOwner(
   ownerPhone: string,
   ownerIsLid: boolean,
   lidJid: string,
+  db: Database,
+  trustedTenantId?: string,
 ): Promise<boolean> {
   // Direct LID match: when ownerIdentifier is itself a LID, compare directly
   if (ownerIsLid && extractPhoneFromJid(lidJid) === ownerPhone) {
@@ -4764,9 +4889,13 @@ async function isLidMatchingOwner(
     return true;
   }
 
-  // DB resolution: resolve LID -> phone JID, then compare with owner phone
+  // DB resolution: resolve LID -> phone JID, then compare with owner phone.
+  // The chat_id_mappings reads run in the message's world (G5, ADR-0008): a
+  // tenant envelope opens a short worker scope per read; a legacy envelope
+  // (no tenant) stays byte-identical on the ambient pool. The surrounding
+  // try/catch keeps DB-lookup failures non-critical, as before.
   try {
-    const mapping = await chatsService.findLidMapping(instanceId, lidJid);
+    const mapping = await runDispatchDb(db, trustedTenantId, () => chatsService.findLidMapping(instanceId, lidJid));
     if (!mapping) return false;
 
     const resolvedPhone = extractPhoneFromJid(mapping);
@@ -4777,7 +4906,9 @@ async function isLidMatchingOwner(
 
     // Reverse check: when owner is LID, also look up the owner's phone mapping
     if (ownerIsLid) {
-      const ownerMapping = await chatsService.findLidMapping(instanceId, ownerIdentifier);
+      const ownerMapping = await runDispatchDb(db, trustedTenantId, () =>
+        chatsService.findLidMapping(instanceId, ownerIdentifier),
+      );
       if (ownerMapping && extractPhoneFromJid(ownerMapping) === resolvedPhone) {
         log.debug('LID resolved to owner via reverse mapping', { lidJid, resolvedPhone, ownerIdentifier });
         return true;
@@ -4802,6 +4933,8 @@ async function resolveLidMentionBot(
   ownerIdentifier: string,
   mentionedJids: string[],
   messageContext: MessageContext,
+  db: Database,
+  trustedTenantId?: string,
 ): Promise<void> {
   const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
   if (lidMentions.length === 0) return;
@@ -4810,7 +4943,18 @@ async function resolveLidMentionBot(
   const ownerPhone = extractPhoneFromJid(ownerIdentifier);
 
   for (const lidJid of lidMentions) {
-    if (await isLidMatchingOwner(chatsService, instanceId, ownerIdentifier, ownerPhone, ownerIsLid, lidJid)) {
+    if (
+      await isLidMatchingOwner(
+        chatsService,
+        instanceId,
+        ownerIdentifier,
+        ownerPhone,
+        ownerIsLid,
+        lidJid,
+        db,
+        trustedTenantId,
+      )
+    ) {
       messageContext.mentionsBot = true;
       break;
     }
@@ -4823,9 +4967,13 @@ async function resolveEffectiveReplyFilter(
   instanceId: string,
   chatId: string,
   defaultFilter: Instance['agentReplyFilter'],
+  db: Database,
   trustedTenantId?: string,
 ): Promise<Instance['agentReplyFilter']> {
-  const chat = await chatsService.findByExternalIdSmart(instanceId, chatId);
+  // chat_id_mappings read in the message's world (G5, ADR-0008): tenant
+  // envelope → short worker scope, legacy → ambient pass-through. routeResolver
+  // threads its own trustedTenantId and manages its own scope.
+  const chat = await runDispatchDb(db, trustedTenantId, () => chatsService.findByExternalIdSmart(instanceId, chatId));
   if (!chat?.id) return defaultFilter;
   const route = await routeResolver.resolve(instanceId, chat.id, undefined, trustedTenantId);
   return (route?.agentReplyFilter as Instance['agentReplyFilter']) ?? defaultFilter;
@@ -4842,13 +4990,22 @@ async function resolveSlackThreadReply(
   instance: Instance,
   payload: MessageReceivedPayload,
   context: MessageContext,
+  db: Database,
+  trustedTenantId?: string,
 ): Promise<void> {
   if (instance.channel !== 'slack') return;
   const raw = payload.rawPayload ?? {};
   if (raw.isThreadReply !== true || !raw.threadTs) return;
-  const chat = await chatsService.findByExternalIdSmart(instance.id, payload.chatId);
-  if (!chat) return;
-  context.isReplyToBot = await messagesService.hasBotRepliedInThread(chat.id, raw.threadTs as string);
+  // chats + messages reads in the message's world (G5, ADR-0008): a tenant
+  // envelope runs the chat lookup and the thread-reply lookup in a short worker
+  // scope; a legacy envelope (no tenant) stays byte-identical on the ambient
+  // pool. When no chat is found, context.isReplyToBot is left unchanged.
+  const isReplyToBot = await runDispatchDb(db, trustedTenantId, async () => {
+    const chat = await chatsService.findByExternalIdSmart(instance.id, payload.chatId);
+    if (!chat) return undefined;
+    return messagesService.hasBotRepliedInThread(chat.id, raw.threadTs as string);
+  });
+  if (isReplyToBot !== undefined) context.isReplyToBot = isReplyToBot;
 }
 
 /** True if the chat is a newsletter or broadcast channel (agent never processes these). */
@@ -5097,10 +5254,12 @@ async function shouldProcessMessage(
       instance.ownerIdentifier as string,
       mentionedJids,
       messageContext,
+      db,
+      trustedTenantId,
     );
   }
 
-  await resolveSlackThreadReply(chatsService, messagesService, instance, payload, messageContext);
+  await resolveSlackThreadReply(chatsService, messagesService, instance, payload, messageContext, db, trustedTenantId);
 
   log.debug('Message context built', {
     instanceId: instance.id,
@@ -5120,6 +5279,7 @@ async function shouldProcessMessage(
     instance.id,
     payload.chatId,
     instance.agentReplyFilter,
+    db,
     trustedTenantId,
   );
 
@@ -5482,7 +5642,9 @@ export async function setupAgentDispatcher(
         return;
       }
       const externalChatId = firstMsg.payload.chatId;
-      const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
+      const chat = await runDispatchDb(db, firstMsg.metadata.trustedTenantId, () =>
+        services.chats.findByExternalIdSmart(instanceId, externalChatId),
+      );
       const resolved = await resolveEffectiveInstance(
         services,
         db,
@@ -5551,7 +5713,9 @@ export async function setupAgentDispatcher(
 
             // Early route resolution: resolve route BEFORE debounce so per-user
             // debounce overrides (e.g. messageDebounceMode: 'disabled') take effect.
-            const chat = await services.chats.findByExternalIdSmart(instance.id, payload.chatId);
+            const chat = await runDispatchDb(db, trustedTenantId, () =>
+              services.chats.findByExternalIdSmart(instance.id, payload.chatId),
+            );
 
             // Resolve person ID for route matching. metadata.personId may not be set yet
             // (message-persistence runs in parallel), so fall back to identity lookup.
@@ -5562,6 +5726,7 @@ export async function setupAgentDispatcher(
               instance.id,
               payload.from,
               metadata.personId,
+              trustedTenantId,
             );
 
             const { instance: resolved, routeId } = await resolveEffectiveInstance(
@@ -5780,7 +5945,9 @@ export async function setupAgentDispatcher(
 
             // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
             // Use metadata personId directly — don't poll for identity here (typing is latency-sensitive).
-            const chat = await services.chats.findByExternalIdSmart(metadata.instanceId as string, payload.chatId);
+            const chat = await runDispatchDb(db, trustedDispatchTenant(metadata), () =>
+              services.chats.findByExternalIdSmart(metadata.instanceId as string, payload.chatId),
+            );
             const typingPersonId = metadata.personId;
             const { instance: resolved } = await resolveEffectiveInstance(
               services,
@@ -5928,6 +6095,17 @@ export const setupAgentResponder = setupAgentDispatcher;
 export const __test__ = {
   buildContextMessages,
   awaitMediaProcessing,
+  // Read helpers converted in the G5 read-path leg — exported so the
+  // worker-scope probes can assert their threading contract directly.
+  resolveQuotedMessage,
+  resolveContactName,
+  resolvePersonId,
+  resolveLidMentionBot,
+  resolveEffectiveReplyFilter,
+  resolveSlackThreadReply,
+  fetchSenderMetadata,
+  fetchChatMetadata,
+  applyCloseContactGate,
   downloadToTempFile,
   mediaCompletions,
   mediaResultCache,

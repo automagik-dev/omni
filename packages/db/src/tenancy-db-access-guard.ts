@@ -488,8 +488,43 @@ export const PENDING_G4_CEILING = 6;
  * derivation (the publish's `instanceId` -> the instance row's persisted
  * `tenant_id`), so those envelopes now carry a trusted tenant and the converted
  * consumers actually enter the tenant world.
+ *
+ * LOWERED TO 20 BY G5 LEG H — the READ-PATH leg. Six sites CONVERTED across the
+ * `chats`/`messages`/`persons` services. The blocker they shared was not the
+ * services (scope-aware since G4, via the `private get db()` -> `scopedHandle`
+ * getter) but their callers, and specifically the LAST big unconverted consumer
+ * plus the read halves of three already-converted ones:
+ *
+ *   * `message-persistence.ts` — the dominant inbound consumer (every message on
+ *     every channel) was wholly unconverted. Its five handlers now wrap their
+ *     awaited work in `runConsumerInTenantContext`, and each fire-and-forget
+ *     write it spawns (the LID upserts, the chat/instance recency bumps, the
+ *     new-identity profile fetch) gets its OWN `runTenantWorkDb` scope rather
+ *     than inheriting a transaction that is about to commit — the G4 leg-2
+ *     use-after-commit trap, which this handler was the largest instance of.
+ *   * `agent-dispatcher.ts` — its WRITE blocks were converted in legs A/C2, but
+ *     eight READ helpers still called the services bare. Each now runs through
+ *     `runDispatchDb`.
+ *   * `media-processor.ts` — same shape; the new local `runMediaDb` wraps its
+ *     instance/chat/message reads.
+ *   * `sync-worker.ts` — the anchor discovery, DM-rename and contact-identity
+ *     reads were outside `inSyncWorkerScope`; they are inside it now.
+ *
+ * A NOTE ON POLLING, because it is the one place this leg could have been got
+ * badly wrong. Four of these paths poll for ANOTHER consumer's commit
+ * (`resolvePersonId`, `awaitMediaProcessing`, the media chat/message waits).
+ * Wrapping such a poll in ONE transaction would be worse than leaving it
+ * unscoped: the snapshot can never contain the row being waited for, so the loop
+ * would spin to its deadline every time, and the transaction would outlive its
+ * work item. Each poll ATTEMPT therefore opens and closes its own short scope.
+ *
+ * `persons.ts::platform_identities` did NOT convert, and its entry now says why
+ * precisely: every async caller is scoped, and the only thing still holding it
+ * is `trpc/router.ts` — a second synchronous edge with no tenant boundary at
+ * all. That is G4-surface debt wearing a G5 label; the entry carries it as an
+ * open question rather than silently reclassifying it.
  */
-export const PENDING_G5_CEILING = 26;
+export const PENDING_G5_CEILING = 20;
 
 /**
  * Ceiling on `pending-G4-conversion` + `pending-G5-conversion` combined.
@@ -529,8 +564,12 @@ export const PENDING_G5_CEILING = 26;
  * 32 after G5 leg G (6 + 26): the four dispatch/session/job sites were
  * CONVERTED, not relabelled. No site moved between the two pending classes this
  * leg, and no new pending site was opened.
+ *
+ * 26 after G5 leg H (6 + 20): the six `chats`/`messages`/`persons` service sites
+ * were CONVERTED by scoping their callers, not relabelled. No site moved between
+ * the two pending classes this leg, and no new pending site was opened.
  */
-export const TOTAL_PENDING_CEILING = 32;
+export const TOTAL_PENDING_CEILING = 26;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -1048,20 +1087,30 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/chats.ts',
     table: 'chat_id_mappings',
-    class: 'pending-G5-conversion',
+    class: 'tenant-boundary',
     justification:
-      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
-      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
-      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
+      'CONVERTED. Every method that touches `chat_id_mappings` (`create`, `findByExternalIdSmart`, ' +
+      '`findLidMapping`, `findOrCreate`, `getAllExternalIds`, `upsertLidMapping`) now reaches this file only from ' +
+      'a scoped caller: the routes through the request tenant transaction, and the async side through ' +
+      '`message-persistence` (converted this leg — its five consumers wrap their awaited work in ' +
+      '`runConsumerInTenantContext` and hand each fire-and-forget LID upsert its own `runTenantWorkDb` scope), ' +
+      '`agent-dispatcher` (`runDispatchDb` per discrete read block, including the media/identity polls), ' +
+      '`media-processor` (`runMediaDb`), `sync-worker` (`inSyncWorkerScope`), `session-cleaner` and ' +
+      '`follow-up-hooks` (`runTenantWorkDb`). The one remaining unscoped caller of this FILE — the automation ' +
+      'engine callbacks in `index.ts` — calls only `chats.getById`, which touches `chats` and nothing else; that ' +
+      'keeps the `chats` site pending, not this one.',
   },
   {
     file: 'packages/api/src/services/chats.ts',
     table: 'chat_participants',
-    class: 'pending-G5-conversion',
+    class: 'tenant-boundary',
     justification:
-      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
-      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
-      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
+      'CONVERTED. The participant methods (`findOrCreateParticipant`, `recordParticipantActivity`, ' +
+      '`addParticipant`, `getParticipants`, `removeParticipant`, `updateParticipantRole`, ' +
+      '`linkParticipantToPerson`, and `list` via `enrichDmNames`) are reached from exactly two places: the ' +
+      'routes, inside the request tenant transaction, and `message-persistence`, converted this leg. No other ' +
+      'worker calls a participant method — verified caller-by-caller across every plugin, the scheduler and ' +
+      '`index.ts`.',
   },
   {
     file: 'packages/api/src/services/chats.ts',
@@ -1075,11 +1124,11 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/chats.ts',
     table: 'omni_groups',
-    class: 'pending-G5-conversion',
+    class: 'tenant-boundary',
     justification:
-      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
-      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
-      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
+      'CONVERTED. `omni_groups` is touched only by the private `enrichGroupNames`, reached only from ' +
+      '`ChatService.list`, whose sole caller is `routes/v2/chats.ts` — inside the request tenant transaction. No ' +
+      'consumer, cron or fire-and-forget path calls `list`.',
   },
   {
     file: 'packages/api/src/services/conversations.ts',
@@ -1204,20 +1253,24 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/messages.ts',
     table: 'chats',
-    class: 'pending-G5-conversion',
+    class: 'tenant-boundary',
     justification:
-      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
-      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
-      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
+      'CONVERTED. Every caller of this file is now scoped: the routes through the request tenant transaction, and ' +
+      'the four async callers through their own worker scopes — `message-persistence` ' +
+      '(`runConsumerInTenantContext`, converted this leg), `agent-dispatcher` (`runDispatchDb`, its read helpers ' +
+      'converted this leg), `media-processor` (`runMediaDb`, converted this leg) and `sync-worker` ' +
+      "(`inSyncWorkerScope`). The dispatcher and media-processor POLL for message-persistence's commit, so each " +
+      'poll ATTEMPT opens and closes its own short scope — one transaction spanning the poll could never observe ' +
+      'the row it waits for, and would outlive its work item.',
   },
   {
     file: 'packages/api/src/services/messages.ts',
     table: 'messages',
-    class: 'pending-G5-conversion',
+    class: 'tenant-boundary',
     justification:
-      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
-      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
-      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
+      'CONVERTED. Same caller set and same per-attempt scoping as the `chats` site in this file: routes inside the ' +
+      'request tenant transaction; `message-persistence`, `agent-dispatcher`, `media-processor` and `sync-worker` ' +
+      'each inside their own worker tenant scope, one per discrete DB block.',
   },
   {
     file: 'packages/api/src/services/payload-store.ts',
@@ -1233,11 +1286,14 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/persons.ts',
     table: 'chat_id_mappings',
-    class: 'pending-G5-conversion',
+    class: 'tenant-boundary',
     justification:
-      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
-      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
-      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
+      'CONVERTED. `chat_id_mappings` is reached in this file from `findOrCreateIdentity` (via the private ' +
+      '`resolvePhoneFromLid`) and from `update`. `update` is called only by `routes/v2/persons.ts`, inside the ' +
+      'request tenant transaction; `findOrCreateIdentity` is called only by `message-persistence` (converted this ' +
+      "leg) and `sync-worker`'s contact sync (wrapped in `inSyncWorkerScope` this leg). The tRPC router, which is " +
+      'the last unscoped caller of this FILE, calls none of them — it reaches `platform_identities` only, which ' +
+      'is why that sibling site stays pending and this one does not.',
   },
   {
     file: 'packages/api/src/services/persons.ts',
@@ -1255,9 +1311,19 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'platform_identities',
     class: 'pending-G5-conversion',
     justification:
-      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
-      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
-      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
+      'ASYNC SIDE CONVERTED; held pending by a SYNCHRONOUS caller, so the class is now an honest overstatement of ' +
+      'G5 debt rather than a G5 gap. Every worker caller is scoped: `message-persistence` ' +
+      '(`runConsumerInTenantContext`), `agent-dispatcher` (`runDispatchDb` around `resolvePersonId`, ' +
+      "`fetchSenderMetadata` and `resolveCustomerContext` — `resolvePersonId` POLLS for message-persistence's " +
+      'commit, so each ATTEMPT gets its own short scope), and `sync-worker` (`inSyncWorkerScope` around the ' +
+      'contact-sync identity write). What remains is `trpc/router.ts` — `getPresence`, `linkIdentities`, ' +
+      '`unlinkIdentity` — which has NO tenant boundary of any kind: it is a second synchronous edge alongside the ' +
+      'Hono routes, and giving it one is G4-surface work, not the async-context work ADR-0008 assigns to G5 (that ' +
+      'half is done). The router is exported as ' +
+      '`@omni/api/trpc` but no handler in this repository mounts it, so it is not currently a live path. OPEN ' +
+      'QUESTION for the orchestrator: either give the tRPC edge the same `withTenantTransaction` boundary the ' +
+      'Hono edge got in G4, or retire the unmounted surface. Not reclassified unilaterally — an unmounted export ' +
+      'is still callable by an out-of-repo consumer, and "nothing mounts it today" is not a boundary.',
   },
   {
     // G5-CONVERTED (leg C2). `resolve()` takes the envelope-derived

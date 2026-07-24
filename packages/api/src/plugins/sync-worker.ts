@@ -359,11 +359,14 @@ async function discoverAnchorsFromPlugin(
   plugin: unknown,
   dbAnchors: WAnchor[],
   services: Services,
+  envelope: SyncEnvelope,
 ): Promise<WAnchor[]> {
   const anchoredJids = new Set(dbAnchors.map((a) => a.chatJid));
 
-  // Query DB for all known chat external IDs (survives restarts)
-  const dbExternalIds = await services.chats.getAllExternalIds(instanceId);
+  // Query DB for all known chat external IDs (survives restarts). Discrete block
+  // in the job envelope's world (G5, ADR-0008) — it reads `chats` AND
+  // `chat_id_mappings`, so an ambient read would leave both sites unscoped.
+  const dbExternalIds = await inSyncWorkerScope(envelope, () => services.chats.getAllExternalIds(instanceId));
 
   // Merge with Baileys volatile cache (newly connected chats not yet in DB)
   const baileysJids = hasKnownChatJids(plugin) ? plugin.getKnownChatJids(instanceId) : [];
@@ -395,6 +398,7 @@ async function resolveWhatsAppAnchors(
   plugin: unknown,
   dbAnchors: WAnchor[],
   services: Services,
+  envelope: SyncEnvelope,
 ): Promise<WAnchor[]> {
   // Explicit chatJids take priority (per-chat active sync)
   if (config.chatJids?.length) {
@@ -402,7 +406,7 @@ async function resolveWhatsAppAnchors(
   }
 
   // Default: use DB anchors + discover chats known to Baileys but not in DB.
-  return [...dbAnchors, ...(await discoverAnchorsFromPlugin(jobId, instanceId, plugin, dbAnchors, services))];
+  return [...dbAnchors, ...(await discoverAnchorsFromPlugin(jobId, instanceId, plugin, dbAnchors, services, envelope))];
 }
 
 /**
@@ -462,13 +466,13 @@ async function processMessageSync(
     // The DB anchor read runs in a per-item worker scope so it only sees the
     // work item's tenant's messages/chats under enforcement.
     const dbAnchors = handle ? await inSyncWorkerScope(envelope, () => buildWhatsAppAnchors(handle, instanceId)) : [];
-    anchors = await resolveWhatsAppAnchors(jobId, instanceId, config, plugin, dbAnchors, services);
+    anchors = await resolveWhatsAppAnchors(jobId, instanceId, config, plugin, dbAnchors, services, envelope);
     log.info('WhatsApp per-chat active sync', { jobId, anchorCount: anchors.length, chatJids: config.chatJids });
   } else if (channelType === 'whatsapp-baileys') {
     // Default sync: discover all known chats from DB + Baileys volatile cache.
     // Using DB ensures chats survive restarts even when Baileys cache is empty.
     const dbAnchors = handle ? await inSyncWorkerScope(envelope, () => buildWhatsAppAnchors(handle, instanceId)) : [];
-    const discoveredAnchors = await discoverAnchorsFromPlugin(jobId, instanceId, plugin, dbAnchors, services);
+    const discoveredAnchors = await discoverAnchorsFromPlugin(jobId, instanceId, plugin, dbAnchors, services, envelope);
     anchors = [...dbAnchors, ...discoveredAnchors];
     if (anchors.length > 0) {
       log.info('WhatsApp default sync with DB+cache discovery', {
@@ -643,15 +647,24 @@ function mapContentType(
 }
 
 /** Update a DM chat's name if it's missing or stale */
-async function updateDmChatName(services: Services, instanceId: string, jid: string, name: string): Promise<void> {
+async function updateDmChatName(
+  services: Services,
+  instanceId: string,
+  jid: string,
+  name: string,
+  envelope: SyncEnvelope,
+): Promise<void> {
   try {
-    // Use smart lookup to handle LID/phone JID resolution
-    const chat = await services.chats.findByExternalIdSmart(instanceId, jid);
-    if (!chat) return;
-    const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
-    if (!chat.name || hasStaleJidName) {
-      await services.chats.update(chat.id, { name });
-    }
+    // Lookup + conditional rename are one work item, in the envelope's world.
+    await inSyncWorkerScope(envelope, async () => {
+      // Use smart lookup to handle LID/phone JID resolution
+      const chat = await services.chats.findByExternalIdSmart(instanceId, jid);
+      if (!chat) return;
+      const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
+      if (!chat.name || hasStaleJidName) {
+        await services.chats.update(chat.id, { name });
+      }
+    });
   } catch {
     // Chat may not exist yet — that's fine
   }
@@ -729,20 +742,25 @@ async function processContactsSync(
       if (c.isGroup) return;
 
       try {
-        const result = await services.persons.findOrCreateIdentity(
-          {
-            channel: channelType,
-            instanceId,
-            platformUserId: c.platformUserId,
-            platformUsername: c.name,
-            profilePicUrl: c.profilePicUrl,
-            profileData: c.metadata,
-          },
-          {
-            matchByPhone: validateContactPhone(c.phone, c.platformUserId),
-            createPerson: true,
-            displayName: c.name,
-          },
+        // One work item per contact: the identity/person write runs in the job
+        // envelope's world (G5, ADR-0008), so `platform_identities` and the
+        // `chat_id_mappings` read behind it are RLS-policed.
+        const result = await inSyncWorkerScope(envelope, () =>
+          services.persons.findOrCreateIdentity(
+            {
+              channel: channelType,
+              instanceId,
+              platformUserId: c.platformUserId,
+              platformUsername: c.name,
+              profilePicUrl: c.profilePicUrl,
+              profileData: c.metadata,
+            },
+            {
+              matchByPhone: validateContactPhone(c.phone, c.platformUserId),
+              createPerson: true,
+              displayName: c.name,
+            },
+          ),
         );
 
         if (result.isNew) stored++;
@@ -750,7 +768,7 @@ async function processContactsSync(
 
         // Update DM chat name if missing or stale
         if (c.name && !c.isGroup) {
-          await updateDmChatName(services, instanceId, c.platformUserId, c.name);
+          await updateDmChatName(services, instanceId, c.platformUserId, c.name, envelope);
         }
       } catch (error) {
         log.warn('Failed to store synced contact', {
