@@ -276,6 +276,7 @@ $omni$;`,
   ];
 }
 
+/** Rollback counterpart of the context-function DDL; operator tooling surface. @public */
 export function dropContextFunctionStatements(): string[] {
   return [
     `DROP FUNCTION IF EXISTS ${AUTH_PLANE_ROW_FUNCTION}(uuid, text);`,

@@ -129,6 +129,7 @@ function drizzleNameFor(table: string): string {
   return table.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
 }
 
+/** Drizzle export name -> SQL table for every RLS-covered table; operator tooling surface. @public */
 export const RLS_DRIZZLE_TO_TABLE: ReadonlyMap<string, string> = new Map(
   RLS_TENANT_TABLES.map((table) => [drizzleNameFor(table), table]),
 );

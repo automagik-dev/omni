@@ -37,7 +37,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { TENANT_OWNERSHIP_SPECS, getOwnershipSpec } from './tenancy-ownership';
 
-/** Drizzle export name -> SQL table name, for the 29 tenant tables. */
+/** Drizzle export name -> SQL table name, for the 29 tenant tables. @public */
 export const DRIZZLE_TO_TABLE: ReadonlyMap<string, string> = new Map(
   TENANT_OWNERSHIP_SPECS.map((s) => [s.drizzle, s.table]),
 );
