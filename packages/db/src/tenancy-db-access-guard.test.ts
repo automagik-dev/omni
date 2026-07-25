@@ -21,6 +21,7 @@ import {
   evaluateDbAccessGuard,
   scanDbAccessSites,
 } from './tenancy-db-access-guard';
+import { TENANT_OWNERSHIP_SPECS } from './tenancy-ownership';
 import { RLS_EXCLUSIONS, RLS_TENANT_TABLES } from './tenancy-rls';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -111,6 +112,47 @@ describe('db-access guard', () => {
       );
       expect(entry.justification).toContain('ADR-0008');
     }
+  });
+
+  test('a pending site whose table cannot carry a tenant before G6 says so', () => {
+    // WHY THIS EXISTS. "Convertible" and "gated" are different kinds of pending,
+    // and only the registry text distinguishes them. A site on a table whose
+    // derivation chain bottoms out in a G2-`unowned` root is stamped NULL by its
+    // trigger, so a scoped read finds NOTHING and a scoped insert fails the
+    // RLS `WITH CHECK` — converting it would ratchet the ceiling down on a
+    // conversion that cannot exist until the G6 backfill. The four `agents`
+    // sites are held on exactly that reasoning; this test is what keeps the
+    // reasoning from being applied unevenly (`turns` derives from `agent_id`,
+    // NOT NULL, so it inherits the same gate).
+    //
+    // The walk mirrors the trigger, not the spec's `required` flag: a derived
+    // table is gated when it has no resolvable parent at all, when EVERY parent
+    // is gated, or when any REQUIRED parent is gated (the trigger nulls the row
+    // as soon as one non-null parent has a null tenant).
+    const specs = new Map(TENANT_OWNERSHIP_SPECS.map((spec) => [spec.table, spec]));
+    const gated = (table: string, seen: Set<string> = new Set()): boolean => {
+      const spec = specs.get(table);
+      if (!spec || seen.has(table)) return false;
+      seen.add(table);
+      if (spec.derivation === 'unowned') return true;
+      if (spec.derivation === 'root') return false;
+      if (spec.parents.length === 0) return true;
+      if (spec.parents.every((parent) => gated(parent.parentTable, new Set(seen)))) return true;
+      return spec.parents.some((parent) => parent.required && gated(parent.parentTable, new Set(seen)));
+    };
+
+    // The chain the finding proved: turns -> agent_id (NOT NULL) -> agents ->
+    // owner_id -> persons (`unowned`).
+    expect(gated('turns')).toBe(true);
+    expect(gated('agents')).toBe(true);
+    // …and the ownership ROOT is of course not gated, so this is not vacuous.
+    expect(gated('instances')).toBe(false);
+
+    const turns = REGISTERED_DB_ACCESS.find(
+      (entry) => entry.file === 'packages/api/src/services/turns.ts' && entry.table === 'turns',
+    );
+    expect(turns?.class).toBe('pending-G5-conversion');
+    expect(turns?.justification ?? '').toMatch(/G6/);
   });
 
   test('tenant-boundary is the G3 boundary modules plus the services G4/G5 fully converted', () => {

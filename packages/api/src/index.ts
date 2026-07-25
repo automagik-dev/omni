@@ -620,6 +620,12 @@ async function setupEventBusServices(
     globalTurnMonitor = new TurnMonitor({
       turnService: services.turns,
       instanceService: services.instances,
+      // G5 (ADR-0008): the pools the per-tenant worker scopes need. Wiring them
+      // does NOT change flag-off behaviour — `runForEachActiveTenantRow` runs
+      // the single ambient pass, and the auth-plane enumeration is gated on the
+      // multitenancy flag.
+      db: services.db,
+      authPlaneDb: services.authPlane.db,
     });
     globalTurnMonitor.start();
     log.info('Turn monitor started');

@@ -1,5 +1,42 @@
 /**
  * Instance service - manages channel instance configurations
+ *
+ * TENANT-BOUND SEALING OF CHANNEL CREDENTIALS (G5 deliverable (g); ADR-0008)
+ * --------------------------------------------------------------------------
+ * An instance row carries the bot tokens and signing secrets for its channel —
+ * ADR-0008's "channel/provider/webhook credentials", which must be "encrypted
+ * with tenant-bound context" and whose "plaintext never appears in API
+ * responses, logs, caches, migration receipts, or object metadata".
+ * `SEALED_CREDENTIAL_COLUMNS` is that set, and every read/write path in this
+ * service passes through `openInstanceCredentials` / `sealInstanceCredentials`.
+ *
+ * The tenant binding needs no resolver seam here: `instances` IS the G2
+ * ownership root, so a row's own persisted `tenant_id` is the trusted answer —
+ * and it is the answer on BOTH sides. A write seals under the tenant the
+ * PERSISTED ROW will present back on read, never merely under the active scope.
+ *
+ * WHY THAT SYMMETRY IS THE WHOLE CONTRACT. Reads open with `row.tenant_id`; a
+ * write that sealed under the active scope while the row landed with
+ * `tenant_id` NULL would produce an envelope nothing can ever open —
+ * `openCredentialField(null, sealed)` fails closed to `null`, so a rotation
+ * would silently and permanently destroy a live bot token. Nothing stamps this
+ * root's `tenant_id` today (`NewInstance` omits it, the root has no derivation
+ * trigger and no column default, and the trusted ownership writer has no
+ * production caller), so every row production writes is still NULL-tenant and
+ * the sealing arm of (g) is INERT on this surface until root-ownership
+ * assignment lands. That is a ROLLOUT ORDERING CONSTRAINT, and it is enforced
+ * here rather than merely documented: master-key custody may precede ownership
+ * without any credential being lost, because a write only seals once the row
+ * actually carries the tenant it is sealed for. The active scope still bounds
+ * it — a write from a scope that does not own the row seals nothing.
+ *
+ * DUAL WORLD. Sealing engages only when BOTH a tenant is present AND a master
+ * key is configured (`setTenantSecretMasterKey`). Flag-off there is no tenant;
+ * with no key the codec is the identity function. In either case the column
+ * holds the same bytes it held before G5 and callers see the same plaintext —
+ * the deliverable is INERT until a deployment opts in. Reads are transitional:
+ * legacy plaintext rows and sealed rows coexist, each handled on its own shape,
+ * because G5 ships no credential backfill.
  */
 
 import type { EventBus } from '@omni/core';
@@ -8,13 +45,90 @@ import type { Database } from '@omni/db';
 import { type ChannelType, type Instance, type NewInstance, instances } from '@omni/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { forgetInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import { credentialSealingEngages, openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
+import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 
 export interface ListInstancesOptions {
   channel?: ChannelType[];
   status?: ('active' | 'inactive')[];
   limit?: number;
   cursor?: string;
+}
+
+/**
+ * The `instances` columns that hold channel credential material.
+ *
+ * Deliberately an explicit allow-list rather than a heuristic on the column
+ * name: a heuristic that silently stopped matching (a renamed column, a new
+ * channel) would fail OPEN, writing a live bot token as plaintext with nothing
+ * to notice it. Adding a channel means adding its secret column here, and the
+ * per-column probe in `sealed-credential-surfaces.test.ts` asserts the whole
+ * list is honoured rather than only the first entry.
+ *
+ * `twilioAccountSid`, `twilioFrom`, the messaging-service SID and the callback
+ * URLs are identifiers, not secrets, and stay in the clear so operators can
+ * still read them out of the database.
+ */
+const SEALED_CREDENTIAL_COLUMNS = [
+  'discordBotToken',
+  'slackBotToken',
+  'slackAppToken',
+  'slackSigningSecret',
+  'telegramBotToken',
+  'gupshupAuthToken',
+  'webhookVerifyToken',
+  'twilioAuthToken',
+] as const satisfies readonly (keyof Instance)[];
+
+/**
+ * Seal the credential columns present in `data` for `tenantId`.
+ *
+ * Only keys the caller actually supplied are touched, so a partial update that
+ * does not mention a token cannot blank or re-seal it. Returns a NEW object;
+ * the caller's input is never mutated.
+ */
+function sealInstanceCredentials<T extends Record<string, unknown>>(tenantId: string | null, data: T): T {
+  const out: Record<string, unknown> = { ...data };
+  for (const column of SEALED_CREDENTIAL_COLUMNS) {
+    if (!(column in out)) continue;
+    const value = out[column];
+    if (typeof value !== 'string') continue;
+    out[column] = sealCredentialField(tenantId, value);
+  }
+  return out as T;
+}
+
+/** Does `data` actually carry a credential column a seal could reshape? */
+function hasSealableCredential(data: Record<string, unknown>): boolean {
+  return SEALED_CREDENTIAL_COLUMNS.some((column) => {
+    const value = data[column];
+    return typeof value === 'string' && value !== '';
+  });
+}
+
+/**
+ * Open the credential columns of a loaded row, using the row's OWN persisted
+ * tenant. A row that cannot be opened (sealed under a different tenant, or no
+ * key configured) yields `null` for that column — fail-closed, never the
+ * ciphertext envelope. See `sealed-credentials.ts` for why null and not a throw.
+ */
+function openInstanceCredentials<T extends { tenantId?: string | null }>(row: T): T {
+  const tenantId = row.tenantId ?? null;
+  let copy: Record<string, unknown> | null = null;
+  for (const column of SEALED_CREDENTIAL_COLUMNS) {
+    const stored = (row as Record<string, unknown>)[column];
+    if (typeof stored !== 'string') continue;
+    const opened = openCredentialField(tenantId, stored);
+    if (opened === stored) continue;
+    if (!copy) copy = { ...row };
+    copy[column] = opened;
+  }
+  return (copy ?? row) as T;
+}
+
+/** Open a batch of loaded rows. Identity when nothing in the batch is sealed. */
+function openInstanceCredentialsAll<T extends { tenantId?: string | null }>(rows: T[]): T[] {
+  return rows.map(openInstanceCredentials);
 }
 
 export class InstanceService {
@@ -90,7 +204,10 @@ export class InstanceService {
 
     const lastItem = items[items.length - 1];
     return {
-      items,
+      // Ownership is taught from the RAW rows above (the registry reads
+      // `tenant_id`, which sealing never touches); only what leaves this method
+      // is opened.
+      items: openInstanceCredentialsAll(items),
       hasMore,
       cursor: lastItem?.id,
     };
@@ -102,7 +219,7 @@ export class InstanceService {
   async listActive(): Promise<Instance[]> {
     const rows = await this.db.select().from(instances).where(eq(instances.isActive, true));
     rememberInstanceOwners(rows);
-    return rows;
+    return openInstanceCredentialsAll(rows);
   }
 
   /**
@@ -116,7 +233,7 @@ export class InstanceService {
     }
 
     rememberInstanceOwners([result]);
-    return result;
+    return openInstanceCredentials(result);
   }
 
   /**
@@ -129,14 +246,71 @@ export class InstanceService {
       throw new NotFoundError('Instance', name);
     }
 
-    return result;
+    return openInstanceCredentials(result);
+  }
+
+  /**
+   * The tenant a WRITE from this service seals under, given the tenant the
+   * PERSISTED ROW carries (or will carry).
+   *
+   * Two trusted facts must agree, and sealing happens only when they do:
+   *
+   *   * the ACTIVE tenant scope — what the G3/G4 boundary resolved from the
+   *     caller's credential. Null on every legacy/worker/CLI path;
+   *   * the ROW's own `tenant_id` — the ownership root's persisted answer, and
+   *     the only thing `openInstanceCredentials` will have on the read side.
+   *
+   * Disagreement (including the additive phase, where the row is NULL-tenant)
+   * returns null, which makes `sealCredentialField` the identity function: the
+   * column keeps the exact bytes it kept before G5. That is strictly safer than
+   * sealing — a value sealed under a tenant the row does not carry is
+   * unopenable FOREVER, while plaintext is exactly the pre-G5 posture. A caller
+   * still cannot choose the key: `NewInstance` omits `tenantId`, and a row
+   * tenant that does not equal the active scope seals nothing at all.
+   */
+  private sealTenantFor(rowTenantId: string | null | undefined): string | null {
+    const scope = currentTenantScope()?.tenantId ?? null;
+    if (!scope) return null;
+    return (rowTenantId ?? null) === scope ? scope : null;
+  }
+
+  /**
+   * The seal tenant for an UPDATE: the persisted row's own tenant, cross-checked
+   * against the active scope.
+   *
+   * The lookup is skipped whenever it could not change the outcome — no scope,
+   * no credential column in the patch, or no master key configured — so the
+   * legacy/inert world issues exactly the statements it issued before G5, not
+   * one more. It runs on `this.db`, i.e. inside the caller's tenant transaction
+   * when there is one.
+   */
+  private async updateSealTenant(id: string, data: Partial<NewInstance>): Promise<string | null> {
+    const scope = currentTenantScope()?.tenantId ?? null;
+    if (!credentialSealingEngages(scope)) return null;
+    if (!hasSealableCredential(data as Record<string, unknown>)) return null;
+
+    const [row] = await this.db
+      .select({ tenantId: instances.tenantId })
+      .from(instances)
+      .where(eq(instances.id, id))
+      .limit(1);
+
+    return this.sealTenantFor(row?.tenantId ?? null);
   }
 
   /**
    * Create a new instance
    */
   async create(data: NewInstance): Promise<Instance> {
-    const [created] = await this.db.insert(instances).values(data).returning();
+    // The row's tenant is whatever the insert persists. `NewInstance` omits
+    // `tenantId`, so in production that is NULL and nothing seals; the cast
+    // mirrors the ownership-carrying shape the G3 root writer produces.
+    const rowTenant = (data as { tenantId?: string | null }).tenantId ?? null;
+
+    const [created] = await this.db
+      .insert(instances)
+      .values(sealInstanceCredentials(this.sealTenantFor(rowTenant), data))
+      .returning();
 
     if (!created) {
       throw new Error('Failed to create instance');
@@ -158,16 +332,17 @@ export class InstanceService {
       });
     }
 
-    return created;
+    return openInstanceCredentials(created);
   }
 
   /**
    * Update an instance
    */
   async update(id: string, data: Partial<NewInstance>): Promise<Instance> {
+    const sealTenant = await this.updateSealTenant(id, data);
     const [updated] = await this.db
       .update(instances)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...sealInstanceCredentials(sealTenant, data), updatedAt: new Date() })
       .where(eq(instances.id, id))
       .returning();
 
@@ -176,7 +351,7 @@ export class InstanceService {
     }
 
     rememberInstanceOwners([updated]);
-    return updated;
+    return openInstanceCredentials(updated);
   }
 
   /**

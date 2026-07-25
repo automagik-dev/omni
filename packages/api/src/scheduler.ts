@@ -77,6 +77,69 @@ async function createDailySyncJobs(services: Services, type: 'contacts' | 'group
 }
 
 /**
+ * Re-emit cached unread counts for every active WhatsApp instance, fanned out
+ * across tenants (G5, ADR-0008).
+ *
+ * Structurally identical to `createDailySyncJobs` and converted for the same
+ * reason: a cron has no envelope and no credential, so it must ENUMERATE whose
+ * instances exist rather than scan the table — under RLS enforcement the global
+ * `listActive()` is not expressible at all. This was the last scheduler caller
+ * reaching `services/instances.ts::instances` unscoped.
+ *
+ * The per-row side effect is an IN-PROCESS plugin call, not a database write, so
+ * `runForEachActiveTenantRow` is the right helper: it scopes only the discrete
+ * `listActive` READ and runs `perRow` outside that scope, never pinning a pooled
+ * connection across the plugin call.
+ *
+ * Three worlds, from the helper: flag-off is the pre-G5 single ambient pass,
+ * byte for byte; flag-on runs one scoped pass per ACTIVE tenant (a suspended
+ * tenant stops being refreshed at the next tick); the transitional NULL-tenant
+ * pass is skipped under enforcement.
+ *
+ * Returns the number of instances refreshed — what the job logs.
+ */
+async function refreshUnreadCounts(
+  services: Services,
+  channelRegistry: ChannelRegistry,
+  env?: NodeJS.ProcessEnv,
+): Promise<number> {
+  const waPlugin = channelRegistry.get('whatsapp-baileys') as
+    | { refreshUnreadCounts?: (instanceId: string) => void }
+    | undefined;
+
+  // No plugin: return before any enumeration or query, exactly as the pre-G5
+  // early return did.
+  if (!waPlugin?.refreshUnreadCounts) return 0;
+  const refresh = waPlugin.refreshUnreadCounts.bind(waPlugin);
+
+  let refreshed = 0;
+  await runForEachActiveTenantRow(
+    {
+      db: services.db,
+      authPlaneDb: services.authPlane.db,
+      jobName: 'unread-count-refresh',
+      listActive: () => services.instances.listActive(),
+      env,
+    },
+    async (instance) => {
+      if (instance.channel !== 'whatsapp-baileys') return;
+      refresh(instance.id);
+      refreshed++;
+    },
+  );
+  return refreshed;
+}
+
+/** Test seam for {@link refreshUnreadCounts} — see the tenant fan-out probe. */
+export function __refreshUnreadCountsForTest(
+  services: Services,
+  channelRegistry: ChannelRegistry,
+  env?: NodeJS.ProcessEnv,
+): Promise<number> {
+  return refreshUnreadCounts(services, channelRegistry, env);
+}
+
+/**
  * Wrap a scheduled job handler with Sentry cron monitoring.
  * When Sentry is not configured the handler runs directly.
  */
@@ -266,22 +329,11 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
       await withCronMonitor('unread-count-refresh', '0 * * * *', 5, 5, async () => {
         const startTime = Date.now();
         try {
-          const waPlugin = channelRegistry.get('whatsapp-baileys') as
-            | { refreshUnreadCounts?: (instanceId: string) => void }
-            | undefined;
-
-          if (!waPlugin?.refreshUnreadCounts) return;
-
-          const instances = await services.instances.listActive();
-          const waInstances = instances.filter((i) => i.channel === 'whatsapp-baileys');
-
-          for (const instance of waInstances) {
-            waPlugin.refreshUnreadCounts(instance.id);
-          }
+          const instanceCount = await refreshUnreadCounts(services, channelRegistry);
 
           const durationSec = (Date.now() - startTime) / 1000;
           recordScheduledJob('unread-count-refresh', 'success', durationSec);
-          log.debug('Refreshed unread counts', { instanceCount: waInstances.length });
+          log.debug('Refreshed unread counts', { instanceCount });
         } catch (err) {
           const durationSec = (Date.now() - startTime) / 1000;
           recordScheduledJob('unread-count-refresh', 'failure', durationSec);

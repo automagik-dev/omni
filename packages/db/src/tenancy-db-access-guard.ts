@@ -1274,15 +1274,17 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'instances',
     class: 'pending-G5-conversion',
     justification:
-      'Route paths run inside the request transaction, and leg I (run13) scoped the biggest worker callers: the ' +
-      'automation-engine callbacks (automation-actions.ts, engine-threaded envelope tenant), the sync-worker ' +
-      'channel-type lookup (inSyncWorkerScope), and the session-cleaner confirmation send (runTenantWorkDb). ' +
-      'What still reaches this site unscoped in the tenant world: (a) turn-monitor.ts per-tick `getById` — its ' +
-      'conversion belongs to the turns surface (turns.ts::turns, same leg); (b) the scheduler unread-count-refresh ' +
-      'cron `listActive` — a per-instance cron that should adopt the runForEachActiveTenantRow fan-out; (c) ' +
-      'trpc/router.ts, the exported-but-unmounted synchronous edge with no tenant boundary, held for the same ' +
-      'open decision as persons.ts::platform_identities. A site is only as scoped as its least-scoped caller; ' +
-      'the remaining conversions are the ADR-0008 async-context work above.',
+      'ASYNC SIDE COMPLETE (run14); held pending by ONE synchronous caller. Every route path runs inside the ' +
+      'request transaction; the async callers were closed across run13 and run14 — the automation-engine ' +
+      'callbacks (automation-actions.ts, engine-threaded envelope tenant), the sync-worker channel-type lookup ' +
+      '(inSyncWorkerScope), the session-cleaner confirmation send (runTenantWorkDb), the scheduler ' +
+      'unread-count-refresh cron (runForEachActiveTenantRow, the daily-sync precedent) and turn-monitor.ts ' +
+      '(runForEachActiveTenantRow over getStale, each per-turn `getById` in its own runTenantWorkDb scope). What ' +
+      'remains is trpc/router.ts alone: a second synchronous edge with NO tenant boundary of any kind, which ' +
+      'reaches list/getById/getByName/create/update/delete here. Giving it one is G4-surface work, not the ' +
+      'ADR-0008 async-context work assigned to G5. Held for the SAME open decision as ' +
+      'persons.ts::platform_identities — add the withTenantTransaction edge, or retire the unmounted export. ' +
+      'Not reclassified unilaterally: an unmounted export is still callable by an out-of-repo consumer.',
   },
   {
     file: 'packages/api/src/services/media-storage.ts',
@@ -1437,9 +1439,24 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'turns',
     class: 'pending-G5-conversion',
     justification:
-      'Called from BOTH a route and a non-request caller (eventBus consumer and/or scheduler cron). The route path ' +
-      'now runs inside the tenant transaction, but the site cannot be called converted while its worker caller ' +
-      'still reaches the ambient pool — closing that caller needs the G5 async context (ADR-0008).',
+      'Route paths run inside the request transaction, and two of the four worker callers are now scoped: ' +
+      'agent-dispatcher.ts `turns.open` (runDispatchDb, envelope-derived tenant) and turn-monitor.ts — whose ' +
+      'whole tick run14 converted to the runForEachActiveTenantRow fan-out with each getStale/incrementNudge/' +
+      'close in its own short worker scope. TWO unscoped callers remain, both fire-and-forget and neither in ' +
+      "run14's scope: (a) middleware/auth.ts, which starts `getOpenByApiKey().then(recordActivity)` from a " +
+      'REQUEST and detaches nothing — its continuations can outlive the request transaction (the G4 leg-2 ' +
+      'use-after-commit trap) and it needs runDetachedFromTenantScope plus a worker scope derived from the ' +
+      "validated key's tenant; (b) services/agent-heartbeat.ts, a NATS consumer whose heartbeat carries an " +
+      'instanceId but is not yet classified through classifyEnvelope. A site is only as scoped as its ' +
+      'least-scoped caller, so those two are the ADR-0008 async-context work that remains. BUT CONVERTING ' +
+      'THEM DOES NOT FLIP THIS ENTRY: `turns` is ALSO G6-GATED, on exactly the chain that holds the four ' +
+      '`agents` sites. It derives from BOTH instance_id and agent_id (tenancy-ownership.ts, required), ' +
+      'turns.agent_id is NOT NULL, and `agents` derives via owner_id -> persons (G2-`unowned`), so ' +
+      'omni_tenant_ownership_agents leaves every agents row NULL-tenant and omni_tenant_ownership_turns ' +
+      'therefore stamps turns.tenant_id NULL for every row. Under enforcement a scoped read returns nothing ' +
+      'and turns.open fails the INSERT WITH CHECK (the composite FK (tenant_id, agent_id) -> agents cannot ' +
+      'be satisfied either). So this flips to tenant-boundary only once BOTH the async callers are converted ' +
+      'AND the G6 persons backfill lands — it is a G6-gated site, not still-convertible G5 work.',
   },
   {
     file: 'packages/api/src/services/webhooks.ts',

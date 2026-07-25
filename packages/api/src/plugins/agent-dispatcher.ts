@@ -89,7 +89,7 @@ import type { MediaStorageService } from '../services/media-storage';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import type { ResolvedRoute } from '../services/route-resolver';
 import { publishTurnOpen } from '../services/turn-events';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
 import { fetchMediaUrl } from '../utils/safe-media-fetch';
 import { AgentDispatchLimiter, loadAgentDispatchLimiterConfig } from './agent-dispatch-limiter';
@@ -4073,8 +4073,42 @@ async function processAgentResponse(
 /** Cache of IAgentProvider instances by "providerId:instanceId" */
 const providerCache = new Map<string, IAgentProvider>();
 
-/** Shared OpenClaw WS clients keyed by provider DB ID (DEC-3: one connection per provider) */
+/**
+ * Shared OpenClaw WS clients (DEC-3: one connection per provider) keyed by
+ * `providerId::tenant`.
+ *
+ * TENANT IN THE KEY (G5; ADR-0008). A pooled `OpenClawClient` HOLDS the Ed25519
+ * `devicePrivateKey` and `deviceToken` it was constructed with and signs every
+ * connect with them, so this map is a credential cache, not merely a connection
+ * cache. `agent_providers` is a G0-`split` table with no `tenant_id`, so one
+ * provider row is reachable from instances of different tenants, and
+ * `ProviderService` binds its secrets to the ACTIVE SCOPE — every other context
+ * fails closed to a null secret "rather than to someone else's key". Keyed by
+ * provider id ALONE, the first tenant to build a client would hand its device
+ * identity to every later tenant and short-circuit exactly that null. The
+ * scope-less legacy world keys on `-` and therefore still shares one client per
+ * provider, byte-identically.
+ */
 const openclawClientPool = new Map<string, OpenClawClient>();
+
+/** Test-only DI hook for the OpenClaw WS client constructor (see `_natsGenieProviderCtor`). */
+let _openClawClientCtor: typeof OpenClawClient = OpenClawClient;
+
+/**
+ * The pool key for `providerId` under the tenant its secrets were OPENED under.
+ *
+ * `openedForTenantId` is the threaded trusted tenant when the caller has one:
+ * `session-cleaner` reads the provider record inside `runTenantWorkDb(...,
+ * trustedTenantId, ...)` and then resolves the provider OUTSIDE that scope (a
+ * worker transaction must not span the provider call), so the ambient scope
+ * alone would key A's opened device key under the legacy `-` bucket and hand it
+ * to the next tenant. Nothing threaded falls back to the active request scope,
+ * and no scope at all is the legacy bucket — which is correct there, because a
+ * scope-less read never opened anything tenant-bound in the first place.
+ */
+function openclawPoolKey(providerId: string, openedForTenantId?: string | null): string {
+  return `${providerId}::${openedForTenantId ?? currentTenantScope()?.tenantId ?? '-'}`;
+}
 
 /**
  * Pick the first non-empty agentId from instance → provider schemaConfig.
@@ -4100,9 +4134,14 @@ function resolveRequiredAgentId(
 }
 
 /** Create an OpenClaw-based agent provider */
-function createOpenClawProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider {
-  // DEC-3: Reuse shared WS client per provider ID
-  let client = openclawClientPool.get(provider.id);
+function createOpenClawProviderInstance(
+  provider: AgentProvider,
+  instance: DispatchInstance,
+  openedForTenantId?: string | null,
+): IAgentProvider {
+  // DEC-3: Reuse the shared WS client per provider — within one tenant.
+  const poolKey = openclawPoolKey(provider.id, openedForTenantId);
+  let client = openclawClientPool.get(poolKey);
   if (!client) {
     const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
     // FIX-SCOPE: Pass device credentials from schemaConfig if present.
@@ -4125,9 +4164,9 @@ function createOpenClawProviderInstance(provider: AgentProvider, instance: Dispa
       origin: (schemaConfig.origin as string) ?? undefined,
       device: deviceConfig,
     };
-    client = new OpenClawClient(clientConfig);
+    client = new _openClawClientCtor(clientConfig);
     client.start(); // DEC-14: lazy connect — starts WS in background
-    openclawClientPool.set(provider.id, client);
+    openclawClientPool.set(poolKey, client);
   }
 
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
@@ -4366,6 +4405,11 @@ export function resolveProvider(
   provider: AgentProvider,
   instance: DispatchInstance,
   db: Database,
+  /**
+   * The tenant `provider`'s secrets were OPENED under, when the caller threads
+   * one instead of holding a scope across this call (see `openclawPoolKey`).
+   */
+  openedForTenantId?: string | null,
 ): IAgentProvider | null {
   const cacheKey = `${provider.id}:${instance.id}`;
   const cached = providerCache.get(cacheKey);
@@ -4381,7 +4425,7 @@ export function resolveProvider(
       agentProvider = createWebhookProvider(provider);
       break;
     case 'openclaw':
-      agentProvider = createOpenClawProviderInstance(provider, instance);
+      agentProvider = createOpenClawProviderInstance(provider, instance, openedForTenantId);
       break;
     case 'claude-code':
       agentProvider = createClaudeCodeProviderInstance(provider, instance, db);
@@ -4432,8 +4476,11 @@ export function invalidateProviderCache(providerId: string): void {
     }
   }
 
-  const openclawClient = openclawClientPool.get(providerId);
-  if (openclawClient) {
+  // Every TENANT's client for this provider — the pool is keyed
+  // `providerId::tenant`, and a config change invalidates all of them.
+  const poolPrefix = `${providerId}::`;
+  for (const [key, openclawClient] of openclawClientPool.entries()) {
+    if (!key.startsWith(poolPrefix)) continue;
     try {
       openclawClient.stop();
     } catch (err) {
@@ -4442,7 +4489,7 @@ export function invalidateProviderCache(providerId: string): void {
         error: String(err),
       });
     }
-    openclawClientPool.delete(providerId);
+    openclawClientPool.delete(key);
   }
 
   log.debug('Provider cache invalidated', { providerId, removed });
@@ -6136,5 +6183,22 @@ export const __test__ = {
   /** Reset to the real NatsGenieProvider (call in afterEach). */
   resetNatsGenieProviderClass() {
     _natsGenieProviderCtor = NatsGenieProvider;
+  },
+  /** Override the OpenClawClient constructor for tests (no WS is opened). */
+  set OpenClawClientClass(cls: typeof OpenClawClient) {
+    _openClawClientCtor = cls;
+  },
+  /** Reset to the real OpenClawClient (call in afterEach). */
+  resetOpenClawClientClass() {
+    _openClawClientCtor = OpenClawClient;
+  },
+  /** The live pool keys (`providerId::tenant`) — for the pool-partitioning probes. */
+  openclawPoolKeys(): string[] {
+    return [...openclawClientPool.keys()];
+  },
+  /** Drop both provider caches WITHOUT stopping anything (test isolation only). */
+  resetProviderCaches() {
+    providerCache.clear();
+    openclawClientPool.clear();
   },
 };

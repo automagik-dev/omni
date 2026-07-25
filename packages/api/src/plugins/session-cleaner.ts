@@ -218,7 +218,13 @@ export async function clearAgentSession(
   // applyAgentFkOverrides threads the trusted tenant into its own discrete DB
   // block (via runDispatchDb); no extra wrap here.
   await applyAgentFkOverrides(db, agentId, dispatchInstance, trustedTenantId ?? undefined);
-  const agentProvider = resolveProvider(providerRecord, dispatchInstance, db);
+  // `providerRecord`'s secrets were opened inside the worker scope above; this
+  // resolution deliberately runs OUTSIDE it (a worker transaction must not span
+  // the provider call), so the tenant is threaded rather than read from the
+  // ambient scope — otherwise the shared OpenClaw client built with THIS
+  // tenant's device key would be pooled in the scope-less bucket and reused by
+  // the next tenant (G5; ADR-0008).
+  const agentProvider = resolveProvider(providerRecord, dispatchInstance, db, trustedTenantId ?? null);
   if (agentProvider?.resetSession) {
     await agentProvider.resetSession(sessionId, chatId, instanceId);
     if (legacySessionId !== sessionId) {

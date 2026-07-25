@@ -21,7 +21,7 @@ import type { AgentReplyFilter, AgentSessionStrategy, ChannelType, Instance } fr
 import type { Database } from '@omni/db';
 import { agentProviders, instances, persons } from '@omni/db';
 import { eq } from 'drizzle-orm';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 
 const log = createLogger('agent-runner');
 
@@ -315,16 +315,33 @@ async function* processStreamChunks(
 // ============================================================================
 
 export class AgentRunnerService {
+  /**
+   * Provider clients, keyed `providerId::tenant`.
+   *
+   * TENANT IN THE KEY (G5; ADR-0008). A cached `IAgentClient` holds the
+   * `apiKey` it was built with and sends it as the provider's bearer
+   * credential, so this map caches a CREDENTIAL. `agent_providers` has no
+   * `tenant_id` (G0-`split`), so one provider row is reachable from instances of
+   * different tenants; keyed by provider id alone the first caller's client —
+   * and its key — would be served to every later tenant. The scope-less legacy
+   * path keys on `-`, so it still shares exactly one client per provider.
+   */
   private clientCache: Map<string, IAgentClient> = new Map();
 
   constructor(private db: Database) {}
+
+  /** The cache key for `providerId` under the tenant scope active right now. */
+  private clientCacheKey(providerId: string): string {
+    return `${providerId}::${currentTenantScope()?.tenantId ?? '-'}`;
+  }
 
   /**
    * Get or create an Agno client for a provider
    */
   private async getClient(providerId: string): Promise<IAgentClient> {
     // Check cache
-    const cached = this.clientCache.get(providerId);
+    const cacheKey = this.clientCacheKey(providerId);
+    const cached = this.clientCache.get(cacheKey);
     if (cached) return cached;
 
     // Fetch provider config from DB
@@ -353,7 +370,7 @@ export class AgentRunnerService {
     });
 
     // Cache it
-    this.clientCache.set(providerId, client);
+    this.clientCache.set(cacheKey, client);
     return client;
   }
 
@@ -621,7 +638,11 @@ export class AgentRunnerService {
    */
   clearCache(providerId?: string): void {
     if (providerId) {
-      this.clientCache.delete(providerId);
+      // Every TENANT's client for this provider (the key is `providerId::tenant`).
+      const prefix = `${providerId}::`;
+      for (const key of this.clientCache.keys()) {
+        if (key.startsWith(prefix)) this.clientCache.delete(key);
+      }
     } else {
       this.clientCache.clear();
     }
