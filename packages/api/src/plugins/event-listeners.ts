@@ -11,8 +11,8 @@ import { chatIdMappings, chats, instances } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 import { sentryEnabled } from '../lib/sentry-scrub';
 import { AgentReplayService } from '../services/agent-replay';
-import { scopedHandle } from '../tenancy/tenant-scope';
-import { runConsumerInTenantContext } from '../tenancy/worker-tenant-context';
+import { runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { runConsumerInTenantContext, trustedEnvelopeTenant } from '../tenancy/worker-tenant-context';
 import { sanitizeText } from '../utils/utf8';
 import { emitConnectionGauge } from './connection-gauge';
 import { clearQrCode } from './qr-store';
@@ -70,9 +70,23 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
         emitConnectionGauge(db).catch(() => {});
       }
 
-      // Trigger agent replay for missed messages (fire-and-forget)
+      // Trigger agent replay for missed messages (fire-and-forget).
+      //
+      // G5 (ADR-0008): replay interleaves DB pages with `message.received`
+      // PUBLISHES, so it cannot be wrapped in one `runConsumerInTenantContext`
+      // scope — the tenant is derived as a VALUE and threaded, and the service
+      // scopes each discrete block itself. A legacy envelope threads `undefined`
+      // and every block stays ambient, byte-identical to pre-G5; a quarantined
+      // envelope throws before the replay starts and is dropped, never replayed
+      // globally.
+      //
+      // The whole fire-and-forget runs DETACHED (G4 leg-2 rule): a background
+      // continuation must never be able to borrow the handler's ALS scope, in
+      // either world.
       if (replayService) {
-        replayService.onInstanceConnect(instanceId).catch((err) => {
+        void runDetachedFromTenantScope(async () =>
+          replayService.onInstanceConnect(instanceId, trustedEnvelopeTenant(event)),
+        ).catch((err) => {
           instanceLog.warn('Agent replay failed', { instanceId, error: String(err) });
         });
       }
@@ -105,9 +119,13 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
         }
       }
 
-      // Update lastSeenAt on any disconnect so the next replay window is accurate
+      // Update lastSeenAt on any disconnect so the next replay window is accurate.
+      // Same threaded-tenant conversion as the connect handler above — one DB
+      // block, in the envelope's world.
       if (replayService) {
-        replayService.updateLastSeenAt(instanceId).catch((err) => {
+        void runDetachedFromTenantScope(async () =>
+          replayService.updateLastSeenAt(instanceId, undefined, trustedEnvelopeTenant(event)),
+        ).catch((err) => {
           instanceLog.warn('Failed to update lastSeenAt on disconnect', { instanceId, error: String(err) });
         });
       }

@@ -88,6 +88,7 @@ import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartb
 import { ApiKeyService } from './services/api-keys';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
+import { resolveAuthPlaneConnection } from './tenancy/auth-plane-connection';
 import { installInstanceOwnerResolver } from './tenancy/instance-owner-registry';
 import { currentTenantScope } from './tenancy/tenant-scope';
 import { startStreamRevocationSweeper } from './tenancy/tenant-stream-subscriptions';
@@ -212,12 +213,27 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
     pluginLog.warn('Some channel plugins failed to load', { failed: result.failed });
   }
 
-  // Auto-reconnect previously active instances
+  // Auto-reconnect previously active instances.
+  //
+  // G5 (ADR-0008/ADR-0003): the startup reconnect is a whole-table `instances`
+  // sweep, so it needs the auth-plane identity to ENUMERATE tenants. This runs
+  // BEFORE `createApp`, so `services.authPlane` does not exist yet — resolve a
+  // handle for exactly this sweep and close it immediately after. In legacy mode
+  // (and under enforcement without `OMNI_DB_AUTH_PLANE_URL`) this IS the runtime
+  // handle and `close()` is a no-op, so nothing new is opened; the fan-out itself
+  // is flag-gated and stays a single ambient scan when multitenancy is off.
   pluginLog.info('Auto-reconnecting active instances');
-  const reconnectResult = await reconnectWithPool(db, result.registry, {
-    maxConcurrent: 3,
-    delayBetweenMs: 500,
-  });
+  const bootAuthPlane = resolveAuthPlaneConnection(db);
+  let reconnectResult: Awaited<ReturnType<typeof reconnectWithPool>>;
+  try {
+    reconnectResult = await reconnectWithPool(db, result.registry, {
+      maxConcurrent: 3,
+      delayBetweenMs: 500,
+      authPlaneDb: bootAuthPlane.db,
+    });
+  } finally {
+    await bootAuthPlane.close();
+  }
 
   if (reconnectResult.attempted > 0) {
     pluginLog.info('Instance reconnection complete', {
@@ -607,7 +623,11 @@ async function setupEventBusServices(
   try {
     const turnEventsConn = getTurnEventsConnection();
     if (turnEventsConn) {
-      initAgentHeartbeat({ natsConnection: turnEventsConn, turnService: services.turns });
+      // G5 (ADR-0008): `db` opts this consumer into the tenant world — the
+      // activity write then runs in the scope derived from the heartbeat's
+      // instance ownership. Flag-off no instance carries a tenant, so every
+      // heartbeat classifies legacy and the call is byte-identical.
+      initAgentHeartbeat({ natsConnection: turnEventsConn, turnService: services.turns, db: services.db });
     } else {
       log.warn('Skipping agent heartbeat consumer: no NATS connection');
     }
@@ -851,6 +871,12 @@ async function main() {
   // Create app and get services
   const { app, services } = createApp(db, eventBus, globalChannelRegistry);
   globalServicesRef = services;
+
+  // G5 (ADR-0008): opt the instance monitor into the tenant fan-out now that the
+  // long-lived auth-plane connection exists. Its first health check is a full
+  // 30-second interval away, so this always lands before any tick. Flag-off this
+  // changes nothing — `runForEachActiveTenantRow` still runs one ambient pass.
+  globalInstanceMonitor?.setAuthPlane(services.authPlane.db);
 
   // G5 deliverable (e): terminate a revoked tenant's live voice sockets inside
   // the RELEASE_SLOS ceiling. Flag-off this starts no timer at all.

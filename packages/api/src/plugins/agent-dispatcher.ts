@@ -5356,7 +5356,7 @@ async function shouldProcessMessage(
   // messages still reach the debounce buffer. Counting per-inbound-message
   // silently dropped mid-thought messages and corrupted the agent context.
 
-  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
+  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel, trustedTenantId);
   if (accessDenied) return null;
 
   return instance;
@@ -5372,6 +5372,7 @@ async function checkAccessWithFallback(
   instance: Instance,
   payload: { from: string; chatId: string; rawPayload?: unknown },
   channel: ChannelType,
+  trustedTenantId?: string,
 ): Promise<boolean> {
   const rawPayload = payload.rawPayload as Record<string, unknown> | undefined;
   const rawKey = rawPayload?.key as Record<string, unknown> | undefined;
@@ -5384,7 +5385,11 @@ async function checkAccessWithFallback(
   const resolvedSenderPhone = rawResolvedPhone && /^\d{7,15}$/.test(rawResolvedPhone) ? rawResolvedPhone : undefined;
   const primaryId = payload.from ?? '';
 
-  let accessResult = await accessService.checkAccess(instance, primaryId, channel);
+  // G5 (ADR-0008): the ALLOW/DENY decision is evaluated against rules read in
+  // the MESSAGE's world. `trustedTenantId` is the envelope-derived tenant
+  // (`trustedDispatchTenant`), threaded rather than wrapped because the service
+  // publishes `access.allowed`/`access.denied` between blocks.
+  let accessResult = await accessService.checkAccess(instance, primaryId, channel, trustedTenantId);
   if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
     log.warn('Access fallback to participantAlt', {
       instanceId: instance.id,
@@ -5392,7 +5397,7 @@ async function checkAccessWithFallback(
       participantAlt,
       chatId: payload.chatId,
     });
-    accessResult = await accessService.checkAccess(instance, participantAlt, channel);
+    accessResult = await accessService.checkAccess(instance, participantAlt, channel, trustedTenantId);
   }
   if (
     !accessResult.allowed &&
@@ -5406,7 +5411,7 @@ async function checkAccessWithFallback(
       resolvedSenderPhone,
       chatId: payload.chatId,
     });
-    accessResult = await accessService.checkAccess(instance, resolvedSenderPhone, channel);
+    accessResult = await accessService.checkAccess(instance, resolvedSenderPhone, channel, trustedTenantId);
   }
   if (accessResult.allowed) return false;
 
@@ -5423,9 +5428,11 @@ async function checkAccessWithFallback(
   // Guard against empty primaryId: a missing payload.from would otherwise create a
   // degenerate pairing entry shared by all anonymous senders.
   if (accessResult.mode === 'allowlist' && !accessResult.rule && primaryId) {
-    accessService.requestPairing(instance.id, primaryId, { channelType: instance.channel }).catch((err) => {
-      log.warn('Failed to create pairing request', { instanceId: instance.id, from: primaryId, error: String(err) });
-    });
+    accessService
+      .requestPairing(instance.id, primaryId, { channelType: instance.channel }, trustedTenantId)
+      .catch((err) => {
+        log.warn('Failed to create pairing request', { instanceId: instance.id, from: primaryId, error: String(err) });
+      });
   }
 
   if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
@@ -5471,7 +5478,7 @@ async function shouldProcessReaction(
   const channel = (metadata.channelType ?? instance.channel) as ChannelType;
 
   // Access check for reactions (reuses LID fallback logic)
-  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
+  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel, trustedTenantId);
   if (accessDenied) return null;
 
   if (reactionDedup.isDuplicate(payload.messageId, payload.emoji, payload.from)) {
@@ -6150,6 +6157,12 @@ export const __test__ = {
   resolveLidMentionBot,
   resolveEffectiveReplyFilter,
   resolveSlackThreadReply,
+  // The two inbound GUARDS. Exported so a probe can prove they THREAD the
+  // envelope-derived tenant into the access read — a property of the call site
+  // that no probe of `AccessService` itself can pin (the run12 lesson).
+  shouldProcessMessage,
+  shouldProcessReaction,
+  checkAccessWithFallback,
   fetchSenderMetadata,
   fetchChatMetadata,
   applyCloseContactGate,

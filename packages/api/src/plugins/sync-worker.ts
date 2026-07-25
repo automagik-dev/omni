@@ -626,7 +626,7 @@ async function processMessageSync(
     jobTenantId,
   );
 
-  await queueMediaBackfillAfterSync(services, config, instanceId, jobId, stored);
+  await queueMediaBackfillAfterSync(services, config, instanceId, jobId, stored, jobTenantId);
 
   // Complete the job
   await services.syncJobs.complete(jobId, jobTenantId);
@@ -639,12 +639,27 @@ async function processMessageSync(
   });
 }
 
+/**
+ * Enqueue the post-sync media backfill batch job.
+ *
+ * @param trustedTenantId - the sync job's OWN tenant (`trustedSyncTenant`,
+ *   producer-stamped envelope metadata — never payload). This call site sits
+ *   OUTSIDE every scope: `inSyncWorkerScope` wraps only the per-item closures,
+ *   which closed before the fetch returned, and the handler is a NATS consumer
+ *   with no ambient scope. So `BatchJobService.create` cannot recover the tenant
+ *   from `currentTenantScope()` here — unthreaded, it would stamp a NULL-tenant
+ *   row whose detached executor reads `messages` and writes `media_content`
+ *   unscoped, and whose dequeue-time revocation gate is skipped (a null tenant
+ *   is admissible by definition). `null` for a legacy job keeps the pre-G5
+ *   ambient behaviour byte-identically.
+ */
 async function queueMediaBackfillAfterSync(
   services: Services,
   config: SyncJobConfig,
   instanceId: string,
   jobId: string,
   stored: number,
+  trustedTenantId: string | null,
 ): Promise<void> {
   if ((config.backfillMedia !== true && config.processMedia !== true) || stored === 0) return;
 
@@ -659,7 +674,7 @@ async function queueMediaBackfillAfterSync(
       delayMinMs: config.delayMinMs ?? 1000,
       delayMaxMs: config.delayMaxMs ?? 3000,
     };
-    const batch = await services.batchJobs.create(params);
+    const batch = await services.batchJobs.create(params, trustedTenantId);
     log.info('Queued media backfill batch after message sync', { jobId, batchJobId: batch.id, stored });
   } catch (error) {
     log.warn('Failed to queue media backfill batch after message sync', { jobId, error: String(error) });

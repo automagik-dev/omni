@@ -219,7 +219,14 @@ async function downloadMediaFromUrl(
       fetchOptions,
       trustedTenantId,
     );
-    await ctx.mediaStorage.updateMessageLocalPath(messageId, result.localPath);
+    // The message write is a discrete DB block, so it gets its own short worker
+    // scope (G5, ADR-0008): `storeFromUrl` above is a NETWORK download and must
+    // never be held inside a worker transaction, and this write must not land on
+    // the ambient pool while the rest of the item runs tenant-scoped. This was
+    // the last unscoped caller of `services/media-storage.ts::messages`; a
+    // legacy envelope (`trustedTenantId` undefined) still writes ambient,
+    // byte-identically to pre-G5.
+    await runMediaDb(ctx, trustedTenantId, () => ctx.mediaStorage.updateMessageLocalPath(messageId, result.localPath));
     log.debug('Downloaded media from URL', { messageId, filePath: result.localPath });
     return result.localPath;
   } catch (error) {
@@ -768,6 +775,7 @@ export const __test__ = {
   persistProcessingResult,
   resolveSafeMediaContentEventId,
   processMessageMedia,
+  downloadMediaFromUrl,
 };
 
 export type { MediaProcessorContext };

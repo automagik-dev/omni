@@ -269,6 +269,33 @@ describe('db-access guard', () => {
       'packages/api/src/services/chats.ts',
       'packages/api/src/services/messages.ts',
       'packages/api/src/services/persons.ts',
+      // G5 run15: the periodic instance sweeps. The 30s health check and the
+      // once-per-boot `reconnectWithPool` fan out with `runForEachActiveTenantRow`
+      // (only the `listActive` READ is scoped; every plugin `getStatus`/`connect`
+      // runs outside it), and the single-row `fetchInstanceById` /
+      // `markInstanceInactive` paths derive their tenant from the instance-owner
+      // registry. Its only callers are its own timers and `index.ts`.
+      'packages/api/src/plugins/instance-monitor.ts',
+      // G5 run15: the batch executor was already fully scoped from the job's
+      // captured trusted tenant; `resumeJobs` — the restart-recovery whole-table
+      // scan, and the file's LAST unscoped caller — now fans out per active
+      // tenant and dispatches each job under its OWN persisted `tenant_id`.
+      'packages/api/src/services/batch-jobs.ts',
+      // G5 run15: both fire-and-forget `event-listeners` callers
+      // (`onInstanceConnect`, `updateLastSeenAt`) run detached and thread
+      // `trustedEnvelopeTenant(event)`; each DB block (instance read, message
+      // PAGE, `lastSeenAt` write) opens its own short scope so no worker
+      // transaction spans a `message.received` republish.
+      'packages/api/src/services/agent-replay.ts',
+      // G5 run15: `updateMessageLocalPath` is this file's only `messages` access
+      // and its last unscoped caller (`media-processor.downloadMediaFromUrl`) now
+      // wraps it in `runMediaDb`, keeping the network download outside the scope.
+      'packages/api/src/services/media-storage.ts',
+      // G5 run15: `access.ts` appears here for its `instances` access ONLY — the
+      // `approvePairingRequest` channel lookup, whose single caller is
+      // `routes/v2/instances.ts` inside the request transaction. Its sibling
+      // `access_rules` site keeps its own pending entry (held by `trpc/router.ts`).
+      'packages/api/src/services/access.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

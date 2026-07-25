@@ -165,6 +165,39 @@ export async function runTenantWorkDb<T>(
 }
 
 /**
+ * Derive a consumer's TRUSTED tenant from its envelope, as a VALUE.
+ *
+ * {@link runConsumerInTenantContext} is the right tool when the handler's whole
+ * DB block fits in one scope. It is the WRONG tool when the work interleaves DB
+ * blocks with publishes or network calls — a worker transaction held across a
+ * publish makes the event a pre-commit side effect. Those handlers need the
+ * tenant as a value they can THREAD into a service that scopes each block
+ * itself (`runTenantWorkDb`), which is what this returns.
+ *
+ * Same three worlds, same fail-closed posture as the wrapper:
+ *   * `tenant`     → the envelope's trusted tenant;
+ *   * `legacy`     → `undefined`, so every threaded block stays ambient and
+ *                    byte-identical to pre-G5;
+ *   * `quarantine` → THROWS. Returning `undefined` here would process the
+ *                    message globally, which is exactly the fallback ADR-0008
+ *                    forbids. The subscription layer already rejects
+ *                    quarantined envelopes, so this is defence in depth and the
+ *                    caller's catch logs and drops it.
+ *
+ * The provenance guarantee is the same one `classifyEnvelope` gives: the value
+ * comes from producer-stamped METADATA, never from the event payload.
+ */
+export function trustedEnvelopeTenant(event: Pick<OmniEvent, 'metadata'>): string | undefined {
+  const classification = classifyEnvelope(event.metadata);
+  if (classification.world === 'quarantine') {
+    throw new WorkerTenantContextError(
+      `refusing to derive a tenant from a quarantined envelope (${classification.reason})`,
+    );
+  }
+  return classification.world === 'tenant' ? classification.tenantId : undefined;
+}
+
+/**
  * The consumer bridge: run an event handler's DB work in the right world.
  *
  * Classifies the inbound envelope and:

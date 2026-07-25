@@ -35,7 +35,7 @@ import {
   createMediaProcessingService,
 } from '@omni/media-processing';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
-import { isTenantWorkAdmissible } from '../tenancy/periodic-tenant-work';
+import { isTenantWorkAdmissible, runForEachActiveTenantRow } from '../tenancy/periodic-tenant-work';
 import { currentTenantScope, runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { BATCH_PRICING_VERSION, computeEstimatedCostCents } from './batch-pricing';
@@ -160,6 +160,13 @@ export class BatchJobService {
    */
   private authPlaneDb: Database | null = null;
 
+  /**
+   * Environment used for the flag/enforcement decisions of the RESUME fan-out.
+   * Tests override it; production leaves it undefined and the helper reads
+   * `process.env`.
+   */
+  private resumeEnv: NodeJS.ProcessEnv | undefined;
+
   constructor(
     private readonly pool: Database,
     private eventBus: EventBus | null,
@@ -175,6 +182,11 @@ export class BatchJobService {
    */
   setAuthPlane(authPlaneDb: Database): void {
     this.authPlaneDb = authPlaneDb;
+  }
+
+  /** Test seam for {@link resumeJobs}' flag/enforcement decisions. */
+  setResumeEnv(env: NodeJS.ProcessEnv | undefined): void {
+    this.resumeEnv = env;
   }
 
   /**
@@ -539,28 +551,60 @@ export class BatchJobService {
   }
 
   /**
-   * Resume jobs that were running when the API restarted
+   * Resume jobs that were running when the API restarted.
+   *
+   * G5 (ADR-0008/ADR-0003): this is restart recovery — no request, no
+   * credential, no envelope — and its read is a WHOLE-TABLE scan for
+   * `status = 'running'`. Under RLS enforcement that scan is not expressible at
+   * all, so recovery must ENUMERATE whose jobs exist (`runForEachActiveTenantRow`,
+   * the daily-sync / turn-monitor precedent) instead of scanning globally and
+   * sorting ownership out afterwards. Only the discrete READ is scoped; each
+   * job's executor is dispatched OUTSIDE it, because `executeJob` is a long
+   * fire-and-forget that opens its own short scope per DB block.
+   *
+   * Each job's trusted tenant is its OWN persisted `tenant_id` (G2, nullable) —
+   * never the enumerating pass's, never an ambient/inherited scope. The executor
+   * then revalidates that tenant is still admissible at this dequeue
+   * (RELEASE_SLOS `queued_retry_delayed_dlq_check`).
+   *
+   * LEGACY WORLD: with no auth plane wired, or with the flag off, this is the
+   * pre-G5 single ambient scan followed by the same dispatch loop — statement
+   * for statement.
    */
   async resumeJobs(): Promise<void> {
-    const runningJobs = await this.db.select().from(batchJobs).where(eq(batchJobs.status, 'running'));
-
-    if (runningJobs.length === 0) {
-      log.debug('No jobs to resume');
-      return;
-    }
-
-    log.info('Resuming batch jobs', { count: runningJobs.length });
-
-    for (const job of runningJobs) {
-      // No request scope exists at boot. Each job's trusted tenant is its OWN
-      // persisted `tenant_id` (G2, nullable) — not any ambient/inherited scope.
-      // A NULL-tenant row resumes ambient exactly as pre-G5 (legacy world); a
-      // tenant row resumes under its own worker scope, and the executor
-      // revalidates that tenant is still admissible at this dequeue.
+    const dispatch = (job: { id: string; tenantId: string | null }): void => {
       this.executeJob(job.id, job.tenantId ?? null).catch((error) => {
         log.error('Failed to resume job', { jobId: job.id, error: String(error) });
       });
+    };
+
+    if (!this.authPlaneDb) {
+      const runningJobs = await this.db.select().from(batchJobs).where(eq(batchJobs.status, 'running'));
+      if (runningJobs.length === 0) {
+        log.debug('No jobs to resume');
+        return;
+      }
+      log.info('Resuming batch jobs', { count: runningJobs.length });
+      for (const job of runningJobs) dispatch(job);
+      return;
     }
+
+    let resumed = 0;
+    await runForEachActiveTenantRow(
+      {
+        db: this.pool,
+        authPlaneDb: this.authPlaneDb,
+        jobName: 'batch-job-resume',
+        listActive: () => this.db.select().from(batchJobs).where(eq(batchJobs.status, 'running')),
+        env: this.resumeEnv,
+      },
+      async (job) => {
+        resumed += 1;
+        dispatch(job);
+      },
+    );
+    if (resumed === 0) log.debug('No jobs to resume');
+    else log.info('Resuming batch jobs', { count: resumed });
   }
 
   /**
