@@ -12,6 +12,7 @@ import { createLogger, generateCorrelationId } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chats, instances, messages } from '@omni/db';
 import { and, asc, eq, gt, lte, or, sql } from 'drizzle-orm';
+import { scopedHandle } from '../tenancy/tenant-scope';
 
 const log = createLogger('agent-replay');
 
@@ -38,8 +39,20 @@ export interface ReplayResult {
 }
 
 export class AgentReplayService {
+  /**
+   * The handle every query in this service uses.
+   *
+   * Inside a tenant-scoped request this is the request's tenant-stamped
+   * transaction (wish: omni-full-multitenancy, G4 — see `tenancy/tenant-scope.ts`);
+   * for a legacy credential, a worker, or the CLI it is the ambient pool and
+   * the query issued is byte-for-byte the one issued before the conversion.
+   */
+  private get db(): Database {
+    return scopedHandle(this.pool);
+  }
+
   constructor(
-    private db: Database,
+    private readonly pool: Database,
     private eventBus: EventBus,
   ) {}
 

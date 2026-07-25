@@ -35,6 +35,7 @@ import {
   createMediaProcessingService,
 } from '@omni/media-processing';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
+import { runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { BATCH_PRICING_VERSION, computeEstimatedCostCents } from './batch-pricing';
 import { MediaStorageService } from './media-storage';
 
@@ -134,12 +135,24 @@ export class BatchJobService {
   /** Progress update interval (items) */
   private static readonly PROGRESS_UPDATE_INTERVAL = 5;
 
+  /**
+   * The handle every query in this service uses.
+   *
+   * Inside a tenant-scoped request this is the request's tenant-stamped
+   * transaction (wish: omni-full-multitenancy, G4 — see `tenancy/tenant-scope.ts`);
+   * for a legacy credential, a worker, or the CLI it is the ambient pool and
+   * the query issued is byte-for-byte the one issued before the conversion.
+   */
+  private get db(): Database {
+    return scopedHandle(this.pool);
+  }
+
   constructor(
-    private db: Database,
+    private readonly pool: Database,
     private eventBus: EventBus | null,
     private settings?: MediaSettingsReader,
   ) {
-    this.mediaStorage = new MediaStorageService(db);
+    this.mediaStorage = new MediaStorageService(this.pool);
   }
 
   private getMediaService(): Promise<MediaProcessingService> {
@@ -272,8 +285,15 @@ export class BatchJobService {
       );
     }
 
-    // Start execution in background (non-blocking)
-    this.executeJob(created.id).catch((error) => {
+    // Start execution in background (non-blocking).
+    //
+    // `create` may be running inside a tenant-scoped request transaction. The
+    // executor MUST NOT inherit that scope: it outlives the request, and by the
+    // time its queries run the request's transaction has committed and its
+    // pooled connection has been released — issuing a query on it would be a
+    // use-after-commit. Detaching pins the executor (and every query it makes
+    // via `this.db`) to the ambient pool, the worker-context path G5 will own.
+    runDetachedFromTenantScope(() => this.executeJob(created.id)).catch((error) => {
       log.error('Job execution failed', { jobId: created.id, error: String(error) });
     });
 

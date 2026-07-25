@@ -21,6 +21,8 @@ import { OpenAiImageGenProvider } from '../providers/openai/imagegen';
 import { OpenAiSttProvider } from '../providers/openai/stt';
 import { OpenAiTtsProvider } from '../providers/openai/tts';
 import { providerRegistry } from '../providers/registry';
+import { type AuthPlaneConnection, resolveAuthPlaneConnection } from '../tenancy/auth-plane-connection';
+import { MembershipSelectionService, RequestAuthenticator } from '../tenancy/request-auth';
 import { AccessService } from './access';
 import { AgentRunnerService } from './agent-runner';
 import { AgentStateService } from './agent-state';
@@ -28,6 +30,7 @@ import { AgentTaskService } from './agent-tasks';
 import { AgentService } from './agents';
 import { ApiKeyService } from './api-keys';
 import { AuditService } from './audit';
+import { AuthBootstrapService } from './auth-bootstrap';
 import { AutomationService } from './automations';
 import { BatchJobService } from './batch-jobs';
 import { ChatService } from './chats';
@@ -49,6 +52,8 @@ import { RouteResolver } from './route-resolver';
 import { RouteService } from './routes';
 import { SettingsService } from './settings';
 import { SyncJobService } from './sync-jobs';
+import { TenantControlPlaneService } from './tenant-control-plane';
+import { TenantKeyService } from './tenant-keys';
 import { TTSService } from './tts';
 import { TurnService } from './turns';
 import { WebhookService } from './webhooks';
@@ -87,6 +92,25 @@ export interface Services {
   followUpLifecycle: FollowUpLifecycleService;
   followUpSweeper: FollowUpSweeperService;
   genieHosts: GenieHostsService;
+  /**
+   * Multitenancy control plane (wish: omni-full-multitenancy, G1). These are
+   * always constructed (no DB I/O at construction) but their routes only mount
+   * when `OMNI_MULTITENANCY_ENABLED === "true"`. `authBootstrap` is the ONLY
+   * read path into the isolated `auth_credentials` index.
+   */
+  authBootstrap: AuthBootstrapService;
+  /**
+   * The one construction point for a request's auth context (ADR-0003). Reads
+   * on the auth-plane connection, which under enforcement is the auth-plane
+   * ROLE's own pool — the runtime role holds no privilege on `auth_credentials`
+   * and no membership in the `omni_auth_plane` marker, so a runtime-backed
+   * authenticator would reject every confirming tenant hint.
+   */
+  requestAuthenticator: RequestAuthenticator;
+  /** How the auth plane is connected. Surfaced for startup logging and probes. */
+  authPlane: AuthPlaneConnection;
+  tenantControlPlane: TenantControlPlaneService;
+  tenantKeys: TenantKeyService;
   /**
    * Media storage service — computes stable keys and delegates to the active
    * backend (local disk or remote S3). Remote mode uses `presignedUrl` at
@@ -138,6 +162,15 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   // defer per-row arming to the central lifecycle gates. Built outside
   // the literal to avoid forward-referencing `services.X` inside its own
   // initializer.
+  // ADR-0003: the auth plane reads on its own identity under enforcement and on
+  // the runtime handle in legacy mode (see tenancy/auth-plane-connection.ts).
+  // Constructed before the service literal so the bootstrap service and the
+  // membership re-validator provably share ONE connection — two handles here
+  // would mean a credential and its membership could be read on different
+  // identities.
+  const authPlane = resolveAuthPlaneConnection(db);
+  const authBootstrap = new AuthBootstrapService(authPlane.db);
+
   const followUpLifecycle = new FollowUpLifecycleService(db, eventBus);
   const followUpSweeper = new FollowUpSweeperService(db, eventBus);
   followUpSweeper.setLifecycle(followUpLifecycle);
@@ -173,6 +206,11 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     followUpLifecycle,
     followUpSweeper,
     genieHosts: new GenieHostsService(db),
+    authBootstrap,
+    requestAuthenticator: new RequestAuthenticator(authBootstrap, new MembershipSelectionService(authPlane.db)),
+    authPlane,
+    tenantControlPlane: new TenantControlPlaneService(db),
+    tenantKeys: new TenantKeyService(db),
     mediaStorage: new MediaStorageService(db),
     eventBus,
   };

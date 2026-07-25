@@ -17,6 +17,7 @@ import { AgentTaskService } from '../agent-tasks';
 function createMockTask(overrides = {}) {
   return {
     id: 'task-1',
+    tenantId: null,
     agentId: 'agent-1',
     chatId: 'chat-1',
     conversationId: null,

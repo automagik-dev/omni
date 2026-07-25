@@ -23,16 +23,21 @@ import './tracing';
 
 import { type ChannelRegistry, isVoiceCapable } from '@omni/channel-sdk';
 import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
-import type { Database } from '@omni/db';
+import type { Database, DbEnforcementMode, EnforcedBootIdentities } from '@omni/db';
 import {
   API_CRITICAL_COLUMNS,
   agents,
   applyMigrations,
+  assertEnforcedRuntimeIdentity,
   closeDb,
   createDb,
+  createDbHandle,
   formatDriftReport,
   getDefaultDatabaseUrl,
   instances,
+  resolveEnforcedBootIdentities,
+  resolveEnforcementMode,
+  scrubDdlCredential,
   verifyCriticalColumns,
 } from '@omni/db';
 import * as Sentry from '@sentry/bun';
@@ -669,6 +674,63 @@ async function waitForDatabaseReady(db: Database, maxAttempts = 30): Promise<voi
 }
 
 /**
+ * Run migrate-on-boot, under the DDL identity when enforcement is active
+ * (wish: omni-full-multitenancy, G3; ADR-0004).
+ *
+ * In LEGACY mode this is exactly the pre-G3 call: the serving connection runs
+ * the migrator, as it always has.
+ *
+ * In ENFORCED mode the serving role holds no CREATE and owns nothing, so it
+ * could not run migrations even if asked. A dedicated DDL connection does the
+ * work and is closed before this function returns — which is what "migration
+ * credentials are unavailable to the application process after boot" means in
+ * practice.
+ */
+async function runStartupMigrations(db: Database, enforced: EnforcedBootIdentities | null): Promise<void> {
+  const MIGRATION_TIMEOUT_MS = 60_000;
+  const ddlHandle = enforced ? createDbHandle({ url: enforced.ddlUrl, maxConnections: 2 }) : null;
+  try {
+    await Promise.race([
+      applyMigrations(ddlHandle?.db ?? db, new URL('../../db/drizzle', import.meta.url).pathname),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Database migrations timed out (60s)')), MIGRATION_TIMEOUT_MS),
+      ),
+    ]);
+  } finally {
+    await ddlHandle?.close().catch(() => undefined);
+    // The connection is shut AND the credential is gone from the environment
+    // (G3 review carry-forward L3). Only on the enforced path: legacy mode has
+    // no DDL identity and nothing is removed.
+    if (enforced && scrubDdlCredential()) {
+      log.info('DDL credential scrubbed from process environment');
+    }
+  }
+}
+
+/**
+ * Refuse to serve traffic on an identity that could bypass RLS, own a tenant
+ * table, or create schema objects — and refuse when enforcement is not actually
+ * installed (wish: omni-full-multitenancy, G3; ADR-0004).
+ *
+ * A legacy boot returns immediately: this is the whole of G3's startup
+ * footprint on an existing deployment.
+ */
+async function verifyEnforcedRuntimeIdentity(db: Database, mode: DbEnforcementMode): Promise<void> {
+  if (mode !== 'enforced') return;
+  try {
+    const identity = await assertEnforcedRuntimeIdentity(db);
+    log.info('Enforced runtime identity verified', {
+      currentUser: identity.currentUser,
+      forcedTables: identity.enforcement.forced.length,
+    });
+  } catch (error) {
+    log.error('Enforcement-mode startup refused', { error: String(error) });
+    await closeDb();
+    throw error;
+  }
+}
+
+/**
  * Main entry point
  */
 async function main() {
@@ -689,10 +751,31 @@ async function main() {
         'omni-api will continue using DATABASE_URL.',
     );
   }
-  const databaseUrl = getDefaultDatabaseUrl();
+  // Enforcement mode (wish: omni-full-multitenancy, G3; ADR-0004).
+  //
+  // `legacy` is the DEFAULT and takes exactly the path it always has:
+  // DATABASE_URL, one connection, migrate on it, serve on it. `enforced`
+  // requires the three-identity split — migrations run under the DDL identity
+  // on a connection that is closed before the server listens, and the serving
+  // connection is a non-owning NOBYPASSRLS role that is verified, not assumed.
+  // There is no superuser fallback on the enforced path: it never consults the
+  // legacy resolver at all.
+  const enforcementMode = resolveEnforcementMode();
+  const enforcedIdentities = enforcementMode === 'enforced' ? resolveEnforcedBootIdentities() : null;
+  const databaseUrl = enforcedIdentities ? enforcedIdentities.runtimeUrl : getDefaultDatabaseUrl();
 
-  // Create database connection
-  log.info('Connecting to database');
+  // Create database connection.
+  //
+  // The log line is byte-identical to the pre-G3 legacy line (G3 review finding
+  // L1): a legacy boot must not gain even an observability field, because
+  // "contract-identical legacy behavior" includes what a log scraper sees. The
+  // `enforcementMode` field is emitted only on the enforced path, where it is
+  // new behavior anyway.
+  if (enforcementMode === 'enforced') {
+    log.info('Connecting to database', { enforcementMode });
+  } else {
+    log.info('Connecting to database');
+  }
   const db = createDb({ url: databaseUrl });
   globalDbRef = db;
 
@@ -722,19 +805,15 @@ async function main() {
   // applyMigrations() throws if Drizzle silently skipped any migration files
   log.info('Running database migrations');
   const migrationStart = Date.now();
-  const MIGRATION_TIMEOUT_MS = 60_000;
   try {
-    await Promise.race([
-      applyMigrations(db, new URL('../../db/drizzle', import.meta.url).pathname),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Database migrations timed out (60s)')), MIGRATION_TIMEOUT_MS),
-      ),
-    ]);
+    await runStartupMigrations(db, enforcedIdentities);
   } catch (error) {
     await closeDb();
     throw error;
   }
   log.info('Database migrations complete', { durationMs: Date.now() - migrationStart });
+
+  await verifyEnforcedRuntimeIdentity(db, enforcementMode);
 
   // Issue #407: migration 0018_supreme_puma was marked applied on a production
   // DB whose columns had never actually been renamed, so every /instances/*

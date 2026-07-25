@@ -13,6 +13,7 @@ import { PersonService } from '../persons';
 function createMockIdentity(overrides: Partial<PlatformIdentity> = {}): PlatformIdentity {
   return {
     id: 'identity-123',
+    tenantId: null,
     personId: 'person-123',
     agentId: null,
     channel: 'whatsapp-baileys',
@@ -92,6 +93,7 @@ describe('PersonService', () => {
     test('returns people whose WhatsApp name only exists on chat participants', async () => {
       const participantBackedPerson = {
         id: 'person-cadu',
+        tenantId: null,
         displayName: 'Cadu Cassau',
         primaryPhone: null,
         primaryEmail: null,

@@ -3,19 +3,20 @@ purpose_id: omni-full-multitenancy
 session_id: ps_74e1504c7ef87f09
 project: omni
 canonical_root: brain/wishes/2026/07/16/omni-full-multitenancy
-state: SPECIFIED
+state: WORKING
 public_name: "Omni Full Multitenancy"
 summary: >-
   Turn Omni into a fail-closed multitenant platform where tenant administrators
   can fully operate and delegate inside one tenant without cross-tenant or
   platform-admin escape paths.
 created_at: 2026-07-16T21:28:26Z
-updated_at: 2026-07-16T22:22:33Z
+updated_at: 2026-07-20T19:46:44Z
 owner: Felipe Rosa
 mutation_policy: >-
-  Planning and read-only evidence only until human approval converts execution
-  groups into Genie tasks; production migration, deployment, credential
-  mutation, tenant onboarding, and destructive cleanup remain separately gated.
+  Repository-local and non-production implementation through G8A is authorized
+  under the WISH DAG. Production access, migration, deployment, credential
+  mutation, tenant onboarding, Vault changes, and destructive cleanup remain
+  separately receipt-gated and unauthorized.
 binding:
   platform: telegram
   chat_id: null
@@ -29,6 +30,8 @@ artifacts:
   genie_wish: .genie/wishes/omni-full-multitenancy/WISH.md
   release_slos: brain/wishes/2026/07/16/omni-full-multitenancy/RELEASE_SLOS.yaml
   artifact_validator: brain/wishes/2026/07/16/omni-full-multitenancy/validate-artifacts.mjs
+  work_approval: brain/wishes/2026/07/16/omni-full-multitenancy/WORK_APPROVAL.md
+  work_materialization: brain/wishes/2026/07/16/omni-full-multitenancy/WORK_MATERIALIZATION.md
   status: brain/wishes/2026/07/16/omni-full-multitenancy/STATUS.md
 decisions:
   - First-class tenants and immutable tenant context replace instance allowlists as the ownership boundary.
@@ -40,5 +43,9 @@ decisions:
   - Production holds require canonical Ed25519-signed receipts from an isolated append-only approval authority, atomically compare-and-consumed by exact action tuple.
   - Production backup, backfill, RLS, release, tenant mapping, and each credential mint require distinct immutable receipts.
 execution:
-  authorized: false
-  next_gate: Human approval before Genie task creation.
+  authorized: true
+  authorized_at: 2026-07-20T19:46:44Z
+  authorized_by: Felipe Rosa
+  scope: G0-through-G8A-non-production
+  reviewed_wish_sha256: 67b52d941196d4ae481b8270d33f58804f5f0d14bb8e0ccc3e1afbcd42c91938
+  next_gate: G0 human/security approval before G1 dispatch.

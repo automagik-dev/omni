@@ -21,6 +21,7 @@ import type { Database } from '@omni/db';
 import { messages } from '@omni/db';
 import { eq } from 'drizzle-orm';
 
+import { scopedHandle } from '../tenancy/tenant-scope';
 import { type MediaFetchOptions, fetchMediaUrl } from '../utils/safe-media-fetch';
 
 export type { MediaFetchOptions } from '../utils/safe-media-fetch';
@@ -129,8 +130,20 @@ export class MediaStorageService {
   private basePath: string;
   private backend: MediaStorageBackend;
 
+  /**
+   * The handle every query in this service uses.
+   *
+   * Inside a tenant-scoped request this is the request's tenant-stamped
+   * transaction (wish: omni-full-multitenancy, G4 — see `tenancy/tenant-scope.ts`);
+   * for a legacy credential, a worker, or the CLI it is the ambient pool and
+   * the query issued is byte-for-byte the one issued before the conversion.
+   */
+  private get db(): Database {
+    return scopedHandle(this.pool);
+  }
+
   constructor(
-    private db: Database,
+    private readonly pool: Database,
     basePath?: string,
     backend?: MediaStorageBackend,
   ) {

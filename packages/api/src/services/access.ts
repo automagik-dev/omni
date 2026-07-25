@@ -19,6 +19,7 @@ import type { Database } from '@omni/db';
 import { type AccessMode, type AccessRule, type NewAccessRule, type RuleType, accessRules, instances } from '@omni/db';
 import { type SQL, and, count, desc, eq, gt, isNull, ne, or, sql } from 'drizzle-orm';
 import { CacheKeys } from '../cache/cache-keys';
+import { scopedHandle } from '../tenancy/tenant-scope';
 
 /** Default pairing request expiry: 1 hour */
 const DEFAULT_PAIRING_EXPIRY_MS = 60 * 60 * 1000;
@@ -65,8 +66,20 @@ export class PairingRequestConsumedError extends Error {
 }
 
 export class AccessService {
+  /**
+   * The handle every query in this service uses.
+   *
+   * Inside a tenant-scoped request this is the request's tenant-stamped
+   * transaction (wish: omni-full-multitenancy, G4 — see `tenancy/tenant-scope.ts`);
+   * for a legacy credential, a worker, or the CLI it is the ambient pool and
+   * the query issued is byte-for-byte the one issued before the conversion.
+   */
+  private get db(): Database {
+    return scopedHandle(this.pool);
+  }
+
   constructor(
-    private db: Database,
+    private readonly pool: Database,
     private eventBus: EventBus | null,
     private cache?: CacheProvider | null,
   ) {}

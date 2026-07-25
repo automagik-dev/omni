@@ -23,6 +23,7 @@ import {
   messages,
 } from '@omni/db';
 import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
+import { scopedHandle } from '../tenancy/tenant-scope';
 
 import { sanitizeText } from '../utils/utf8';
 
@@ -133,8 +134,20 @@ function buildMessagePreview(options: CreateMessageOptions): string {
 }
 
 export class MessageService {
+  /**
+   * The handle every query in this service uses.
+   *
+   * Inside a tenant-scoped request this is the request's tenant-stamped
+   * transaction (wish: omni-full-multitenancy, G4 — see `tenancy/tenant-scope.ts`);
+   * for a legacy credential, a worker, or the CLI it is the ambient pool and
+   * the query issued is byte-for-byte the one issued before the conversion.
+   */
+  private get db(): Database {
+    return scopedHandle(this.pool);
+  }
+
   constructor(
-    private db: Database,
+    private readonly pool: Database,
     private eventBus: EventBus | null,
   ) {}
 

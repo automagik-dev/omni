@@ -10,6 +10,7 @@
 import { createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { deleteConfigValue, getConfigDir, getConfigPath, loadConfig, loadServerConfig, saveConfig } from '../config.js';
+import { credentialStatusFields } from '../lib/credential-status.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
@@ -366,6 +367,8 @@ export function createAuthCommand(): Command {
           keyName: result.keyName,
           keyPrefix: result.keyPrefix,
           scopes: result.scopes,
+          // Empty for a legacy credential (wish: omni-full-multitenancy, G4).
+          ...credentialStatusFields(result),
           configDir: getConfigDir(),
         });
       } catch (err) {

@@ -281,6 +281,20 @@
       "when": 1783900800000,
       "tag": "0039_instances_message_supersede_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1784000000000,
+      "tag": "0040_multitenancy_control_plane",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1784100000000,
+      "tag": "0041_tenant_ownership_columns",
+      "breakpoints": true
     }
   ]
 }
