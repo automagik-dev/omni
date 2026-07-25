@@ -89,7 +89,7 @@ const PORT = Number.parseInt(process.env.API_PORT ?? '8882', 10);
 const HOST = process.env.API_HOST ?? '0.0.0.0';
 const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
 
-import { VoiceStreamRegistry, parseVoiceStreamParams, transcodeAudioFrame } from './ws/voice';
+import { VoiceStreamRegistry, authorizeVoiceApiKey, parseVoiceStreamParams, transcodeAudioFrame } from './ws/voice';
 import type { VoiceStreamClient } from './ws/voice';
 
 // Voice stream WebSocket registry (global singleton)
@@ -248,15 +248,18 @@ function startBunServer(app: App) {
           return;
         }
 
-        // Validate API key against the database
-        if (globalDbRef) {
-          try {
-            const apiKeyService = new ApiKeyService(globalDbRef);
-            await apiKeyService.validate(params.apiKey);
-          } catch {
-            ws.close(4004, 'Invalid API key');
-            return;
-          }
+        // Validate API key against the database. The refusal logic lives in
+        // authorizeVoiceApiKey: an invalid key makes ApiKeyService.validate
+        // RESOLVE NULL rather than throw, so the result must be inspected — and
+        // an absent db ref must refuse rather than skip the check entirely.
+        const db = globalDbRef;
+        const authorized = await authorizeVoiceApiKey(
+          db ? (key: string) => new ApiKeyService(db).validate(key) : null,
+          params.apiKey,
+        );
+        if (!authorized) {
+          ws.close(4004, 'Invalid API key');
+          return;
         }
 
         // Validate session exists via VoiceCapable interface

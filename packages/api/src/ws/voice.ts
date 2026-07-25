@@ -222,3 +222,30 @@ export function parseVoiceStreamParams(url: URL): VoiceStreamParams | null {
 
   return { sessionId, apiKey, format: format === 'pcm' ? 'pcm' : 'opus', filterUserId };
 }
+
+/**
+ * Authorize an API key for a voice WebSocket upgrade.
+ *
+ * `ApiKeyService.validate` resolves to `ValidatedApiKey | null`: it returns
+ * **null** — it does not throw — for an unknown, malformed, expired, or revoked
+ * key, and only throws when the lookup itself fails. Awaiting it without
+ * inspecting the result therefore admits every key that fails politely and
+ * refuses only the ones that fail loudly, which is the opposite of the intent.
+ *
+ * Every unresolvable outcome refuses:
+ * - `validate` absent (no database to consult) — we cannot authenticate, so we
+ *   do not admit. This is a partially-initialized process, not a deployment shape.
+ * - `validate` resolves null — the key is not a live credential.
+ * - `validate` throws — an auth store we cannot consult is not evidence of authority.
+ */
+export async function authorizeVoiceApiKey(
+  validate: ((apiKey: string) => Promise<unknown>) | null,
+  apiKey: string,
+): Promise<boolean> {
+  if (!validate) return false;
+  try {
+    return (await validate(apiKey)) != null;
+  } catch {
+    return false;
+  }
+}
