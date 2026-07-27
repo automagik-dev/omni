@@ -39,14 +39,35 @@
  *      never passed through as itself — a raw `tenant:*`-adjacent name landing
  *      in an authorization decision made by `ApiKeyService.scopeAllows` would be
  *      evaluated by a rulebook that never vetted it.
- *   2. The output universe is DERIVED from `SCOPE_MAP` rather than listed here,
- *      and `classifyLegacyScope` returns `null` for a verb it does not know.
+ *   2. The output universe is DERIVED rather than listed here, and
+ *      `classifyLegacyScope` returns `null` for a verb it does not know.
  *      `scope-projection.test.ts` fails on any unclassified scope, so adding a
  *      route with a novel verb breaks the build instead of silently making that
  *      route unreachable for every tenant credential.
+ *
+ * WHAT IT IS DERIVED FROM, AND WHY THAT CHANGED
+ * ---------------------------------------------
+ * The output universe used to be all of `SCOPE_MAP` — every scope any route
+ * requires. That was wrong in a way the "cannot widen beyond the tenant"
+ * argument above does not cover, because it assumed every route is a
+ * tenant-data route. Some are not. `GET /metrics` and `GET /logs/recent` read
+ * PROCESS-WIDE state with no tenant column to scope, and `/trust/hosts` is
+ * deployment infrastructure — `route-ownership.ts` declares all of them
+ * platform-admin or control-plane precisely because they are cross-tenant. A
+ * tier that swept `metrics:read`/`logs:read`/`trust:write` up with
+ * `instances:read` therefore handed a tenant-viewer key a genuine cross-tenant
+ * READ, and a tenant-operator key mutation rights over host trust — neither of
+ * which RLS can claw back, because there is no row-level boundary there to
+ * enforce.
+ *
+ * So the universe is now `TENANT_ADDRESSABLE_SCOPES`: the scopes required by
+ * routes the ownership table declares tenant-addressable, and nothing else. The
+ * projection can no longer emit a scope that authorizes a route the ownership
+ * declaration forbids, which is the drift that produced the bug.
  */
 
 import { SCOPE_MAP } from '../constants/scopes';
+import { TENANT_ADDRESSABLE_SCOPES } from './route-ownership';
 
 /**
  * Authority tiers, ordered. A tier includes everything below it.
@@ -81,7 +102,14 @@ const TIER_ORDER: readonly ScopeTier[] = ['read', 'write', 'admin'];
  */
 const DELEGATION_NAMESPACE = 'keys';
 
-/** Every scope some route actually requires, derived so it cannot drift. */
+/**
+ * Every scope some route actually requires, derived so it cannot drift.
+ *
+ * This is the CLASSIFICATION universe, not the projection universe: the
+ * exhaustiveness test walks it so a novel verb anywhere in `SCOPE_MAP` is a
+ * build failure. What a tenant credential may actually be granted is the
+ * narrower `TENANT_ADDRESSABLE_SCOPES`.
+ */
 export const LEGACY_SCOPE_UNIVERSE: readonly string[] = Object.freeze([...new Set(Object.values(SCOPE_MAP))].sort());
 
 /**
@@ -97,7 +125,7 @@ export function classifyLegacyScope(scope: string): ScopeTier | null {
 
 function scopesUpToTier(tier: ScopeTier): string[] {
   const ceiling = TIER_ORDER.indexOf(tier);
-  return LEGACY_SCOPE_UNIVERSE.filter((scope) => {
+  return TENANT_ADDRESSABLE_SCOPES.filter((scope) => {
     if (scope.startsWith(`${DELEGATION_NAMESPACE}:`)) return false;
     const scopeTier = classifyLegacyScope(scope);
     if (scopeTier === null) return false;
@@ -105,12 +133,25 @@ function scopesUpToTier(tier: ScopeTier): string[] {
   });
 }
 
-/** What each tenant-vocabulary scope expands to. Anything absent projects to nothing. */
+/**
+ * What each tenant-vocabulary scope expands to. Anything absent projects to
+ * nothing.
+ *
+ * `keys:delegate` intersects the delegation namespace with the addressable set,
+ * which reduces it to `keys:write` alone — the scope `POST /keys` requires,
+ * where a tenant credential is intercepted and served by the tenant child-key
+ * path. It deliberately does NOT yield `keys:read`: that scope's only routes
+ * are the legacy list/read/audit verbs over the deployment-wide, un-RLS'd
+ * `api_keys` table, so granting it would let a tenant-admin enumerate every
+ * credential in the deployment.
+ */
 const EXPANSIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   'tenant:read': Object.freeze(scopesUpToTier('read')),
   'tenant:write': Object.freeze(scopesUpToTier('write')),
   'tenant:*': Object.freeze(scopesUpToTier('admin')),
-  'keys:delegate': Object.freeze(LEGACY_SCOPE_UNIVERSE.filter((scope) => scope.startsWith(`${DELEGATION_NAMESPACE}:`))),
+  'keys:delegate': Object.freeze(
+    TENANT_ADDRESSABLE_SCOPES.filter((scope) => scope.startsWith(`${DELEGATION_NAMESPACE}:`)),
+  ),
 });
 
 /**

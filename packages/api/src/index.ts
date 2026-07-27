@@ -82,6 +82,7 @@ import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartb
 import { ApiKeyService } from './services/api-keys';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
+import { warnOnMixedTenancyState } from './tenancy/enforcement-posture';
 import { printStartupBanner } from './utils/startup-banner';
 
 // Configuration
@@ -764,6 +765,12 @@ async function main() {
   // There is no superuser fallback on the enforced path: it never consults the
   // legacy resolver at all.
   const enforcementMode = resolveEnforcementMode();
+
+  // Multitenancy on, DB enforcement off: credentials that claim a tenant
+  // boundary the database does not enforce. It is the documented migration
+  // path, so it boots — but never silently. See tenancy/enforcement-posture.ts.
+  warnOnMixedTenancyState(enforcementMode, (message) => log.warn(message));
+
   const enforcedIdentities = enforcementMode === 'enforced' ? resolveEnforcedBootIdentities() : null;
   const databaseUrl = enforcedIdentities ? enforcedIdentities.runtimeUrl : getDefaultDatabaseUrl();
 

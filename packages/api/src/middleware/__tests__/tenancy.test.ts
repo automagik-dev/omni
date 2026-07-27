@@ -58,7 +58,22 @@ function tenantContext(tenantId: string, overrides: Partial<Record<string, unkno
   } as AuthContext;
 }
 
-/** Minimal harness: a route that reports what the edge established. */
+/**
+ * Minimal harness: a route that reports what the edge established.
+ *
+ * The probe routes are mounted at REAL declared route keys (`GET
+ * /api/v2/instances`, `GET /api/v2/settings`, both `tenant-scoped` in
+ * `route-ownership.ts`) rather than at invented paths. The edge now refuses any
+ * route a tenant credential may not address, and an undeclared route is refused
+ * — so a synthetic path would make every tenant-world test below assert a 403
+ * for the wrong reason. That refusal has its own coverage in
+ * `tenancy/__tests__/route-ownership-gate.test.ts`; here the route must be one
+ * a tenant is genuinely entitled to, so the assertions are about the SCOPE the
+ * edge establishes.
+ */
+const PROBE = '/api/v2/instances';
+const RAW_DB_PROBE = '/api/v2/settings';
+
 function harness(authenticate: (input: unknown) => Promise<unknown>) {
   const app = new Hono<{ Variables: AppVariables }>();
   const db = {
@@ -71,8 +86,13 @@ function harness(authenticate: (input: unknown) => Promise<unknown>) {
     c.set('services', { requestAuthenticator: { authenticate, release: () => {} } } as never);
     await next();
   });
-  app.use('*', tenancyMiddleware);
-  app.get('/probe', (c) =>
+
+  // Mounted the way the real app mounts it — a sub-app carrying the edge,
+  // routed under /api/v2 — so Hono records the same full route paths the
+  // ownership declarations use.
+  const protectedApp = new Hono<{ Variables: AppVariables }>();
+  protectedApp.use('*', tenancyMiddleware);
+  protectedApp.get('/instances', (c) =>
     c.json({
       scopedTenant: currentTenantScope()?.tenantId ?? null,
       contextTenant: (c.get('authContext') as { tenantId?: string } | undefined)?.tenantId ?? null,
@@ -81,14 +101,15 @@ function harness(authenticate: (input: unknown) => Promise<unknown>) {
     }),
   );
   // A handler that reaches for the database directly, as several v2 routes do.
-  app.get('/raw-db', (c) => c.json({ handle: (c.get('db') as unknown as { __handle: string }).__handle }));
+  protectedApp.get('/settings', (c) => c.json({ handle: (c.get('db') as unknown as { __handle: string }).__handle }));
+  app.route('/api/v2', protectedApp);
   return app;
 }
 
 describe('tenancy edge — legacy world (default, flag off)', () => {
   test('a legacy credential establishes no context and no scope', async () => {
     const app = harness(async () => ({ ok: false, reason: 'not_found' }));
-    const res = await app.request('/probe', { headers: { 'x-api-key': 'legacy-key' } });
+    const res = await app.request(PROBE, { headers: { 'x-api-key': 'legacy-key' } });
 
     expect(res.status).toBe(200);
     // The whole legacy contract in one assertion: nothing was established, so
@@ -99,7 +120,7 @@ describe('tenancy edge — legacy world (default, flag off)', () => {
   test('an unauthenticated request is passed through untouched for authMiddleware to reject', async () => {
     const authenticate = mock(async () => ({ ok: false, reason: 'not_found' }));
     const app = harness(authenticate);
-    const res = await app.request('/probe');
+    const res = await app.request(PROBE);
 
     expect(res.status).toBe(200);
     // No credential means no auth-plane lookup at all — the edge must not turn
@@ -109,7 +130,7 @@ describe('tenancy edge — legacy world (default, flag off)', () => {
 
   test('an auth-plane outage does not convert a legacy request into a failure', async () => {
     const app = harness(async () => ({ ok: false, reason: 'auth_plane_error' }));
-    const res = await app.request('/probe', { headers: { 'x-api-key': 'legacy-key' } });
+    const res = await app.request(PROBE, { headers: { 'x-api-key': 'legacy-key' } });
 
     // A tenant credential cannot be confirmed, so the request continues as
     // legacy and authMiddleware decides. Failing the request here would break
@@ -131,7 +152,7 @@ describe('tenancy edge — flag off (no control plane mounted)', () => {
   test('a presented credential does NOT trigger an auth-plane lookup', async () => {
     const authenticate = mock(async () => ({ ok: false, reason: 'not_found' }));
     const app = harness(authenticate);
-    const res = await app.request('/probe', { headers: { 'x-api-key': 'some-key' } });
+    const res = await app.request(PROBE, { headers: { 'x-api-key': 'some-key' } });
 
     expect(res.status).toBe(200);
     // The lookup is a `lookupBySecret` SELECT on auth_credentials. Flag off, it
@@ -144,7 +165,7 @@ describe('tenancy edge — flag off (no control plane mounted)', () => {
   test('a bearer credential likewise reaches the legacy world untouched', async () => {
     const authenticate = mock(async () => ({ ok: false, reason: 'not_found' }));
     const app = harness(authenticate);
-    const res = await app.request('/raw-db', { headers: { authorization: 'Bearer some-key' } });
+    const res = await app.request(RAW_DB_PROBE, { headers: { authorization: 'Bearer some-key' } });
 
     expect(res.status).toBe(200);
     expect(authenticate).not.toHaveBeenCalled();
@@ -160,7 +181,7 @@ describe('tenancy edge — tenant world (flag on)', () => {
     // flag is on and a credential is RECOGNISED as tenant-class, scoping is not
     // re-litigated per request — the recognised credential is always scoped.
     const app = harness(async () => ({ ok: true, context: tenantContext(TENANT_A), tenantSource: 'credential' }));
-    const res = await app.request('/probe', { headers: { 'x-api-key': 'tenant-key' } });
+    const res = await app.request(PROBE, { headers: { 'x-api-key': 'tenant-key' } });
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as { scopedTenant: string; contextTenant: string; apiKeyId: string };
@@ -179,7 +200,7 @@ describe('tenancy edge — tenant world (flag on)', () => {
    */
   test('role-ceiling scopes are projected into the vocabulary the routes enforce', async () => {
     const app = harness(async () => ({ ok: true, context: tenantContext(TENANT_A), tenantSource: 'credential' }));
-    const res = await app.request('/probe', { headers: { 'x-api-key': 'tenant-key' } });
+    const res = await app.request(PROBE, { headers: { 'x-api-key': 'tenant-key' } });
 
     const { scopes } = (await res.json()) as { scopes: string[] };
     expect(scopes).toContain('instances:read');
@@ -199,7 +220,7 @@ describe('tenancy edge — tenant world (flag on)', () => {
       context: tenantContext(TENANT_A, { scopes: ['tenant:*'] }),
       tenantSource: 'credential',
     }));
-    const res = await app.request('/probe', { headers: { 'x-api-key': 'tenant-key' } });
+    const res = await app.request(PROBE, { headers: { 'x-api-key': 'tenant-key' } });
 
     const { scopes } = (await res.json()) as { scopes: string[] };
     expect(scopes).not.toContain('tenant:*');
@@ -209,7 +230,7 @@ describe('tenancy edge — tenant world (flag on)', () => {
 
   test('the scope is torn down after the response', async () => {
     const app = harness(async () => ({ ok: true, context: tenantContext(TENANT_A), tenantSource: 'credential' }));
-    await app.request('/probe', { headers: { 'x-api-key': 'tenant-key' } });
+    await app.request(PROBE, { headers: { 'x-api-key': 'tenant-key' } });
     expect(currentTenantScope()).toBeNull();
   });
 
@@ -219,7 +240,7 @@ describe('tenancy edge — tenant world (flag on)', () => {
       seen.push(input);
       return { ok: true, context: tenantContext(TENANT_A), tenantSource: 'validated_membership' };
     });
-    const res = await app.request('/probe', {
+    const res = await app.request(PROBE, {
       headers: { 'x-api-key': 'tenant-key', 'x-omni-tenant-id': TENANT_A },
     });
 
@@ -234,7 +255,7 @@ describe('tenancy edge — tenant world (flag on)', () => {
 describe('tenancy edge — tenant header confusion', () => {
   test('a header naming another tenant is rejected uniformly', async () => {
     const app = harness(async () => ({ ok: false, reason: 'tenant_selection_rejected' }));
-    const res = await app.request('/probe', {
+    const res = await app.request(PROBE, {
       headers: { 'x-api-key': 'tenant-key', 'x-omni-tenant-id': TENANT_B },
     });
 
@@ -254,10 +275,10 @@ describe('tenancy edge — tenant header confusion', () => {
     const withMembership = harness(async () => ({ ok: false, reason: 'tenant_selection_rejected' }));
     const withoutMembership = harness(async () => ({ ok: false, reason: 'tenant_selection_rejected' }));
 
-    const a = await withMembership.request('/probe', {
+    const a = await withMembership.request(PROBE, {
       headers: { 'x-api-key': 'tenant-key', 'x-omni-tenant-id': TENANT_B },
     });
-    const b = await withoutMembership.request('/probe', {
+    const b = await withoutMembership.request(PROBE, {
       headers: { 'x-api-key': 'tenant-key', 'x-omni-tenant-id': TENANT_B },
     });
 
@@ -267,7 +288,7 @@ describe('tenancy edge — tenant header confusion', () => {
 
   test('a revoked membership on a confirming hint is rejected', async () => {
     const app = harness(async () => ({ ok: false, reason: 'membership_disabled' }));
-    const res = await app.request('/probe', {
+    const res = await app.request(PROBE, {
       headers: { 'x-api-key': 'tenant-key', 'x-omni-tenant-id': TENANT_A },
     });
 
@@ -279,7 +300,7 @@ describe('tenancy edge — tenant header confusion', () => {
 describe('tenancy edge — handlers that use the database directly', () => {
   test('a tenant request sees the transaction, not the pool', async () => {
     const app = harness(async () => ({ ok: true, context: tenantContext(TENANT_A), tenantSource: 'credential' }));
-    const res = await app.request('/raw-db', { headers: { 'x-api-key': 'tenant-key' } });
+    const res = await app.request(RAW_DB_PROBE, { headers: { 'x-api-key': 'tenant-key' } });
 
     // Routes like v2/messages and v2/handoffs query through `c.get('db')`.
     // If this returned the pool they would read across tenants while every
@@ -289,7 +310,7 @@ describe('tenancy edge — handlers that use the database directly', () => {
 
   test('a legacy request still sees the ambient pool', async () => {
     const app = harness(async () => ({ ok: false, reason: 'not_found' }));
-    const res = await app.request('/raw-db', { headers: { 'x-api-key': 'legacy-key' } });
+    const res = await app.request(RAW_DB_PROBE, { headers: { 'x-api-key': 'legacy-key' } });
 
     expect(await res.json()).toEqual({ handle: 'pool' });
   });
@@ -311,8 +332,8 @@ describe('tenancy edge — the single-construction guard is not caller-addressab
     });
 
     const headers = { 'x-api-key': 'tenant-key', 'x-request-id': 'collide-on-me' };
-    const first = await app.request('/probe', { headers });
-    const second = await app.request('/probe', { headers });
+    const first = await app.request(PROBE, { headers });
+    const second = await app.request(PROBE, { headers });
 
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
