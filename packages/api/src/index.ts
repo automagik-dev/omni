@@ -80,6 +80,7 @@ import { getPlugin } from './plugins/loader';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
 import { ApiKeyService } from './services/api-keys';
+import { releaseIdleTimeoutClaim } from './services/follow-up-lifecycle';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
 import { warnOnMixedTenancyState } from './tenancy/enforcement-posture';
@@ -586,6 +587,9 @@ async function setupEventBusServices(
       staleIdleTimeoutGate: async (chatId, instanceId, eventSequenceIndex) => {
         return services.followUpLifecycle.evaluateIdleTimeoutFreshness(chatId, instanceId, eventSequenceIndex);
       },
+      // Give the delivery claim back when handling failed (queue full → nak),
+      // so the NATS redelivery is a first delivery and not a "duplicate".
+      releaseIdleTimeoutClaim: (claimToken) => releaseIdleTimeoutClaim(claimToken),
     });
   } catch (error) {
     log.error('Failed to start automation engine', { error: String(error) });

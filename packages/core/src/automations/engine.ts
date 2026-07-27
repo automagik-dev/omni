@@ -121,6 +121,7 @@ export class AutomationEngine {
       sendMessage: deps.sendMessage,
       callAgent: deps.callAgent,
       staleIdleTimeoutGate: deps.staleIdleTimeoutGate,
+      releaseIdleTimeoutClaim: deps.releaseIdleTimeoutClaim,
     };
     this.automations = automations.filter((a) => a.enabled);
 
@@ -347,16 +348,18 @@ export class AutomationEngine {
    * call_agent + send_message for every replayed event regardless of the
    * chat's current state — the spam pattern reported on 2026-05-01.
    *
-   * Returns `true` when the event should be dropped (gate said skip).
-   * Returns `false` when the event should proceed (no gate, missing payload
-   * fields, gate said proceed, or gate threw — fail-open by design).
+   * Returns `{ skip: true }` when the event should be dropped (gate said skip).
+   * Returns `{ skip: false }` when the event should proceed (no gate, missing
+   * payload fields, gate said proceed, or gate threw — fail-open by design);
+   * `claimToken` is set when the gate recorded a delivery claim that must be
+   * released if handling the event then fails.
    */
-  private async shouldSkipStaleIdleTimeout(event: OmniEvent): Promise<boolean> {
-    if (event.type !== 'chat.idle_timeout' || !this.deps.staleIdleTimeoutGate) return false;
+  private async shouldSkipStaleIdleTimeout(event: OmniEvent): Promise<{ skip: boolean; claimToken?: string }> {
+    if (event.type !== 'chat.idle_timeout' || !this.deps.staleIdleTimeoutGate) return { skip: false };
     const payload = event.payload as { chatId?: string; instanceId?: string; sequenceIndex?: number };
     const chatId = payload?.chatId;
     const payloadInstanceId = payload?.instanceId ?? event.metadata.instanceId;
-    if (!chatId || !payloadInstanceId) return false;
+    if (!chatId || !payloadInstanceId) return { skip: false };
     const eventSequenceIndex = typeof payload?.sequenceIndex === 'number' ? payload.sequenceIndex : null;
 
     try {
@@ -369,8 +372,9 @@ export class AutomationEngine {
           eventSequenceIndex,
           reason: verdict.reason ?? 'unknown',
         });
-        return true;
+        return { skip: true };
       }
+      return { skip: false, ...(verdict.claimToken ? { claimToken: verdict.claimToken } : {}) };
     } catch (err) {
       // Fail-open — better to fire a redundant follow-up than to silently
       // drop legitimate events when the DB is flaky.
@@ -380,7 +384,24 @@ export class AutomationEngine {
         error: err instanceof Error ? err.message : String(err),
       });
     }
-    return false;
+    return { skip: false };
+  }
+
+  /**
+   * Give back a delivery claim after the event failed to be handled, so the
+   * NATS redelivery is treated as a first delivery instead of a duplicate.
+   * Never throws — the caller is already propagating a failure.
+   */
+  private async releaseIdleTimeoutClaim(claimToken: string, event: OmniEvent): Promise<void> {
+    if (!this.deps.releaseIdleTimeoutClaim) return;
+    try {
+      await this.deps.releaseIdleTimeoutClaim(claimToken);
+    } catch (err) {
+      logger.warn('releaseIdleTimeoutClaim failed', {
+        eventId: event.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -397,7 +418,8 @@ export class AutomationEngine {
       return;
     }
 
-    if (await this.shouldSkipStaleIdleTimeout(event)) {
+    const gate = await this.shouldSkipStaleIdleTimeout(event);
+    if (gate.skip) {
       return;
     }
 
@@ -409,13 +431,22 @@ export class AutomationEngine {
     // Sort by priority (higher first)
     const sortedAutomations = [...matchingAutomations].sort((a, b) => b.priority - a.priority);
 
-    for (const automation of sortedAutomations) {
-      // Check if this automation has debounce
-      if (automation.debounce && automation.debounce.mode !== 'none') {
-        await this.handleDebounced(automation, event);
-      } else {
-        await this.handleImmediate(automation, event);
+    try {
+      for (const automation of sortedAutomations) {
+        // Check if this automation has debounce
+        if (automation.debounce && automation.debounce.mode !== 'none') {
+          await this.handleDebounced(automation, event);
+        } else {
+          await this.handleImmediate(automation, event);
+        }
       }
+    } catch (err) {
+      // The delivery failed (e.g. QueueFullError → the subscriber naks and
+      // NATS redelivers). Hand the claim back before rethrowing, otherwise the
+      // redelivery meets this event's own claim and the follow-up is dropped
+      // forever — fail-closed, which this gate must never do.
+      if (gate.claimToken) await this.releaseIdleTimeoutClaim(gate.claimToken, event);
+      throw err;
     }
   }
 

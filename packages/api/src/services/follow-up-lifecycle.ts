@@ -71,6 +71,17 @@ const log = createLogger('follow-up-lifecycle');
 //   • JetStream redelivery of event N after an ack timeout, row also at N+1 →
 //     duplicate, must be dropped or the chat gets the same follow-up twice.
 //
+// The triple alone is NOT stable enough to key a claim: `upsertArmed` resets
+// `sequenceIndex` to 0 on every re-arm, so the extremely common
+// fire → customer replies (disarm) → agent replies (re-arm) → idles again cycle
+// produces a second, entirely legitimate event 0 for the same chat — which a
+// (chat, instance, index) claim from the previous cycle would have swallowed for
+// the claim's whole 6h TTL. The key therefore carries an ARM EPOCH: the row's
+// `lastAgentMessageAt`, which `upsertArmed` rewrites on every arm and which
+// `recordFired` never touches. That makes the epoch constant across an event's
+// own redeliveries (the property the dedupe needs) and distinct across re-arms
+// (the property that keeps legitimate follow-ups flowing).
+//
 // In-memory and best-effort by design: a process restart forgets the claims and
 // the gate degrades to fail-open (a redundant follow-up), which is the same
 // trade-off the rest of this gate already makes.
@@ -96,9 +107,43 @@ function pruneIdleTimeoutClaims(now: number): void {
 }
 
 /**
- * Claim a `chat.idle_timeout` delivery for its (chat, instance, sequence)
- * identity. Returns `true` on the first delivery, `false` when this exact
- * event was already processed (redelivery).
+ * Compose the claim key for an idle-timeout delivery. `armEpoch` is the arm
+ * generation (the row's `lastAgentMessageAt` in ms); 0 when no row could be
+ * read, which degrades to the old triple-only behaviour for that event.
+ */
+function idleTimeoutClaimKey(chatId: string, instanceId: string, armEpoch: number, eventSequenceIndex: number): string {
+  return `${instanceId}:${chatId}:${armEpoch}:${eventSequenceIndex}`;
+}
+
+/**
+ * Claim a composed key. Returns `true` on the first delivery, `false` when the
+ * exact key was already claimed (redelivery).
+ */
+function claimIdleTimeoutKey(key: string, now: number = Date.now()): boolean {
+  pruneIdleTimeoutClaims(now);
+  if (idleTimeoutClaims.has(key)) return false;
+  idleTimeoutClaims.set(key, now);
+  return true;
+}
+
+/**
+ * Release a previously granted claim so the event can be processed again.
+ *
+ * The gate records the claim BEFORE the engine executes the delivery, so a
+ * delivery that fails (queue full → `msg.nak()`, dispatcher throw) would meet
+ * its own claim on redelivery and be dropped forever — failing CLOSED, the
+ * exact opposite of this gate's contract. The engine therefore releases the
+ * claim whenever the post-gate handling throws; the redelivery then claims
+ * afresh.
+ */
+export function releaseIdleTimeoutClaim(claimToken: string): void {
+  idleTimeoutClaims.delete(claimToken);
+}
+
+/**
+ * Claim a `chat.idle_timeout` delivery for its
+ * (chat, instance, arm epoch, sequence) identity. Returns `true` on the first
+ * delivery, `false` when this exact event was already processed (redelivery).
  *
  * Events without a sequence index carry no identity, so they always claim.
  */
@@ -107,13 +152,10 @@ export function claimIdleTimeoutDelivery(
   instanceId: string,
   eventSequenceIndex: number | null,
   now: number = Date.now(),
+  armEpoch = 0,
 ): boolean {
   if (typeof eventSequenceIndex !== 'number') return true;
-  pruneIdleTimeoutClaims(now);
-  const key = `${instanceId}:${chatId}:${eventSequenceIndex}`;
-  if (idleTimeoutClaims.has(key)) return false;
-  idleTimeoutClaims.set(key, now);
-  return true;
+  return claimIdleTimeoutKey(idleTimeoutClaimKey(chatId, instanceId, armEpoch, eventSequenceIndex), now);
 }
 
 const TERMINAL_DISARM_REASONS: ReadonlySet<FollowUpDisarmReason> = new Set<FollowUpDisarmReason>([
@@ -527,9 +569,12 @@ export class FollowUpLifecycleService {
    *  - follow-up row's `disarmReason` is set — sequence is in a terminal
    *    state and any further fire would re-spam a chat the system already
    *    finished/handed-off/archived
-   *  - the event's identity (chat + instance + `eventSequenceIndex`) was
-   *    already delivered to the engine in this process — a redelivery of an
-   *    event that already fired. This replaced the old
+   *  - the event's identity (chat + instance + arm epoch + `eventSequenceIndex`)
+   *    was already delivered to the engine in this process — a redelivery of an
+   *    event that already fired. The arm epoch (the row's `lastAgentMessageAt`)
+   *    scopes the claim to one arm cycle, so a disarm + re-arm — which resets
+   *    `sequenceIndex` to 0 — does not collide with the previous cycle's
+   *    claims. This replaced the old
    *    `row.sequenceIndex > eventSequenceIndex` distance test, which could
    *    not tell a JetStream redelivery of event N (row at N+1) from a healthy
    *    first delivery of event N (row also at N+1, because the sweeper
@@ -547,12 +592,18 @@ export class FollowUpLifecycleService {
    * the event flow through. The engine logs the failure but doesn't drop —
    * a flaky DB at consumer time is less harmful than silently dropping
    * legitimate idle-timeout events.
+   *
+   * The returned `claimToken` (present only when the event claimed its
+   * identity) MUST be handed to `releaseIdleTimeoutClaim` if the delivery then
+   * fails — otherwise the claim recorded here would make the NATS redelivery
+   * of a follow-up that never actually ran look like a duplicate, and the
+   * follow-up would be lost. The engine does this for us.
    */
   async evaluateIdleTimeoutFreshness(
     chatId: string,
     instanceId: string,
     eventSequenceIndex: number | null,
-  ): Promise<{ skip: boolean; reason?: string }> {
+  ): Promise<{ skip: boolean; reason?: string; claimToken?: string }> {
     if (await this.isInActiveCloseState(chatId, instanceId)) {
       return { skip: true, reason: 'chat_closed' };
     }
@@ -579,14 +630,20 @@ export class FollowUpLifecycleService {
     }
     // Gap of 0 or 1 is ambiguous by sequence alone — discriminate by identity:
     // only the first delivery of this exact event proceeds, a redelivery of it
-    // (ack timeout, consumer restart mid-flight) is dropped.
-    if (!claimIdleTimeoutDelivery(chatId, instanceId, eventSequenceIndex)) {
+    // (ack timeout, consumer restart mid-flight) is dropped. The identity is
+    // scoped to the ARM EPOCH so a disarm + re-arm (which resets sequenceIndex
+    // to 0) starts a fresh claim space instead of colliding with the previous
+    // cycle's event 0.
+    if (typeof eventSequenceIndex !== 'number') return { skip: false };
+    const armEpoch = row?.lastAgentMessageAt?.getTime() ?? 0;
+    const claimToken = idleTimeoutClaimKey(chatId, instanceId, armEpoch, eventSequenceIndex);
+    if (!claimIdleTimeoutKey(claimToken)) {
       return {
         skip: true,
         reason: `duplicate_delivery_event_${eventSequenceIndex}`,
       };
     }
-    return { skip: false };
+    return { skip: false, claimToken };
   }
 
   /**
@@ -601,6 +658,7 @@ export class FollowUpLifecycleService {
     disarmedAt: Date | null;
     lastInboundCustomerMessageAt: Date | null;
     sequenceIndex: number;
+    lastAgentMessageAt: Date | null;
   } | null> {
     const [row] = await this.db
       .select({
@@ -608,6 +666,7 @@ export class FollowUpLifecycleService {
         disarmedAt: chatFollowUpState.disarmedAt,
         lastInboundCustomerMessageAt: chatFollowUpState.lastInboundCustomerMessageAt,
         sequenceIndex: chatFollowUpState.sequenceIndex,
+        lastAgentMessageAt: chatFollowUpState.lastAgentMessageAt,
       })
       .from(chatFollowUpState)
       .where(and(eq(chatFollowUpState.chatId, chatId), eq(chatFollowUpState.instanceId, instanceId)))
@@ -619,6 +678,7 @@ export class FollowUpLifecycleService {
       disarmedAt: row.disarmedAt ?? null,
       lastInboundCustomerMessageAt: row.lastInboundCustomerMessageAt ?? null,
       sequenceIndex: row.sequenceIndex,
+      lastAgentMessageAt: row.lastAgentMessageAt ?? null,
     };
   }
 

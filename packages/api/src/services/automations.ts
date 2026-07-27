@@ -66,7 +66,8 @@ export class AutomationService {
       chatId: string,
       instanceId: string,
       eventSequenceIndex: number | null,
-    ) => Promise<{ skip: boolean; reason?: string }>;
+    ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
+    releaseIdleTimeoutClaim?: (claimToken: string) => void | Promise<void>;
   }): Promise<void> {
     if (!this.eventBus) {
       return;

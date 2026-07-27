@@ -807,61 +807,9 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     expect(rows[0].disarmReason).toBeNull();
   });
 
-  // ───────────────────────────────────────────────────────────
-  // evaluateIdleTimeoutFreshness — stale/duplicate delivery gate
-  // ───────────────────────────────────────────────────────────
-
-  async function armAtIndex(sequenceIndex: number): Promise<void> {
-    await service.armForOutbound({
-      chatId: testChatId,
-      instanceId: testInstanceId,
-      agentId: null,
-      lastAgentMessageAt: new Date(),
-      config: config(),
-    });
-    await db
-      .update(chatFollowUpState)
-      .set({ sequenceIndex })
-      .where(and(eq(chatFollowUpState.chatId, testChatId), eq(chatFollowUpState.instanceId, testInstanceId)));
-  }
-
-  test('freshness gate lets the first delivery through while the row is one step ahead', async () => {
-    // publish(0) → recordFired(1): the healthy publish/consume race that the
-    // old strictly-greater gate dropped for ~14% of armed chats (f149179a).
-    await armAtIndex(1);
-
-    const verdict = await service.evaluateIdleTimeoutFreshness(testChatId, testInstanceId, 0);
-
-    expect(verdict.skip).toBe(false);
-  });
-
-  test('freshness gate drops a redelivery of an event it already let through', async () => {
-    await armAtIndex(1);
-
-    const first = await service.evaluateIdleTimeoutFreshness(testChatId, testInstanceId, 0);
-    const redelivery = await service.evaluateIdleTimeoutFreshness(testChatId, testInstanceId, 0);
-
-    expect(first.skip).toBe(false);
-    expect(redelivery.skip).toBe(true);
-    expect(redelivery.reason).toBe('duplicate_delivery_event_0');
-  });
-
-  test('freshness gate lets the next event through after the previous one fired', async () => {
-    await armAtIndex(1);
-    await service.evaluateIdleTimeoutFreshness(testChatId, testInstanceId, 0);
-
-    await armAtIndex(2);
-    const next = await service.evaluateIdleTimeoutFreshness(testChatId, testInstanceId, 1);
-
-    expect(next.skip).toBe(false);
-  });
-
-  test('freshness gate still drops a historical replay two or more steps behind', async () => {
-    await armAtIndex(3);
-
-    const verdict = await service.evaluateIdleTimeoutFreshness(testChatId, testInstanceId, 0);
-
-    expect(verdict.skip).toBe(true);
-    expect(verdict.reason).toBe('sequence_advanced_row_at_3_event_0');
-  });
+  // The `evaluateIdleTimeoutFreshness` gate assertions live in
+  // `follow-up-freshness-postgres.test.ts` — this file's `describeWithDb`
+  // harness skips unless ENABLE_DB_TESTS is set, which nothing sets, so the
+  // gate's coverage would never execute anywhere. The `*-postgres.test.ts`
+  // suite is discovered and forced to run by `scripts/pg-gate.ts` in CI.
 });
