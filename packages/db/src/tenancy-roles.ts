@@ -38,12 +38,12 @@
 import { sql } from 'drizzle-orm';
 import type { Database } from './client';
 import {
-  AUTH_PLANE_FUNCTION,
   AUTH_PLANE_READABLE_TABLES,
-  AUTH_PLANE_ROW_FUNCTION,
   DEFAULT_ROLE_NAMES,
+  QUALIFIED_AUTH_PLANE_FUNCTION,
+  QUALIFIED_AUTH_PLANE_ROW_FUNCTION,
+  QUALIFIED_TENANT_CONTEXT_FUNCTION,
   RUNTIME_DENIED_TABLES,
-  TENANT_CONTEXT_FUNCTION,
   type TenancyRoleNames,
 } from './tenancy-rls';
 
@@ -98,10 +98,12 @@ export function roleProvisioningStatements(
   passwords: TenancyRolePasswords,
   roles: TenancyRoleNames = DEFAULT_ROLE_NAMES,
   database = 'omni',
+  legacyRoles: readonly string[] = [],
 ): string[] {
   for (const [label, value] of Object.entries(roles)) assertSafeIdent(label, value);
   assertSafeIdent('database', database);
   for (const value of Object.values(passwords)) assertSafePassword(value);
+  for (const value of legacyRoles) assertSafeIdent('legacy role', value);
 
   const { ddl, runtime, authPlane, authPlaneMarker } = roles;
   const statements: string[] = [];
@@ -228,9 +230,9 @@ $omni$;`,
   GRANT USAGE, SELECT ON SEQUENCES TO "${runtime}";`,
     // The policy helpers must be callable by whoever the policy is evaluated
     // for, which is the querying role.
-    `GRANT EXECUTE ON FUNCTION ${TENANT_CONTEXT_FUNCTION}() TO "${runtime}", "${authPlane}", "${ddl}";`,
-    `GRANT EXECUTE ON FUNCTION ${AUTH_PLANE_FUNCTION}(text) TO "${runtime}", "${authPlane}", "${ddl}";`,
-    `GRANT EXECUTE ON FUNCTION ${AUTH_PLANE_ROW_FUNCTION}(uuid, text) TO "${runtime}", "${authPlane}", "${ddl}";`,
+    `GRANT EXECUTE ON FUNCTION ${QUALIFIED_TENANT_CONTEXT_FUNCTION}() TO "${runtime}", "${authPlane}", "${ddl}";`,
+    `GRANT EXECUTE ON FUNCTION ${QUALIFIED_AUTH_PLANE_FUNCTION}(text) TO "${runtime}", "${authPlane}", "${ddl}";`,
+    `GRANT EXECUTE ON FUNCTION ${QUALIFIED_AUTH_PLANE_ROW_FUNCTION}(uuid, text) TO "${runtime}", "${authPlane}", "${ddl}";`,
   );
 
   // --- 5. control-plane denial --------------------------------------------
@@ -255,7 +257,72 @@ $omni$;`,
     statements.push(`GRANT SELECT ON TABLE "${table}" TO "${authPlane}";`);
   }
 
+  // --- 7. legacy cutover role ----------------------------------------------
+  // `packages/cli/src/lib/role-cutover.ts` provisions ONE scoped role
+  // (`pgserve_omni_<fp>_role`) and hands it `GRANT SELECT, INSERT, UPDATE,
+  // DELETE ON ALL TABLES IN SCHEMA public` plus default privileges. Section 2
+  // moves every OBJECT it owns to the DDL role, but ownership is not privilege:
+  // without this section the pre-cutover role keeps its blanket grants and can
+  // still SELECT `auth_credentials.key_hash` — the one table that is RLS-free by
+  // design and therefore protected by privilege alone (ADR-0003).
+  //
+  // Placed last, after every GRANT above, because `GRANT ... ON ALL TABLES`
+  // would otherwise re-add what this revokes. Guarded on role existence: REVOKE
+  // against a role that was never provisioned is a hard error, and a deployment
+  // that never ran the CLI cutover must still be able to apply this plan.
+  for (const legacy of legacyRoles) {
+    if (legacy === ddl || legacy === runtime || legacy === authPlane || legacy === authPlaneMarker) {
+      throw new Error(`tenancy-roles: legacy role ${JSON.stringify(legacy)} collides with a provisioned identity`);
+    }
+    statements.push(legacyRevokeStatement(legacy, database), revokeMembership(authPlaneMarker, legacy));
+  }
+
   return statements;
+}
+
+/**
+ * Strip every privilege the CLI cutover granted a legacy scoped role.
+ *
+ * Wrapped in one `DO` block guarded on `pg_roles`, so the whole thing is a
+ * no-op on a deployment where that role never existed. `ALTER DEFAULT
+ * PRIVILEGES` is issued twice on purpose: once `FOR ROLE` the legacy role
+ * (the grants it made for itself) and once for the current provisioner
+ * identity (the grants the cutover script made as superuser) — a default
+ * privilege survives an object-level REVOKE and would silently re-arm the
+ * legacy role on the next table created.
+ */
+function legacyRevokeStatement(legacy: string, database: string): string {
+  const revokes = [
+    'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM %I',
+    'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM %I',
+    'REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM %I',
+    'REVOKE ALL PRIVILEGES ON SCHEMA public FROM %I',
+    'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA drizzle FROM %I',
+    'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA drizzle FROM %I',
+    'REVOKE ALL PRIVILEGES ON SCHEMA drizzle FROM %I',
+    `REVOKE ALL PRIVILEGES ON DATABASE "${database}" FROM %I`,
+    'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE ALL ON TABLES FROM %I',
+    'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE ALL ON SEQUENCES FROM %I',
+    'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA drizzle REVOKE ALL ON TABLES FROM %I',
+    'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA drizzle REVOKE ALL ON SEQUENCES FROM %I',
+    'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM %I',
+    'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM %I',
+    'ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle REVOKE ALL ON TABLES FROM %I',
+    'ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle REVOKE ALL ON SEQUENCES FROM %I',
+  ]
+    .map((template) => {
+      const args = Array.from({ length: (template.match(/%I/g) ?? []).length }, () => `'${legacy}'`).join(', ');
+      return `    EXECUTE format(${quoteLiteral(template)}, ${args});`;
+    })
+    .join('\n');
+
+  return `DO $omni$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${legacy}') THEN
+${revokes}
+  END IF;
+END
+$omni$;`;
 }
 
 /** Apply {@link roleProvisioningStatements} on a provisioner (superuser) connection. */
@@ -264,8 +331,9 @@ export async function applyTenancyRoles(
   passwords: TenancyRolePasswords,
   roles: TenancyRoleNames = DEFAULT_ROLE_NAMES,
   database = 'omni',
+  legacyRoles: readonly string[] = [],
 ): Promise<number> {
-  const statements = roleProvisioningStatements(passwords, roles, database);
+  const statements = roleProvisioningStatements(passwords, roles, database, legacyRoles);
   for (const statement of statements) {
     await db.execute(sql.raw(statement));
   }

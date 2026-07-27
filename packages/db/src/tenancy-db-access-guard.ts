@@ -1314,6 +1314,13 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
   },
   {
+    file: 'packages/db/scripts/online-ddl.ts',
+    table: '*',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. The G2 online index phase: invoked explicitly by an operator with an explicit --url (DATABASE_URL is never read), outside the migration transaction, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
     file: 'packages/db/src/migrate.ts',
     table: '*',
     class: 'migration-ddl',

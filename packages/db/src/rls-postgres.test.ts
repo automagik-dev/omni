@@ -183,6 +183,9 @@ postgresDescribe('G3 enforcement (real PostgreSQL)', () => {
   const enforcedDbName = `omni_g3_enforced_${crypto.randomUUID().replaceAll('-', '')}`;
   const legacyDbName = `omni_g3_legacy_${crypto.randomUUID().replaceAll('-', '')}`;
   const passwords = { ddl: password(), runtime: password(), authPlane: password() };
+  /** Shaped like the CLI cutover's `pgserve_omni_<fp12>_role`. */
+  const LEGACY_SCOPED_ROLE = 'pgserve_omni_g3legacyfp_role';
+  const legacyScopedPassword = password();
 
   let provisioner: Handle;
   let ddl: Handle;
@@ -191,6 +194,8 @@ postgresDescribe('G3 enforcement (real PostgreSQL)', () => {
   let pooledRuntime: Handle;
   let authPlane: Handle;
   let legacy: Handle;
+  /** The pre-cutover scoped role, connected AFTER its privileges are revoked. */
+  let legacyScoped: Handle;
 
   beforeAll(async () => {
     // ---- enforced world -------------------------------------------------
@@ -201,11 +206,39 @@ postgresDescribe('G3 enforcement (real PostgreSQL)', () => {
     const seeded = runSqlOn(enforcedSuperUrl, SEED);
     if (seeded.exitCode !== 0) throw new Error(`seed failed: ${seeded.stderr}`);
 
+    // The world as `packages/cli/src/lib/role-cutover.ts` leaves it: ONE scoped
+    // role holding blanket DML on every table, including `auth_credentials`.
+    // Enforcement has to take that away, or the credential index — RLS-free by
+    // design and protected by privilege alone — stays readable from the
+    // pre-cutover identity.
+    const cutover = runSqlOn(
+      enforcedSuperUrl,
+      `DO $do$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${LEGACY_SCOPED_ROLE}') THEN
+    EXECUTE 'ALTER ROLE "${LEGACY_SCOPED_ROLE}" WITH LOGIN PASSWORD ''${legacyScopedPassword}''';
+  ELSE
+    EXECUTE 'CREATE ROLE "${LEGACY_SCOPED_ROLE}" WITH LOGIN PASSWORD ''${legacyScopedPassword}'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS';
+  END IF;
+END
+$do$;
+GRANT CONNECT, TEMPORARY ON DATABASE "${enforcedDbName}" TO "${LEGACY_SCOPED_ROLE}";
+GRANT USAGE, CREATE ON SCHEMA public TO "${LEGACY_SCOPED_ROLE}";
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${LEGACY_SCOPED_ROLE}";
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO "${LEGACY_SCOPED_ROLE}";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${LEGACY_SCOPED_ROLE}";`,
+    );
+    if (cutover.exitCode !== 0) throw new Error(`legacy scoped role setup failed: ${cutover.stderr}`);
+
     provisioner = connect(enforcedSuperUrl);
     // Order matters: the policy helper functions must EXIST before the role
     // plan can GRANT EXECUTE on them.
     await applyTenantRlsEnforcement(provisioner.db);
-    await applyTenancyRoles(provisioner.db, passwords, DEFAULT_ROLE_NAMES, enforcedDbName);
+    await applyTenancyRoles(provisioner.db, passwords, DEFAULT_ROLE_NAMES, enforcedDbName, [LEGACY_SCOPED_ROLE]);
+    legacyScoped = connect(
+      urlFor(superUrl, enforcedDbName, { name: LEGACY_SCOPED_ROLE, password: legacyScopedPassword }),
+      1,
+    );
 
     ddl = connect(urlFor(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.ddl, password: passwords.ddl }));
     runtime = connect(
@@ -230,11 +263,14 @@ postgresDescribe('G3 enforcement (real PostgreSQL)', () => {
   }, 180_000);
 
   afterAll(async () => {
-    for (const handle of [provisioner, ddl, runtime, pooledRuntime, authPlane, legacy]) {
+    for (const handle of [provisioner, ddl, runtime, pooledRuntime, authPlane, legacy, legacyScoped]) {
       if (handle) await handle.close();
     }
     runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${enforcedDbName}" WITH (FORCE);`);
     runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${legacyDbName}" WITH (FORCE);`);
+    // Roles are cluster-wide; the synthetic cutover role must not outlive the
+    // databases it was scoped to.
+    runSqlOn(superUrl, `DROP ROLE IF EXISTS "${LEGACY_SCOPED_ROLE}";`);
   });
 
   // -------------------------------------------------------------------------
@@ -573,6 +609,34 @@ postgresDescribe('G3 enforcement (real PostgreSQL)', () => {
     test('the runtime role cannot enumerate the credential index at all', async () => {
       const error = await refused(() => runtime.raw`SELECT key_hash FROM auth_credentials`);
       expect(error.message).toMatch(/permission denied/i);
+    });
+
+    test('the PRE-CUTOVER scoped role cannot read the credential index after enforcement', async () => {
+      // The failure this pins: section 2 moves object OWNERSHIP to the DDL role
+      // but leaves the legacy role's `GRANT ... ON ALL TABLES` intact, so the
+      // identity every pre-G3 deployment still has on disk could keep reading
+      // `auth_credentials.key_hash` — a table with no RLS by design.
+      const error = await refused(() => legacyScoped.raw`SELECT key_hash FROM auth_credentials`);
+      expect(error.message).toMatch(/permission denied|does not exist|denied for database/i);
+    });
+
+    test('the pre-cutover scoped role keeps no blanket DML on the tenant plane either', async () => {
+      for (const table of ['instances', 'tenant_memberships']) {
+        const error = await refused(() => legacyScoped.raw`SELECT 1 FROM ${legacyScoped.raw(table)}`);
+        expect(error.message).toMatch(
+          /permission denied|does not exist|denied for database|app\.tenant_id is not set/i,
+        );
+      }
+    });
+
+    test('the pre-cutover scoped role never holds the auth-plane marker', async () => {
+      const rows = await provisioner.raw`
+        SELECT r.rolname::text AS member
+        FROM pg_auth_members m
+        JOIN pg_roles g ON g.oid = m.roleid
+        JOIN pg_roles r ON r.oid = m.member
+        WHERE g.rolname = ${DEFAULT_ROLE_NAMES.authPlaneMarker}`;
+      expect(rows.map((r) => r.member)).not.toContain(LEGACY_SCOPED_ROLE);
     });
 
     test('a tenant-scoped transaction cannot reach the credential index either', async () => {

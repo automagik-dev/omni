@@ -192,9 +192,27 @@ export function policyName(table: string, command: PolicyCommand): string {
   return `${table}_tenant_${command}`;
 }
 
-export const TENANT_CONTEXT_FUNCTION = 'omni_current_tenant_id';
-export const AUTH_PLANE_FUNCTION = 'omni_is_auth_plane';
+const TENANT_CONTEXT_FUNCTION = 'omni_current_tenant_id';
+const AUTH_PLANE_FUNCTION = 'omni_is_auth_plane';
 export const AUTH_PLANE_ROW_FUNCTION = 'omni_auth_plane_row_visible';
+
+/**
+ * The schema the helpers live in, spelled out in every CREATE, DROP, GRANT and
+ * policy predicate.
+ *
+ * An unqualified `CREATE FUNCTION` lands in the first writable schema of the
+ * apply-time `search_path`. `omni_auth_plane_row_visible` pins its own
+ * `search_path` to `pg_catalog` and therefore calls its siblings as
+ * `public.<name>` — so a provisioner connection whose `search_path` did not
+ * start with `public` would create the helpers somewhere else and break
+ * authentication the moment enforcement went live. Qualifying the creation side
+ * makes the two ends agree by construction.
+ */
+const TENANCY_FUNCTION_SCHEMA = 'public';
+
+export const QUALIFIED_TENANT_CONTEXT_FUNCTION = `${TENANCY_FUNCTION_SCHEMA}.${TENANT_CONTEXT_FUNCTION}`;
+export const QUALIFIED_AUTH_PLANE_FUNCTION = `${TENANCY_FUNCTION_SCHEMA}.${AUTH_PLANE_FUNCTION}`;
+export const QUALIFIED_AUTH_PLANE_ROW_FUNCTION = `${TENANCY_FUNCTION_SCHEMA}.${AUTH_PLANE_ROW_FUNCTION}`;
 
 /** The transaction-local GUC every tenant transaction sets. */
 export const TENANT_SETTING = 'app.tenant_id';
@@ -219,7 +237,7 @@ export const TENANT_SETTING = 'app.tenant_id';
  */
 export function contextFunctionStatements(): string[] {
   return [
-    `CREATE OR REPLACE FUNCTION ${TENANT_CONTEXT_FUNCTION}() RETURNS uuid
+    `CREATE OR REPLACE FUNCTION ${QUALIFIED_TENANT_CONTEXT_FUNCTION}() RETURNS uuid
 LANGUAGE plpgsql
 STABLE
 SET search_path = pg_catalog
@@ -239,7 +257,7 @@ $omni$;`,
     // the two-argument pg_has_role(name, text) so that a cluster where the
     // marker role has not been provisioned yet returns FALSE instead of
     // raising "role does not exist" — absent marker means no exemption.
-    `CREATE OR REPLACE FUNCTION ${AUTH_PLANE_FUNCTION}(marker text) RETURNS boolean
+    `CREATE OR REPLACE FUNCTION ${QUALIFIED_AUTH_PLANE_FUNCTION}(marker text) RETURNS boolean
 LANGUAGE sql
 STABLE
 SET search_path = pg_catalog
@@ -259,7 +277,7 @@ $omni$;`,
     // before the auth-plane side is ever considered, which breaks
     // authentication outright. Putting the branch inside plpgsql makes the
     // ordering a language guarantee instead of a planner accident.
-    `CREATE OR REPLACE FUNCTION ${AUTH_PLANE_ROW_FUNCTION}(row_tenant uuid, marker text) RETURNS boolean
+    `CREATE OR REPLACE FUNCTION ${QUALIFIED_AUTH_PLANE_ROW_FUNCTION}(row_tenant uuid, marker text) RETURNS boolean
 LANGUAGE plpgsql
 STABLE
 SET search_path = pg_catalog
@@ -267,10 +285,10 @@ AS $omni$
 BEGIN
   -- Schema-qualified because search_path is pinned to pg_catalog: an
   -- unqualified name would not resolve to the helpers in the public schema.
-  IF public.${AUTH_PLANE_FUNCTION}(marker) THEN
+  IF ${QUALIFIED_AUTH_PLANE_FUNCTION}(marker) THEN
     RETURN true;
   END IF;
-  RETURN row_tenant = public.${TENANT_CONTEXT_FUNCTION}();
+  RETURN row_tenant = ${QUALIFIED_TENANT_CONTEXT_FUNCTION}();
 END;
 $omni$;`,
   ];
@@ -279,17 +297,20 @@ $omni$;`,
 /** Rollback counterpart of the context-function DDL; operator tooling surface. @public */
 export function dropContextFunctionStatements(): string[] {
   return [
-    `DROP FUNCTION IF EXISTS ${AUTH_PLANE_ROW_FUNCTION}(uuid, text);`,
-    `DROP FUNCTION IF EXISTS ${AUTH_PLANE_FUNCTION}(text);`,
-    `DROP FUNCTION IF EXISTS ${TENANT_CONTEXT_FUNCTION}();`,
+    `DROP FUNCTION IF EXISTS ${QUALIFIED_AUTH_PLANE_ROW_FUNCTION}(uuid, text);`,
+    `DROP FUNCTION IF EXISTS ${QUALIFIED_AUTH_PLANE_FUNCTION}(text);`,
+    `DROP FUNCTION IF EXISTS ${QUALIFIED_TENANT_CONTEXT_FUNCTION}();`,
   ];
 }
 
 /** `tenant_id = omni_current_tenant_id()`, plus the auth-plane disjunct where earned. */
 function predicate(table: string, command: PolicyCommand, marker: string): string {
-  const equality = `"tenant_id" = ${TENANT_CONTEXT_FUNCTION}()`;
+  // Qualified: a policy expression is resolved at CREATE POLICY time against
+  // the apply-time search_path and stored as a parsed reference. Naming the
+  // schema keeps the stored reference independent of who applied it.
+  const equality = `"tenant_id" = ${QUALIFIED_TENANT_CONTEXT_FUNCTION}()`;
   const authPlaneRead = command === 'select' && AUTH_PLANE_READABLE_TABLES.includes(table);
-  return authPlaneRead ? `(${AUTH_PLANE_ROW_FUNCTION}("tenant_id", '${marker}'))` : `(${equality})`;
+  return authPlaneRead ? `(${QUALIFIED_AUTH_PLANE_ROW_FUNCTION}("tenant_id", '${marker}'))` : `(${equality})`;
 }
 
 /**

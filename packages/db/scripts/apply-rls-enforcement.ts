@@ -21,6 +21,14 @@
  *            OMNI_DDL_PASSWORD / OMNI_RUNTIME_PASSWORD / OMNI_AUTH_PLANE_PASSWORD.
  *   --check  Report the current enforcement state and exit without changing
  *            anything.
+ *   --legacy-role <name>
+ *            Repeatable. Strip every privilege the pre-cutover scoped role
+ *            (`pgserve_omni_<fp>_role`, provisioned by
+ *            `packages/cli/src/lib/role-cutover.ts`) still holds. Ownership of
+ *            its objects moves to the DDL role automatically; its blanket
+ *            `GRANT ... ON ALL TABLES` does NOT, and until it is revoked that
+ *            role can still read `auth_credentials`. Only meaningful with
+ *            `--roles`.
  *
  * PRECONDITIONS the operator is responsible for (this script does NOT verify
  * them, and cannot):
@@ -42,6 +50,18 @@ function flag(name: string): boolean {
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
   return index === -1 ? undefined : process.argv[index + 1];
+}
+
+/** Every `--<name> <value>` occurrence, so `--legacy-role` can be repeated. */
+function options(name: string): string[] {
+  const values: string[] = [];
+  process.argv.forEach((arg, index) => {
+    if (arg === `--${name}`) {
+      const value = process.argv[index + 1];
+      if (value && !value.startsWith('--')) values.push(value);
+    }
+  });
+  return values;
 }
 
 const url = option('url');
@@ -89,7 +109,13 @@ try {
       }
     }
     const database = new URL(url).pathname.replace(/^\//, '');
-    const count = await applyTenancyRoles(handle.db, passwords, undefined, database);
+    // The pre-cutover scoped role keeps its blanket GRANTs until it is named
+    // here — ownership moves to the DDL role automatically, privilege does not.
+    const legacyRoles = options('legacy-role');
+    const count = await applyTenancyRoles(handle.db, passwords, undefined, database, legacyRoles);
+    if (legacyRoles.length > 0) {
+      process.stdout.write(`revoked legacy role privileges: ${legacyRoles.join(', ')}\n`);
+    }
     process.stdout.write(`provisioned role split: ${count} statements\n`);
   }
   process.exit(report.state.state === 'enforced' ? 0 : 1);

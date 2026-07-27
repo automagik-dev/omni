@@ -23,6 +23,7 @@
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/migrate.ts",
+    "db:online-ddl": "bun run scripts/online-ddl.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
