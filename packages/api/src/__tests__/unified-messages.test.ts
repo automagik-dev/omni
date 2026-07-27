@@ -173,6 +173,32 @@ describeWithDb('Unified Messages', () => {
       expect(message.source).toBe('realtime');
     });
 
+    test('should strip NUL bytes from textContent on create and update', async () => {
+      // Postgres rejects 0x00 in text columns with
+      // `invalid byte sequence for encoding "UTF8": 0x00` — a0800e2f covered
+      // the media-text columns but left textContent (POST /messages and
+      // PATCH /messages/:id) raw.
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-nulbyte@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const message = await messageService.create({
+        chatId: chat.id,
+        externalId: 'BAE5NUL789',
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'contrato\u0000assinado',
+        platformTimestamp: new Date(),
+        isFromMe: false,
+      });
+
+      expect(message.textContent).toBe('contratoassinado');
+
+      const updated = await messageService.update(message.id, { textContent: 'revis\u0000ado' });
+      expect(updated.textContent).toBe('revisado');
+    });
+
     test('should find or create a message', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-findorcreate@g.us', {
         chatType: 'group',

@@ -27,10 +27,27 @@ import { scopedHandle } from '../tenancy/tenant-scope';
 
 import { sanitizeText } from '../utils/utf8';
 
+/**
+ * Sanitize a `textContent`-style value without changing its shape.
+ *
+ * `sanitizeText` maps `''` (and `undefined`/`null`) to `undefined`, which the
+ * media-text writers absorb with `?? ''`. Message text has no such fallback —
+ * `create()` and `update()` must persist exactly what the caller passed — so
+ * an empty string stays an empty string, `undefined` stays `undefined`, and
+ * only the bytes Postgres rejects (NUL, lone surrogates) are stripped.
+ */
+export function sanitizeMessageText<T extends string | null | undefined>(value: T): T {
+  if (typeof value !== 'string' || value === '') return value;
+  return (sanitizeText(value) ?? '') as T;
+}
+
 // Pre-processed media text (extraction / vision / transcription) can carry NUL
 // bytes; Postgres text columns reject 0x00, so strip them before any write.
-function sanitizeMediaText(data: Partial<NewMessage>): Partial<NewMessage> {
+// `textContent` rides the same paths (PATCH /messages/:id) and is just as
+// capable of carrying a NUL — see the 0x00 write failure fixed in a0800e2f.
+export function sanitizeMediaText(data: Partial<NewMessage>): Partial<NewMessage> {
   const out: Partial<NewMessage> = { ...data };
+  if (typeof out.textContent === 'string') out.textContent = sanitizeMessageText(out.textContent);
   if (typeof out.transcription === 'string') out.transcription = sanitizeText(out.transcription) ?? '';
   if (typeof out.imageDescription === 'string') out.imageDescription = sanitizeText(out.imageDescription) ?? '';
   if (typeof out.videoDescription === 'string') out.videoDescription = sanitizeText(out.videoDescription) ?? '';
@@ -130,7 +147,10 @@ function buildMessagePreview(options: CreateMessageOptions): string {
 
   // Prefix with sender name
   const preview = sender ? `${sender}: ${content}` : content;
-  return preview.substring(0, 500);
+  // `chats.lastMessagePreview` is written in the same transaction as the
+  // message row, so an unsanitized preview would fail the insert just as an
+  // unsanitized `textContent` would.
+  return sanitizeMessageText(preview.substring(0, 500));
 }
 
 export class MessageService {
@@ -455,7 +475,7 @@ export class MessageService {
           externalId: options.externalId,
           source: options.source,
           messageType: options.messageType,
-          textContent: options.textContent,
+          textContent: sanitizeMessageText(options.textContent),
           platformTimestamp: options.platformTimestamp,
           // Sender
           senderPersonId: options.senderPersonId,
