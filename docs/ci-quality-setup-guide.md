@@ -496,6 +496,7 @@ Triggers on push to `main`/`dev` and all PRs targeting them.
 |-----|------|---------|
 | `secrets-scan` | GitGuardian scans for leaked secrets | 5m |
 | `quality-gate` | Build → Typecheck → Lint → Dead-code → Test | 15m |
+| `pg-isolation-gate` | `make test-pg-gate` — every `*-postgres.test.ts` suite against a disposable cluster | 25m |
 | `smoke-test` | Full boot: start API, hit `/health`, verify | 15m |
 
 **Quality Gate steps:**
@@ -511,6 +512,19 @@ Triggers on push to `main`/`dev` and all PRs targeting them.
 10. `bunx biome check .` (lint, all files)
 11. `bunx knip@5.85.0` (dead code — unused exports, dead files, unused deps)
 12. `bun test --env-file=.env` (all tests)
+
+**PostgreSQL Isolation Gate steps:**
+1. Checkout + setup Bun + `bun install`
+2. Resolve a PostgreSQL **server** build (`postgres` next to `initdb`), installing one if the runner has none, and export `OMNI_PG_BIN_DIR`
+3. Stop any distro-started cluster on `:5432` — the gate never uses a shared server
+4. `make test-pg-gate` → `bun scripts/pg-gate.ts`
+
+The gate stands up its own disposable cluster on a random loopback port, exports
+every `OMNI_G{1..4}_POSTGRES_URL` opt-in variable from it so no suite can
+`describe.skip`, runs the suites, and fails when a server is unavailable, when
+any test skipped, when zero tests passed, or when the number of files that ran
+differs from the number of `*-postgres.test.ts` files discovered. Adding a new
+suite without wiring it fails the gate rather than silently skipping.
 
 **Smoke Test steps:**
 1. Same setup as quality gate
