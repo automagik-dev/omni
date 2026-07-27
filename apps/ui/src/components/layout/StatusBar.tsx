@@ -1,3 +1,4 @@
+import { useInstances } from '@/hooks/useInstances';
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
 import { cn } from '@/lib/utils';
@@ -42,6 +43,12 @@ export function StatusBar() {
     refetchInterval: 30000,
   });
 
+  // Instance inventory is no longer part of the unauthenticated /health
+  // response (privacy contract); count from the authenticated list instead.
+  const { data: instancesData } = useInstances();
+  const instanceItems = instancesData?.items;
+  const activeInstances = instanceItems?.filter((i) => i.isActive).length ?? 0;
+
   const dbStatus = getServiceStatus(isLoading, isError, health?.checks?.database?.status);
   const natsStatus = getServiceStatus(isLoading, isError, health?.checks?.nats?.status);
 
@@ -53,9 +60,9 @@ export function StatusBar() {
       </div>
 
       <div className="flex items-center gap-4 font-mono text-xs text-muted-foreground">
-        {health?.instances && (
+        {instanceItems && (
           <span>
-            {health.instances.connected}/{health.instances.total} instances
+            {activeInstances}/{instanceItems.length} instances
           </span>
         )}
         {health?.uptime !== undefined && <span>Uptime: {formatUptime(health.uptime)}</span>}
