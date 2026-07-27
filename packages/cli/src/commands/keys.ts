@@ -147,7 +147,6 @@ async function handleAdminCreate(options: CreateOptions): Promise<void> {
       undefined,
       1,
     );
-    return;
   }
 
   if (!process.stdin.isTTY) {
