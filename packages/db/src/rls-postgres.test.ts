@@ -30,7 +30,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { type Database, createDbHandle } from './client';
-import { DEFAULT_ROLE_NAMES, applyTenantRlsEnforcement, readEnforcementState } from './tenancy-rls';
+import { DEFAULT_ROLE_NAMES, RLS_TENANT_TABLES, applyTenantRlsEnforcement, readEnforcementState } from './tenancy-rls';
 import { applyTenancyRoles, readRoleAttributes, roleAttributeViolations } from './tenancy-roles';
 import { EnforcementStartupError, assertEnforcedRuntimeIdentity } from './tenancy-startup';
 
@@ -306,11 +306,15 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE O
 
   // -------------------------------------------------------------------------
   describe('world (b): enforcement state', () => {
-    test('every one of the 37 tables is ENABLE + FORCE with all four policies', async () => {
+    test('every covered tenant table is ENABLE + FORCE with all four policies', async () => {
+      // Derived from `RLS_TENANT_TABLES`, never a frozen count: a hardcoded
+      // `toHaveLength(37)` fails the moment someone correctly adds and covers a
+      // new tenant table, and `tenancy-rls.test.ts` already proves that list is
+      // exactly the set of schema tables carrying `tenant_id`.
       const state = await readEnforcementState(provisioner.db);
       expect(state.missing).toEqual([]);
       expect(state.missingPolicies).toEqual([]);
-      expect(state.forced).toHaveLength(37);
+      expect([...state.forced].sort()).toEqual([...RLS_TENANT_TABLES].sort());
       expect(state.state).toBe('enforced');
     });
 
