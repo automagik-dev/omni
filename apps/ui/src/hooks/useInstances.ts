@@ -6,10 +6,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 /**
  * Hook for listing instances
  */
-export function useInstances(params?: ListInstancesParams) {
+export function useInstances(params?: ListInstancesParams, options?: { refetchInterval?: number }) {
   return useQuery({
     queryKey: queryKeys.instancesList(params as Record<string, unknown>),
     queryFn: () => getClient().instances.list(params),
+    ...(options?.refetchInterval ? { refetchInterval: options.refetchInterval } : {}),
   });
 }
 
