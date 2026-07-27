@@ -493,11 +493,17 @@ export class FollowUpLifecycleService {
     if (row?.disarmReason) {
       return { skip: true, reason: `disarmed_${row.disarmReason}` };
     }
+    // The sweeper publishes the event carrying the PRE-increment index and then
+    // immediately advances the row (publish(N) → recordFired(N+1)). By the time a
+    // consumer handles the event the row is legitimately one step ahead, so
+    // `row > event` also matches every healthy first-delivery — dropping real
+    // follow-ups in a publish/consume race. Only a gap of 2+ indicates an actual
+    // replay of a historical event, which is what this gate exists to stop.
     if (
       row !== null &&
       typeof eventSequenceIndex === 'number' &&
       typeof row.sequenceIndex === 'number' &&
-      row.sequenceIndex > eventSequenceIndex
+      row.sequenceIndex > eventSequenceIndex + 1
     ) {
       return {
         skip: true,
