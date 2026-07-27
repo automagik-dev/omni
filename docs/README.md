@@ -17,6 +17,7 @@ docs/
 ├── api/                    # API design, endpoints, internal routes
 ├── architecture/           # System architecture (events, identity, plugins)
 ├── cli/                    # CLI design & commands
+├── deployment/             # Deployment modes, flags, upgrade checklists
 ├── media/                  # Media processing pipeline
 ├── migration/              # v1 → v2 migration docs
 ├── performance/            # Load tests, baselines
@@ -56,6 +57,12 @@ docs/
 | Document | Description | Status |
 |----------|-------------|--------|
 | [[design\|CLI Design]] | All CLI commands, flags, and usage examples | ✅ current |
+
+### Deployment
+
+| Document | Description | Status |
+|----------|-------------|--------|
+| [[single-tenant-mode\|Single-Tenant (Master-Key) Mode]] | Default deployment mode: flags, what changed unconditionally, large-database upgrade checklist | ✅ current |
 
 ### Media
 
