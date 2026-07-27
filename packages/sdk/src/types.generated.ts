@@ -2152,6 +2152,174 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/platform/tenants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List tenants
+         * @description List tenants, newest first. The read itself is audited. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:tenants:read`.
+         */
+        get: operations["listPlatformTenants"];
+        put?: never;
+        /**
+         * Create a tenant
+         * @description Create a tenant with its mandatory credential ceilings. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:tenants:write`.
+         */
+        post: operations["createPlatformTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/tenants/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a tenant
+         * @description Fetch one tenant. The read itself is audited. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:tenants:read`.
+         */
+        get: operations["getPlatformTenant"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/tenants/{id}/suspend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Suspend a tenant
+         * @description Suspend a tenant and bump its revocation epoch, which invalidates the tenant’s credentials on their next auth-bootstrap lookup. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:tenants:write`.
+         */
+        post: operations["suspendPlatformTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/tenants/{id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive a tenant
+         * @description Archive a tenant. Archived is TERMINAL — there is no un-archive and no hard delete anywhere on this surface. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:tenants:write`.
+         */
+        post: operations["archivePlatformTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/tenants/{id}/memberships": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List tenant memberships
+         * @description List the memberships of one tenant. The read itself is audited. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:tenants:read`.
+         */
+        get: operations["listPlatformMemberships"];
+        put?: never;
+        /**
+         * Attach a membership
+         * @description Grant a principal a role in the tenant. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:memberships:write`.
+         */
+        post: operations["attachPlatformMembership"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/tenants/{tenantId}/memberships/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable a membership
+         * @description Detach a principal from the tenant by disabling the membership. Memberships are never hard-deleted. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:memberships:write`.
+         */
+        post: operations["disablePlatformMembership"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/tenants/{tenantId}/memberships/{id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set membership status
+         * @description Activate or disable an existing membership. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:memberships:write`.
+         */
+        post: operations["setPlatformMembershipStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/tenants/{tenantId}/memberships/{id}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set membership role
+         * @description Change the role an existing membership acts under. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:memberships:write`.
+         */
+        post: operations["setPlatformMembershipRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2311,6 +2479,42 @@ export interface components {
                  *     ]
                  */
                 scopes: string[];
+                /** @description Tenant credential context; absent for a legacy credential */
+                credential?: {
+                    /**
+                     * @description Credential class of the caller
+                     * @enum {string}
+                     */
+                    class: "tenant";
+                    /**
+                     * Format: uuid
+                     * @description Tenant this credential is bound to
+                     */
+                    tenantId: string;
+                    /**
+                     * @description Stable tenant slug, or null when unresolved
+                     * @example acme
+                     */
+                    tenantSlug: string | null;
+                    /**
+                     * @description Tenant role the credential acts under
+                     * @example tenant-operator
+                     */
+                    role: string;
+                    /** @description Scopes carried by the tenant credential */
+                    scopes: string[];
+                    /** @description Immutable resource ceilings inherited from the key lineage */
+                    constraints: {
+                        [key: string]: string[];
+                    };
+                    /**
+                     * Format: date-time
+                     * @description Credential expiry (ISO 8601), or null when it does not expire
+                     */
+                    expiresAt: string | null;
+                    /** @description Delegation depth: 0 = root key, 1 = child key */
+                    delegationDepth: number;
+                };
             };
         };
         HealthCheck: {
@@ -2375,16 +2579,6 @@ export interface components {
                     };
                 };
             };
-            instances?: {
-                /** @description Total instance count */
-                total: number;
-                /** @description Connected instance count */
-                connected: number;
-                /** @description Count by channel type */
-                byChannel: {
-                    [key: string]: number;
-                };
-            };
         };
         InfoResponse: {
             /** @description API version */
@@ -2393,14 +2587,6 @@ export interface components {
             environment: string;
             /** @description Uptime in seconds */
             uptime: number;
-            instances: {
-                total: number;
-                connected: number;
-            };
-            events: {
-                today: number;
-                total: number;
-            };
         };
         InternalHealthResponse: {
             /** @description Health status */
@@ -4900,6 +5086,144 @@ export interface components {
             /** @description Voice session ID to leave */
             sessionId: string;
         };
+        PlatformTenant: {
+            /**
+             * Format: uuid
+             * @description Tenant id
+             */
+            id: string;
+            /**
+             * @description Immutable lowercase DNS-like slug
+             * @example acme
+             */
+            slug: string;
+            /** @description Human-readable tenant name */
+            displayName: string;
+            /**
+             * @description Tenant lifecycle status
+             * @enum {string}
+             */
+            status: "active" | "suspended" | "archived";
+            /** @description Policy epoch, bumped on policy change */
+            policyVersion: number;
+            /** @description Revocation epoch, bumped on suspend/archive */
+            revocationEpoch: number;
+            /** @description Ceiling for credential TTL, in seconds */
+            maxKeyTtlSeconds: number;
+            /** @description Ceiling for credential rate limit */
+            maxKeyRateLimit: number;
+            /** @description Ceiling for credential budget */
+            maxKeyBudget: number;
+            /**
+             * Format: uuid
+             * @description Creator principal, or null for bootstrap/system tenants
+             */
+            createdByPrincipalId: string | null;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+            /**
+             * Format: date-time
+             * @description When the tenant was suspended, if ever
+             */
+            suspendedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the tenant was archived, if ever
+             */
+            archivedAt: string | null;
+        };
+        PlatformMembership: {
+            /**
+             * Format: uuid
+             * @description Membership id
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Tenant the membership belongs to
+             */
+            tenantId: string;
+            /**
+             * Format: uuid
+             * @description Principal granted access
+             */
+            principalId: string;
+            /**
+             * @description Tenant role
+             * @enum {string}
+             */
+            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+            /**
+             * @description Membership status
+             * @enum {string}
+             */
+            status: "active" | "disabled";
+            /**
+             * Format: uuid
+             * @description Principal that granted the membership, when known
+             */
+            invitedByPrincipalId: string | null;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+            /**
+             * Format: date-time
+             * @description When the membership was disabled, if ever
+             */
+            disabledAt: string | null;
+        };
+        CreateTenantRequest: {
+            /**
+             * @description Immutable lowercase DNS-like slug
+             * @example acme
+             */
+            slug: string;
+            /** @description Human-readable tenant name */
+            displayName: string;
+            /** @description Ceiling for credential TTL, in seconds */
+            maxKeyTtlSeconds: number;
+            /** @description Ceiling for credential rate limit */
+            maxKeyRateLimit: number;
+            /** @description Ceiling for credential budget */
+            maxKeyBudget: number;
+            /**
+             * @description Audited justification for the change
+             * @example onboarding request OPS-1421
+             */
+            reason: string;
+        };
+        AttachMembershipRequest: {
+            /**
+             * Format: uuid
+             * @description Principal to grant access to
+             */
+            principalId: string;
+            /**
+             * @description Tenant role
+             * @enum {string}
+             */
+            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+            /**
+             * @description Audited justification for the change
+             * @example onboarding request OPS-1421
+             */
+            reason: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -5487,6 +5811,42 @@ export interface operations {
                              *     ]
                              */
                             scopes: string[];
+                            /** @description Tenant credential context; absent for a legacy credential */
+                            credential?: {
+                                /**
+                                 * @description Credential class of the caller
+                                 * @enum {string}
+                                 */
+                                class: "tenant";
+                                /**
+                                 * Format: uuid
+                                 * @description Tenant this credential is bound to
+                                 */
+                                tenantId: string;
+                                /**
+                                 * @description Stable tenant slug, or null when unresolved
+                                 * @example acme
+                                 */
+                                tenantSlug: string | null;
+                                /**
+                                 * @description Tenant role the credential acts under
+                                 * @example tenant-operator
+                                 */
+                                role: string;
+                                /** @description Scopes carried by the tenant credential */
+                                scopes: string[];
+                                /** @description Immutable resource ceilings inherited from the key lineage */
+                                constraints: {
+                                    [key: string]: string[];
+                                };
+                                /**
+                                 * Format: date-time
+                                 * @description Credential expiry (ISO 8601), or null when it does not expire
+                                 */
+                                expiresAt: string | null;
+                                /** @description Delegation depth: 0 = root key, 1 = child key */
+                                delegationDepth: number;
+                            };
                         };
                     };
                 };
@@ -5569,16 +5929,6 @@ export interface operations {
                                 };
                             };
                         };
-                        instances?: {
-                            /** @description Total instance count */
-                            total: number;
-                            /** @description Connected instance count */
-                            connected: number;
-                            /** @description Count by channel type */
-                            byChannel: {
-                                [key: string]: number;
-                            };
-                        };
                     };
                 };
             };
@@ -5635,16 +5985,6 @@ export interface operations {
                                 };
                             };
                         };
-                        instances?: {
-                            /** @description Total instance count */
-                            total: number;
-                            /** @description Connected instance count */
-                            connected: number;
-                            /** @description Count by channel type */
-                            byChannel: {
-                                [key: string]: number;
-                            };
-                        };
                     };
                 };
             };
@@ -5672,14 +6012,6 @@ export interface operations {
                         environment: string;
                         /** @description Uptime in seconds */
                         uptime: number;
-                        instances: {
-                            total: number;
-                            connected: number;
-                        };
-                        events: {
-                            today: number;
-                            total: number;
-                        };
                     };
                 };
             };
@@ -17098,6 +17430,1395 @@ export interface operations {
                             code: string;
                             /** @description Error message */
                             message: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listPlatformTenants: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-platform-reason": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tenants */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /**
+                             * Format: uuid
+                             * @description Tenant id
+                             */
+                            id: string;
+                            /**
+                             * @description Immutable lowercase DNS-like slug
+                             * @example acme
+                             */
+                            slug: string;
+                            /** @description Human-readable tenant name */
+                            displayName: string;
+                            /**
+                             * @description Tenant lifecycle status
+                             * @enum {string}
+                             */
+                            status: "active" | "suspended" | "archived";
+                            /** @description Policy epoch, bumped on policy change */
+                            policyVersion: number;
+                            /** @description Revocation epoch, bumped on suspend/archive */
+                            revocationEpoch: number;
+                            /** @description Ceiling for credential TTL, in seconds */
+                            maxKeyTtlSeconds: number;
+                            /** @description Ceiling for credential rate limit */
+                            maxKeyRateLimit: number;
+                            /** @description Ceiling for credential budget */
+                            maxKeyBudget: number;
+                            /**
+                             * Format: uuid
+                             * @description Creator principal, or null for bootstrap/system tenants
+                             */
+                            createdByPrincipalId: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                            /**
+                             * Format: date-time
+                             * @description When the tenant was suspended, if ever
+                             */
+                            suspendedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the tenant was archived, if ever
+                             */
+                            archivedAt: string | null;
+                        }[];
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    createPlatformTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Immutable lowercase DNS-like slug
+                     * @example acme
+                     */
+                    slug: string;
+                    /** @description Human-readable tenant name */
+                    displayName: string;
+                    /** @description Ceiling for credential TTL, in seconds */
+                    maxKeyTtlSeconds: number;
+                    /** @description Ceiling for credential rate limit */
+                    maxKeyRateLimit: number;
+                    /** @description Ceiling for credential budget */
+                    maxKeyBudget: number;
+                    /**
+                     * @description Audited justification for the change
+                     * @example onboarding request OPS-1421
+                     */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Tenant created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Tenant id
+                             */
+                            id: string;
+                            /**
+                             * @description Immutable lowercase DNS-like slug
+                             * @example acme
+                             */
+                            slug: string;
+                            /** @description Human-readable tenant name */
+                            displayName: string;
+                            /**
+                             * @description Tenant lifecycle status
+                             * @enum {string}
+                             */
+                            status: "active" | "suspended" | "archived";
+                            /** @description Policy epoch, bumped on policy change */
+                            policyVersion: number;
+                            /** @description Revocation epoch, bumped on suspend/archive */
+                            revocationEpoch: number;
+                            /** @description Ceiling for credential TTL, in seconds */
+                            maxKeyTtlSeconds: number;
+                            /** @description Ceiling for credential rate limit */
+                            maxKeyRateLimit: number;
+                            /** @description Ceiling for credential budget */
+                            maxKeyBudget: number;
+                            /**
+                             * Format: uuid
+                             * @description Creator principal, or null for bootstrap/system tenants
+                             */
+                            createdByPrincipalId: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                            /**
+                             * Format: date-time
+                             * @description When the tenant was suspended, if ever
+                             */
+                            suspendedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the tenant was archived, if ever
+                             */
+                            archivedAt: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found. Non-enumerating: an unknown id yields a bare 404 with no metadata. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Lifecycle conflict (e.g. duplicate slug, or a transition out of the terminal archived state) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getPlatformTenant: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-platform-reason": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tenant */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Tenant id
+                             */
+                            id: string;
+                            /**
+                             * @description Immutable lowercase DNS-like slug
+                             * @example acme
+                             */
+                            slug: string;
+                            /** @description Human-readable tenant name */
+                            displayName: string;
+                            /**
+                             * @description Tenant lifecycle status
+                             * @enum {string}
+                             */
+                            status: "active" | "suspended" | "archived";
+                            /** @description Policy epoch, bumped on policy change */
+                            policyVersion: number;
+                            /** @description Revocation epoch, bumped on suspend/archive */
+                            revocationEpoch: number;
+                            /** @description Ceiling for credential TTL, in seconds */
+                            maxKeyTtlSeconds: number;
+                            /** @description Ceiling for credential rate limit */
+                            maxKeyRateLimit: number;
+                            /** @description Ceiling for credential budget */
+                            maxKeyBudget: number;
+                            /**
+                             * Format: uuid
+                             * @description Creator principal, or null for bootstrap/system tenants
+                             */
+                            createdByPrincipalId: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                            /**
+                             * Format: date-time
+                             * @description When the tenant was suspended, if ever
+                             */
+                            suspendedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the tenant was archived, if ever
+                             */
+                            archivedAt: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found. Non-enumerating: an unknown id yields a bare 404 with no metadata. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    suspendPlatformTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Audited justification for the change
+                     * @example onboarding request OPS-1421
+                     */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Tenant suspended */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Tenant id
+                             */
+                            id: string;
+                            /**
+                             * @description Immutable lowercase DNS-like slug
+                             * @example acme
+                             */
+                            slug: string;
+                            /** @description Human-readable tenant name */
+                            displayName: string;
+                            /**
+                             * @description Tenant lifecycle status
+                             * @enum {string}
+                             */
+                            status: "active" | "suspended" | "archived";
+                            /** @description Policy epoch, bumped on policy change */
+                            policyVersion: number;
+                            /** @description Revocation epoch, bumped on suspend/archive */
+                            revocationEpoch: number;
+                            /** @description Ceiling for credential TTL, in seconds */
+                            maxKeyTtlSeconds: number;
+                            /** @description Ceiling for credential rate limit */
+                            maxKeyRateLimit: number;
+                            /** @description Ceiling for credential budget */
+                            maxKeyBudget: number;
+                            /**
+                             * Format: uuid
+                             * @description Creator principal, or null for bootstrap/system tenants
+                             */
+                            createdByPrincipalId: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                            /**
+                             * Format: date-time
+                             * @description When the tenant was suspended, if ever
+                             */
+                            suspendedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the tenant was archived, if ever
+                             */
+                            archivedAt: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found. Non-enumerating: an unknown id yields a bare 404 with no metadata. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Lifecycle conflict (e.g. duplicate slug, or a transition out of the terminal archived state) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    archivePlatformTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Audited justification for the change
+                     * @example onboarding request OPS-1421
+                     */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Tenant archived */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Tenant id
+                             */
+                            id: string;
+                            /**
+                             * @description Immutable lowercase DNS-like slug
+                             * @example acme
+                             */
+                            slug: string;
+                            /** @description Human-readable tenant name */
+                            displayName: string;
+                            /**
+                             * @description Tenant lifecycle status
+                             * @enum {string}
+                             */
+                            status: "active" | "suspended" | "archived";
+                            /** @description Policy epoch, bumped on policy change */
+                            policyVersion: number;
+                            /** @description Revocation epoch, bumped on suspend/archive */
+                            revocationEpoch: number;
+                            /** @description Ceiling for credential TTL, in seconds */
+                            maxKeyTtlSeconds: number;
+                            /** @description Ceiling for credential rate limit */
+                            maxKeyRateLimit: number;
+                            /** @description Ceiling for credential budget */
+                            maxKeyBudget: number;
+                            /**
+                             * Format: uuid
+                             * @description Creator principal, or null for bootstrap/system tenants
+                             */
+                            createdByPrincipalId: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                            /**
+                             * Format: date-time
+                             * @description When the tenant was suspended, if ever
+                             */
+                            suspendedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the tenant was archived, if ever
+                             */
+                            archivedAt: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found. Non-enumerating: an unknown id yields a bare 404 with no metadata. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Lifecycle conflict (e.g. duplicate slug, or a transition out of the terminal archived state) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listPlatformMemberships: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-platform-reason": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Memberships */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /**
+                             * Format: uuid
+                             * @description Membership id
+                             */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description Tenant the membership belongs to
+                             */
+                            tenantId: string;
+                            /**
+                             * Format: uuid
+                             * @description Principal granted access
+                             */
+                            principalId: string;
+                            /**
+                             * @description Tenant role
+                             * @enum {string}
+                             */
+                            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+                            /**
+                             * @description Membership status
+                             * @enum {string}
+                             */
+                            status: "active" | "disabled";
+                            /**
+                             * Format: uuid
+                             * @description Principal that granted the membership, when known
+                             */
+                            invitedByPrincipalId: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                            /**
+                             * Format: date-time
+                             * @description When the membership was disabled, if ever
+                             */
+                            disabledAt: string | null;
+                        }[];
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found. Non-enumerating: an unknown id yields a bare 404 with no metadata. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    attachPlatformMembership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description Principal to grant access to
+                     */
+                    principalId: string;
+                    /**
+                     * @description Tenant role
+                     * @enum {string}
+                     */
+                    role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+                    /**
+                     * @description Audited justification for the change
+                     * @example onboarding request OPS-1421
+                     */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Membership attached */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Membership id
+                             */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description Tenant the membership belongs to
+                             */
+                            tenantId: string;
+                            /**
+                             * Format: uuid
+                             * @description Principal granted access
+                             */
+                            principalId: string;
+                            /**
+                             * @description Tenant role
+                             * @enum {string}
+                             */
+                            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+                            /**
+                             * @description Membership status
+                             * @enum {string}
+                             */
+                            status: "active" | "disabled";
+                            /**
+                             * Format: uuid
+                             * @description Principal that granted the membership, when known
+                             */
+                            invitedByPrincipalId: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                            /**
+                             * Format: date-time
+                             * @description When the membership was disabled, if ever
+                             */
+                            disabledAt: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found. Non-enumerating: an unknown id yields a bare 404 with no metadata. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Lifecycle conflict (e.g. duplicate slug, or a transition out of the terminal archived state) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    disablePlatformMembership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenantId: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Audited justification for the change
+                     * @example onboarding request OPS-1421
+                     */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Membership disabled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Membership id
+                             */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description Tenant the membership belongs to
+                             */
+                            tenantId: string;
+                            /**
+                             * Format: uuid
+                             * @description Principal granted access
+                             */
+                            principalId: string;
+                            /**
+                             * @description Tenant role
+                             * @enum {string}
+                             */
+                            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+                            /**
+                             * @description Membership status
+                             * @enum {string}
+                             */
+                            status: "active" | "disabled";
+                            /**
+                             * Format: uuid
+                             * @description Principal that granted the membership, when known
+                             */
+                            invitedByPrincipalId: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                            /**
+                             * Format: date-time
+                             * @description When the membership was disabled, if ever
+                             */
+                            disabledAt: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found. Non-enumerating: an unknown id yields a bare 404 with no metadata. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Lifecycle conflict (e.g. duplicate slug, or a transition out of the terminal archived state) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    setPlatformMembershipStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenantId: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Target membership status
+                     * @enum {string}
+                     */
+                    status: "active" | "disabled";
+                    /**
+                     * @description Audited justification for the change
+                     * @example onboarding request OPS-1421
+                     */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Membership status updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Membership id
+                             */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description Tenant the membership belongs to
+                             */
+                            tenantId: string;
+                            /**
+                             * Format: uuid
+                             * @description Principal granted access
+                             */
+                            principalId: string;
+                            /**
+                             * @description Tenant role
+                             * @enum {string}
+                             */
+                            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+                            /**
+                             * @description Membership status
+                             * @enum {string}
+                             */
+                            status: "active" | "disabled";
+                            /**
+                             * Format: uuid
+                             * @description Principal that granted the membership, when known
+                             */
+                            invitedByPrincipalId: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                            /**
+                             * Format: date-time
+                             * @description When the membership was disabled, if ever
+                             */
+                            disabledAt: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found. Non-enumerating: an unknown id yields a bare 404 with no metadata. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Lifecycle conflict (e.g. duplicate slug, or a transition out of the terminal archived state) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    setPlatformMembershipRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenantId: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Tenant role
+                     * @enum {string}
+                     */
+                    role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+                    /**
+                     * @description Audited justification for the change
+                     * @example onboarding request OPS-1421
+                     */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Membership role updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Membership id
+                             */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description Tenant the membership belongs to
+                             */
+                            tenantId: string;
+                            /**
+                             * Format: uuid
+                             * @description Principal granted access
+                             */
+                            principalId: string;
+                            /**
+                             * @description Tenant role
+                             * @enum {string}
+                             */
+                            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+                            /**
+                             * @description Membership status
+                             * @enum {string}
+                             */
+                            status: "active" | "disabled";
+                            /**
+                             * Format: uuid
+                             * @description Principal that granted the membership, when known
+                             */
+                            invitedByPrincipalId: string | null;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                            /**
+                             * Format: date-time
+                             * @description When the membership was disabled, if ever
+                             */
+                            disabledAt: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found. Non-enumerating: an unknown id yields a bare 404 with no metadata. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Lifecycle conflict (e.g. duplicate slug, or a transition out of the terminal archived state) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
                         };
                     };
                 };
