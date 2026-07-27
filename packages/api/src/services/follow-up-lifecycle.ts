@@ -56,6 +56,66 @@ const log = createLogger('follow-up-lifecycle');
  * (normal flow), the latter three mean the sequence ran its course or
  * errored out and a brand-new agent reply can legitimately arm afresh.
  */
+// ─────────────────────────────────────────────────────────────
+// Idle-timeout delivery identity dedupe
+// ─────────────────────────────────────────────────────────────
+//
+// The sweeper emits exactly one `chat.idle_timeout` per
+// (chatId, instanceId, sequenceIndex) — it publishes the PRE-increment index
+// and then advances the row — so that triple IS the event's identity. Tracking
+// which triples were already handed to the automation engine lets the gate
+// discriminate the two cases a sequence-distance comparison cannot tell apart:
+//
+//   • first delivery of event N while the row already reads N+1 → legitimate
+//     (the publish/consume race that dropped ~14% of follow-ups, f149179a);
+//   • JetStream redelivery of event N after an ack timeout, row also at N+1 →
+//     duplicate, must be dropped or the chat gets the same follow-up twice.
+//
+// In-memory and best-effort by design: a process restart forgets the claims and
+// the gate degrades to fail-open (a redundant follow-up), which is the same
+// trade-off the rest of this gate already makes.
+const IDLE_TIMEOUT_CLAIM_TTL_MS = 6 * 60 * 60 * 1000;
+const IDLE_TIMEOUT_CLAIM_MAX_ENTRIES = 20_000;
+const idleTimeoutClaims = new Map<string, number>();
+
+/** Test-only: clears the in-memory idle-timeout delivery claims. */
+export function resetIdleTimeoutClaims(): void {
+  idleTimeoutClaims.clear();
+}
+
+function pruneIdleTimeoutClaims(now: number): void {
+  for (const [key, ts] of idleTimeoutClaims) {
+    if (now - ts > IDLE_TIMEOUT_CLAIM_TTL_MS) idleTimeoutClaims.delete(key);
+  }
+  // Hard bound: Map iterates in insertion order, so the head is the oldest.
+  while (idleTimeoutClaims.size > IDLE_TIMEOUT_CLAIM_MAX_ENTRIES) {
+    const oldest = idleTimeoutClaims.keys().next();
+    if (oldest.done) break;
+    idleTimeoutClaims.delete(oldest.value);
+  }
+}
+
+/**
+ * Claim a `chat.idle_timeout` delivery for its (chat, instance, sequence)
+ * identity. Returns `true` on the first delivery, `false` when this exact
+ * event was already processed (redelivery).
+ *
+ * Events without a sequence index carry no identity, so they always claim.
+ */
+export function claimIdleTimeoutDelivery(
+  chatId: string,
+  instanceId: string,
+  eventSequenceIndex: number | null,
+  now: number = Date.now(),
+): boolean {
+  if (typeof eventSequenceIndex !== 'number') return true;
+  pruneIdleTimeoutClaims(now);
+  const key = `${instanceId}:${chatId}:${eventSequenceIndex}`;
+  if (idleTimeoutClaims.has(key)) return false;
+  idleTimeoutClaims.set(key, now);
+  return true;
+}
+
 const TERMINAL_DISARM_REASONS: ReadonlySet<FollowUpDisarmReason> = new Set<FollowUpDisarmReason>([
   'session_cleared',
   'handoff',
@@ -467,12 +527,19 @@ export class FollowUpLifecycleService {
    *  - follow-up row's `disarmReason` is set — sequence is in a terminal
    *    state and any further fire would re-spam a chat the system already
    *    finished/handed-off/archived
-   *  - row's `sequenceIndex` is strictly greater than the event's
-   *    `eventSequenceIndex` — the row already advanced via a more recent
-   *    sweeper tick. Catches the regression class where a row stays
-   *    nominally active (no `disarmReason`) but a replayed event
-   *    references an older sequence position. Without this check, replays
-   *    of events 0..N-1 keep firing while the row is at sequenceIndex N.
+   *  - the event's identity (chat + instance + `eventSequenceIndex`) was
+   *    already delivered to the engine in this process — a redelivery of an
+   *    event that already fired. This replaced the old
+   *    `row.sequenceIndex > eventSequenceIndex` distance test, which could
+   *    not tell a JetStream redelivery of event N (row at N+1) from a healthy
+   *    first delivery of event N (row also at N+1, because the sweeper
+   *    publishes N then immediately records N+1) — the confusion that dropped
+   *    ~14% of legitimate follow-ups (f149179a).
+   *  - row's `sequenceIndex` is 2+ ahead of the event's — a bulk replay of
+   *    historical events (e.g. a durable-consumer reset re-delivering days-old
+   *    events after this process started, so no claim exists for them).
+   *    Without this check, replays of events 0..N-2 keep firing while the row
+   *    is at sequenceIndex N.
    *
    * Returns `{ skip: false }` when the event should proceed normally.
    *
@@ -497,8 +564,8 @@ export class FollowUpLifecycleService {
     // immediately advances the row (publish(N) → recordFired(N+1)). By the time a
     // consumer handles the event the row is legitimately one step ahead, so
     // `row > event` also matches every healthy first-delivery — dropping real
-    // follow-ups in a publish/consume race. Only a gap of 2+ indicates an actual
-    // replay of a historical event, which is what this gate exists to stop.
+    // follow-ups in a publish/consume race. A gap of 2+ can only be a replay of
+    // an event this process never claimed (durable-consumer reset, old backlog).
     if (
       row !== null &&
       typeof eventSequenceIndex === 'number' &&
@@ -508,6 +575,15 @@ export class FollowUpLifecycleService {
       return {
         skip: true,
         reason: `sequence_advanced_row_at_${row.sequenceIndex}_event_${eventSequenceIndex}`,
+      };
+    }
+    // Gap of 0 or 1 is ambiguous by sequence alone — discriminate by identity:
+    // only the first delivery of this exact event proceeds, a redelivery of it
+    // (ack timeout, consumer restart mid-flight) is dropped.
+    if (!claimIdleTimeoutDelivery(chatId, instanceId, eventSequenceIndex)) {
+      return {
+        skip: true,
+        reason: `duplicate_delivery_event_${eventSequenceIndex}`,
       };
     }
     return { skip: false };
