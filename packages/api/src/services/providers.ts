@@ -1,5 +1,34 @@
 /**
  * Provider service - manages agent providers
+ *
+ * TENANT-BOUND SEALING OF PROVIDER CREDENTIALS (G5 deliverable (g); ADR-0008)
+ * ---------------------------------------------------------------------------
+ * `agent_providers` holds two kinds of secret: the bearer `api_key` used against
+ * the provider's HTTP/WS endpoint, and — for the OpenClaw schema — the device
+ * identity in `schema_config`, whose `devicePrivateKey` is a raw Ed25519 private
+ * key and whose `deviceToken` is its bearer companion. ADR-0008 puts both in the
+ * "channel/provider/webhook credentials" class that must be encrypted with
+ * tenant-bound context.
+ *
+ * WHERE THE TENANT COMES FROM, AND WHY IT IS THE SCOPE
+ * ----------------------------------------------------
+ * Unlike `instances`, `agent_providers` is a G0-`split` table: it has no
+ * `tenant_id`, because the tenant-configured half (`tenant_provider_config`) and
+ * the immutable catalog half (`platform_provider_catalog`) have not been
+ * separated yet (G2 `SPLIT_DESTINATIONS`). So there is no per-row ownership to
+ * read, and the honest binding is the ACTIVE TENANT SCOPE: the tenant that
+ * configured the credential is the tenant that can use it, and every other
+ * context — including a worker that never established a scope — fails closed to
+ * a null secret rather than to someone else's key.
+ *
+ * The `devicePublicKey`, `deviceId`, `origin` and every other `schema_config`
+ * field stay in the clear: sealing is scoped to key material, so operators can
+ * still read and diff a provider's configuration.
+ *
+ * DUAL WORLD. With no scope (legacy/worker/CLI) or no master key the codec is
+ * the identity function and every column holds exactly the bytes it held before
+ * G5. Reads are transitional — legacy plaintext rows keep working while sealing
+ * is enabled, because G5 ships no credential backfill.
  */
 
 import { NotFoundError } from '@omni/core';
@@ -7,6 +36,8 @@ import type { Database } from '@omni/db';
 import { type AgentProvider, type NewAgentProvider, agentProviders } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { invalidateProviderCache } from '../plugins/agent-dispatcher';
+import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
+import { currentTenantScope } from '../tenancy/tenant-scope';
 
 export interface ProviderHealthResult {
   healthy: boolean;
@@ -14,8 +45,59 @@ export interface ProviderHealthResult {
   error?: string;
 }
 
+/**
+ * The `schema_config` keys that are key material. Explicit allow-list for the
+ * same reason as `instances`: a heuristic that stopped matching would fail OPEN.
+ */
+const SEALED_SCHEMA_CONFIG_KEYS = ['devicePrivateKey', 'deviceToken'] as const;
+
+/** Apply `codec` to `api_key` and the sealed `schema_config` keys of `row`. */
+function mapProviderSecrets<T extends Record<string, unknown>>(
+  row: T,
+  codec: (value: string) => string | null | undefined,
+): T {
+  const out: Record<string, unknown> = { ...row };
+
+  if (typeof out.apiKey === 'string') out.apiKey = codec(out.apiKey);
+
+  const schemaConfig = out.schemaConfig;
+  if (schemaConfig && typeof schemaConfig === 'object') {
+    const config = { ...(schemaConfig as Record<string, unknown>) };
+    let changed = false;
+    for (const key of SEALED_SCHEMA_CONFIG_KEYS) {
+      const value = config[key];
+      if (typeof value !== 'string') continue;
+      config[key] = codec(value);
+      changed = true;
+    }
+    if (changed) out.schemaConfig = config;
+  }
+
+  return out as T;
+}
+
+/** Seal the provider secrets present in `data` for `tenantId`. */
+function sealProviderSecrets<T extends Record<string, unknown>>(tenantId: string | null, data: T): T {
+  if (!tenantId) return data;
+  return mapProviderSecrets(data, (value) => sealCredentialField(tenantId, value));
+}
+
+/**
+ * Open a loaded provider row under `tenantId`. A secret sealed for another
+ * tenant (or unreadable because no key is configured) becomes `null` — never the
+ * envelope, which would otherwise be sent as an `Authorization: Bearer` value.
+ */
+function openProviderSecrets<T extends Record<string, unknown>>(tenantId: string | null, row: T): T {
+  return mapProviderSecrets(row, (value) => openCredentialField(tenantId, value) ?? null);
+}
+
 export class ProviderService {
   constructor(private db: Database) {}
+
+  /** The tenant this service seals under / opens with; null on legacy paths. */
+  private get tenantId(): string | null {
+    return currentTenantScope()?.tenantId ?? null;
+  }
 
   /**
    * List all providers
@@ -27,7 +109,9 @@ export class ProviderService {
       query = query.where(eq(agentProviders.isActive, options.active));
     }
 
-    return query.orderBy(agentProviders.name);
+    const rows = await query.orderBy(agentProviders.name);
+    const tenantId = this.tenantId;
+    return rows.map((row) => openProviderSecrets(tenantId, row));
   }
 
   /**
@@ -40,7 +124,7 @@ export class ProviderService {
       throw new NotFoundError('AgentProvider', id);
     }
 
-    return result;
+    return openProviderSecrets(this.tenantId, result);
   }
 
   /**
@@ -53,29 +137,31 @@ export class ProviderService {
       throw new NotFoundError('AgentProvider', name);
     }
 
-    return result;
+    return openProviderSecrets(this.tenantId, result);
   }
 
   /**
    * Create a new provider
    */
   async create(data: NewAgentProvider): Promise<AgentProvider> {
-    const [created] = await this.db.insert(agentProviders).values(data).returning();
+    const tenantId = this.tenantId;
+    const [created] = await this.db.insert(agentProviders).values(sealProviderSecrets(tenantId, data)).returning();
 
     if (!created) {
       throw new Error('Failed to create agent provider');
     }
 
-    return created;
+    return openProviderSecrets(tenantId, created);
   }
 
   /**
    * Update a provider
    */
   async update(id: string, data: Partial<NewAgentProvider>): Promise<AgentProvider> {
+    const tenantId = this.tenantId;
     const [updated] = await this.db
       .update(agentProviders)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...sealProviderSecrets(tenantId, data), updatedAt: new Date() })
       .where(eq(agentProviders.id, id))
       .returning();
 
@@ -85,7 +171,7 @@ export class ProviderService {
 
     invalidateProviderCache(id);
 
-    return updated;
+    return openProviderSecrets(tenantId, updated);
   }
 
   /**

@@ -379,3 +379,48 @@ export function resolveOmniScopedCredentials(): ScopedCredentialOverride | null 
     roleName: sentinel.roleName,
   };
 }
+
+/**
+ * Enforcement-mode credential resolution — the fail-closed twin of
+ * {@link resolveOmniScopedCredentials} (wish: omni-full-multitenancy, G3; ADR-0004).
+ *
+ * `resolveOmniScopedCredentials` returns `null` when the sentinel is missing or
+ * the kill switch is set, and the caller then falls back to
+ * `postgres:postgres`. That fallback is a documented, deliberate convenience
+ * while the scoped role is only a blast-radius reduction. It becomes a
+ * vulnerability the moment RLS is the security boundary: falling back to the
+ * cluster superuser silently restores the ability to read every tenant.
+ *
+ * So under `OMNI_DB_ENFORCEMENT=on` this function THROWS instead of returning
+ * null. There is no path from here to a superuser credential.
+ *
+ * The legacy resolver is untouched, and a deployment that has not set the
+ * variable never reaches this code.
+ */
+export function resolveOmniEnforcedCredentials(
+  env: Record<string, string | undefined> = process.env,
+): ScopedCredentialOverride {
+  if (env.OMNI_DB_ENFORCEMENT !== 'on') {
+    throw new Error('role-cutover: resolveOmniEnforcedCredentials called outside enforcement mode');
+  }
+  if (env.OMNI_ROLE_CUTOVER === '0') {
+    throw new Error(
+      'role-cutover: OMNI_ROLE_CUTOVER=0 disables the scoped role, which is not permitted under ' +
+        'OMNI_DB_ENFORCEMENT=on — enforcement has no legacy superuser fallback',
+    );
+  }
+  const sentinel = readOmniCutoverSentinel();
+  if (!sentinel) {
+    throw new Error(
+      'role-cutover: no scoped-role sentinel found and enforcement mode forbids the postgres:postgres ' +
+        'fallback — provision the runtime role before starting',
+    );
+  }
+  const expected = deriveOmniScopedRoleName();
+  if (sentinel.roleName !== expected) {
+    throw new Error(
+      `role-cutover: sentinel names role ${sentinel.roleName} but this install expects ${expected}; refusing to start rather than falling back`,
+    );
+  }
+  return { username: sentinel.roleName, password: sentinel.password, roleName: sentinel.roleName };
+}

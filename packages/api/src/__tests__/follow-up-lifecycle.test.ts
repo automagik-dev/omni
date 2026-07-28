@@ -17,7 +17,7 @@ import type { EventBus, FollowUpSequenceConfig } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatFollowUpState, chats, instances } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
-import { FollowUpLifecycleService } from '../services/follow-up-lifecycle';
+import { FollowUpLifecycleService, resetIdleTimeoutClaims } from '../services/follow-up-lifecycle';
 import { describeWithDb, getTestDb } from './db-helper';
 
 const MS_PER_MINUTE = 60_000;
@@ -65,6 +65,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
   });
 
   beforeEach(() => {
+    resetIdleTimeoutClaims();
     publishedEvents = [];
     eventBus = {
       connect: async () => {},
@@ -805,4 +806,10 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].disarmReason).toBeNull();
   });
+
+  // The `evaluateIdleTimeoutFreshness` gate assertions live in
+  // `follow-up-freshness-postgres.test.ts` — this file's `describeWithDb`
+  // harness skips unless ENABLE_DB_TESTS is set, which nothing sets, so the
+  // gate's coverage would never execute anywhere. The `*-postgres.test.ts`
+  // suite is discovered and forced to run by `scripts/pg-gate.ts` in CI.
 });

@@ -2,7 +2,7 @@
 # Universal Event-Driven Omnichannel Platform
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
-        test test-watch test-api test-db typecheck typecheck-ui lint lint-fix lint-ui format check dead-code \
+        test test-watch test-api test-db test-pg-gate typecheck typecheck-ui lint lint-fix lint-ui format check dead-code \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -38,6 +38,7 @@ help:
 	@echo "  make test-watch    Run tests in watch mode"
 	@echo "  make test-api      Run API package tests only"
 	@echo "  make test-db       Run DB package tests only"
+	@echo "  make test-pg-gate  Run every real-PostgreSQL suite (fails loudly, never skips)"
 	@echo "  make test-file F=<path>  Run a specific test file"
 	@echo "  make kill-stale-test-daemons  Sweep leaked PM2 god daemons from CLI tests (#413)"
 	@echo ""
@@ -236,6 +237,16 @@ test-api: _sync-db
 
 test-db:
 	bun test --env-file=.env packages/db/src
+
+# Real-PostgreSQL gate (wish: omni-full-multitenancy, G3).
+#
+# Runs EVERY *-postgres.test.ts suite against a disposable cluster it creates
+# and destroys, and FAILS LOUDLY when no server is available — unlike a plain
+# `bun test`, where those suites opt out silently and a green run proves nothing
+# about tenant isolation. No .env is loaded: the gate never touches an ambient
+# DATABASE_URL or a shared cluster.
+test-pg-gate:
+	bun scripts/pg-gate.ts
 
 # Run a specific test file (usage: make test-file F=packages/api/src/__tests__/foo.test.ts)
 test-file:

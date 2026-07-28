@@ -13,6 +13,9 @@ import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context'
 import { isLockActive } from '../../middleware/scope-enforcer';
 import { optionalDateParam } from '../../schemas/date-query';
 import { ApiKeyService } from '../../services/api-keys';
+import type { TenantAuthContext } from '../../tenancy/auth-context';
+import { scopeCovered } from '../../tenancy/delegation';
+import { isTenantRole } from '../../tenancy/role-policies';
 import type { ApiKeyData, AppVariables } from '../../types';
 
 export const keysRoutes = new Hono<{ Variables: AppVariables }>();
@@ -79,6 +82,11 @@ const createKeySchema = z
     outboundRecipientAllowlist: z.array(z.string()).optional().describe('Outbound recipients this key may send to'),
     owner: z.string().optional().describe('Scout owner JID — forced into outboundRecipientAllowlist'),
     denylistPresetKey: z.string().optional().describe('Denylist preset key override for coworker'),
+    // Tenant delegation only (wish: omni-full-multitenancy, Group G4). Both are
+    // ignored on the legacy paths, which destructure the fields they use rather
+    // than spreading the body, so adding them changes no legacy behaviour.
+    role: z.string().optional().describe('Tenant role for a delegated child key; may only narrow the parent role'),
+    reason: z.string().optional().describe('Audit reason recorded on a delegated child key'),
   })
   .passthrough();
 
@@ -151,6 +159,15 @@ keysRoutes.post(
   async (c) => {
     const data = c.req.valid('json');
     const services = c.get('services');
+
+    // Which service handles this is decided by the CREDENTIAL, not the body
+    // (wish: omni-full-multitenancy, Group G4). A tenant credential delegates a
+    // bounded child of its own lineage; anything else keeps the legacy path
+    // byte-for-byte, because a legacy caller has no tenant context at all.
+    const context = c.get('authContext');
+    if (context) {
+      return handleTenantChildCreate(c, data, services, context);
+    }
 
     if (data.profile) {
       return handleProfileCreate(c, data, services);
@@ -477,6 +494,153 @@ async function handleProfileCreate(
     }
     throw err;
   }
+}
+
+/**
+ * Mint a bounded child of the caller's own tenant key lineage
+ * (wish: omni-full-multitenancy, Group G4; ADR-0006).
+ *
+ * WHAT THIS FUNCTION DELIBERATELY DOES NOT DO
+ * -------------------------------------------
+ * It does not read a tenant from anywhere. The actor is the frozen context the
+ * edge constructed, the parent is that context's own lineage, and there is no
+ * code path by which a body, header, or query value can name either. A
+ * `tenantId` in the request body is simply never read.
+ *
+ * WHY PROFILES ARE REFUSED
+ * ------------------------
+ * A profile resolves to a legacy scope bundle with legacy allowlist semantics.
+ * Feeding one into the delegation evaluator would have it check a ceiling
+ * against scopes the tenant role policy never vetted — a bounded-looking key
+ * shaped by the wrong rulebook. Tenant child keys are explicit-scope only.
+ *
+ * WHERE THE CEILING IS ENFORCED
+ * -----------------------------
+ * Twice, on purpose. `enforceScopeCeiling` refuses a scope the caller does not
+ * hold before any transaction opens, which is the route-level enforcement the
+ * WISH names and which makes a denial cost no database work.
+ * `TenantKeyService.createChildKey` then re-derives EVERY ceiling — scope,
+ * role, expiry, rate limit, budget, resource constraints, depth — from rows it
+ * holds under `FOR UPDATE`, which is the boundary that actually decides. The
+ * route check can only ever be narrower or equal; it is not trusted to be
+ * sufficient.
+ */
+async function handleTenantChildCreate(
+  c: Context<{ Variables: AppVariables }>,
+  data: CreateKeyData,
+  services: CreateServices,
+  context: TenantAuthContext,
+) {
+  if (data.profile) {
+    return c.json(
+      {
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'profile-based keys are not available to a tenant credential — request explicit scopes',
+        },
+      },
+      400,
+    );
+  }
+
+  if (!data.scopes || data.scopes.length === 0) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'scopes is required' } }, 400);
+  }
+
+  if (data.role !== undefined && !isTenantRole(data.role)) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'role is not a tenant role' } }, 400);
+  }
+
+  // The ceiling pre-check is done in the TENANT vocabulary, deliberately NOT
+  // through `enforceScopeCeiling`. That helper authorizes against
+  // `c.get('apiKey').scopes`, which for a tenant credential is the LEGACY
+  // projection (`instances:read`, `messages:send`, …) that `scope-projection.ts`
+  // built for the route enforcer. The scopes being delegated here are tenant
+  // scopes (`tenant:read`, `keys:delegate`) — a different language. Feeding one
+  // to the other rejects every well-formed delegation: an authorization bug in
+  // the "denies everything" direction rather than "permits too much", which is
+  // why it surfaced as a failing acceptance probe and not as a leak.
+  //
+  // `scopeCovered` is the SAME covering relation `evaluateDelegation` applies
+  // inside the transaction, so this pre-check can only agree with the
+  // authoritative one or be narrower. It is a cheap early denial, never the
+  // decision.
+  const exceeding = data.scopes.filter((scope) => !scopeCovered(context.scopes, scope));
+  if (exceeding.length > 0) {
+    return c.json(
+      {
+        error: {
+          code: 'FORBIDDEN',
+          message: `Cannot grant scopes that exceed the caller's own. Disallowed: ${exceeding.join(', ')}`,
+        },
+      },
+      403,
+    );
+  }
+
+  // Only constraints the caller actually sent become part of the request. An
+  // empty array is a REAL constraint ("nothing is allowed"), so it must not be
+  // conflated with an absent one, which means "inherit the parent's".
+  const resourceConstraints: Record<string, readonly string[]> = {};
+  if (data.instanceAllowlist) resourceConstraints.instanceAllowlist = data.instanceAllowlist;
+  if (data.chatAllowlist) resourceConstraints.chatAllowlist = data.chatAllowlist;
+  if (data.outboundRecipientAllowlist) {
+    resourceConstraints.outboundRecipientAllowlist = data.outboundRecipientAllowlist;
+  }
+  if (data.instanceIds) resourceConstraints.instanceIds = data.instanceIds;
+
+  const result = await services.tenantKeys.createChildKey({
+    actor: context,
+    parentKeyId: context.tenantKeyLineageId,
+    name: data.name,
+    reason: data.reason ?? `child key delegated via POST /keys by ${context.actorRole}`,
+    request: {
+      scopes: data.scopes,
+      ...(Object.keys(resourceConstraints).length > 0 ? { resourceConstraints } : {}),
+      ...(data.expiresAt ? { expiresAt: new Date(data.expiresAt) } : {}),
+      ...(data.rateLimit !== undefined ? { rateLimit: data.rateLimit } : {}),
+      ...(data.role ? { role: data.role } : {}),
+    },
+  });
+
+  if (result.status === 'parent_not_found') {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'parent key not found' } }, 404);
+  }
+  if (result.status === 'denied') {
+    return c.json(
+      {
+        error: {
+          code: 'FORBIDDEN',
+          message: 'delegation exceeds the parent key ceiling',
+          details: { violations: result.violations },
+        },
+      },
+      403,
+    );
+  }
+
+  // An explicit projection, never the lineage row: the row carries `keyHash`,
+  // and a spread would publish it the first time anyone forgot it was there.
+  const { lineage, plainTextKey } = result.issued;
+  return c.json(
+    {
+      data: {
+        id: lineage.id,
+        tenantId: lineage.tenantId,
+        name: data.name,
+        role: lineage.actorRole,
+        scopes: lineage.scopes,
+        constraints: lineage.resourceConstraints ?? {},
+        delegationDepth: lineage.depth,
+        expiresAt: lineage.expiresAt,
+        rateLimit: lineage.rateLimit,
+        budget: lineage.budget,
+        /** Returned ONCE. Never persisted or logged by the caller. */
+        plainTextKey,
+      },
+    },
+    201,
+  );
 }
 
 async function handleLegacyCreate(

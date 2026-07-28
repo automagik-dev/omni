@@ -66,6 +66,7 @@
 
 import { createLogger } from '@omni/core';
 import { OpusCodec } from '@omni/voice-client';
+import { TenantStreamRegistry } from '../tenancy/tenant-stream-subscriptions';
 
 const log = createLogger('ws:voice');
 
@@ -125,22 +126,101 @@ export interface VoiceStreamParams {
   filterUserId?: string;
 }
 
-/** A connected WS client subscription. */
+/**
+ * A connected WS client subscription.
+ *
+ * `tenantId` is deliberately NOT part of {@link VoiceStreamParams}: params are
+ * parsed from the caller's URL, and a tenant must never come from a caller. It
+ * is set by the upgrade handler from the connection's authenticated credential
+ * after {@link authorizeStreamSubscription} confirmed the session's persisted
+ * owner matches (G5 deliverable (e); WISH "Streaming and long-lived state").
+ */
 export interface VoiceStreamClient {
   params: VoiceStreamParams;
+  /** Trusted tenant of this connection; absent on a legacy/flag-off connection. */
+  tenantId?: string | null;
+  /** Tenant revocation epoch observed when the connection was authorized. */
+  revocationEpoch?: number;
   send: (data: string | ArrayBuffer | Uint8Array) => void;
+  /** Terminate the transport — used by the revocation sweep. */
+  close?: (reason: string) => void;
 }
 
 /**
  * Registry of active voice stream WS clients.
  * The voice session pushes audio here; the WS handler pushes client audio to the session.
+ *
+ * TENANT KEYING (G5 deliverable (e))
+ * ----------------------------------
+ * Pre-G5 every fan-out matched on `params.sessionId` alone, so naming a session
+ * WAS the authorization to receive it. Two tenants can hold sessions with the
+ * same plugin-generated id, so a resource-only match is a cross-tenant read.
+ *
+ * The narrowing device is a session→tenant BINDING, registered by the API side
+ * when a session's persisted ownership is resolved. Producers keep the pre-G5
+ * `AudioStreamSink` signature (`pushAudio(sessionId, userId, data, format)`) —
+ * the discord `VoiceManager` never learns about tenants. When a session is
+ * bound, its fan-out reaches only clients carrying that tenant; when it is NOT
+ * bound (flag-off, legacy), the match is the pre-G5 session-only one,
+ * byte-identical.
  */
 export class VoiceStreamRegistry {
   private clients = new Map<unknown, VoiceStreamClient>();
+  /** Trusted owner per voice session; absent = legacy/flag-off session. */
+  private sessionTenants = new Map<string, string>();
+  /** Tenancy bookkeeping for the revocation sweep (RELEASE_SLOS ≤ 30s). */
+  readonly streamRegistry = new TenantStreamRegistry<unknown>();
+
+  /**
+   * Record a voice session's TRUSTED owner, derived from the session's persisted
+   * resource ownership — never from a socket message or query parameter.
+   */
+  bindSession(sessionId: string, trustedTenantId: string): void {
+    this.sessionTenants.set(sessionId, trustedTenantId);
+  }
+
+  /** Drop a session's tenant binding when the session ends. */
+  unbindSession(sessionId: string): void {
+    this.sessionTenants.delete(sessionId);
+  }
+
+  /** The trusted owner of a session, or null when the session is unbound. */
+  sessionTenant(sessionId: string): string | null {
+    return this.sessionTenants.get(sessionId) ?? null;
+  }
+
+  /**
+   * Whether a client may receive a session's traffic.
+   *
+   * Unbound session → the pre-G5 session-id match. Bound session → the client's
+   * trusted tenant must equal the session's owner; a tenantless client on a
+   * bound session is refused (fail-closed).
+   */
+  private deliverableTo(client: VoiceStreamClient, sessionId: string): boolean {
+    if (client.params.sessionId !== sessionId) return false;
+    const owner = this.sessionTenants.get(sessionId);
+    if (owner === undefined) return true;
+    return client.tenantId === owner;
+  }
 
   /** Register a new WS client. */
   add(ws: unknown, client: VoiceStreamClient): void {
     this.clients.set(ws, client);
+    this.streamRegistry.add(ws, {
+      tenantId: client.tenantId ?? null,
+      resourceId: client.params.sessionId,
+      revocationEpoch: client.revocationEpoch ?? 0,
+      // The sweep terminates through this binding, so it must drop the client
+      // from the AUDIO map too — a socket the sweep closed must stop being a
+      // `pushAudio` target, not merely disappear from the tenancy view.
+      close: (reason) => {
+        try {
+          client.close?.(reason);
+        } finally {
+          this.clients.delete(ws);
+        }
+      },
+    });
     log.info('Voice WS client connected', {
       sessionId: client.params.sessionId,
       format: client.params.format,
@@ -151,6 +231,28 @@ export class VoiceStreamRegistry {
   /** Remove a WS client. */
   remove(ws: unknown): void {
     this.clients.delete(ws);
+    this.streamRegistry.remove(ws);
+  }
+
+  /**
+   * Close and drop every socket belonging to a revoked tenant
+   * (RELEASE_SLOS `websocket_sse_channel_provider_session_termination_seconds_max`).
+   * Legacy/tenantless sockets are untouched.
+   */
+  terminateTenant(tenantId: string, reason: string): number {
+    let closed = 0;
+    for (const [ws, client] of [...this.clients]) {
+      if (client.tenantId !== tenantId) continue;
+      try {
+        client.close?.(reason);
+      } catch {
+        // Socket already gone — the drop below is what matters.
+      }
+      this.clients.delete(ws);
+      this.streamRegistry.remove(ws);
+      closed += 1;
+    }
+    return closed;
   }
 
   /** Get client info for a WS. */
@@ -161,7 +263,7 @@ export class VoiceStreamRegistry {
   /** Push a tagged audio frame to all matching clients for a session. */
   pushAudio(sessionId: string, userId: string, audioData: Uint8Array, format: AudioFormat): void {
     for (const [, client] of this.clients) {
-      if (client.params.sessionId !== sessionId) continue;
+      if (!this.deliverableTo(client, sessionId)) continue;
       if (client.params.filterUserId && client.params.filterUserId !== userId) continue;
 
       try {
@@ -183,7 +285,7 @@ export class VoiceStreamRegistry {
   broadcast(sessionId: string, message: Record<string, unknown>): void {
     const json = JSON.stringify(message);
     for (const [, client] of this.clients) {
-      if (client.params.sessionId !== sessionId) continue;
+      if (!this.deliverableTo(client, sessionId)) continue;
       try {
         client.send(json);
       } catch {
@@ -201,7 +303,7 @@ export class VoiceStreamRegistry {
   getClientsForSession(sessionId: string): VoiceStreamClient[] {
     const result: VoiceStreamClient[] = [];
     for (const [, client] of this.clients) {
-      if (client.params.sessionId === sessionId) result.push(client);
+      if (this.deliverableTo(client, sessionId)) result.push(client);
     }
     return result;
   }
@@ -221,4 +323,31 @@ export function parseVoiceStreamParams(url: URL): VoiceStreamParams | null {
   if (!apiKey) return null;
 
   return { sessionId, apiKey, format: format === 'pcm' ? 'pcm' : 'opus', filterUserId };
+}
+
+/**
+ * Authorize an API key for a voice WebSocket upgrade.
+ *
+ * `ApiKeyService.validate` resolves to `ValidatedApiKey | null`: it returns
+ * **null** — it does not throw — for an unknown, malformed, expired, or revoked
+ * key, and only throws when the lookup itself fails. Awaiting it without
+ * inspecting the result therefore admits every key that fails politely and
+ * refuses only the ones that fail loudly, which is the opposite of the intent.
+ *
+ * Every unresolvable outcome refuses:
+ * - `validate` absent (no database to consult) — we cannot authenticate, so we
+ *   do not admit. This is a partially-initialized process, not a deployment shape.
+ * - `validate` resolves null — the key is not a live credential.
+ * - `validate` throws — an auth store we cannot consult is not evidence of authority.
+ */
+export async function authorizeVoiceApiKey(
+  validate: ((apiKey: string) => Promise<unknown>) | null,
+  apiKey: string,
+): Promise<boolean> {
+  if (!validate) return false;
+  try {
+    return (await validate(apiKey)) != null;
+  } catch {
+    return false;
+  }
 }

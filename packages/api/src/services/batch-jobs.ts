@@ -35,6 +35,9 @@ import {
   createMediaProcessingService,
 } from '@omni/media-processing';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
+import { isTenantWorkAdmissible, runForEachActiveTenantRow } from '../tenancy/periodic-tenant-work';
+import { currentTenantScope, runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { BATCH_PRICING_VERSION, computeEstimatedCostCents } from './batch-pricing';
 import { MediaStorageService } from './media-storage';
 
@@ -134,12 +137,76 @@ export class BatchJobService {
   /** Progress update interval (items) */
   private static readonly PROGRESS_UPDATE_INTERVAL = 5;
 
+  /**
+   * The handle every query in this service uses.
+   *
+   * Inside a tenant-scoped request this is the request's tenant-stamped
+   * transaction (wish: omni-full-multitenancy, G4 — see `tenancy/tenant-scope.ts`);
+   * for a legacy credential, a worker, or the CLI it is the ambient pool and
+   * the query issued is byte-for-byte the one issued before the conversion.
+   */
+  private get db(): Database {
+    return scopedHandle(this.pool);
+  }
+
+  /**
+   * The auth-plane read connection, injected after construction by
+   * `services/index.ts` (mirrors `followUpSweeper.setAuthPlane`). It is the one
+   * runtime-process identity that may read `tenants` under enforcement, so it is
+   * where the background executor revalidates a job's tenant is still admissible
+   * at DEQUEUE time (see {@link isJobTenantAdmissible}). Legacy deployments and
+   * existing tests that never enable multitenancy can omit it — a NULL-tenant
+   * job is admissible without any read.
+   */
+  private authPlaneDb: Database | null = null;
+
+  /**
+   * Environment used for the flag/enforcement decisions of the RESUME fan-out.
+   * Tests override it; production leaves it undefined and the helper reads
+   * `process.env`.
+   */
+  private resumeEnv: NodeJS.ProcessEnv | undefined;
+
   constructor(
-    private db: Database,
+    private readonly pool: Database,
     private eventBus: EventBus | null,
     private settings?: MediaSettingsReader,
   ) {
-    this.mediaStorage = new MediaStorageService(db);
+    this.mediaStorage = new MediaStorageService(this.pool);
+  }
+
+  /**
+   * Inject the auth-plane read connection (wired by `services/index.ts`). Used
+   * only for dequeue-time tenant revalidation of tenant-owned jobs; NULL-tenant
+   * (legacy) jobs never consult it.
+   */
+  setAuthPlane(authPlaneDb: Database): void {
+    this.authPlaneDb = authPlaneDb;
+  }
+
+  /** Test seam for {@link resumeJobs}' flag/enforcement decisions. */
+  setResumeEnv(env: NodeJS.ProcessEnv | undefined): void {
+    this.resumeEnv = env;
+  }
+
+  /**
+   * Dequeue-time tenant revalidation (RELEASE_SLOS
+   * "queued_retry_delayed_dlq_check"). A NULL-tenant (legacy) job is always
+   * admissible and never touches the auth plane. A tenant job is admissible only
+   * when its tenant is still `active` — a suspension/archival between job
+   * creation and this dequeue (or across a restart-resume) makes it inadmissible.
+   *
+   * Fails CLOSED for a tenant job when no auth-plane connection was injected:
+   * the multitenancy world always wires one (`services/index.ts`), so its
+   * absence under a tenant job is a misconfiguration we must not run through.
+   */
+  private async isJobTenantAdmissible(jobTenantId: string | null): Promise<boolean> {
+    if (!jobTenantId) return true;
+    if (!this.authPlaneDb) {
+      log.warn('Batch job has a tenant but no auth-plane connection is wired — refusing to run', { jobTenantId });
+      return false;
+    }
+    return isTenantWorkAdmissible(this.authPlaneDb, jobTenantId);
   }
 
   private getMediaService(): Promise<MediaProcessingService> {
@@ -190,9 +257,16 @@ export class BatchJobService {
   }
 
   /**
-   * Create and start a batch job
+   * Create and start a batch job.
+   *
+   * @param trustedTenantId - for NON-request callers only (e.g. the sync worker's
+   *   post-sync media backfill, which enqueues from OUTSIDE its per-item worker
+   *   scope). It threads the envelope-derived trusted tenant so the row is stamped
+   *   and the background executor revalidates the right tenant. A request caller
+   *   omits it: the tenant is captured from the active request scope, which is
+   *   edge-derived and trusted. Passing `null` explicitly forces a legacy job.
    */
-  async create(options: CreateBatchJobOptions): Promise<BatchJob> {
+  async create(options: CreateBatchJobOptions, trustedTenantId?: string | null): Promise<BatchJob> {
     const {
       jobType,
       instanceId,
@@ -245,11 +319,30 @@ export class BatchJobService {
       errors: [],
     };
 
-    const [created] = await this.db.insert(batchJobs).values(jobData).returning();
+    // Capture the TRUSTED tenant for this job BEFORE any detach. A request
+    // caller is inside its edge-opened tenant scope, so `currentTenantScope()`
+    // is the trusted, edge-derived tenant; a worker caller has no scope here and
+    // threads its envelope-derived tenant explicitly via `trustedTenantId`. This
+    // value travels into the detached executor as a PARAMETER — the executor
+    // never reads ALS (it runs detached, where ALS is empty anyway).
+    const activeScope = currentTenantScope();
+    const jobTenantId = trustedTenantId !== undefined ? trustedTenantId : (activeScope?.tenantId ?? null);
 
-    if (!created) {
-      throw new Error('Failed to create batch job');
-    }
+    // The INSERT stamps tenant ownership (`batch_jobs.tenant_id`) from the tenant
+    // transaction it runs in. A request caller is already inside that scope, so
+    // the insert joins the request transaction unchanged. A worker caller holds
+    // no scope but threaded a tenant, so it opens ONE short worker transaction
+    // here to stamp the row. A legacy caller (no tenant) inserts on the ambient
+    // pool, byte-identical to pre-G5.
+    const insertJob = async (): Promise<BatchJob> => {
+      const [row] = await this.db.insert(batchJobs).values(jobData).returning();
+      if (!row) {
+        throw new Error('Failed to create batch job');
+      }
+      return row;
+    };
+    const created =
+      activeScope || !jobTenantId ? await insertJob() : await runTenantWorkDb(this.pool, jobTenantId, insertJob);
 
     log.info('Batch job created', {
       jobId: created.id,
@@ -272,8 +365,15 @@ export class BatchJobService {
       );
     }
 
-    // Start execution in background (non-blocking)
-    this.executeJob(created.id).catch((error) => {
+    // Start execution in background (non-blocking).
+    //
+    // `create` may be running inside a tenant-scoped request transaction. The
+    // executor MUST NOT inherit that scope: it outlives the request, and by the
+    // time its queries run the request's transaction has committed and its
+    // pooled connection has been released — issuing a query on it would be a
+    // use-after-commit. Detaching pins the executor (and every query it makes
+    // via `this.db`) to the ambient pool, the worker-context path G5 will own.
+    runDetachedFromTenantScope(() => this.executeJob(created.id, jobTenantId)).catch((error) => {
       log.error('Job execution failed', { jobId: created.id, error: String(error) });
     });
 
@@ -451,30 +551,84 @@ export class BatchJobService {
   }
 
   /**
-   * Resume jobs that were running when the API restarted
+   * Resume jobs that were running when the API restarted.
+   *
+   * G5 (ADR-0008/ADR-0003): this is restart recovery — no request, no
+   * credential, no envelope — and its read is a WHOLE-TABLE scan for
+   * `status = 'running'`. Under RLS enforcement that scan is not expressible at
+   * all, so recovery must ENUMERATE whose jobs exist (`runForEachActiveTenantRow`,
+   * the daily-sync / turn-monitor precedent) instead of scanning globally and
+   * sorting ownership out afterwards. Only the discrete READ is scoped; each
+   * job's executor is dispatched OUTSIDE it, because `executeJob` is a long
+   * fire-and-forget that opens its own short scope per DB block.
+   *
+   * Each job's trusted tenant is its OWN persisted `tenant_id` (G2, nullable) —
+   * never the enumerating pass's, never an ambient/inherited scope. The executor
+   * then revalidates that tenant is still admissible at this dequeue
+   * (RELEASE_SLOS `queued_retry_delayed_dlq_check`).
+   *
+   * LEGACY WORLD: with no auth plane wired, or with the flag off, this is the
+   * pre-G5 single ambient scan followed by the same dispatch loop — statement
+   * for statement.
    */
   async resumeJobs(): Promise<void> {
-    const runningJobs = await this.db.select().from(batchJobs).where(eq(batchJobs.status, 'running'));
+    const dispatch = (job: { id: string; tenantId: string | null }): void => {
+      this.executeJob(job.id, job.tenantId ?? null).catch((error) => {
+        log.error('Failed to resume job', { jobId: job.id, error: String(error) });
+      });
+    };
 
-    if (runningJobs.length === 0) {
-      log.debug('No jobs to resume');
+    if (!this.authPlaneDb) {
+      const runningJobs = await this.db.select().from(batchJobs).where(eq(batchJobs.status, 'running'));
+      if (runningJobs.length === 0) {
+        log.debug('No jobs to resume');
+        return;
+      }
+      log.info('Resuming batch jobs', { count: runningJobs.length });
+      for (const job of runningJobs) dispatch(job);
       return;
     }
 
-    log.info('Resuming batch jobs', { count: runningJobs.length });
-
-    for (const job of runningJobs) {
-      this.executeJob(job.id).catch((error) => {
-        log.error('Failed to resume job', { jobId: job.id, error: String(error) });
-      });
-    }
+    let resumed = 0;
+    await runForEachActiveTenantRow(
+      {
+        db: this.pool,
+        authPlaneDb: this.authPlaneDb,
+        jobName: 'batch-job-resume',
+        listActive: () => this.db.select().from(batchJobs).where(eq(batchJobs.status, 'running')),
+        env: this.resumeEnv,
+      },
+      async (job) => {
+        resumed += 1;
+        dispatch(job);
+      },
+    );
+    if (resumed === 0) log.debug('No jobs to resume');
+    else log.info('Resuming batch jobs', { count: resumed });
   }
 
   /**
-   * Execute a batch job (main processing loop)
+   * Execute a batch job (main processing loop).
+   *
+   * `jobTenantId` is the job's TRUSTED tenant, threaded as a value (never read
+   * from ALS): captured from the request scope at `create` time, threaded by a
+   * worker caller, or read from the persisted row at resume time. Every discrete
+   * DB block below runs in `runTenantWorkDb(this.pool, jobTenantId, ...)` — one
+   * short worker transaction per block, never one across the whole job — while
+   * downloads, AI calls, and event publishes stay OUTSIDE any scope. A NULL
+   * tenant runs every block on the ambient pool, byte-identical to pre-G5.
    */
-  private async executeJob(jobId: string): Promise<void> {
-    const job = await this.getById(jobId);
+  private async executeJob(jobId: string, jobTenantId: string | null): Promise<void> {
+    // DEQUEUE-TIME REVALIDATION #1 — before any work. A tenant suspended between
+    // create/resume and now (RELEASE_SLOS "queued_retry_delayed_dlq_check") must
+    // not have its queued job run. An inadmissible tenant STOPS the job with a
+    // clear error and performs NO side effects.
+    if (!(await this.isJobTenantAdmissible(jobTenantId))) {
+      await this.stopForInadmissibleTenant(jobId, jobTenantId);
+      return;
+    }
+
+    const job = await runTenantWorkDb(this.pool, jobTenantId, () => this.getById(jobId));
     const instanceId = this.requireInstanceId(job);
     const params = (job.requestParams ?? {}) as Partial<CreateBatchJobOptions>;
 
@@ -482,9 +636,25 @@ export class BatchJobService {
     this.activeJobs.set(jobId, { cancelled: false });
 
     try {
-      const { eligibleItems, totalItems, skippedItems } = await this.prepareJobExecution(job, instanceId, params);
+      const { eligibleItems, totalItems, skippedItems } = await this.prepareJobExecution(
+        job,
+        instanceId,
+        params,
+        jobTenantId,
+      );
 
-      await this.markJobRunning(jobId, instanceId, job.jobType as BatchJobType, totalItems);
+      // DEQUEUE-TIME REVALIDATION #2 — immediately before the durable side-effect
+      // batch (status→running, `batch-job.started` publish, and the whole
+      // processing loop of media writes + progress publishes). If the tenant was
+      // suspended during item preparation, stop here before the first durable
+      // effect.
+      if (!(await this.isJobTenantAdmissible(jobTenantId))) {
+        this.activeJobs.delete(jobId);
+        await this.stopForInadmissibleTenant(jobId, jobTenantId);
+        return;
+      }
+
+      await this.markJobRunning(jobId, instanceId, job.jobType as BatchJobType, totalItems, jobTenantId);
 
       const state = this.initializeJobState(job);
       const startTime = Date.now();
@@ -501,6 +671,7 @@ export class BatchJobService {
         state,
         delayMinMs,
         delayMaxMs,
+        jobTenantId,
       );
 
       await this.finalizeJob(
@@ -511,12 +682,31 @@ export class BatchJobService {
         skippedItems,
         state,
         startTime,
+        jobTenantId,
       );
     } catch (error) {
-      await this.handleJobError(jobId, instanceId, error);
+      await this.handleJobError(jobId, instanceId, error, jobTenantId);
     } finally {
       this.activeJobs.delete(jobId);
     }
+  }
+
+  /**
+   * Stop a job whose tenant is no longer admissible at dequeue. Marks it
+   * `failed` with a clear error and performs NO further side effects (no
+   * processing, no downloads, no event publishes). The status write itself runs
+   * in the job's tenant scope — a suspended tenant's row is still visible to its
+   * own worker transaction (RLS matches on `tenant_id`, not on status).
+   */
+  private async stopForInadmissibleTenant(jobId: string, jobTenantId: string | null): Promise<void> {
+    const message = `Tenant ${jobTenantId} is not admissible (suspended or archived); job stopped at dequeue`;
+    log.warn('Batch job stopped — tenant not admissible', { jobId, jobTenantId });
+    await runTenantWorkDb(this.pool, jobTenantId, () =>
+      this.db
+        .update(batchJobs)
+        .set({ status: 'failed', completedAt: new Date(), errorMessage: message })
+        .where(eq(batchJobs.id, jobId)),
+    );
   }
 
   /**
@@ -526,15 +716,18 @@ export class BatchJobService {
     job: BatchJob,
     instanceId: string,
     params: Partial<CreateBatchJobOptions>,
+    jobTenantId: string | null,
   ): Promise<{ eligibleItems: Message[]; totalItems: number; skippedItems: number }> {
-    const items = await this.queryEligibleItems({
-      jobType: job.jobType as BatchJobType,
-      instanceId,
-      chatId: params.chatId,
-      daysBack: params.daysBack,
-      limit: params.limit,
-      contentTypes: params.contentTypes as ProcessableContentType[],
-    });
+    const items = await runTenantWorkDb(this.pool, jobTenantId, () =>
+      this.queryEligibleItems({
+        jobType: job.jobType as BatchJobType,
+        instanceId,
+        chatId: params.chatId,
+        daysBack: params.daysBack,
+        limit: params.limit,
+        contentTypes: params.contentTypes as ProcessableContentType[],
+      }),
+    );
 
     const eligibleItems = params.force === true ? items : items.filter((item) => !this.hasExistingContent(item));
     const totalItems = eligibleItems.length;
@@ -551,11 +744,15 @@ export class BatchJobService {
     instanceId: string,
     jobType: BatchJobType,
     totalItems: number,
+    jobTenantId: string | null,
   ): Promise<void> {
-    await this.db
-      .update(batchJobs)
-      .set({ status: 'running', startedAt: new Date(), totalItems })
-      .where(eq(batchJobs.id, jobId));
+    // DB block scoped to the job's tenant; the publish stays OUTSIDE the scope.
+    await runTenantWorkDb(this.pool, jobTenantId, () =>
+      this.db
+        .update(batchJobs)
+        .set({ status: 'running', startedAt: new Date(), totalItems })
+        .where(eq(batchJobs.id, jobId)),
+    );
 
     log.info('Job started', { jobId, totalItems });
 
@@ -589,15 +786,19 @@ export class BatchJobService {
     state: JobProcessingState,
     delayMinMs: number,
     delayMaxMs: number,
+    jobTenantId: string | null,
   ): Promise<void> {
     for (let i = 0; i < eligibleItems.length; i++) {
-      if (await this.isJobCancelled(jobId)) break;
+      if (await this.isJobCancelled(jobId, jobTenantId)) break;
 
       const item = eligibleItems[i];
       if (!item) continue;
 
-      await this.db.update(batchJobs).set({ currentItem: item.id }).where(eq(batchJobs.id, jobId));
-      await this.processSingleItem(instanceId, item, jobId, state);
+      // DB block: mark the current item. External processing follows outside.
+      await runTenantWorkDb(this.pool, jobTenantId, () =>
+        this.db.update(batchJobs).set({ currentItem: item.id }).where(eq(batchJobs.id, jobId)),
+      );
+      await this.processSingleItem(instanceId, item, jobId, state, jobTenantId);
       await this.updateProgressIfNeeded(
         jobId,
         instanceId,
@@ -607,6 +808,7 @@ export class BatchJobService {
         skippedItems,
         item.id,
         state,
+        jobTenantId,
       );
       // Random delay between items to avoid API rate limits and behave humanly
       const delay = delayMinMs + Math.random() * (delayMaxMs - delayMinMs);
@@ -617,18 +819,16 @@ export class BatchJobService {
   /**
    * Check if job was cancelled (via memory flag or DB)
    */
-  private async isJobCancelled(jobId: string): Promise<boolean> {
+  private async isJobCancelled(jobId: string, jobTenantId: string | null): Promise<boolean> {
     const activeJob = this.activeJobs.get(jobId);
     if (activeJob?.cancelled) {
       log.info('Job cancelled by user', { jobId });
       return true;
     }
 
-    const [current] = await this.db
-      .select({ status: batchJobs.status })
-      .from(batchJobs)
-      .where(eq(batchJobs.id, jobId))
-      .limit(1);
+    const [current] = await runTenantWorkDb(this.pool, jobTenantId, () =>
+      this.db.select({ status: batchJobs.status }).from(batchJobs).where(eq(batchJobs.id, jobId)).limit(1),
+    );
     if (current?.status === 'cancelled') {
       log.info('Job cancelled (DB check)', { jobId });
       return true;
@@ -645,9 +845,10 @@ export class BatchJobService {
     item: Message,
     jobId: string,
     state: JobProcessingState,
+    jobTenantId: string | null,
   ): Promise<void> {
     try {
-      const result = await this.processItem(instanceId, item, jobId);
+      const result = await this.processItem(instanceId, item, jobId, jobTenantId);
       if (result.success) {
         state.processedItems++;
         state.totalCostUsd += (result.costCents ?? 0) / 100;
@@ -675,6 +876,7 @@ export class BatchJobService {
     skippedItems: number,
     currentItemId: string,
     state: JobProcessingState,
+    jobTenantId: string | null,
   ): Promise<void> {
     const isProgressInterval = (index + 1) % BatchJobService.PROGRESS_UPDATE_INTERVAL === 0;
     const isLastItem = index === total - 1;
@@ -683,17 +885,20 @@ export class BatchJobService {
     const progressPercent =
       totalItems > 0 ? Math.round(((state.processedItems + state.failedItems) / totalItems) * 100) : 0;
 
-    await this.db
-      .update(batchJobs)
-      .set({
-        processedItems: state.processedItems,
-        failedItems: state.failedItems,
-        progressPercent,
-        totalCostUsd: String(state.totalCostUsd),
-        totalTokens: state.totalTokens,
-        errors: state.errors,
-      })
-      .where(eq(batchJobs.id, jobId));
+    // DB block scoped to the job's tenant; the progress publish stays outside.
+    await runTenantWorkDb(this.pool, jobTenantId, () =>
+      this.db
+        .update(batchJobs)
+        .set({
+          processedItems: state.processedItems,
+          failedItems: state.failedItems,
+          progressPercent,
+          totalCostUsd: String(state.totalCostUsd),
+          totalTokens: state.totalTokens,
+          errors: state.errors,
+        })
+        .where(eq(batchJobs.id, jobId)),
+    );
 
     if (this.eventBus) {
       await this.eventBus.publish(
@@ -728,30 +933,32 @@ export class BatchJobService {
     skippedItems: number,
     state: JobProcessingState,
     startTime: number,
+    jobTenantId: string | null,
   ): Promise<void> {
-    const [finalStatus] = await this.db
-      .select({ status: batchJobs.status })
-      .from(batchJobs)
-      .where(eq(batchJobs.id, jobId))
-      .limit(1);
+    const [finalStatus] = await runTenantWorkDb(this.pool, jobTenantId, () =>
+      this.db.select({ status: batchJobs.status }).from(batchJobs).where(eq(batchJobs.id, jobId)).limit(1),
+    );
     if (finalStatus?.status === 'cancelled') return;
 
     const durationMs = Date.now() - startTime;
 
-    await this.db
-      .update(batchJobs)
-      .set({
-        status: 'completed',
-        completedAt: new Date(),
-        processedItems: state.processedItems,
-        failedItems: state.failedItems,
-        progressPercent: 100,
-        totalCostUsd: String(state.totalCostUsd),
-        totalTokens: state.totalTokens,
-        errors: state.errors,
-        currentItem: null,
-      })
-      .where(eq(batchJobs.id, jobId));
+    // DB block scoped to the job's tenant; the completion publish stays outside.
+    await runTenantWorkDb(this.pool, jobTenantId, () =>
+      this.db
+        .update(batchJobs)
+        .set({
+          status: 'completed',
+          completedAt: new Date(),
+          processedItems: state.processedItems,
+          failedItems: state.failedItems,
+          progressPercent: 100,
+          totalCostUsd: String(state.totalCostUsd),
+          totalTokens: state.totalTokens,
+          errors: state.errors,
+          currentItem: null,
+        })
+        .where(eq(batchJobs.id, jobId)),
+    );
 
     log.info('Job completed', {
       jobId,
@@ -786,13 +993,20 @@ export class BatchJobService {
   /**
    * Handle job execution error
    */
-  private async handleJobError(jobId: string, instanceId: string, error: unknown): Promise<void> {
+  private async handleJobError(
+    jobId: string,
+    instanceId: string,
+    error: unknown,
+    jobTenantId: string | null,
+  ): Promise<void> {
     log.error('Job execution failed', { jobId, error: String(error) });
 
-    await this.db
-      .update(batchJobs)
-      .set({ status: 'failed', completedAt: new Date(), errorMessage: String(error) })
-      .where(eq(batchJobs.id, jobId));
+    await runTenantWorkDb(this.pool, jobTenantId, () =>
+      this.db
+        .update(batchJobs)
+        .set({ status: 'failed', completedAt: new Date(), errorMessage: String(error) })
+        .where(eq(batchJobs.id, jobId)),
+    );
 
     if (this.eventBus) {
       await this.eventBus.publish('batch-job.failed', { jobId, instanceId, error: String(error) }, { instanceId });
@@ -802,14 +1016,19 @@ export class BatchJobService {
   /**
    * Process a single media item
    */
-  private async processItem(instanceId: string, message: Message, batchJobId: string): Promise<ProcessingResult> {
+  private async processItem(
+    instanceId: string,
+    message: Message,
+    batchJobId: string,
+    jobTenantId: string | null,
+  ): Promise<ProcessingResult> {
     const mimeType = message.mediaMimeType;
     const mediaService = await this.getMediaService();
     if (!mimeType || !mediaService.canProcess(mimeType)) {
       return this.failedResult(`MIME type not processable: ${mimeType}`);
     }
 
-    const resolved = await this.resolveFilePath(instanceId, message, mimeType);
+    const resolved = await this.resolveFilePath(instanceId, message, mimeType, jobTenantId);
     if (!resolved.ok) {
       return this.failedResult(resolved.reason);
     }
@@ -829,7 +1048,7 @@ export class BatchJobService {
     }
 
     if (result.success && result.content) {
-      await this.persistProcessingResult(message.id, result, batchJobId);
+      await this.persistProcessingResult(message.id, result, batchJobId, jobTenantId);
     }
 
     return result;
@@ -863,6 +1082,7 @@ export class BatchJobService {
     instanceId: string,
     message: Message,
     mimeType: string,
+    jobTenantId: string | null,
   ): Promise<{ ok: true; path: string } | { ok: false; reason: string }> {
     if (message.mediaLocalPath) {
       return { ok: true, path: message.mediaLocalPath };
@@ -873,14 +1093,23 @@ export class BatchJobService {
     }
 
     try {
+      // Download + store is external work; the trusted tenant is threaded so the
+      // object lands under the tenant's storage prefix (media-storage `buildKey`).
       const result = await this.mediaStorage.storeFromUrl(
         instanceId,
         message.id,
         message.mediaUrl,
         mimeType,
         message.platformTimestamp ?? undefined,
+        undefined,
+        jobTenantId ?? undefined,
       );
-      await this.mediaStorage.updateMessageLocalPath(message.id, result.localPath);
+      // The message write is a discrete DB block — scoped to the job's tenant so
+      // it lands under the correct tenant transaction (RLS-policed under
+      // enforcement, ambient byte-identical for a legacy job).
+      await runTenantWorkDb(this.pool, jobTenantId, () =>
+        this.mediaStorage.updateMessageLocalPath(message.id, result.localPath),
+      );
       return { ok: true, path: result.localPath };
     } catch (error) {
       const reason = `storeFromUrl failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -900,28 +1129,34 @@ export class BatchJobService {
     messageId: string,
     result: ProcessingResult,
     batchJobId: string,
+    jobTenantId: string | null,
   ): Promise<void> {
     // Content is guaranteed by caller check: `if (result.success && result.content)`
     const content = result.content ?? '';
 
-    await this.db.insert(mediaContent).values({
-      mediaId: messageId,
-      processingType: result.processingType,
-      content,
-      model: result.model,
-      provider: result.provider,
-      language: result.language,
-      duration: result.duration,
-      tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
-      costUsd: result.costCents != null ? String(Math.round(result.costCents)) : null,
-      processingTimeMs: result.processingTimeMs,
-      batchJobId,
-    });
+    // One discrete DB block: the media_content insert plus the dependent message
+    // update, scoped to the job's tenant so both land in the same short worker
+    // transaction (legacy job → ambient, byte-identical).
+    await runTenantWorkDb(this.pool, jobTenantId, async () => {
+      await this.db.insert(mediaContent).values({
+        mediaId: messageId,
+        processingType: result.processingType,
+        content,
+        model: result.model,
+        provider: result.provider,
+        language: result.language,
+        duration: result.duration,
+        tokensUsed: result.inputTokens ? result.inputTokens + (result.outputTokens ?? 0) : undefined,
+        costUsd: result.costCents != null ? String(Math.round(result.costCents)) : null,
+        processingTimeMs: result.processingTimeMs,
+        batchJobId,
+      });
 
-    const updateData = this.getMessageUpdateForType(result.processingType, content);
-    if (updateData) {
-      await this.db.update(messages).set(updateData).where(eq(messages.id, messageId));
-    }
+      const updateData = this.getMessageUpdateForType(result.processingType, content);
+      if (updateData) {
+        await this.db.update(messages).set(updateData).where(eq(messages.id, messageId));
+      }
+    });
   }
 
   /**

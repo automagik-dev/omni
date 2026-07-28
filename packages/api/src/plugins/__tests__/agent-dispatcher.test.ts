@@ -605,8 +605,13 @@ describe('agent-dispatcher', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       // Should have been called 3 times: once for LID, once fallback (no participantAlt), once for resolvedSenderPhone
-      expect(checkAccess).toHaveBeenCalledWith(expect.anything(), '100000001', expect.anything());
-      expect(checkAccess).toHaveBeenCalledWith(expect.anything(), '5511999000001', expect.anything());
+      // G5 run15: `checkAccess` gained a 4th `trustedTenantId` parameter so the
+      // consumer path can scope its rule read. These legacy-envelope events
+      // classify `legacy`, so the dispatcher threads `undefined` — the same value
+      // the parameter defaults to, i.e. identical behaviour. Only the recorded
+      // ARITY changed, which `toHaveBeenCalledWith` compares exactly.
+      expect(checkAccess).toHaveBeenCalledWith(expect.anything(), '100000001', expect.anything(), undefined);
+      expect(checkAccess).toHaveBeenCalledWith(expect.anything(), '5511999000001', expect.anything(), undefined);
       // Message should have reached agent (allowed via phone number)
       expect(services.agentRunner.getSenderName).toHaveBeenCalled();
     });
@@ -662,7 +667,12 @@ describe('agent-dispatcher', () => {
       await eventBus.fire('message.received', event);
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(checkAccess).toHaveBeenCalledWith(expect.anything(), '5511999000003', expect.anything());
+      // G5 run15: `checkAccess` gained a 4th `trustedTenantId` parameter so the
+      // consumer path can scope its rule read. These legacy-envelope events
+      // classify `legacy`, so the dispatcher threads `undefined` — the same value
+      // the parameter defaults to, i.e. identical behaviour. Only the recorded
+      // ARITY changed, which `toHaveBeenCalledWith` compares exactly.
+      expect(checkAccess).toHaveBeenCalledWith(expect.anything(), '5511999000003', expect.anything(), undefined);
       expect(services.agentRunner.getSenderName).toHaveBeenCalled();
     });
 
@@ -2266,6 +2276,12 @@ describe('agent-dispatcher', () => {
     // CURRENT_OWNER. Returns the agentRunner so callers can assert whether
     // dispatch proceeded (getSenderName is only reached past the gate).
     async function fireFirstPartyMessage(allowFirstParty: boolean) {
+      // The active-owner list is memoized in a module-level cache with a 10s
+      // TTL. Any dispatch by an earlier test (this file or another file in the
+      // same process) inside that window leaves a stale owner list that does
+      // NOT contain OTHER_OWNER, and the gate then dispatches instead of
+      // dropping — order- and timing-dependent, so it only shows on CI.
+      __test__.resetActiveOwnerIdentifiersCache();
       const eventBus = createMockEventBus();
       const agentRunner = {
         getInstanceWithProvider: mock(async () =>

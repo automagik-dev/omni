@@ -1,0 +1,109 @@
+schema_version: 1
+wish: omni-full-multitenancy
+group: G0
+status: normative-draft-requires-g0-human-security-approval
+principle: >-
+  No ambiguous resource is silently defaulted to platform/global. Ambiguity becomes `quarantine`
+  or an explicit split decision. Quarantined rows are not served until manually resolved; they are
+  reported with counts/identifiers in a restricted reconciliation report only.
+disposition_enum: [tenant, platform, split, quarantine]
+
+decisions:
+  - item: ambiguous_api_keys
+    subject: api_keys with instance_ids spanning multiple future tenants, or ['*'] god keys
+    decision: split_or_quarantine
+    rule: >-
+      A key restricted only to instances that all map to ONE tenant may become a tenant key after
+      scope/role review. A key spanning multiple tenants is NEVER silently converted: classify as a
+      platform automation/admin credential, split explicitly, or revoke. Unrestricted/god keys move to
+      the platform credential class only with explicit owner+purpose. Anything unresolved -> quarantine.
+    evidence: packages/db/src/schema.ts:529-601 (scopes/instance_ids/allowlists); routes/v2/keys.ts:188-284
+    verification_target: no multi-tenant key is served as a tenant key; god keys isolated to platform class
+
+  - item: legacy_instance_allowlists
+    subject: instanceIds / instanceAllowlist / chatAllowlist columns
+    decision: tenant_transitional
+    rule: >-
+      Remain transitional during migration but cannot override or widen tenant ownership. Deprecated;
+      removed only after all clients/keys migrate. They never establish tenant authority.
+    evidence: packages/db/src/schema.ts:557-562
+    verification_target: allowlist cannot widen beyond the owning tenant
+
+  - item: global_persons_and_identities
+    subject: persons (global) + platform_identities crossing instances
+    decision: tenant_clone
+    rule: >-
+      Persons spanning mapped tenants are cloned per tenant; all references (platform_identities,
+      chat_participants, messages) rewired deterministically to the per-tenant clone. Cross-tenant merge
+      forbidden. Persons whose reachable instances map to conflicting tenants without a clear owner ->
+      quarantine until reviewed.
+    evidence: packages/db/src/schema.ts:955-972 (persons), 984-1024 (platform_identities)
+    verification_target: overlapping phone/JID across tenants never merges
+
+  - item: global_or_null_instance_rows
+    subject: access_rules / settings / provider config with instance_id IS NULL or global scope
+    decision: explicit_split_or_quarantine
+    rule: >-
+      Global/null-instance access rules, settings, plugin state, and provider/storage config REQUIRE an
+      explicit platform/tenant/split decision. instance_id IS NULL means tenant-wide-within-tenant, never
+      global-across-tenants. Ambiguity -> quarantine.
+    evidence: packages/db/src/schema.ts:1562 (access_rules), 1609 (global_settings), 2208 (payload_storage_config)
+    verification_target: no rule/setting/config applies across a tenant boundary
+
+  - item: settings_rules_plugin_state
+    subject: global_settings / setting_change_history / plugin_storage
+    decision: split
+    rule: >-
+      Split platform vs tenant. Each settings key and each plugin-storage namespace is classified
+      platform or tenant; unclassifiable keys -> quarantine. No mixed keyspace.
+    evidence: packages/db/src/schema.ts:1609,1638,1852
+    verification_target: tenant runtime cannot read platform settings/plugin state
+
+  - item: events_jobs_backlogs
+    subject: pre-tenant omni_events / batch_jobs / sync_jobs / dead_letter_events / event_payloads / NATS backlog
+    decision: derive_or_quarantine
+    rule: >-
+      Map each pre-tenant event/job/DLQ/callback to one tenant via trusted server-side ownership
+      (owning instance) or quarantine it. Consumers dual-read known envelope versions and reject
+      unknown/missing tenant context. No global processing fallback; no poison loop.
+    evidence: packages/db/src/schema.ts:1374,1666,1741,2161,2242; packages/core/src/events/nats/*
+    verification_target: tenantless/legacy backlog item is quarantined, never globally processed
+
+  - item: object_media_keys
+    subject: existing media/object keys without a tenant prefix
+    decision: tenant_rekey
+    rule: >-
+      Re-key legacy objects under tenants/<tenantId>/instances/<instanceId>/... derived from the owning
+      message/instance during fenced backfill. Objects with no resolvable owner -> quarantine (not served).
+    evidence: packages/db/src/schema.ts:1786 (media_content), 2242 (event_payloads); media-backends/*
+    verification_target: no legacy object is fetchable cross-tenant by guessed/stale key
+
+  - item: unowned_or_cross_owned_records
+    subject: orphan rows, rows reachable from conflicting tenant roots
+    decision: quarantine
+    rule: >-
+      Unowned/orphan rows are not exposed. They remain quarantined with counts and identifiers in a
+      restricted reconciliation report. Zero unresolved tenant-owned rows is required before NOT NULL,
+      composite FKs, and RLS enforcement.
+    evidence: derived from composite-ownership reconciliation across all tables
+    verification_target: reconciliation reports zero unresolved owned rows before constraints/RLS activate
+
+  - item: consumer_offsets_and_genie_hosts
+    subject: consumer_offsets, genie_hosts
+    decision: platform
+    rule: >-
+      Kept as platform infrastructure/trust; no tenant backfill. Consumer identity/subject design must
+      prevent one tenant consumer from advancing another's cursor. A future tenant-host registry is a
+      separate tenant-owned table.
+    evidence: packages/db/src/schema.ts:2546 (consumer_offsets), 3006 (genie_hosts)
+    verification_target: one tenant consumer cannot advance/read another tenant's offset
+
+  - item: caller_adjacent_customer_tenant_ref
+    subject: OmniCustomerContext.tenantId / OMNI_TENANT_ID / agent-dispatcher tenantId|tenant_id
+    decision: quarantine
+    rule: >-
+      Caller/person-metadata-derived label; NEVER authoritative. Rename to a customer/account reference
+      so the authoritative tenant context is unambiguous. No authorization/RLS path may read it as tenant
+      authority. (See OWNERSHIP_MANIFEST.yaml caller_adjacent_tenant_context.)
+    evidence: packages/core/src/providers/types.ts:377; execution-context.ts:75; agent-dispatcher.ts:1746
+    verification_target: forged person.metadata.tenantId cannot select/cross a tenant boundary

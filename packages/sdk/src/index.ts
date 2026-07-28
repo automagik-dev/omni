@@ -68,6 +68,7 @@ export type {
   SyncJobSummary,
   SyncJobStatus,
   // Auth types
+  AuthCredentialContext,
   AuthValidateResponse,
   // A2A types
   A2ADiscoverableAgent,

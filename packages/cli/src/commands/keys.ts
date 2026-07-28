@@ -119,6 +119,36 @@ async function promptAdminConfirmation(): Promise<boolean> {
  * `key.admin_created` audit event so operators have a record.
  */
 async function handleAdminCreate(options: CreateOptions): Promise<void> {
+  // Enforcement world: refuse to mint or print a data-plane god key at all
+  // (wish: omni-full-multitenancy, G4; WISH line 180, Success Criterion 19).
+  //
+  // This is checked FIRST — before the TTY test, before the confirmation
+  // prompt, before the DB layer is imported and before any key material is
+  // generated — so that under enforcement no god key is ever constructed, not
+  // even transiently in memory.
+  //
+  // It is consistent with what the database already does under enforcement:
+  // G3 REVOKEs ALL on `auth_credentials` from the runtime role, so a key minted
+  // here would be unusable by the serving process anyway. Refusing here turns
+  // an obscure runtime authorization failure into an explicit, explained one.
+  //
+  // The literal-`on` comparison mirrors `resolveEnforcementMode` in
+  // `@omni/db/tenancy-startup` exactly — `1`, `true`, and `ON` are NOT
+  // enforcement, so a stray environment variable can neither half-activate nor
+  // half-deactivate a security boundary. It is inlined rather than imported
+  // because this module deliberately keeps `@omni/db` off the CLI cold path
+  // (see the dynamic imports below); the shared semantics are pinned by
+  // `__tests__/keys-godkey-refusal.test.ts`.
+  if (process.env.OMNI_DB_ENFORCEMENT === 'on') {
+    output.error(
+      'refusing to create an admin (god) key while OMNI_DB_ENFORCEMENT=on — a plaintext data-plane key with ' +
+        'every scope is not an admissible bootstrap under enforcement. Create a platform-class credential and ' +
+        'delegate a tenant-scoped key from it instead.',
+      undefined,
+      1,
+    );
+  }
+
   if (!process.stdin.isTTY) {
     output.error('admin keys require a TTY — run this command interactively', undefined, 1);
     return;

@@ -69,6 +69,7 @@ import { genieSignatureMiddleware } from './middleware/genie-signature';
 import { outputRedactorMiddleware } from './middleware/output-redactor';
 import { requireSignedInstanceMiddleware } from './middleware/require-signed-instance';
 import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
+import { tenancyMiddleware } from './middleware/tenancy';
 
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
@@ -79,8 +80,10 @@ import { createWebhookAuthMiddleware } from './middleware/webhook-auth';
 import { getHealth, healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
+import { platformTenantRoutes } from './routes/v2/platform-tenants';
 import type { Services } from './services';
 import { resolveA2AAgentCard } from './services/a2a-discovery';
+import { isMultitenancyEnabled } from './tenancy/feature-flag';
 import type { AppVariables } from './types';
 
 /**
@@ -305,8 +308,25 @@ export function createApp(
     return plugin.handleWebhook(c.req.raw);
   });
 
+  // ── Multitenancy control plane — feature-flagged, OFF by default ────────────
+  // Mounted ONLY when OMNI_MULTITENANCY_ENABLED === "true". When off, this
+  // surface does not exist (404) and legacy route/auth behavior is untouched.
+  // These routes carry their OWN platform-class auth guard (platformAuthMiddleware)
+  // and deliberately bypass the legacy bearer authMiddleware / scope-enforcer so
+  // tenant/legacy keys can never reach the control plane.
+  if (isMultitenancyEnabled()) {
+    app.route('/api/v2/platform', platformTenantRoutes);
+    httpLog.info('Multitenancy control plane mounted at /api/v2/platform (OMNI_MULTITENANCY_ENABLED=true)');
+  }
+
   // Protected routes
   const protectedApp = new Hono<{ Variables: AppVariables }>();
+  // Tenancy edge (wish: omni-full-multitenancy, G4). Runs BEFORE the legacy
+  // bearer auth so a tenant-class credential is recognised, given its immutable
+  // context, and wrapped in a tenant-stamped transaction for the whole chain.
+  // A credential the auth plane does not know falls straight through and the
+  // legacy path below behaves exactly as it did pre-G4.
+  protectedApp.use('*', tenancyMiddleware);
   protectedApp.use('*', authMiddleware);
   // Genie host signature verification (omni-host-fingerprint-trust group 4).
   // Runs BEFORE scope-enforcer so `signedBy`/`signedByScopes` are populated
@@ -343,7 +363,11 @@ export function createApp(
     : packagesUiPath && existsSync(packagesUiPath)
       ? packagesUiPath
       : cwdUiPath; // fallback to cwd path even if not exists
-  const serveUI = existsSync(uiDistPath);
+  // OMNI_FORCE_UI_ROUTES makes registration independent of the filesystem so the
+  // route-ownership gate enumerates the same surface whether or not the UI bundle
+  // has been built. Enumeration-only: it is set (and restored) inside
+  // enumerateRegisteredRoutes, never in a serving configuration.
+  const serveUI = process.env.OMNI_FORCE_UI_ROUTES === 'true' || existsSync(uiDistPath);
 
   if (serveUI) {
     httpLog.info('Serving UI from apps/ui/dist');

@@ -1,14 +1,47 @@
 /**
  * Health check endpoints
+ *
+ * PRIVACY CONTRACT (wish: omni-full-multitenancy, Group G4)
+ * --------------------------------------------------------
+ * Every endpoint in this file is UNAUTHENTICATED. WISH "Public and bootstrap
+ * surfaces" therefore binds them: no tenant inventory, counts, identifiers,
+ * connection state, consumer offsets, or resource-existence oracle may cross
+ * this boundary. The declarations in `tenancy/route-ownership.ts` state each
+ * endpoint's contract inline and the probes in
+ * `tenancy/__tests__/public-surface-privacy.test.ts` hold it.
+ *
+ * Two things were removed here rather than scoped, because scoping is not
+ * available to a caller who presents no credential and therefore names no
+ * tenant:
+ *
+ *   * The per-channel instance-count aggregation on `/health` and the totals on
+ *     `/info`. "How many WhatsApp instances does this deployment run, and how
+ *     many are live" is tenant inventory to an anonymous caller, and the answer
+ *     is not needed to decide whether the process is alive.
+ *   * The `consumer_offsets` dump on `/health/consumers` — consumer names,
+ *     stream names, sequence numbers, event ids, and update timestamps. That is
+ *     a direct read of tenant event-pipeline volume and of real event row ids.
+ *
+ * Both removals apply in BOTH worlds, flag on and flag off. An unauthenticated
+ * leak is not something a feature flag may protect, so this is the one
+ * deliberate, individually justified exception to G4's otherwise strict
+ * legacy-invariance boundary.
+ *
+ * What replaces them is the health signal an operator probe actually consumes:
+ * whether offset tracking is working and how stale the most-behind consumer is,
+ * as a bounded staleness bucket rather than a number that could be differenced
+ * over time into a throughput estimate.
  */
 
-import { consumerOffsets, instances } from '@omni/db';
+import { createLogger } from '@omni/core';
+import { consumerOffsets } from '@omni/db';
 import { sql } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
 import packageJson from '../../package.json';
 import { arePluginsDegraded, getPluginsDegradedReason } from '../plugin-state';
 import type { AppVariables, HealthCheck, HealthResponse } from '../types';
 
+const healthLog = createLogger('health');
 const VERSION = packageJson.version;
 const startTime = Date.now();
 
@@ -20,7 +53,6 @@ export const healthRoutes = new Hono<{ Variables: AppVariables }>();
 export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
   const db = c.get('db');
   const eventBus = c.get('eventBus');
-  const channelRegistry = c.get('channelRegistry');
 
   // Check database
   let dbCheck: HealthCheck;
@@ -49,42 +81,10 @@ export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
     natsCheck = { status: 'ok', details: { connected: false, reason: 'Not configured' } };
   }
 
-  // Get instance counts
-  let instanceStats: HealthResponse['instances'] | undefined;
-  try {
-    const instanceCounts = await db
-      .select({
-        channel: instances.channel,
-        total: sql<number>`count(*)::int`,
-        active: sql<number>`count(*) filter (where ${instances.isActive})::int`,
-      })
-      .from(instances)
-      .groupBy(instances.channel);
-
-    const byChannel: Record<string, number> = {};
-    let total = 0;
-    let active = 0;
-
-    for (const row of instanceCounts) {
-      byChannel[row.channel] = row.total;
-      total += row.total;
-      active += row.active;
-    }
-
-    // `connected` must reflect live channel-plugin state, not the `isActive`
-    // row flag. Active rows that failed to reconnect would otherwise be
-    // counted as connected and mask the bug in issue #408.
-    let connected = 0;
-    if (channelRegistry) {
-      for (const plugin of channelRegistry.getAll()) {
-        connected += plugin.getConnectedInstances().length;
-      }
-    }
-
-    instanceStats = { total, active, connected, byChannel };
-  } catch {
-    // Ignore instance stats errors
-  }
+  // Instance inventory is deliberately NOT reported here — see the privacy
+  // contract at the top of this file. The channel-plugin health question that
+  // issue #408 actually needed ("did the plugins come up") is answered by the
+  // `plugins` check below, which is a degraded/ok signal and not a count.
 
   // Channel plugin initialization check (issue #408)
   const pluginsFailed = arePluginsDegraded();
@@ -106,7 +106,6 @@ export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
       nats: natsCheck,
       plugins: pluginsCheck,
     },
-    instances: instanceStats,
   };
 
   return c.json(response, status === 'healthy' ? 200 : 503);
@@ -118,50 +117,15 @@ healthRoutes.get('/health', getHealth);
  * GET /info - System info (no auth required)
  */
 healthRoutes.get('/info', async (c) => {
-  const db = c.get('db');
-  const channelRegistry = c.get('channelRegistry');
-
-  // Get basic stats
-  let instancesTotal = 0;
-  let instancesActive = 0;
-  const eventsToday = 0;
-  const eventsTotal = 0;
-
-  try {
-    const [instanceStats] = await db
-      .select({
-        total: sql<number>`count(*)::int`,
-        active: sql<number>`count(*) filter (where ${instances.isActive})::int`,
-      })
-      .from(instances);
-
-    instancesTotal = instanceStats?.total ?? 0;
-    instancesActive = instanceStats?.active ?? 0;
-  } catch {
-    // Ignore errors
-  }
-
-  // Real connected count from channel registry (see /health rationale).
-  let instancesConnected = 0;
-  if (channelRegistry) {
-    for (const plugin of channelRegistry.getAll()) {
-      instancesConnected += plugin.getConnectedInstances().length;
-    }
-  }
-
+  // Build/deployment identification only. The instance totals and the
+  // (always-zero) event counters that used to be here were tenant inventory on
+  // an unauthenticated endpoint — see the privacy contract at the top of this
+  // file. An authenticated caller gets the same numbers, tenant-scoped, from
+  // GET /api/v2/instances.
   return c.json({
     version: VERSION,
     environment: process.env.NODE_ENV ?? 'development',
     uptime: Math.floor((Date.now() - startTime) / 1000),
-    instances: {
-      total: instancesTotal,
-      active: instancesActive,
-      connected: instancesConnected,
-    },
-    events: {
-      today: eventsToday,
-      total: eventsTotal,
-    },
   });
 });
 
@@ -188,8 +152,34 @@ healthRoutes.get('/_internal/health', async (c) => {
 });
 
 /**
- * GET /health/consumers - Consumer lag info (no auth required)
- * Shows per-consumer offset tracking and lag
+ * Bounded staleness buckets for the public consumer health signal.
+ *
+ * A bucket rather than a number of seconds on purpose: an anonymous caller
+ * polling an exact lag value can difference it over time into a throughput
+ * estimate, which is the same tenant-volume disclosure the offset dump was.
+ * A bucket answers "is the pipeline keeping up" and nothing finer.
+ */
+type OffsetFreshness = 'current' | 'lagging' | 'stale';
+
+const LAGGING_AFTER_MS = 60_000;
+const STALE_AFTER_MS = 15 * 60_000;
+
+function freshnessFor(oldestUpdateMs: number | null): OffsetFreshness {
+  if (oldestUpdateMs === null) return 'current';
+  const age = Date.now() - oldestUpdateMs;
+  if (age >= STALE_AFTER_MS) return 'stale';
+  if (age >= LAGGING_AFTER_MS) return 'lagging';
+  return 'current';
+}
+
+/**
+ * GET /health/consumers - Consumer offset-tracking health (no auth required)
+ *
+ * Answers ONLY "is offset tracking working, and is the most-behind consumer
+ * keeping up". It deliberately does not return consumer names, stream names,
+ * sequence numbers, event ids, timestamps, or a consumer count — see the
+ * privacy contract at the top of this file. An authenticated operator who needs
+ * per-consumer detail reads it from the event-ops surface.
  */
 healthRoutes.get('/health/consumers', async (c) => {
   const db = c.get('db');
@@ -197,28 +187,27 @@ healthRoutes.get('/health/consumers', async (c) => {
   try {
     const offsets = await db.select().from(consumerOffsets);
 
-    const consumers = offsets.map((offset) => ({
-      consumer: offset.consumerName,
-      stream: offset.streamName,
-      lastSequence: offset.lastSequence,
-      lastEventId: offset.lastEventId,
-      updatedAt: offset.updatedAt.toISOString(),
-    }));
+    const oldest = offsets.reduce<number | null>((acc, offset) => {
+      const at = offset.updatedAt.getTime();
+      return acc === null || at < acc ? at : acc;
+    }, null);
 
     return c.json({
       status: 'ok',
-      consumers,
-      totalTracked: consumers.length,
+      // `tracking` says whether the mechanism is running at all, without
+      // revealing how many consumers are running.
+      tracking: offsets.length > 0 ? 'active' : 'idle',
+      freshness: freshnessFor(oldest),
     });
   } catch (error) {
-    return c.json(
-      {
-        status: 'error',
-        error: error instanceof Error ? error.message : 'Unknown error',
-        consumers: [],
-        totalTracked: 0,
-      },
-      500,
-    );
+    // The driver's message names the host, port, database, and role. That is
+    // connection state, which this file's privacy contract forbids returning to
+    // an anonymous caller just as plainly as it forbids the offsets themselves.
+    // The probe only needs to know that offset tracking is not answering; the
+    // detail goes to the operator's logs.
+    healthLog.error('consumer offset health check failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return c.json({ status: 'error' }, 500);
   }
 });

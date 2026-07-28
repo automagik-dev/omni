@@ -1,12 +1,13 @@
 ---
 slug: omni-full-multitenancy
 title: Omni Full Multitenancy
-status: draft-awaiting-human-approval
+status: work-approved-g0-in-progress
 created_at: 2026-07-16T21:28:26Z
-updated_at: 2026-07-16T22:22:33Z
+updated_at: 2026-07-20T19:46:44Z
 source_branch: origin/dev
-source_commit: 739fd49f1cd31de759664c0dcd266f71c868e338
+source_commit: d6c400d05287bbf436ecd7e28c56c845b893afc9
 genie_wish: .genie/wishes/omni-full-multitenancy/WISH.md
+work_approval: brain/wishes/2026/07/16/omni-full-multitenancy/WORK_APPROVAL.md
 risk: critical
 ---
 
@@ -136,13 +137,15 @@ A caller-provided tenant header/body field is never trusted as authority. The au
 - Work ships as a staged PR/release train, not one unreviewable monolithic patch.
 - The tactical branch `fix/tenant-scoped-instance-create-guard` remains separate and may serve as a temporary precursor; it is not the final ownership model.
 
-## Definition of ready for implementation
+## Implementation authorization
 
-This purpose is ready to become Genie execution tasks only after a human approves:
+Felipe Rosa approved `/work` on 2026-07-20 for task materialization and non-production implementation through G8A. The exact bounded authorization, reviewed WISH hash, Claude Fable verdict, and explicit production exclusions are recorded in `brain/wishes/2026/07/16/omni-full-multitenancy/WORK_APPROVAL.md`.
 
-1. the ownership matrix and global-vs-tenant classifications;
-2. the shared-schema + RLS architecture;
-3. the key delegation and platform-admin split;
-4. the legacy backfill/quarantine rules;
-5. the secure rollback floor and production gates; and
-6. the staged execution groups in the linked WISH.
+Materialization creates task rows for G0-G8A only. H8.1-H9.2 remain non-executable WISH hold nodes, and no production group is materialized. Because Genie v5 task rows do not enforce WISH dependency edges, only groups authorized by this document's DAG may be dispatched even when the board labels other rows `ready`.
+
+Before G1 may start, G0 must pass its human/security gate and must:
+
+1. refresh the ownership/source inventory against the materialization base commit;
+2. classify the existing caller-adjacent `tenantId` execution metadata and prevent it from becoming tenant authority;
+3. freeze the approved ownership/trust-boundary artifacts and `RELEASE_SLOS.yaml`; and
+4. preserve proof that no production, credential, Vault, tenant-mapping, or destructive action occurred.

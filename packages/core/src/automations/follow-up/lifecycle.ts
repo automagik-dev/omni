@@ -99,6 +99,13 @@ export interface ArmSequenceInput {
   config: FollowUpSequenceConfig;
   /** Wall-clock timestamp of the outbound agent message. */
   lastAgentMessageAt: Date;
+  /**
+   * Trusted tenant of the chat's instance (G5, ADR-0008) — derived by the
+   * caller from the consumed envelope or the loaded resource's persisted
+   * ownership, never from a payload claim. When set, the `follow_up.armed`
+   * publish stamps a versioned tenant envelope; unset keeps it legacy.
+   */
+  tenantId?: string | null;
 }
 
 export interface ArmResult {
@@ -142,6 +149,7 @@ export async function armSequence(deps: LifecycleDeps, input: ArmSequenceInput):
     await deps.eventBus.publish('follow_up.armed', payload, {
       instanceId: input.instanceId,
       ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.tenantId ? { tenantId: input.tenantId } : {}),
     });
   } catch (err) {
     deps.logger.warn('follow-up lifecycle: failed to emit follow_up.armed', {
@@ -161,6 +169,12 @@ export interface DisarmSequenceInput {
   reason: FollowUpDisarmReason;
   /** Only meaningful for `reason === 'customer_replied'`. */
   lastInboundCustomerMessageAt?: Date;
+  /**
+   * Trusted tenant (G5, ADR-0008) — same contract as
+   * {@link ArmSequenceInput.tenantId}: producer-derived, stamps the
+   * `follow_up.disarmed` envelope when set, legacy when unset.
+   */
+  tenantId?: string | null;
 }
 
 export interface DisarmResult {
@@ -201,6 +215,7 @@ export async function disarmSequence(deps: LifecycleDeps, input: DisarmSequenceI
     await deps.eventBus.publish('follow_up.disarmed', payload, {
       instanceId: input.instanceId,
       ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.tenantId ? { tenantId: input.tenantId } : {}),
     });
   } catch (err) {
     deps.logger.warn('follow-up lifecycle: failed to emit follow_up.disarmed', {

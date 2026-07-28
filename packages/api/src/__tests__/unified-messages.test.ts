@@ -173,6 +173,32 @@ describeWithDb('Unified Messages', () => {
       expect(message.source).toBe('realtime');
     });
 
+    test('should strip NUL bytes from textContent on create and update', async () => {
+      // Postgres rejects 0x00 in text columns with
+      // `invalid byte sequence for encoding "UTF8": 0x00` — a0800e2f covered
+      // the media-text columns but left textContent (POST /messages and
+      // PATCH /messages/:id) raw.
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-nulbyte@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const message = await messageService.create({
+        chatId: chat.id,
+        externalId: 'BAE5NUL789',
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'contrato\u0000assinado',
+        platformTimestamp: new Date(),
+        isFromMe: false,
+      });
+
+      expect(message.textContent).toBe('contratoassinado');
+
+      const updated = await messageService.update(message.id, { textContent: 'revis\u0000ado' });
+      expect(updated.textContent).toBe('revisado');
+    });
+
     test('should find or create a message', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-findorcreate@g.us', {
         chatType: 'group',
@@ -346,6 +372,43 @@ describeWithDb('Unified Messages', () => {
 
       expect(result?.textContent).toContain('QUOTE-CANARY');
       expect(result?.textContent).toContain('R$ 182,47');
+    });
+
+    test('findRecentOutboundBefore returns null when two option cards from the same burst tie', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, `test-msg-gupshup-tie-${Date.now()}@g.us`, {
+        chatType: 'dm',
+        channel: 'gupshup',
+      });
+
+      // Two option cards delivered ~1s apart in the same burst: equal scores,
+      // no reliable way to tell which one the customer quoted.
+      await messageService.create({
+        chatId: chat.id,
+        externalId: `card-a-${Date.now()}`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Opção 1 — Plano Essencial R$ 150,00/mês com coparticipação',
+        platformTimestamp: new Date('2026-06-09T17:51:50.319Z'),
+        isFromMe: true,
+      });
+      await messageService.create({
+        chatId: chat.id,
+        externalId: `card-b-${Date.now()}`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Opção 2 — Plano Completo R$ 260,00/mês com coparticipação',
+        platformTimestamp: new Date('2026-06-09T17:51:51.646Z'),
+        isFromMe: true,
+      });
+
+      const result = await messageService.findRecentOutboundBefore(
+        chat.id,
+        new Date('2026-06-09T17:56:00.000Z'),
+        'quero esse',
+      );
+
+      // A guessed quote would corrupt the reply context; null lets the agent ask.
+      expect(result).toBeNull();
     });
 
     test('should filter list by exact externalId only', async () => {

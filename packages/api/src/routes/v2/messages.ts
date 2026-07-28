@@ -53,6 +53,7 @@ import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { type MediaFetchOptions, MediaStorageService } from '../../services/media-storage';
+import { currentTenantScope } from '../../tenancy/tenant-scope';
 import type { ApiKeyData, AppVariables } from '../../types';
 import { isHardTerminalOutcome, resolveCloseContactConfig } from './_close-contact-config';
 
@@ -825,6 +826,12 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
         message.mediaMimeType ?? undefined,
         message.platformTimestamp ?? undefined,
         buildMediaDownloadFetchOptions(instance as Record<string, unknown>),
+        // `mediaUrl` came off a stored message, i.e. a tenant-controlled
+        // payload, so this download is tenant-controlled egress: pass the
+        // REQUEST's tenant so the `OMNI_MEDIA_URL_GUARD=off` escape hatch is
+        // subsumed here too (G5 deliverable (b), ADR-0009). Null off-scope
+        // (flag-off), where the pre-G5 behavior is kept exactly.
+        currentTenantScope()?.tenantId ?? undefined,
       );
       mediaLocalPath = result.localPath;
       await mediaStorage.updateMessageLocalPath(message.id, result.localPath);

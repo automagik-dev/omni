@@ -2,7 +2,7 @@
   "$schema": "https://unpkg.com/knip@5.85.0/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["scripts/test-messaging.ts", "scripts/kill-stale-test-daemons.ts"],
+      "entry": ["scripts/test-messaging.ts", "scripts/kill-stale-test-daemons.ts", "scripts/pg-gate.ts"],
       "project": ["scripts/**/*.ts"],
       "ignore": [
         "scripts/backfill-*.ts",
@@ -62,7 +62,9 @@
       ]
     },
     "packages/db": {
-      "project": ["src/**/*.ts"]
+      "entry": ["src/online-ddl.ts"],
+      "project": ["src/**/*.ts"],
+      "ignore": ["src/backfill/**"]
     },
     "packages/media-processing": {
       "project": ["src/**/*.ts"]

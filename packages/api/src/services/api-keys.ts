@@ -16,7 +16,7 @@ import { createLogger } from '@omni/core';
 import type { ApiKeyProfile, ApiKeyProfileOverrides, Database } from '@omni/db';
 import { type ApiKey, type NewApiKey, apiKeys } from '@omni/db';
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
-import { CacheKeys, CacheTTL, type CachedApiKey, apiKeyCache } from '../cache';
+import { CacheKeys, CacheTTL, type CachedApiKey, apiKeyCache, authCacheTtlMs } from '../cache';
 
 const log = createLogger('api-keys');
 
@@ -210,7 +210,9 @@ export class ApiKeyService {
       outboundRecipientAllowlist: apiKey.outboundRecipientAllowlist,
       profileOverrides: apiKey.profileOverrides ?? null,
     };
-    await apiKeyCache.set(cacheKey, cachedData, CacheTTL.API_KEY);
+    // G5 (RELEASE_SLOS auth_cache_invalidation_seconds_max): clamped to the
+    // revocation ceiling when multitenancy is enabled; legacy TTL flag-off.
+    await apiKeyCache.set(cacheKey, cachedData, authCacheTtlMs(CacheTTL.API_KEY));
 
     // Update usage asynchronously
     this.updateUsageAsync(apiKey.id, ip);

@@ -23,6 +23,7 @@ import { AutomationService } from '../automations';
 function createMockAutomation(overrides: Partial<Automation> = {}): Automation {
   return {
     id: 'test-automation-123',
+    tenantId: null,
     name: 'Test Automation',
     description: 'Test automation for unit tests',
     triggerEventType: 'message.received',

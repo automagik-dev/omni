@@ -20,6 +20,7 @@ import {
 import type { Database, DeadLetterStatus } from '@omni/db';
 import { deadLetterEvents } from '@omni/db';
 import { and, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
+import { scopedHandle } from '../tenancy/tenant-scope';
 
 const log = createLogger('dead-letters');
 
@@ -48,8 +49,20 @@ export interface RetryResult {
  * Dead Letter Service class
  */
 export class DeadLetterService {
+  /**
+   * The handle every query in this service uses.
+   *
+   * Inside a tenant-scoped request this is the request's tenant-stamped
+   * transaction (wish: omni-full-multitenancy, G4 — see `tenancy/tenant-scope.ts`);
+   * for a legacy credential, a worker, or the CLI it is the ambient pool and
+   * the query issued is byte-for-byte the one issued before the conversion.
+   */
+  private get db(): Database {
+    return scopedHandle(this.pool);
+  }
+
   constructor(
-    private db: Database,
+    private readonly pool: Database,
     private eventBus: EventBus | null,
   ) {}
 

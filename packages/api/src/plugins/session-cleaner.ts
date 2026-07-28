@@ -7,18 +7,35 @@
  * Sends a confirmation message and blocks agent response.
  */
 
-import type { EventBus, TypedOmniEvent } from '@omni/core';
-import { createAgnoClient, createLogger } from '@omni/core';
+import type { EventBus, OmniEvent, TypedOmniEvent } from '@omni/core';
+import { classifyEnvelope, createAgnoClient, createLogger } from '@omni/core';
 import type { ChannelType, Database } from '@omni/db';
 import { agents, chatParticipants } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 import { withIdempotency } from '../lib/idempotency';
 import type { Services } from '../services';
 import { type ResolvedAgentSessionIdentity, resolveKhalSessionId } from '../services/agent-session-identity';
+import { scopedHandle } from '../tenancy/tenant-scope';
+import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { applyAgentFkOverrides, resolveProvider } from './agent-dispatcher';
 import { getPlugin } from './loader';
 
 const log = createLogger('session-cleaner');
+
+/**
+ * Classify the consumed envelope once and return the trusted tenant to thread
+ * through the cleanup's DB blocks, or `null` for a legacy envelope. Throws on a
+ * quarantined envelope — processing it globally is the fallback ADR-0008 forbids
+ * (defense in depth: the subscription layer already terms it first). The tenant
+ * is read ONLY from the producer-stamped metadata, never from payload fields.
+ */
+function trustedTenantOf(event: Pick<OmniEvent, 'metadata'>): string | null {
+  const classification = classifyEnvelope(event.metadata);
+  if (classification.world === 'quarantine') {
+    throw new Error(`session-cleaner: refusing quarantined envelope (${classification.reason})`);
+  }
+  return classification.world === 'tenant' ? classification.tenantId : null;
+}
 
 /**
  * Check if message contains only trash emoji
@@ -36,10 +53,23 @@ function isTrashEmojiOnly(text: string | undefined): boolean {
 }
 
 /**
- * Send a message via channel plugin
+ * Send a message via channel plugin.
+ *
+ * The instance lookup is one discrete scoped read (G5, ADR-0008): the
+ * consumer caller threads the envelope tenant so a tenant-world cleanup
+ * resolves the channel under a short worker scope; nothing threaded reads the
+ * ambient pool byte-identically. The plugin network call stays OUTSIDE the
+ * scope — a worker transaction must never span a channel send.
  */
-async function sendMessage(services: Services, instanceId: string, chatId: string, text: string): Promise<void> {
-  const instance = await services.instances.getById(instanceId);
+async function sendMessage(
+  services: Services,
+  db: Database,
+  instanceId: string,
+  chatId: string,
+  text: string,
+  trustedTenantId?: string | null,
+): Promise<void> {
+  const instance = await runTenantWorkDb(db, trustedTenantId, () => services.instances.getById(instanceId));
   const channel = instance.channel as ChannelType;
   const plugin = await getPlugin(channel);
   if (plugin) {
@@ -48,6 +78,24 @@ async function sendMessage(services: Services, instanceId: string, chatId: strin
       content: { type: 'text', text },
     });
   }
+}
+
+/**
+ * The `chat_participants` read of the cleanup path, extracted so the two-tenant
+ * probe can exercise the EXACT query the consumer issues rather than a replica
+ * of it. Callers supply the world (see `resolveCleanupPersonId`).
+ */
+async function readChatParticipant(
+  db: Database,
+  chatId: string,
+  platformUserId: string,
+): Promise<{ personId: string | null } | undefined> {
+  const [participant] = await scopedHandle(db)
+    .select({ personId: chatParticipants.personId })
+    .from(chatParticipants)
+    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.platformUserId, platformUserId)))
+    .limit(1);
+  return participant;
 }
 
 /**
@@ -62,21 +110,42 @@ async function resolveCleanupPersonId(
   chatId: string,
   from: string,
   metadataPersonId?: string,
+  trustedTenantId?: string | null,
 ): Promise<string | undefined> {
   if (metadataPersonId?.trim()) return metadataPersonId.trim();
 
-  const dbChat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+  // Discrete DB block in the caller's world (G5, ADR-0008): threaded a tenant
+  // opens a short worker scope; threaded nothing (legacy consumer / route
+  // request scope) runs byte-identically via `runTenantWorkDb`'s passthrough.
+  const dbChat = await runTenantWorkDb(db, trustedTenantId, () =>
+    services.chats.findByExternalIdSmart(instanceId, chatId),
+  );
   if (!dbChat?.id) return undefined;
 
-  const [participant] = await db
-    .select({ personId: chatParticipants.personId })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, dbChat.id), eq(chatParticipants.platformUserId, from)))
-    .limit(1);
+  // G5-CONVERTED. The participant read runs through `scopedHandle` inside the
+  // same threaded world as the chat lookup above. `chat_participants` derives its
+  // tenant from the REQUIRED `chat_id` parent, so it is owned by the `instances`
+  // root and RLS scopes it — it does NOT need the G6 `persons` backfill, even
+  // though `person_id` is the column being read (the column's VALUE is opaque
+  // here; only the ROW's visibility is at stake).
+  const participant = await runTenantWorkDb(db, trustedTenantId, () => readChatParticipant(db, dbChat.id, from));
 
   return participant?.personId ?? undefined;
 }
 
+/**
+ * Clear the agent session for a user/chat.
+ *
+ * Tenant boundary (G5, ADR-0008): each DISCRETE DB block is wrapped in
+ * `runTenantWorkDb(db, trustedTenantId, …)`. The consumer path threads the
+ * envelope-derived tenant so every lookup runs in a short worker scope; the
+ * route caller (routes/v2/chats.ts) threads NOTHING and relies on its own
+ * request scope via `scopedHandle` — `runTenantWorkDb` passes straight through
+ * for an undefined tenant, so that path is byte-identical to pre-G5. The
+ * provider `resetSession` / Agno `deleteSession` calls are EXTERNAL side effects
+ * and are deliberately left outside any scope — a worker transaction must never
+ * span them.
+ */
 export async function clearAgentSession(
   services: Services,
   db: Database,
@@ -84,29 +153,43 @@ export async function clearAgentSession(
   from: string,
   chatId: string,
   options: { personId?: string; rawPayload?: Record<string, unknown> } = {},
+  trustedTenantId?: string | null,
 ): Promise<ResolvedAgentSessionIdentity> {
-  // Get instance with provider
-  const instance = await services.agentRunner.getInstanceWithProvider(instanceId);
+  // Get instance with provider (pure DB lookup → scoped as one block).
+  const instance = await runTenantWorkDb(db, trustedTenantId, () =>
+    services.agentRunner.getInstanceWithProvider(instanceId),
+  );
 
   if (!instance?.agentId) {
     throw new Error('No agent configured for instance');
   }
+  // Narrow the nullable FK to a local BEFORE the closure captures it — TS cannot
+  // carry the `!instance.agentId` guard into an arrow that closes over `instance`.
+  const agentId = instance.agentId;
 
-  // Resolve agent provider from the agent FK
-  const [agentRow] = await db
-    .select({ agentProviderId: agents.agentProviderId })
-    .from(agents)
-    .where(eq(agents.id, instance.agentId))
-    .limit(1);
+  // Resolve agent provider from the agent FK. This `agents` read is a registered
+  // `pending-G5-conversion` site; the caller scope is established around it.
+  const [agentRow] = await runTenantWorkDb(db, trustedTenantId, () =>
+    db.select({ agentProviderId: agents.agentProviderId }).from(agents).where(eq(agents.id, agentId)).limit(1),
+  );
 
   if (!agentRow?.agentProviderId) {
     throw new Error('Agent has no provider configured');
   }
+  const agentProviderId = agentRow.agentProviderId;
 
-  // Get provider record from DB
-  const providerRecord = await services.providers.getById(agentRow.agentProviderId);
+  // Get provider record from DB (pure DB lookup → scoped as one block).
+  const providerRecord = await runTenantWorkDb(db, trustedTenantId, () => services.providers.getById(agentProviderId));
 
-  const personId = await resolveCleanupPersonId(services, db, instanceId, chatId, from, options.personId);
+  const personId = await resolveCleanupPersonId(
+    services,
+    db,
+    instanceId,
+    chatId,
+    from,
+    options.personId,
+    trustedTenantId,
+  );
   const identity = resolveKhalSessionId({
     providerSchema: providerRecord.schema,
     sessionStrategy: instance.agentSessionStrategy ?? 'per_chat',
@@ -132,8 +215,16 @@ export async function clearAgentSession(
   // Agent entity — without it, providers that require a non-empty agentId (post 2.260430)
   // throw "cannot resolve agentId" and the user sees "Erro ao limpar sessão".
   const dispatchInstance = { ...instance, agentProviderId: agentRow.agentProviderId };
-  await applyAgentFkOverrides(db, instance.agentId, dispatchInstance);
-  const agentProvider = resolveProvider(providerRecord, dispatchInstance, db);
+  // applyAgentFkOverrides threads the trusted tenant into its own discrete DB
+  // block (via runDispatchDb); no extra wrap here.
+  await applyAgentFkOverrides(db, agentId, dispatchInstance, trustedTenantId ?? undefined);
+  // `providerRecord`'s secrets were opened inside the worker scope above; this
+  // resolution deliberately runs OUTSIDE it (a worker transaction must not span
+  // the provider call), so the tenant is threaded rather than read from the
+  // ambient scope — otherwise the shared OpenClaw client built with THIS
+  // tenant's device key would be pooled in the scope-less bucket and reused by
+  // the next tenant (G5; ADR-0008).
+  const agentProvider = resolveProvider(providerRecord, dispatchInstance, db, trustedTenantId ?? null);
   if (agentProvider?.resetSession) {
     await agentProvider.resetSession(sessionId, chatId, instanceId);
     if (legacySessionId !== sessionId) {
@@ -203,7 +294,7 @@ async function handleTrashEmojiMessage(
   }
 }
 
-async function runTrashEmojiCleanup(
+export async function runTrashEmojiCleanup(
   services: Services,
   db: Database,
   event: TypedOmniEvent<'message.received'>,
@@ -212,10 +303,23 @@ async function runTrashEmojiCleanup(
   const { instanceId, personId } = event.metadata;
   if (!instanceId) return;
 
+  // Classify the envelope ONCE and refuse quarantine BEFORE any work — the throw
+  // must escape (not be swallowed by the error handler below into an "Erro ao
+  // limpar sessão" message), so a corrupt/forged tenant does no cleanup at all.
+  const tenantId = trustedTenantOf(event);
+
   log.info('Trash emoji detected, clearing session', { instanceId, chatId, from, personId });
 
   try {
-    const identity = await clearAgentSession(services, db, instanceId, from, chatId, { personId, rawPayload });
+    const identity = await clearAgentSession(
+      services,
+      db,
+      instanceId,
+      from,
+      chatId,
+      { personId, rawPayload },
+      tenantId,
+    );
     const { sessionId, legacySessionId, sessionStrategy, source, canonicalSessionId, environment, channelSegment } =
       identity;
 
@@ -237,12 +341,18 @@ async function runTrashEmojiCleanup(
     // Also resume agent if paused (handoff active) — trash emoji from dev/QA
     // is the explicit signal to re-enable the agent and start fresh.
     try {
-      const dbChat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+      const dbChat = await runTenantWorkDb(db, tenantId, () =>
+        services.chats.findByExternalIdSmart(instanceId, chatId),
+      );
       if (dbChat?.id) {
+        // Disarm THREADS the tenant — the lifecycle service scopes its own DB
+        // blocks and publishes between them, so wrapping it in one scope here
+        // would hold a worker transaction across a publish.
         await services.followUpLifecycle.disarm({
           chatId: dbChat.id,
           instanceId,
           reason: 'session_cleared',
+          tenantId,
         });
 
         // Resume agent if handoff had paused it.
@@ -250,9 +360,13 @@ async function runTrashEmojiCleanup(
         // arrived before the resume (NATS redelivery of pre-handoff messages).
         const isAgentPaused = (dbChat.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
         if (isAgentPaused) {
-          await services.chats.update(dbChat.id, {
-            settings: { agentPaused: false, agentResumedAt: new Date().toISOString() },
-          });
+          // Discrete DB block → scoped. This write sets agentPaused:false, so
+          // chats.update's false→true handoff publish never fires here.
+          await runTenantWorkDb(db, tenantId, () =>
+            services.chats.update(dbChat.id, {
+              settings: { agentPaused: false, agentResumedAt: new Date().toISOString() },
+            }),
+          );
           log.info('Agent resumed after session clear (was paused by handoff)', { instanceId, chatId });
         }
       }
@@ -266,7 +380,14 @@ async function runTrashEmojiCleanup(
 
     // Send confirmation message
     try {
-      await sendMessage(services, instanceId, chatId, '✅ Conversa limpa! Sua sessão com o assistente foi resetada.');
+      await sendMessage(
+        services,
+        db,
+        instanceId,
+        chatId,
+        '✅ Conversa limpa! Sua sessão com o assistente foi resetada.',
+        tenantId,
+      );
       log.info('Sent session cleared confirmation', { instanceId, chatId });
     } catch (sendError) {
       log.error('Failed to send confirmation message', { instanceId, chatId, error: String(sendError) });
@@ -290,7 +411,7 @@ async function runTrashEmojiCleanup(
 
     // Send error message
     try {
-      await sendMessage(services, instanceId, chatId, '❌ Erro ao limpar sessão. Tente novamente.');
+      await sendMessage(services, db, instanceId, chatId, '❌ Erro ao limpar sessão. Tente novamente.', tenantId);
     } catch (sendError) {
       log.error('Failed to send error message', { instanceId, chatId, error: String(sendError) });
     }
@@ -320,3 +441,6 @@ export async function setupSessionCleaner(eventBus: EventBus, services: Services
     throw error;
   }
 }
+
+/** Seams the two-tenant containment probe drives directly. Not a public API. */
+export const __test__ = { readChatParticipant };

@@ -27,13 +27,9 @@ export const HealthResponseSchema = z.object({
     database: HealthCheckSchema,
     nats: HealthCheckSchema,
   }),
-  instances: z
-    .object({
-      total: z.number().int().openapi({ description: 'Total instance count' }),
-      connected: z.number().int().openapi({ description: 'Connected instance count' }),
-      byChannel: z.record(z.string(), z.number()).openapi({ description: 'Count by channel type' }),
-    })
-    .optional(),
+  // No `instances` block: /health is unauthenticated, and instance totals /
+  // per-channel inventory on an unauthenticated endpoint are tenant inventory
+  // (wish: omni-full-multitenancy, G4; WISH "Public and bootstrap surfaces").
 });
 
 /**
@@ -43,14 +39,8 @@ export const InfoResponseSchema = z.object({
   version: z.string().openapi({ description: 'API version' }),
   environment: z.string().openapi({ description: 'Environment' }),
   uptime: z.number().int().openapi({ description: 'Uptime in seconds' }),
-  instances: z.object({
-    total: z.number().int(),
-    connected: z.number().int(),
-  }),
-  events: z.object({
-    today: z.number().int(),
-    total: z.number().int(),
-  }),
+  // No instance or event counts: /info is unauthenticated. See the privacy
+  // contract in routes/health.ts.
 });
 
 /**

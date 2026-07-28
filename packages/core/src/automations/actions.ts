@@ -4,7 +4,9 @@
  * Actions are the "do Y" part of "when X happens, do Y".
  */
 
+import { brokeredFetch } from '../egress';
 import type { EventBus } from '../events/bus';
+import { resolveAmbientTenantId } from '../events/envelope';
 import type { CustomEventType, GenericEventPayload } from '../events/types';
 import { createLogger } from '../logger';
 import { type TemplateContext, substituteTemplate, substituteTemplateObject } from './templates';
@@ -58,15 +60,28 @@ export interface AgentCallContext {
 
 /**
  * Dependencies needed by action executors
+ *
+ * TENANT THREADING (G5, ADR-0008): the engine classifies each consumed
+ * envelope (`classifyEnvelope`) and threads the producer-stamped trusted
+ * tenant into `sendMessage` / `callAgent` as the trailing `trustedTenantId`
+ * argument — `null` for a legacy envelope. The value is derived from envelope
+ * METADATA, never from the event payload, and the callback implementations
+ * (packages/api `automation-actions.ts`) scope their DB blocks with it. A
+ * caller that threads nothing (the route-side manual `execute`, existing
+ * tests) leaves it `undefined` and the callbacks behave exactly as before.
  */
 export interface ActionDependencies {
   eventBus: EventBus | null;
-  sendMessage?: (instanceId: string, to: string, content: string) => Promise<void>;
+  sendMessage?: (instanceId: string, to: string, content: string, trustedTenantId?: string | null) => Promise<void>;
   /**
    * Call an AI agent and return the response.
    * The response is stored in variables for use in subsequent actions.
    */
-  callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
+  callAgent?: (
+    context: AgentCallContext,
+    config: CallAgentActionConfig,
+    trustedTenantId?: string | null,
+  ) => Promise<AgentRunResult>;
   /**
    * Optional consumer-side stale-event gate. Invoked by the engine for
    * `chat.idle_timeout` events before matching automations execute.
@@ -75,8 +90,11 @@ export interface ActionDependencies {
    *     `closeUntil` still in window)
    *   - follow-up row already disarmed (`sequence_complete`,
    *     `customer_replied`, `handoff`, `contact_closed`, etc.)
-   *   - row has advanced past the event's `sequenceIndex` (event is a
-   *     replay or redelivery from before the row's last sweeper tick)
+   *   - this exact event was already delivered to the engine (an event's
+   *     identity is chat + instance + arm epoch + `sequenceIndex`, and the
+   *     gate remembers the identities it let through)
+   *   - the row's `sequenceIndex` is 2+ ahead of the event's — a bulk replay
+   *     of history the gate never claimed
    *
    * Defense-in-depth against NATS replay of historical or duplicate
    * idle-timeout events that the sweeper had already processed before a
@@ -84,19 +102,37 @@ export interface ActionDependencies {
    * redelivered after a transient handler failure.
    *
    * `eventSequenceIndex` is the `sequenceIndex` field from the
-   * `chat.idle_timeout` payload at publish time. The row's current
-   * `sequence_index` is read by the gate; if it is strictly greater than
-   * the event's value, the row has already advanced via a more recent
-   * sweep and this event is stale.
+   * `chat.idle_timeout` payload at publish time. It is NOT compared as a
+   * distance against the row's current `sequence_index` for the ambiguous
+   * 0/1 gap: the sweeper publishes index N and then immediately advances the
+   * row to N+1, so `row > event` also matches every healthy first delivery —
+   * the comparison that dropped ~14% of legitimate follow-ups (f149179a).
+   * Event identity is what discriminates a redelivery from a first delivery.
    *
    * Returning `{ skip: false }` (or omitting the gate entirely) lets the
-   * engine proceed with normal matching+execution.
+   * engine proceed with normal matching+execution. A `claimToken` on that
+   * verdict must be handed back to `releaseIdleTimeoutClaim` if the engine
+   * then fails to handle the event.
    */
   staleIdleTimeoutGate?: (
     chatId: string,
     instanceId: string,
     eventSequenceIndex: number | null,
-  ) => Promise<{ skip: boolean; reason?: string }>;
+    /**
+     * Trusted tenant of the consumed envelope (G5, ADR-0008) — the engine
+     * classifies the event's producer-stamped metadata and threads the result;
+     * `null` for a legacy envelope. The gate scopes its DB reads from it.
+     */
+    trustedTenantId?: string | null,
+  ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
+  /**
+   * Release a claim previously granted by `staleIdleTimeoutGate`. The gate
+   * records the claim before the event is executed, so a delivery that throws
+   * (queue full → `nak`, dispatcher error) must give the claim back or its own
+   * NATS redelivery is dropped as a "duplicate" and the follow-up is lost
+   * permanently — a fail-CLOSED outcome the gate explicitly forbids.
+   */
+  releaseIdleTimeoutClaim?: (claimToken: string) => void | Promise<void>;
 }
 
 /**
@@ -127,6 +163,7 @@ async function executeWebhookAction(
   config: WebhookActionConfig,
   context: TemplateContext,
   _deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
     const url = substituteTemplate(config.url, context);
@@ -138,11 +175,27 @@ async function executeWebhookAction(
 
     logger.debug(`Webhook ${method} ${url}`, { method, url, waitForResponse: config.waitForResponse });
 
-    const response = await fetch(url, {
+    // ADR-0009: tenant-controlled egress goes through the audited egress broker.
+    // With no tenant policy bound (flag-off / no tenant scope) this is a
+    // byte-identical passthrough to the previous raw `fetch`; with a bound policy
+    // it enforces the default-deny SSRF broker. The `egress` marker carries the
+    // audit context; the request init is otherwise unchanged.
+    //
+    // G5 tenant threading: a consumer-side execution binds the CONSUMED
+    // envelope's trusted tenant (threaded by the engine), so the broker can
+    // resolve that tenant's policy; the request-side ambient resolver only
+    // applies when no envelope tenant exists. A legacy envelope threads null
+    // and the marker stays `(unbound)` — passthrough, byte-identical.
+    const response = await brokeredFetch(url, {
       method,
       headers,
       body: method !== 'GET' ? body : undefined,
       signal: AbortSignal.timeout(config.timeoutMs ?? 30000),
+      egress: {
+        tenantId: trustedTenantId ?? resolveAmbientTenantId() ?? '(unbound)',
+        actorCredentialId: null,
+        integration: 'automations.webhook',
+      },
     });
 
     if (!config.waitForResponse) {
@@ -172,6 +225,7 @@ async function executeSendMessageAction(
   config: SendMessageActionConfig,
   context: TemplateContext,
   deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
     if (!deps.sendMessage) {
@@ -198,7 +252,7 @@ async function executeSendMessageAction(
 
     logger.debug('Sending message', { instanceId, to, contentLength: content.length });
 
-    await deps.sendMessage(instanceId, to, content);
+    await deps.sendMessage(instanceId, to, content, trustedTenantId);
 
     return {
       success: true,
@@ -221,6 +275,7 @@ async function executeEmitEventAction(
   config: EmitEventActionConfig,
   context: TemplateContext,
   deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
     if (!deps.eventBus) {
@@ -242,9 +297,16 @@ async function executeEmitEventAction(
 
     logger.debug('Emitting event', { eventType });
 
+    // G5 (ADR-0008): a tenant-world execution threads its trusted tenant into
+    // the re-publish metadata, so the publisher seam
+    // (`resolvePublishTenantId`, explicit-tenant precedence) stamps the NEXT
+    // hop's envelope — a consumer chain never silently drops back to the
+    // legacy world. With nothing threaded the metadata is unchanged and the
+    // publish stays byte-identical.
     const result = await deps.eventBus.publishGeneric(eventType, payload, {
       correlationId: (context.payload.correlationId as string) ?? undefined,
       source: 'automation',
+      ...(trustedTenantId ? { tenantId: trustedTenantId } : {}),
     });
 
     return {
@@ -385,6 +447,7 @@ async function executeCallAgentAction(
   config: CallAgentActionConfig,
   context: TemplateContext,
   deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   if (!deps.callAgent) {
     return { success: false, error: 'callAgent dependency not provided' };
@@ -406,7 +469,9 @@ async function executeCallAgentAction(
   });
 
   try {
-    const result = await deps.callAgent(agentContext, config);
+    // `agentContext` is payload-derived; the trusted tenant travels as its own
+    // argument so the trust boundary stays visible at the callback signature.
+    const result = await deps.callAgent(agentContext, config, trustedTenantId);
 
     logger.info('Agent call completed', {
       runId: result.metadata.runId,
@@ -437,6 +502,7 @@ export async function executeAction(
   action: AutomationAction,
   context: TemplateContext,
   deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<ActionExecutionResult> {
   const start = Date.now();
 
@@ -444,19 +510,19 @@ export async function executeAction(
 
   switch (action.type) {
     case 'webhook':
-      result = await executeWebhookAction(action.config, context, deps);
+      result = await executeWebhookAction(action.config, context, deps, trustedTenantId);
       break;
     case 'send_message':
-      result = await executeSendMessageAction(action.config, context, deps);
+      result = await executeSendMessageAction(action.config, context, deps, trustedTenantId);
       break;
     case 'emit_event':
-      result = await executeEmitEventAction(action.config, context, deps);
+      result = await executeEmitEventAction(action.config, context, deps, trustedTenantId);
       break;
     case 'log':
       result = await executeLogAction(action.config, context, deps);
       break;
     case 'call_agent':
-      result = await executeCallAgentAction(action.config, context, deps);
+      result = await executeCallAgentAction(action.config, context, deps, trustedTenantId);
       break;
     default:
       // TypeScript should catch this, but just in case
@@ -484,6 +550,7 @@ export async function executeActions(
   actions: AutomationAction[],
   context: TemplateContext,
   deps: ActionDependencies,
+  trustedTenantId?: string | null,
 ): Promise<ActionExecutionResult[]> {
   const results: ActionExecutionResult[] = [];
   const variables = { ...context.variables };
@@ -495,7 +562,7 @@ export async function executeActions(
       variables,
     };
 
-    const result = await executeAction(action, actionContext, deps);
+    const result = await executeAction(action, actionContext, deps, trustedTenantId);
     results.push(result);
 
     // Store response as variable if configured (for webhook and call_agent)

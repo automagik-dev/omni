@@ -27,6 +27,7 @@ import {
   automations,
 } from '@omni/db';
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { scopedHandle } from '../tenancy/tenant-scope';
 
 export interface AutomationTestResult {
   matched: boolean;
@@ -38,8 +39,20 @@ export interface AutomationTestResult {
 export class AutomationService {
   private engine: AutomationEngine | null = null;
 
+  /**
+   * The handle every query in this service uses.
+   *
+   * Inside a tenant-scoped request this is the request's tenant-stamped
+   * transaction (wish: omni-full-multitenancy, G4 — see `tenancy/tenant-scope.ts`);
+   * for a legacy credential, a worker, or the CLI it is the ambient pool and
+   * the query issued is byte-for-byte the one issued before the conversion.
+   */
+  private get db(): Database {
+    return scopedHandle(this.pool);
+  }
+
   constructor(
-    private db: Database,
+    private readonly pool: Database,
     private eventBus: EventBus | null,
   ) {}
 
@@ -53,7 +66,11 @@ export class AutomationService {
       chatId: string,
       instanceId: string,
       eventSequenceIndex: number | null,
-    ) => Promise<{ skip: boolean; reason?: string }>;
+      // Trusted tenant of the consumed envelope (G5, ADR-0008) — threaded by
+      // the engine from the producer-stamped metadata; null for legacy.
+      trustedTenantId?: string | null,
+    ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
+    releaseIdleTimeoutClaim?: (claimToken: string) => void | Promise<void>;
   }): Promise<void> {
     if (!this.eventBus) {
       return;
@@ -67,8 +84,18 @@ export class AutomationService {
       defaultConcurrency: 5,
     });
 
-    // Set up execution logger
-    this.engine.setLogger(async (log) => {
+    // Set up execution logger.
+    //
+    // The engine threads the executed envelope's trusted tenant as a second
+    // argument (G5, ADR-0008) — deliberately UNUSED here for now:
+    // `automation_logs` derives its tenant from the G2-`unowned` `automations`
+    // parent (tenancy-ownership.ts), so tenant_id stays NULL until the G6
+    // backfill decides ownership, and a worker-scoped insert would violate the
+    // strict RLS WITH CHECK and destroy the execution log. Scoping this write
+    // is G6-gated; when G6 lands, wrap the call in
+    // `runTenantWorkDb(this.pool, trustedTenantId, …)` — the threading is
+    // already in place.
+    this.engine.setLogger(async (log, _trustedTenantId) => {
       await this.logExecution(log);
     });
 

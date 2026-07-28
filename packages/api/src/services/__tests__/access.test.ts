@@ -17,6 +17,7 @@ import { AccessService } from '../access';
 function createRule(overrides: Partial<AccessRule> = {}): AccessRule {
   return {
     id: 'rule-1',
+    tenantId: null,
     instanceId: 'inst-1',
     ruleType: 'deny',
     phonePattern: null,

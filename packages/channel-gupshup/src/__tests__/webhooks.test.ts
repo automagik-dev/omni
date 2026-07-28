@@ -11,10 +11,15 @@
  * - Reply context extraction
  */
 
-import { describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, setSystemTime } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { GupshupSimplifiedWebhookSchema, handleGupshupWebhook, parseSimplifiedWebhook } from '../handlers/webhooks';
+import {
+  GupshupSimplifiedWebhookSchema,
+  handleGupshupWebhook,
+  parseSimplifiedWebhook,
+  resetCrossIdDedupeState,
+} from '../handlers/webhooks';
 import { GUPSHUP_WEBHOOK_METRIC } from '../observability';
 import type { GupshupPlugin } from '../plugin';
 
@@ -828,5 +833,224 @@ describe('handleGupshupWebhook — simplified payload dispatches like native', (
     expect(received).toHaveLength(1);
     expect(received[0]?.content.text).toBe('oi quero plano');
     expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unrecognized shape'))).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Cross-id duplicate suppression
+// ─────────────────────────────────────────────────────────────
+
+describe('Gupshup cross-id duplicate suppression', () => {
+  beforeEach(() => {
+    resetCrossIdDedupeState();
+  });
+
+  afterEach(() => {
+    setSystemTime();
+  });
+
+  function textPayload(id: string, text: string) {
+    return makePayload({
+      type: 'text',
+      text,
+      from: BASE.sender,
+      timestamp: 1776273477,
+      id,
+      raw: { payload: { text } },
+    });
+  }
+
+  it('drops a same-text redelivery under a different external id within the window', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('gs-entry-1776273477001', 'my daughter is 3 years old')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('wamid.NATIVE_REDELIVERY_001', 'my daughter is 3 years old')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('gs-entry-1776273477001');
+  });
+
+  it('keeps short quick answers even when repeated', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('gs-entry-1776273477002', 'ok')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('wamid.SHORT_002', 'ok')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(received).toHaveLength(2);
+  });
+
+  it('keeps different texts from the same chat', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('gs-entry-1776273477003', 'first message here')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('wamid.OTHER_003', 'a different message')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(received).toHaveLength(2);
+  });
+
+  it('drops a relay media-URL echo right after a native media message', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    await handleGupshupWebhook(
+      makeWebhookRequest(
+        makePayload({
+          type: 'image',
+          url: 'https://filemanager.gupshup.io/wa/media/972665975453585?download=false',
+          contentType: 'image/jpeg',
+          from: BASE.sender,
+          timestamp: 1776273929,
+          id: 'wamid.MEDIA_NATIVE_004',
+          mediaId: '972665975453585',
+        }),
+      ),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+    await handleGupshupWebhook(
+      makeWebhookRequest(
+        textPayload(
+          'gs-entry-1776273930111',
+          'https://filemanager.gupshup.io/wa/media/972665975453585?download=false&fileName=Doc.pdf',
+        ),
+      ),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.externalId).toBe('wamid.MEDIA_NATIVE_004');
+  });
+
+  it('delivers a legitimate user repeat sent outside the content-match window', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    const t0 = new Date('2026-07-27T12:00:00.000Z');
+    setSystemTime(t0);
+
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('wamid.USER_REPEAT_A', 'my daughter is 3 years old')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    // 30s later — well past the relay-redelivery window (~1s), well inside the
+    // old 60s window that used to swallow this message.
+    setSystemTime(new Date(t0.getTime() + 30_000));
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('gs-entry-1776273477999', 'my daughter is 3 years old')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(received).toHaveLength(2);
+    expect(received.map((m) => m.externalId)).toEqual(['wamid.USER_REPEAT_A', 'gs-entry-1776273477999']);
+  });
+
+  it('delivers a same-text repeat when neither id comes from the entry-flow relay', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('wamid.NATIVE_ONE', 'quero falar com um atendente')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('wamid.NATIVE_TWO', 'quero falar com um atendente')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(received).toHaveLength(2);
+  });
+
+  it('re-arms the entry so a later relay pair is still suppressed', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const dedupeCache = createInboundDedupeCache();
+    const t0 = new Date('2026-07-27T12:00:00.000Z');
+    setSystemTime(t0);
+
+    // First delivery arms the entry.
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('wamid.REARM_ONE', 'preciso de ajuda com o pedido')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    // 30s later: outside the match window but still cached — must re-arm.
+    setSystemTime(new Date(t0.getTime() + 30_000));
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('wamid.REARM_TWO', 'preciso de ajuda com o pedido')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    // 1s after that: a genuine relay redelivery of the second message.
+    setSystemTime(new Date(t0.getTime() + 31_000));
+    await handleGupshupWebhook(
+      makeWebhookRequest(textPayload('gs-entry-1776273478000', 'preciso de ajuda com o pedido')),
+      plugin,
+      'inst-gs-xid',
+      undefined,
+      dedupeCache,
+    );
+
+    expect(received.map((m) => m.externalId)).toEqual(['wamid.REARM_ONE', 'wamid.REARM_TWO']);
   });
 });

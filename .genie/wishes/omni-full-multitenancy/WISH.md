@@ -1,18 +1,19 @@
 ---
 slug: omni-full-multitenancy
 title: "Omni full multitenancy: first-class tenant ownership, bounded tenant administration, and RLS"
-status: draft-awaiting-human-approval
+status: work-approved-g0-in-progress
 risk: critical
 created_at: 2026-07-16T21:28:26Z
-updated_at: 2026-07-16T22:22:33Z
+updated_at: 2026-07-20T19:46:44Z
 base_branch: dev
-base_commit: 739fd49f1cd31de759664c0dcd266f71c868e338
+base_commit: d6c400d05287bbf436ecd7e28c56c845b893afc9
 purpose_session: brain/wishes/2026/07/16/omni-full-multitenancy/PURPOSE_SPEC.md
 brainstorm_session: brain/wishes/2026/07/16/omni-full-multitenancy/BRAINSTORM_SESSION.md
 ownership_matrix: brain/wishes/2026/07/16/omni-full-multitenancy/OWNERSHIP_MATRIX.md
 release_slos: brain/wishes/2026/07/16/omni-full-multitenancy/RELEASE_SLOS.yaml
 artifact_validator: brain/wishes/2026/07/16/omni-full-multitenancy/validate-artifacts.mjs
-execution_authorized: false
+work_approval: brain/wishes/2026/07/16/omni-full-multitenancy/WORK_APPROVAL.md
+execution_authorized: true
 ---
 
 # WISH — Omni Full Multitenancy
@@ -25,15 +26,17 @@ This is a **staged PR and release train**, not a single monolithic code patch. T
 
 ## Current-state evidence
 
-At `origin/dev` commit `739fd49f1cd31de759664c0dcd266f71c868e338`:
+Refreshed live in G0 against the materialization base `origin/dev` commit `d6c400d05287bbf436ecd7e28c56c845b893afc9` (worktree HEAD `63c1528d5c2e3cb4190e6a117f83c5a801a96ebb`; the single intervening commit only adds wish artifacts, so all `packages/` source equals the base). Exact per-item citations and the full inventory live in `OWNERSHIP_MANIFEST.yaml`, `SURFACE_INVENTORY.yaml`, `LEGACY_MAPPING_DECISIONS.yaml`, and `THREAT_MODEL.md`.
 
-1. `packages/db/src/schema.ts` declares 38 Drizzle/PostgreSQL tables and none has `tenant_id`.
-2. `api_keys` has `instance_ids`, profile allowlists, and global scopes (`packages/db/src/schema.ts:529-600`).
-3. `scope-enforcer.ts` authorizes by route scope plus request-extracted instance/chat/recipient targets (`packages/api/src/middleware/scope-enforcer.ts:82-107, 193-319, 357-501`). It cannot establish ownership for every indirect UUID route, global collection, worker, or storage path.
-4. `persons` is global while `platform_identities` references instances (`packages/db/src/schema.ts:955-993`), allowing identity relations to cross future tenant boundaries unless explicitly split.
-5. Tenant-like key creation only enforces a scope subset ceiling (`packages/api/src/routes/v2/keys.ts:170-284`); it has no immutable tenant lineage ceiling.
-6. The dedicated runtime DB role is correctly provisioned as `NOBYPASSRLS`, but current install behavior can skip/fall back to legacy `postgres:postgres` credentials (`packages/cli/src/lib/role-cutover.ts:15-27, 181-255`). That fallback must not exist once RLS is a security boundary.
+1. `packages/db/src/schema.ts` declares 38 Drizzle/PostgreSQL tables (verified: 38 `pgTable` declarations, the only such declarations in the repository) and none has `tenant_id` (verified: zero `tenant_id` columns).
+2. `api_keys` has `instance_ids`, profile allowlists, and global scopes (`packages/db/src/schema.ts:529-601`).
+3. `scope-enforcer.ts` authorizes by route scope plus request-extracted instance/chat/recipient targets (`packages/api/src/middleware/scope-enforcer.ts:83-105, 142-201, 243-320, 372-501`). It cannot establish ownership for every indirect UUID route, global collection, worker, or storage path.
+4. `persons` is global (`packages/db/src/schema.ts:955-972`) while `platform_identities` references instances (`packages/db/src/schema.ts:984-1024`), allowing identity relations to cross future tenant boundaries unless explicitly split.
+5. Tenant-like key creation only enforces a scope subset ceiling (`packages/api/src/routes/v2/keys.ts:188-284`); it has no immutable tenant lineage ceiling.
+6. The dedicated runtime DB role is correctly provisioned as `NOBYPASSRLS` (`packages/cli/src/lib/role-cutover.ts:232-235`), but the cutover is best-effort and can skip/fall back to legacy `postgres:postgres` credentials (`packages/cli/src/lib/role-cutover.ts:194-200`). That fallback must not exist once RLS is a security boundary.
 7. Existing direct UUID surfaces include persons, handoffs, dead letters, messages, access rules, jobs, turns, media, and others. Route-by-route guards alone are not sufficient defense in depth.
+8. Tenant-controlled outbound egress is unbounded today: the automation webhook action does a raw `fetch` on a tenant-templated URL (`packages/core/src/automations/actions.ts:132, 141`) with no SSRF guard, and provider clients fetch tenant `baseUrl`; only media has a partial guard (`packages/api/src/utils/safe-media-fetch.ts`, with an `OMNI_MEDIA_URL_GUARD=off` escape hatch).
+9. The caller-adjacent `OmniCustomerContext.tenantId` / `OMNI_TENANT_ID` label derives from untrusted person metadata (`packages/core/src/providers/types.ts:377`, `packages/core/src/providers/execution-context.ts:75`, `packages/api/src/plugins/agent-dispatcher.ts:1746`); it is never authoritative and is quarantined/renamed in G0 (see `OWNERSHIP_MANIFEST.yaml`).
 
 ## Security model
 
@@ -252,7 +255,7 @@ Disabling RLS, restoring only the pre-migration snapshot while discarding post-s
 - Tenant hard delete is disabled; lifecycle ends at archived in this release.
 - Backup/restore rehearsals include the auth-plane store, tenant encryption key metadata/KMS grants, object-store versions, and queued work. A database restore without the matching encryption/auth/event state is not accepted as recoverable.
 
-## Execution groups (proposal only; no Genie tasks before approval)
+## Execution groups (G0-G8A approved for non-production work; H8/H9 remain non-executable)
 
 ### G0 — Architecture inventory and threat model
 
@@ -261,6 +264,8 @@ Disabling RLS, restoring only the pre-migration snapshot while discarding post-s
 
 - machine-readable ownership manifest for all 38 Drizzle tables plus non-Drizzle stores;
 - route/service/repository/event/job/storage/cache inventory;
+- refreshed current-state citations and complete table/non-DB inventory against the materialization base commit;
+- explicit `tenant|platform|split|quarantine` disposition and rename-or-derive decision for the existing caller-adjacent `executionContext.customer.tenantId`, `OMNI_TENANT_ID`, and agent-dispatcher `tenantId`/`tenant_id` surface; caller-supplied values never establish tenant authority;
 - ADRs for ownership classes, person split, RLS transaction context, platform-admin access, and key lineage;
 - explicit legacy mapping/quarantine decision table;
 - security threat model (IDOR, confused deputy, delegation, async, storage, outbound egress/SSRF, suspension/revocation, rollback);
@@ -476,7 +481,7 @@ For at least tenants A and B with deliberately overlapping names, phones, JIDs, 
 
 ## Explicit human gates
 
-No Genie task creation or execution is authorized by this draft. One explicit approval from **either Felipe Rosa or Leonardo Cintra BR** authorizes conversion of approved groups into Genie tasks; it authorizes no production action. True break-glass RLS/control-plane bypass requires both humans, short JIT expiry, reason/ticket, alerting, immutable audit, and post-use review.
+Felipe Rosa's bounded work approval (`WORK_APPROVAL.md`) authorizes non-production materialization and execution of groups **G0 through G8A** only; it authorizes no production action and does not satisfy any H8/H9 hold. Every production action (H8.1–H9.2) remains fail-closed and unauthorized until its own distinct canonical signed approval receipt is atomically consumed by the launcher. One explicit approval from **either Felipe Rosa or Leonardo Cintra BR** authorized conversion of the approved non-production groups into Genie tasks; that authorizes no production action. True break-glass RLS/control-plane bypass requires both humans, short JIT expiry, reason/ticket, alerting, immutable audit, and post-use review.
 
 Production mutations use non-executable hold nodes. Receipts are not executor-authored documents: an authenticated approval authority, isolated from launcher/worker/executor write credentials, converts Felipe/Leonardo's authenticated decision into a versioned canonical payload, signs it with an Ed25519 key from the platform trusted-signer registry, and stores the signed event in an append-only tamper-evident log. Executors have read/consume capability only; they cannot issue, edit, replace, or backdate approvals. At consumption, the launcher verifies the signature, signer/key status and revocation epoch, append-only event identity, audience, policy version, exact action tuple, and current evidence digests against the trusted approval authority.
 

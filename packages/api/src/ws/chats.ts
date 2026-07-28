@@ -6,6 +6,7 @@
 
 import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
+import { TenantStreamRegistry } from '../tenancy/tenant-stream-subscriptions';
 
 /**
  * Subscribe to chat updates
@@ -53,6 +54,20 @@ interface ChatUpdateMessage {
 }
 
 /**
+ * The tenancy of one connection, established at `open()` from the authenticated
+ * upgrade — NEVER from a socket message (G5 deliverable (e); WISH "Streaming and
+ * long-lived state"). A connection with no binding is a legacy/flag-off one.
+ */
+export interface ChatConnectionBinding {
+  /** Trusted tenant of the connection. */
+  tenantId: string;
+  /** Tenant revocation epoch observed when the connection was authorized. */
+  revocationEpoch: number;
+  /** Terminate the transport — used by the revocation sweep. */
+  close?: (reason: string) => void;
+}
+
+/**
  * Subscription options
  */
 interface SubscriptionOptions {
@@ -60,12 +75,33 @@ interface SubscriptionOptions {
   includeTyping: boolean;
   includePresence: boolean;
   includeReadReceipts: boolean;
+  /**
+   * The connection's trusted tenant, copied from its `open()` binding on every
+   * (re)subscribe. It is deliberately NOT read from the client message: a
+   * `subscribe` payload carrying a `tenantId` is ignored, so a caller cannot
+   * widen what it receives.
+   */
+  tenantId: string | null;
 }
 
 /**
  * Check if a subscriber should receive an update based on their filter settings
+ *
+ * `updateTenantId` is the TRUSTED tenant of the update (null for a legacy/
+ * flag-off update). It must equal the subscriber's own trusted tenant: a
+ * tenant-bound update never reaches a legacy subscriber and vice versa, so the
+ * two worlds cannot mix even while both exist.
  */
-function shouldReceiveUpdate(sub: SubscriptionOptions, update: ChatUpdateMessage): boolean {
+function shouldReceiveUpdate(
+  sub: SubscriptionOptions,
+  update: ChatUpdateMessage,
+  updateTenantId: string | null,
+): boolean {
+  // Tenant gate first — a chat id is not authority to receive a chat.
+  if (sub.tenantId !== updateTenantId) {
+    return false;
+  }
+
   // Check chat filter
   if (sub.chatId && sub.chatId !== update.chatId) {
     return false;
@@ -109,19 +145,63 @@ function sendToSocket(ws: unknown, data: string, instanceId: string): void {
  */
 export function createChatWebSocketHandler(_db: Database, _eventBus: EventBus | null, instanceId: string) {
   const subscriptions = new Map<unknown, SubscriptionOptions>();
+  const bindings = new Map<unknown, ChatConnectionBinding>();
+  /** Tenancy bookkeeping for the revocation sweep (RELEASE_SLOS ≤ 30s). */
+  const streamRegistry = new TenantStreamRegistry<unknown>();
   const log = createLogger('ws:chats');
 
+  function forget(ws: unknown): void {
+    subscriptions.delete(ws);
+    bindings.delete(ws);
+    streamRegistry.remove(ws);
+  }
+
   return {
+    /** The live tenancy view, for the revocation sweep. */
+    streamRegistry,
+
     /**
      * Handle WebSocket open
+     *
+     * `binding` carries the connection's TRUSTED tenant, derived by the upgrade
+     * handler from the authenticated credential. Omitted ⇒ a legacy/flag-off
+     * connection, byte-identical to pre-G5.
      */
-    open(ws: unknown): void {
+    open(ws: unknown, binding?: ChatConnectionBinding): void {
       log.debug('Client connected', { instanceId });
+      if (binding) bindings.set(ws, binding);
       subscriptions.set(ws, {
         includeTyping: true,
         includePresence: true,
         includeReadReceipts: true,
+        tenantId: binding?.tenantId ?? null,
       });
+      streamRegistry.add(ws, {
+        tenantId: binding?.tenantId ?? null,
+        resourceId: instanceId,
+        revocationEpoch: binding?.revocationEpoch ?? 0,
+        close: (reason) => binding?.close?.(reason),
+      });
+    },
+
+    /**
+     * Close and drop every subscription of a revoked tenant (RELEASE_SLOS
+     * `websocket_sse_channel_provider_session_termination_seconds_max`).
+     * Legacy/tenantless connections are untouched.
+     */
+    terminateTenant(tenantId: string, reason: string): number {
+      let closed = 0;
+      for (const [ws, sub] of [...subscriptions]) {
+        if (sub.tenantId !== tenantId) continue;
+        try {
+          bindings.get(ws)?.close?.(reason);
+        } catch {
+          // Socket already gone — the drop below is what matters.
+        }
+        forget(ws);
+        closed += 1;
+      }
+      return closed;
     },
 
     /**
@@ -139,6 +219,9 @@ export function createChatWebSocketHandler(_db: Database, _eventBus: EventBus | 
               includeTyping: data.includeTyping ?? true,
               includePresence: data.includePresence ?? true,
               includeReadReceipts: data.includeReadReceipts ?? true,
+              // From the CONNECTION's binding, never from `data` — a tenant in
+              // the payload is ignored.
+              tenantId: bindings.get(ws)?.tenantId ?? null,
             });
             break;
 
@@ -160,17 +243,21 @@ export function createChatWebSocketHandler(_db: Database, _eventBus: EventBus | 
      */
     close(ws: unknown): void {
       log.debug('Client disconnected', { instanceId });
-      subscriptions.delete(ws);
+      forget(ws);
     },
 
     /**
      * Broadcast a chat update to relevant subscribers
+     *
+     * @param updateTenantId - the TRUSTED tenant that owns this update, derived
+     *   by the producer from the chat's persisted ownership. Omitted ⇒ a
+     *   legacy/flag-off update, delivered only to legacy subscribers.
      */
-    broadcast(update: ChatUpdateMessage): void {
+    broadcast(update: ChatUpdateMessage, updateTenantId: string | null = null): void {
       const payload = JSON.stringify(update);
 
       for (const [ws, sub] of subscriptions) {
-        if (shouldReceiveUpdate(sub, update)) {
+        if (shouldReceiveUpdate(sub, update, updateTenantId)) {
           sendToSocket(ws, payload, instanceId);
         }
       }

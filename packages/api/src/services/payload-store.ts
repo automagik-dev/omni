@@ -20,6 +20,7 @@ import {
 import type { Database, PayloadStorageConfig as DbPayloadStorageConfig } from '@omni/db';
 import { eventPayloads, payloadStorageConfig } from '@omni/db';
 import { and, desc, eq, isNull, lte, sql } from 'drizzle-orm';
+import { scopedHandle } from '../tenancy/tenant-scope';
 
 const log = createLogger('payload-store');
 
@@ -36,7 +37,19 @@ export interface PayloadWithData<T = unknown> extends Omit<PayloadEntry, 'payloa
 export class PayloadStoreService {
   private configCache = new Map<string, CorePayloadStorageConfig>();
 
-  constructor(private db: Database) {}
+  /**
+   * The handle every query in this service uses.
+   *
+   * Inside a tenant-scoped request this is the request's tenant-stamped
+   * transaction (wish: omni-full-multitenancy, G4 — see `tenancy/tenant-scope.ts`);
+   * for a legacy credential, a worker, or the CLI it is the ambient pool and
+   * the query issued is byte-for-byte the one issued before the conversion.
+   */
+  private get db(): Database {
+    return scopedHandle(this.pool);
+  }
+
+  constructor(private readonly pool: Database) {}
 
   /**
    * Get storage config for an event type (with caching)

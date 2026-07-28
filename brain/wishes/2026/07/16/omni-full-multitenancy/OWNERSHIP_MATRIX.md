@@ -1,8 +1,8 @@
 # Provisional Tenant Ownership Matrix
 
-**Source:** `origin/dev` at `739fd49f1cd31de759664c0dcd266f71c868e338`
-**Inventory result:** `packages/db/src/schema.ts` contains 38 `pgTable` declarations and zero `tenant_id` columns.
-**Status:** Architecture input; G0 must validate every row and locate tables created outside Drizzle (including pg-boss/internal schemas) before migrations are generated.
+**Source:** `origin/dev` at `d6c400d05287bbf436ecd7e28c56c845b893afc9` (materialization base; worktree HEAD `63c1528d5c2e3cb4190e6a117f83c5a801a96ebb`)
+**Inventory result:** `packages/db/src/schema.ts` contains 38 `pgTable` declarations and zero `tenant_id` columns (re-verified live in G0; they are the only `pgTable` declarations in the repository).
+**Status:** Superseded by the machine-readable `OWNERSHIP_MANIFEST.yaml` (validated by `validate-g0.mjs`). This matrix is retained as human-readable context. G0 confirmed there is **no pg-boss**: asynchronous work uses NATS/JetStream plus DB-backed job tables (`batch_jobs`, `sync_jobs`, `dead_letter_events`, `processed_events`, `consumer_offsets`). Non-Drizzle stores and boundaries are enumerated in `OWNERSHIP_MANIFEST.yaml` and `SURFACE_INVENTORY.yaml`.
 
 ## Classification rules
 

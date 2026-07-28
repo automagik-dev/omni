@@ -1,0 +1,202 @@
+schema_version: 1
+wish: omni-full-multitenancy
+group: G0
+status: normative-draft-requires-g0-human-security-approval
+source:
+  materialization_base_commit: d6c400d05287bbf436ecd7e28c56c845b893afc9
+  worktree_head_commit: 63c1528d5c2e3cb4190e6a117f83c5a801a96ebb
+notes:
+  - No pg-boss in the codebase. Asynchronous work is NATS/JetStream plus DB-backed
+    job tables (batch_jobs, sync_jobs, dead_letter_events, processed_events, consumer_offsets).
+  - Every tenant-capable surface below requires a declared ownership policy in G4/G5;
+    a route without one must fail the generated coverage test.
+
+# ---------------------------------------------------------------------------
+# HTTP ROUTES (packages/api/src/routes)
+# ---------------------------------------------------------------------------
+http_routes:
+  mount: /api/v2 (packages/api/src/routes/v2/index.ts); app wiring packages/api/src/app.ts
+  authn: bearer omni_sk_ key -> authMiddleware -> scopeEnforcerMiddleware (deny-by-default, SCOPE_MAP)
+  authz_evidence: packages/api/src/middleware/scope-enforcer.ts:83-105,142-201,243-320,372-501
+  authz_gap: >-
+    scope-enforcer authorizes by route scope plus request-extracted instance/chat/recipient targets.
+    It cannot establish ownership for every indirect UUID route, global collection, worker, or storage
+    path. RLS is required as defense in depth.
+  direct_uuid_routes:
+    # every /:id route is a direct IDOR surface today (guarded only by scope + allowlist)
+    - instances.ts (/:id, QR, restart, group mutations)
+    - chats.ts (/:id, participants, jid resolution)
+    - messages.ts (/:id, send, reaction, media, forward, transcription)
+    - persons.ts (/:id, timeline)
+    - conversations.ts (/:id)
+    - handoffs.ts (/:id)
+    - dead-letters.ts (/:id, redrive)
+    - turns.ts (/:id, close/reopen)
+    - batch-jobs.ts (/:id)
+    - agent-tasks.ts (/:id, callbacks)
+    - agents.ts (/:id)
+    - agent-routes.ts (/:id)
+    - agent-state.ts (/:id)
+    - providers.ts (/:id)
+    - access.ts (/:id)
+    - automations.ts (/:id)
+    - webhooks.ts (/:id, replay/test)
+    - media.ts (/:instanceId/*)
+    - follow-up.ts, journeys.ts, event-ops.ts, events.ts, processed-events.ts, payloads.ts
+    - settings.ts, logs.ts, context.ts, voice.ts, metrics.ts, trust.ts
+  list_search_count_export_aggregate_surfaces:
+    disposition: tenant
+    enforcement_target: tenant predicate applied BEFORE pagination/count/aggregate; RLS backstop
+    surfaces:
+      - messages/chats/persons timelines and pagination cursors (pre-filter leakage risk)
+      - events/event-ops queries with date ranges
+      - handoffs, turns, batch-jobs, automations, trigger cost/usage aggregates
+      - keys audit logs, settings history
+  keys_admin_surface:
+    file: packages/api/src/routes/v2/keys.ts
+    mint_ceiling: routes/v2/keys.ts:188-284 (scopes must be subset of caller's own scopes)
+    gap: no immutable tenant-lineage ceiling; admin profile refused over HTTP (keys.ts:118-160)
+    disposition: split
+  auth_surface:
+    file: packages/api/src/routes/v2/auth.ts (auth validate; shows class/tenant/role/scopes/expiry)
+    disposition: platform (auth plane isolated from tenant data routes)
+
+# ---------------------------------------------------------------------------
+# SERVICES & REPOSITORIES (packages/api/src/services)
+# ---------------------------------------------------------------------------
+services:
+  disposition: tenant
+  enforcement_target: >-
+    every repository/service query runs inside withTenantTransaction(authContext, fn); no singleton/raw
+    DB access outside the tenant boundary (architecture guard in G3).
+  examples:
+    - api-keys.ts (auth-plane lookup + key metadata)
+    - media-storage.ts, payload-store.ts (object storage)
+    - batch-jobs.ts, events.ts, event-ops.ts, providers.ts, settings.ts
+    - agent-state.ts, agent-heartbeat.ts, follow-up-lifecycle.ts, turn-events.ts
+    - consumer-offsets.ts (platform infrastructure)
+
+# ---------------------------------------------------------------------------
+# EVENT BUS (NATS / JetStream)
+# ---------------------------------------------------------------------------
+events:
+  transport: NATS JetStream
+  disposition: split
+  files: packages/core/src/events/nats/{client,consumer,streams,subjects,subscription}.ts, packages/core/src/events/bus.ts
+  publishers: packages/api/src/plugins/{event-persistence,event-listeners,agent-dispatcher}.ts
+  enforcement_target: >-
+    versioned tenant-aware envelopes; trusted producer derives tenant from loaded resource; consumer
+    validates envelope tenant before processing; missing/ambiguous -> quarantine/DLQ + alert.
+  verification_target: tenant A event cannot dispatch tenant B agent/instance; tenantless event quarantined
+
+# ---------------------------------------------------------------------------
+# JOBS / WORKERS / RETRIES / DLQ (DB-backed; no pg-boss)
+# ---------------------------------------------------------------------------
+jobs:
+  disposition: tenant
+  workers: packages/api/src/plugins/{sync-worker,agent-dispatcher,agent-responder,media-processor,instance-monitor,session-cleaner}.ts
+  scheduler: packages/api/src/scheduler.ts
+  tables: batch_jobs, sync_jobs, dead_letter_events, processed_events, consumer_offsets
+  enforcement_target: >-
+    tenant captured at enqueue; dequeue/redrive revalidates tenant + revocation epoch and again
+    immediately before each external/durable side effect; between multi-effect steps.
+  dlq: dead_letter_events + dead-letters.ts redrive; refuse redrive without tenant context
+  idempotency: packages/api/src/lib/idempotency.ts + processed_events (tenant must be in key)
+
+# ---------------------------------------------------------------------------
+# STORAGE / MEDIA / OBJECT / PRESIGNED
+# ---------------------------------------------------------------------------
+storage:
+  disposition: tenant
+  backends: packages/channel-sdk/src/media-backends/{s3-backend,local-backend,config,web-identity}.ts
+  api: packages/api/src/services/media-storage.ts, packages/api/src/plugins/storage.ts, packages/api/src/plugins/session-storage.ts, packages/api/src/plugins/qr-store.ts
+  enforcement_target: tenant-prefixed object keys; presigned URL binds tenant/object/expiry/decision; TTL <= 60s; no issue/refresh after revocation
+  ssrf_note: >-
+    media fetch has an SSRF guard (packages/api/src/utils/safe-media-fetch.ts) with an
+    OMNI_MEDIA_URL_GUARD=off escape hatch; it is media-only, not the unified egress broker.
+
+# ---------------------------------------------------------------------------
+# CACHE / RATE / DEBOUNCE / SEARCH / SESSION
+# ---------------------------------------------------------------------------
+cache_rate_debounce_session:
+  disposition: tenant
+  rate_limit: packages/api/src/middleware/rate-limit.ts
+  debounce: packages/core/src/automations/debounce.ts, packages/api/src/plugins/message-debouncer.ts
+  session: packages/api/src/plugins/{session-storage,session-cleaner}.ts, packages/channel-whatsapp/src/auth.ts
+  qr: packages/api/src/plugins/qr-store.ts
+  enforcement_target: tenant identity in every cache key, rate bucket, debounce buffer, session path
+
+# ---------------------------------------------------------------------------
+# STREAMING (WebSocket / SSE)
+# ---------------------------------------------------------------------------
+streaming:
+  disposition: tenant
+  websocket: packages/api/src/ws/{chats,logs,voice}.ts
+  a2a_streams: packages/channel-a2a/src/stream-store.ts
+  enforcement_target: subscriptions keyed/authorized by tenant; revocation terminates sessions <= 30s
+  verification_target: tenant A cannot subscribe to/resume tenant B streams
+
+# ---------------------------------------------------------------------------
+# PROVIDER / PLUGIN REGISTRIES / AUTOMATIONS / WEBHOOKS / CALLBACKS
+# ---------------------------------------------------------------------------
+registries_and_callbacks:
+  disposition: split
+  provider_factory: packages/core/src/providers/factory.ts
+  plugin_loader: packages/api/src/plugins/loader.ts
+  automations: packages/core/src/automations/{engine,actions,debounce}.ts
+  webhooks_inbound: packages/api/src/routes/v2/webhooks.ts + webhook_sources (tenant from source record + signed audience)
+  agent_task_callbacks: agent_tasks callback tokens (tenant-bound, revalidated at use)
+  enforcement_target: tenant-keyed registry lookups; server-side tenant derivation for inbound webhooks/callbacks
+
+# ---------------------------------------------------------------------------
+# TENANT-CONTROLLED OUTBOUND EGRESS (SSRF boundary)
+# ---------------------------------------------------------------------------
+egress:
+  disposition: split
+  status: UNBOUNDED_TODAY
+  paths:
+    - packages/core/src/automations/actions.ts:132,141 (raw fetch on tenant-templated webhook URL, NO guard)
+    - packages/core/src/providers/{webhook-provider,a2a-client,ag-ui-client,agno-client}.ts (tenant baseUrl fetch)
+    - packages/api/src/utils/safe-media-fetch.ts (media-only guard, has escape hatch)
+  enforcement_target: single audited default-deny egress broker; block direct fetch/socket; DNS re-resolve per redirect hop
+  verification_target: SSRF/DNS-rebinding/metadata/private/control-plane tests fail closed
+
+# ---------------------------------------------------------------------------
+# PUBLIC / WELL-KNOWN / A2A / HEALTH / INFO / METRICS (unauthenticated)
+# ---------------------------------------------------------------------------
+public_surfaces:
+  disposition: platform
+  endpoints:
+    - GET /.well-known/agent-card.json (app.ts:189; A2A-flag-gated, 503 when off at app.ts:226)
+    - GET /.well-known/agent.json (app.ts:190,227)
+    - GET /health (app.ts:152) and /api/v2 health (app.ts:155, routes/health.ts)
+    - OpenAPI (packages/api/src/routes/openapi.ts)
+    - metrics (packages/api/src/routes/v2/metrics.ts, packages/core/src/metrics/index.ts)
+    - A2A route (packages/api/src/routes/v2/a2a.ts)
+  enforcement_target: expose no tenant inventory/counts/identifiers/state/offsets; readiness exposes non-sensitive compat epoch
+  verification_target: public endpoint tests prove no cross-tenant existence/count/identifier leakage
+
+# ---------------------------------------------------------------------------
+# CLI / ADMIN / STARTUP SEEDER / CREDENTIAL BOOTSTRAP
+# ---------------------------------------------------------------------------
+cli_admin_bootstrap:
+  disposition: platform
+  cli_keys: packages/cli/src/commands/keys.ts (admin/god-key mint prints plaintext, keys.ts:116-192)
+  cli_auth_install_trust: packages/cli/src/commands/{auth,install,trust}.ts
+  role_cutover: packages/cli/src/lib/role-cutover.ts (NOBYPASSRLS at :232-235; postgres:postgres fallback at :194-200)
+  api_keys_service: packages/api/src/services/api-keys.ts
+  enforcement_target: >-
+    control-plane credential class only; bootstrap must not create/print a data-plane god key; runtime
+    startup fails closed without the NOBYPASSRLS role (no superuser fallback)
+
+# ---------------------------------------------------------------------------
+# MIGRATION SURFACE
+# ---------------------------------------------------------------------------
+migration:
+  disposition: platform
+  auto_migrate: packages/api/src/index.ts (migrateDb on startup)
+  drizzle_migrations: packages/db/drizzle/*.sql + meta/_journal.json
+  runner: packages/db/src/migrate.ts
+  cli_embedded: packages/cli/src/lib/embedded-canonical-migration.ts
+  enforcement_target: migration/DDL credentials separate from runtime; unavailable to app process after boot
+  verification_target: runtime cannot create/alter schema objects or policies; drizzle-kit push never mixed with migrate

@@ -24,6 +24,7 @@ import { isLidFormat, isValidE164Phone, validateContactPhone } from '../../utils
 function makePerson(overrides: Partial<Person> = {}): Person {
   return {
     id: 'person-1',
+    tenantId: null,
     displayName: 'Example User',
     primaryPhone: null,
     primaryEmail: null,
@@ -38,6 +39,7 @@ function makePerson(overrides: Partial<Person> = {}): Person {
 function makeIdentity(overrides: Partial<PlatformIdentity> = {}): PlatformIdentity {
   return {
     id: 'identity-1',
+    tenantId: null,
     personId: 'person-1',
     agentId: null,
     channel: 'whatsapp-baileys',

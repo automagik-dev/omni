@@ -118,7 +118,7 @@ describe('setupSyncWorker', () => {
       config: {},
     });
 
-    expect(services.syncJobs.start).toHaveBeenCalledWith('job-1');
+    expect(services.syncJobs.start).toHaveBeenCalledWith('job-1', null);
   });
 
   // -- Type routing ----------------------------------------------------------
@@ -132,8 +132,8 @@ describe('setupSyncWorker', () => {
       config: {},
     });
 
-    expect(services.syncJobs.start).toHaveBeenCalledWith('job-p');
-    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-p');
+    expect(services.syncJobs.start).toHaveBeenCalledWith('job-p', null);
+    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-p', null);
     // Plugin should never be looked up for profile sync
     expect(registry.get).not.toHaveBeenCalled();
   });
@@ -159,7 +159,7 @@ describe('setupSyncWorker', () => {
     // First argument is the instanceId
     const histCalls = mockPlugin.fetchHistory.mock.calls as unknown[][];
     expect(histCalls[0]?.[0]).toBe('inst-1');
-    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-m');
+    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-m', null);
   });
 
   test('contacts type calls plugin.fetchContacts', async () => {
@@ -182,7 +182,7 @@ describe('setupSyncWorker', () => {
     expect(mockPlugin.fetchContacts).toHaveBeenCalledTimes(1);
     const contactCalls = mockPlugin.fetchContacts.mock.calls as unknown[][];
     expect(contactCalls[0]?.[0]).toBe('inst-1');
-    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-c');
+    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-c', null);
   });
 
   test('groups type calls plugin.fetchGroups', async () => {
@@ -203,7 +203,7 @@ describe('setupSyncWorker', () => {
 
     expect(registry.get).toHaveBeenCalledWith('whatsapp-baileys');
     expect(mockPlugin.fetchGroups).toHaveBeenCalledTimes(1);
-    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-g');
+    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-g', null);
   });
 
   test('all type calls plugin.fetchHistory (processes message sync)', async () => {
@@ -223,7 +223,7 @@ describe('setupSyncWorker', () => {
     });
 
     expect(mockPlugin.fetchHistory).toHaveBeenCalledTimes(1);
-    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-a');
+    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-a', null);
   });
 
   test('history-push type is a no-op after start', async () => {
@@ -235,7 +235,7 @@ describe('setupSyncWorker', () => {
       config: {},
     });
 
-    expect(services.syncJobs.start).toHaveBeenCalledWith('job-hp');
+    expect(services.syncJobs.start).toHaveBeenCalledWith('job-hp', null);
     // Should NOT call complete or fail — progress is driven by tracker subscribers
     expect(services.syncJobs.complete).not.toHaveBeenCalled();
     expect(services.syncJobs.fail).not.toHaveBeenCalled();
@@ -253,7 +253,7 @@ describe('setupSyncWorker', () => {
       config: {},
     });
 
-    expect(services.syncJobs.fail).toHaveBeenCalledWith('job-u', 'Unknown sync type: banana');
+    expect(services.syncJobs.fail).toHaveBeenCalledWith('job-u', 'Unknown sync type: banana', null);
   });
 
   test('fails job when instances.getById returns null', async () => {
@@ -448,7 +448,7 @@ describe('setupSyncWorker', () => {
       '5511999999999@s.whatsapp.net',
     ]);
 
-    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-gh142');
+    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-gh142', null);
   });
 
   test('default WhatsApp sync falls back to passive when no prior data (fresh instance)', async () => {
@@ -484,6 +484,6 @@ describe('setupSyncWorker', () => {
     // Fresh instance: no anchors, passive sync
     expect(capturedOptions[0]!.anchors).toBeUndefined();
 
-    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-fresh');
+    expect(services.syncJobs.complete).toHaveBeenCalledWith('job-fresh', null);
   });
 });

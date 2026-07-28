@@ -22,21 +22,32 @@ import './tracing';
  */
 
 import { type ChannelRegistry, isVoiceCapable } from '@omni/channel-sdk';
-import { type EventBus, configureLogging, connectEventBus, createLogger, enableDefaultMetrics } from '@omni/core';
-import type { Database } from '@omni/db';
+import {
+  type EventBus,
+  configureLogging,
+  connectEventBus,
+  createLogger,
+  enableDefaultMetrics,
+  setEnvelopeTenantResolver,
+} from '@omni/core';
+import type { Database, DbEnforcementMode, EnforcedBootIdentities } from '@omni/db';
 import {
   API_CRITICAL_COLUMNS,
-  agents,
   applyMigrations,
+  assertEnforcedRuntimeIdentity,
   closeDb,
   createDb,
+  createDbHandle,
   formatDriftReport,
   getDefaultDatabaseUrl,
   instances,
+  resolveEnforcedBootIdentities,
+  resolveEnforcementMode,
+  scrubDdlCredential,
   verifyCriticalColumns,
 } from '@omni/db';
 import * as Sentry from '@sentry/bun';
-import { eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 
 // Configure logging at startup
 configureLogging({
@@ -71,21 +82,28 @@ import {
   setupSessionCleaner,
   setupSyncWorker,
 } from './plugins';
-import { getPlugin } from './plugins/loader';
+import { buildAutomationEngineDeps } from './plugins/automation-actions';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
 import { ApiKeyService } from './services/api-keys';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
+import { resolveAuthPlaneConnection } from './tenancy/auth-plane-connection';
+import { warnOnMixedTenancyState } from './tenancy/enforcement-posture';
+import { installInstanceOwnerResolver } from './tenancy/instance-owner-registry';
+import { currentTenantScope } from './tenancy/tenant-scope';
+import { startStreamRevocationSweeper } from './tenancy/tenant-stream-subscriptions';
 import { printStartupBanner } from './utils/startup-banner';
+import { resolveInstanceTenantId } from './ws/voice-instance-ownership';
 
 // Configuration
 const PORT = Number.parseInt(process.env.API_PORT ?? '8882', 10);
 const HOST = process.env.API_HOST ?? '0.0.0.0';
 const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
 
-import { VoiceStreamRegistry, parseVoiceStreamParams, transcodeAudioFrame } from './ws/voice';
+import { VoiceStreamRegistry, authorizeVoiceApiKey, parseVoiceStreamParams, transcodeAudioFrame } from './ws/voice';
 import type { VoiceStreamClient } from './ws/voice';
+import { type VoiceUpgradeDeps, authorizeVoiceUpgrade } from './ws/voice-upgrade-authorization';
 
 // Voice stream WebSocket registry (global singleton)
 const voiceStreamRegistry = new VoiceStreamRegistry();
@@ -134,6 +152,24 @@ async function connectToNats(db: Database): Promise<EventBus | null> {
     globalEventBus = eventBus;
     natsLog.info('Connected to NATS');
 
+    // Versioned tenant-aware envelope (G5, ADR-0008): stamp the request's tenant
+    // onto every request-originated publish, so consumers can validate it. Reads
+    // the per-request tenant scope; returns null off-scope (workers, flag-off),
+    // where nothing is stamped and publishes stay legacy/byte-identical. A worker
+    // republish must pass an explicit `metadata.tenantId` — this resolver never
+    // lends an ambient tenant across the request→worker boundary.
+    setEnvelopeTenantResolver(() => currentTenantScope()?.tenantId ?? null);
+
+    // ...and the PRODUCER-side derivation for publishes that have no request at
+    // all — every channel-plugin emit (`message.received`, `instance.connected`,
+    // `reaction.*`). Those name an instanceId, and `instances` is the ownership
+    // root, so the tenant comes from the instance's PERSISTED row via the
+    // ownership registry the instance-loading paths populate. Without this the
+    // dominant traffic path stamps nothing and every consumer G5 converted stays
+    // on its legacy branch. Flag-off the registry is empty (NULL tenants teach
+    // it nothing), so publishes remain byte-identical.
+    installInstanceOwnerResolver();
+
     // Set up event listeners
     await setupQrCodeListener(eventBus);
     await setupConnectionListener(eventBus, db);
@@ -178,12 +214,27 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
     pluginLog.warn('Some channel plugins failed to load', { failed: result.failed });
   }
 
-  // Auto-reconnect previously active instances
+  // Auto-reconnect previously active instances.
+  //
+  // G5 (ADR-0008/ADR-0003): the startup reconnect is a whole-table `instances`
+  // sweep, so it needs the auth-plane identity to ENUMERATE tenants. This runs
+  // BEFORE `createApp`, so `services.authPlane` does not exist yet — resolve a
+  // handle for exactly this sweep and close it immediately after. In legacy mode
+  // (and under enforcement without `OMNI_DB_AUTH_PLANE_URL`) this IS the runtime
+  // handle and `close()` is a no-op, so nothing new is opened; the fan-out itself
+  // is flag-gated and stays a single ambient scan when multitenancy is off.
   pluginLog.info('Auto-reconnecting active instances');
-  const reconnectResult = await reconnectWithPool(db, result.registry, {
-    maxConcurrent: 3,
-    delayBetweenMs: 500,
-  });
+  const bootAuthPlane = resolveAuthPlaneConnection(db);
+  let reconnectResult: Awaited<ReturnType<typeof reconnectWithPool>>;
+  try {
+    reconnectResult = await reconnectWithPool(db, result.registry, {
+      maxConcurrent: 3,
+      delayBetweenMs: 500,
+      authPlaneDb: bootAuthPlane.db,
+    });
+  } finally {
+    await bootAuthPlane.close();
+  }
 
   if (reconnectResult.attempted > 0) {
     pluginLog.info('Instance reconnection complete', {
@@ -243,28 +294,45 @@ function startBunServer(app: App) {
           return;
         }
 
-        // Validate API key against the database
-        if (globalDbRef) {
-          try {
-            const apiKeyService = new ApiKeyService(globalDbRef);
-            await apiKeyService.validate(params.apiKey);
-          } catch {
-            ws.close(4004, 'Invalid API key');
-            return;
-          }
+        // Validate API key against the database. The refusal logic lives in
+        // authorizeVoiceApiKey: an invalid key makes ApiKeyService.validate
+        // RESOLVE NULL rather than throw, so the result must be inspected — and
+        // an absent db ref must refuse rather than skip the check entirely.
+        const db = globalDbRef;
+        const authorized = await authorizeVoiceApiKey(
+          db ? (key: string) => new ApiKeyService(db).validate(key) : null,
+          params.apiKey,
+        );
+        if (!authorized) {
+          ws.close(4004, 'Invalid API key');
+          return;
         }
 
-        // Validate session exists via VoiceCapable interface
-        const voicePlugin = globalChannelRegistry
-          ?.getAll()
-          .find((p) => isVoiceCapable(p) && p.voiceSession(params.sessionId));
-        if (!voicePlugin) {
-          ws.close(4004, `Voice session ${params.sessionId} not found`);
+        // G5 deliverable (e): tenant-authorized upgrade. Flag-off this is the
+        // pre-G5 "does the session exist" decision, byte-identical and with no
+        // tenancy lookup; flag-on the connection's tenant is derived from the
+        // CREDENTIAL and the session's instance must be owned by it.
+        const decision = await authorizeVoiceUpgrade(
+          { apiKey: params.apiKey, sessionId: params.sessionId },
+          voiceUpgradeDeps(),
+        );
+        if (!decision.ok) {
+          if (decision.reason === 'session_not_found') {
+            ws.close(4004, `Voice session ${params.sessionId} not found`);
+          } else if (decision.reason === 'unauthenticated') {
+            ws.close(4004, 'Invalid API key');
+          } else {
+            // Cross-tenant / unowned: refuse WITHOUT disclosing whether the
+            // session exists — the refusal must not become an existence oracle.
+            ws.close(4004, `Voice session ${params.sessionId} not found`);
+          }
           return;
         }
 
         const client: VoiceStreamClient = {
           params,
+          tenantId: decision.tenantId,
+          revocationEpoch: decision.revocationEpoch,
           send: (data) => {
             try {
               ws.send(data as string | ArrayBuffer | Uint8Array);
@@ -272,7 +340,17 @@ function startBunServer(app: App) {
               // Client slow or disconnected
             }
           },
+          close: (reason) => {
+            try {
+              ws.close(4003, reason);
+            } catch {
+              // Already gone
+            }
+          },
         };
+        // Bind the session to its trusted owner so the audio fan-out is narrowed
+        // to this tenant even if another tenant holds a session with the same id.
+        if (decision.tenantId) voiceStreamRegistry.bindSession(params.sessionId, decision.tenantId);
         voiceStreamRegistry.add(ws, client);
         ws.send(JSON.stringify({ type: 'session_ready', sessionId: params.sessionId }));
       },
@@ -312,7 +390,14 @@ function startBunServer(app: App) {
         }
       },
       close(ws) {
+        const sessionId = voiceStreamRegistry.get(ws)?.params.sessionId;
         voiceStreamRegistry.remove(ws);
+        // Drop the session→tenant binding only once the session itself is gone,
+        // so a reconnecting client is still narrowed to its own tenant.
+        if (sessionId) {
+          const stillLive = globalChannelRegistry?.getAll().some((p) => isVoiceCapable(p) && p.voiceSession(sessionId));
+          if (!stillLive) voiceStreamRegistry.unbindSession(sessionId);
+        }
       },
     },
   });
@@ -320,6 +405,47 @@ function startBunServer(app: App) {
 
 // Database reference for WS auth (set during startup)
 let globalDbRef: Database | null = null;
+
+/**
+ * Services reference for WS tenant authorization (set during startup).
+ *
+ * G5 deliverable (e): the voice upgrade lives in `Bun.serve`'s raw `fetch`,
+ * before Hono, so it cannot reach the tenancy middleware's context. It resolves
+ * the connection's tenant itself, through the SAME auth plane the HTTP edge uses
+ * (`services.authBootstrap`) and the same ownership root (`instances`).
+ */
+let globalServicesRef: ReturnType<typeof createApp>['services'] | null = null;
+
+/** The revocation sweeper for live voice sockets; stopped on shutdown. */
+let globalStreamSweeper: { stop: () => void } | null = null;
+
+/**
+ * The tenancy derivations the voice upgrade needs, all trusted — the credential
+ * index for the tenant, the live plugin session for the instance, and the
+ * `instances` ownership root (read inside the credential tenant's own scope, so
+ * RLS decides visibility) for the resource owner.
+ */
+function voiceUpgradeDeps(): VoiceUpgradeDeps {
+  return {
+    resolveCredentialTenant: async (apiKey) => {
+      const services = globalServicesRef;
+      if (!services) return null;
+      const result = await services.authBootstrap.lookupBySecret(apiKey, `voice-ws-${crypto.randomUUID()}`);
+      if (!result.ok || result.context.credentialClass !== 'tenant') return null;
+      return { tenantId: result.context.tenantId, revocationEpoch: result.context.revocationEpoch };
+    },
+    resolveSessionInstanceId: (sessionId) => {
+      const plugin = globalChannelRegistry?.getAll().find((p) => isVoiceCapable(p) && p.voiceSession(sessionId));
+      if (!plugin || !isVoiceCapable(plugin)) return null;
+      return plugin.voiceSession(sessionId)?.instanceId ?? null;
+    },
+    resolveInstanceTenantId: async (instanceId, tenantId) => {
+      const db = globalDbRef;
+      if (!db) return null;
+      return resolveInstanceTenantId(db, instanceId, tenantId);
+    },
+  };
+}
 
 /**
  * Set up graceful shutdown handlers
@@ -351,6 +477,12 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
 
       shutdownLog.info('Stopping HTTP server');
       server.stop();
+
+      if (globalStreamSweeper) {
+        shutdownLog.info('Stopping stream revocation sweeper');
+        globalStreamSweeper.stop();
+        globalStreamSweeper = null;
+      }
 
       if (globalDispatcherCleanup) {
         shutdownLog.info('Stopping agent dispatcher');
@@ -405,46 +537,6 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
   process.on('SIGTERM', shutdown);
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Resolve chat UUID → channel-native external_id for a call_agent invocation.
- *
- * Symmetric with the send_message action (above) which already auto-resolves
- * UUIDs for the same reason: system-initiated events (chat.idle_timeout) emit
- * payload.chatId as the internal chats.id UUID, but the seller dispatch path
- * carries the external_id (e.g. WA phone). Without resolution, the agent
- * runner's computeSessionId produces session_ids that diverge from sessions
- * created by the seller path.
- *
- * Also resolves senderId — extractAgentCallContext falls back senderId=chatId
- * when payload.from/senderId are absent (follow-up events).
- *
- * On missing chat row, logs a warning and falls through with the raw UUID so
- * the call still runs (avoids hard-failing the automation action).
- */
-async function resolveCallAgentChatIds(
-  services: ReturnType<typeof createApp>['services'],
-  ctx: { chatId: string; senderId: string; instanceId: string },
-): Promise<{ chatId: string; senderId: string }> {
-  if (!UUID_RE.test(ctx.chatId)) {
-    return { chatId: ctx.chatId, senderId: ctx.senderId };
-  }
-  try {
-    const chat = await services.chats.getById(ctx.chatId, { includeHidden: true });
-    return {
-      chatId: chat.externalId,
-      senderId: ctx.senderId === ctx.chatId ? chat.externalId : ctx.senderId,
-    };
-  } catch {
-    log.warn('call_agent: chat UUID not resolvable, using raw value (session may diverge)', {
-      chatId: ctx.chatId,
-      instanceId: ctx.instanceId,
-    });
-    return { chatId: ctx.chatId, senderId: ctx.senderId };
-  }
-}
-
 /**
  * Setup event bus related services (plugins, persistence, workers)
  * Extracted to reduce main() complexity
@@ -480,104 +572,13 @@ async function setupEventBusServices(
     log.error('Failed to set up agent dispatcher', { error: String(error) });
   }
 
-  // Automation engine (subscribes to NATS events and evaluates rules)
+  // Automation engine (subscribes to NATS events and evaluates rules).
+  // The action callbacks live in `plugins/automation-actions.ts` — a worker
+  // surface (G5, ADR-0008): the engine threads each consumed envelope's
+  // trusted tenant into them, and their DB blocks scope themselves with
+  // `runTenantWorkDb` (legacy envelopes run ambient, byte-identically).
   try {
-    await services.automations.startEngine({
-      sendMessage: async (instanceId, to, content) => {
-        const instance = await services.instances.getById(instanceId);
-        if (!instance) throw new Error(`Instance not found: ${instanceId}`);
-        const plugin = await getPlugin(instance.channel);
-        if (!plugin) throw new Error(`No plugin for channel: ${instance.channel}`);
-        // Resolve internal chat UUID → channel-native external_id (e.g. WA JID).
-        // Automation payloads carry chat UUIDs; plugins expect channel JIDs.
-        let recipient = to;
-        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(to)) {
-          try {
-            const chat = await services.chats.getById(to, { includeHidden: true });
-            recipient = chat.externalId;
-          } catch {
-            throw new Error(`Chat not found for UUID: ${to}`);
-          }
-        }
-        await plugin.sendMessage(instanceId, { to: recipient, content: { type: 'text', text: content } });
-      },
-      callAgent: async (ctx, cfg) => {
-        const instance = await services.instances.getById(ctx.instanceId);
-        if (!instance) throw new Error(`Instance not found: ${ctx.instanceId}`);
-
-        // System-initiated events (chat.idle_timeout) emit payload.chatId as
-        // the internal chats.id UUID; the seller dispatch path carries the
-        // channel-native external_id. Resolve UUID → external_id so the
-        // computed session_id matches sessions created by the seller path.
-        const { chatId: resolvedChatId, senderId: resolvedSenderId } = await resolveCallAgentChatIds(services, ctx);
-
-        const agentFkId = ctx.agentId ?? instance.agentId;
-        if (!agentFkId) throw new Error(`No agent configured for instance ${instance.id}`);
-
-        const [agentRow] = await db
-          .select({
-            name: agents.name,
-            agentProviderId: agents.agentProviderId,
-            agentType: agents.agentType,
-            metadata: agents.metadata,
-            configPath: agents.configPath,
-          })
-          .from(agents)
-          .where(eq(agents.id, agentFkId))
-          .limit(1);
-        if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
-
-        const typeMap: Record<string, 'agent' | 'team' | 'workflow'> = {
-          assistant: 'agent',
-          tool: 'agent',
-          workflow: 'workflow',
-          team: 'team',
-        };
-        const providerAgentId =
-          ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??
-          agentRow.configPath ??
-          agentRow.name;
-
-        const runInstance = {
-          ...instance,
-          agentProviderId: agentRow.agentProviderId ?? null,
-          agentType: cfg.agentType ?? typeMap[agentRow.agentType] ?? 'agent',
-          agentInternalId: providerAgentId,
-          agentSessionStrategy: cfg.sessionStrategy ?? instance.agentSessionStrategy,
-          agentPrefixSenderName: cfg.prefixSenderName ?? instance.agentPrefixSenderName,
-          agentTimeout: cfg.timeoutMs ? Math.ceil(cfg.timeoutMs / 1000) : instance.agentTimeout,
-        };
-
-        // Honor instance.agentStreamMode — sync mode waits for the full agent run
-        // before sending anything (11-14s on some providers); stream mode returns
-        // progressively. See issue #410.
-        const result = await services.agentRunner.runOrStream({
-          instance: runInstance,
-          chatId: resolvedChatId,
-          senderId: resolvedSenderId,
-          senderName: ctx.senderName,
-          chatType: 'dm',
-          messages: ctx.messages,
-        });
-        return {
-          parts: result.parts,
-          fullResponse: result.parts.join('\n'),
-          metadata: {
-            runId: result.metadata.runId,
-            sessionId: result.metadata.sessionId,
-            status: result.metadata.status,
-          },
-        };
-      },
-      // Consumer-side stale-event gate — see engine.handleEvent comment.
-      // Skips chat.idle_timeout events whose row has been disarmed since the
-      // sweeper published the event, or whose chat is in active close-contact
-      // state. Fail-open on errors so a flaky DB doesn't drop legitimate
-      // events.
-      staleIdleTimeoutGate: async (chatId, instanceId, eventSequenceIndex) => {
-        return services.followUpLifecycle.evaluateIdleTimeoutFreshness(chatId, instanceId, eventSequenceIndex);
-      },
-    });
+    await services.automations.startEngine(buildAutomationEngineDeps(services, db));
   } catch (error) {
     log.error('Failed to start automation engine', { error: String(error) });
   }
@@ -591,7 +592,7 @@ async function setupEventBusServices(
 
   // Follow-up lifecycle hooks (arm on outbound agent msg, disarm on reply/handoff/archive)
   try {
-    await setupFollowUpHooks(eventBus, services);
+    await setupFollowUpHooks(eventBus, services, db);
   } catch (error) {
     log.error('Failed to set up follow-up hooks', { error: String(error) });
   }
@@ -626,7 +627,11 @@ async function setupEventBusServices(
   try {
     const turnEventsConn = getTurnEventsConnection();
     if (turnEventsConn) {
-      initAgentHeartbeat({ natsConnection: turnEventsConn, turnService: services.turns });
+      // G5 (ADR-0008): `db` opts this consumer into the tenant world — the
+      // activity write then runs in the scope derived from the heartbeat's
+      // instance ownership. Flag-off no instance carries a tenant, so every
+      // heartbeat classifies legacy and the call is byte-identical.
+      initAgentHeartbeat({ natsConnection: turnEventsConn, turnService: services.turns, db: services.db });
     } else {
       log.warn('Skipping agent heartbeat consumer: no NATS connection');
     }
@@ -639,6 +644,12 @@ async function setupEventBusServices(
     globalTurnMonitor = new TurnMonitor({
       turnService: services.turns,
       instanceService: services.instances,
+      // G5 (ADR-0008): the pools the per-tenant worker scopes need. Wiring them
+      // does NOT change flag-off behaviour — `runForEachActiveTenantRow` runs
+      // the single ambient pass, and the auth-plane enumeration is gated on the
+      // multitenancy flag.
+      db: services.db,
+      authPlaneDb: services.authPlane.db,
     });
     globalTurnMonitor.start();
     log.info('Turn monitor started');
@@ -669,6 +680,63 @@ async function waitForDatabaseReady(db: Database, maxAttempts = 30): Promise<voi
 }
 
 /**
+ * Run migrate-on-boot, under the DDL identity when enforcement is active
+ * (wish: omni-full-multitenancy, G3; ADR-0004).
+ *
+ * In LEGACY mode this is exactly the pre-G3 call: the serving connection runs
+ * the migrator, as it always has.
+ *
+ * In ENFORCED mode the serving role holds no CREATE and owns nothing, so it
+ * could not run migrations even if asked. A dedicated DDL connection does the
+ * work and is closed before this function returns — which is what "migration
+ * credentials are unavailable to the application process after boot" means in
+ * practice.
+ */
+async function runStartupMigrations(db: Database, enforced: EnforcedBootIdentities | null): Promise<void> {
+  const MIGRATION_TIMEOUT_MS = 60_000;
+  const ddlHandle = enforced ? createDbHandle({ url: enforced.ddlUrl, maxConnections: 2 }) : null;
+  try {
+    await Promise.race([
+      applyMigrations(ddlHandle?.db ?? db, new URL('../../db/drizzle', import.meta.url).pathname),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Database migrations timed out (60s)')), MIGRATION_TIMEOUT_MS),
+      ),
+    ]);
+  } finally {
+    await ddlHandle?.close().catch(() => undefined);
+    // The connection is shut AND the credential is gone from the environment
+    // (G3 review carry-forward L3). Only on the enforced path: legacy mode has
+    // no DDL identity and nothing is removed.
+    if (enforced && scrubDdlCredential()) {
+      log.info('DDL credential scrubbed from process environment');
+    }
+  }
+}
+
+/**
+ * Refuse to serve traffic on an identity that could bypass RLS, own a tenant
+ * table, or create schema objects — and refuse when enforcement is not actually
+ * installed (wish: omni-full-multitenancy, G3; ADR-0004).
+ *
+ * A legacy boot returns immediately: this is the whole of G3's startup
+ * footprint on an existing deployment.
+ */
+async function verifyEnforcedRuntimeIdentity(db: Database, mode: DbEnforcementMode): Promise<void> {
+  if (mode !== 'enforced') return;
+  try {
+    const identity = await assertEnforcedRuntimeIdentity(db);
+    log.info('Enforced runtime identity verified', {
+      currentUser: identity.currentUser,
+      forcedTables: identity.enforcement.forced.length,
+    });
+  } catch (error) {
+    log.error('Enforcement-mode startup refused', { error: String(error) });
+    await closeDb();
+    throw error;
+  }
+}
+
+/**
  * Main entry point
  */
 async function main() {
@@ -689,10 +757,37 @@ async function main() {
         'omni-api will continue using DATABASE_URL.',
     );
   }
-  const databaseUrl = getDefaultDatabaseUrl();
+  // Enforcement mode (wish: omni-full-multitenancy, G3; ADR-0004).
+  //
+  // `legacy` is the DEFAULT and takes exactly the path it always has:
+  // DATABASE_URL, one connection, migrate on it, serve on it. `enforced`
+  // requires the three-identity split — migrations run under the DDL identity
+  // on a connection that is closed before the server listens, and the serving
+  // connection is a non-owning NOBYPASSRLS role that is verified, not assumed.
+  // There is no superuser fallback on the enforced path: it never consults the
+  // legacy resolver at all.
+  const enforcementMode = resolveEnforcementMode();
 
-  // Create database connection
-  log.info('Connecting to database');
+  // Multitenancy on, DB enforcement off: credentials that claim a tenant
+  // boundary the database does not enforce. It is the documented migration
+  // path, so it boots — but never silently. See tenancy/enforcement-posture.ts.
+  warnOnMixedTenancyState(enforcementMode, (message) => log.warn(message));
+
+  const enforcedIdentities = enforcementMode === 'enforced' ? resolveEnforcedBootIdentities() : null;
+  const databaseUrl = enforcedIdentities ? enforcedIdentities.runtimeUrl : getDefaultDatabaseUrl();
+
+  // Create database connection.
+  //
+  // The log line is byte-identical to the pre-G3 legacy line (G3 review finding
+  // L1): a legacy boot must not gain even an observability field, because
+  // "contract-identical legacy behavior" includes what a log scraper sees. The
+  // `enforcementMode` field is emitted only on the enforced path, where it is
+  // new behavior anyway.
+  if (enforcementMode === 'enforced') {
+    log.info('Connecting to database', { enforcementMode });
+  } else {
+    log.info('Connecting to database');
+  }
   const db = createDb({ url: databaseUrl });
   globalDbRef = db;
 
@@ -722,19 +817,15 @@ async function main() {
   // applyMigrations() throws if Drizzle silently skipped any migration files
   log.info('Running database migrations');
   const migrationStart = Date.now();
-  const MIGRATION_TIMEOUT_MS = 60_000;
   try {
-    await Promise.race([
-      applyMigrations(db, new URL('../../db/drizzle', import.meta.url).pathname),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Database migrations timed out (60s)')), MIGRATION_TIMEOUT_MS),
-      ),
-    ]);
+    await runStartupMigrations(db, enforcedIdentities);
   } catch (error) {
     await closeDb();
     throw error;
   }
   log.info('Database migrations complete', { durationMs: Date.now() - migrationStart });
+
+  await verifyEnforcedRuntimeIdentity(db, enforcementMode);
 
   // Issue #407: migration 0018_supreme_puma was marked applied on a production
   // DB whose columns had never actually been renamed, so every /instances/*
@@ -789,6 +880,17 @@ async function main() {
 
   // Create app and get services
   const { app, services } = createApp(db, eventBus, globalChannelRegistry);
+  globalServicesRef = services;
+
+  // G5 (ADR-0008): opt the instance monitor into the tenant fan-out now that the
+  // long-lived auth-plane connection exists. Its first health check is a full
+  // 30-second interval away, so this always lands before any tick. Flag-off this
+  // changes nothing — `runForEachActiveTenantRow` still runs one ambient pass.
+  globalInstanceMonitor?.setAuthPlane(services.authPlane.db);
+
+  // G5 deliverable (e): terminate a revoked tenant's live voice sockets inside
+  // the RELEASE_SLOS ceiling. Flag-off this starts no timer at all.
+  globalStreamSweeper = startStreamRevocationSweeper(services.authPlane.db, voiceStreamRegistry.streamRegistry);
 
   // Seed default settings
   try {

@@ -34,7 +34,7 @@ import {
   probeCanonicalSocketSync,
   resolvePgserveSocketDir,
 } from './lib/pgserve-transport.js';
-import { resolveOmniScopedCredentials } from './lib/role-cutover.js';
+import { resolveOmniEnforcedCredentials, resolveOmniScopedCredentials } from './lib/role-cutover.js';
 
 /**
  * Environment object suitable for passing to `runPm2` as `envOverrides`
@@ -228,7 +228,13 @@ export function buildRuntimeEnv(serverConfig: ServerConfig, cliConfig: Config): 
   // `postgres:postgres` for `<scoped_role>:<scoped_password>` in
   // DATABASE_URL. Falls back to the legacy superuser path when the
   // sentinel is absent or OMNI_ROLE_CUTOVER=0.
-  const scopedCreds = resolveOmniScopedCredentials();
+  // Under OMNI_DB_ENFORCEMENT=on (wish: omni-full-multitenancy, G3) the
+  // fallback below is not available: `resolveOmniEnforcedCredentials` throws
+  // rather than letting the process start on `postgres:postgres`. Legacy
+  // deployments — every deployment that has not set the variable — take the
+  // unchanged best-effort path.
+  const scopedCreds =
+    process.env.OMNI_DB_ENFORCEMENT === 'on' ? resolveOmniEnforcedCredentials() : resolveOmniScopedCredentials();
   return {
     API_PORT: String(serverConfig.port),
     DATABASE_URL: applyScopedCredentials(resolveDatabaseUrl(serverConfig), scopedCreds),

@@ -23,6 +23,7 @@ import {
   headers as natsHeaders,
 } from 'nats';
 import { createLogger } from '../../logger';
+import { CURRENT_ENVELOPE_VERSION, resolvePublishTenantId } from '../envelope';
 
 const log = createLogger('nats');
 
@@ -239,6 +240,15 @@ export class NatsEventBus implements EventBus {
     const eventId = crypto.randomUUID();
     const timestamp = Date.now();
 
+    // Versioned tenant-aware envelope (G5, ADR-0008). One decision, three
+    // sources in trust order — explicit republish tenant, then the request
+    // scope, then the named instance's PERSISTED owner (the channel-plugin
+    // producer path, which has neither of the first two). When none yields a
+    // tenant — every flag-off publish, and every publish naming no known
+    // instance — both fields stay undefined and the envelope is `legacy`, i.e.
+    // byte-identical to pre-G5.
+    const tenantId = resolvePublishTenantId(metadata?.tenantId, metadata?.instanceId);
+
     const event: OmniEvent = {
       id: eventId,
       type,
@@ -254,6 +264,7 @@ export class NatsEventBus implements EventBus {
         source: metadata?.source ?? this.config.serviceName,
         ingestMode: metadata?.ingestMode,
         timings: metadata?.timings,
+        ...(tenantId ? { envelopeVersion: CURRENT_ENVELOPE_VERSION, tenantId } : {}),
       },
     };
 
@@ -501,6 +512,25 @@ export class NatsEventBus implements EventBus {
             error: error.message,
             retryCount,
             timestamp: Date.now(),
+          },
+          { source: this.config.serviceName },
+        );
+      },
+      onQuarantine: async (event, classification) => {
+        // Route a quarantined envelope (G5, ADR-0008) to the dead-letter stream
+        // with an explicit quarantine marker + the classification reason. The
+        // trusted tenant (when present) travels in the DLQ payload so a redrive
+        // tool can re-derive context; no payload/secret is copied.
+        await this.publishGeneric(
+          'system.dead_letter',
+          {
+            originalEventId: event.id,
+            originalEventType: event.type,
+            error: `envelope_quarantined:${classification.reason}`,
+            retryCount: 0,
+            timestamp: Date.now(),
+            quarantineReason: classification.reason,
+            tenantId: event.metadata.tenantId,
           },
           { source: this.config.serviceName },
         );

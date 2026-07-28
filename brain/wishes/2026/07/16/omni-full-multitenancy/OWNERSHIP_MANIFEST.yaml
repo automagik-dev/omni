@@ -1,0 +1,547 @@
+schema_version: 1
+wish: omni-full-multitenancy
+group: G0
+status: normative-draft-requires-g0-human-security-approval
+generated_by: engineer-complex-g0
+# Evidence is derived live from the materialization base. HEAD of this worktree
+# (63c1528d5c2e3cb4190e6a117f83c5a801a96ebb) is the materialization of
+# origin/dev d6c400d05287bbf436ecd7e28c56c845b893afc9; the single intervening
+# commit only adds wish artifacts, so all packages/ source equals the base.
+source:
+  materialization_base_commit: d6c400d05287bbf436ecd7e28c56c845b893afc9
+  worktree_head_commit: 63c1528d5c2e3cb4190e6a117f83c5a801a96ebb
+  schema_file: packages/db/src/schema.ts
+  drizzle_pgtable_count: 38
+  drizzle_tables_with_tenant_id: 0
+  non_drizzle_boundary_classes: 14
+  caller_adjacent_tenant_surfaces: 1
+
+# Every entry MUST declare exactly one disposition from this set. The G0
+# validator (validate-g0.mjs) enforces the enum and one-to-one table coverage.
+disposition_enum:
+  - tenant       # every row carries non-null tenant_id; RLS + tenant-aware constraints
+  - platform     # control-plane only; unreachable by tenant runtime roles/routes
+  - split        # a mixed global/tenant concept separated into distinct stores, never nullable ownership
+  - quarantine   # ambiguous/missing ownership; cannot be served until manually resolved
+
+required_entry_fields:
+  - disposition
+  - rationale
+  - ownership_derivation   # how the trusted tenant_id is established (never caller payload)
+  - enforcement_target     # where isolation is enforced (RLS/route/service/broker/etc.)
+  - migration_rule         # how legacy rows acquire ownership
+  - verification_target    # the test/gate that proves it
+
+# ---------------------------------------------------------------------------
+# DRIZZLE TABLES (38) — every pgTable in packages/db/src/schema.ts, once each.
+# `line` is the live declaration line at the materialization base.
+# ---------------------------------------------------------------------------
+drizzle_tables:
+  - table: agent_providers
+    line: 289
+    disposition: split
+    rationale: >-
+      Holds tenant-configured provider credentials/config alongside immutable
+      built-in provider definitions. Nullable ownership would let one tenant see
+      another's provider config or platform secrets.
+    ownership_derivation: tenant_id on the tenant-config split; platform catalog carries no tenant_id
+    enforcement_target: RLS on tenant provider-config table; platform catalog in a control-plane read-only table
+    migration_rule: split rows — provider credential/config rows derive tenant from owning instance; built-in definitions move to platform catalog
+    verification_target: tenant A cannot read/mutate tenant B provider config; catalog exposes no secrets
+  - table: agents
+    line: 347
+    disposition: tenant
+    rationale: Agents are tenant-owned automation definitions; names/aliases must be unique per tenant, not globally.
+    ownership_derivation: tenant_id denormalized from owning instance/creator at write
+    enforcement_target: RLS + tenant-scoped unique index on (tenant_id, name)
+    migration_rule: derive tenant_id from owning instance/creator; clone none
+    verification_target: cross-tenant agent UUID read/list returns empty/404
+  - table: agent_routes
+    line: 389
+    disposition: tenant
+    rationale: Routes bind agent+provider+instance/chat selectors that must all share one tenant.
+    ownership_derivation: tenant_id denormalized; composite FKs to (tenant_id, agent_id)/(tenant_id, instance_id)
+    enforcement_target: RLS + composite FKs preventing cross-tenant selector joins
+    migration_rule: derive from referenced agent/instance; reconcile against all reachable parents
+    verification_target: composite FK rejects cross-tenant route/agent/instance pairs
+  - table: agent_sessions
+    line: 485
+    disposition: tenant
+    rationale: Session lookup/cleanup must always be tenant-scoped to prevent cross-tenant session reuse.
+    ownership_derivation: tenant_id denormalized from instance/agent at session open
+    enforcement_target: RLS; tenant included in session lookup keys
+    migration_rule: derive from owning instance/agent
+    verification_target: session cleanup and lookup never cross tenant
+  - table: api_keys
+    line: 529
+    disposition: split
+    rationale: >-
+      Mixes an authentication index (hash/subject -> class/status) with tenant-visible
+      key metadata, global scopes (['*']) and legacy instance allowlists. Authentication
+      must resolve tenant before RLS starts, so the hash-lookup index cannot be a tenant table.
+    ownership_derivation: >-
+      platform-owned auth index establishes credential_class/tenant/principal/status/ceiling;
+      tenant-visible metadata/lineage derives tenant_id from that resolved context
+    enforcement_target: isolated auth-plane index (no tenant-route enumeration) + tenant RLS on key metadata + separate platform credential store
+    migration_rule: >-
+      legacy key restricted only to instances of one tenant may become a tenant key after scope/role review;
+      multi-tenant/god keys become platform class, are split, or revoked; never silently converted
+    verification_target: tenant routes cannot enumerate the global index; child-key writes enforce ceilings transactionally
+    evidence: instance_ids/allowlists/scopes at schema.ts:543-562; mint ceiling at routes/v2/keys.ts:188-284
+  - table: api_key_audit_logs
+    line: 614
+    disposition: split
+    rationale: Tenant-key actions belong to the tenant; platform-key actions belong to platform audit with target-tenant + reason.
+    ownership_derivation: tenant_id on tenant-key audit rows; platform audit store carries actor + target tenant + reason
+    enforcement_target: RLS on tenant audit rows; append-only platform audit store off the tenant plane
+    migration_rule: partition existing rows by the class of the referenced key; ambiguous key -> quarantine
+    verification_target: tenant cannot read platform-key audit rows or another tenant's audit rows
+  - table: instances
+    line: 660
+    disposition: tenant
+    rationale: Instance is the primary tenant ownership root; all channel credentials and session state belong to its tenant.
+    ownership_derivation: tenant_id assigned at instance creation from authenticated tenant context; the ownership root all descendants derive from
+    enforcement_target: non-null tenant_id, RLS, tenant-local name/default constraints
+    migration_rule: every current instance receives exactly one explicitly approved tenant mapping (H9.1 receipt)
+    verification_target: instance CRUD/QR/restart works within tenant; cross-tenant instance UUID denied
+  - table: persons
+    line: 955
+    disposition: tenant
+    rationale: >-
+      persons is currently global (schema.ts:955-972, no tenant_id); a global person can bridge
+      identity across future tenant boundaries. Cross-tenant person merging must be forbidden.
+    ownership_derivation: tenant_id assigned per tenant; ambiguous legacy persons cloned per tenant
+    enforcement_target: non-null tenant_id, RLS, tenant-scoped phone/email uniqueness
+    migration_rule: persons spanning mapped tenants are cloned per tenant; all references rewired deterministically
+    verification_target: overlapping phone/JID across tenants never merges; timelines return only same-tenant persons
+  - table: platform_identities
+    line: 984
+    disposition: tenant
+    rationale: >-
+      Links persons to channel/instance presence (schema.ts:984-1024, references instances/agents/persons).
+      Uniqueness (channel, instance, platform_user_id) must include tenant to avoid cross-tenant collision.
+    ownership_derivation: tenant_id denormalized from owning instance; composite FK to (tenant_id, person_id)
+    enforcement_target: RLS + tenant in unique index (channel, instance_id, platform_user_id)
+    migration_rule: derive tenant from instance; re-point to the per-tenant person clone
+    verification_target: identity relations never cross tenant; composite FK rejects cross-tenant pairs
+  - table: conversations
+    line: 1035
+    disposition: tenant
+    rationale: Cross-channel conversation continuity must exist only inside one tenant.
+    ownership_derivation: tenant_id denormalized from owning instance/chats
+    enforcement_target: RLS + composite FKs
+    migration_rule: derive from constituent chats/instance
+    verification_target: conversation continuity never spans tenants
+  - table: chats
+    line: 1065
+    disposition: tenant
+    rationale: Chats reference instance/conversation; external/canonical IDs must be unique in tenant/instance scope.
+    ownership_derivation: tenant_id denormalized from instance; composite FK to (tenant_id, instance_id)
+    enforcement_target: RLS + composite FK + tenant-aware external-ID index
+    migration_rule: derive from owning instance
+    verification_target: cross-tenant chat UUID/external-ID resolution denied
+  - table: chat_participants
+    line: 1139
+    disposition: tenant
+    rationale: Participant rows join chat+person+platform identity; all must share a tenant.
+    ownership_derivation: tenant_id denormalized; composite FKs to chat/person/platform_identity
+    enforcement_target: RLS + composite FKs
+    migration_rule: derive from owning chat
+    verification_target: participant lists never leak cross-tenant persons
+  - table: omni_groups
+    line: 1192
+    disposition: tenant
+    rationale: Group IDs are unique only inside the owning instance/tenant.
+    ownership_derivation: tenant_id denormalized from owning instance
+    enforcement_target: RLS + tenant/instance-scoped group-id uniqueness
+    migration_rule: derive from owning instance
+    verification_target: group-id collisions across tenants do not resolve cross-tenant
+  - table: messages
+    line: 1247
+    disposition: tenant
+    rationale: Messages are the highest-volume tenant data; external-ID indexes must be tenant-aware.
+    ownership_derivation: tenant_id denormalized from chat/instance at persist
+    enforcement_target: RLS + composite FK to (tenant_id, chat_id) + tenant-aware external-ID index
+    migration_rule: derive from owning chat
+    verification_target: message read/edit/reaction/forward/media/transcription cross-tenant denied
+  - table: omni_events
+    line: 1374
+    disposition: tenant
+    rationale: Event ingestion must derive tenant from trusted instance/context, never payload claims.
+    ownership_derivation: tenant_id derived from trusted instance/source record at ingest
+    enforcement_target: RLS; ingest rejects payload-supplied tenant claims
+    migration_rule: derive from owning instance; missing context -> quarantine
+    verification_target: event payload cannot select or leak another tenant
+  - table: handoff_logs
+    line: 1460
+    disposition: tenant
+    rationale: Direct UUID route plus list/aggregate queries must be tenant-scoped.
+    ownership_derivation: tenant_id denormalized from chat/instance
+    enforcement_target: RLS; tenant in list/aggregate predicates
+    migration_rule: derive from owning chat/instance
+    verification_target: cross-tenant handoff UUID and aggregates denied
+  - table: close_contact_logs
+    line: 1516
+    disposition: tenant
+    rationale: Chat/instance-scoped operational log.
+    ownership_derivation: tenant_id denormalized from chat/instance
+    enforcement_target: RLS + composite chat/instance constraints
+    migration_rule: derive from owning chat/instance
+    verification_target: cross-tenant read denied
+  - table: access_rules
+    line: 1562
+    disposition: tenant
+    rationale: >-
+      Instance-scoped and tenant-wide rules must be explicit; a global rule expressed as
+      instance_id IS NULL would silently apply across tenants.
+    ownership_derivation: tenant_id required; tenant-wide vs instance-scoped is an explicit column, never NULL-instance
+    enforcement_target: RLS; NULL instance means tenant-wide-within-tenant, never global
+    migration_rule: NULL-instance/global rules require explicit platform|tenant|split decision; ambiguity -> quarantine
+    verification_target: no rule applies across tenant boundary
+  - table: global_settings
+    line: 1609
+    disposition: split
+    rationale: Name conflates platform-wide runtime values with tenant-scoped settings.
+    ownership_derivation: split into platform_settings (no tenant_id) and tenant_settings (tenant_id)
+    enforcement_target: RLS on tenant_settings; platform_settings unreachable by tenant runtime
+    migration_rule: classify each key as platform or tenant; ambiguous keys -> quarantine (see LEGACY_MAPPING_DECISIONS.yaml)
+    verification_target: tenant runtime cannot read platform settings
+  - table: setting_change_history
+    line: 1638
+    disposition: split
+    rationale: History must follow the same platform/tenant split as the settings it records.
+    ownership_derivation: explicit owner class per row; tenant history carries tenant_id
+    enforcement_target: RLS on tenant history; platform history off the tenant plane
+    migration_rule: partition by referenced setting class; ambiguous -> quarantine
+    verification_target: tenant cannot read platform setting history
+  - table: batch_jobs
+    line: 1666
+    disposition: tenant
+    rationale: Job payload/status/retry/cancellation must be tenant-scoped (async replay boundary).
+    ownership_derivation: tenant_id captured at enqueue from authenticated/loaded resource
+    enforcement_target: RLS; dequeue/redrive revalidates tenant + revocation epoch
+    migration_rule: derive from owning resource; missing context -> DLQ/quarantine
+    verification_target: retry/replay preserves tenant; no cross-tenant cancellation
+  - table: sync_jobs
+    line: 1741
+    disposition: tenant
+    rationale: Sync jobs reference an instance; status UUID route must include tenant.
+    ownership_derivation: tenant_id denormalized from instance; composite FK to (tenant_id, instance_id)
+    enforcement_target: RLS + composite FK
+    migration_rule: derive from owning instance
+    verification_target: cross-tenant sync-job status UUID denied
+  - table: media_content
+    line: 1786
+    disposition: tenant
+    rationale: Message/storage keys and presigned-URL checks must include tenant.
+    ownership_derivation: tenant_id denormalized from message/instance; object keys carry tenant prefix
+    enforcement_target: RLS; tenant-prefixed object keys; presigned URL binds tenant/object/expiry/decision
+    migration_rule: derive from owning message/instance; re-key objects under tenant prefix during backfill
+    verification_target: guessed key/stale signed URL/cache hit cannot fetch cross-tenant media
+  - table: chat_id_mappings
+    line: 1826
+    disposition: tenant
+    rationale: Aliases must not resolve across tenants.
+    ownership_derivation: tenant_id denormalized from chat
+    enforcement_target: RLS; tenant in alias resolution
+    migration_rule: derive from owning chat
+    verification_target: alias never resolves cross-tenant
+  - table: plugin_storage
+    line: 1852
+    disposition: split
+    rationale: Plugin state may be tenant-scoped or platform-scoped; a mixed keyspace risks cross-tenant reads.
+    ownership_derivation: tenant namespace for tenant plugin state; separate platform plugin-state table
+    enforcement_target: RLS on tenant plugin storage; platform plugin state in a distinct table/schema; no mixed keyspace
+    migration_rule: classify each key namespace platform|tenant; ambiguous -> quarantine
+    verification_target: tenant A cannot read tenant B or platform plugin keys
+  - table: dead_letter_events
+    line: 2161
+    disposition: tenant
+    rationale: Retries must rehydrate tenant context and cannot execute without it (poison-path boundary).
+    ownership_derivation: tenant_id captured from the failed event's trusted context
+    enforcement_target: RLS; redrive revalidates tenant + revocation before side effects
+    migration_rule: derive from source event; missing context stays quarantined
+    verification_target: DLQ redrive without tenant context is refused, not globally processed
+  - table: payload_storage_config
+    line: 2208
+    disposition: split
+    rationale: Backend configuration is platform-owned; tenant overrides/quotas are a distinct tenant concern.
+    ownership_derivation: platform backend config (no tenant_id) + tenant overrides table (tenant_id)
+    enforcement_target: RLS on tenant overrides; platform backend config off tenant plane; secrets isolated/encrypted
+    migration_rule: platform backend rows stay platform; per-tenant overrides derive tenant
+    verification_target: tenant cannot read/modify platform backend config or secrets
+  - table: event_payloads
+    line: 2242
+    disposition: tenant
+    rationale: Offloaded event payloads and retention are tenant-scoped.
+    ownership_derivation: tenant_id denormalized from owning event
+    enforcement_target: RLS; tenant-prefixed offload object keys
+    migration_rule: derive from owning event; missing -> quarantine
+    verification_target: cross-tenant payload retrieval denied
+  - table: webhook_sources
+    line: 2287
+    disposition: tenant
+    rationale: Source secrets, replay, validation, and test delivery must stay inside the tenant.
+    ownership_derivation: tenant_id denormalized from owning instance; server-side source record establishes tenant, not request body
+    enforcement_target: RLS; inbound webhook tenant derives from source record + signed audience
+    migration_rule: derive from owning instance
+    verification_target: request body/header tenant claim cannot select ownership
+  - table: automations
+    line: 2444
+    disposition: tenant
+    rationale: >-
+      Triggers/actions may reference only same-tenant resources AND perform tenant-controlled
+      outbound egress (webhook action does a raw fetch at core/automations/actions.ts:141).
+    ownership_derivation: tenant_id denormalized from owning instance/creator
+    enforcement_target: RLS + composite FKs; all egress forced through the audited tenant-egress broker
+    migration_rule: derive from owning instance; automation URLs re-validated against default-deny egress policy
+    verification_target: automation cannot target another tenant's resources or reach private/metadata/control-plane hosts
+  - table: automation_logs
+    line: 2504
+    disposition: tenant
+    rationale: Automation execution logs follow the automation/event they record.
+    ownership_derivation: tenant_id denormalized; composite FK to automation/event
+    enforcement_target: RLS + composite FKs
+    migration_rule: derive from owning automation
+    verification_target: cross-tenant automation-log read denied
+  - table: consumer_offsets
+    line: 2546
+    disposition: platform
+    rationale: >-
+      NATS/JetStream consumer cursor bookkeeping (schema.ts:2546). Infrastructure state, not
+      tenant-facing data. One tenant consumer must never advance another's cursor.
+    ownership_derivation: consumer identity/subject design; not tenant-derived business data
+    enforcement_target: kept off tenant-facing data access; per-tenant offsets get a tenant-specific table if consumers become per tenant
+    migration_rule: remains platform infrastructure; no tenant backfill
+    verification_target: one tenant consumer cannot advance/read another tenant's offset
+  - table: trigger_logs
+    line: 2577
+    disposition: tenant
+    rationale: Direct reads and cost/usage aggregates must be tenant-scoped.
+    ownership_derivation: tenant_id denormalized from owning instance/agent
+    enforcement_target: RLS; tenant in aggregate predicates
+    migration_rule: derive from owning resource
+    verification_target: cost/usage aggregates never mix tenants
+  - table: agent_tasks
+    line: 2671
+    disposition: tenant
+    rationale: Task callbacks/tokens must be tenant-bound (callback-capability leakage boundary).
+    ownership_derivation: tenant_id denormalized; callback tokens bind tenant + revocation epoch
+    enforcement_target: RLS; callback token revalidated at use against current revocation epoch
+    migration_rule: derive from owning agent/instance
+    verification_target: callback token cannot act cross-tenant or after revocation
+  - table: turns
+    line: 2779
+    disposition: tenant
+    rationale: Close/reopen and lookup paths must validate same tenant/instance/chat.
+    ownership_derivation: tenant_id denormalized from chat/instance
+    enforcement_target: RLS + composite FKs
+    migration_rule: derive from owning chat/instance
+    verification_target: cross-tenant turn close/reopen/lookup denied
+  - table: chat_follow_up_state
+    line: 2883
+    disposition: tenant
+    rationale: Agent/instance/chat precedence must not cross tenant.
+    ownership_derivation: tenant_id denormalized from chat/instance
+    enforcement_target: RLS + composite FKs
+    migration_rule: derive from owning chat/instance
+    verification_target: follow-up state never crosses tenant
+  - table: processed_events
+    line: 2967
+    disposition: tenant
+    rationale: >-
+      Idempotency ledger; without tenant in the key one tenant could suppress another
+      tenant's event (async replay/poison boundary).
+    ownership_derivation: tenant_id added to the idempotency/primary key
+    enforcement_target: RLS; tenant included in idempotency key
+    migration_rule: derive from source event; missing -> quarantine
+    verification_target: one tenant cannot suppress/dedupe another tenant's event
+  - table: genie_hosts
+    line: 3006
+    disposition: platform
+    rationale: >-
+      Host trust registry (A2A/genie host fingerprints). Platform trust surface kept out of
+      tenant runtime and tenant-admin scope in the first release.
+    ownership_derivation: platform trust registry; not tenant-derived
+    enforcement_target: kept off tenant runtime/tenant-admin scopes; a future tenant-host registry is a separate tenant-owned table
+    migration_rule: remains platform; no tenant backfill in this release
+    verification_target: tenant admin cannot read/mutate host trust registry
+
+# ---------------------------------------------------------------------------
+# CALLER-ADJACENT TENANT CONTEXT — mandatory explicit item (WISH/Fable condition).
+# ---------------------------------------------------------------------------
+caller_adjacent_tenant_context:
+  surface: OmniCustomerContext.tenantId / OMNI_TENANT_ID / agent-dispatcher tenantId|tenant_id
+  disposition: quarantine
+  decision: rename
+  rationale: >-
+    OmniCustomerContext.tenantId (packages/core/src/providers/types.ts:377) is an OPTIONAL free-form
+    string documented as "resolved from person metadata" (types.ts:490-491). It flows
+    person.metadata -> customerContextFromRecord (agent-dispatcher.ts:1741-1748, reads tenantId/tenant_id)
+    -> customer context -> OMNI_TENANT_ID env exported to the external agent runtime
+    (execution-context.ts:75). It is a CALLER/DATA-DERIVED label, never an authenticated value, and MUST
+    NOT be confused with the future immutable authenticated tenant_id.
+  ownership_derivation: >-
+    none today; it is untrusted person-metadata content. It can never establish tenant authority. Any
+    genuine account linkage must be DERIVED from the authenticated tenant + a validated account mapping.
+  enforcement_target: >-
+    rename to a non-authoritative customer/account reference (e.g. OMNI_CUSTOMER_ACCOUNT_REF) so the
+    authoritative tenant context established at the G3 auth boundary is namespace-unambiguous; the
+    authenticated tenant_id is injected separately by the runtime, never from customer/person metadata.
+  migration_rule: >-
+    quarantine the field name; do not let any code read tenant authority from it. Introduce the
+    authoritative tenant context under a distinct name in G1/G3. Caller-supplied values are ignored for
+    isolation decisions.
+  verification_target: >-
+    static/architecture check that no authorization or RLS path reads OmniCustomerContext.tenantId or
+    OMNI_TENANT_ID as tenant authority; adversarial test that a forged person.metadata.tenantId cannot
+    select or cross a tenant boundary.
+  evidence:
+    - packages/core/src/providers/types.ts:373-378
+    - packages/core/src/providers/execution-context.ts:72-76
+    - packages/api/src/plugins/agent-dispatcher.ts:1741-1748,1778-1781
+
+# ---------------------------------------------------------------------------
+# NON-DRIZZLE STORES / TRUST BOUNDARIES (14) — every one carries a disposition.
+# `class` values are required by validate-g0.mjs.
+# ---------------------------------------------------------------------------
+non_drizzle_boundaries:
+  - class: nats_jetstream
+    disposition: split
+    rationale: >-
+      Event bus streams/subjects/durable consumers/DLQ carry cross-tenant traffic on shared subjects.
+      Envelopes must carry trusted tenantId; consumers validate before processing.
+    ownership_derivation: publisher derives tenant from authenticated/loaded resource, never payload claim
+    enforcement_target: tenant-aware subject strategy or envelope-tenant validation; missing context -> quarantine/DLQ + alert
+    migration_rule: version envelopes; pre-tenant backlog mapped to one tenant or quarantined
+    verification_target: tenant A event cannot dispatch tenant B; tenantless event quarantined
+    evidence: packages/core/src/events/nats/{client,consumer,streams,subjects,subscription}.ts, packages/core/src/events/bus.ts
+  - class: object_media_storage
+    disposition: tenant
+    rationale: S3/MinIO + local media backends store tenant media; keys must be tenant-prefixed.
+    ownership_derivation: tenant prefix tenants/<tenantId>/instances/<instanceId>/... derived from owning resource
+    enforcement_target: tenant-prefixed keys; presigned URL binds tenant/object/expiry/decision; TTL <= 60s
+    migration_rule: re-key legacy objects under tenant prefix during backfill; object inventory/snapshot receipt
+    verification_target: guessed key/stale URL/redirect cannot fetch cross-tenant object
+    evidence: packages/channel-sdk/src/media-backends/{s3-backend,local-backend,config,web-identity}.ts, packages/api/src/services/media-storage.ts, packages/api/src/plugins/storage.ts
+  - class: filesystem_session_state
+    disposition: tenant
+    rationale: Channel session/auth state (WhatsApp Baileys creds, session storage) is tenant-owned secret material.
+    ownership_derivation: tenant derived from owning instance; encrypted with tenant-bound context
+    enforcement_target: per-instance/tenant path isolation; non-exportable, tenant-bound encryption
+    migration_rule: re-scope session dirs under tenant/instance; secrets never in receipts/logs
+    verification_target: session state cannot be decrypted/exported under another tenant context
+    evidence: packages/api/src/plugins/session-storage.ts, packages/api/src/plugins/session-cleaner.ts, packages/channel-whatsapp/src/auth.ts
+  - class: in_memory_cache_rate_debounce
+    disposition: tenant
+    rationale: Rate-limit buckets and debounce buffers keyed only by resource UUID can collide across tenants.
+    ownership_derivation: tenant added to cache/rate/debounce keys
+    enforcement_target: tenant identity in every cache key, rate bucket, and debounce buffer
+    migration_rule: namespace keys by tenant on cutover
+    verification_target: rate/debounce/cache state does not collide across tenants
+    evidence: packages/api/src/middleware/rate-limit.ts, packages/core/src/automations/debounce.ts, packages/api/src/plugins/message-debouncer.ts
+  - class: idempotency_store
+    disposition: tenant
+    rationale: Idempotency keys without tenant let one tenant suppress another's event.
+    ownership_derivation: tenant included in idempotency key (backed by processed_events table)
+    enforcement_target: tenant-qualified idempotency keys
+    migration_rule: add tenant to key space; legacy keys quarantined if tenant unknown
+    verification_target: cross-tenant idempotency suppression impossible
+    evidence: packages/api/src/lib/idempotency.ts
+  - class: websocket_sse_streaming
+    disposition: tenant
+    rationale: WS/SSE subscriptions (chats, logs, voice) must be authorized by tenant, not only resource UUID.
+    ownership_derivation: tenant from the authenticated connection context
+    enforcement_target: subscriptions keyed/authorized by tenant; revocation terminates sessions <= 30s
+    migration_rule: add tenant authorization to subscription setup
+    verification_target: tenant A cannot subscribe to/resume tenant B streams
+    evidence: packages/api/src/ws/{chats,logs,voice}.ts
+  - class: a2a_task_stream_store
+    disposition: tenant
+    rationale: A2A task/stream stores hold task state and stream tokens that must be tenant-scoped.
+    ownership_derivation: tenant from the resolved instance/agent-card context
+    enforcement_target: tenant-scoped task/stream keys; tokens revalidated at use
+    migration_rule: scope existing task/stream state by tenant; ambiguous -> quarantine
+    verification_target: A2A task/stream cannot be resumed cross-tenant
+    evidence: packages/channel-a2a/src/{task-store,stream-store}.ts
+  - class: payload_offload_store
+    disposition: split
+    rationale: >-
+      Large event/media payload offload uses a platform backend with tenant-owned payloads
+      (event_payloads/payload_storage_config tables + object backend).
+    ownership_derivation: tenant on payload records/keys; platform on backend config
+    enforcement_target: tenant-prefixed payload keys; platform backend config off tenant plane
+    migration_rule: re-key payloads under tenant prefix; backend config stays platform
+    verification_target: cross-tenant payload fetch denied
+    evidence: packages/core/src/events/payload-store.ts, packages/api/src/services/payload-store.ts
+  - class: metrics_observability
+    disposition: platform
+    rationale: >-
+      Metrics/log/trace sinks are platform infrastructure; tenant labels must be bounded to avoid
+      cardinality abuse and cross-tenant disclosure.
+    ownership_derivation: tenant id attached to audit/trace context; metrics avoid unbounded tenant labels
+    enforcement_target: bounded/controlled tenant labels; audit/traces include tenant + actor credential id
+    migration_rule: add tenant to audit/trace context; keep metrics cardinality controlled
+    verification_target: metrics do not leak per-tenant existence; audit carries tenant + actor
+    evidence: packages/core/src/metrics/index.ts, packages/api/src/routes/v2/metrics.ts, packages/core/src/logger/buffer.ts, packages/api/src/middleware/output-redactor.ts
+  - class: provider_plugin_registry
+    disposition: split
+    rationale: >-
+      In-memory provider/plugin registries and the channel plugin loader hold both platform
+      built-ins and tenant-configured entries; tenant A must not resolve tenant B registry entries.
+    ownership_derivation: tenant entries keyed by tenant; platform built-ins are catalog
+    enforcement_target: tenant-keyed registry lookups; platform catalog read-only
+    migration_rule: separate tenant-configured registry state from platform built-ins
+    verification_target: tenant A cannot resolve tenant B in-memory registry entries
+    evidence: packages/api/src/plugins/loader.ts, packages/core/src/providers/factory.ts
+  - class: tenant_egress
+    disposition: split
+    rationale: >-
+      Tenant-controlled outbound egress is UNBOUNDED today. Automation webhook does a raw
+      fetch on a tenant-templated URL (core/automations/actions.ts:132,141) with NO SSRF guard;
+      provider clients fetch tenant baseUrl. Only media has a partial guard (safe-media-fetch.ts)
+      and it has an OMNI_MEDIA_URL_GUARD=off escape hatch.
+    ownership_derivation: tenant + actor + integration recorded per egress decision; destinations are tenant-bound policy
+    enforcement_target: >-
+      single audited default-deny egress broker for ALL tenant egress; block direct fetch/socket from
+      routes/providers/plugins/automations/workers; DNS re-resolved+revalidated per hop; reject
+      loopback/RFC1918/link-local/metadata/control-plane/non-approved schemes
+    migration_rule: route every tenant-controlled URL through the broker; remove per-call escape hatches
+    verification_target: SSRF/DNS-rebinding/redirect/metadata tests fail closed; no direct-network bypass
+    evidence: packages/core/src/automations/actions.ts:124-141, packages/core/src/providers/{webhook-provider,a2a-client,ag-ui-client,agno-client}.ts, packages/api/src/utils/safe-media-fetch.ts
+  - class: credential_bootstrap
+    disposition: platform
+    rationale: >-
+      God/admin key mint. cli/commands/keys.ts admin path creates a profile:'admin' (['*']) key
+      directly against the DB (bypassing POST /keys which refuses admin) and prints plaintext
+      (keys.ts:116-192). Must be a control-plane operation, never from the tenant data plane.
+    ownership_derivation: platform control plane only; explicit owner + purpose + audit (key.admin_created)
+    enforcement_target: >-
+      separate platform credential class/store; primary-key bootstrap must not create/print a plaintext
+      god key from the normal data plane; tenant admins never mint '*'
+    migration_rule: unrestricted/god keys migrate to platform credential class with explicit owner+purpose
+    verification_target: tenant routes cannot mint '*'; bootstrap does not emit a data-plane god key
+    evidence: packages/cli/src/commands/keys.ts:116-192, packages/api/src/services/api-keys.ts, packages/api/src/routes/v2/keys.ts:118-160
+  - class: cli_local_state_trust
+    disposition: platform
+    rationale: >-
+      CLI local sentinels (scoped-role.json), host trust/signing context, and the postgres:postgres
+      fallback are operator/control-plane state; the runtime NOBYPASSRLS cutover is best-effort and can
+      fall back to superuser (role-cutover.ts:194-200,232-235).
+    ownership_derivation: operator/control-plane; not tenant-derived
+    enforcement_target: >-
+      remove the superuser fallback once RLS is a security boundary; runtime startup fails closed if the
+      NOBYPASSRLS role is absent; migration/DDL credentials separate and unavailable post-boot
+    migration_rule: fail-closed cutover; no postgres:postgres fallback in RLS-enforced states
+    verification_target: runtime role verified NOBYPASSRLS; no superuser credential in app process
+    evidence: packages/cli/src/lib/role-cutover.ts:194-200,232-235, packages/api/src/middleware/signed-host-scope-context (referenced by scope-enforcer.ts:28), packages/cli/src/commands/trust.ts
+  - class: public_bootstrap_surfaces
+    disposition: platform
+    rationale: >-
+      Unauthenticated surfaces (/.well-known/agent-card.json, /.well-known/agent.json, /health,
+      /api/v2 health, OpenAPI, metrics) must not leak tenant inventory/counts/identifiers/state.
+    ownership_derivation: no tenant context; must expose no tenant-scoped data unless an explicit privacy contract approves it
+    enforcement_target: classify each public endpoint; A2A agent-card scoped by explicit instance only; health/info exposes non-sensitive compat epoch
+    migration_rule: audit each unauthenticated endpoint for tenant leakage before RLS release
+    verification_target: public endpoints leak no cross-tenant counts/identifiers/existence/offsets
+    evidence: packages/api/src/app.ts:151-227, packages/api/src/routes/health.ts, packages/api/src/routes/openapi.ts, packages/api/src/routes/v2/a2a.ts

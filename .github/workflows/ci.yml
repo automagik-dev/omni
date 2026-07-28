@@ -150,6 +150,97 @@ jobs:
         env:
           NODE_ENV: test
 
+  pg-isolation-gate:
+    name: PostgreSQL Isolation Gate (tenancy/RLS)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 25
+
+    # WHY A SEPARATE JOB
+    # ------------------
+    # Every `*-postgres.test.ts` suite in this repository is opt-in on an
+    # `OMNI_G{1..4}_POSTGRES_URL` variable and `describe.skip`s itself when the
+    # variable is unset. Before this job, no workflow set them, so the tenancy /
+    # RLS / two-tenant-adversarial suites — the ones that actually prove tenant
+    # containment — skipped on every CI run while CI stayed green. A skipped
+    # security test is worse than a missing one, because it looks like coverage.
+    #
+    # It does NOT reuse the quality gate's autopg service on :5432. The harness
+    # (`scripts/disposable-pg-cluster.ts`) is deliberately built to `initdb` its
+    # OWN throwaway cluster on a random loopback port with a generated
+    # superuser password — it refuses port 5432 outright — because the suites
+    # create databases, roles, and RLS policies that must never land in a shared
+    # cluster. So this job supplies a postgres SERVER build and lets the gate
+    # stand up and tear down its own cluster.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Cache bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Resolve a PostgreSQL server build
+        # `initdb` alone is not enough: a client-only distribution ships initdb
+        # and psql but no `postgres`, and initdb then dies halfway through. The
+        # harness applies the same postgres-next-to-initdb test, so apply it
+        # here and install only when the runner image does not already satisfy
+        # it. OMNI_PG_BIN_DIR is exported so the harness never has to guess.
+        run: |
+          set -euo pipefail
+          find_bin_dir() {
+            for dir in /usr/lib/postgresql/*/bin; do
+              if [ -x "$dir/postgres" ] && [ -x "$dir/initdb" ]; then echo "$dir"; return 0; fi
+            done
+            return 1
+          }
+          if ! BIN_DIR=$(find_bin_dir); then
+            echo "No PostgreSQL server build on the runner — installing one."
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends postgresql postgresql-client
+            BIN_DIR=$(find_bin_dir)
+          fi
+          echo "Using PostgreSQL server build at $BIN_DIR"
+          "$BIN_DIR/postgres" --version
+          echo "OMNI_PG_BIN_DIR=$BIN_DIR" >> "$GITHUB_ENV"
+          # The suites shell out to psql, and `resolvePgBinaries` looks for it
+          # inside OMNI_PG_BIN_DIR first. A server build that ships no client
+          # (some embedded distributions do exactly this) then makes every suite
+          # fail with ENOENT rather than skip — loud, but for the wrong reason.
+          # Pin the client explicitly when the server dir does not carry one.
+          if [ ! -x "$BIN_DIR/psql" ]; then
+            PSQL=$(command -v psql)
+            echo "Server build has no psql; using client at $PSQL"
+            echo "OMNI_PG_PSQL_BIN=$PSQL" >> "$GITHUB_ENV"
+          fi
+
+      - name: Stop any distro-started cluster
+        # The apt package starts a cluster on :5432 under the `postgres` user.
+        # The gate never uses it, and leaving it running only invites a suite to
+        # find a shared server by accident. Best-effort: absent unit = fine.
+        run: sudo systemctl stop postgresql || true
+
+      - name: Real-PostgreSQL isolation gate
+        # `make test-pg-gate` → `bun scripts/pg-gate.ts`, which creates the
+        # disposable cluster, exports EVERY opt-in URL variable from it so no
+        # suite can skip, runs the suites, and FAILS when a server is
+        # unavailable, when any test skipped, when zero tests passed, or when
+        # the number of files that ran differs from the number of
+        # `*-postgres.test.ts` files it discovered. Adding a new suite without
+        # wiring it therefore fails the gate rather than silently skipping.
+        #
+        # No `--env-file`: the gate must never touch an ambient DATABASE_URL.
+        run: make test-pg-gate
+
   remote-media-tests:
     name: Remote Media (S3/MinIO integration)
     runs-on: blacksmith-4vcpu-ubuntu-2404

@@ -10,6 +10,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
+import { agentKeyName } from '../../lib/agent-key-name';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { getQrCode } from '../../plugins/qr-store';
 import type { Services } from '../../services';
@@ -826,7 +827,14 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
 
   // Auto-provision/update scoped API key on agent assignment change
   if (data.agentId !== undefined && data.agentId !== oldAgentId) {
-    await handleAgentKeyProvisioning(services, id, data.agentId, oldAgentId ?? null);
+    const authContext = c.get('authContext');
+    await handleAgentKeyProvisioning(
+      services,
+      id,
+      data.agentId,
+      oldAgentId ?? null,
+      authContext?.credentialClass === 'tenant' ? authContext.tenantId : null,
+    );
   }
 
   return c.json({ data: sanitizeInstance(instance) });
@@ -836,18 +844,22 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
  * Auto-provision or update a scoped API key when an agent is assigned to an instance.
  * - Assign: creates or updates key `agent:<name>` with instanceIds including this instance
  * - Unassign: removes instanceId from the old agent's key
+ *
+ * `tenantId` is the calling credential's tenant, or null for a legacy request;
+ * see `agentKeyName` for why it participates in the key name.
  */
 async function handleAgentKeyProvisioning(
   services: Services,
   instanceId: string,
   newAgentId: string | null,
   oldAgentId: string | null,
+  tenantId: string | null,
 ) {
   // Remove instance from old agent's key
   if (oldAgentId) {
     try {
       const oldAgent = await services.agents.getById(oldAgentId);
-      const keyName = `agent:${oldAgent.name}`;
+      const keyName = agentKeyName(oldAgent.name, tenantId);
       const existingKey = await services.apiKeys.findByName(keyName);
       if (existingKey?.instanceIds) {
         const updated = existingKey.instanceIds.filter((id) => id !== instanceId);
@@ -865,7 +877,7 @@ async function handleAgentKeyProvisioning(
   if (newAgentId) {
     try {
       const agent = await services.agents.getById(newAgentId);
-      const keyName = `agent:${agent.name}`;
+      const keyName = agentKeyName(agent.name, tenantId);
       const existingKey = await services.apiKeys.findByName(keyName);
 
       if (existingKey) {

@@ -977,6 +977,32 @@ export interface SyncJobStatus {
 }
 
 /**
+ * The caller's own tenant credential context, as returned by
+ * `POST /auth/validate` (wish: omni-full-multitenancy, Group G4).
+ *
+ * Facts about the CALLER only — never a secret, hash, or key material. Absent
+ * entirely for a legacy credential, which is why `AuthValidateResponse.credential`
+ * is optional rather than nullable: "no tenant context" and "a tenant context
+ * whose fields are empty" are different states and must stay distinguishable.
+ */
+export interface AuthCredentialContext {
+  /** Credential class. Only tenant-class credentials carry a context today. */
+  class: 'tenant';
+  tenantId: string;
+  /** Stable tenant slug, or null when the auth plane did not resolve one. */
+  tenantSlug: string | null;
+  role: string;
+  /** Scopes carried by the tenant credential itself. */
+  scopes: string[];
+  /** Immutable resource ceilings inherited from the key lineage. */
+  constraints: Record<string, string[]>;
+  /** ISO 8601 expiry, or null when the credential does not expire. */
+  expiresAt: string | null;
+  /** 0 = root key, 1 = child key. */
+  delegationDepth: number;
+}
+
+/**
  * Auth validation response
  */
 export interface AuthValidateResponse {
@@ -984,6 +1010,8 @@ export interface AuthValidateResponse {
   keyPrefix: string;
   keyName: string;
   scopes: string[];
+  /** Present only for a tenant-class credential. */
+  credential?: AuthCredentialContext;
 }
 
 // ============================================================================

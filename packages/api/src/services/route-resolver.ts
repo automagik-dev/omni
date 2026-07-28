@@ -12,6 +12,8 @@ import type { Database } from '@omni/db';
 import { agentRoutes } from '@omni/db';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { LRUCache } from 'lru-cache';
+import { scopedHandle } from '../tenancy/tenant-scope';
+import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
 
 const log = createLogger('route-resolver');
 
@@ -98,8 +100,20 @@ export class RouteResolver {
   /**
    * Resolve the matching route for a given instance, chat, and person.
    * Returns null if no route matches (use instance default).
+   *
+   * `trustedTenantId` (G5, ADR-0008) is the envelope-derived tenant its
+   * consumer callers thread through `DispatchMetadata` — never a payload
+   * claim. When present, the DB read runs inside a short worker tenant scope
+   * AND the cache key includes the tenant, so one tenant's (positive or
+   * negative) entry can never answer another tenant's lookup. Undefined —
+   * the legacy world — keeps the pre-G5 key and ambient read byte-identically.
    */
-  async resolve(instanceId: string, chatId: string, personId?: string): Promise<ResolvedRoute | null> {
+  async resolve(
+    instanceId: string,
+    chatId: string,
+    personId?: string,
+    trustedTenantId?: string,
+  ): Promise<ResolvedRoute | null> {
     // Defense-in-depth: reject non-UUID chatIds before they reach SQL.
     // External IDs (e.g. WhatsApp LID JIDs like "12345:90@lid", phone JIDs like
     // "5511999@s.whatsapp.net") must NEVER be passed to UUID columns — PostgreSQL
@@ -113,7 +127,7 @@ export class RouteResolver {
       return null;
     }
 
-    const cacheKey = this.getCacheKey(instanceId, chatId, personId);
+    const cacheKey = this.getCacheKey(instanceId, chatId, personId, trustedTenantId);
     const cached = this.cache.get(cacheKey);
 
     // Check if we have a cached result (including negative cache via NO_ROUTE sentinel)
@@ -131,25 +145,32 @@ export class RouteResolver {
     // Note: personId ?? null handles SQL NULL semantics correctly - when personId is undefined,
     // the query becomes "personId = NULL" which is always false in SQL (use IS NULL instead).
     // This is intentional: undefined personId means "no user context", so user routes won't match.
-    const routes = await this.db
-      .select()
-      .from(agentRoutes)
-      .where(
-        and(
-          eq(agentRoutes.instanceId, instanceId),
-          eq(agentRoutes.isActive, true),
-          sql`(
+    // Tenant world: a short worker scope wraps exactly this read, so RLS
+    // confines it to the tenant's own routes; legacy world: the ambient read,
+    // byte-identical to pre-G5.
+    const queryRoutes = (handle: Database) =>
+      handle
+        .select()
+        .from(agentRoutes)
+        .where(
+          and(
+            eq(agentRoutes.instanceId, instanceId),
+            eq(agentRoutes.isActive, true),
+            sql`(
             (${agentRoutes.scope} = 'chat' AND ${agentRoutes.chatId} = ${chatId})
             OR (${agentRoutes.scope} = 'user' AND ${agentRoutes.personId} = ${personId ?? null})
           )`,
-        ),
-      )
-      .orderBy(
-        // Chat routes first, then user routes
-        sql`CASE ${agentRoutes.scope} WHEN 'chat' THEN 0 WHEN 'user' THEN 1 END`,
-        desc(agentRoutes.priority),
-      )
-      .limit(1);
+          ),
+        )
+        .orderBy(
+          // Chat routes first, then user routes
+          sql`CASE ${agentRoutes.scope} WHEN 'chat' THEN 0 WHEN 'user' THEN 1 END`,
+          desc(agentRoutes.priority),
+        )
+        .limit(1);
+    const routes = await (trustedTenantId === undefined
+      ? queryRoutes(this.db)
+      : runInWorkerTenantScope(this.db, trustedTenantId, () => queryRoutes(scopedHandle(this.db))));
 
     const dbRoute = routes[0];
     this.metrics.lastQueryMs = Date.now() - startMs;
@@ -227,7 +248,16 @@ export class RouteResolver {
   /**
    * Generate cache key from instance, chat, and person
    */
-  private getCacheKey(instanceId: string, chatId: string | null, personId: string | null | undefined): string {
-    return `${instanceId}:${chatId ?? 'null'}:${personId ?? 'null'}`;
+  private getCacheKey(
+    instanceId: string,
+    chatId: string | null,
+    personId: string | null | undefined,
+    trustedTenantId?: string,
+  ): string {
+    // Tenant-context lookups carry the tenant in the key (WISH: "cache keys
+    // include tenant identity") so a foreign scope's negative entry cannot
+    // shadow a tenant's real route. Legacy lookups keep the pre-G5 key.
+    const base = `${instanceId}:${chatId ?? 'null'}:${personId ?? 'null'}`;
+    return trustedTenantId === undefined ? base : `tenant:${trustedTenantId}:${base}`;
   }
 }
