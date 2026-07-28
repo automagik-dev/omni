@@ -73,7 +73,7 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.turbo', '__tests__
 const SKIP_FILES = new Set(['packages/core/src/egress/broker.ts', 'packages/core/src/egress/egress-access-guard.ts']);
 
 /** The package roots that contain tenant-reachable egress. */
-export const EGRESS_SCAN_ROOTS = [
+const EGRESS_SCAN_ROOTS = [
   'packages/core/src',
   'packages/api/src',
   'packages/channel-discord/src',

@@ -259,6 +259,3 @@ export function buildAutomationEngineDeps(
     releaseIdleTimeoutClaim: (claimToken) => releaseIdleTimeoutClaim(claimToken),
   };
 }
-
-/** Test seam: the worker-scope probes drive exactly what production runs. */
-export const __test__ = { resolveCallAgentChatIds, buildAutomationEngineDeps };

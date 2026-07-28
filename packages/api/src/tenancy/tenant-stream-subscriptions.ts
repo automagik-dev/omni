@@ -267,7 +267,7 @@ export type TenantRevocationStateReader = (
  * handle the read FAILS CLOSED (it raises), and the sweep treats that as
  * "unknown" — which terminates, never grants.
  */
-export const readTenantRevocationState: TenantRevocationStateReader = async (authPlaneDb, tenantId) => {
+const readTenantRevocationState: TenantRevocationStateReader = async (authPlaneDb, tenantId) => {
   const [row] = await authPlaneDb
     .select({ status: tenants.status, revocationEpoch: tenants.revocationEpoch })
     .from(tenants)

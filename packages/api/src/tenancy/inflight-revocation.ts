@@ -50,7 +50,7 @@ const log = createLogger('inflight-revocation');
 export const INFLIGHT_REVOCATION_CEILING_SECONDS = 30;
 
 /** Half the ceiling — see the cadence rationale in the module doc. */
-export function resolveInflightRecheckIntervalMs(): number {
+function resolveInflightRecheckIntervalMs(): number {
   return Math.floor((INFLIGHT_REVOCATION_CEILING_SECONDS * 1000) / 2);
 }
 

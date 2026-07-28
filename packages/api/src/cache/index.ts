@@ -6,7 +6,6 @@
  */
 
 export {
-  AUTH_CACHE_INVALIDATION_CEILING_SECONDS,
   CacheKeys,
   CacheTTL,
   apiKeyCache,
