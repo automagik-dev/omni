@@ -15,7 +15,9 @@ export const WHATSAPP_CLOUD_CAPABILITIES: ChannelCapabilities = {
   canSendText: true,
   canSendMedia: true,
   canSendReaction: true,
-  canSendTyping: false,
+  // Typing rides on read receipts: Meta shows it by marking the newest inbound
+  // message read with typing_indicator (plugin.sendTyping). ~25s, self-dismissing.
+  canSendTyping: true,
   canReceiveReadReceipts: true,
   canReceiveDeliveryReceipts: true,
   canEditMessage: false,

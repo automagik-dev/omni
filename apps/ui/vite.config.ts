@@ -14,7 +14,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8882',
+        // Override when the API runs on a non-default port (e.g. 8882 taken).
+        target: process.env.OMNI_API_PROXY_TARGET || 'http://localhost:8882',
         changeOrigin: true,
         configure: (proxy) => {
           // Fix ERR_CONTENT_DECODING_FAILED by removing accept-encoding

@@ -43,6 +43,7 @@ import {
 } from './senders';
 import type { MetaSendResponse, WhatsAppCloudConfig } from './types';
 import { MetaApiError, MetaErrorCode } from './utils/errors';
+import { toMetaPhone } from './utils/identity';
 
 const META_MEDIA_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'video', 'document', 'sticker']);
 
@@ -57,7 +58,16 @@ interface WhatsAppCloudInstanceState {
   client: MetaWhatsAppClient;
   config: WhatsAppCloudConfig;
   dedupeCache: DedupeCache;
+  /**
+   * chat (digits-only phone) → wamid of the newest inbound message. Meta's
+   * typing indicator can only be sent by referencing a RECEIVED message id
+   * (`sendTyping` looks the wamid up here), so we remember one per chat.
+   */
+  lastInboundWamid: Map<string, string>;
 }
+
+/** Cap on remembered chats per instance — oldest insertion evicted beyond it. */
+const MAX_TYPING_WAMID_CHATS = 1000;
 
 export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   readonly id = 'whatsapp-cloud' as ChannelType;
@@ -175,8 +185,9 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
       displayPhoneNumber,
     };
     const dedupeCache = createInboundDedupeCache();
+    const lastInboundWamid = new Map<string, string>();
 
-    this.waCloudInstances.set(instanceId, { client, config: cloudConfig, dedupeCache });
+    this.waCloudInstances.set(instanceId, { client, config: cloudConfig, dedupeCache, lastInboundWamid });
     this.byPhoneNumberId.set(phoneNumberId, instanceId);
     let wabaSet = this.byWabaId.get(wabaId);
     if (!wabaSet) {
@@ -379,6 +390,71 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // Typing indicator (implements ChannelPlugin.sendTyping)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Show the typing indicator in `chatId`.
+   *
+   * Meta's Cloud API has no free-standing presence endpoint — the indicator is
+   * sent by marking the newest RECEIVED message as read with
+   * `typing_indicator: { type: 'text' }`, and it self-dismisses on reply or
+   * after ~25s. Consequences honored here:
+   *   - Needs a remembered inbound wamid for the chat (`lastInboundWamid`,
+   *     recorded by `handleInboundMessage`). No wamid → silent no-op, per the
+   *     sendTyping contract ("plugins that cannot start the indicator are
+   *     silently skipped — the follow-up still sends, without the indicator").
+   *   - `duration` cannot be enforced and `duration === 0` (stop) cannot be
+   *     expressed — both are accepted and ignored.
+   *   - The referenced message is marked read as a side effect (Meta couples
+   *     them by design). That matches every caller's intent: typing precedes
+   *     an imminent reply.
+   */
+  async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
+    if (duration === 0) return; // Meta has no "stop typing" — it self-dismisses.
+
+    const state = this.waCloudInstances.get(instanceId);
+    if (!state) return; // Contract: typing is best-effort; never throw from here.
+
+    const wamid = state.lastInboundWamid.get(toMetaPhone(chatId));
+    if (!wamid) {
+      this.logger.debug('[whatsapp-cloud] sendTyping skipped — no inbound wamid remembered for chat', {
+        instanceId,
+        chatId,
+      });
+      return;
+    }
+
+    try {
+      await state.client.sendTypingIndicator(wamid);
+    } catch (err) {
+      this.logger.debug('[whatsapp-cloud] sendTyping failed (best-effort, ignored)', {
+        instanceId,
+        chatId,
+        err: String(err),
+      });
+    }
+  }
+
+  /**
+   * Remember the newest inbound wamid for a chat so `sendTyping` can reference
+   * it. Bounded FIFO per instance: beyond `MAX_TYPING_WAMID_CHATS` chats the
+   * oldest-inserted entry is evicted (re-inserting on every message keeps
+   * active chats near the young end).
+   */
+  private rememberInboundWamid(instanceId: string, from: string, wamid: string): void {
+    const state = this.waCloudInstances.get(instanceId);
+    if (!state) return;
+    const chatKey = toMetaPhone(from);
+    state.lastInboundWamid.delete(chatKey);
+    state.lastInboundWamid.set(chatKey, wamid);
+    if (state.lastInboundWamid.size > MAX_TYPING_WAMID_CHATS) {
+      const oldest = state.lastInboundWamid.keys().next().value;
+      if (oldest !== undefined) state.lastInboundWamid.delete(oldest);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // Inbound media download
   // ─────────────────────────────────────────────────────────────
 
@@ -502,6 +578,8 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
       await this.handleInboundReaction(instanceId, msg);
       return true;
     }
+
+    this.rememberInboundWamid(instanceId, msg.from, wamid);
 
     const content = extractInboundContent(msg);
     if (!content) {

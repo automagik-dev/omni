@@ -110,6 +110,21 @@ export class MetaWhatsAppClient {
     });
   }
 
+  /**
+   * Show the typing indicator for a conversation. Meta couples it to marking
+   * the referenced INBOUND message as read (`status: "read"` is mandatory in
+   * the same call), so `messageId` must be a received wamid. The indicator
+   * self-dismisses when we reply or after ~25s — there is no cancel endpoint.
+   */
+  async sendTypingIndicator(messageId: string): Promise<void> {
+    await this.post(`/${this.phoneNumberId}/messages`, {
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: messageId,
+      typing_indicator: { type: 'text' },
+    });
+  }
+
   /** GET /{media_id} — returns a temporary download URL for inbound media. */
   async getMediaUrl(mediaId: string): Promise<{ url: string; mime_type: string; sha256?: string; file_size?: number }> {
     return this.get(`/${mediaId}`);

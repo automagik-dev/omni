@@ -68,11 +68,7 @@ describe('channelHasMessagingWindow', () => {
 describe('channelSupportsTypingIndicator', () => {
   test.each<[ChannelType, boolean]>([
     ['whatsapp-baileys', true],
-    // whatsapp-cloud: the plugin's sendTyping() is a no-op (canSendTyping:
-    // false) — advertising typing here would make the follow-up runtime wait
-    // the burst with no indicator shown. Flip together with the capability
-    // when the plugin implements Meta's typing_indicator send.
-    ['whatsapp-cloud', false],
+    ['whatsapp-cloud', true],
     ['twilio-whatsapp', true],
     ['discord', true],
     ['telegram', true],
