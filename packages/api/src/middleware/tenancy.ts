@@ -48,9 +48,12 @@
  * and credential state.
  */
 
+import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
+import { matchedRoutes } from 'hono/route';
 import type { AuthContext, TenantAuthContext } from '../tenancy/auth-context';
 import { isMultitenancyEnabled } from '../tenancy/feature-flag';
+import { isTenantAddressableRoute } from '../tenancy/route-ownership';
 import { projectTenantScopes } from '../tenancy/scope-projection';
 import { runInTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import type { ApiKeyData, AppVariables } from '../types';
@@ -114,6 +117,69 @@ function projectTenantApiKey(context: TenantAuthContext): ApiKeyData {
   };
 }
 
+/**
+ * The route key Hono will actually serve, in the exact `"METHOD /path"` shape
+ * `route-ownership.ts` declares.
+ *
+ * Read from Hono's own match result rather than by re-matching the path against
+ * the declaration patterns. Re-matching would be a SECOND router with its own
+ * precedence rules, and the two disagreeing is precisely how a route slips past
+ * a gate: a pattern that this file resolves to a tenant-scoped declaration
+ * while Hono dispatches somewhere else is a bypass with no symptom.
+ *
+ * The chain contains middleware as well as handlers; they are told apart by
+ * arity exactly as the enumerator does it (`(c, next)` vs `(c)`). The FIRST
+ * terminal handler is the one that responds.
+ */
+function servedRouteKey(c: Context<{ Variables: AppVariables }>): string | null {
+  for (const route of matchedRoutes(c)) {
+    if (route.handler.length >= 2) continue;
+    return `${route.method} ${route.path}`;
+  }
+  return null;
+}
+
+/**
+ * Refuse routes a tenant credential may not address (wish:
+ * omni-full-multitenancy, Group G4).
+ *
+ * `route-ownership.ts` has always DECLARED which routes are platform-admin or
+ * control-plane. Until this function it had no runtime consumer, so the
+ * declaration was a comment: `projectTenantScopes` handed a tenant-viewer key
+ * `metrics:read` and `logs:read`, and the scope enforcer — which knows only
+ * `SCOPE_MAP` — duly let it read the process-wide log ring buffer.
+ *
+ * The projection is now derived from the same table, so this check is the
+ * SECOND of two independent barriers rather than the only one. It is worth
+ * having both: the projection stops authority from being granted, and this
+ * stops it from being exercised even if some other path (a legacy allowlist, a
+ * future wildcard, a hand-set scope) produced it anyway.
+ *
+ * Fail closed on an unknown route. The coverage gate holds the undeclared count
+ * at zero, so `undefined` here means a route was added without a declaration —
+ * the case where nobody has yet decided whether a tenant may reach it.
+ *
+ * Returns a response to send, or `null` to continue.
+ */
+function refuseUnaddressableRoute(c: Context<{ Variables: AppVariables }>): Response | null {
+  const route = servedRouteKey(c);
+  // No terminal handler matched at all: nothing will run, and Hono's 404 is the
+  // correct answer. Turning it into a 403 would make the tenancy edge an
+  // existence oracle for routes rather than a gate on them.
+  if (route === null) return null;
+  if (isTenantAddressableRoute(route)) return null;
+
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Insufficient permissions. This route is not addressable by a tenant credential.',
+      },
+    },
+    403,
+  );
+}
+
 export const tenancyMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
   const secret = presentedSecret(
     (name) => c.req.header(name),
@@ -167,6 +233,13 @@ export const tenancyMiddleware = createMiddleware<{ Variables: AppVariables }>(a
   if (context.credentialClass !== 'tenant') {
     return c.json({ error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } }, 401);
   }
+
+  // Ownership gate. Runs BEFORE the context is published and before the tenant
+  // transaction is opened: a refusal must not leave a scoped handle, an audited
+  // context, or an open transaction behind for a route the credential was never
+  // allowed to name.
+  const refusal = refuseUnaddressableRoute(c);
+  if (refusal) return refusal;
 
   c.set('authContext', context);
   c.set('tenantSource', result.tenantSource);

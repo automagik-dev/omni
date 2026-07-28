@@ -473,14 +473,27 @@ export async function handleGupshupWebhook(
 // reply is discarded and never reaches the user). Two suppression rules,
 // both scoped to a short window and failing open:
 //
-//   1. Same chat + same normalized text under a different external id.
-//      Texts of <= 3 chars are exempt ("ok"/"yes"-style quick answers repeat
-//      legitimately).
+//   1. Same chat + same normalized text under a different external id, where
+//      one of the two ids is a relay id (`gs-entry-*`). Both narrowings exist
+//      to protect legitimate user repeats: a person re-sending the same
+//      sentence is normal, and only the relay pair carries the synthetic id.
+//      Observed relay redeliveries arrive ~1s apart (see bea2b13a), so the
+//      content match is scoped to CROSS_ID_TEXT_WINDOW_MS, not the full
+//      minute. Texts of <= 3 chars are exempt entirely ("ok"/"yes"-style
+//      quick answers repeat legitimately).
 //   2. A relay text that is just a filemanager media URL arriving right
 //      after a native media message from the same chat (the relay's
-//      "media echo" of an already-delivered attachment).
+//      "media echo" of an already-delivered attachment). This one carries two
+//      independent relay signals (synthetic id + filemanager URL shape), so it
+//      keeps the wider window.
 
 const CROSS_ID_WINDOW_MS = 60_000;
+/**
+ * Content-match window for rule 1. Relay redeliveries land within seconds; a
+ * repeat outside this window is treated as a genuine user message.
+ */
+const CROSS_ID_TEXT_WINDOW_MS = 10_000;
+const RELAY_ID_PREFIX = 'gs-entry-';
 const FILEMANAGER_URL_RE = /^https:\/\/filemanager\.gupshup\.io\/\S+$/;
 const recentTextByChat = new Map<string, { ts: number; id: string }>();
 const recentMediaByChat = new Map<string, { ts: number; id: string }>();
@@ -492,15 +505,18 @@ export function resetCrossIdDedupeState(): void {
 }
 
 function pruneExpiredCrossIdEntries(now: number): void {
-  for (const map of [recentTextByChat, recentMediaByChat]) {
+  for (const [map, ttl] of [
+    [recentTextByChat, CROSS_ID_TEXT_WINDOW_MS * 1.5],
+    [recentMediaByChat, CROSS_ID_WINDOW_MS * 1.5],
+  ] as const) {
     for (const [key, value] of map) {
-      if (now - value.ts > CROSS_ID_WINDOW_MS * 1.5) map.delete(key);
+      if (now - value.ts > ttl) map.delete(key);
     }
   }
 }
 
 function isRelayMediaEcho(chatKey: string, messageId: string, bodyText: string, now: number): string | null {
-  if (!messageId.startsWith('gs-entry-') || !FILEMANAGER_URL_RE.test(bodyText)) return null;
+  if (!messageId.startsWith(RELAY_ID_PREFIX) || !FILEMANAGER_URL_RE.test(bodyText)) return null;
   const lastMedia = recentMediaByChat.get(chatKey);
   if (lastMedia && now - lastMedia.ts <= CROSS_ID_WINDOW_MS) return lastMedia.id;
   return null;
@@ -511,8 +527,16 @@ function isDuplicateTextRedelivery(chatKey: string, messageId: string, bodyText:
   if (normalized.length <= 3) return null; // "ok"/"yes"-style quick answers legitimately repeat
   const textKey = `${chatKey}:${normalized}`;
   const prev = recentTextByChat.get(textKey);
-  if (prev && prev.id !== messageId && now - prev.ts <= CROSS_ID_WINDOW_MS) return prev.id;
-  if (!prev || prev.id === messageId) recentTextByChat.set(textKey, { ts: now, id: messageId });
+  const isRelayPair = messageId.startsWith(RELAY_ID_PREFIX) || prev?.id.startsWith(RELAY_ID_PREFIX) === true;
+  if (prev && prev.id !== messageId && isRelayPair && now - prev.ts <= CROSS_ID_TEXT_WINDOW_MS) {
+    // Suppressed: keep the original entry so a third copy is measured from the
+    // first delivery rather than chaining the window forward.
+    return prev.id;
+  }
+  // Every non-suppressed delivery re-arms the entry (timestamp + id). Without
+  // this, a delivery that missed the match window but was still cached left a
+  // stale entry behind, so the next genuine relay pair went undetected.
+  recentTextByChat.set(textKey, { ts: now, id: messageId });
   return null;
 }
 

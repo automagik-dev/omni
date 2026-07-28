@@ -89,6 +89,7 @@ import { ApiKeyService } from './services/api-keys';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
 import { resolveAuthPlaneConnection } from './tenancy/auth-plane-connection';
+import { warnOnMixedTenancyState } from './tenancy/enforcement-posture';
 import { installInstanceOwnerResolver } from './tenancy/instance-owner-registry';
 import { currentTenantScope } from './tenancy/tenant-scope';
 import { startStreamRevocationSweeper } from './tenancy/tenant-stream-subscriptions';
@@ -100,7 +101,7 @@ const PORT = Number.parseInt(process.env.API_PORT ?? '8882', 10);
 const HOST = process.env.API_HOST ?? '0.0.0.0';
 const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
 
-import { VoiceStreamRegistry, parseVoiceStreamParams, transcodeAudioFrame } from './ws/voice';
+import { VoiceStreamRegistry, authorizeVoiceApiKey, parseVoiceStreamParams, transcodeAudioFrame } from './ws/voice';
 import type { VoiceStreamClient } from './ws/voice';
 import { type VoiceUpgradeDeps, authorizeVoiceUpgrade } from './ws/voice-upgrade-authorization';
 
@@ -293,15 +294,18 @@ function startBunServer(app: App) {
           return;
         }
 
-        // Validate API key against the database
-        if (globalDbRef) {
-          try {
-            const apiKeyService = new ApiKeyService(globalDbRef);
-            await apiKeyService.validate(params.apiKey);
-          } catch {
-            ws.close(4004, 'Invalid API key');
-            return;
-          }
+        // Validate API key against the database. The refusal logic lives in
+        // authorizeVoiceApiKey: an invalid key makes ApiKeyService.validate
+        // RESOLVE NULL rather than throw, so the result must be inspected — and
+        // an absent db ref must refuse rather than skip the check entirely.
+        const db = globalDbRef;
+        const authorized = await authorizeVoiceApiKey(
+          db ? (key: string) => new ApiKeyService(db).validate(key) : null,
+          params.apiKey,
+        );
+        if (!authorized) {
+          ws.close(4004, 'Invalid API key');
+          return;
         }
 
         // G5 deliverable (e): tenant-authorized upgrade. Flag-off this is the
@@ -763,6 +767,12 @@ async function main() {
   // There is no superuser fallback on the enforced path: it never consults the
   // legacy resolver at all.
   const enforcementMode = resolveEnforcementMode();
+
+  // Multitenancy on, DB enforcement off: credentials that claim a tenant
+  // boundary the database does not enforce. It is the documented migration
+  // path, so it boots — but never silently. See tenancy/enforcement-posture.ts.
+  warnOnMixedTenancyState(enforcementMode, (message) => log.warn(message));
+
   const enforcedIdentities = enforcementMode === 'enforced' ? resolveEnforcedBootIdentities() : null;
   const databaseUrl = enforcedIdentities ? enforcedIdentities.runtimeUrl : getDefaultDatabaseUrl();
 

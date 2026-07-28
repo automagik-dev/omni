@@ -1,3 +1,4 @@
+import { useInstances } from '@/hooks/useInstances';
 import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
 import { cn } from '@/lib/utils';
@@ -42,6 +43,18 @@ export function StatusBar() {
     refetchInterval: 30000,
   });
 
+  // Instance inventory is no longer part of the unauthenticated /health
+  // response (privacy contract); count from the authenticated list instead.
+  // `limit: 100` is the endpoint's maximum page size (routes/v2/instances.ts) —
+  // the default of 50 silently undercounted deployments past 50 instances. The
+  // response carries no total, so `meta.hasMore` is surfaced as a "+" rather
+  // than reported as a wrong exact count. Refreshed on the same 30s cadence as
+  // the health query so the footer does not go stale.
+  const { data: instancesData } = useInstances({ limit: 100 }, { refetchInterval: 30000 });
+  const instanceItems = instancesData?.items;
+  const activeInstances = instanceItems?.filter((i) => i.isActive).length ?? 0;
+  const moreInstances = instancesData?.meta?.hasMore === true;
+
   const dbStatus = getServiceStatus(isLoading, isError, health?.checks?.database?.status);
   const natsStatus = getServiceStatus(isLoading, isError, health?.checks?.nats?.status);
 
@@ -53,9 +66,10 @@ export function StatusBar() {
       </div>
 
       <div className="flex items-center gap-4 font-mono text-xs text-muted-foreground">
-        {health?.instances && (
+        {instanceItems && (
           <span>
-            {health.instances.connected}/{health.instances.total} instances
+            {activeInstances}/{instanceItems.length}
+            {moreInstances ? '+' : ''} instances
           </span>
         )}
         {health?.uptime !== undefined && <span>Uptime: {formatUptime(health.uptime)}</span>}

@@ -170,6 +170,63 @@ describe('provisioning plan', () => {
     expect(revoke).toBeGreaterThan(grantAll);
   });
 
+  test('the pre-cutover legacy role keeps nothing once it is named', () => {
+    const legacy = 'pgserve_omni_deadbeef1234_role';
+    const statements = roleProvisioningStatements(PASSWORDS, DEFAULT_ROLE_NAMES, 'omni', [legacy]);
+    const withLegacy = statements.join('\n');
+
+    // Guarded: a deployment that never ran the CLI cutover must still apply.
+    expect(withLegacy).toContain(`IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${legacy}')`);
+    // The blanket grants role-cutover.ts hands it (GRANT ... ON ALL TABLES) —
+    // ownership moves to the DDL role on its own, privilege does not.
+    for (const fragment of [
+      'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM %I',
+      'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM %I',
+      'REVOKE ALL PRIVILEGES ON SCHEMA public FROM %I',
+      'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA drizzle FROM %I',
+      'REVOKE ALL PRIVILEGES ON DATABASE "omni" FROM %I',
+      // A default privilege survives an object-level REVOKE and would re-arm
+      // the legacy role on the next table created. Both grantors are covered.
+      'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE ALL ON TABLES FROM %I',
+      'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM %I',
+    ]) {
+      expect(withLegacy).toContain(fragment);
+    }
+    expect(withLegacy).toContain(`format('REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM %I', '${legacy}')`);
+    // And it never becomes an auth-plane identity by inheritance.
+    expect(withLegacy).toContain(`EXECUTE 'REVOKE "${DEFAULT_ROLE_NAMES.authPlaneMarker}" FROM "${legacy}"'`);
+  });
+
+  test('the legacy revoke lands after every grant, or the blanket grant would undo it', () => {
+    const legacy = 'pgserve_omni_deadbeef1234_role';
+    const statements = roleProvisioningStatements(PASSWORDS, DEFAULT_ROLE_NAMES, 'omni', [legacy]);
+    const lastGrant = statements.reduce((acc, s, i) => (s.startsWith('GRANT ') ? i : acc), -1);
+    const revoke = statements.findIndex((s) => s.includes(`rolname = '${legacy}'`));
+    expect(lastGrant).toBeGreaterThanOrEqual(0);
+    expect(revoke).toBeGreaterThan(lastGrant);
+  });
+
+  test('naming no legacy role changes nothing — the default plan is byte-identical', () => {
+    expect(roleProvisioningStatements(PASSWORDS, DEFAULT_ROLE_NAMES, 'omni', []).join('\n')).toBe(plan);
+  });
+
+  test('a legacy name that collides with a provisioned identity is refused', () => {
+    for (const name of Object.values(DEFAULT_ROLE_NAMES)) {
+      expect(() => roleProvisioningStatements(PASSWORDS, DEFAULT_ROLE_NAMES, 'omni', [name])).toThrow(/collides/);
+    }
+    expect(() =>
+      roleProvisioningStatements(PASSWORDS, DEFAULT_ROLE_NAMES, 'omni', ['bad"; DROP DATABASE omni --']),
+    ).toThrow(/unsafe legacy role identifier/);
+  });
+
+  test('the auth-plane function grants name their schema', () => {
+    // An unqualified GRANT EXECUTE resolves against the applier's search_path,
+    // which is the same failure mode as an unqualified CREATE.
+    expect(plan).toContain('GRANT EXECUTE ON FUNCTION public.omni_current_tenant_id()');
+    expect(plan).toContain('GRANT EXECUTE ON FUNCTION public.omni_is_auth_plane(text)');
+    expect(plan).toContain('GRANT EXECUTE ON FUNCTION public.omni_auth_plane_row_visible(uuid, text)');
+  });
+
   test('unsafe identifiers and passwords are rejected rather than interpolated', () => {
     expect(() =>
       roleProvisioningStatements(PASSWORDS, { ...DEFAULT_ROLE_NAMES, runtime: 'bad"; DROP DATABASE omni --' }),

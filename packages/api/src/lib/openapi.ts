@@ -79,4 +79,10 @@ export const apiTags = [
   { name: 'Payloads', description: 'Event payload management' },
   { name: 'Conversations', description: 'Cross-channel conversation continuity' },
   { name: 'Voice', description: 'Voice channel sessions and streaming' },
+  {
+    name: 'Platform',
+    description:
+      'Platform control plane: tenant lifecycle and memberships. Mounted only when ' +
+      '`OMNI_MULTITENANCY_ENABLED=true`; requires a platform-class credential.',
+  },
 ];

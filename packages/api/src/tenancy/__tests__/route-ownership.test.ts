@@ -7,12 +7,12 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { enumerateRegisteredRoutes } from '../route-enumeration';
 import {
   ROUTE_OWNERSHIP,
   type RouteOwnershipDeclaration,
   UNDECLARED_ACKNOWLEDGED,
   UNDECLARED_ACKNOWLEDGED_CEILING,
-  enumerateRegisteredRoutes,
   evaluateRouteOwnership,
 } from '../route-ownership';
 

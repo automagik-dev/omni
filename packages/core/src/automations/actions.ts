@@ -90,8 +90,11 @@ export interface ActionDependencies {
    *     `closeUntil` still in window)
    *   - follow-up row already disarmed (`sequence_complete`,
    *     `customer_replied`, `handoff`, `contact_closed`, etc.)
-   *   - row has advanced past the event's `sequenceIndex` (event is a
-   *     replay or redelivery from before the row's last sweeper tick)
+   *   - this exact event was already delivered to the engine (an event's
+   *     identity is chat + instance + arm epoch + `sequenceIndex`, and the
+   *     gate remembers the identities it let through)
+   *   - the row's `sequenceIndex` is 2+ ahead of the event's — a bulk replay
+   *     of history the gate never claimed
    *
    * Defense-in-depth against NATS replay of historical or duplicate
    * idle-timeout events that the sweeper had already processed before a
@@ -99,13 +102,17 @@ export interface ActionDependencies {
    * redelivered after a transient handler failure.
    *
    * `eventSequenceIndex` is the `sequenceIndex` field from the
-   * `chat.idle_timeout` payload at publish time. The row's current
-   * `sequence_index` is read by the gate; if it is strictly greater than
-   * the event's value, the row has already advanced via a more recent
-   * sweep and this event is stale.
+   * `chat.idle_timeout` payload at publish time. It is NOT compared as a
+   * distance against the row's current `sequence_index` for the ambiguous
+   * 0/1 gap: the sweeper publishes index N and then immediately advances the
+   * row to N+1, so `row > event` also matches every healthy first delivery —
+   * the comparison that dropped ~14% of legitimate follow-ups (f149179a).
+   * Event identity is what discriminates a redelivery from a first delivery.
    *
    * Returning `{ skip: false }` (or omitting the gate entirely) lets the
-   * engine proceed with normal matching+execution.
+   * engine proceed with normal matching+execution. A `claimToken` on that
+   * verdict must be handed back to `releaseIdleTimeoutClaim` if the engine
+   * then fails to handle the event.
    */
   staleIdleTimeoutGate?: (
     chatId: string,
@@ -117,7 +124,15 @@ export interface ActionDependencies {
      * `null` for a legacy envelope. The gate scopes its DB reads from it.
      */
     trustedTenantId?: string | null,
-  ) => Promise<{ skip: boolean; reason?: string }>;
+  ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
+  /**
+   * Release a claim previously granted by `staleIdleTimeoutGate`. The gate
+   * records the claim before the event is executed, so a delivery that throws
+   * (queue full → `nak`, dispatcher error) must give the claim back or its own
+   * NATS redelivery is dropped as a "duplicate" and the follow-up is lost
+   * permanently — a fail-CLOSED outcome the gate explicitly forbids.
+   */
+  releaseIdleTimeoutClaim?: (claimToken: string) => void | Promise<void>;
 }
 
 /**

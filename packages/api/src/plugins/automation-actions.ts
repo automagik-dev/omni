@@ -39,6 +39,7 @@ import type { Database } from '@omni/db';
 import { agents } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import type { Services } from '../services';
+import { releaseIdleTimeoutClaim } from '../services/follow-up-lifecycle';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { getPlugin } from './loader';
@@ -105,7 +106,8 @@ export interface AutomationEngineDeps {
     instanceId: string,
     eventSequenceIndex: number | null,
     trustedTenantId?: string | null,
-  ) => Promise<{ skip: boolean; reason?: string }>;
+  ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
+  releaseIdleTimeoutClaim: (claimToken: string) => void | Promise<void>;
 }
 
 /** Injectable seams (tests only — production uses the module defaults). */
@@ -250,6 +252,11 @@ export function buildAutomationEngineDeps(
         trustedTenantId,
       );
     },
+
+    // Give the delivery claim back when handling failed (queue full → nak),
+    // so the NATS redelivery is a first delivery and not a "duplicate". The
+    // claim registry is in-memory (no DB), so no tenant scope applies.
+    releaseIdleTimeoutClaim: (claimToken) => releaseIdleTimeoutClaim(claimToken),
   };
 }
 

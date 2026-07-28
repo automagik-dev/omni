@@ -12,7 +12,18 @@ export { createDb, createDbHandle, createPostgresClient, getDb, closeDb, getDefa
 export type { Database, DbConfig } from './client';
 
 // Migration exports
-export { applyMigrations } from './migrate';
+export { applyMigrations, assertOnlineDdlPreflight, BLOCKING_INDEX_OVERRIDE_ENV_VAR } from './migrate';
+export type { ApplyMigrationsOptions } from './migrate';
+
+// Online (CONCURRENTLY) index phase for G2 — explicitly invoked, never on boot.
+export {
+  DEFAULT_LARGE_TABLE_ROWS,
+  ONLINE_DDL_COMMAND,
+  applyOnlineTenantDdl,
+  checkOnlineDdlPreflight,
+  onlineDdlPreflightMessage,
+} from './online-ddl';
+export type { OnlineDdlBlocker, OnlineDdlPreflight, OnlineDdlReport, OnlineDdlStep } from './online-ddl';
 
 // Tenant RLS enforcement (G3) — explicitly invoked, never journaled.
 export {

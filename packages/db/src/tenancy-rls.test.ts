@@ -14,16 +14,22 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PgTable, getTableConfig } from 'drizzle-orm/pg-core';
+import * as schema from './schema';
 import { TENANT_TABLES } from './tenancy-ownership';
 import {
   AUTH_PLANE_READABLE_TABLES,
   AUTH_PLANE_ROW_FUNCTION,
   G1_TENANT_PLANE_TABLES,
   POLICY_COMMANDS,
+  QUALIFIED_AUTH_PLANE_FUNCTION,
+  QUALIFIED_AUTH_PLANE_ROW_FUNCTION,
+  QUALIFIED_TENANT_CONTEXT_FUNCTION,
   RLS_EXCLUSIONS,
   RLS_TENANT_TABLES,
   RUNTIME_DENIED_TABLES,
   contextFunctionStatements,
+  dropContextFunctionStatements,
   dropPolicyStatements,
   policyName,
   policyStatements,
@@ -33,11 +39,37 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const drizzleDir = join(here, '..', 'drizzle');
 
+/**
+ * Every table in `schema.ts` that actually carries a `tenant_id` column.
+ *
+ * Derived, never hardcoded: a frozen count (`toHaveLength(37)`) passes happily
+ * when someone adds a tenant table and forgets to cover it — the new table is
+ * simply not in the list the count was written against. Reading the schema
+ * makes "a tenant table without RLS" a test failure by construction.
+ */
+const SCHEMA_TENANT_TABLES: string[] = (Object.values(schema) as unknown[])
+  .filter((value): value is PgTable => value instanceof PgTable)
+  .map((table) => getTableConfig(table))
+  .filter((config) => config.columns.some((column) => column.name === 'tenant_id'))
+  .map((config) => config.name)
+  .sort();
+
 describe('RLS coverage', () => {
-  test('covers the 29 manifest tenant tables plus every G1 tenant-plane table', () => {
-    expect(TENANT_TABLES).toHaveLength(29);
-    expect(G1_TENANT_PLANE_TABLES).toHaveLength(8);
-    expect(RLS_TENANT_TABLES).toHaveLength(37);
+  test('every schema table carrying tenant_id is either covered or explicitly excluded', () => {
+    expect(SCHEMA_TENANT_TABLES.length).toBeGreaterThan(0);
+    const covered = new Set(RLS_TENANT_TABLES);
+    const excluded = new Set(RLS_EXCLUSIONS.map((e) => e.table));
+    const unaccounted = SCHEMA_TENANT_TABLES.filter((t) => !covered.has(t) && !excluded.has(t));
+    expect(unaccounted).toEqual([]);
+  });
+
+  test('nothing is covered that does not carry a tenant_id column', () => {
+    const inSchema = new Set(SCHEMA_TENANT_TABLES);
+    expect(RLS_TENANT_TABLES.filter((t) => !inSchema.has(t))).toEqual([]);
+  });
+
+  test('the explicit runtime list is exactly the manifest tables plus the G1 tenant plane', () => {
+    expect(RLS_TENANT_TABLES).toHaveLength(TENANT_TABLES.length + G1_TENANT_PLANE_TABLES.length);
     for (const table of TENANT_TABLES) expect(RLS_TENANT_TABLES).toContain(table);
     for (const table of G1_TENANT_PLANE_TABLES) expect(RLS_TENANT_TABLES).toContain(table);
   });
@@ -123,6 +155,33 @@ describe('policy shape', () => {
       if (exempt.has(table)) continue;
       expect(tablePolicyStatements(table).join('\n')).not.toContain(AUTH_PLANE_ROW_FUNCTION);
     }
+  });
+
+  test('the helpers are created in public and called as public — no search_path can split them', () => {
+    const created = contextFunctionStatements();
+    for (const qualified of [
+      QUALIFIED_TENANT_CONTEXT_FUNCTION,
+      QUALIFIED_AUTH_PLANE_FUNCTION,
+      QUALIFIED_AUTH_PLANE_ROW_FUNCTION,
+    ]) {
+      expect(created.join('\n')).toContain(`CREATE OR REPLACE FUNCTION ${qualified}(`);
+    }
+    // The row-visibility helper pins search_path to pg_catalog and therefore
+    // calls its siblings public-qualified; an unqualified CREATE would have put
+    // them wherever the applying connection's search_path pointed.
+    for (const statement of created) {
+      expect(statement).not.toMatch(/CREATE OR REPLACE FUNCTION omni_/);
+    }
+    expect(dropContextFunctionStatements().join('\n')).toContain(
+      `DROP FUNCTION IF EXISTS ${QUALIFIED_TENANT_CONTEXT_FUNCTION}()`,
+    );
+  });
+
+  test('policy predicates name the schema, so the stored reference does not depend on the applier', () => {
+    const plan = policyStatements().join('\n');
+    expect(plan).toContain(`${QUALIFIED_TENANT_CONTEXT_FUNCTION}()`);
+    expect(plan).not.toMatch(/[^.]\bomni_current_tenant_id\(\)/);
+    expect(plan).not.toMatch(/[^.]\bomni_auth_plane_row_visible\(/);
   });
 
   test('the auth-plane exemption is a role-membership predicate, never BYPASSRLS', () => {

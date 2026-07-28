@@ -73,6 +73,7 @@ import { createMediaProcessingService } from '@omni/media-processing';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import * as Sentry from '@sentry/bun';
 import { and, eq } from 'drizzle-orm';
+import { agentKeyNameCandidates } from '../lib/agent-key-name';
 import { withIdempotency } from '../lib/idempotency';
 import { sentryEnabled } from '../lib/sentry-scrub';
 import type { Services } from '../services';
@@ -2679,11 +2680,25 @@ async function dispatchViaTurnBasedProvider(
     return false;
   }
 
-  // Find the scoped API key (provisioned on agent-instance assignment)
-  const keyName = `agent:${agentRecord.name}`;
-  const scopedKey = await services.apiKeys.findByName(keyName);
+  // Find the scoped API key (provisioned on agent-instance assignment).
+  //
+  // Two names may exist for one agent: the tenant-qualified name a tenant
+  // request provisions, and the bare legacy name. Dispatch runs on the event
+  // path with no request credential, so the tenant comes from the INSTANCE row
+  // rather than from a caller. See lib/agent-key-name.ts — the qualified name
+  // wins where it exists, and an untenanted instance performs the same single
+  // lookup it always has.
+  const keyNames = agentKeyNameCandidates(agentRecord.name, instance.tenantId);
+  let scopedKey: Awaited<ReturnType<typeof services.apiKeys.findByName>> = null;
+  for (const candidate of keyNames) {
+    scopedKey = await services.apiKeys.findByName(candidate);
+    if (scopedKey) break;
+  }
   if (!scopedKey) {
-    log.error('Turn-based dispatch: scoped API key not found', { keyName, instanceId: instance.id });
+    log.error('Turn-based dispatch: scoped API key not found', {
+      keyName: keyNames[0],
+      instanceId: instance.id,
+    });
     return false;
   }
 

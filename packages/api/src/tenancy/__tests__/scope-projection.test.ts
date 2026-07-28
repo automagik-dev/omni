@@ -42,6 +42,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { SCOPE_MAP } from '../../constants/scopes';
+import { TENANT_ADDRESSABLE_SCOPES } from '../route-ownership';
 import { LEGACY_SCOPE_UNIVERSE, classifyLegacyScope, projectTenantScopes } from '../scope-projection';
 
 /** Every distinct scope any route actually requires. */
@@ -84,11 +85,28 @@ describe('tiers expand to what the role ceiling means', () => {
     expect(projectTenantScopes(['tenant:write'])).not.toContain('turns:admin');
   });
 
-  test('tenant:* reaches every non-delegation scope, including admin verbs', () => {
+  test('tenant:* reaches every tenant-addressable non-delegation scope, including admin verbs', () => {
     const projected = new Set(projectTenantScopes(['tenant:*']));
-    const missing = requiredScopes.filter((s) => !s.startsWith('keys:') && !projected.has(s));
+    const missing = TENANT_ADDRESSABLE_SCOPES.filter((s) => !s.startsWith('keys:') && !projected.has(s));
     expect(missing).toEqual([]);
     expect(projected.has('turns:admin')).toBe(true);
+  });
+
+  test('the widest tier still stops at the tenant-addressable surface', () => {
+    // The complement of the assertion above, and the actual bug this pins.
+    // These four scopes ARE in SCOPE_MAP, so the previous universe-from-
+    // SCOPE_MAP projection emitted them: `tenant:read` handed a viewer key the
+    // process-wide log ring buffer and the Prometheus counters, and
+    // `tenant:write` handed an operator key mutation rights over the
+    // deployment's host-trust registry. `route-ownership.ts` declares every one
+    // of those routes platform-admin or control-plane, and no tier may reach
+    // them.
+    const widest = new Set(projectTenantScopes(['tenant:read', 'tenant:write', 'tenant:*', 'keys:delegate']));
+    for (const scope of ['metrics:read', 'logs:read', 'trust:read', 'trust:write']) {
+      expect(widest.has(scope)).toBe(false);
+      // Not vacuous: each one is a scope some real route requires.
+      expect(requiredScopes).toContain(scope);
+    }
   });
 });
 
@@ -99,10 +117,19 @@ describe('delegation authority is separate from resource authority', () => {
     expect(projected).not.toContain('keys:read');
   });
 
-  test('keys:delegate is what grants the /keys surface', () => {
-    const projected = projectTenantScopes(['keys:delegate']);
-    expect(projected).toContain('keys:write');
-    expect(projected).toContain('keys:read');
+  test('keys:delegate grants child-key creation and nothing else on /keys', () => {
+    // `keys:write` is what `POST /keys` requires, and a tenant credential on
+    // that route is intercepted into the same-tenant child-key path.
+    expect(projectTenantScopes(['keys:delegate'])).toEqual(['keys:write']);
+  });
+
+  test('keys:delegate cannot read the deployment-wide key index', () => {
+    // `keys:read` covers GET /keys, GET /keys/:id and GET /keys/:id/audit over
+    // `api_keys` — a table with no tenant column and no RLS. Projecting it made
+    // a tenant-admin key an enumerator of every credential in the deployment,
+    // including the operator master key it could then revoke.
+    expect(projectTenantScopes(['keys:delegate'])).not.toContain('keys:read');
+    expect(requiredScopes).toContain('keys:read');
   });
 
   test('keys:delegate grants no resource authority of its own', () => {

@@ -38,19 +38,24 @@
  *
  * ENUMERATION
  * -----------
- * Routes are read from the Hono app itself rather than from a hand-kept list,
- * under the UNION of the feature-flag combinations that change which routes
- * exist (`A2A_ENABLED`, `OMNI_MULTITENANCY_ENABLED`). A route that only exists
- * when a flag is on is still a route.
+ * The registered surface is read from the Hono app itself rather than from a
+ * hand-kept list — see `route-enumeration.ts`, which is a separate module so
+ * that this one stays a leaf with no import cycle back into the app.
  *
- * `app.routes` contains middleware registrations alongside handlers. They are
- * told apart by arity: Hono middleware is `(c, next)` and a terminal handler is
- * `(c)`. Only `ALL`-method entries need the test — every other method is a real
- * route — so a two-argument `ALL` entry is skipped and a one-argument one (the
- * A2A-disabled 503 stub, the SPA fallback) is kept and must be declared.
+ * DECLARATION IS ALSO ENFORCEMENT
+ * ------------------------------
+ * This table used to be a build-time gate only, which meant the classes it
+ * asserts could be true in the registry and false at runtime. They no longer
+ * can: `resolveRouteOwnership` / `isTenantAddressableRoute` are read by the
+ * tenancy edge on every request carrying a tenant credential, and
+ * `TENANT_ADDRESSABLE_SCOPES` is what `scope-projection.ts` projects FROM. A
+ * route declared `platform-admin` or `control-plane` is therefore unreachable
+ * by a tenant credential in two independent ways — it is not in the projected
+ * scope set, and the edge refuses it by name — so the declaration and the
+ * enforcement cannot drift apart again.
  */
 
-import { createApp } from '../app';
+import { SCOPE_MAP } from '../constants/scopes';
 
 export type RouteOwnershipClass = 'tenant-scoped' | 'platform-admin' | 'public-by-contract' | 'control-plane';
 
@@ -71,55 +76,6 @@ export interface AcknowledgedUndeclaredRoute {
   readonly route: RouteKey;
   /** What has to be answered before this route can be declared. */
   readonly openQuestion: string;
-}
-
-/**
- * Flag combinations that change the registered route set.
- *
- * OMNI_FORCE_UI_ROUTES is pinned on in every combination: the UI static routes
- * normally register only when apps/ui/dist exists on disk, and the enumerated
- * surface must be the union -- independent of whether the UI bundle happens to
- * be built in this checkout (CI's typecheck builds it; a bare checkout has not).
- */
-const FLAG_COMBINATIONS: readonly Record<string, string>[] = [
-  { A2A_ENABLED: 'true', OMNI_MULTITENANCY_ENABLED: 'true', OMNI_FORCE_UI_ROUTES: 'true' },
-  { A2A_ENABLED: 'true', OMNI_MULTITENANCY_ENABLED: '', OMNI_FORCE_UI_ROUTES: 'true' },
-  { A2A_ENABLED: '', OMNI_MULTITENANCY_ENABLED: 'true', OMNI_FORCE_UI_ROUTES: 'true' },
-  { A2A_ENABLED: '', OMNI_MULTITENANCY_ENABLED: '', OMNI_FORCE_UI_ROUTES: 'true' },
-];
-
-/**
- * Every route the app can register, across flag combinations.
- *
- * Takes a factory so a test can enumerate a DELIBERATELY seeded extra route and
- * prove the gate goes red on it, rather than trusting that it would.
- */
-export function enumerateRegisteredRoutes(
-  appFactory: () => { routes: { method: string; path: string; handler: { length: number } }[] } = () =>
-    createApp(undefined as never, null, null).app,
-): RouteKey[] {
-  const seen = new Set<RouteKey>();
-  const restore = {
-    A2A_ENABLED: process.env.A2A_ENABLED,
-    OMNI_MULTITENANCY_ENABLED: process.env.OMNI_MULTITENANCY_ENABLED,
-    OMNI_FORCE_UI_ROUTES: process.env.OMNI_FORCE_UI_ROUTES,
-  };
-  try {
-    for (const combo of FLAG_COMBINATIONS) {
-      for (const [key, value] of Object.entries(combo)) process.env[key] = value;
-      for (const route of appFactory().routes) {
-        // Middleware, not a route: `(c, next)`.
-        if (route.method === 'ALL' && route.handler.length >= 2) continue;
-        seen.add(`${route.method} ${route.path}`);
-      }
-    }
-  } finally {
-    for (const [key, value] of Object.entries(restore)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-  return [...seen].sort();
 }
 
 export interface RouteOwnershipReport {
@@ -747,3 +703,92 @@ export const UNDECLARED_ACKNOWLEDGED: readonly AcknowledgedUndeclaredRoute[] = [
  * a reviewed commit, which is exactly the conversation that should happen.
  */
 export const UNDECLARED_ACKNOWLEDGED_CEILING = 0;
+
+// ---------------------------------------------------------------------------
+// Runtime consumption: what a tenant credential may address
+// ---------------------------------------------------------------------------
+
+/**
+ * The ONLY non-`tenant-scoped` routes a tenant-class credential may address.
+ *
+ * Both are control-plane routes that operate on the CALLER'S OWN credential
+ * lineage and nothing else, which is why they are exceptions rather than holes:
+ *
+ *   * `POST /api/v2/auth/validate` returns facts about the caller's own
+ *     authenticated context only. A credential that cannot introspect itself
+ *     cannot be used by any client that needs to know its own tenant or role.
+ *   * `POST /api/v2/keys` is intercepted for a tenant credential and routed to
+ *     `handleTenantChildCreate` (routes/v2/keys.ts), which mints a same-tenant
+ *     child bounded by the parent's scope/expiry/role ceiling. The legacy
+ *     create path is never reached by a tenant credential.
+ *
+ * Every OTHER `/keys` verb — list, read, patch, revoke, delete, audit — is
+ * deliberately absent. Those operate on the deployment-wide `api_keys` table,
+ * which has no tenant column and no RLS, so `keys:write` on `POST
+ * /keys/:id/revoke` would let a tenant-admin revoke the operator master key.
+ * Tenant key lifecycle belongs to the tenant-keys service, not to this router.
+ */
+const TENANT_ADDRESSABLE_CONTROL_PLANE: readonly RouteKey[] = Object.freeze([
+  'POST /api/v2/auth/validate',
+  'POST /api/v2/keys',
+]);
+
+const OWNERSHIP_BY_ROUTE: ReadonlyMap<RouteKey, RouteOwnershipClass> = new Map(
+  ROUTE_OWNERSHIP.map((d) => [d.route, d.class]),
+);
+
+const TENANT_ADDRESSABLE_ROUTES: ReadonlySet<RouteKey> = new Set<RouteKey>([
+  ...ROUTE_OWNERSHIP.filter((d) => d.class === 'tenant-scoped').map((d) => d.route),
+  ...TENANT_ADDRESSABLE_CONTROL_PLANE,
+]);
+
+/**
+ * The declared class of a route, or `undefined` when the route carries no
+ * declaration.
+ *
+ * `undefined` is not "allowed": callers must treat it as a refusal. The
+ * coverage gate holds the undeclared count at zero, so in a passing build the
+ * only way to reach `undefined` is a route that was added without a
+ * declaration — exactly the case that must fail closed.
+ */
+export function resolveRouteOwnership(route: RouteKey): RouteOwnershipClass | undefined {
+  return OWNERSHIP_BY_ROUTE.get(route);
+}
+
+/** Whether a tenant-class credential may address this route at all. */
+export function isTenantAddressableRoute(route: RouteKey): boolean {
+  return TENANT_ADDRESSABLE_ROUTES.has(route);
+}
+
+/**
+ * The legacy scope a declared route requires, or `undefined` when the route is
+ * outside `SCOPE_MAP` (the A2A surface, the bare `/api/v2` roots, the
+ * unauthenticated routes — none of which the scope enforcer consults).
+ */
+function requiredScopeForRoute(route: RouteKey): string | undefined {
+  const space = route.indexOf(' ');
+  if (space === -1) return undefined;
+  const method = route.slice(0, space);
+  const path = route.slice(space + 1);
+  if (!path.startsWith('/api/v2')) return undefined;
+  const stripped = path.slice('/api/v2'.length);
+  return SCOPE_MAP[`${method} ${stripped === '' ? '/' : stripped}`];
+}
+
+/**
+ * Every legacy scope that a tenant-addressable route actually requires.
+ *
+ * This is the projection's source of truth (`scope-projection.ts`). Deriving it
+ * from the ownership table rather than from all of `SCOPE_MAP` is what stops a
+ * tenant credential from being handed authority over a surface this table
+ * declares platform-admin or control-plane: `metrics:read`, `logs:read`, and
+ * `trust:read`/`trust:write` are required ONLY by such routes, so they simply
+ * are not in this set.
+ */
+export const TENANT_ADDRESSABLE_SCOPES: readonly string[] = Object.freeze(
+  [
+    ...new Set(
+      [...TENANT_ADDRESSABLE_ROUTES].map((route) => requiredScopeForRoute(route)).filter((s): s is string => s != null),
+    ),
+  ].sort(),
+);
