@@ -338,6 +338,28 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /voice/sessions': 'voice:read',
   'GET /voice/sessions/:id': 'voice:read',
 
+  // --- whatsapp-cloud (Meta Cloud API): mounted at /instances/:id/whatsapp-cloud/* ---
+  'POST /instances/:id/whatsapp-cloud/oauth/exchange': 'instances:write',
+  'POST /instances/:id/whatsapp-cloud/connect': 'instances:write',
+  'POST /instances/:id/whatsapp-cloud/register': 'instances:write',
+  'POST /instances/:id/whatsapp-cloud/subscribe-app': 'instances:write',
+  'GET /instances/:id/whatsapp-cloud/connection': 'instances:read',
+  'DELETE /instances/:id/whatsapp-cloud/connection': 'instances:write',
+  'GET /instances/:id/whatsapp-cloud/quality': 'instances:read',
+  'GET /instances/:id/whatsapp-cloud/analytics': 'instances:read',
+  'GET /instances/:id/whatsapp-cloud/profile': 'instances:read',
+  'PUT /instances/:id/whatsapp-cloud/profile': 'instances:write',
+  'POST /instances/:id/whatsapp-cloud/profile/photo': 'instances:write',
+
+  // --- whatsapp-templates (mounted at root: /instances/:id/whatsapp-templates/...) ---
+  'GET /instances/:id/whatsapp-templates': 'instances:read',
+  'GET /instances/:id/whatsapp-templates/:templateId': 'instances:read',
+  'POST /instances/:id/whatsapp-templates': 'instances:write',
+  'DELETE /instances/:id/whatsapp-templates/:templateId': 'instances:write',
+  'POST /instances/:id/whatsapp-templates/upload-header-media': 'instances:write',
+  'POST /instances/:id/whatsapp-templates/:templateId/send-test': 'instances:write',
+  'POST /instances/:id/whatsapp-templates/:templateName/send': 'instances:write',
+
   // --- webhooks (mounted at root: /webhook-sources/..., /webhooks/:source, /events/trigger) ---
   'GET /webhook-sources': 'webhooks:read',
   'GET /webhook-sources/:id': 'webhooks:read',

@@ -33,6 +33,7 @@
     "@hono/swagger-ui": "^0.4.1",
     "@hono/zod-validator": "^0.4.3",
     "@omni/channel-sdk": "workspace:*",
+    "@omni/channel-whatsapp-cloud": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/db": "workspace:*",
     "@omni/media-processing": "workspace:*",

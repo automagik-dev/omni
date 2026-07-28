@@ -291,6 +291,53 @@ export function createApp(
     return plugin.handleWebhook(c.req.raw);
   });
 
+  // Public WhatsApp Cloud (Meta) webhook endpoint — auth-exempt, signed by Meta with HMAC-SHA256.
+  // Unlike Gupshup/Twilio, the URL is GLOBAL (no :instanceId in path): instance resolution
+  // happens inside the plugin via `metadata.phone_number_id` from the payload.
+  //
+  // - GET: Meta verification challenge (hub.mode=subscribe + hub.verify_token).
+  // - POST: signed event delivery (X-Hub-Signature-256 verified against META_APP_SECRET).
+  //
+  // Both methods delegate to `plugin.handleWebhook(request)`, which internally
+  // calls `handlers/webhook.ts::handleMetaWebhook` (reading META_VERIFY_TOKEN
+  // and META_APP_SECRET from env). The plugin owns env access — keeping the
+  // app.ts wiring identical to the Gupshup/Twilio pattern.
+  app.get('/api/v2/channels/whatsapp-cloud/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('whatsapp-cloud');
+    if (!plugin?.handleWebhook) {
+      return c.json(
+        { error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } },
+        503,
+      );
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
+  app.post('/api/v2/channels/whatsapp-cloud/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('whatsapp-cloud');
+    if (!plugin?.handleWebhook) {
+      return c.json(
+        { error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } },
+        503,
+      );
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Public Twilio WhatsApp webhook endpoint - auth-exempt, verified by X-Twilio-Signature in the plugin.
   // Must be mounted before protectedApp so Twilio's servers (no x-api-key) can reach it.
   app.post('/api/v2/channels/twilio-whatsapp/:instanceId/webhook', async (c) => {

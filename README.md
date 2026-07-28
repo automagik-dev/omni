@@ -46,7 +46,7 @@ Think of Omni as a deep-sea octopus. Each **channel** is a tentacle reaching int
 | Channel | Status | Highlights |
 |---------|--------|------------|
 | **WhatsApp** (Baileys) | ✅ Stable | QR/phone pairing, media, reactions, groups, contacts, presence |
-| **WhatsApp Cloud API** | ✅ Available | Official Meta Cloud API path |
+| **WhatsApp Cloud API** (Meta) | ✅ Available | Embedded Signup OAuth, templates HSM, webhook (HMAC-SHA256), media, location, reactions |
 | **Discord** | ✅ Stable | Bots, embeds, polls, buttons, threads, slash commands |
 | **Slack** | ✅ Available | Bot/App token support |
 | **Telegram** | ✅ Available | Bot API, inline keyboards, groups, channels, threads, polls |

@@ -13,3 +13,4 @@ export * from './guild-config';
 export * from './instance';
 export * from './message';
 export * from './person';
+export * from './whatsapp-cloud';

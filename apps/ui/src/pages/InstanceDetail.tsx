@@ -1,4 +1,5 @@
 import { AgentConfigForm } from '@/components/instances/AgentConfigForm';
+import { TemplatesTab } from '@/components/instances/TemplatesTab';
 import { Header } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -24,6 +25,7 @@ import {
   ArrowLeft,
   Bot,
   Cog,
+  FileText,
   LogOut,
   MessageSquare,
   Mic,
@@ -120,6 +122,12 @@ export function InstanceDetail() {
               <Webhook className="mr-2 h-4 w-4" />
               Webhooks
             </TabsTrigger>
+            {instance.channel === 'whatsapp-cloud' && (
+              <TabsTrigger value="templates">
+                <FileText className="mr-2 h-4 w-4" />
+                Templates
+              </TabsTrigger>
+            )}
           </TabsList>
 
           {/* Connection Tab */}
@@ -336,6 +344,13 @@ export function InstanceDetail() {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {/* Templates Tab (WhatsApp Cloud only) */}
+          {instance.channel === 'whatsapp-cloud' && (
+            <TabsContent value="templates">
+              <TemplatesTab instanceId={instance.id} />
+            </TabsContent>
+          )}
 
           {/* Webhooks Tab */}
           <TabsContent value="webhooks">
