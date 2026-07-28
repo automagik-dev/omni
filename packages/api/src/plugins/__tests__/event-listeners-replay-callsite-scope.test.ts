@@ -123,6 +123,11 @@ describe('event-listeners threads the envelope tenant into the replay', () => {
     const reads = observed.filter((o) => o.op === 'select');
     expect(reads.length).toBeGreaterThan(0);
     for (const read of reads) {
+      // The full observation sequence goes in the failure text — a bare
+      // "Received: null" from a CI-only run is undiagnosable without it.
+      if (read.scope !== TENANT_A || read.handle !== 'TX') {
+        throw new Error(`unscoped read observed; sequence=${JSON.stringify(observed)}`);
+      }
       expect(read.scope).toBe(TENANT_A);
       expect(read.handle).toBe('TX');
     }
