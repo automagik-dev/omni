@@ -44,7 +44,9 @@ describe('DebounceManager', () => {
       manager.addMessage('key', message, { id: '123' }, 'wa-001');
 
       expect(callback).toHaveBeenCalledTimes(1);
-      expect(callback).toHaveBeenCalledWith('key', [message], { id: '123' }, 'wa-001');
+      // Trailing `null` = the window's envelope stamp (G5): mode-none fires
+      // straight through with the message's own (legacy) world.
+      expect(callback).toHaveBeenCalledWith('key', [message], { id: '123' }, 'wa-001', null);
     });
   });
 

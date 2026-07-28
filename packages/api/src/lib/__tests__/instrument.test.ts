@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import * as Sentry from '@sentry/bun';
 
 /**
@@ -10,6 +10,19 @@ import * as Sentry from '@sentry/bun';
  * verify option wiring.
  */
 describe('Sentry instrument', () => {
+  afterAll(async () => {
+    // The init above installs a PROCESS-GLOBAL client. `bun test` runs every
+    // test file in one process, so without this teardown each file that runs
+    // after this one sees `sentryEnabled() === true` and takes Sentry-gated
+    // code paths (e.g. the connection gauge) it never takes locally — which
+    // files run "after" depends on filesystem readdir order, so the leak
+    // shows up as CI-only, order-dependent failures. `close()` flushes but
+    // does NOT detach the client; only setClient(undefined) does.
+    await Sentry.close();
+    Sentry.getCurrentScope().setClient(undefined);
+    Sentry.getIsolationScope().setClient(undefined);
+  });
+
   test('does not initialise client when SENTRY_DSN is empty string', async () => {
     // SENTRY_DSN="" is the opt-out escape hatch (DSN is hardcoded by default)
     const savedDsn = process.env.SENTRY_DSN;

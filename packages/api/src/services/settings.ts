@@ -1,11 +1,35 @@
 /**
  * Settings service - manages global settings
+ *
+ * TENANT-BOUND SEALING OF SECRET SETTINGS (G5 deliverable (g); ADR-0008)
+ * ----------------------------------------------------------------------
+ * A `global_settings` row flagged `is_secret` holds live credential material —
+ * `elevenlabs.api_key` and its siblings. ADR-0008 requires such values to be
+ * encrypted with tenant-bound context, and names one consequence explicitly:
+ * "plaintext never appears in ... migration receipts". `setting_change_history`
+ * IS that receipt, and it copies both the old and the new value on every change.
+ * Sealing before the write therefore protects the history rows for free — the
+ * receipt records ciphertext because there was never plaintext to record.
+ *
+ * `global_settings` is a G0-`split` table with no `tenant_id` yet (its
+ * destinations are `tenant_settings` / `platform_settings`), so — exactly as in
+ * `providers.ts` — the binding is the ACTIVE TENANT SCOPE rather than a per-row
+ * owner. Whether a row is secret is the row's own `is_secret` for an existing
+ * setting, and the seeded definition for a new one; a value whose secrecy cannot
+ * be established is left in the clear, so this can never seal an operational
+ * setting an operator needs to read.
+ *
+ * DUAL WORLD. No scope or no master key ⇒ the codec is the identity function and
+ * every value is stored and returned exactly as before G5. Reads are
+ * transitional: legacy plaintext and sealed values coexist.
  */
 
 import { NotFoundError, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type GlobalSetting, type SettingValueType, globalSettings, settingChangeHistory } from '@omni/db';
 import { desc, eq } from 'drizzle-orm';
+import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
+import { currentTenantScope } from '../tenancy/tenant-scope';
 
 const log = createLogger('settings');
 
@@ -309,6 +333,39 @@ export interface SettingWithHistory extends GlobalSetting {
 export class SettingsService {
   constructor(private db: Database) {}
 
+  /** The tenant this service seals under / opens with; null on legacy paths. */
+  private get tenantId(): string | null {
+    return currentTenantScope()?.tenantId ?? null;
+  }
+
+  /**
+   * Whether the setting named `key` holds secret material.
+   *
+   * An existing row's own `is_secret` is authoritative. For a key being created
+   * for the first time, the seeded definition is consulted, so
+   * `setValue('elevenlabs.api_key', ...)` seals even before `seedDefaults` has
+   * run. Unknown keys are NOT secret — failing towards plaintext here is
+   * deliberate: sealing an operational setting nobody declared secret would hide
+   * it from operators with no way to tell why.
+   */
+  private isSecretSetting(key: string, existing?: GlobalSetting): boolean {
+    if (existing?.isSecret) return true;
+    // The seeded definition is the fallback in BOTH directions: for a key being
+    // created for the first time, and for a pre-existing row whose `is_secret`
+    // was never set (rows created by `setValue` before `seedDefaults` ran
+    // default the column to false). Without the second case a declared secret
+    // could be sealed on write and then not recognised on read.
+    return DEFAULT_SETTINGS.some((def) => def.key === key && def.isSecret);
+  }
+
+  /** Open a loaded row's value when it is a sealed secret; identity otherwise. */
+  private openSetting(row: GlobalSetting): GlobalSetting {
+    if (!this.isSecretSetting(row.key, row) || typeof row.value !== 'string') return row;
+    const opened = openCredentialField(this.tenantId, row.value);
+    if (opened === row.value) return row;
+    return { ...row, value: opened ?? null };
+  }
+
   /**
    * List all settings, optionally filtered by category
    */
@@ -319,7 +376,8 @@ export class SettingsService {
       query = query.where(eq(globalSettings.category, category));
     }
 
-    return query.orderBy(globalSettings.key);
+    const rows = await query.orderBy(globalSettings.key);
+    return rows.map((row) => this.openSetting(row));
   }
 
   /**
@@ -332,7 +390,7 @@ export class SettingsService {
       throw new NotFoundError('Setting', key);
     }
 
-    return result;
+    return this.openSetting(result);
   }
 
   /**
@@ -358,14 +416,22 @@ export class SettingsService {
     value: unknown,
     options?: { reason?: string; changedBy?: string },
   ): Promise<GlobalSetting> {
-    const stringValue = this.stringifyValue(value);
+    const plainValue = this.stringifyValue(value);
 
     // Get existing setting if it exists
     const existing = await this.db.select().from(globalSettings).where(eq(globalSettings.key, key)).limit(1);
 
     const existingSetting = existing[0];
+    // Seal BEFORE the write, so `stringValue` is what lands in the row AND in
+    // the history receipt below. A non-secret setting, a legacy path, or a
+    // deployment with no master key all leave this as the identity function.
+    const stringValue = this.isSecretSetting(key, existingSetting)
+      ? (sealCredentialField(this.tenantId, plainValue) ?? plainValue)
+      : plainValue;
+
     if (existingSetting) {
-      // Update existing
+      // Update existing. `oldValue` is the value AT REST — already sealed if the
+      // previous write sealed it — so the receipt never gains plaintext.
       const oldValue = existingSetting.value;
 
       const [updated] = await this.db
@@ -391,7 +457,7 @@ export class SettingsService {
         changeReason: options?.reason,
       });
 
-      return updated;
+      return this.openSetting(updated);
     }
 
     // Create new
@@ -410,7 +476,7 @@ export class SettingsService {
       throw new Error('Failed to create setting');
     }
 
-    return created;
+    return this.openSetting(created);
   }
 
   /**

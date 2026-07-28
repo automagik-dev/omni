@@ -3,6 +3,35 @@
  *
  * Persists plugin data (auth state, credentials, etc.) to PostgreSQL.
  * Data survives API restarts.
+ *
+ * TENANT-BOUND SEALING OF PLUGIN CREDENTIALS (G5 deliverable (g); ADR-0008;
+ * OWNERSHIP_MANIFEST `filesystem_session_state`)
+ * ---------------------------------------------------------------------------
+ * The doc comment above says "auth state, credentials" and it means it: the
+ * WhatsApp channel stores its entire Baileys session here — `auth:<instanceId>:
+ * creds` is the blob that IS the authenticated WhatsApp identity, and
+ * `auth:<instanceId>:keys:*` are the Signal protocol keys. ADR-0008 requires
+ * this material to be encrypted with tenant-bound context.
+ *
+ * WHERE THE TENANT COMES FROM
+ * ---------------------------
+ * `plugin_storage` is a G0-`split` table and carries no `tenant_id`. But every
+ * credential key NAMES its instance, and `instances` is the G2 ownership root —
+ * so the tenant is derived by parsing the instance id out of the key and asking
+ * the instance-owner registry, which is populated only from `instances` ROWS the
+ * API layer already loaded. That is the same trusted derivation the publish path
+ * uses (`instance-owner-registry.ts`), never a payload or caller hint.
+ *
+ * DUAL WORLD, WITH NO FLAG CHECK. The registry is empty when every
+ * `instances.tenant_id` is NULL, and the codec is the identity function without
+ * a master key — so a flag-off deployment writes byte-identical plaintext and
+ * this module is inert. Reads are transitional: a legacy plaintext row and a
+ * sealed row coexist and each is handled on its own shape, because G5 ships no
+ * credential backfill.
+ *
+ * A key that names no known instance (`global:*`, platform plugin state) seals
+ * nothing — there is no tenant to bind it to, and guessing one would be worse
+ * than leaving it as it is.
  */
 
 import type { PluginStorage } from '@omni/channel-sdk';
@@ -10,8 +39,23 @@ import { createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { pluginStorage } from '@omni/db';
 import { and, eq, gt, isNotNull, isNull, like, lt, or, sql } from 'drizzle-orm';
+import { lookupInstanceOwner } from '../tenancy/instance-owner-registry';
+import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 
 const log = createLogger('api:storage');
+
+/** First UUID appearing in a storage key — the instance it belongs to. */
+const INSTANCE_ID_IN_KEY = /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
+
+/**
+ * The tenant a given storage key's value is sealed for, or null when this row
+ * is not tenant-owned secret material (no instance in the key, or an instance
+ * whose ownership this process has never loaded).
+ */
+function tenantForStorageKey(fullKey: string): string | null {
+  const match = INSTANCE_ID_IN_KEY.exec(fullKey);
+  return match ? lookupInstanceOwner(match[0]) : null;
+}
 
 /**
  * Database-backed storage for plugin data
@@ -60,16 +104,25 @@ class DatabasePluginStorage implements PluginStorage {
     const row = result[0];
     if (!row) return null;
 
+    // Unseal BEFORE parsing: a sealed row's `value` is the envelope, and the
+    // plaintext inside it is exactly the string `set` serialized. A row that
+    // cannot be opened (sealed for another tenant, or no key configured) is
+    // treated as ABSENT — fail-closed. Returning the envelope would hand the
+    // caller a blob it would then present to WhatsApp as a session credential.
+    const opened = openCredentialField(tenantForStorageKey(fullKey), row.value);
+    if (opened == null) return null;
+
     try {
-      return JSON.parse(row.value) as T;
+      return JSON.parse(opened) as T;
     } catch {
-      return row.value as unknown as T;
+      return opened as unknown as T;
     }
   }
 
   async set<T>(key: string, value: T, ttlMs?: number): Promise<void> {
     const fullKey = this.getFullKey(key);
-    const serializedValue = typeof value === 'string' ? value : JSON.stringify(value);
+    const plainValue = typeof value === 'string' ? value : JSON.stringify(value);
+    const serializedValue = sealCredentialField(tenantForStorageKey(fullKey), plainValue);
     const expiresAt = ttlMs ? new Date(Date.now() + ttlMs) : null;
 
     await this.db
@@ -258,6 +311,18 @@ export function setStorageDatabase(db: Database): void {
  *
  * Uses DatabasePluginStorage if database is available, falls back to InMemory
  */
+/**
+ * Test-only constructor for the database-backed store.
+ *
+ * `getPluginStorage` memoises one instance per plugin id against a module-global
+ * database, which the sealing probes cannot use: each case needs its own fresh
+ * table stand-in. This exposes the class without widening the production API —
+ * `getPluginStorage` remains the only way production code obtains a store.
+ */
+export function __createPluginStorageForTest(db: Database, pluginId: string): PluginStorage {
+  return new DatabasePluginStorage(db, pluginId);
+}
+
 export function getPluginStorage(pluginId: string): PluginStorage {
   let storage = storageInstances.get(pluginId);
   if (!storage) {

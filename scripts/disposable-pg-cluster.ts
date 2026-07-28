@@ -164,11 +164,20 @@ export async function createDisposableCluster(bins: PgBinaries = resolvePgBinari
   const pgData = join(dataDir, 'data');
   // Loopback only. An `initdb` default already omits listen_addresses, but
   // being explicit means a stray postgresql.conf template cannot widen it.
+  // The socket lives in the data dir: distribution builds (Debian/Ubuntu
+  // pgdg) default unix_socket_directories to /var/run/postgresql, which an
+  // unprivileged CI runner cannot write — the postmaster then dies on its
+  // lock file before ever listening.
   writeFileSync(
     join(pgData, 'postgresql.auto.conf'),
-    ["listen_addresses = '127.0.0.1'", 'fsync = off', 'synchronous_commit = off', 'full_page_writes = off', ''].join(
-      '\n',
-    ),
+    [
+      "listen_addresses = '127.0.0.1'",
+      `unix_socket_directories = '${pgData}'`,
+      'fsync = off',
+      'synchronous_commit = off',
+      'full_page_writes = off',
+      '',
+    ].join('\n'),
   );
 
   let started: { port: number } | null = null;
@@ -188,8 +197,16 @@ export async function createDisposableCluster(bins: PgBinaries = resolvePgBinari
     }
   }
   if (started === null) {
+    // pg_ctl's stderr only says "could not start server" — the reason lives
+    // in server.log, so capture it before the data dir is destroyed.
+    let serverLog = '';
+    try {
+      serverLog = readFileSync(join(dataDir, 'server.log'), 'utf-8');
+    } catch {
+      serverLog = '(no server.log was written)';
+    }
     rmSync(dataDir, { recursive: true, force: true });
-    throw new Error(`disposable-pg: postmaster would not start after 8 attempts\n${lastError}`);
+    throw new Error(`disposable-pg: postmaster would not start after 8 attempts\n${lastError}\n${serverLog}`);
   }
 
   const url = `postgres://${superuser}:${encodeURIComponent(password)}@127.0.0.1:${started.port}/postgres`;

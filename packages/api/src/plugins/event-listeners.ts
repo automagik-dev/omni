@@ -8,11 +8,13 @@
 import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatIdMappings, chats, instances } from '@omni/db';
-import * as Sentry from '@sentry/bun';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { sentryEnabled } from '../lib/sentry-scrub';
 import { AgentReplayService } from '../services/agent-replay';
+import { runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { runConsumerInTenantContext, trustedEnvelopeTenant } from '../tenancy/worker-tenant-context';
 import { sanitizeText } from '../utils/utf8';
+import { emitConnectionGauge } from './connection-gauge';
 import { clearQrCode } from './qr-store';
 
 const instanceLog = createLogger('instance');
@@ -37,19 +39,25 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
       // Clear QR code
       clearQrCode(instanceId);
 
-      // Update database with connection info
+      // Update database with connection info. The write runs in the envelope's
+      // world (G5, ADR-0008): a tenant envelope opens a worker tenant scope and
+      // the update goes through `scopedHandle` inside it; a legacy envelope runs
+      // it on the ambient pool byte-identically; a malformed one is refused here
+      // (quarantine — never processed globally) and lands in the catch.
       if (db) {
         try {
-          await db
-            .update(instances)
-            .set({
-              isActive: true,
-              ownerIdentifier: ownerIdentifier || null,
-              profileName: profileName || null,
-              profilePicUrl: profilePicUrl || null,
-              updatedAt: new Date(),
-            })
-            .where(eq(instances.id, instanceId));
+          await runConsumerInTenantContext(db, event, async () => {
+            await scopedHandle(db)
+              .update(instances)
+              .set({
+                isActive: true,
+                ownerIdentifier: ownerIdentifier || null,
+                profileName: profileName || null,
+                profilePicUrl: profilePicUrl || null,
+                updatedAt: new Date(),
+              })
+              .where(eq(instances.id, instanceId));
+          });
         } catch (dbError) {
           instanceLog.error('Failed to update database', { instanceId, error: String(dbError) });
         }
@@ -62,9 +70,23 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
         emitConnectionGauge(db).catch(() => {});
       }
 
-      // Trigger agent replay for missed messages (fire-and-forget)
+      // Trigger agent replay for missed messages (fire-and-forget).
+      //
+      // G5 (ADR-0008): replay interleaves DB pages with `message.received`
+      // PUBLISHES, so it cannot be wrapped in one `runConsumerInTenantContext`
+      // scope — the tenant is derived as a VALUE and threaded, and the service
+      // scopes each discrete block itself. A legacy envelope threads `undefined`
+      // and every block stays ambient, byte-identical to pre-G5; a quarantined
+      // envelope throws before the replay starts and is dropped, never replayed
+      // globally.
+      //
+      // The whole fire-and-forget runs DETACHED (G4 leg-2 rule): a background
+      // continuation must never be able to borrow the handler's ALS scope, in
+      // either world.
       if (replayService) {
-        replayService.onInstanceConnect(instanceId).catch((err) => {
+        void runDetachedFromTenantScope(async () =>
+          replayService.onInstanceConnect(instanceId, trustedEnvelopeTenant(event)),
+        ).catch((err) => {
           instanceLog.warn('Agent replay failed', { instanceId, error: String(err) });
         });
       }
@@ -81,22 +103,29 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
 
       if (db && isLoggedOut) {
         try {
-          await db
-            .update(instances)
-            .set({
-              isActive: false,
-              updatedAt: new Date(),
-            })
-            .where(eq(instances.id, instanceId));
+          // Same worker-tenant boundary as the connect handler above.
+          await runConsumerInTenantContext(db, event, async () => {
+            await scopedHandle(db)
+              .update(instances)
+              .set({
+                isActive: false,
+                updatedAt: new Date(),
+              })
+              .where(eq(instances.id, instanceId));
+          });
           instanceLog.info('Marked inactive (logged out)', { instanceId });
         } catch (dbError) {
           instanceLog.error('Failed to update database', { instanceId, error: String(dbError) });
         }
       }
 
-      // Update lastSeenAt on any disconnect so the next replay window is accurate
+      // Update lastSeenAt on any disconnect so the next replay window is accurate.
+      // Same threaded-tenant conversion as the connect handler above — one DB
+      // block, in the envelope's world.
       if (replayService) {
-        replayService.updateLastSeenAt(instanceId).catch((err) => {
+        void runDetachedFromTenantScope(async () =>
+          replayService.updateLastSeenAt(instanceId, undefined, trustedEnvelopeTenant(event)),
+        ).catch((err) => {
           instanceLog.warn('Failed to update lastSeenAt on disconnect', { instanceId, error: String(err) });
         });
       }
@@ -115,27 +144,6 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
     });
   } catch (error) {
     instanceLog.warn('Failed to set up connection listener', { error: String(error) });
-  }
-}
-
-/**
- * Count active instances per channel type and emit Sentry gauge metrics.
- * Called on connect/disconnect events to keep the gauge current.
- */
-async function emitConnectionGauge(db: Database): Promise<void> {
-  const rows = await db
-    .select({
-      channel: instances.channel,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(instances)
-    .where(eq(instances.isActive, true))
-    .groupBy(instances.channel);
-
-  for (const row of rows) {
-    Sentry.metrics.gauge('instance.connections', row.count, {
-      attributes: { channel_type: row.channel },
-    });
   }
 }
 
@@ -180,13 +188,21 @@ export async function setupLidMappingListener(eventBus: EventBus, db?: Database)
       let persisted = 0;
       for (const { lidJid, phoneJid } of mappings) {
         try {
-          await db
-            .insert(chatIdMappings)
-            .values({ instanceId, lidId: lidJid, phoneId: phoneJid, discoveredFrom: 'contacts_sync' })
-            .onConflictDoUpdate({
-              target: [chatIdMappings.instanceId, chatIdMappings.lidId],
-              set: { phoneId: phoneJid, discoveredAt: new Date() },
-            });
+          // Per-ITEM worker scope (G5, ADR-0008), mirroring the per-statement
+          // implicit transactions this loop had before the conversion: one bad
+          // mapping aborts only its own short transaction, and the later items
+          // still persist — wrapping the whole loop in one scope would let a
+          // single failure poison the batch. A legacy envelope runs each insert
+          // on the ambient pool byte-identically.
+          await runConsumerInTenantContext(db, event, async () => {
+            await scopedHandle(db)
+              .insert(chatIdMappings)
+              .values({ instanceId, lidId: lidJid, phoneId: phoneJid, discoveredFrom: 'contacts_sync' })
+              .onConflictDoUpdate({
+                target: [chatIdMappings.instanceId, chatIdMappings.lidId],
+                set: { phoneId: phoneJid, discoveredAt: new Date() },
+              });
+          });
           persisted++;
         } catch {
           // Skip individual failures
@@ -255,7 +271,13 @@ export async function setupContactNamesListener(eventBus: EventBus, db?: Databas
       let updated = 0;
       for (const { jid, name } of names) {
         try {
-          if (await updateChatName(db, instanceId, jid, name)) updated++;
+          // Per-item worker scope (G5) — same shape as the LID batch above.
+          // `updateChatName` receives the scope's handle, so its reads and its
+          // write all run inside the same short tenant transaction.
+          if (
+            await runConsumerInTenantContext(db, event, () => updateChatName(scopedHandle(db), instanceId, jid, name))
+          )
+            updated++;
         } catch {
           // Skip individual failures
         }
@@ -286,11 +308,14 @@ export async function setupChatUnreadListener(eventBus: EventBus, db?: Database)
       if (!instanceId || !chatId) return;
 
       try {
-        const result = await db
-          .update(chats)
-          .set({ unreadCount, updatedAt: new Date() })
-          .where(and(eq(chats.instanceId, instanceId), eq(chats.externalId, chatId)))
-          .returning({ id: chats.id });
+        // Worker tenant boundary (G5, ADR-0008) — see the connect handler.
+        const result = await runConsumerInTenantContext(db, event, () =>
+          scopedHandle(db)
+            .update(chats)
+            .set({ unreadCount, updatedAt: new Date() })
+            .where(and(eq(chats.instanceId, instanceId), eq(chats.externalId, chatId)))
+            .returning({ id: chats.id }),
+        );
 
         if (result.length > 0) {
           unreadLog.debug('Synced unread count from platform', { instanceId, chatId, unreadCount });
