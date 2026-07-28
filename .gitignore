@@ -40,6 +40,9 @@ coverage/
 .worktrees/
 .claude/worktrees/
 
+# Repository-local coding environment
+.dev/
+
 # Misc
 *.bak
 *.tmp
@@ -61,6 +64,35 @@ memory/
 .genie/
 docs/reports/
 docs/reports/tmp/
+
+# Repository-local Hermes profile: keep portable profile files tracked while
+# excluding credentials, conversations, logs, caches, and mutable runtime state.
+.hermes/.env
+.hermes/.hermes_history
+.hermes/.update_check
+.hermes/auth.json
+.hermes/auth.lock
+.hermes/state.db*
+.hermes/projects.db*
+.hermes/sessions/
+.hermes/logs/
+.hermes/cache/
+.hermes/home/
+.hermes/bin/
+.hermes/shared/
+.hermes/skills/
+.hermes/plugins/
+.hermes/plans/
+.hermes/audio_cache/
+.hermes/cron/
+.hermes/memories/
+.hermes/__pycache__/
+.hermes/.codex_gpt55_autoraise_notice
+.hermes/.skills_prompt_snapshot.json
+.hermes/context_length_cache.yaml
+.hermes/models_dev_cache.json
+.hermes/ollama_cloud_models_cache.json
+.hermes/provider_models_cache.json
 
 # Claude Code local settings
 .claude/settings.local.json

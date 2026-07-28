@@ -59,6 +59,8 @@
       "omni-*",
       ".worktrees",
       ".genie",
+      ".dev",
+      ".hermes",
       "repos",
       "apps/khal-ui/scripts/openapi.snapshot.json",
       "apps/khal-ui/package/src/capabilities/capabilities.json",
