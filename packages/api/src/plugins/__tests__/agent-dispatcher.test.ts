@@ -2276,6 +2276,12 @@ describe('agent-dispatcher', () => {
     // CURRENT_OWNER. Returns the agentRunner so callers can assert whether
     // dispatch proceeded (getSenderName is only reached past the gate).
     async function fireFirstPartyMessage(allowFirstParty: boolean) {
+      // The active-owner list is memoized in a module-level cache with a 10s
+      // TTL. Any dispatch by an earlier test (this file or another file in the
+      // same process) inside that window leaves a stale owner list that does
+      // NOT contain OTHER_OWNER, and the gate then dispatches instead of
+      // dropping — order- and timing-dependent, so it only shows on CI.
+      __test__.resetActiveOwnerIdentifiersCache();
       const eventBus = createMockEventBus();
       const agentRunner = {
         getInstanceWithProvider: mock(async () =>
