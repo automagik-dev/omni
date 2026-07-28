@@ -97,8 +97,15 @@ function harness(observed: Observed[]) {
       payload: { instanceId: 'inst-1', channelType: 'telegram', reason: 'network' },
       metadata: { correlationId: 'corr-1', instanceId: 'inst-1', ...metadata },
     });
-    // The replay is fire-and-forget; let its detached chain run.
-    await new Promise((r) => setTimeout(r, 5));
+    // The replay is fire-and-forget; wait for its detached chain to reach the
+    // db rather than sleeping a fixed slice — a loaded CI runner can stall the
+    // detached continuation past any fixed number of milliseconds.
+    const deadline = Date.now() + 2000;
+    while (observed.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    // One more macrotask so everything downstream of the first db call lands.
+    await new Promise((r) => setTimeout(r, 10));
   };
 
   return { bus, fire, db: makeDb(observed) };
