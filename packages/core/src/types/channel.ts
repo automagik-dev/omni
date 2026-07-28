@@ -32,6 +32,8 @@ export const CONTENT_TYPES = [
   'live_location',
   'product',
   'pix',
+  // Meta Cloud API HSM template messages (descriptor carried via metadata.template)
+  'template',
   // Meta types (message lifecycle)
   'edit',
   'delete',

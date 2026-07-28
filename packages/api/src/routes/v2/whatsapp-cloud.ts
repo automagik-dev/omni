@@ -40,7 +40,7 @@ import {
   WhatsAppCloudConnectRequestSchema,
   WhatsAppCloudRegisterRequestSchema,
 } from '@omni/core/schemas';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import * as oauthTokenCache from '../../lib/oauth-token-cache';
 import { requireInstanceAccess } from '../../middleware/auth';
@@ -69,11 +69,18 @@ function readMetaAppEnv(): { appId: string | undefined; appSecret: string | unde
 /**
  * Channel-guard: returns a 400 response if the instance is not whatsapp-cloud.
  */
-function ensureWhatsAppCloud(instance: { channel: string }): { ok: true } | { ok: false; payload: { error: { code: string; message: string } } } {
+function ensureWhatsAppCloud(instance: { channel: string }):
+  | { ok: true }
+  | { ok: false; payload: { error: { code: string; message: string } } } {
   if (instance.channel !== 'whatsapp-cloud') {
     return {
       ok: false,
-      payload: { error: { code: 'WRONG_CHANNEL', message: `Instance channel is "${instance.channel}", expected "whatsapp-cloud"` } },
+      payload: {
+        error: {
+          code: 'WRONG_CHANNEL',
+          message: `Instance channel is "${instance.channel}", expected "whatsapp-cloud"`,
+        },
+      },
     };
   }
   return { ok: true };
@@ -290,7 +297,10 @@ whatsappCloudRoutes.post(
     const guard = ensureWhatsAppCloud(instance);
     if (!guard.ok) return c.json(guard.payload, 400);
     if (!instance.metaAccessToken || !instance.metaPhoneNumberId) {
-      return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected to WhatsApp Cloud yet' } }, 409);
+      return c.json(
+        { error: { code: 'NOT_CONNECTED', message: 'Instance is not connected to WhatsApp Cloud yet' } },
+        409,
+      );
     }
 
     try {
@@ -325,7 +335,11 @@ whatsappCloudRoutes.post('/:id/whatsapp-cloud/subscribe-app', async (c) => {
   }
 
   try {
-    const result = await subscribeApp(instance.metaAccessToken, instance.metaWabaId, instance.metaApiVersion ?? 'v25.0');
+    const result = await subscribeApp(
+      instance.metaAccessToken,
+      instance.metaWabaId,
+      instance.metaApiVersion ?? 'v25.0',
+    );
     return c.json({ subscribed: result.success });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -440,53 +454,52 @@ const analyticsQuerySchema = z.object({
   granularity: z.enum(['HALF_HOUR', 'DAY', 'MONTH']).default('DAY'),
 });
 
-whatsappCloudRoutes.get(
-  '/:id/whatsapp-cloud/analytics',
-  zValidator('query', analyticsQuerySchema),
-  async (c) => {
-    const id = c.req.param('id');
-    const services = c.get('services');
-    const { start, end, granularity } = c.req.valid('query');
+whatsappCloudRoutes.get('/:id/whatsapp-cloud/analytics', zValidator('query', analyticsQuerySchema), async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+  const { start, end, granularity } = c.req.valid('query');
 
-    const instance = await services.instances.getById(id);
-    const guard = ensureWhatsAppCloud(instance);
-    if (!guard.ok) return c.json(guard.payload, 400);
-    if (!instance.metaAccessToken || !instance.metaWabaId) {
-      return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected' } }, 409);
-    }
+  const instance = await services.instances.getById(id);
+  const guard = ensureWhatsAppCloud(instance);
+  if (!guard.ok) return c.json(guard.payload, 400);
+  if (!instance.metaAccessToken || !instance.metaWabaId) {
+    return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected' } }, 409);
+  }
 
-    const apiVersion = instance.metaApiVersion ?? 'v25.0';
-    const now = Math.floor(Date.now() / 1000);
-    const rangeStart = start ?? now - 30 * 24 * 60 * 60;
-    const rangeEnd = end ?? now;
+  const apiVersion = instance.metaApiVersion ?? 'v25.0';
+  const now = Math.floor(Date.now() / 1000);
+  const rangeStart = start ?? now - 30 * 24 * 60 * 60;
+  const rangeEnd = end ?? now;
 
-    // WABA conversation_analytics is a GET-with-query endpoint exposed on
-    // /{waba_id} with `fields=conversation_analytics.start(X).end(Y).granularity(Z)`.
-    const fields = `conversation_analytics.start(${rangeStart}).end(${rangeEnd}).granularity(${granularity})`;
-    const url = `https://graph.facebook.com/${apiVersion}/${instance.metaWabaId}?fields=${encodeURIComponent(fields)}`;
+  // WABA conversation_analytics is a GET-with-query endpoint exposed on
+  // /{waba_id} with `fields=conversation_analytics.start(X).end(Y).granularity(Z)`.
+  const fields = `conversation_analytics.start(${rangeStart}).end(${rangeEnd}).granularity(${granularity})`;
+  const url = `https://graph.facebook.com/${apiVersion}/${instance.metaWabaId}?fields=${encodeURIComponent(fields)}`;
 
-    try {
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${instance.metaAccessToken}` },
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        return c.json(
-          {
-            error: { code: 'ANALYTICS_FETCH_FAILED', message: `HTTP ${res.status}${text ? `: ${text.slice(0, 160)}` : ''}` },
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${instance.metaAccessToken}` },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      return c.json(
+        {
+          error: {
+            code: 'ANALYTICS_FETCH_FAILED',
+            message: `HTTP ${res.status}${text ? `: ${text.slice(0, 160)}` : ''}`,
           },
-          500,
-        );
-      }
-      const data = (await res.json()) as Record<string, unknown>;
-      return c.json({ data });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      return c.json({ error: { code: 'ANALYTICS_FETCH_FAILED', message } }, 500);
+        },
+        500,
+      );
     }
-  },
-);
+    const data = (await res.json()) as Record<string, unknown>;
+    return c.json({ data });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return c.json({ error: { code: 'ANALYTICS_FETCH_FAILED', message } }, 500);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // GET /:id/whatsapp-cloud/profile
@@ -525,30 +538,26 @@ const updateProfileSchema = z.object({
   websites: z.array(z.string().url()).max(2).optional(),
 });
 
-whatsappCloudRoutes.put(
-  '/:id/whatsapp-cloud/profile',
-  zValidator('json', updateProfileSchema),
-  async (c) => {
-    const id = c.req.param('id');
-    const services = c.get('services');
-    const body = c.req.valid('json');
+whatsappCloudRoutes.put('/:id/whatsapp-cloud/profile', zValidator('json', updateProfileSchema), async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+  const body = c.req.valid('json');
 
-    const instance = await services.instances.getById(id);
-    const guard = ensureWhatsAppCloud(instance);
-    if (!guard.ok) return c.json(guard.payload, 400);
+  const instance = await services.instances.getById(id);
+  const guard = ensureWhatsAppCloud(instance);
+  if (!guard.ok) return c.json(guard.payload, 400);
 
-    const client = buildClientFromInstance(instance);
-    if (!client) return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance has no Meta credentials' } }, 409);
+  const client = buildClientFromInstance(instance);
+  if (!client) return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance has no Meta credentials' } }, 409);
 
-    try {
-      const updated = await client.updateBusinessProfile(body);
-      return c.json({ data: updated });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      return c.json({ error: { code: 'PROFILE_UPDATE_FAILED', message } }, 500);
-    }
-  },
-);
+  try {
+    const updated = await client.updateBusinessProfile(body);
+    return c.json({ data: updated });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return c.json({ error: { code: 'PROFILE_UPDATE_FAILED', message } }, 500);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // POST /:id/whatsapp-cloud/profile/photo
@@ -569,6 +578,38 @@ whatsappCloudRoutes.put(
 // upload session URL.
 // ---------------------------------------------------------------------------
 
+/**
+ * Parse the multipart body of a profile-photo upload and validate the `file`
+ * field. Returns a 400-shaped payload on parse/validation failure (caller
+ * responds with status 400), mirroring the `ensureWhatsAppCloud` guard shape.
+ */
+async function readProfilePhotoUpload(
+  c: Context<{ Variables: AppVariables }>,
+): Promise<
+  | { ok: true; blob: Blob; fileName: string; fileType: string }
+  | { ok: false; payload: { error: { code: string; message: string } } }
+> {
+  let form: Awaited<ReturnType<typeof c.req.parseBody>>;
+  try {
+    form = await c.req.parseBody();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Invalid multipart body';
+    return { ok: false, payload: { error: { code: 'INVALID_MULTIPART', message } } };
+  }
+
+  const file = form.file as unknown;
+  if (!(file instanceof File) && !(file instanceof Blob)) {
+    return { ok: false, payload: { error: { code: 'NO_FILE', message: 'Multipart field "file" is required' } } };
+  }
+  const blob = file as Blob;
+  return {
+    ok: true,
+    blob,
+    fileName: (file as File).name ?? 'profile.jpg',
+    fileType: blob.type || 'image/jpeg',
+  };
+}
+
 whatsappCloudRoutes.post('/:id/whatsapp-cloud/profile/photo', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
@@ -581,21 +622,9 @@ whatsappCloudRoutes.post('/:id/whatsapp-cloud/profile/photo', async (c) => {
     return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected' } }, 409);
   }
 
-  let form: Awaited<ReturnType<typeof c.req.parseBody>>;
-  try {
-    form = await c.req.parseBody();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Invalid multipart body';
-    return c.json({ error: { code: 'INVALID_MULTIPART', message } }, 400);
-  }
-
-  const file = form.file as unknown;
-  if (!(file instanceof File) && !(file instanceof Blob)) {
-    return c.json({ error: { code: 'NO_FILE', message: 'Multipart field "file" is required' } }, 400);
-  }
-  const blob = file as Blob;
-  const fileName = (file as File).name ?? 'profile.jpg';
-  const fileType = blob.type || 'image/jpeg';
+  const upload = await readProfilePhotoUpload(c);
+  if (!upload.ok) return c.json(upload.payload, 400);
+  const { blob, fileName, fileType } = upload;
 
   const appIdForUpload = instance.metaAppId ?? envAppId;
   if (!appIdForUpload) {

@@ -7,12 +7,7 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import {
-  exchangeCodeForToken,
-  getWabaDetails,
-  registerPhoneNumber,
-  subscribeApp,
-} from '../oauth';
+import { exchangeCodeForToken, getWabaDetails, registerPhoneNumber, subscribeApp } from '../oauth';
 import { MetaApiError, MetaErrorCode } from '../utils/errors';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -86,9 +81,7 @@ describe('exchangeCodeForToken', () => {
   });
 
   it('respects a custom apiVersion + redirectUri', async () => {
-    const m = mockFetchSequence([
-      () => ({ status: 200, body: { access_token: 'tok', token_type: 'bearer' } }),
-    ]);
+    const m = mockFetchSequence([() => ({ status: 200, body: { access_token: 'tok', token_type: 'bearer' } })]);
     restore = m.restore;
 
     await exchangeCodeForToken('c', 'a', 's', 'https://app.example/cb', 'v23.0');
@@ -111,7 +104,7 @@ describe('exchangeCodeForToken', () => {
     try {
       await exchangeCodeForToken('', 'a', 's');
     } catch (err) {
-      expect((err as MetaApiError).code).toBe(MetaErrorCode.INVALID_REQUEST);
+      expect<string>((err as MetaApiError).code).toBe(MetaErrorCode.INVALID_REQUEST);
     }
   });
 
@@ -140,7 +133,7 @@ describe('exchangeCodeForToken', () => {
       await exchangeCodeForToken('c', 'a', 's');
     } catch (err) {
       const e = err as MetaApiError;
-      expect(e.code).toBe(MetaErrorCode.INVALID_REQUEST);
+      expect<string>(e.code).toBe(MetaErrorCode.INVALID_REQUEST);
       expect(e.message).toContain('authorization code');
       expect(e.context.fbtraceId).toBe('abc123');
       expect(e.context.httpStatus).toBe(400);
@@ -157,7 +150,7 @@ describe('exchangeCodeForToken', () => {
     } catch (err) {
       const e = err as MetaApiError;
       expect(e).toBeInstanceOf(MetaApiError);
-      expect(e.code).toBe(MetaErrorCode.UPSTREAM_ERROR);
+      expect<string>(e.code).toBe(MetaErrorCode.UPSTREAM_ERROR);
     }
   });
 
@@ -170,7 +163,7 @@ describe('exchangeCodeForToken', () => {
       throw new Error('expected throw');
     } catch (err) {
       const e = err as MetaApiError;
-      expect(e.code).toBe(MetaErrorCode.AUTH_FAILED);
+      expect<string>(e.code).toBe(MetaErrorCode.AUTH_FAILED);
       expect(e.message).toContain('access_token');
     }
   });
@@ -184,7 +177,7 @@ describe('exchangeCodeForToken', () => {
       throw new Error('expected throw');
     } catch (err) {
       const e = err as MetaApiError;
-      expect(e.code).toBe(MetaErrorCode.UNKNOWN);
+      expect<string>(e.code).toBe(MetaErrorCode.UNKNOWN);
     }
   });
 });
@@ -290,7 +283,13 @@ describe('getWabaDetails', () => {
     const result = await getWabaDetails('tok');
     expect(result.wabaIds).toEqual(['waba_c']);
     expect(result.phoneNumbers).toEqual([
-      { phone_number_id: 'pn_c', wabaId: 'waba_c', display_phone_number: undefined, verified_name: undefined, quality_rating: undefined },
+      {
+        phone_number_id: 'pn_c',
+        wabaId: 'waba_c',
+        display_phone_number: undefined,
+        verified_name: undefined,
+        quality_rating: undefined,
+      },
     ]);
   });
 
@@ -308,7 +307,7 @@ describe('getWabaDetails', () => {
     } catch (err) {
       const e = err as MetaApiError;
       expect(e).toBeInstanceOf(MetaApiError);
-      expect(e.code).toBe(MetaErrorCode.AUTH_FAILED);
+      expect<string>(e.code).toBe(MetaErrorCode.AUTH_FAILED);
     }
   });
 
@@ -388,9 +387,7 @@ describe('subscribeApp', () => {
   });
 
   it('throws MetaApiError on 4xx', async () => {
-    const m = mockFetchSequence([
-      () => ({ status: 400, body: { error: { message: 'bad waba', code: 100 } } }),
-    ]);
+    const m = mockFetchSequence([() => ({ status: 400, body: { error: { message: 'bad waba', code: 100 } } })]);
     restore = m.restore;
 
     try {
@@ -399,8 +396,7 @@ describe('subscribeApp', () => {
     } catch (err) {
       const e = err as MetaApiError;
       expect(e).toBeInstanceOf(MetaApiError);
-      expect(e.code).toBe(MetaErrorCode.INVALID_REQUEST);
+      expect<string>(e.code).toBe(MetaErrorCode.INVALID_REQUEST);
     }
   });
 });
-

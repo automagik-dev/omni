@@ -10,7 +10,7 @@
  * access_token) + dedupe cache keyed by `wamid`.
  */
 
-import { BaseChannelPlugin, createInboundDedupeCache } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
   DedupeCache,
@@ -25,30 +25,33 @@ import type {
 } from '@omni/channel-sdk';
 import type { Logger } from '@omni/core';
 import type { EventPayloadMap } from '@omni/core/events';
-import type {
-  MetaInboundMessage,
-  MetaTemplateStatusUpdate,
-  MetaWebhookStatusEntry,
-} from '@omni/core/schemas';
+import type { MetaInboundMessage, MetaTemplateStatusUpdate, MetaWebhookStatusEntry } from '@omni/core/schemas';
 import type { ChannelType, ContentType } from '@omni/core/types';
 
 import { WHATSAPP_CLOUD_CAPABILITIES } from './capabilities';
 import { MetaWhatsAppClient } from './client';
 import { handleMetaWebhook } from './handlers/webhook';
 import {
+  type SendTemplateButton,
+  type SendTemplateHeaderMedia,
   sendContact,
   sendLocation,
   sendMedia,
   sendReaction,
   sendTemplate,
   sendText,
-  type SendTemplateButton,
-  type SendTemplateHeaderMedia,
 } from './senders';
 import type { MetaSendResponse, WhatsAppCloudConfig } from './types';
 import { MetaApiError, MetaErrorCode } from './utils/errors';
 
 const META_MEDIA_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'video', 'document', 'sticker']);
+
+/**
+ * SDK download guard for inbound media. Meta reports `file_size` on the
+ * `GET /{media_id}` lookup — the guard rejects oversized payloads before any
+ * bytes are pulled into memory (see `downloadInboundMedia`).
+ */
+const downloadGuard = createDownloadGuard();
 
 interface WhatsAppCloudInstanceState {
   client: MetaWhatsAppClient;
@@ -115,7 +118,10 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     const wabaId = (creds.metaWabaId ?? opts.metaWabaId) as string | undefined;
 
     if (!accessToken) {
-      throw new MetaApiError(MetaErrorCode.AUTH_FAILED, 'metaAccessToken is required to connect a whatsapp-cloud instance');
+      throw new MetaApiError(
+        MetaErrorCode.AUTH_FAILED,
+        'metaAccessToken is required to connect a whatsapp-cloud instance',
+      );
     }
     if (!phoneNumberId) {
       throw new MetaApiError(
@@ -134,7 +140,8 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     const appId = (creds.metaAppId ?? opts.metaAppId) as string | undefined;
     const businessId = (creds.metaBusinessId ?? opts.metaBusinessId) as string | undefined;
     const displayPhoneNumber = (creds.metaDisplayPhoneNumber ?? opts.metaDisplayPhoneNumber) as string | undefined;
-    const connectionMethod = ((creds.metaConnectionMethod ?? opts.metaConnectionMethod) as string | undefined) ?? 'manual';
+    const connectionMethod =
+      ((creds.metaConnectionMethod ?? opts.metaConnectionMethod) as string | undefined) ?? 'manual';
 
     this.logger.info('Connecting WhatsApp Cloud instance', { instanceId, phoneNumberId, wabaId, connectionMethod });
 
@@ -234,75 +241,24 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     const { client } = state;
     const { content, to, replyTo, metadata } = message;
 
+    // Journey timing: T10 (pluginSentAt) right before the Graph API call.
+    const correlationId = metadata?.correlationId as string | undefined;
+    if (correlationId) this.captureT10(correlationId);
+
     try {
-      let response: MetaSendResponse;
-      if (content.type === 'text') {
-        response = await sendText(client, to, content.text ?? '', replyTo);
-      } else if (META_MEDIA_TYPES.has(content.type)) {
-        response = await sendMedia(
-          client,
-          to,
-          content.mediaUrl ?? '',
-          content.mimeType,
-          content.caption ?? content.text,
-          content.filename,
-          replyTo,
-        );
-      } else if (content.type === 'location' && content.location) {
-        const { latitude, longitude, name, address } = content.location;
-        response = await sendLocation(client, to, latitude, longitude, name, address, replyTo);
-      } else if (content.type === 'contact' && content.contact) {
-        response = await sendContact(
-          client,
-          to,
-          [
-            {
-              name: content.contact.name,
-              phones: content.contact.phone ? [content.contact.phone] : undefined,
-              emails: content.contact.email ? [content.contact.email] : undefined,
-            },
-          ],
-          replyTo,
-        );
-      } else if (content.type === 'reaction') {
-        response = await sendReaction(client, to, content.targetMessageId ?? '', content.emoji ?? '');
-      } else if (content.type === 'template') {
-        // Template descriptor is carried via `metadata.template`. Senders/templates wire
-        // this via the routes/v2/templates.ts handler when the user hits send-template;
-        // for direct sendMessage calls, callers populate metadata.template themselves.
-        const tpl = (metadata?.template ?? {}) as {
-          name?: string;
-          language?: string;
-          bodyParameters?: string[];
-          headerMedia?: SendTemplateHeaderMedia;
-          buttonParameters?: SendTemplateButton[];
-        };
-        if (!tpl.name) {
-          return {
-            success: false,
-            error: 'template send requires metadata.template.name',
-            retryable: false,
-            timestamp: Date.now(),
-          };
-        }
-        response = await sendTemplate(
-          client,
-          to,
-          tpl.name,
-          tpl.language ?? 'pt_BR',
-          tpl.bodyParameters,
-          tpl.headerMedia,
-          tpl.buttonParameters,
-          replyTo,
-        );
-      } else {
+      const dispatched = await dispatchOutbound(client, message);
+      if (!dispatched.ok) {
         return {
           success: false,
-          error: `Unsupported content.type=${content.type} for whatsapp-cloud`,
+          error: dispatched.error,
           retryable: false,
           timestamp: Date.now(),
         };
       }
+      const { response } = dispatched;
+
+      // Journey timing: T11 (platformDeliveredAt) once Meta acknowledged the send.
+      if (correlationId) this.captureT11(correlationId);
 
       // Meta returns `messages[0].id` (wamid) on every successful send — if it's
       // missing, the response is malformed. Bail with a clear error rather than
@@ -371,11 +327,12 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   // Health
   // ─────────────────────────────────────────────────────────────
 
-  async getHealth(instanceId?: string): Promise<HealthStatus> {
+  override async getHealth(instanceId?: string): Promise<HealthStatus> {
     const checks: HealthCheck[] = [];
-    const states = instanceId
-      ? this.waCloudInstances.has(instanceId)
-        ? [[instanceId, this.waCloudInstances.get(instanceId)!] as const]
+    const single = instanceId ? this.waCloudInstances.get(instanceId) : undefined;
+    const states: Array<readonly [string, WhatsAppCloudInstanceState]> = instanceId
+      ? single
+        ? [[instanceId, single] as const]
         : []
       : Array.from(this.waCloudInstances.entries());
 
@@ -387,14 +344,13 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
         message: ok
           ? `Phone ${state.config.phoneNumberId} reachable`
           : `Phone ${state.config.phoneNumberId} unreachable — token rejected or network error`,
-        lastChecked: new Date(),
       });
     }
 
     return {
       status: checks.length === 0 || checks.every((c) => c.status === 'pass') ? 'healthy' : 'unhealthy',
       checks,
-      lastChecked: new Date(),
+      checkedAt: new Date(),
     };
   }
 
@@ -404,6 +360,60 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
 
   async fetchHistory(_instanceId: string, _options: FetchHistoryOptions): Promise<FetchHistoryResult> {
     return { totalFetched: 0, messages: [] };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Reactions (implements ChannelPlugin.react / ChannelPlugin.unreact)
+  // ─────────────────────────────────────────────────────────────
+
+  /** Add a reaction emoji to a message (`messageId` is the target wamid). */
+  async react(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
+    const state = this.requireInstanceState(instanceId, 'react');
+    await sendReaction(state.client, chatId, messageId, emoji);
+  }
+
+  /** Remove a reaction — Meta removes it when an empty emoji is sent for the same wamid. */
+  async unreact(instanceId: string, chatId: string, messageId: string, _emoji: string): Promise<void> {
+    const state = this.requireInstanceState(instanceId, 'unreact');
+    await sendReaction(state.client, chatId, messageId, '');
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Inbound media download
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Resolve and download an inbound media attachment by Meta media id.
+   *
+   * Inbound webhooks carry only a `media_id` (surfaced in
+   * `rawPayload.mediaId` by `handleInboundMessage`) — the bytes live behind
+   * `GET /{media_id}` + an authenticated, short-lived download URL. The SDK
+   * download guard checks the `file_size` Meta reports on the lookup before
+   * any bytes are pulled into memory (throws `DownloadTooLargeError`).
+   */
+  async downloadInboundMedia(instanceId: string, mediaId: string): Promise<{ buffer: Buffer; mimeType: string }> {
+    const state = this.requireInstanceState(instanceId, 'downloadInboundMedia');
+    const media = await state.client.getMediaUrl(mediaId);
+    if (typeof media.file_size === 'number') {
+      downloadGuard.checkSize(media.file_size, this.logger, {
+        instanceId,
+        url: media.url,
+        channel: 'whatsapp-cloud',
+      });
+    }
+    const bytes = await state.client.downloadMedia(media.url);
+    return { buffer: Buffer.from(bytes), mimeType: media.mime_type };
+  }
+
+  /** Live state for `instanceId`, or throw `META_NOT_CONNECTED`. */
+  private requireInstanceState(instanceId: string, operation: string): WhatsAppCloudInstanceState {
+    const state = this.waCloudInstances.get(instanceId);
+    if (!state) {
+      throw new MetaApiError(MetaErrorCode.NOT_CONNECTED, 'WhatsApp Cloud instance not connected', {
+        operation,
+      });
+    }
+    return state;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -488,33 +498,8 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
       return false;
     }
 
-    // Reactions go through emitReactionReceived (or emitReactionRemoved when
-    // emoji is empty — Meta uses empty emoji as "reaction removed").
-    //
-    // Phone numbers stay in Meta wire format (digits-only) — each channel
-    // uses its native `platform_user_id` shape; cross-channel identity
-    // unification happens in the identity-graph layer, not here.
     if (msg.type === 'reaction') {
-      const targetMessageId = msg.reaction.message_id;
-      const emoji = msg.reaction.emoji;
-      if (!emoji) {
-        await this.emitReactionRemoved({
-          instanceId,
-          messageId: targetMessageId,
-          chatId: msg.from,
-          from: msg.from,
-          emoji: '',
-        });
-      } else {
-        await this.emitReactionReceived({
-          instanceId,
-          messageId: targetMessageId,
-          chatId: msg.from,
-          from: msg.from,
-          emoji,
-          rawPayload: msg as unknown as Record<string, unknown>,
-        });
-      }
+      await this.handleInboundReaction(instanceId, msg);
       return true;
     }
 
@@ -528,12 +513,18 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
       return false;
     }
 
+    if (!this.sanitizeInboundContent(instanceId, wamid, content)) return false;
+
     const senderName = contacts?.find((c) => c.wa_id === msg.from)?.profile?.name;
     const tsSeconds = Number.parseInt(msg.timestamp, 10);
     const platformTimestampMs = Number.isFinite(tsSeconds) ? tsSeconds * 1000 : Date.now();
     const replyToId = 'context' in msg ? msg.context?.id : undefined;
 
-    await this.emitMessageReceived({
+    // Journey timing: T0 (platformReceivedAt) + T1 (pluginReceivedAt), then
+    // T2 (eventPublishedAt) after the event is on the bus.
+    const timings = this.captureInboundTimings(platformTimestampMs);
+
+    const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId: wamid,
       chatId: msg.from,
@@ -553,7 +544,69 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
         filename: content.filename,
         platformTimestampMs,
       },
+      timings,
     });
+    if (timings) this.captureT2(correlationId, timings);
+    return true;
+  }
+
+  /**
+   * Reactions go through emitReactionReceived (or emitReactionRemoved when
+   * emoji is empty — Meta uses empty emoji as "reaction removed").
+   *
+   * Phone numbers stay in Meta wire format (digits-only) — each channel
+   * uses its native `platform_user_id` shape; cross-channel identity
+   * unification happens in the identity-graph layer, not here.
+   */
+  private async handleInboundReaction(
+    instanceId: string,
+    msg: Extract<MetaInboundMessage, { type: 'reaction' }>,
+  ): Promise<void> {
+    const targetMessageId = msg.reaction.message_id;
+    const emoji = msg.reaction.emoji;
+    if (!emoji) {
+      await this.emitReactionRemoved({
+        instanceId,
+        messageId: targetMessageId,
+        chatId: msg.from,
+        from: msg.from,
+        emoji: '',
+      });
+      return;
+    }
+    await this.emitReactionReceived({
+      instanceId,
+      messageId: targetMessageId,
+      chatId: msg.from,
+      from: msg.from,
+      emoji,
+      rawPayload: msg as unknown as Record<string, unknown>,
+    });
+  }
+
+  /**
+   * Run inbound text (body and/or media caption) through the SDK sanitizer.
+   *
+   * Mutates `content` in place with the cleaned text. Returns `false` when
+   * the sanitizer rejects the message (null bytes / oversized) — the caller
+   * drops the message without emitting.
+   */
+  private sanitizeInboundContent(instanceId: string, wamid: string, content: ExtractedInboundContent): boolean {
+    for (const field of ['text', 'caption'] as const) {
+      const value = content[field];
+      if (!value) continue;
+      const sanitized = sanitizeMessage(value, this.logger, { instanceId, messageId: wamid });
+      if (!sanitized.ok) {
+        this.logger.warn('[whatsapp-cloud] inbound text rejected by sanitizer', {
+          instanceId,
+          wamid,
+          field,
+          rejected: sanitized.rejected,
+        });
+        return false;
+      }
+      content[field] = sanitized.text;
+    }
     return true;
   }
 
@@ -601,8 +654,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
       case 'failed': {
         const firstError = status.errors?.[0];
         const errorCode = firstError ? String(firstError.code) : undefined;
-        const errorMessage =
-          firstError?.message ?? firstError?.title ?? 'Meta reported delivery failure';
+        const errorMessage = firstError?.message ?? firstError?.title ?? 'Meta reported delivery failure';
         await this.emitMessageFailed({
           instanceId,
           externalId: status.id,
@@ -705,8 +757,99 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
 
 // ─────────────────────────────────────────────────────────────────────────
 // Module-level helpers — pure, no plugin state, kept outside the class
-// for clarity. They're used only by `handleInboundMessage`.
+// for clarity. They're used by `sendMessage` and the inbound handlers.
 // ─────────────────────────────────────────────────────────────────────────
+
+type OutboundDispatchResult = { ok: true; response: MetaSendResponse } | { ok: false; error: string };
+
+/**
+ * Route an outgoing message to the matching sender by `content.type`.
+ *
+ * Returns `{ ok: false }` for unsupported types or missing template metadata —
+ * `sendMessage` surfaces that as a non-retryable `SendResult` without emitting
+ * `message.failed` (nothing was attempted against the Graph API). Sender
+ * failures propagate as thrown `MetaApiError`s, handled by the caller.
+ */
+async function dispatchOutbound(client: MetaWhatsAppClient, message: OutgoingMessage): Promise<OutboundDispatchResult> {
+  const { content, to, replyTo } = message;
+
+  if (content.type === 'text') {
+    return { ok: true, response: await sendText(client, to, content.text ?? '', replyTo) };
+  }
+  if (META_MEDIA_TYPES.has(content.type)) {
+    return {
+      ok: true,
+      response: await sendMedia(
+        client,
+        to,
+        content.mediaUrl ?? '',
+        content.mimeType,
+        content.caption ?? content.text,
+        content.filename,
+        replyTo,
+      ),
+    };
+  }
+  if (content.type === 'location' && content.location) {
+    const { latitude, longitude, name, address } = content.location;
+    return { ok: true, response: await sendLocation(client, to, latitude, longitude, name, address, replyTo) };
+  }
+  if (content.type === 'contact' && content.contact) {
+    const response = await sendContact(
+      client,
+      to,
+      [
+        {
+          name: content.contact.name,
+          phones: content.contact.phone ? [content.contact.phone] : undefined,
+          emails: content.contact.email ? [content.contact.email] : undefined,
+        },
+      ],
+      replyTo,
+    );
+    return { ok: true, response };
+  }
+  if (content.type === 'reaction') {
+    return { ok: true, response: await sendReaction(client, to, content.targetMessageId ?? '', content.emoji ?? '') };
+  }
+  if (content.type === 'template') {
+    return dispatchOutboundTemplate(client, message);
+  }
+  return { ok: false, error: `Unsupported content.type=${content.type} for whatsapp-cloud` };
+}
+
+/**
+ * Template descriptor is carried via `metadata.template`. Senders/templates wire
+ * this via the routes/v2/templates.ts handler when the user hits send-template;
+ * for direct sendMessage calls, callers populate metadata.template themselves.
+ */
+async function dispatchOutboundTemplate(
+  client: MetaWhatsAppClient,
+  message: OutgoingMessage,
+): Promise<OutboundDispatchResult> {
+  const { to, replyTo, metadata } = message;
+  const tpl = (metadata?.template ?? {}) as {
+    name?: string;
+    language?: string;
+    bodyParameters?: string[];
+    headerMedia?: SendTemplateHeaderMedia;
+    buttonParameters?: SendTemplateButton[];
+  };
+  if (!tpl.name) {
+    return { ok: false, error: 'template send requires metadata.template.name' };
+  }
+  const response = await sendTemplate(
+    client,
+    to,
+    tpl.name,
+    tpl.language ?? 'pt_BR',
+    tpl.bodyParameters,
+    tpl.headerMedia,
+    tpl.buttonParameters,
+    replyTo,
+  );
+  return { ok: true, response };
+}
 
 interface ExtractedInboundContent {
   type: ContentType;
@@ -740,68 +883,92 @@ function extractInboundContent(msg: MetaInboundMessage): ExtractedInboundContent
   if (msg.type === 'text') {
     return { type: 'text', text: msg.text.body };
   }
-
   if (msg.type === 'location') {
-    const { latitude, longitude, name, address } = msg.location;
-    const label = [name, address].filter(Boolean).join(', ');
-    return {
-      type: 'location',
-      text: label || `${latitude},${longitude}`,
-    };
+    return extractLocationContent(msg.location);
   }
-
   if (msg.type === 'contacts') {
-    const first = msg.contacts[0];
-    const formattedName = first?.name?.formatted_name as string | undefined;
-    const firstName = first?.name?.first_name as string | undefined;
-    const phone = (first?.phones?.[0]?.phone as string | undefined) ?? '';
-    const name = formattedName ?? firstName ?? 'Contact';
-    return {
-      type: 'text',
-      text: `Contact: ${name}${phone ? `: ${phone}` : ''}`,
-    };
+    return extractContactContent(msg.contacts);
   }
-
   if (msg.type === 'interactive') {
-    const i = msg.interactive;
-    if (i.type === 'button_reply' && i.button_reply) {
-      return { type: 'text', text: i.button_reply.title };
-    }
-    if (i.type === 'list_reply' && i.list_reply) {
-      return { type: 'text', text: i.list_reply.title };
-    }
-    return { type: 'text', text: '[interactive]' };
+    return extractInteractiveContent(msg.interactive);
   }
-
   if (msg.type === 'button') {
     return { type: 'text', text: msg.button.text };
   }
+  // Media types — image | audio | video | document | sticker (anything else → null)
+  return extractMediaContent(msg);
+}
 
-  // Media types — image | audio | video | document | sticker
-  const omniType = MEDIA_TYPE_MAP[msg.type];
-  if (omniType) {
-    const mediaField =
-      msg.type === 'image'
-        ? msg.image
-        : msg.type === 'audio'
-          ? msg.audio
-          : msg.type === 'video'
-            ? msg.video
-            : msg.type === 'document'
-              ? msg.document
-              : msg.sticker;
-    if (!mediaField) return null;
-    return {
-      type: omniType,
-      mediaId: mediaField.id,
-      mimeType: mediaField.mime_type,
-      caption: mediaField.caption,
-      filename: mediaField.filename,
-      isVoiceNote: msg.type === 'audio' ? mediaField.voice === true : undefined,
-    };
+function extractLocationContent(
+  location: Extract<MetaInboundMessage, { type: 'location' }>['location'],
+): ExtractedInboundContent {
+  const { latitude, longitude, name, address } = location;
+  const label = [name, address].filter(Boolean).join(', ');
+  return {
+    type: 'location',
+    text: label || `${latitude},${longitude}`,
+  };
+}
+
+function extractContactContent(
+  contacts: Extract<MetaInboundMessage, { type: 'contacts' }>['contacts'],
+): ExtractedInboundContent {
+  const first = contacts[0];
+  const formattedName = first?.name?.formatted_name as string | undefined;
+  const firstName = first?.name?.first_name as string | undefined;
+  const phone = (first?.phones?.[0]?.phone as string | undefined) ?? '';
+  const name = formattedName ?? firstName ?? 'Contact';
+  return {
+    type: 'text',
+    text: `Contact: ${name}${phone ? `: ${phone}` : ''}`,
+  };
+}
+
+function extractInteractiveContent(
+  interactive: Extract<MetaInboundMessage, { type: 'interactive' }>['interactive'],
+): ExtractedInboundContent {
+  if (interactive.type === 'button_reply' && interactive.button_reply) {
+    return { type: 'text', text: interactive.button_reply.title };
   }
+  if (interactive.type === 'list_reply' && interactive.list_reply) {
+    return { type: 'text', text: interactive.list_reply.title };
+  }
+  return { type: 'text', text: '[interactive]' };
+}
 
-  return null;
+/** Pick the media payload matching the message type — image | audio | video | document | sticker. */
+function getInboundMediaField(msg: MetaInboundMessage) {
+  switch (msg.type) {
+    case 'image':
+      return msg.image;
+    case 'audio':
+      return msg.audio;
+    case 'video':
+      return msg.video;
+    case 'document':
+      return msg.document;
+    case 'sticker':
+      return msg.sticker;
+    default:
+      return undefined;
+  }
+}
+
+function extractMediaContent(msg: MetaInboundMessage): ExtractedInboundContent | null {
+  const omniType = MEDIA_TYPE_MAP[msg.type];
+  if (!omniType) return null;
+
+  const mediaField = getInboundMediaField(msg);
+  if (!mediaField) return null;
+
+  return {
+    type: omniType,
+    mediaId: mediaField.id,
+    mimeType: mediaField.mime_type,
+    caption: mediaField.caption,
+    filename: mediaField.filename,
+    isVoiceNote: msg.type === 'audio' ? mediaField.voice === true : undefined,
+  };
 }
 
 /**
@@ -820,26 +987,40 @@ function inferAlertSeverity(
   alertType: EventPayloadMap['channel.alert']['alertType'],
   alertInfo: Record<string, unknown>,
   value: Record<string, unknown>,
-): 'info' | 'warning' | 'critical' {
+): AlertSeverity {
   if (alertType === 'phone_number_quality_update') {
-    const rating = (value.current_quality ?? value.event ?? '').toString().toUpperCase();
-    if (rating === 'RED') return 'critical';
-    if (rating === 'YELLOW') return 'warning';
-    return 'info';
+    return inferQualityUpdateSeverity(value);
   }
   if (alertType === 'account_update') {
-    const evt = (value.event ?? '').toString().toUpperCase();
-    if (evt.includes('BAN') || evt.includes('DISABLE') || evt.includes('SUSPEND')) return 'critical';
-    if (evt.includes('WARN') || evt.includes('RESTRICT')) return 'warning';
-    return 'info';
+    return inferAccountUpdateSeverity(value);
   }
   if (alertType === 'account_alerts') {
-    const sev = (alertInfo.severity ?? alertInfo.alert_severity ?? '').toString().toLowerCase();
-    if (sev === 'critical' || sev === 'high') return 'critical';
-    if (sev === 'warning' || sev === 'medium') return 'warning';
-    return 'warning'; // alerts default to warning — they're meant to be acted on
+    return inferAccountAlertsSeverity(alertInfo);
   }
   return 'info';
+}
+
+type AlertSeverity = 'info' | 'warning' | 'critical';
+
+function inferQualityUpdateSeverity(value: Record<string, unknown>): AlertSeverity {
+  const rating = (value.current_quality ?? value.event ?? '').toString().toUpperCase();
+  if (rating === 'RED') return 'critical';
+  if (rating === 'YELLOW') return 'warning';
+  return 'info';
+}
+
+function inferAccountUpdateSeverity(value: Record<string, unknown>): AlertSeverity {
+  const evt = (value.event ?? '').toString().toUpperCase();
+  if (evt.includes('BAN') || evt.includes('DISABLE') || evt.includes('SUSPEND')) return 'critical';
+  if (evt.includes('WARN') || evt.includes('RESTRICT')) return 'warning';
+  return 'info';
+}
+
+function inferAccountAlertsSeverity(alertInfo: Record<string, unknown>): AlertSeverity {
+  const sev = (alertInfo.severity ?? alertInfo.alert_severity ?? '').toString().toLowerCase();
+  if (sev === 'critical' || sev === 'high') return 'critical';
+  if (sev === 'warning' || sev === 'medium') return 'warning';
+  return 'warning'; // alerts default to warning — they're meant to be acted on
 }
 
 function inferAlertMessage(

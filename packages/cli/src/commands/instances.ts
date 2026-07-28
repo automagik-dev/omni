@@ -672,16 +672,14 @@ export function createInstancesCommand(): Command {
 
           // WhatsApp Cloud manual connect — hits /whatsapp-cloud/connect when
           // the operator supplies the three required Meta identifiers.
-          const wantsWhatsAppCloud =
-            options.accessToken && options.phoneNumberId && options.wabaId;
+          const wantsWhatsAppCloud = options.accessToken && options.phoneNumberId && options.wabaId;
 
           if (wantsWhatsAppCloud) {
             // Verify the instance channel matches before hitting the endpoint.
             const instance = await client.instances.get(id);
             if ((instance as { channel?: string }).channel !== 'whatsapp-cloud') {
               output.error(
-                `Instance ${id} is not a whatsapp-cloud instance (channel=${(instance as { channel?: string }).channel}). ` +
-                  '--access-token/--phone-number-id/--waba-id only apply to whatsapp-cloud.',
+                `Instance ${id} is not a whatsapp-cloud instance (channel=${(instance as { channel?: string }).channel}). --access-token/--phone-number-id/--waba-id only apply to whatsapp-cloud.`,
               );
               return;
             }

@@ -8,7 +8,7 @@
  */
 
 export { sendText } from './text';
-export { sendMedia, resolveMetaMediaType, type MetaMediaKind } from './media';
+export { sendMedia, type MetaMediaKind } from './media';
 export { sendLocation } from './location';
 export { sendContact, type ContactInput } from './contact';
 export { sendReaction } from './reaction';

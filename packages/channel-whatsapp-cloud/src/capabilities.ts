@@ -55,7 +55,10 @@ export const WHATSAPP_CLOUD_CAPABILITIES: ChannelCapabilities = {
     { mimeType: 'application/vnd.ms-excel', maxSize: 100 * 1024 * 1024 },
     { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', maxSize: 100 * 1024 * 1024 },
     { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', maxSize: 100 * 1024 * 1024 },
-    { mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', maxSize: 100 * 1024 * 1024 },
+    {
+      mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      maxSize: 100 * 1024 * 1024,
+    },
     { mimeType: 'text/plain', maxSize: 100 * 1024 * 1024 },
   ],
 };

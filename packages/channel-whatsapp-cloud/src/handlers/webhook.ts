@@ -29,10 +29,10 @@
  */
 
 import {
-  MetaTemplateStatusUpdateSchema,
-  MetaWebhookPayloadSchema,
   type MetaInboundMessage,
+  MetaTemplateStatusUpdateSchema,
   type MetaWebhookPayload,
+  MetaWebhookPayloadSchema,
   type MetaWebhookStatusEntry,
 } from '@omni/core/schemas';
 
@@ -134,10 +134,7 @@ export async function handleMetaWebhook(
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────
 
-async function processValidatedPayload(
-  plugin: WhatsAppCloudPlugin,
-  payload: MetaWebhookPayload,
-): Promise<void> {
+async function processValidatedPayload(plugin: WhatsAppCloudPlugin, payload: MetaWebhookPayload): Promise<void> {
   const logger = plugin.getLogger();
 
   for (const entry of payload.entry) {
@@ -159,67 +156,25 @@ const CHANNEL_ALERT_FIELDS = new Set([
   'phone_number_name_update',
 ]);
 
+type MetaWebhookChange = MetaWebhookPayload['entry'][number]['changes'][number];
+type WebhookLogger = ReturnType<WhatsAppCloudPlugin['getLogger']>;
+type InboundContacts = Parameters<WhatsAppCloudPlugin['handleInboundMessage']>[2];
+type InboundDedupeCache = Parameters<WhatsAppCloudPlugin['handleInboundMessage']>[3];
+
 async function processChange(
   plugin: WhatsAppCloudPlugin,
-  change: MetaWebhookPayload['entry'][number]['changes'][number],
+  change: MetaWebhookChange,
   entryId: string,
-  logger: ReturnType<WhatsAppCloudPlugin['getLogger']>,
+  logger: WebhookLogger,
 ): Promise<void> {
   // ─── WABA-scoped alerts (no phone_number_id) ───
   if (CHANNEL_ALERT_FIELDS.has(change.field)) {
-    const value = (change.value ?? {}) as Record<string, unknown>;
-    // entry.id IS the WABA id for these fields. Resolve all instances under
-    // that WABA — multi-instance customers get one event per instance so
-    // dashboards scoped per-instance still fire.
-    const matches = plugin.findInstancesByWabaId(entryId);
-    if (matches.length === 0) {
-      logger.debug('[whatsapp-cloud] channel alert arrived with no matching WABA', {
-        field: change.field,
-        wabaId: entryId,
-      });
-      return;
-    }
-    const alertType = change.field as Parameters<typeof plugin.handleChannelAlert>[1];
-    await Promise.all(
-      matches.map(([instanceId]) =>
-        plugin.handleChannelAlert(instanceId, alertType, value).catch((err) => {
-          logger.warn('[whatsapp-cloud] failed to emit channel.alert', {
-            instanceId,
-            field: change.field,
-            err: String(err),
-          });
-        }),
-      ),
-    );
+    await processChannelAlert(plugin, change, entryId, logger);
     return;
   }
 
   if (change.field === 'message_template_status_update') {
-    const parsed = MetaTemplateStatusUpdateSchema.safeParse(change.value);
-    if (!parsed.success) {
-      logger.warn('[whatsapp-cloud] template_status_update payload invalid', {
-        issues: parsed.error.issues.slice(0, 3),
-      });
-      return;
-    }
-    // Template status updates don't carry phone_number_id — they're scoped
-    // to a WABA. The templates service (`templates.ts::handleTemplateStatusUpdate`)
-    // resolves the correct local row + instance scope by `(metaTemplateId, wabaId)`
-    // and updates the DB before emitting. The webhook handler here delegates
-    // to the templates service rather than fanning out to all instances.
-    //
-    // Lazy import keeps the webhook handler free of a hard dep on the db layer
-    // (which the @omni/db workspace dep already provides at runtime).
-    const { handleTemplateStatusUpdate } = await import('../templates');
-    const { db } = await import('@omni/db');
-    try {
-      await handleTemplateStatusUpdate(db, parsed.data, plugin);
-    } catch (err) {
-      logger.warn('[whatsapp-cloud] failed to handle template status update', {
-        metaTemplateId: parsed.data.message_template_id,
-        err: String(err),
-      });
-    }
+    await processTemplateStatusUpdate(plugin, change, logger);
     return;
   }
 
@@ -228,6 +183,78 @@ async function processChange(
     return;
   }
 
+  await processMessagesChange(plugin, change, logger);
+}
+
+async function processChannelAlert(
+  plugin: WhatsAppCloudPlugin,
+  change: MetaWebhookChange,
+  entryId: string,
+  logger: WebhookLogger,
+): Promise<void> {
+  const value = (change.value ?? {}) as Record<string, unknown>;
+  // entry.id IS the WABA id for these fields. Resolve all instances under
+  // that WABA — multi-instance customers get one event per instance so
+  // dashboards scoped per-instance still fire.
+  const matches = plugin.findInstancesByWabaId(entryId);
+  if (matches.length === 0) {
+    logger.debug('[whatsapp-cloud] channel alert arrived with no matching WABA', {
+      field: change.field,
+      wabaId: entryId,
+    });
+    return;
+  }
+  const alertType = change.field as Parameters<typeof plugin.handleChannelAlert>[1];
+  await Promise.all(
+    matches.map(([instanceId]) =>
+      plugin.handleChannelAlert(instanceId, alertType, value).catch((err) => {
+        logger.warn('[whatsapp-cloud] failed to emit channel.alert', {
+          instanceId,
+          field: change.field,
+          err: String(err),
+        });
+      }),
+    ),
+  );
+}
+
+async function processTemplateStatusUpdate(
+  plugin: WhatsAppCloudPlugin,
+  change: MetaWebhookChange,
+  logger: WebhookLogger,
+): Promise<void> {
+  const parsed = MetaTemplateStatusUpdateSchema.safeParse(change.value);
+  if (!parsed.success) {
+    logger.warn('[whatsapp-cloud] template_status_update payload invalid', {
+      issues: parsed.error.issues.slice(0, 3),
+    });
+    return;
+  }
+  // Template status updates don't carry phone_number_id — they're scoped
+  // to a WABA. The templates service (`templates.ts::handleTemplateStatusUpdate`)
+  // resolves the correct local row + instance scope by `(metaTemplateId, wabaId)`
+  // and updates the DB before emitting. The webhook handler here delegates
+  // to the templates service rather than fanning out to all instances.
+  //
+  // Lazy import keeps the webhook handler free of a hard dep on the db layer
+  // (which the @omni/db workspace dep already provides at runtime).
+  const { handleTemplateStatusUpdate } = await import('../templates');
+  const { getDb } = await import('@omni/db');
+  try {
+    await handleTemplateStatusUpdate(getDb(), parsed.data, plugin);
+  } catch (err) {
+    logger.warn('[whatsapp-cloud] failed to handle template status update', {
+      metaTemplateId: parsed.data.message_template_id,
+      err: String(err),
+    });
+  }
+}
+
+async function processMessagesChange(
+  plugin: WhatsAppCloudPlugin,
+  change: MetaWebhookChange,
+  logger: WebhookLogger,
+): Promise<void> {
   // `messages` field — value matches MetaWebhookValueSchema.
   const value = change.value as Record<string, unknown>;
   const metadata = value.metadata as { phone_number_id?: string } | undefined;
@@ -256,7 +283,19 @@ async function processChange(
     ? (value.contacts as Array<{ profile?: { name?: string }; wa_id?: string }>)
     : undefined;
 
-  // --- Inbound messages ---
+  await emitInboundMessages(plugin, instanceId, messages, contacts, state.dedupeCache, logger);
+  await emitStatusUpdates(plugin, instanceId, statuses, logger);
+}
+
+// --- Inbound messages ---
+async function emitInboundMessages(
+  plugin: WhatsAppCloudPlugin,
+  instanceId: string,
+  messages: unknown[],
+  contacts: InboundContacts,
+  dedupeCache: InboundDedupeCache,
+  logger: WebhookLogger,
+): Promise<void> {
   for (const msg of messages) {
     try {
       // Already passed MetaWebhookPayloadSchema (which embeds the
@@ -264,12 +303,7 @@ async function processChange(
       // runtime check for the discriminator before casting.
       const m = msg as { id?: string; type?: string };
       if (!m.id || !m.type) continue;
-      await plugin.handleInboundMessage(
-        instanceId,
-        msg as MetaInboundMessage,
-        contacts,
-        state.dedupeCache,
-      );
+      await plugin.handleInboundMessage(instanceId, msg as MetaInboundMessage, contacts, dedupeCache);
     } catch (err) {
       logger.warn('[whatsapp-cloud] failed to emit inbound message', {
         instanceId,
@@ -277,8 +311,15 @@ async function processChange(
       });
     }
   }
+}
 
-  // --- Status updates (sent/delivered/read/failed) ---
+// --- Status updates (sent/delivered/read/failed) ---
+async function emitStatusUpdates(
+  plugin: WhatsAppCloudPlugin,
+  instanceId: string,
+  statuses: unknown[],
+  logger: WebhookLogger,
+): Promise<void> {
   for (const status of statuses) {
     try {
       const s = status as { id?: string; status?: string };

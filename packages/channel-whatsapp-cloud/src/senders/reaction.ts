@@ -17,11 +17,9 @@ export async function sendReaction(
   emoji: string,
 ): Promise<MetaSendResponse> {
   if (!messageId) {
-    throw new MetaApiError(
-      MetaErrorCode.INVALID_REQUEST,
-      'sendReaction requires a target messageId (wamid)',
-      { operation: 'sendReaction' },
-    );
+    throw new MetaApiError(MetaErrorCode.INVALID_REQUEST, 'sendReaction requires a target messageId (wamid)', {
+      operation: 'sendReaction',
+    });
   }
   const payload: MetaOutboundMessage = {
     messaging_product: 'whatsapp',

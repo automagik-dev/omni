@@ -311,10 +311,7 @@ export function createApp(
 
     const plugin = channelRegistry.get('whatsapp-cloud');
     if (!plugin?.handleWebhook) {
-      return c.json(
-        { error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } },
-        503,
-      );
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } }, 503);
     }
 
     return plugin.handleWebhook(c.req.raw);
@@ -329,10 +326,7 @@ export function createApp(
 
     const plugin = channelRegistry.get('whatsapp-cloud');
     if (!plugin?.handleWebhook) {
-      return c.json(
-        { error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } },
-        503,
-      );
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } }, 503);
     }
 
     return plugin.handleWebhook(c.req.raw);

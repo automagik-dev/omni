@@ -36,7 +36,7 @@ function buildRealisticMetaEvent() {
       values: [
         {
           type: 'MetaApiError',
-          value: `OUTSIDE_24H_WINDOW: cannot send free-form to +5511999998888 — wamid.abc123`,
+          value: 'OUTSIDE_24H_WINDOW: cannot send free-form to +5511999998888 — wamid.abc123',
         },
       ],
     },

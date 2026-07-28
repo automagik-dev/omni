@@ -50,13 +50,7 @@ export async function verifyMetaSignature(
 
   let cryptoKey: CryptoKey;
   try {
-    cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyData,
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign'],
-    );
+    cryptoKey = await crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   } catch {
     return false;
   }

@@ -13,8 +13,6 @@
 import { cn } from '@/lib/utils';
 import { Copy, FileText, Image as ImageIcon, Link2, Phone, Reply, Video } from 'lucide-react';
 
-export type PreviewHeaderFormat = 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'LOCATION';
-
 export interface PreviewButton {
   type: 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER' | 'COPY_CODE';
   text: string;
@@ -23,10 +21,7 @@ export interface PreviewButton {
 }
 
 export interface TemplatePreviewProps {
-  header?:
-    | { format: 'TEXT'; text: string }
-    | { format: 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'LOCATION' }
-    | null;
+  header?: { format: 'TEXT'; text: string } | { format: 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'LOCATION' } | null;
   body: string;
   footer?: string;
   buttons?: PreviewButton[];
@@ -53,9 +48,7 @@ export function TemplatePreview({ header, body, footer, buttons = [] }: Template
           >
             {header.format === 'IMAGE' && <ImageIcon className="h-8 w-8 text-emerald-700 dark:text-emerald-300" />}
             {header.format === 'VIDEO' && <Video className="h-8 w-8 text-emerald-700 dark:text-emerald-300" />}
-            {header.format === 'DOCUMENT' && (
-              <FileText className="h-6 w-6 text-emerald-700 dark:text-emerald-300" />
-            )}
+            {header.format === 'DOCUMENT' && <FileText className="h-6 w-6 text-emerald-700 dark:text-emerald-300" />}
             {header.format === 'LOCATION' && (
               <span className="text-xs text-emerald-700 dark:text-emerald-300">[location]</span>
             )}

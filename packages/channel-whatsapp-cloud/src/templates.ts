@@ -16,15 +16,10 @@
  *   https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates
  */
 
+import type { MetaTemplateStatusUpdate, WhatsAppTemplateComponent } from '@omni/core/schemas';
+import type { MetaTemplateCategory, MetaTemplateStatus } from '@omni/core/types';
 import type { Database, NewWhatsappTemplate, WhatsappTemplate } from '@omni/db';
-import { whatsappTemplates } from '@omni/db';
-import type {
-  MetaTemplateCategory,
-  MetaTemplateStatus,
-  WhatsAppTemplateComponent,
-} from '@omni/core/types';
-import type { MetaTemplateStatusUpdate } from '@omni/core/schemas';
-import { and, eq, inArray, or } from 'drizzle-orm';
+import { and, eq, inArray, or, whatsappTemplates } from '@omni/db';
 
 import type { MetaWhatsAppClient } from './client';
 import type { WhatsAppCloudPlugin } from './plugin';
@@ -133,10 +128,7 @@ export async function listTemplatesFromMeta(
 }
 
 /** GET /{template_id} — fetch a single template by Graph API id. */
-export async function getTemplateFromMeta(
-  client: MetaWhatsAppClient,
-  templateId: string,
-): Promise<MetaTemplateRecord> {
+export async function getTemplateFromMeta(client: MetaWhatsAppClient, templateId: string): Promise<MetaTemplateRecord> {
   const fields = 'id,name,language,category,status,components,rejected_reason,quality_score';
   return client.get<MetaTemplateRecord>(`/${templateId}?fields=${fields}`);
 }
@@ -295,10 +287,7 @@ export async function syncTemplatesToDb(
   // calls don't trample each other and a partial failure rolls back cleanly.
   return db.transaction(async (tx) => {
     // 1) Snapshot local rows.
-    const localRows = await tx
-      .select()
-      .from(whatsappTemplates)
-      .where(eq(whatsappTemplates.instanceId, instanceId));
+    const localRows = await tx.select().from(whatsappTemplates).where(eq(whatsappTemplates.instanceId, instanceId));
 
     // Lookup map keyed on (name, language).
     const localByKey = new Map<string, WhatsappTemplate>();
@@ -432,7 +421,7 @@ export async function handleTemplateStatusUpdate(
       .set({
         metaId: update.message_template_id,
         status: newStatus,
-        rejectionReason: update.event === 'REJECTED' ? update.reason ?? null : null,
+        rejectionReason: update.event === 'REJECTED' ? (update.reason ?? null) : null,
         updatedAt: now,
       })
       .where(inArray(whatsappTemplates.id, ids));
@@ -510,11 +499,9 @@ async function getAbsolute<T>(client: MetaWhatsAppClient, absoluteUrl: string): 
   // using the headers we know the client uses. We can't reach the private
   // headers helper from outside, so just bail on this edge case with a clear
   // error rather than silently mis-pointing.
-  throw new MetaApiError(
-    MetaErrorCode.UNKNOWN,
-    `paging.next URL not on expected Graph API base (got ${absoluteUrl})`,
-    { operation: 'listTemplatesFromMeta:paginate' },
-  );
+  throw new MetaApiError(MetaErrorCode.UNKNOWN, `paging.next URL not on expected Graph API base (got ${absoluteUrl})`, {
+    operation: 'listTemplatesFromMeta:paginate',
+  });
 }
 
 async function throwUploadError(res: Response, op: string): Promise<MetaApiError> {
@@ -527,7 +514,8 @@ async function throwUploadError(res: Response, op: string): Promise<MetaApiError
     /* ignore */
   }
   const apiError = envelope?.error;
-  const code = apiError?.code !== undefined ? mapHttpStatusToMetaError(apiError.code) : mapHttpStatusToMetaError(res.status);
+  const code =
+    apiError?.code !== undefined ? mapHttpStatusToMetaError(apiError.code) : mapHttpStatusToMetaError(res.status);
   const message = apiError?.message ?? `HTTP ${res.status} from ${op}${bodyText ? `: ${bodyText.slice(0, 200)}` : ''}`;
   return new MetaApiError(code, message, {
     httpStatus: res.status,

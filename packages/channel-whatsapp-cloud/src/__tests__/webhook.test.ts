@@ -103,7 +103,14 @@ function makeHarness(opts?: {
     // tests already make on `emits[].method` / `.params`.
     async handleInboundMessage(
       iid: string,
-      msg: { id: string; type: string; from: string; text?: { body?: string }; reaction?: { message_id: string; emoji: string }; timestamp?: string },
+      msg: {
+        id: string;
+        type: string;
+        from: string;
+        text?: { body?: string };
+        reaction?: { message_id: string; emoji: string };
+        timestamp?: string;
+      },
       contacts: Array<{ profile?: { name?: string }; wa_id?: string }> | undefined,
       dedupeCache: { isDuplicate: (instanceId: string, key: string, channel: string, logger: unknown) => boolean },
     ) {
@@ -132,17 +139,29 @@ function makeHarness(opts?: {
 
     async handleStatusUpdate(
       iid: string,
-      status: { id: string; status: string; timestamp: string; recipient_id: string; errors?: Array<{ code: number; title: string; message?: string }> },
+      status: {
+        id: string;
+        status: string;
+        timestamp: string;
+        recipient_id: string;
+        errors?: Array<{ code: number; title: string; message?: string }>;
+      },
     ) {
       const ts = Number.parseInt(status.timestamp, 10);
       const timestampMs = Number.isFinite(ts) ? ts * 1000 : Date.now();
       if (status.status === 'sent') return; // intentional no-op (de-duped with sendMessage)
       if (status.status === 'delivered') {
-        emits.push({ method: 'message.delivered', params: { instanceId: iid, externalId: status.id, chatId: status.recipient_id, deliveredAt: timestampMs } });
+        emits.push({
+          method: 'message.delivered',
+          params: { instanceId: iid, externalId: status.id, chatId: status.recipient_id, deliveredAt: timestampMs },
+        });
         return;
       }
       if (status.status === 'read') {
-        emits.push({ method: 'message.read', params: { instanceId: iid, externalId: status.id, chatId: status.recipient_id, readAt: timestampMs } });
+        emits.push({
+          method: 'message.read',
+          params: { instanceId: iid, externalId: status.id, chatId: status.recipient_id, readAt: timestampMs },
+        });
         return;
       }
       if (status.status === 'failed') {
@@ -172,13 +191,9 @@ function makeHarness(opts?: {
 /** Compute the X-Hub-Signature-256 header value for a given body + secret. */
 async function signBody(body: string, secret: string): Promise<string> {
   const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
+  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, [
+    'sign',
+  ]);
   const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
   const bytes = new Uint8Array(sig);
   let hex = '';
@@ -203,11 +218,7 @@ async function makeSignedPost(body: string, secret: string = APP_SECRET): Promis
 }
 
 /** Build a payload envelope around a single change `value`. */
-function envelope(
-  field: string,
-  value: Record<string, unknown>,
-  entryId = '107654321987654',
-): Record<string, unknown> {
+function envelope(field: string, value: Record<string, unknown>, entryId = '107654321987654'): Record<string, unknown> {
   return {
     object: 'whatsapp_business_account',
     entry: [
@@ -240,7 +251,7 @@ describe('handleVerifyChallenge (GET)', () => {
 
   test('returns 403 when verify_token mismatches', () => {
     const req = new Request(
-      `https://example.com/api/v2/channels/whatsapp-cloud/webhook?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=abc123`,
+      'https://example.com/api/v2/channels/whatsapp-cloud/webhook?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=abc123',
       { method: 'GET' },
     );
     const res = handleVerifyChallenge(req, VERIFY_TOKEN);
@@ -452,11 +463,7 @@ describe('handleMetaWebhook (POST) — unknown phone_number_id', () => {
     const res = await handleMetaWebhook(req, plugin, APP_SECRET, VERIFY_TOKEN);
     expect(res.status).toBe(200);
     expect(emits).toHaveLength(0);
-    expect(
-      logs.some(
-        (l) => l.level === 'warn' && l.message.includes('no instance for phone_number_id'),
-      ),
-    ).toBe(true);
+    expect(logs.some((l) => l.level === 'warn' && l.message.includes('no instance for phone_number_id'))).toBe(true);
   });
 });
 

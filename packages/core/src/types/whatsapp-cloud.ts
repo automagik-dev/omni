@@ -54,11 +54,7 @@ export interface WhatsAppTemplateButtonsComponent {
   buttons: MetaTemplateButton[];
 }
 
-export type WhatsAppTemplateComponent =
-  | WhatsAppTemplateHeaderComponent
-  | WhatsAppTemplateBodyComponent
-  | WhatsAppTemplateFooterComponent
-  | WhatsAppTemplateButtonsComponent;
+// WhatsAppTemplateComponent is exported from ../schemas/whatsapp-cloud (Zod source of truth).
 
 /**
  * Webhook value.metadata shape — present on every entry change.
@@ -99,35 +95,5 @@ export interface MetaInboundContext {
  */
 export type MetaStatusType = 'sent' | 'delivered' | 'read' | 'failed';
 
-export interface MetaWebhookStatusEntry {
-  id: string;
-  status: MetaStatusType;
-  timestamp: string;
-  recipient_id: string;
-  errors?: Array<{
-    code: number;
-    title: string;
-    message?: string;
-    error_data?: { details?: string };
-  }>;
-  conversation?: {
-    id: string;
-    origin?: { type: string };
-  };
-  pricing?: {
-    pricing_model: string;
-    billable: boolean;
-    category: string;
-  };
-}
-
-/**
- * Template status update — fired when Meta reviews a submitted template.
- */
-export interface MetaTemplateStatusUpdate {
-  message_template_id: string;
-  message_template_name: string;
-  message_template_language: string;
-  event: 'APPROVED' | 'REJECTED' | 'FLAGGED' | 'PAUSED' | 'DISABLED';
-  reason?: string;
-}
+// MetaWebhookStatusEntry and MetaTemplateStatusUpdate are exported from
+// ../schemas/whatsapp-cloud (Zod source of truth).

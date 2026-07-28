@@ -16,24 +16,27 @@
 import { zValidator } from '@hono/zod-validator';
 import {
   MetaWhatsAppClient,
+  listTemplatesFromMeta,
   createTemplate as metaCreateTemplate,
   deleteTemplate as metaDeleteTemplate,
-  listTemplatesFromMeta,
   syncTemplatesToDb,
   uploadHeaderMedia,
 } from '@omni/channel-whatsapp-cloud';
+import { createLogger } from '@omni/core';
 import {
   MetaTemplateCategorySchema,
   MetaTemplateStatusSchema,
   WhatsAppTemplateComponentSchema,
 } from '@omni/core/schemas';
-import type { WhatsAppTemplateComponent } from '@omni/core/types';
+import type { WhatsAppTemplateComponent } from '@omni/core/schemas';
 import { whatsappTemplates } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireInstanceAccess } from '../../middleware/auth';
 import type { AppVariables } from '../../types';
+
+const log = createLogger('routes:whatsapp-templates');
 
 const templatesRoutes = new Hono<{ Variables: AppVariables }>();
 
@@ -107,7 +110,7 @@ interface InstanceMetaConfig {
   apiVersion: string;
 }
 
-function jsonError(message: string, code = 'BAD_REQUEST', status = 400) {
+function jsonError(message: string, code = 'BAD_REQUEST', _status = 400) {
   return { error: { code, message } } as const;
 }
 
@@ -322,7 +325,7 @@ templatesRoutes.post(
       // mirror failed. Log the orphan so it can be reconciled by a sync run.
       // We surface a 500 to the caller because the local state is now lagging
       // Meta; the next ?sync=true list call will resolve it.
-      c.get('logger')?.error?.('[whatsapp-cloud] local template mirror failed after Meta create', {
+      log.error('[whatsapp-cloud] local template mirror failed after Meta create', {
         instanceId,
         metaTemplateId: result.id,
         name: body.name,

@@ -180,7 +180,15 @@ describe('sendMedia', () => {
     const client = makeClient();
     const spy = spyOn(client, 'sendMessage').mockResolvedValueOnce(OK_RESPONSE);
 
-    await sendMedia(client, '5511999998888', 'https://cdn.example.com/x.jpg', 'image/jpeg', undefined, undefined, 'wamid.prev');
+    await sendMedia(
+      client,
+      '5511999998888',
+      'https://cdn.example.com/x.jpg',
+      'image/jpeg',
+      undefined,
+      undefined,
+      'wamid.prev',
+    );
 
     const arg = spy.mock.calls[0]?.[0];
     expect(arg?.context).toEqual({ message_id: 'wamid.prev' });

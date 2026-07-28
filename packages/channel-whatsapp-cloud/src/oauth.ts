@@ -60,7 +60,8 @@ async function errorFromResponse(res: Response, operation: string): Promise<Meta
   const codeNumber = apiError?.code;
   const code = codeNumber !== undefined ? mapHttpStatusToMetaError(codeNumber) : mapHttpStatusToMetaError(res.status);
   // Defensive: bodyText may contain tokens — truncate aggressively.
-  const message = apiError?.message ?? `HTTP ${res.status} from ${operation}${bodyText ? `: ${bodyText.slice(0, 160)}` : ''}`;
+  const message =
+    apiError?.message ?? `HTTP ${res.status} from ${operation}${bodyText ? `: ${bodyText.slice(0, 160)}` : ''}`;
   return new MetaApiError(code, message, {
     httpStatus: res.status,
     operation,
@@ -158,6 +159,28 @@ export async function exchangeCodeForToken(
   // token keeps the integration alive for ~1h and the operator can refresh
   // manually. We surface the failure mode via the return shape so the route
   // layer can log a warning.
+  const longLived = await exchangeLongLivedToken(url, appId, appSecret, shortToken, shortTokenType);
+  if (longLived) return longLived;
+
+  return {
+    accessToken: shortToken,
+    expiresIn: typeof shortData.expires_in === 'number' ? shortData.expires_in : undefined,
+    tokenType: shortTokenType,
+  };
+}
+
+/**
+ * Swap a short-lived token for a long-lived (~60 day) one via
+ * `grant_type=fb_exchange_token`. Returns `undefined` on any failure — the
+ * caller falls back to the short-lived token (see `exchangeCodeForToken`).
+ */
+async function exchangeLongLivedToken(
+  url: string,
+  appId: string,
+  appSecret: string,
+  shortToken: string,
+  shortTokenType: string,
+): Promise<ExchangeCodeResult | undefined> {
   const longParams = new URLSearchParams();
   longParams.set('grant_type', 'fb_exchange_token');
   longParams.set('client_id', appId);
@@ -166,27 +189,20 @@ export async function exchangeCodeForToken(
 
   try {
     const longRes = await fetchWithTimeout(`${url}?${longParams.toString()}`, { method: 'GET' });
-    if (longRes.ok) {
-      const longText = await longRes.text();
-      const longData = longText ? (JSON.parse(longText) as Record<string, unknown>) : {};
-      const longToken = longData.access_token;
-      if (typeof longToken === 'string' && longToken) {
-        return {
-          accessToken: longToken,
-          expiresIn: typeof longData.expires_in === 'number' ? longData.expires_in : undefined,
-          tokenType: typeof longData.token_type === 'string' ? longData.token_type : shortTokenType,
-        };
-      }
-    }
+    if (!longRes.ok) return undefined;
+    const longText = await longRes.text();
+    const longData = longText ? (JSON.parse(longText) as Record<string, unknown>) : {};
+    const longToken = longData.access_token;
+    if (typeof longToken !== 'string' || !longToken) return undefined;
+    return {
+      accessToken: longToken,
+      expiresIn: typeof longData.expires_in === 'number' ? longData.expires_in : undefined,
+      tokenType: typeof longData.token_type === 'string' ? longData.token_type : shortTokenType,
+    };
   } catch {
-    /* swallow — fall through to short-lived fallback */
+    /* swallow — caller falls back to the short-lived token */
+    return undefined;
   }
-
-  return {
-    accessToken: shortToken,
-    expiresIn: typeof shortData.expires_in === 'number' ? shortData.expires_in : undefined,
-    tokenType: shortTokenType,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +255,41 @@ async function graphGet<T>(accessToken: string, url: string, operation: string):
 }
 
 /**
+ * Fetch a Graph list endpoint, returning `[]` when the call fails.
+ * Permission errors on discovery sub-calls are non-fatal — we may not have
+ * access to every sub-object and the caller wants the union of what we can see.
+ */
+async function graphListOrEmpty<T>(accessToken: string, url: string, operation: string): Promise<T[]> {
+  try {
+    const envelope = await graphGet<GraphListEnvelope<T>>(accessToken, url, operation);
+    return Array.isArray(envelope?.data) ? envelope.data : [];
+  } catch {
+    return [];
+  }
+}
+
+/** List the phone numbers under a WABA, normalized to `WabaPhoneNumber` rows. */
+async function listWabaPhoneNumbers(accessToken: string, base: string, wabaId: string): Promise<WabaPhoneNumber[]> {
+  const rows = await graphListOrEmpty<PhoneNumberRow>(
+    accessToken,
+    `${base}/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating`,
+    'GET phone_numbers',
+  );
+  const phoneNumbers: WabaPhoneNumber[] = [];
+  for (const pn of rows) {
+    if (!pn?.id) continue;
+    phoneNumbers.push({
+      phone_number_id: pn.id,
+      wabaId,
+      display_phone_number: pn.display_phone_number,
+      verified_name: pn.verified_name,
+      quality_rating: pn.quality_rating,
+    });
+  }
+  return phoneNumbers;
+}
+
+/**
  * Discover all WhatsApp Business Accounts and phone numbers reachable by the
  * given access token.
  *
@@ -280,40 +331,15 @@ export async function getWabaDetails(
     ];
 
     for (const url of wabaSources) {
-      let wabas: GraphListEnvelope<WabaRow>;
-      try {
-        wabas = await graphGet<GraphListEnvelope<WabaRow>>(accessToken, url, 'GET wabas');
-      } catch {
-        continue; // Permission errors are non-fatal for discovery.
-      }
-      const rows = Array.isArray(wabas?.data) ? wabas.data : [];
-      for (const waba of rows) {
+      // Permission errors are non-fatal for discovery.
+      const wabaRows = await graphListOrEmpty<WabaRow>(accessToken, url, 'GET wabas');
+      for (const waba of wabaRows) {
         if (!waba?.id || wabaIdSet.has(waba.id)) continue;
         wabaIdSet.add(waba.id);
         wabaIds.push(waba.id);
 
         // Phone numbers under this WABA.
-        let phones: GraphListEnvelope<PhoneNumberRow>;
-        try {
-          phones = await graphGet<GraphListEnvelope<PhoneNumberRow>>(
-            accessToken,
-            `${base}/${waba.id}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating`,
-            'GET phone_numbers',
-          );
-        } catch {
-          continue;
-        }
-        const phoneRows = Array.isArray(phones?.data) ? phones.data : [];
-        for (const pn of phoneRows) {
-          if (!pn?.id) continue;
-          phoneNumbers.push({
-            phone_number_id: pn.id,
-            wabaId: waba.id,
-            display_phone_number: pn.display_phone_number,
-            verified_name: pn.verified_name,
-            quality_rating: pn.quality_rating,
-          });
-        }
+        phoneNumbers.push(...(await listWabaPhoneNumbers(accessToken, base, waba.id)));
       }
     }
   }

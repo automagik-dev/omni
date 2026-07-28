@@ -143,37 +143,34 @@ export function useFacebookSDK(appId?: string): UseFacebookSDKReturn {
     document.head.appendChild(script);
   }, [appId]);
 
-  const loginWithEmbeddedSignup = useCallback(
-    (configId: string): Promise<FBLoginResponse> => {
-      return new Promise((resolve, reject) => {
-        if (!window.FB) {
-          reject(new Error('Facebook SDK not loaded'));
-          return;
-        }
-        if (!configId) {
-          reject(new Error('Missing Embedded Signup config_id'));
-          return;
-        }
-        window.FB.login(
-          (response) => {
-            resolve(response);
+  const loginWithEmbeddedSignup = useCallback((configId: string): Promise<FBLoginResponse> => {
+    return new Promise((resolve, reject) => {
+      if (!window.FB) {
+        reject(new Error('Facebook SDK not loaded'));
+        return;
+      }
+      if (!configId) {
+        reject(new Error('Missing Embedded Signup config_id'));
+        return;
+      }
+      window.FB.login(
+        (response) => {
+          resolve(response);
+        },
+        {
+          config_id: configId,
+          response_type: 'code',
+          override_default_response_type: true,
+          extras: {
+            setup: {},
+            featureType: 'whatsapp_business_app_onboarding',
+            sessionInfoVersion: '3',
+            version: 'v3',
           },
-          {
-            config_id: configId,
-            response_type: 'code',
-            override_default_response_type: true,
-            extras: {
-              setup: {},
-              featureType: 'whatsapp_business_app_onboarding',
-              sessionInfoVersion: '3',
-              version: 'v3',
-            },
-          },
-        );
-      });
-    },
-    [],
-  );
+        },
+      );
+    });
+  }, []);
 
   return { isLoaded, isLoading, error, loginWithEmbeddedSignup };
 }

@@ -79,30 +79,3 @@ export function take(handle: string): string | undefined {
   if (entry.expiresAt < Date.now()) return undefined;
   return entry.accessToken;
 }
-
-/**
- * Sweep expired entries. Called opportunistically — there's no need to
- * run this on a timer since `take()` already invalidates on read.
- *
- * Exposed for tests and operational diagnostics.
- */
-export function evictExpired(now: number = Date.now()): number {
-  let evicted = 0;
-  for (const [handle, entry] of store) {
-    if (entry.expiresAt < now) {
-      store.delete(handle);
-      evicted++;
-    }
-  }
-  return evicted;
-}
-
-/** Test-only — clear the entire cache. */
-export function _clearAll(): void {
-  store.clear();
-}
-
-/** Test-only — current entry count (does NOT count expired entries). */
-export function _size(): number {
-  return store.size;
-}

@@ -17,13 +17,7 @@ import { TemplateBuilder } from '@/components/templates/TemplateBuilder';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/components/ui/toaster';
 import { apiFetch } from '@/lib/sdk';
@@ -185,9 +179,7 @@ export function TemplatesTab({ instanceId }: TemplatesTabProps) {
             <select
               id="tpl-filter-status"
               value={filters.status ?? ''}
-              onChange={(e) =>
-                setFilters((prev) => ({ ...prev, status: e.target.value as TemplateStatus | '' }))
-              }
+              onChange={(e) => setFilters((prev) => ({ ...prev, status: e.target.value as TemplateStatus | '' }))}
               className="flex h-9 w-full rounded-md border border-input bg-input/50 px-2 text-sm"
             >
               <option value="">All</option>
@@ -205,9 +197,7 @@ export function TemplatesTab({ instanceId }: TemplatesTabProps) {
             <select
               id="tpl-filter-category"
               value={filters.category ?? ''}
-              onChange={(e) =>
-                setFilters((prev) => ({ ...prev, category: e.target.value as TemplateCategory | '' }))
-              }
+              onChange={(e) => setFilters((prev) => ({ ...prev, category: e.target.value as TemplateCategory | '' }))}
               className="flex h-9 w-full rounded-md border border-input bg-input/50 px-2 text-sm"
             >
               <option value="">All</option>
@@ -272,9 +262,7 @@ export function TemplatesTab({ instanceId }: TemplatesTabProps) {
                     <td className="px-3 py-2">{tpl.category}</td>
                     <td className="px-3 py-2">
                       <Badge variant={STATUS_VARIANT[tpl.status] ?? 'secondary'}>{tpl.status}</Badge>
-                      {tpl.rejectionReason && (
-                        <p className="mt-0.5 text-xs text-destructive">{tpl.rejectionReason}</p>
-                      )}
+                      {tpl.rejectionReason && <p className="mt-0.5 text-xs text-destructive">{tpl.rejectionReason}</p>}
                     </td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">{tpl.qualityScore ?? '-'}</td>
                     <td className="px-3 py-2 text-right">
@@ -302,9 +290,7 @@ export function TemplatesTab({ instanceId }: TemplatesTabProps) {
         <DialogContent className="max-w-4xl overflow-y-auto sm:max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>New Template</DialogTitle>
-            <DialogDescription>
-              Submit a HSM template for Meta review. Approval can take up to 24h.
-            </DialogDescription>
+            <DialogDescription>Submit a HSM template for Meta review. Approval can take up to 24h.</DialogDescription>
           </DialogHeader>
           <TemplateBuilder
             instanceId={instanceId}

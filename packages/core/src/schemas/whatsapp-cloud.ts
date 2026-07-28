@@ -52,7 +52,12 @@ export const MetaTemplateFooterComponentSchema = z.object({
 
 export const MetaTemplateButtonSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('QUICK_REPLY'), text: z.string() }),
-  z.object({ type: z.literal('URL'), text: z.string(), url: z.string().url(), example: z.array(z.string()).optional() }),
+  z.object({
+    type: z.literal('URL'),
+    text: z.string(),
+    url: z.string().url(),
+    example: z.array(z.string()).optional(),
+  }),
   z.object({ type: z.literal('PHONE_NUMBER'), text: z.string(), phone_number: z.string() }),
   z.object({ type: z.literal('COPY_CODE'), example: z.string() }),
 ]);
@@ -131,12 +136,14 @@ export const MetaInboundContactsMessageSchema = z.object({
   id: z.string(),
   timestamp: z.string(),
   contacts: z.array(
-    z.object({
-      name: z.object({ formatted_name: z.string().optional(), first_name: z.string().optional() }).passthrough(),
-      phones: z
-        .array(z.object({ phone: z.string().optional(), wa_id: z.string().optional() }).passthrough())
-        .optional(),
-    }).passthrough(),
+    z
+      .object({
+        name: z.object({ formatted_name: z.string().optional(), first_name: z.string().optional() }).passthrough(),
+        phones: z
+          .array(z.object({ phone: z.string().optional(), wa_id: z.string().optional() }).passthrough())
+          .optional(),
+      })
+      .passthrough(),
   ),
   context: InboundContextSchema.optional(),
 });
@@ -195,12 +202,14 @@ export const MetaWebhookStatusEntrySchema = z.object({
   recipient_id: z.string(),
   errors: z
     .array(
-      z.object({
-        code: z.number(),
-        title: z.string(),
-        message: z.string().optional(),
-        error_data: z.object({ details: z.string().optional() }).passthrough().optional(),
-      }).passthrough(),
+      z
+        .object({
+          code: z.number(),
+          title: z.string(),
+          message: z.string().optional(),
+          error_data: z.object({ details: z.string().optional() }).passthrough().optional(),
+        })
+        .passthrough(),
     )
     .optional(),
   conversation: z

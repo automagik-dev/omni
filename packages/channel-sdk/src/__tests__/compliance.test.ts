@@ -44,6 +44,12 @@ import {
   TwilioWhatsAppPlugin,
 } from '../../../channel-twilio-whatsapp/src/index';
 import {
+  MetaApiError,
+  MetaErrorCode,
+  WHATSAPP_CLOUD_CAPABILITIES,
+  WhatsAppCloudPlugin,
+} from '../../../channel-whatsapp-cloud/src/index';
+import {
   WHATSAPP_CAPABILITIES,
   WhatsAppError,
   ErrorCode as WhatsAppErrorCode,
@@ -119,6 +125,16 @@ const channels: ChannelDescriptor[] = [
     errorSourcePath: channelPath('slack', 'types.ts'),
   },
   {
+    name: 'whatsapp-cloud',
+    packageName: '@omni/channel-whatsapp-cloud',
+    pluginClass: WhatsAppCloudPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: MetaApiError,
+    capabilities: WHATSAPP_CLOUD_CAPABILITIES,
+    pluginSourcePath: channelPath('whatsapp-cloud', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('whatsapp-cloud', 'handlers', 'webhook.ts')],
+    errorSourcePath: channelPath('whatsapp-cloud', 'utils', 'errors.ts'),
+  },
+  {
     name: 'twilio-whatsapp',
     packageName: '@omni/channel-twilio-whatsapp',
     pluginClass: TwilioWhatsAppPlugin as unknown as typeof BaseChannelPlugin,
@@ -192,14 +208,15 @@ const errorConstructorArgs: Record<string, unknown[]> = {
   discord: [DiscordErrorCode.SEND_FAILED, 'compliance test'],
   slack: [SlackErrorCode.SEND_FAILED, 'compliance test'],
   'twilio-whatsapp': [TwilioWhatsAppErrorCode.SEND_FAILED, 'compliance test'],
+  'whatsapp-cloud': [MetaErrorCode.INVALID_REQUEST, 'compliance test'],
 };
 
 // Group 1: Infrastructure
 
 describe('SDK compliance test infrastructure', () => {
-  it('has descriptors for all 5 channels', () => {
+  it('has descriptors for all 6 channels', () => {
     const names = channels.map((c) => c.name).sort();
-    expect(names).toEqual(['discord', 'slack', 'telegram', 'twilio-whatsapp', 'whatsapp']);
+    expect(names).toEqual(['discord', 'slack', 'telegram', 'twilio-whatsapp', 'whatsapp', 'whatsapp-cloud']);
   });
 
   for (const channel of channels) {

@@ -5,11 +5,8 @@
  * @omni/core → packages/core/src/types/whatsapp-cloud.ts.
  */
 
-import type {
-  MetaTemplateCategory,
-  MetaTemplateStatus,
-  WhatsAppTemplateComponent,
-} from '@omni/core/types';
+import type { WhatsAppTemplateComponent } from '@omni/core/schemas';
+import type { MetaTemplateCategory, MetaTemplateStatus } from '@omni/core/types';
 
 /** Per-instance Meta config persisted on `instances` table. */
 export interface WhatsAppCloudConfig {

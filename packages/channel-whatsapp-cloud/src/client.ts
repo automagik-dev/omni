@@ -8,15 +8,61 @@
  *   https://developers.facebook.com/docs/whatsapp/cloud-api/reference
  */
 
-import { MetaApiError as MetaApiErrorClass, MetaErrorCode, mapHttpStatusToMetaError } from './utils/errors';
 import type {
   MetaApiError as MetaApiErrorEnvelope,
   MetaOutboundMessage,
   MetaSendResponse,
   MetaTemplatePayload,
 } from './types';
+import { MetaApiError as MetaApiErrorClass, MetaErrorCode, mapHttpStatusToMetaError } from './utils/errors';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+type MetaTemplateComponent = NonNullable<MetaTemplatePayload['components']>[number];
+type MetaTemplateParameter = NonNullable<MetaTemplateComponent['parameters']>[number];
+
+/** Header media descriptor accepted by `buildTemplatePayload`. */
+export interface TemplateHeaderMedia {
+  type: 'image' | 'video' | 'document';
+  link?: string;
+  id?: string;
+  filename?: string;
+}
+
+/** Button parameter descriptor accepted by `buildTemplatePayload`. */
+export interface TemplateButtonParameter {
+  sub_type: 'quick_reply' | 'url' | 'copy_code';
+  index: number;
+  payload?: string;
+  text?: string;
+}
+
+/** Build the `header` template component for a media header. */
+function buildHeaderComponent(headerMedia: TemplateHeaderMedia): MetaTemplateComponent {
+  return { type: 'header', parameters: [buildHeaderParameter(headerMedia)] };
+}
+
+function buildHeaderParameter(headerMedia: TemplateHeaderMedia): MetaTemplateParameter {
+  if (headerMedia.type === 'image') {
+    return { type: 'image', image: { link: headerMedia.link, id: headerMedia.id } };
+  }
+  if (headerMedia.type === 'video') {
+    return { type: 'video', video: { link: headerMedia.link, id: headerMedia.id } };
+  }
+  return {
+    type: 'document',
+    document: { link: headerMedia.link, id: headerMedia.id, filename: headerMedia.filename },
+  };
+}
+
+/** Build a `button` template component (`url` buttons carry text, the rest a payload). */
+function buildButtonComponent(button: TemplateButtonParameter): MetaTemplateComponent {
+  const parameter: MetaTemplateParameter =
+    button.sub_type === 'url'
+      ? { type: 'text', text: button.text ?? '' }
+      : { type: 'payload', payload: button.payload ?? button.text ?? '' };
+  return { type: 'button', sub_type: button.sub_type, index: String(button.index), parameters: [parameter] };
+}
 
 export interface MetaWhatsAppClientOptions {
   phoneNumberId: string;
@@ -88,22 +134,13 @@ export class MetaWhatsAppClient {
     name: string;
     language: string;
     bodyParameters?: string[];
-    headerMedia?: { type: 'image' | 'video' | 'document'; link?: string; id?: string; filename?: string };
-    buttonParameters?: Array<{ sub_type: 'quick_reply' | 'url' | 'copy_code'; index: number; payload?: string; text?: string }>;
+    headerMedia?: TemplateHeaderMedia;
+    buttonParameters?: TemplateButtonParameter[];
   }): MetaTemplatePayload {
     const components: NonNullable<MetaTemplatePayload['components']> = [];
 
     if (opts.headerMedia) {
-      const headerParam =
-        opts.headerMedia.type === 'image'
-          ? { type: 'image' as const, image: { link: opts.headerMedia.link, id: opts.headerMedia.id } }
-          : opts.headerMedia.type === 'video'
-            ? { type: 'video' as const, video: { link: opts.headerMedia.link, id: opts.headerMedia.id } }
-            : {
-                type: 'document' as const,
-                document: { link: opts.headerMedia.link, id: opts.headerMedia.id, filename: opts.headerMedia.filename },
-              };
-      components.push({ type: 'header', parameters: [headerParam] });
+      components.push(buildHeaderComponent(opts.headerMedia));
     }
 
     if (opts.bodyParameters && opts.bodyParameters.length > 0) {
@@ -113,21 +150,8 @@ export class MetaWhatsAppClient {
       });
     }
 
-    if (opts.buttonParameters && opts.buttonParameters.length > 0) {
-      for (const button of opts.buttonParameters) {
-        components.push({
-          type: 'button',
-          sub_type: button.sub_type,
-          index: String(button.index),
-          parameters: [
-            button.sub_type === 'copy_code'
-              ? { type: 'payload', payload: button.payload ?? button.text ?? '' }
-              : button.sub_type === 'url'
-                ? { type: 'text', text: button.text ?? '' }
-                : { type: 'payload', payload: button.payload ?? button.text ?? '' },
-          ],
-        });
-      }
+    for (const button of opts.buttonParameters ?? []) {
+      components.push(buildButtonComponent(button));
     }
 
     return {
@@ -226,8 +250,10 @@ export class MetaWhatsAppClient {
       /* leave envelope undefined */
     }
     const apiError = envelope?.error;
-    const code = apiError?.code !== undefined ? mapHttpStatusToMetaError(apiError.code) : mapHttpStatusToMetaError(res.status);
-    const message = apiError?.message ?? `HTTP ${res.status} from ${op}${bodyText ? `: ${bodyText.slice(0, 200)}` : ''}`;
+    const code =
+      apiError?.code !== undefined ? mapHttpStatusToMetaError(apiError.code) : mapHttpStatusToMetaError(res.status);
+    const message =
+      apiError?.message ?? `HTTP ${res.status} from ${op}${bodyText ? `: ${bodyText.slice(0, 200)}` : ''}`;
     return new MetaApiErrorClass(code, message, {
       httpStatus: res.status,
       operation: op,

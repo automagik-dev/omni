@@ -15,15 +15,15 @@
  */
 
 import { describe, expect, it, mock, spyOn } from 'bun:test';
-import type { Database, WhatsappTemplate } from '@omni/db';
 import type { MetaTemplateStatusUpdate } from '@omni/core/schemas';
+import type { Database, NewWhatsappTemplate, WhatsappTemplate } from '@omni/db';
 
 import { MetaWhatsAppClient } from '../client';
 import {
+  type MetaTemplateRecord,
   createTemplate,
   handleTemplateStatusUpdate,
   listTemplatesFromMeta,
-  type MetaTemplateRecord,
   syncTemplatesToDb,
 } from '../templates';
 
@@ -35,10 +35,7 @@ const WABA_ID = '123456789012345';
 const INSTANCE_ID = '11111111-2222-3333-4444-555555555555';
 
 function makeClient(): MetaWhatsAppClient {
-  return new MetaWhatsAppClient(
-    { phoneNumberId: '99999', accessToken: 'test-token', apiVersion: 'v25.0' },
-    WABA_ID,
-  );
+  return new MetaWhatsAppClient({ phoneNumberId: '99999', accessToken: 'test-token', apiVersion: 'v25.0' }, WABA_ID);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -239,27 +236,23 @@ function fakeDb(initialRows: WhatsappTemplate[]) {
       }),
     }),
     insert: (_table: unknown) => ({
-      values: async (v: WhatsappTemplate | WhatsappTemplate[]) => {
+      values: async (v: NewWhatsappTemplate | NewWhatsappTemplate[]) => {
         const arr = Array.isArray(v) ? v : [v];
         for (const row of arr) {
           // Synthesise an id if not provided (drizzle defaults; we don't need
           // a real uuid for assertions).
           const withId: WhatsappTemplate = {
-            id: `gen_${rows.length + 1}`,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            metaId: null,
-            wabaId: WABA_ID,
-            instanceId: INSTANCE_ID,
-            name: '',
-            language: 'pt_BR',
-            category: 'UTILITY',
-            status: 'PENDING',
-            components: null,
-            variableMapping: null,
-            rejectionReason: null,
-            qualityScore: null,
             ...row,
+            id: row.id ?? `gen_${rows.length + 1}`,
+            createdAt: row.createdAt ?? new Date(),
+            updatedAt: row.updatedAt ?? new Date(),
+            metaId: row.metaId ?? null,
+            language: row.language ?? 'pt_BR',
+            status: row.status ?? 'PENDING',
+            components: row.components ?? null,
+            variableMapping: row.variableMapping ?? null,
+            rejectionReason: row.rejectionReason ?? null,
+            qualityScore: row.qualityScore ?? null,
           };
           rows.push(withId);
           calls.inserts.push(row);
@@ -284,6 +277,10 @@ function fakeDb(initialRows: WhatsappTemplate[]) {
         },
       }),
     }),
+    // syncTemplatesToDb / handleTemplateStatusUpdate wrap their reconciliation
+    // in db.transaction(tx => ...). The fake has no real isolation — hand the
+    // callback the same fake handle so the queries above keep recording.
+    transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(db),
   };
   return { db: db as unknown as Database, rows, calls };
 }
@@ -326,9 +323,7 @@ describe('handleTemplateStatusUpdate', () => {
   /** Minimal plugin stub — only exposes the method handleTemplateStatusUpdate calls. */
   function stubPlugin() {
     const handleTemplateStatusChanged = mock(async () => undefined);
-    const plugin = { handleTemplateStatusChanged } as unknown as Parameters<
-      typeof handleTemplateStatusUpdate
-    >[2];
+    const plugin = { handleTemplateStatusChanged } as unknown as Parameters<typeof handleTemplateStatusUpdate>[2];
     return { plugin, handleTemplateStatusChanged };
   }
 
@@ -356,7 +351,7 @@ describe('handleTemplateStatusUpdate', () => {
     expect(calls.updates[0]!.setPatch.status).toBe('APPROVED');
 
     expect(handleTemplateStatusChanged).toHaveBeenCalledTimes(1);
-    const [instanceId, sentUpdate, extras] = handleTemplateStatusChanged.mock.calls[0]! as [
+    const [instanceId, sentUpdate, extras] = handleTemplateStatusChanged.mock.calls[0]! as unknown as [
       string,
       MetaTemplateStatusUpdate,
       { templateId?: string; previousStatus?: string },
@@ -390,7 +385,7 @@ describe('handleTemplateStatusUpdate', () => {
     );
 
     expect(handleTemplateStatusChanged).toHaveBeenCalledTimes(1);
-    const [, sentUpdate, extras] = handleTemplateStatusChanged.mock.calls[0]! as [
+    const [, sentUpdate, extras] = handleTemplateStatusChanged.mock.calls[0]! as unknown as [
       string,
       MetaTemplateStatusUpdate,
       { previousStatus?: string },

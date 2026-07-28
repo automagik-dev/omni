@@ -14,14 +14,10 @@
  * TODO: switch to omni.templates.create(...) after make sdk-generate.
  */
 
+import { type PreviewButton, TemplatePreview } from '@/components/templates/TemplatePreview';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
-import {
-  type PreviewButton,
-  type PreviewHeaderFormat,
-  TemplatePreview,
-} from '@/components/templates/TemplatePreview';
 import { apiFetch } from '@/lib/sdk';
 import { cn } from '@/lib/utils';
 import { AlertCircle, Trash2 } from 'lucide-react';
@@ -209,9 +205,9 @@ export function TemplateBuilder({ instanceId, onCreated, onCancel }: TemplateBui
 
   const previewHeader =
     headerMode === 'TEXT' && headerText
-      ? ({ format: 'TEXT' as const, text: headerText })
+      ? { format: 'TEXT' as const, text: headerText }
       : headerMode === 'IMAGE'
-        ? ({ format: 'IMAGE' as PreviewHeaderFormat })
+        ? { format: 'IMAGE' as const }
         : null;
 
   // -------------------------------------------------------------------------
@@ -405,9 +401,7 @@ export function TemplateBuilder({ instanceId, onCreated, onCancel }: TemplateBui
                   <div className="space-y-2">
                     <Input
                       value={btn.text}
-                      onChange={(e) =>
-                        updateButton(idx, { text: e.target.value.slice(0, MAX_BUTTON_TEXT) })
-                      }
+                      onChange={(e) => updateButton(idx, { text: e.target.value.slice(0, MAX_BUTTON_TEXT) })}
                       placeholder="Button text"
                       maxLength={MAX_BUTTON_TEXT}
                     />
