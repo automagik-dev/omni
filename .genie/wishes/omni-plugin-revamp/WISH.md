@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT |
+| **Status** | APPROVED |
 | **Slug** | `omni-plugin-revamp` |
 | **Date** | 2026-07-29 |
 | **Author** | Felipe Rosa |
@@ -316,6 +316,34 @@ _What must be verified on dev after merge. The QA agent tests each criterion._
 ## Review Results
 
 _The read-only reviewer returns evidence; the invoking orchestrator appends a timestamped block here after plan, execution, and PR reviews._
+
+### Plan review — 2026-07-29 — SHIP
+
+Reviewer: plan-reviewer-ac0c4527 (loop 2, independent of the author).
+
+Loop 1 returned FIX-FIRST on three gaps, all resolved and re-verified:
+
+1. **[HIGH] groups 1 and 2 were not disjoint** — both write the same four
+   `SKILL.md` files while the wish claimed they ran in parallel. Resolved by
+   serializing: Wave 1 is groups 1 and 3, Wave 2 is group 2 (`depends-on: 1`),
+   Wave 3 is group 4. Group 3 confirmed genuinely disjoint.
+2. **[HIGH] group 3 carried an always-pass validation** — `rg -q "packages/mcp"`
+   never matched, since the real row is `└── mcp/` at `.claude/CLAUDE.md:195`,
+   so deliverable 4 could be skipped with the gate still green. Now
+   `! rg -qi "mcp"`, proven to fail today.
+3. **[MEDIUM] group 4 invoked script aliases nothing created** — `skills:lint`
+   and `plugin:smoke` are now a declared deliverable with `package.json` in
+   Files to Create/Modify.
+
+All four group validations were executed by the reviewer and exit 1 today for
+the correct reason. Design fidelity holds against all 11 DESIGN.md criteria; no
+placeholders; ordering sound.
+
+Two LOW notes carried into execution (non-blocking): group 3 deliverable 2
+(`plugin.json` metadata) has no mechanical check in its own validation block —
+success criterion only; and group 3's acceptance text still says "zero hits
+claiming a shipped MCP server" while its validation is the stricter flat grep.
+The validation governs, so there is no escape hatch.
 
 ---
 

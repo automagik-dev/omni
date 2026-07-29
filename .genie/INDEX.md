@@ -6,6 +6,6 @@
 
 ## Ready
 
-- [omni-plugin-revamp](brainstorms/omni-plugin-revamp/DESIGN.md) — simplify plugins/omni to genie-plugin conventions; kill stale v4 surface (design review pending)
-
 ## Poured
+
+- [omni-plugin-revamp](wishes/omni-plugin-revamp/WISH.md) — simplify plugins/omni to genie-plugin conventions; kill stale v4 surface. Design SHIP, plan SHIP, status APPROVED; 4 groups on the board.
