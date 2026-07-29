@@ -24,6 +24,17 @@ jobs:
           # Use a PAT with contents:read + pull-requests:write scopes.
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
+          # Nothing to promote is the steady state right after a promotion
+          # merges, and `gh pr create` exits non-zero on an empty diff
+          # ("No commits between main and homolog"). Without this guard the
+          # hourly schedule reports a red run for every hour that homolog and
+          # main agree, which is most of them.
+          AHEAD=$(gh api "repos/${{ github.repository }}/compare/main...homolog" --jq '.ahead_by' 2>/dev/null || echo 0)
+          if [ "${AHEAD:-0}" -eq 0 ]; then
+            echo "homolog is not ahead of main — nothing to promote"
+            exit 0
+          fi
+
           # Check if open PR exists (homolog -> main)
           PR=$(gh pr list --repo ${{ github.repository }} --base main --head homolog --state open --json number --jq '.[0].number')
 
