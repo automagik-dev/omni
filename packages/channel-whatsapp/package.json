@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-whatsapp",
-  "version": "2.260728.2",
+  "version": "2.260729.1",
   "description": "WhatsApp channel plugin for Omni using Baileys",
   "type": "module",
   "main": "src/index.ts",
