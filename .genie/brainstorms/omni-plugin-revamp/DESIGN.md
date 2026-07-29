@@ -19,6 +19,10 @@ change silently invalidates hardcoded command lists.
 ## Scope
 
 ### IN
+
+Primary surface is `plugins/omni/**`; the last two bullets also touch repo-root
+`.claude/` and two doc files, because the same rot lives there.
+
 - `plugins/omni/**`: skills, commands, agents, hooks, `plugin.json`
 - Restructure to the genie plugin shape: one router skill (`omni`) + flat peer
   skills, each ≤ 100 lines (hard CI budget; aim lower), long material moved to
@@ -48,12 +52,19 @@ change silently invalidates hardcoded command lists.
 - Repo-root `.claude/skills/*.md` flat files that never load: convert the ones
   worth keeping to `<name>/SKILL.md` dirs, delete the rest; wire or delete the
   orphaned `hooks/wish-validator.md`
+- Delete the doc sections that describe an MCP server omni does not have:
+  `docs/architecture/overview.md` "MCP Integration" (nine tools, HTTP/stdio,
+  port 8882) and the `packages/mcp/` row in `.claude/CLAUDE.md`'s structure
+  table — same doc-rot class as the genie-v4 commands this wish removes
 
 ### OUT
-- MCP server exposure in `plugin.json` — `packages/mcp` does not exist (the
-  project-structure table in `.claude/CLAUDE.md` is aspirational); authoring an
-  MCP server is its own wish. The user's genie-parity intent is recorded there,
-  not here.
+- MCP entirely — the plugin drives omni through the CLI and nothing else. No
+  `packages/mcp` exists anywhere on `dev` (verified: `git ls-tree -r origin/dev`
+  matches zero `mcp` paths), and the user's decision is CLI-only, so no MCP
+  server is written, exposed, or planned. Instead this wish deletes the two
+  places that document a server as if it ships: the MCP section of
+  `docs/architecture/overview.md` and the `packages/mcp/` row in
+  `.claude/CLAUDE.md`'s structure table.
 - `packages/cli/src/commands/connect.ts` genie-v4 contract bug — product code,
   ships as its own `fix(cli)` commit/PR independent of this wish
 - Any behavior change to the omni product API or CLI
@@ -88,7 +99,7 @@ independently.
 |---|----------|-----------|
 | 1 | Delete all 11 slash commands | User decision. Genie ships zero; skills are the only surface; removes ~280 lines duplicating references 1:1. |
 | 2 | Simplify SessionStart hook: probe only, no auto-install | User decision. Keeps fresh-session signal; removes a 430-line shim silently installing software. |
-| 3 | MCP exposure deferred to its own wish | The user chose "add it" on the (wrong) premise that `packages/mcp` exists; it does not, and authoring a server breaks single-wish scope. Deferred with intent preserved. |
+| 3 | CLI-only: no MCP, now or planned | The user first chose "add it" on my wrong premise that `packages/mcp` exists; once corrected they chose CLI-only. One surface (the CLI) is the simpler contract, and the stale docs claiming an MCP server get deleted here. |
 | 4 | Single skill location + CI gates, no mirror sync | Omni skills have exactly one consumer (the plugin); sync machinery is YAGNI. |
 | 5 | Fold bot-framework and automation-builder agents; keep feature-implementor | The first two are prose pointers into omni-ops; the third targets repo-internal dev work no skill covers. |
 | 6 | `connect.ts` v4-contract bug ships separately | Product code bug with its own test surface; keeping the wish plugin-only keeps it reviewable. |
@@ -113,10 +124,12 @@ src/term-commands/omni.ts).
 ## Success Criteria
 
 - [ ] `plugins/omni/commands/` no longer exists; plugin loads cleanly without it
-- [ ] Every `SKILL.md` under `plugins/omni/skills/` is ≤ 100 lines, carries only
-      `name`, `description`, and (where it shells out) `allowed-tools`
-      frontmatter, and uses the operational section grammar
-      (`When to Use → Flow → Rules`)
+- [ ] Every `SKILL.md` under `plugins/omni/skills/` is ≤ 100 lines and carries
+      only `name`, `description`, and (where it shells out) `allowed-tools`
+      frontmatter. Peer skills use the operational grammar
+      (`When to Use → Flow → Rules`); the router is exempt from the grammar
+      check and uses a routing shape (intent table → rules), as genie's router
+      does
 - [ ] No skill or reference names a `genie` v4 command (`genie serve`,
       `genie dir`) — grep returns zero hits
 - [ ] No skill hardcodes an `omni` subcommand list; each instructs discovering
@@ -124,8 +137,9 @@ src/term-commands/omni.ts).
 - [ ] Agents directory contains exactly `omni-feature-implementor`;
       `rules/omni-agent.md` is gone, its content folded into the omni-agent skill
 - [ ] SessionStart hook performs no installation; probe script ≤ 80 lines
-- [ ] `plugin.json` declares repository, license, keywords (no MCP entry —
-      deferred wish)
+- [ ] `plugin.json` declares repository, license, keywords, and no `mcpServers`
+      key; `rg -i mcp` over `plugins/omni/`, `docs/architecture/overview.md`,
+      and `.claude/CLAUDE.md` returns zero hits claiming a shipped MCP server
 - [ ] CI gate builds the CLI from `packages/cli` and fails on: over-budget
       skill, malformed frontmatter, a named CLI subcommand absent from
       `omni --help`, fresh-install smoke failure
@@ -141,7 +155,7 @@ After an independent design review returns SHIP, persist the evidence below and 
 ## Design Review Evidence
 
 - **Verdict:** SHIP
-- **Reviewed content SHA-256:** `e628e5280d3fcd4134c45ff1fef2a874c76ea2e6b95610d400d0fabf2f0bd4e4`
-- **Reviewer:** design-reviewer-a783b2fe
-- **Reviewed at:** 2026-07-28T22:08:19.000Z
+- **Reviewed content SHA-256:** `c81dc644dbb5d7d530d8b766578ba0ae0a34f6196afa3b7c49ce7a0d92c658b6`
+- **Reviewer:** design-reviewer-ae3b4037
+- **Reviewed at:** 2026-07-29T00:17:22.000Z
 <!-- genie-design-review:end -->
