@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni",
-  "version": "2.260730.2",
+  "version": "2.260730.3",
   "description": "LLM-optimized CLI for Omni",
   "type": "module",
   "bin": {
@@ -38,7 +38,6 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.62",
-    "@omni/channel-hermes": "workspace:*",
     "@sentry/bun": "^10.43.0",
     "@snazzah/davey": "^0.1.11",
     "chalk": "^5.4.0",
@@ -58,6 +57,7 @@
     "@omni/channel-a2a": "workspace:*",
     "@omni/channel-discord": "workspace:*",
     "@omni/channel-gupshup": "workspace:*",
+    "@omni/channel-hermes": "workspace:*",
     "@omni/channel-sdk": "workspace:*",
     "@omni/channel-slack": "workspace:*",
     "@omni/channel-telegram": "workspace:*",
