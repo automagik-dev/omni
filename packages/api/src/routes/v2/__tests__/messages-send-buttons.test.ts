@@ -110,6 +110,16 @@ describe('POST /messages/send with buttons', () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  test('requestLocation flips content.type to location_request', async () => {
+    const { app, sendMessage } = mountMessagesRoutes();
+
+    const res = await postSend(app, { requestLocation: true });
+
+    expect(res.status).toBe(201);
+    const [, message] = sendMessage.mock.calls[0] as [string, { content: { type: string } }];
+    expect(message.content.type).toBe('location_request');
+  });
+
   test('rejects more than 10 buttons', async () => {
     const { app, sendMessage } = mountMessagesRoutes();
 

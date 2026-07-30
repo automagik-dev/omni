@@ -165,9 +165,13 @@ export const MetaInboundInteractiveMessageSchema = z.object({
   id: z.string(),
   timestamp: z.string(),
   interactive: z.object({
-    type: z.enum(['button_reply', 'list_reply']),
+    type: z.enum(['button_reply', 'list_reply', 'nfm_reply']),
     button_reply: z.object({ id: z.string(), title: z.string() }).optional(),
     list_reply: z.object({ id: z.string(), title: z.string(), description: z.string().optional() }).optional(),
+    /** WhatsApp Flow completion — `response_json` is the flow's answer payload. */
+    nfm_reply: z
+      .object({ response_json: z.string(), body: z.string().optional(), name: z.string().optional() })
+      .optional(),
   }),
   context: InboundContextSchema.optional(),
 });
@@ -348,6 +352,34 @@ export const WhatsAppCloudConnectRequestSchema = z
     path: ['accessToken'],
   });
 
+/**
+ * Send-a-Flow descriptor — used as the `POST .../whatsapp-flows/send` request
+ * body and as `OutgoingMessage.metadata.flow` on the plugin dispatch path.
+ * Exactly one of `flowId` / `flowName` identifies the flow. `draft: true`
+ * sends an unpublished flow (Meta's mode=draft) for testing.
+ */
+export const WhatsAppFlowSendSchema = z
+  .object({
+    flowId: z.string().min(1).optional(),
+    flowName: z.string().min(1).optional(),
+    /** Button label that opens the flow. */
+    cta: z.string().min(1).max(30),
+    bodyText: z.string().min(1).max(1024),
+    headerText: z.string().max(60).optional(),
+    footerText: z.string().max(60).optional(),
+    /** First screen id (defaults to the flow's entry screen when omitted). */
+    screen: z.string().optional(),
+    /** Input data for the first screen — must be non-empty when present. */
+    data: z.record(z.string(), z.unknown()).optional(),
+    /** Correlates the nfm_reply back to this send; generated when omitted. */
+    flowToken: z.string().optional(),
+    draft: z.boolean().optional(),
+  })
+  .refine((v) => Boolean(v.flowId) !== Boolean(v.flowName), {
+    message: 'Provide exactly one of flowId or flowName',
+    path: ['flowId'],
+  });
+
 export const WhatsAppCloudRegisterRequestSchema = z.object({
   /** 6-digit PIN required by Meta for new number registration. */
   pin: z
@@ -386,4 +418,5 @@ export type MetaTemplateStatusUpdate = z.infer<typeof MetaTemplateStatusUpdateSc
 export type EmbeddedSignupExchangeRequest = z.infer<typeof EmbeddedSignupExchangeRequestSchema>;
 export type EmbeddedSignupExchangeResponse = z.infer<typeof EmbeddedSignupExchangeResponseSchema>;
 export type WhatsAppCloudConnectRequest = z.infer<typeof WhatsAppCloudConnectRequestSchema>;
+export type WhatsAppFlowSend = z.infer<typeof WhatsAppFlowSendSchema>;
 export type SendTemplateRequest = z.infer<typeof SendTemplateRequestSchema>;

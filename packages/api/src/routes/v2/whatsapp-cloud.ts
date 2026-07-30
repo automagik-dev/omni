@@ -68,8 +68,9 @@ function readMetaAppEnv(): { appId: string | undefined; appSecret: string | unde
 
 /**
  * Channel-guard: returns a 400 response if the instance is not whatsapp-cloud.
+ * Also consumed by routes/v2/whatsapp-flows.ts.
  */
-function ensureWhatsAppCloud(instance: { channel: string }):
+export function ensureWhatsAppCloud(instance: { channel: string }):
   | { ok: true }
   | { ok: false; payload: { error: { code: string; message: string } } } {
   if (instance.channel !== 'whatsapp-cloud') {

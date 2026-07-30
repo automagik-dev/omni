@@ -127,6 +127,32 @@ export function planInteractive(
 }
 
 /**
+ * Ask the user to share their location — renders WhatsApp's native
+ * "Send location" button under the body text. The shared location arrives
+ * as a regular inbound `location` message on the webhook.
+ */
+export async function sendLocationRequest(
+  client: MetaWhatsAppClient,
+  to: string,
+  bodyText: string,
+  replyTo?: string,
+): Promise<MetaSendResponse> {
+  const payload: MetaOutboundMessage = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: toMetaPhone(to),
+    type: 'interactive',
+    interactive: {
+      type: 'location_request_message',
+      body: { text: bodyText },
+      action: { name: 'send_location' },
+    },
+  };
+  if (replyTo) payload.context = { message_id: replyTo };
+  return client.sendMessage(payload);
+}
+
+/**
  * Send body text with buttons as the best-fitting Meta interactive type.
  * Falls back to a plain text send when nothing interactive remains after
  * mapping (e.g. only URL buttons folded into the body).

@@ -528,6 +528,10 @@ const sendTextSchema = z.object({
     .describe(
       'Inline buttons — channel maps them natively (WhatsApp Cloud: ≤3 reply buttons, 4-10 list; Telegram: inline keyboard)',
     ),
+  requestLocation: z
+    .boolean()
+    .optional()
+    .describe('Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text)'),
 });
 
 // Send media schema
@@ -1092,7 +1096,7 @@ messagesRoutes.post('/send', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', issues: parsed.error.issues } }, 400);
   }
 
-  const { instanceId, to, replyTo, threadId, mentions, buttons } = parsed.data;
+  const { instanceId, to, replyTo, threadId, mentions, buttons, requestLocation } = parsed.data;
   // Strip internal routing headers and agent directives before sending (GH #300)
   const text = sanitizeOutboundText(parsed.data.text);
   if (!text) {
@@ -1122,7 +1126,11 @@ messagesRoutes.post('/send', async (c) => {
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     threadId,
-    content: { type: 'text', text, ...(buttons?.length ? { buttons } : {}) } as OutgoingContent,
+    content: {
+      type: requestLocation ? 'location_request' : 'text',
+      text,
+      ...(buttons?.length ? { buttons } : {}),
+    } as OutgoingContent,
     replyTo,
     metadata: { ...(mentions ? { mentions } : {}), ...replyContext },
   };

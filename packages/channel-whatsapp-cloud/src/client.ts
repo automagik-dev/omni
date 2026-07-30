@@ -125,6 +125,62 @@ export class MetaWhatsAppClient {
     });
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // Flows (WhatsApp Flows management on the WABA)
+  // ─────────────────────────────────────────────────────────────
+
+  /** GET /{waba_id}/flows — list flows with status/categories/validation state. */
+  async listFlows(): Promise<{
+    data: Array<{ id: string; name: string; status: string; categories: string[]; validation_errors?: unknown[] }>;
+  }> {
+    this.requireWaba('listFlows');
+    return this.get(`/${this.wabaId}/flows`);
+  }
+
+  /**
+   * POST /{waba_id}/flows — create a flow (optionally publishing immediately).
+   * `flowJson` is the stringified Flow JSON (screens/layout definition).
+   */
+  async createFlow(input: {
+    name: string;
+    categories: string[];
+    flowJson?: string;
+    publish?: boolean;
+    endpointUri?: string;
+  }): Promise<{ id: string }> {
+    this.requireWaba('createFlow');
+    return this.post(`/${this.wabaId}/flows`, {
+      name: input.name,
+      categories: input.categories,
+      ...(input.flowJson ? { flow_json: input.flowJson } : {}),
+      ...(input.publish !== undefined ? { publish: input.publish } : {}),
+      ...(input.endpointUri ? { endpoint_uri: input.endpointUri } : {}),
+    });
+  }
+
+  /** POST /{flow_id}/publish — requires zero validation errors. */
+  async publishFlow(flowId: string): Promise<{ success: boolean }> {
+    return this.post(`/${flowId}/publish`, {});
+  }
+
+  /** DELETE /{flow_id} — only while the flow is still DRAFT. */
+  async deleteFlow(flowId: string): Promise<{ success: boolean }> {
+    return this.delete(`/${flowId}`);
+  }
+
+  /** GET /{flow_id}?fields=preview — browser preview URL (valid ~30 days). */
+  async getFlowPreview(flowId: string): Promise<{ preview?: { preview_url: string; expires_at: string } }> {
+    return this.get(`/${flowId}?fields=preview.invalidate(false)`);
+  }
+
+  private requireWaba(operation: string): void {
+    if (!this.wabaId) {
+      throw new MetaApiErrorClass(MetaErrorCode.INVALID_REQUEST, 'wabaId is required for flow operations', {
+        operation,
+      });
+    }
+  }
+
   /** GET /{media_id} — returns a temporary download URL for inbound media. */
   async getMediaUrl(mediaId: string): Promise<{ url: string; mime_type: string; sha256?: string; file_size?: number }> {
     return this.get(`/${mediaId}`);

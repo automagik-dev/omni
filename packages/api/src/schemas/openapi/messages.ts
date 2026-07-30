@@ -36,6 +36,9 @@ export const SendTextSchema = z.object({
       description:
         'Inline buttons — mapped natively per channel (WhatsApp Cloud: up to 3 reply buttons, 4-10 become a list; Telegram: inline keyboard)',
     }),
+  requestLocation: z.boolean().optional().openapi({
+    description: 'Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text)',
+  }),
 });
 
 // Send media request

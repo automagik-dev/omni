@@ -25,6 +25,7 @@ import type {
 } from '@omni/channel-sdk';
 import type { Logger } from '@omni/core';
 import type { EventPayloadMap } from '@omni/core/events';
+import { WhatsAppFlowSendSchema } from '@omni/core/schemas';
 import type { MetaInboundMessage, MetaTemplateStatusUpdate, MetaWebhookStatusEntry } from '@omni/core/schemas';
 import type { ChannelType, ContentType } from '@omni/core/types';
 
@@ -35,8 +36,10 @@ import {
   type SendTemplateButton,
   type SendTemplateHeaderMedia,
   sendContact,
+  sendFlow,
   sendInteractive,
   sendLocation,
+  sendLocationRequest,
   sendMedia,
   sendReaction,
   sendTemplate,
@@ -895,10 +898,36 @@ async function dispatchOutbound(
   if (content.type === 'reaction') {
     return { ok: true, response: await sendReaction(client, to, content.targetMessageId ?? '', content.emoji ?? '') };
   }
+  if (content.type === 'location_request') {
+    return { ok: true, response: await sendLocationRequest(client, to, content.text ?? '', replyTo) };
+  }
   if (content.type === 'template') {
     return dispatchOutboundTemplate(client, message);
   }
+  if (content.type === 'flow') {
+    return dispatchOutboundFlow(client, message);
+  }
   return { ok: false, error: `Unsupported content.type=${content.type} for whatsapp-cloud` };
+}
+
+/**
+ * Flow descriptor is carried via `metadata.flow` (same convention as
+ * `metadata.template`) and validated against `WhatsAppFlowSendSchema` —
+ * callers populate it via the whatsapp-flows send route or directly.
+ */
+async function dispatchOutboundFlow(
+  client: MetaWhatsAppClient,
+  message: OutgoingMessage,
+): Promise<OutboundDispatchResult> {
+  const parsed = WhatsAppFlowSendSchema.safeParse(message.metadata?.flow);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: `content.type=flow requires a valid metadata.flow descriptor: ${parsed.error.issues[0]?.message ?? 'invalid'}`,
+    };
+  }
+  const { response } = await sendFlow(client, message.to, parsed.data, message.replyTo);
+  return { ok: true, response };
 }
 
 /**
@@ -1034,6 +1063,12 @@ function extractInteractiveContent(
 ): ExtractedInboundContent {
   if (interactive.type === 'button_reply' && interactive.button_reply) {
     return { type: 'text', text: interactive.button_reply.title };
+  }
+  if (interactive.type === 'nfm_reply' && interactive.nfm_reply) {
+    // WhatsApp Flow completion. The structured answers live in response_json —
+    // surfaced as text for the conversation timeline; consumers read the full
+    // payload from rawPayload.meta.interactive.nfm_reply.response_json.
+    return { type: 'text', text: interactive.nfm_reply.body ?? '[flow response]' };
   }
   if (interactive.type === 'list_reply' && interactive.list_reply) {
     return { type: 'text', text: interactive.list_reply.title };

@@ -10,7 +10,7 @@ import { describe, expect, it, spyOn } from 'bun:test';
 
 import { MetaWhatsAppClient } from '../client';
 import { sendContact } from '../senders/contact';
-import { planInteractive, sendInteractive } from '../senders/interactive';
+import { planInteractive, sendInteractive, sendLocationRequest } from '../senders/interactive';
 import { sendLocation } from '../senders/location';
 import { resolveMetaMediaType, sendMedia } from '../senders/media';
 import { sendReaction } from '../senders/reaction';
@@ -526,5 +526,26 @@ describe('sendInteractive', () => {
     const arg = spy.mock.calls[0]?.[0] as { type: string; text?: { body: string } };
     expect(arg.type).toBe('text');
     expect(arg.text?.body).toBe('Read this\n\nDocs: https://khal.ai/docs\nBlog: https://khal.ai/blog');
+  });
+});
+
+describe('sendLocationRequest', () => {
+  it('produces the location_request_message interactive payload', async () => {
+    const client = makeClient();
+    const spy = spyOn(client, 'sendMessage').mockResolvedValueOnce(OK_RESPONSE);
+
+    await sendLocationRequest(client, '+55 11 99999-8888', 'Onde você está?');
+
+    expect(spy).toHaveBeenCalledWith({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: '5511999998888',
+      type: 'interactive',
+      interactive: {
+        type: 'location_request_message',
+        body: { text: 'Onde você está?' },
+        action: { name: 'send_location' },
+      },
+    });
   });
 });

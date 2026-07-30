@@ -50,6 +50,12 @@ export type {
   SyncResult,
 } from './templates';
 
+// WhatsApp Flow sender — consumed by the plugin dispatch (content.type='flow')
+// and exposed for direct use alongside the flows REST surface at
+// `packages/api/src/routes/v2/whatsapp-flows.ts`.
+export { sendFlow } from './senders/flow';
+export type { SendFlowResult } from './senders/flow';
+
 // Embedded Signup OAuth helpers — pure functions consumed by the REST surface
 // at `packages/api/src/routes/v2/whatsapp-cloud.ts` (Group 5).
 export {

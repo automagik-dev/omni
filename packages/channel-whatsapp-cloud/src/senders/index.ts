@@ -12,7 +12,8 @@ export { sendMedia, type MetaMediaKind } from './media';
 export { sendLocation } from './location';
 export { sendContact, type ContactInput } from './contact';
 export { sendReaction } from './reaction';
-export { planInteractive, sendInteractive, type InteractiveButton } from './interactive';
+export { planInteractive, sendInteractive, sendLocationRequest, type InteractiveButton } from './interactive';
+export { sendFlow, type SendFlowResult } from './flow';
 export {
   sendTemplate,
   type SendTemplateButton,
