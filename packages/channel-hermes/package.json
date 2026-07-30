@@ -1,7 +1,7 @@
 {
   "name": "@omni/channel-hermes",
-  "version": "2.260727.2",
-  "description": "Hermes API (Mutant) WhatsApp gateway channel plugin for Omni — per-instance webhook + REST outbound with JWT auth",
+  "version": "2.260729.3",
+  "description": "Hermes API (Mutant) WhatsApp gateway channel plugin for Omni \u2014 per-instance webhook + REST outbound with JWT auth",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",

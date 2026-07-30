@@ -11,7 +11,9 @@
 -- idempotent, no rewrite: ADD COLUMN with no default does not rewrite the
 -- table, and the partial index build is small on `instances`).
 
-BEGIN;
+-- NOTE: no explicit BEGIN/COMMIT — the boot migrator executes this file on a
+-- pooled postgres-js connection, which rejects raw transaction control
+-- (UNSAFE_TRANSACTION). Single batch, idempotent statements.
 
 ALTER TABLE "instances"
   ADD COLUMN IF NOT EXISTS "hermes_base_url" text,
@@ -23,4 +25,3 @@ ALTER TABLE "instances"
 CREATE INDEX IF NOT EXISTS "instances_hermes_media_idx"
   ON "instances" ("hermes_media_id");
 
-COMMIT;
