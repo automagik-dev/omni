@@ -35,6 +35,7 @@ import {
   type SendTemplateButton,
   type SendTemplateHeaderMedia,
   sendContact,
+  sendInteractive,
   sendLocation,
   sendMedia,
   sendReaction,
@@ -257,7 +258,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     if (correlationId) this.captureT10(correlationId);
 
     try {
-      const dispatched = await dispatchOutbound(client, message);
+      const dispatched = await dispatchOutbound(client, message, this.logger);
       if (!dispatched.ok) {
         return {
           success: false,
@@ -848,11 +849,15 @@ type OutboundDispatchResult = { ok: true; response: MetaSendResponse } | { ok: f
  * `message.failed` (nothing was attempted against the Graph API). Sender
  * failures propagate as thrown `MetaApiError`s, handled by the caller.
  */
-async function dispatchOutbound(client: MetaWhatsAppClient, message: OutgoingMessage): Promise<OutboundDispatchResult> {
+async function dispatchOutbound(
+  client: MetaWhatsAppClient,
+  message: OutgoingMessage,
+  logger?: Logger,
+): Promise<OutboundDispatchResult> {
   const { content, to, replyTo } = message;
 
   if (content.type === 'text') {
-    return { ok: true, response: await sendText(client, to, content.text ?? '', replyTo) };
+    return { ok: true, response: await dispatchOutboundText(client, message, logger) };
   }
   if (META_MEDIA_TYPES.has(content.type)) {
     return {
@@ -894,6 +899,28 @@ async function dispatchOutbound(client: MetaWhatsAppClient, message: OutgoingMes
     return dispatchOutboundTemplate(client, message);
   }
   return { ok: false, error: `Unsupported content.type=${content.type} for whatsapp-cloud` };
+}
+
+/**
+ * Text content — plain send, or the best-fitting Meta interactive type when
+ * `content.buttons` is present (reply buttons ≤3, list 4-10, cta_url for a
+ * single URL button). Overflow beyond Meta's 10-row list limit is dropped
+ * with a warn log — never silently.
+ */
+async function dispatchOutboundText(
+  client: MetaWhatsAppClient,
+  message: OutgoingMessage,
+  logger?: Logger,
+): Promise<MetaSendResponse> {
+  const { content, to, replyTo } = message;
+  if (!content.buttons?.length) {
+    return sendText(client, to, content.text ?? '', replyTo);
+  }
+  const { response, droppedRows } = await sendInteractive(client, to, content.text ?? '', content.buttons, replyTo);
+  if (droppedRows > 0) {
+    logger?.warn('[whatsapp-cloud] interactive list capped at 10 rows — extra buttons dropped', { to, droppedRows });
+  }
+  return response;
 }
 
 /**

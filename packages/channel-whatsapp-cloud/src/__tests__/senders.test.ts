@@ -10,6 +10,7 @@ import { describe, expect, it, spyOn } from 'bun:test';
 
 import { MetaWhatsAppClient } from '../client';
 import { sendContact } from '../senders/contact';
+import { planInteractive, sendInteractive } from '../senders/interactive';
 import { sendLocation } from '../senders/location';
 import { resolveMetaMediaType, sendMedia } from '../senders/media';
 import { sendReaction } from '../senders/reaction';
@@ -406,5 +407,124 @@ describe('sendTemplate', () => {
 
     const arg = spy.mock.calls[0]?.[0];
     expect(arg?.context).toEqual({ message_id: 'wamid.prev' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// sendInteractive (session buttons / lists / cta_url)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('planInteractive', () => {
+  it('maps up to 3 reply buttons onto interactive.button', () => {
+    const plan = planInteractive(
+      'Pick one',
+      [{ text: 'Yes', data: 'opt_yes' }, { text: 'No', data: 'opt_no' }, { text: 'Maybe' }],
+      'Options',
+    );
+
+    expect(plan.droppedRows).toBe(0);
+    expect(plan.interactive).toEqual({
+      type: 'button',
+      body: { text: 'Pick one' },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: 'opt_yes', title: 'Yes' } },
+          { type: 'reply', reply: { id: 'opt_no', title: 'No' } },
+          { type: 'reply', reply: { id: 'Maybe', title: 'Maybe' } },
+        ],
+      },
+    });
+  });
+
+  it('maps 4-10 reply buttons onto a single-section interactive.list', () => {
+    const buttons = Array.from({ length: 5 }, (_, i) => ({ text: `Option ${i + 1}`, data: `opt_${i + 1}` }));
+    const plan = planInteractive('Menu', buttons, 'Choose');
+
+    const interactive = plan.interactive as {
+      type: string;
+      action: { button: string; sections: Array<{ rows: unknown[] }> };
+    };
+    expect(interactive.type).toBe('list');
+    expect(interactive.action.button).toBe('Choose');
+    expect(interactive.action.sections[0]?.rows).toHaveLength(5);
+    expect(plan.droppedRows).toBe(0);
+  });
+
+  it('caps lists at 10 rows and reports the overflow', () => {
+    const buttons = Array.from({ length: 12 }, (_, i) => ({ text: `Option ${i + 1}` }));
+    const plan = planInteractive('Menu', buttons, 'Choose');
+
+    const interactive = plan.interactive as { action: { sections: Array<{ rows: unknown[] }> } };
+    expect(interactive.action.sections[0]?.rows).toHaveLength(10);
+    expect(plan.droppedRows).toBe(2);
+  });
+
+  it('maps a single URL button onto interactive.cta_url', () => {
+    const plan = planInteractive('Check our docs', [{ text: 'Open docs', url: 'https://khal.ai/docs' }], 'Options');
+
+    expect(plan.interactive).toEqual({
+      type: 'cta_url',
+      body: { text: 'Check our docs' },
+      action: { name: 'cta_url', parameters: { display_text: 'Open docs', url: 'https://khal.ai/docs' } },
+    });
+  });
+
+  it('folds inexpressible URL buttons into the body and keeps reply buttons', () => {
+    const plan = planInteractive(
+      'Pick',
+      [
+        { text: 'Yes', data: 'y' },
+        { text: 'Site', url: 'https://khal.ai' },
+      ],
+      'Options',
+    );
+
+    expect(plan.body).toBe('Pick\n\nSite: https://khal.ai');
+    const interactive = plan.interactive as { type: string; body: { text: string } };
+    expect(interactive.type).toBe('button');
+    expect(interactive.body.text).toBe('Pick\n\nSite: https://khal.ai');
+  });
+
+  it('truncates long titles to Meta limits (20 button / 24 row chars)', () => {
+    const long = 'This button title is far beyond the limit';
+    const asButton = planInteractive('t', [{ text: long }], 'Options');
+    const btn = asButton.interactive as { action: { buttons: Array<{ reply: { title: string } }> } };
+    expect(btn.action.buttons[0]?.reply.title).toHaveLength(20);
+
+    const asList = planInteractive(
+      't',
+      Array.from({ length: 4 }, () => ({ text: long })),
+      'Options',
+    );
+    const list = asList.interactive as { action: { sections: Array<{ rows: Array<{ title: string }> }> } };
+    expect(list.action.sections[0]?.rows[0]?.title).toHaveLength(24);
+  });
+});
+
+describe('sendInteractive', () => {
+  it('sends type=interactive with normalized phone and reply context', async () => {
+    const client = makeClient();
+    const spy = spyOn(client, 'sendMessage').mockResolvedValueOnce(OK_RESPONSE);
+
+    await sendInteractive(client, '+55 11 99999-8888', 'Pick', [{ text: 'Yes', data: 'y' }], 'wamid.ctx');
+
+    const arg = spy.mock.calls[0]?.[0] as { to: string; type: string; context?: { message_id: string } };
+    expect(arg.to).toBe('5511999998888');
+    expect(arg.type).toBe('interactive');
+    expect(arg.context).toEqual({ message_id: 'wamid.ctx' });
+  });
+
+  it('falls back to a plain text send when only folded URL buttons remain', async () => {
+    const client = makeClient();
+    const spy = spyOn(client, 'sendMessage').mockResolvedValueOnce(OK_RESPONSE);
+
+    await sendInteractive(client, '5511999998888', 'Read this', [
+      { text: 'Docs', url: 'https://khal.ai/docs' },
+      { text: 'Blog', url: 'https://khal.ai/blog' },
+    ]);
+
+    const arg = spy.mock.calls[0]?.[0] as { type: string; text?: { body: string } };
+    expect(arg.type).toBe('text');
+    expect(arg.text?.body).toBe('Read this\n\nDocs: https://khal.ai/docs\nBlog: https://khal.ai/blog');
   });
 });

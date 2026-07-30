@@ -12,6 +12,7 @@ export { sendMedia, type MetaMediaKind } from './media';
 export { sendLocation } from './location';
 export { sendContact, type ContactInput } from './contact';
 export { sendReaction } from './reaction';
+export { planInteractive, sendInteractive, type InteractiveButton } from './interactive';
 export {
   sendTemplate,
   type SendTemplateButton,
