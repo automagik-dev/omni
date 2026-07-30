@@ -12,7 +12,10 @@
 -- Run `bunx drizzle-kit generate` after `bun install` to (re)align the
 -- snapshot if the schema diverges from what's encoded here.
 
-BEGIN;
+-- NOTE: no explicit BEGIN/COMMIT — the boot migrator executes this file on a
+-- pooled postgres-js connection, which rejects raw transaction control
+-- (UNSAFE_TRANSACTION). The file is a single batch (no statement-breakpoints),
+-- so it executes atomically anyway, and every statement is idempotent.
 
 -- --------------------------------------------------------------------------
 -- instances: WhatsApp Cloud per-instance config
@@ -60,4 +63,3 @@ CREATE UNIQUE INDEX IF NOT EXISTS "idx_wa_tpl_instance_name_lang"
 CREATE INDEX IF NOT EXISTS "idx_wa_tpl_status"
   ON "whatsapp_templates" ("status");
 
-COMMIT;
