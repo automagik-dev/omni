@@ -22,14 +22,15 @@ import { BaseChannelPlugin } from '../base/BaseChannelPlugin';
 import type { ChannelCapabilities } from '../types/capabilities';
 
 import { ChannelError } from '@omni/core';
-// Use relative imports to avoid circular workspace dependencies
-// (channel packages depend on channel-sdk; adding them as devDeps creates a turbo cycle)
 import {
   DISCORD_CAPABILITIES,
   DiscordError,
   ErrorCode as DiscordErrorCode,
   DiscordPlugin,
 } from '../../../channel-discord/src/index';
+// Use relative imports to avoid circular workspace dependencies
+// (channel packages depend on channel-sdk; adding them as devDeps creates a turbo cycle)
+import { HERMES_CAPABILITIES, HermesApiError, HermesErrorCode, HermesPlugin } from '../../../channel-hermes/src/index';
 import { SLACK_CAPABILITIES, SlackError, SlackErrorCode, SlackPlugin } from '../../../channel-slack/src/index';
 import {
   TELEGRAM_CAPABILITIES,
@@ -43,6 +44,12 @@ import {
   TwilioWhatsAppErrorCode,
   TwilioWhatsAppPlugin,
 } from '../../../channel-twilio-whatsapp/src/index';
+import {
+  MetaApiError,
+  MetaErrorCode,
+  WHATSAPP_CLOUD_CAPABILITIES,
+  WhatsAppCloudPlugin,
+} from '../../../channel-whatsapp-cloud/src/index';
 import {
   WHATSAPP_CAPABILITIES,
   WhatsAppError,
@@ -119,6 +126,26 @@ const channels: ChannelDescriptor[] = [
     errorSourcePath: channelPath('slack', 'types.ts'),
   },
   {
+    name: 'hermes',
+    packageName: '@omni/channel-hermes',
+    pluginClass: HermesPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: HermesApiError,
+    capabilities: HERMES_CAPABILITIES,
+    pluginSourcePath: channelPath('hermes', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('hermes', 'handlers', 'webhook.ts')],
+    errorSourcePath: channelPath('hermes', 'utils', 'errors.ts'),
+  },
+  {
+    name: 'whatsapp-cloud',
+    packageName: '@omni/channel-whatsapp-cloud',
+    pluginClass: WhatsAppCloudPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: MetaApiError,
+    capabilities: WHATSAPP_CLOUD_CAPABILITIES,
+    pluginSourcePath: channelPath('whatsapp-cloud', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('whatsapp-cloud', 'handlers', 'webhook.ts')],
+    errorSourcePath: channelPath('whatsapp-cloud', 'utils', 'errors.ts'),
+  },
+  {
     name: 'twilio-whatsapp',
     packageName: '@omni/channel-twilio-whatsapp',
     pluginClass: TwilioWhatsAppPlugin as unknown as typeof BaseChannelPlugin,
@@ -192,14 +219,16 @@ const errorConstructorArgs: Record<string, unknown[]> = {
   discord: [DiscordErrorCode.SEND_FAILED, 'compliance test'],
   slack: [SlackErrorCode.SEND_FAILED, 'compliance test'],
   'twilio-whatsapp': [TwilioWhatsAppErrorCode.SEND_FAILED, 'compliance test'],
+  'whatsapp-cloud': [MetaErrorCode.INVALID_REQUEST, 'compliance test'],
+  hermes: [HermesErrorCode.INVALID_REQUEST, 'compliance test'],
 };
 
 // Group 1: Infrastructure
 
 describe('SDK compliance test infrastructure', () => {
-  it('has descriptors for all 5 channels', () => {
+  it('has descriptors for all 7 channels', () => {
     const names = channels.map((c) => c.name).sort();
-    expect(names).toEqual(['discord', 'slack', 'telegram', 'twilio-whatsapp', 'whatsapp']);
+    expect(names).toEqual(['discord', 'hermes', 'slack', 'telegram', 'twilio-whatsapp', 'whatsapp', 'whatsapp-cloud']);
   });
 
   for (const channel of channels) {

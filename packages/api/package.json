@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.260729.1",
+  "version": "2.260730.2",
   "type": "module",
   "exports": {
     ".": {
@@ -33,6 +33,7 @@
     "@hono/swagger-ui": "^0.4.1",
     "@hono/zod-validator": "^0.4.3",
     "@omni/channel-sdk": "workspace:*",
+    "@omni/channel-whatsapp-cloud": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/db": "workspace:*",
     "@omni/media-processing": "workspace:*",

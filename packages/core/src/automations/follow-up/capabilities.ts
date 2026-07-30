@@ -53,6 +53,7 @@ export const DEFAULT_TYPING_INDICATOR_MS = 2500;
  */
 const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<ChannelType>([
   'whatsapp-cloud',
+  'hermes',
   'twilio-whatsapp',
 ]);
 
@@ -60,6 +61,12 @@ const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<Channel
  * Channels that can produce a "typing…" or analogous presence indicator
  * before a message. `internal` is a synthetic transport with no user to
  * signal; `a2a` is agent-to-agent and skips presence.
+ *
+ * NOTE: `whatsapp-cloud` sends its indicator by marking the newest inbound
+ * message as read with `typing_indicator` (Meta couples the two; there is no
+ * free-standing presence endpoint). The plugin's `sendTyping` is a silent
+ * no-op for chats with no remembered inbound message — the follow-up still
+ * sends, just without the indicator, which the runtime already tolerates.
  */
 const CHANNELS_WITH_TYPING_INDICATOR: ReadonlySet<ChannelType> = new Set<ChannelType>([
   'whatsapp-baileys',

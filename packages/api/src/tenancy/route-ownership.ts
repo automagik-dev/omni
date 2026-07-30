@@ -263,6 +263,38 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'verifies against the server-held auth token, and the tenant comes from the server-side instance record ' +
       'addressed by the path.',
   },
+  {
+    route: 'POST /api/v2/channels/hermes/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      "Hermes (Mutant) gateway callback. Auth-exempt for Mutant's servers, which send no credential and no " +
+      'signature — the Hermes API has no HMAC mechanism at all. Authenticity rests on two factors the handler ' +
+      'enforces: the per-instance path (an unguessable instance UUID, the Gupshup precedent) and a cross-check ' +
+      'of the payload media_id (the Hermes UUID of the WhatsApp line) against the hermes_media_id stored ' +
+      'server-side on that instance — a mismatch is dropped with a warn log. The tenant comes from the ' +
+      'server-side instance record addressed by the path, never from a body or header claim. Responses are ' +
+      'fixed 200 acks with no row data.',
+  },
+  {
+    route: 'GET /api/v2/channels/whatsapp-cloud/webhook',
+    class: 'public-by-contract',
+    justification:
+      "Meta webhook verification challenge. Auth-exempt because Meta's servers send no credential; the handler " +
+      'compares hub.verify_token against the server-held META_VERIFY_TOKEN and echoes back the hub.challenge ' +
+      'nonce Meta itself supplied. It reads no rows and reveals only whether the deployment-level verify token ' +
+      'matched — a configuration fact, not tenant data.',
+  },
+  {
+    route: 'POST /api/v2/channels/whatsapp-cloud/webhook',
+    class: 'public-by-contract',
+    justification:
+      "Meta Cloud API callback. Auth-exempt for Meta's servers; authenticity is the X-Hub-Signature-256 HMAC the " +
+      'plugin verifies against the server-held META_APP_SECRET over the raw body. The URL is global by Meta design ' +
+      '(one callback per app, no :instanceId segment) — the instance, and therefore the tenant, is resolved from ' +
+      'the server-side instance record matching the payload phone_number_id, never from a body or header tenant ' +
+      'claim. Responses are fixed acks (200/401) and carry no row data; unknown phone_number_id still acks 200 ' +
+      'so the surface is not a resource-existence oracle.',
+  },
 ];
 
 /**
@@ -329,6 +361,8 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'DELETE /api/v2/instances/:id/block',
   'DELETE /api/v2/instances/:id/guilds/:guildId/config',
   'DELETE /api/v2/instances/:id/profile/picture',
+  'DELETE /api/v2/instances/:id/whatsapp-cloud/connection',
+  'DELETE /api/v2/instances/:id/whatsapp-templates/:templateId',
   'DELETE /api/v2/instances/:instanceId/routes/:id',
   'DELETE /api/v2/messages/:id',
   'DELETE /api/v2/messages/:id/reactions',
@@ -408,6 +442,14 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/instances/:id/sync',
   'GET /api/v2/instances/:id/sync/:jobId',
   'GET /api/v2/instances/:id/users/:userId/profile',
+  'GET /api/v2/instances/:id/whatsapp-cloud/analytics',
+  'GET /api/v2/instances/:id/whatsapp-cloud/connection',
+  'GET /api/v2/instances/:id/whatsapp-cloud/profile',
+  'GET /api/v2/instances/:id/whatsapp-cloud/quality',
+  'GET /api/v2/instances/:id/whatsapp-flows',
+  'GET /api/v2/instances/:id/whatsapp-flows/:flowId/preview',
+  'GET /api/v2/instances/:id/whatsapp-templates',
+  'GET /api/v2/instances/:id/whatsapp-templates/:templateId',
   'GET /api/v2/instances/:instanceId/routes',
   'GET /api/v2/instances/:instanceId/routes/:id',
   'GET /api/v2/instances/supported-channels',
@@ -531,6 +573,18 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/instances/:id/resync',
   'POST /api/v2/instances/:id/sync',
   'POST /api/v2/instances/:id/sync/profile',
+  'POST /api/v2/instances/:id/whatsapp-cloud/connect',
+  'POST /api/v2/instances/:id/whatsapp-cloud/oauth/exchange',
+  'POST /api/v2/instances/:id/whatsapp-cloud/profile/photo',
+  'POST /api/v2/instances/:id/whatsapp-cloud/register',
+  'POST /api/v2/instances/:id/whatsapp-cloud/subscribe-app',
+  'POST /api/v2/instances/:id/whatsapp-flows',
+  'POST /api/v2/instances/:id/whatsapp-flows/:flowId/publish',
+  'POST /api/v2/instances/:id/whatsapp-flows/send',
+  'POST /api/v2/instances/:id/whatsapp-templates',
+  'POST /api/v2/instances/:id/whatsapp-templates/:templateId/send-test',
+  'POST /api/v2/instances/:id/whatsapp-templates/:templateName/send',
+  'POST /api/v2/instances/:id/whatsapp-templates/upload-header-media',
   'POST /api/v2/instances/:instanceId/routes',
   'POST /api/v2/media/film',
   'POST /api/v2/media/imagine',
@@ -583,6 +637,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'PUT /api/v2/instances/:id/presence',
   'PUT /api/v2/instances/:id/profile/name',
   'PUT /api/v2/instances/:id/profile/picture',
+  'PUT /api/v2/instances/:id/whatsapp-cloud/profile',
   'PUT /api/v2/instances/:id/profile/status',
   'PUT /api/v2/payload-config/:eventType',
   'PUT /api/v2/settings/:key',

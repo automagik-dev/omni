@@ -188,6 +188,14 @@ function buildInstanceConnectOptions(instance: {
   twilioStatusCallbackUrl?: string | null;
   twilioWebhookUrl?: string | null;
   twilioValidateSignature?: boolean | null;
+  metaAccessToken?: string | null;
+  metaPhoneNumberId?: string | null;
+  metaWabaId?: string | null;
+  metaAppId?: string | null;
+  metaBusinessId?: string | null;
+  metaApiVersion?: string | null;
+  metaDisplayPhoneNumber?: string | null;
+  metaConnectionMethod?: string | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
@@ -205,7 +213,38 @@ function buildInstanceConnectOptions(instance: {
   if (instance.channel === 'twilio-whatsapp') {
     applyTwilioWhatsAppOptions(options, instance);
   }
+  if (instance.channel === 'whatsapp-cloud') {
+    applyWhatsAppCloudOptions(options, instance);
+  }
   return options;
+}
+
+/**
+ * whatsapp-cloud reconnect credentials — the plugin's `connect()` reads these
+ * from `config.options` (same keys as `config.credentials` in the manual
+ * connect route). Persisted on `instances` by the connect/oauth routes.
+ */
+function applyWhatsAppCloudOptions(
+  options: Record<string, unknown>,
+  instance: {
+    metaAccessToken?: string | null;
+    metaPhoneNumberId?: string | null;
+    metaWabaId?: string | null;
+    metaAppId?: string | null;
+    metaBusinessId?: string | null;
+    metaApiVersion?: string | null;
+    metaDisplayPhoneNumber?: string | null;
+    metaConnectionMethod?: string | null;
+  },
+): void {
+  if (instance.metaAccessToken) options.metaAccessToken = instance.metaAccessToken;
+  if (instance.metaPhoneNumberId) options.metaPhoneNumberId = instance.metaPhoneNumberId;
+  if (instance.metaWabaId) options.metaWabaId = instance.metaWabaId;
+  if (instance.metaAppId) options.metaAppId = instance.metaAppId;
+  if (instance.metaBusinessId) options.metaBusinessId = instance.metaBusinessId;
+  if (instance.metaApiVersion) options.metaApiVersion = instance.metaApiVersion;
+  if (instance.metaDisplayPhoneNumber) options.metaDisplayPhoneNumber = instance.metaDisplayPhoneNumber;
+  if (instance.metaConnectionMethod) options.metaConnectionMethod = instance.metaConnectionMethod;
 }
 
 function applyGupshupOptions(

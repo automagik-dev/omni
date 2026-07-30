@@ -2853,6 +2853,18 @@ export interface components {
             text: string;
             /** @description Message ID to reply to */
             replyTo?: string;
+            /** @description Inline buttons — mapped natively per channel (WhatsApp Cloud: up to 3 reply buttons, 4-10 become a list; Telegram: inline keyboard) */
+            buttons?: {
+                /** @description Button label */
+                text: string;
+                /** @description Callback payload (reply button / list row id) */
+                data?: string;
+                /**
+                 * Format: uri
+                 * @description Link button URL (mutually exclusive with data)
+                 */
+                url?: string;
+            }[];
         };
         TTSVoice: {
             /** @description ElevenLabs voice ID */
@@ -7402,6 +7414,18 @@ export interface operations {
                     text: string;
                     /** @description Message ID to reply to */
                     replyTo?: string;
+                    /** @description Inline buttons — mapped natively per channel (WhatsApp Cloud: up to 3 reply buttons, 4-10 become a list; Telegram: inline keyboard) */
+                    buttons?: {
+                        /** @description Button label */
+                        text: string;
+                        /** @description Callback payload (reply button / list row id) */
+                        data?: string;
+                        /**
+                         * Format: uri
+                         * @description Link button URL (mutually exclusive with data)
+                         */
+                        url?: string;
+                    }[];
                 };
             };
         };

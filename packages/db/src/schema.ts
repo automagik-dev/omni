@@ -11,6 +11,7 @@
 
 import type { ProviderSchema as CoreProviderSchema, FollowUpSequenceConfig } from '@omni/core';
 import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJobConfig } from '@omni/core/events';
+import { CONTENT_TYPES, type ContentType as CoreContentType } from '@omni/core/types';
 import { relations, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
@@ -43,6 +44,7 @@ export const channelTypes = [
   'telegram',
   'a2a',
   'gupshup',
+  'hermes',
   'twilio-whatsapp',
   'internal',
 ] as const;
@@ -143,18 +145,10 @@ export type ApiKeyProfileOverrides = {
 export const eventTypes = CORE_EVENT_TYPES;
 export type EventType = CoreEventType;
 
-export const contentTypes = [
-  'text',
-  'audio',
-  'image',
-  'video',
-  'document',
-  'sticker',
-  'contact',
-  'location',
-  'reaction',
-] as const;
-export type ContentType = (typeof contentTypes)[number];
+// Derived from core CONTENT_TYPES (same no-drift rule as eventTypes above) —
+// this local tuple had fallen behind by ten content types.
+export const contentTypes = CONTENT_TYPES;
+export type ContentType = CoreContentType;
 
 // ============================================================================
 // UNIFIED MESSAGES ENUMS
@@ -733,6 +727,37 @@ export const instances = pgTable(
     twilioWebhookUrl: text('twilio_webhook_url'),
     twilioValidateSignature: boolean('twilio_validate_signature').notNull().default(true),
 
+    // ---- WhatsApp Cloud (Meta Cloud API) Configuration ----
+    // Per-instance values for the official Meta WhatsApp Cloud channel.
+    // Global app-level config (META_APP_SECRET, META_VERIFY_TOKEN, etc.) lives in env.
+    // metaAccessToken is stored plain text for parity with other channel tokens
+    // (discord_bot_token, telegram_bot_token, gupshup_auth_token). Encryption at-rest
+    // is tracked as cross-channel tech debt.
+    metaPhoneNumberId: varchar('meta_phone_number_id', { length: 64 }),
+    metaWabaId: varchar('meta_waba_id', { length: 64 }),
+    metaAccessToken: text('meta_access_token'),
+    metaAppId: varchar('meta_app_id', { length: 64 }),
+    metaBusinessId: varchar('meta_business_id', { length: 64 }),
+    /** Snapshot of Graph API version used at provisioning. Runtime uses META_GRAPH_API_VERSION env. */
+    metaApiVersion: varchar('meta_api_version', { length: 16 }).notNull().default('v25.0'),
+    /** 'manual' | 'embedded_signup' — provenance of the connection */
+    metaConnectionMethod: varchar('meta_connection_method', { length: 32 }).default('manual'),
+    metaDisplayPhoneNumber: varchar('meta_display_phone_number', { length: 32 }),
+    metaConnectedAt: timestamp('meta_connected_at', { withTimezone: true }),
+
+    // ---- Hermes (Mutant WhatsApp gateway) Configuration ----
+    // Per-instance credentials for the H3rmes API (Brazilian BSP-style gateway).
+    // hermesPassword is stored plain text for parity with the other channel
+    // credentials above — same cross-channel encryption-at-rest tech debt.
+    /** Customer-specific API base URL (each Hermes tenant gets its own host). */
+    hermesBaseUrl: text('hermes_base_url'),
+    hermesUsername: varchar('hermes_username', { length: 255 }),
+    hermesPassword: text('hermes_password'),
+    /** Hermes UUID of the WhatsApp LINE ("media_id" in their API) — webhook resolution key. */
+    hermesMediaId: varchar('hermes_media_id', { length: 64 }),
+    /** Meta template namespace required by Hermes template sends. */
+    hermesTemplateNamespace: varchar('hermes_template_namespace', { length: 128 }),
+
     // ---- Agent Reference ----
     /** FK to agents table (phase 3: replaces legacy agentProviderId + agentId varchar). */
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
@@ -973,9 +998,57 @@ export const instances = pgTable(
     isActiveIdx: index('instances_is_active_idx').on(table.isActive),
     isDefaultIdx: index('instances_is_default_idx').on(table.isDefault),
     agentIdIdx: index('instances_agent_id_idx').on(table.agentId),
+    metaPhoneNumberIdx: index('instances_meta_phone_number_idx').on(table.metaPhoneNumberId),
     chainModeCheck: check('instances_chain_mode_check', sql`${table.chainMode} IN ('off', 'forward', 'bidirectional')`),
   }),
 );
+
+// ============================================================================
+// WHATSAPP TEMPLATES (Meta Cloud API HSM)
+// ============================================================================
+
+/**
+ * High Structured Message (HSM) templates for WhatsApp Cloud API.
+ * Stored locally, synchronized with Meta Graph API (POST /{waba_id}/message_templates).
+ *
+ * One template is uniquely identified by (instance_id, name, language).
+ * Status mirrors Meta lifecycle: PENDING → APPROVED | REJECTED | PAUSED | DELETED.
+ */
+export const whatsappTemplates = pgTable(
+  'whatsapp_templates',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+    /** ID returned by Graph API after creation (null until first sync). */
+    metaId: varchar('meta_id', { length: 64 }),
+    wabaId: varchar('waba_id', { length: 64 }).notNull(),
+    name: varchar('name', { length: 255 }).notNull(),
+    language: varchar('language', { length: 16 }).notNull().default('pt_BR'),
+    /** MARKETING | UTILITY | AUTHENTICATION */
+    category: varchar('category', { length: 32 }).notNull(),
+    /** APPROVED | PENDING | REJECTED | PAUSED | DELETED */
+    status: varchar('status', { length: 32 }).notNull().default('PENDING'),
+    /** HEADER / BODY / FOOTER / BUTTONS components — see WhatsAppTemplateComponent in @omni/core */
+    components: jsonb('components').$type<unknown[]>(),
+    /** Variable name → channel value mappings, indexed by component type. */
+    variableMapping: jsonb('variable_mapping').$type<Record<string, Record<string, string>>>(),
+    rejectionReason: text('rejection_reason'),
+    /** GREEN | YELLOW | RED | UNKNOWN (Meta-side quality score) */
+    qualityScore: varchar('quality_score', { length: 16 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    instanceIdx: index('idx_wa_tpl_instance').on(t.instanceId),
+    instanceNameLangUnique: uniqueIndex('idx_wa_tpl_instance_name_lang').on(t.instanceId, t.name, t.language),
+    statusIdx: index('idx_wa_tpl_status').on(t.status),
+  }),
+);
+
+export type WhatsappTemplate = typeof whatsappTemplates.$inferSelect;
+export type NewWhatsappTemplate = typeof whatsappTemplates.$inferInsert;
 
 // ============================================================================
 // PERSONS (Identity Graph Root)

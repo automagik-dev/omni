@@ -7,6 +7,12 @@
 // Schema exports
 export * from './schema';
 
+// Drizzle operator re-exports — consumers outside api/db must import these from
+// here so they share this package's drizzle-orm instance (bun's isolated
+// installs dual-instance the ORM for packages with a different peer set, and
+// the two instances' SQL/Column types are not assignable to each other).
+export { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+
 // Client exports
 export { createDb, createDbHandle, createPostgresClient, getDb, closeDb, getDefaultDatabaseUrl } from './client';
 export type { Database, DbConfig } from './client';

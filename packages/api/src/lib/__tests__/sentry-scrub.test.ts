@@ -370,3 +370,113 @@ describe('sentryEnabled', () => {
     expect(typeof result).toBe('boolean');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Meta WhatsApp Cloud — token + sensitive-key scrubbing (whatsapp-cloud wish)
+// ---------------------------------------------------------------------------
+
+describe('scrubPii — Meta access tokens', () => {
+  test('replaces EAA-prefixed Meta access token', () => {
+    const token = `EAA${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0'}`; // 43 chars after EAA
+    const input = `Failed with token=${token} blah`;
+    expect(scrubPii(input)).toBe('Failed with token=[meta_token] blah');
+  });
+
+  test('does NOT match short EAA prefixes (false positive guard)', () => {
+    // "EAAtoo_short" — fewer than 40 chars after EAA → leave as-is
+    expect(scrubPii('plain EAAshort here')).toBe('plain EAAshort here');
+  });
+
+  test('replaces Bearer header tokens while preserving the keyword', () => {
+    // Synthetic low-entropy token (40+ chars to satisfy the regex) so
+    // secret-scanners like GitGuardian don't flag this fixture as a leak.
+    const fakeToken = 'a'.repeat(40);
+    const input = `Authorization: Bearer ${fakeToken}`;
+    expect(scrubPii(input)).toBe('Authorization: Bearer [token]');
+  });
+
+  test('handles multiple tokens in one string', () => {
+    const tok = `EAA${'A'.repeat(50)}`;
+    const fakeBearer = 'b'.repeat(30);
+    const input = `before ${tok} middle Bearer ${fakeBearer} middle2 ${tok} end`;
+    const result = scrubPii(input);
+    expect(result).toContain('[meta_token]');
+    expect(result).toContain('Bearer [token]');
+    expect(result).not.toContain('EAAAAAAA');
+  });
+});
+
+describe('scrubEvent — sensitive-key field-level redaction (whatsapp-cloud)', () => {
+  test('redacts message text/body verbatim regardless of content', () => {
+    const event: SentryEvent = {
+      extra: {
+        wamid: 'wamid.xyz123',
+        text: 'olá tudo bem este texto não bate em nenhum regex',
+        body: 'free-form portuguese chat content',
+        caption: 'media caption here',
+      },
+    };
+    const result = scrubEvent(event);
+    expect((result.extra as Record<string, unknown>).text).toBe('[redacted]');
+    expect((result.extra as Record<string, unknown>).body).toBe('[redacted]');
+    expect((result.extra as Record<string, unknown>).caption).toBe('[redacted]');
+    // Non-sensitive key passes through scrubPii (no PII pattern → unchanged)
+    expect((result.extra as Record<string, unknown>).wamid).toBe('wamid.xyz123');
+  });
+
+  test('redacts profile_name / verified_name / display_name', () => {
+    const event: SentryEvent = {
+      contexts: {
+        meta_profile: {
+          phone_number_id: '107654321987654',
+          profile_name: 'João da Silva',
+          verified_name: 'Acme Inc.',
+          display_name: 'Acme Support',
+        },
+      },
+    };
+    const result = scrubEvent(event);
+    const ctx = result.contexts?.meta_profile as Record<string, unknown>;
+    expect(ctx.profile_name).toBe('[redacted]');
+    expect(ctx.verified_name).toBe('[redacted]');
+    expect(ctx.display_name).toBe('[redacted]');
+    // 15-digit phone_number_id should NOT be redacted by sensitive-key (key is
+    // not sensitive) but DOES get phone-scrubbed by pattern match.
+    expect(ctx.phone_number_id).toBe('[phone]');
+  });
+
+  test('redacts access_token / authorization / verify_token regardless of value shape', () => {
+    const event: SentryEvent = {
+      extra: {
+        meta_config: {
+          access_token: 'not-even-EAA-prefixed-garbage',
+          authorization: 'Bearer real-but-short',
+          verify_token: 'agilsystem_webhook_verify',
+        },
+      },
+    };
+    const result = scrubEvent(event);
+    const cfg = (result.extra as Record<string, unknown>).meta_config as Record<string, unknown>;
+    expect(cfg.access_token).toBe('[redacted]');
+    expect(cfg.authorization).toBe('[redacted]');
+    expect(cfg.verify_token).toBe('[redacted]');
+  });
+
+  test('handles nested arrays of sensitive-key parents (contacts[].name etc.)', () => {
+    const event: SentryEvent = {
+      extra: {
+        contacts: [
+          { name: 'Alice', phone: '+5511999998888' },
+          { name: 'Bob', phone: '+14155551234' },
+        ],
+      },
+    };
+    const result = scrubEvent(event);
+    const list = (result.extra as Record<string, unknown>).contacts as Array<Record<string, unknown>>;
+    // `name` is NOT in SENSITIVE_KEYS (we only redact profile_name/verified_name/
+    // display_name to avoid over-redaction). Phones get pattern-scrubbed.
+    expect(list[0]?.name).toBe('Alice');
+    expect(list[0]?.phone).toBe('[phone]');
+    expect(list[1]?.phone).toBe('[phone]');
+  });
+});

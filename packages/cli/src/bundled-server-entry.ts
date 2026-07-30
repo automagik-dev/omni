@@ -10,14 +10,24 @@ import { type ChannelPlugin, channelRegistry } from '@omni/channel-sdk';
 
 import discordPlugin from '@omni/channel-discord';
 import gupshupPlugin from '@omni/channel-gupshup';
+import hermesPlugin from '@omni/channel-hermes';
 import slackPlugin from '@omni/channel-slack';
 import telegramPlugin from '@omni/channel-telegram';
 import whatsappPlugin from '@omni/channel-whatsapp';
+import whatsappCloudPlugin from '@omni/channel-whatsapp-cloud';
 
 // Pre-register all bundled channel plugins
 // Type assertion needed: channel plugins implement ChannelPlugin but
 // some have narrower parameter types (e.g. Discord's fetchContacts)
-for (const plugin of [telegramPlugin, discordPlugin, whatsappPlugin, slackPlugin, gupshupPlugin] as ChannelPlugin[]) {
+for (const plugin of [
+  telegramPlugin,
+  discordPlugin,
+  whatsappPlugin,
+  whatsappCloudPlugin,
+  slackPlugin,
+  gupshupPlugin,
+  hermesPlugin,
+] as ChannelPlugin[]) {
   channelRegistry.register(plugin);
 }
 

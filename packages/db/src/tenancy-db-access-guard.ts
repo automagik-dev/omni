@@ -371,7 +371,7 @@ export function defaultClassFor(site: DbAccessSite): { class: DbAccessClass; jus
  * able to land without also editing this constant. When G4 lowers it, lower the
  * ceiling with it so the ratchet keeps its grip.
  */
-export const PENDING_G4_CEILING = 6;
+export const PENDING_G4_CEILING = 7;
 
 /**
  * Ceiling for the `pending-G5-conversion` class.
@@ -615,7 +615,12 @@ export const PENDING_G5_CEILING = 12;
  * remaining 12 are a floor rather than a backlog. No site moved between the two
  * pending classes this run, and no new pending site was opened.
  */
-export const TOTAL_PENDING_CEILING = 18;
+// 18 after the G4/G5 conversion sweep (6 + 12). 19 after the whatsapp-cloud
+// channel landed: its template-status webhook adds ONE genuinely new
+// pending-G4 site (a bare getDb() in a credential-less webhook path — see its
+// registry entry). Nothing was reclassified; the raise is a real new site in
+// a new package, not movement between pending classes.
+export const TOTAL_PENDING_CEILING = 19;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -1627,6 +1632,18 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   // comment-aware, not by reclassifying"; `stripComments` plus the raw-SQL
   // word-boundary did exactly that, so the sites no longer scan and the guard's
   // own staleness check removed them.
+  {
+    file: 'packages/channel-whatsapp-cloud/src/handlers/webhook.ts',
+    table: '*',
+    class: 'pending-G4-conversion',
+    justification:
+      'Bare getDb() acquisition (lazy-imported) in the Meta template-status webhook path of the whatsapp-cloud ' +
+      'channel. The webhook is authenticated by app-secret HMAC, not by a tenant credential — Meta configures ONE ' +
+      'global callback per app, so there is no request credential to derive a tenant from; the affected instance ' +
+      'is resolved from the payload (metaTemplateId/wabaId) by the templates service. Converting it means routing ' +
+      'the template-status write through the api layer (which owns tenant scoping) instead of a channel-package ' +
+      'db handle — the channel-site default class until that conversion lands.',
+  },
   {
     file: 'packages/cli/src/commands/keys.ts',
     table: '*',
