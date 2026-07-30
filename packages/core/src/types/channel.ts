@@ -10,6 +10,7 @@ export const CHANNEL_TYPES = [
   'telegram',
   'a2a',
   'gupshup',
+  'hermes',
   'twilio-whatsapp',
   'internal',
 ] as const;

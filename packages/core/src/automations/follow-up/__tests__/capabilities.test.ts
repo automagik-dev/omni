@@ -50,6 +50,7 @@ const row = (overrides: Partial<FollowUpStateRow> = {}): FollowUpStateRow => ({
 describe('channelHasMessagingWindow', () => {
   test('WhatsApp BSP channels have a 24h window', () => {
     expect(channelHasMessagingWindow('whatsapp-cloud')).toBe(true);
+    expect(channelHasMessagingWindow('hermes')).toBe(true);
     expect(channelHasMessagingWindow('twilio-whatsapp')).toBe(true);
     expect(channelHasMessagingWindow('whatsapp-baileys')).toBe(false);
     expect(channelHasMessagingWindow('discord')).toBe(false);
@@ -69,6 +70,8 @@ describe('channelSupportsTypingIndicator', () => {
   test.each<[ChannelType, boolean]>([
     ['whatsapp-baileys', true],
     ['whatsapp-cloud', true],
+    // hermes: gateway HTTP puro — a API não expõe typing/presence.
+    ['hermes', false],
     ['twilio-whatsapp', true],
     ['discord', true],
     ['telegram', true],

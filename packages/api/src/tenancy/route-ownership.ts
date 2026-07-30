@@ -264,6 +264,18 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'addressed by the path.',
   },
   {
+    route: 'POST /api/v2/channels/hermes/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      "Hermes (Mutant) gateway callback. Auth-exempt for Mutant's servers, which send no credential and no " +
+      'signature — the Hermes API has no HMAC mechanism at all. Authenticity rests on two factors the handler ' +
+      'enforces: the per-instance path (an unguessable instance UUID, the Gupshup precedent) and a cross-check ' +
+      'of the payload media_id (the Hermes UUID of the WhatsApp line) against the hermes_media_id stored ' +
+      'server-side on that instance — a mismatch is dropped with a warn log. The tenant comes from the ' +
+      'server-side instance record addressed by the path, never from a body or header claim. Responses are ' +
+      'fixed 200 acks with no row data.',
+  },
+  {
     route: 'GET /api/v2/channels/whatsapp-cloud/webhook',
     class: 'public-by-contract',
     justification:

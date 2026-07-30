@@ -92,6 +92,8 @@ const InboundMediaSchema = z.object({
   caption: z.string().optional(),
   filename: z.string().optional(),
   voice: z.boolean().optional(),
+  /** Hermes (Mutant) gateway extension: direct download URL for the media. Never sent by Meta. */
+  file: z.string().optional(),
 });
 
 export const MetaInboundTextMessageSchema = z.object({
