@@ -25,6 +25,7 @@ import type {
 } from '@omni/channel-sdk';
 import type { Logger } from '@omni/core';
 import type { EventPayloadMap } from '@omni/core/events';
+import { WhatsAppFlowSendSchema } from '@omni/core/schemas';
 import type { MetaInboundMessage, MetaTemplateStatusUpdate, MetaWebhookStatusEntry } from '@omni/core/schemas';
 import type { ChannelType, ContentType } from '@omni/core/types';
 
@@ -35,7 +36,10 @@ import {
   type SendTemplateButton,
   type SendTemplateHeaderMedia,
   sendContact,
+  sendFlow,
+  sendInteractive,
   sendLocation,
+  sendLocationRequest,
   sendMedia,
   sendReaction,
   sendTemplate,
@@ -257,7 +261,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     if (correlationId) this.captureT10(correlationId);
 
     try {
-      const dispatched = await dispatchOutbound(client, message);
+      const dispatched = await dispatchOutbound(client, message, this.logger);
       if (!dispatched.ok) {
         return {
           success: false,
@@ -848,11 +852,15 @@ type OutboundDispatchResult = { ok: true; response: MetaSendResponse } | { ok: f
  * `message.failed` (nothing was attempted against the Graph API). Sender
  * failures propagate as thrown `MetaApiError`s, handled by the caller.
  */
-async function dispatchOutbound(client: MetaWhatsAppClient, message: OutgoingMessage): Promise<OutboundDispatchResult> {
+async function dispatchOutbound(
+  client: MetaWhatsAppClient,
+  message: OutgoingMessage,
+  logger?: Logger,
+): Promise<OutboundDispatchResult> {
   const { content, to, replyTo } = message;
 
   if (content.type === 'text') {
-    return { ok: true, response: await sendText(client, to, content.text ?? '', replyTo) };
+    return { ok: true, response: await dispatchOutboundText(client, message, logger) };
   }
   if (META_MEDIA_TYPES.has(content.type)) {
     return {
@@ -890,10 +898,58 @@ async function dispatchOutbound(client: MetaWhatsAppClient, message: OutgoingMes
   if (content.type === 'reaction') {
     return { ok: true, response: await sendReaction(client, to, content.targetMessageId ?? '', content.emoji ?? '') };
   }
+  if (content.type === 'location_request') {
+    return { ok: true, response: await sendLocationRequest(client, to, content.text ?? '', replyTo) };
+  }
   if (content.type === 'template') {
     return dispatchOutboundTemplate(client, message);
   }
+  if (content.type === 'flow') {
+    return dispatchOutboundFlow(client, message);
+  }
   return { ok: false, error: `Unsupported content.type=${content.type} for whatsapp-cloud` };
+}
+
+/**
+ * Flow descriptor is carried via `metadata.flow` (same convention as
+ * `metadata.template`) and validated against `WhatsAppFlowSendSchema` —
+ * callers populate it via the whatsapp-flows send route or directly.
+ */
+async function dispatchOutboundFlow(
+  client: MetaWhatsAppClient,
+  message: OutgoingMessage,
+): Promise<OutboundDispatchResult> {
+  const parsed = WhatsAppFlowSendSchema.safeParse(message.metadata?.flow);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: `content.type=flow requires a valid metadata.flow descriptor: ${parsed.error.issues[0]?.message ?? 'invalid'}`,
+    };
+  }
+  const { response } = await sendFlow(client, message.to, parsed.data, message.replyTo);
+  return { ok: true, response };
+}
+
+/**
+ * Text content — plain send, or the best-fitting Meta interactive type when
+ * `content.buttons` is present (reply buttons ≤3, list 4-10, cta_url for a
+ * single URL button). Overflow beyond Meta's 10-row list limit is dropped
+ * with a warn log — never silently.
+ */
+async function dispatchOutboundText(
+  client: MetaWhatsAppClient,
+  message: OutgoingMessage,
+  logger?: Logger,
+): Promise<MetaSendResponse> {
+  const { content, to, replyTo } = message;
+  if (!content.buttons?.length) {
+    return sendText(client, to, content.text ?? '', replyTo);
+  }
+  const { response, droppedRows } = await sendInteractive(client, to, content.text ?? '', content.buttons, replyTo);
+  if (droppedRows > 0) {
+    logger?.warn('[whatsapp-cloud] interactive list capped at 10 rows — extra buttons dropped', { to, droppedRows });
+  }
+  return response;
 }
 
 /**
@@ -1007,6 +1063,12 @@ function extractInteractiveContent(
 ): ExtractedInboundContent {
   if (interactive.type === 'button_reply' && interactive.button_reply) {
     return { type: 'text', text: interactive.button_reply.title };
+  }
+  if (interactive.type === 'nfm_reply' && interactive.nfm_reply) {
+    // WhatsApp Flow completion. The structured answers live in response_json —
+    // surfaced as text for the conversation timeline; consumers read the full
+    // payload from rawPayload.meta.interactive.nfm_reply.response_json.
+    return { type: 'text', text: interactive.nfm_reply.body ?? '[flow response]' };
   }
   if (interactive.type === 'list_reply' && interactive.list_reply) {
     return { type: 'text', text: interactive.list_reply.title };
