@@ -18,11 +18,39 @@
  * Backward compatibility: pre-publisher genie clients keep the current
  * behavior (they trip nudges); newer clients suppress their own false nudges.
  * No flag day.
+ *
+ * WORKER TENANT CONTEXT (wish: omni-full-multitenancy, G5; ADR-0008)
+ * ------------------------------------------------------------------
+ * This is a CONSUMER — a raw NATS subscription, not an eventBus one — and it
+ * used to call `recordActivity` straight onto the ambient pool without ever
+ * going through `classifyEnvelope`. It therefore had no world at all: no
+ * tenant, no legacy/quarantine distinction, and a write on whatever handle
+ * happened to be ambient. It is one of the two unscoped worker callers named in
+ * the `services/turns.ts::turns` registry justification.
+ *
+ * WHERE THE TENANT COMES FROM. A heartbeat is published by an EXTERNAL client
+ * as raw JSON, so nothing in the body may be believed — ADR-0008 requires the
+ * tenant to come from an authenticated context or a LOADED resource's persisted
+ * ownership. The message names an `instanceId`, and `instances` is the ownership
+ * ROOT, so the instance-owner registry (fed only by `instances` rows this
+ * process already read) is the trusted answer. `parseHeartbeat` returns ONLY its
+ * four validated fields, so a publisher cannot smuggle a `tenantId` or an
+ * `envelopeVersion` claim into the derivation. That tenant is then STAMPED onto
+ * an envelope and handed to `runConsumerInTenantContext`, which classifies it —
+ * so this consumer inherits exactly the same three worlds as every other one.
+ *
+ * DUAL WORLD: with no `db` wired (the shape every existing test constructs), or
+ * for an instance whose ownership this process never observed (every instance,
+ * flag-off), the call is the pre-G5 ambient one, byte for byte.
  */
 
-import { createLogger } from '@omni/core';
+import { createLogger, stampTenantEnvelope } from '@omni/core';
+import type { Database } from '@omni/db';
 import type { NatsConnection, Subscription } from 'nats';
 import { StringCodec } from 'nats';
+import { lookupInstanceOwner } from '../tenancy/instance-owner-registry';
+import { runDetachedFromTenantScope } from '../tenancy/tenant-scope';
+import { runConsumerInTenantContext } from '../tenancy/worker-tenant-context';
 import type { AgentHeartbeatEvent } from './turn-events';
 import type { TurnService } from './turns';
 
@@ -34,6 +62,14 @@ const HEARTBEAT_SUBJECT = 'omni.agent.heartbeat.>';
 export interface AgentHeartbeatStartOptions {
   natsConnection: NatsConnection;
   turnService: TurnService;
+  /**
+   * The runtime pool a per-message worker scope opens its transaction on.
+   *
+   * OPTIONAL, and its absence is the legacy world: without it the activity write
+   * is the pre-G5 ambient call. Wiring it (`index.ts`) is what opts this consumer
+   * into the tenant world.
+   */
+  db?: Database;
 }
 
 export class AgentHeartbeatConsumer {
@@ -43,7 +79,7 @@ export class AgentHeartbeatConsumer {
   start(options: AgentHeartbeatStartOptions): void {
     if (this.subscription) return;
 
-    const { natsConnection, turnService } = options;
+    const { natsConnection, turnService, db } = options;
 
     if (natsConnection.isClosed()) {
       log.warn('Cannot start agent-heartbeat: NATS connection is closed');
@@ -67,12 +103,17 @@ export class AgentHeartbeatConsumer {
             continue;
           }
 
-          turnService.recordActivity(parsed.turnId).catch((error) => {
-            log.warn('recordActivity failed for heartbeat (turn likely closed)', {
-              turnId: parsed.turnId,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
+          // The activity write, in the heartbeat's world. Detached because this
+          // is a fire-and-forget started from the subscription loop; scoped from
+          // the instance's PERSISTED ownership, never from the payload.
+          void runDetachedFromTenantScope(async () => recordHeartbeatActivity(turnService, db, parsed)).catch(
+            (error) => {
+              log.warn('recordActivity failed for heartbeat (turn likely closed)', {
+                turnId: parsed.turnId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            },
+          );
 
           log.debug('Agent heartbeat applied', {
             turnId: parsed.turnId,
@@ -102,6 +143,31 @@ export class AgentHeartbeatConsumer {
       log.info('Agent heartbeat consumer stopped');
     }
   }
+}
+
+/**
+ * Apply one heartbeat's activity write in the right world.
+ *
+ * With no `db` wired this is the pre-G5 ambient call. With one, the instance's
+ * PERSISTED tenant is looked up, stamped onto an envelope, and classified by
+ * `runConsumerInTenantContext`: a known owner runs the write inside that
+ * tenant's worker transaction; an instance whose ownership this process never
+ * observed classifies `legacy` and runs ambient (which fails closed under
+ * enforcement — the correct posture, never someone else's tenant).
+ */
+async function recordHeartbeatActivity(
+  turnService: TurnService,
+  db: Database | undefined,
+  parsed: AgentHeartbeatEvent,
+): Promise<void> {
+  if (!db) {
+    await turnService.recordActivity(parsed.turnId);
+    return;
+  }
+  const trustedTenantId = lookupInstanceOwner(parsed.instanceId);
+  const base = { correlationId: `heartbeat-${parsed.turnId}`, instanceId: parsed.instanceId };
+  const metadata = trustedTenantId ? stampTenantEnvelope(base, trustedTenantId) : base;
+  await runConsumerInTenantContext(db, { metadata }, () => turnService.recordActivity(parsed.turnId));
 }
 
 function parseHeartbeat(raw: string): AgentHeartbeatEvent | null {

@@ -13,7 +13,12 @@ import { scrubBreadcrumb, scrubEvent, scrubSpan, scrubTransaction } from './lib/
 const OMNI_SENTRY_DSN =
   'https://2b2ca6f407e3d13409aa7dd8d12483f2@o4509714066571264.ingest.us.sentry.io/4510982636371968';
 
-const dsn = process.env.SENTRY_DSN ?? OMNI_SENTRY_DSN;
+// Never under `bun test`: this module is a transitive import of anything that
+// touches the API entry, and its client is PROCESS-GLOBAL — one test file
+// importing it flips `sentryEnabled()` for every file that runs after it
+// (order-dependent, CI-only failures) and ships test telemetry to the
+// production DSN. Tests that need a client init one explicitly.
+const dsn = process.env.NODE_ENV === 'test' ? '' : (process.env.SENTRY_DSN ?? OMNI_SENTRY_DSN);
 
 if (dsn) {
   const tracesSampleRate = Number.parseFloat(process.env.SENTRY_TRACES_SAMPLE_RATE ?? '0.1');

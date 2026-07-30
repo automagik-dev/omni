@@ -21,6 +21,7 @@ import {
   evaluateDbAccessGuard,
   scanDbAccessSites,
 } from './tenancy-db-access-guard';
+import { TENANT_OWNERSHIP_SPECS } from './tenancy-ownership';
 import { RLS_EXCLUSIONS, RLS_TENANT_TABLES } from './tenancy-rls';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -113,12 +114,54 @@ describe('db-access guard', () => {
     }
   });
 
-  test('tenant-boundary is the G3 boundary modules plus the services G4 fully converted', () => {
+  test('a pending site whose table cannot carry a tenant before G6 says so', () => {
+    // WHY THIS EXISTS. "Convertible" and "gated" are different kinds of pending,
+    // and only the registry text distinguishes them. A site on a table whose
+    // derivation chain bottoms out in a G2-`unowned` root is stamped NULL by its
+    // trigger, so a scoped read finds NOTHING and a scoped insert fails the
+    // RLS `WITH CHECK` — converting it would ratchet the ceiling down on a
+    // conversion that cannot exist until the G6 backfill. The four `agents`
+    // sites are held on exactly that reasoning; this test is what keeps the
+    // reasoning from being applied unevenly (`turns` derives from `agent_id`,
+    // NOT NULL, so it inherits the same gate).
+    //
+    // The walk mirrors the trigger, not the spec's `required` flag: a derived
+    // table is gated when it has no resolvable parent at all, when EVERY parent
+    // is gated, or when any REQUIRED parent is gated (the trigger nulls the row
+    // as soon as one non-null parent has a null tenant).
+    const specs = new Map(TENANT_OWNERSHIP_SPECS.map((spec) => [spec.table, spec]));
+    const gated = (table: string, seen: Set<string> = new Set()): boolean => {
+      const spec = specs.get(table);
+      if (!spec || seen.has(table)) return false;
+      seen.add(table);
+      if (spec.derivation === 'unowned') return true;
+      if (spec.derivation === 'root') return false;
+      if (spec.parents.length === 0) return true;
+      if (spec.parents.every((parent) => gated(parent.parentTable, new Set(seen)))) return true;
+      return spec.parents.some((parent) => parent.required && gated(parent.parentTable, new Set(seen)));
+    };
+
+    // The chain the finding proved: turns -> agent_id (NOT NULL) -> agents ->
+    // owner_id -> persons (`unowned`).
+    expect(gated('turns')).toBe(true);
+    expect(gated('agents')).toBe(true);
+    // …and the ownership ROOT is of course not gated, so this is not vacuous.
+    expect(gated('instances')).toBe(false);
+
+    const turns = REGISTERED_DB_ACCESS.find(
+      (entry) => entry.file === 'packages/api/src/services/turns.ts' && entry.table === 'turns',
+    );
+    expect(turns?.class).toBe('pending-G5-conversion');
+    expect(turns?.justification ?? '').toMatch(/G6/);
+  });
+
+  test('tenant-boundary is the G3 boundary modules plus the services G4/G5 fully converted', () => {
     // G3 could only claim this class for `tenancy/` itself. G4 converts service
     // files, so the assertion widens — but only to services whose EVERY caller
     // carries a request context. A service with a consumer or cron caller stays
     // in a pending class, which is what keeps this from becoming "anything that
-    // has been edited".
+    // has been edited". G5 widens it once more, to CONSUMER files whose worker
+    // callers now establish a tenant scope from the versioned envelope.
     const boundary = REGISTERED_DB_ACCESS.filter((e) => e.class === 'tenant-boundary');
     expect(boundary.length).toBeGreaterThan(0);
     const converted = new Set([
@@ -134,6 +177,125 @@ describe('db-access guard', () => {
       // `c.get('db')` to the request transaction.
       'packages/api/src/routes/v2/handoffs.ts',
       'packages/api/src/routes/v2/messages.ts',
+      // G5 leg A: consumer-only plugin whose NATS handlers now open a worker
+      // tenant scope from the envelope (tenancy/worker-tenant-context.ts) before
+      // any DB work. Its only callers are those consumers, so every caller is
+      // now scoped.
+      'packages/api/src/plugins/event-persistence.ts',
+      // G5 leg B: the media-processor consumer threads its versioned envelope
+      // into `processMessageMedia`, whose DB blocks run through
+      // `runConsumerInTenantContext` + `scopedHandle`. Consumer-only callers.
+      'packages/api/src/plugins/media-processor.ts',
+      // G5 leg B pt2: the sync-worker `sync.started` consumer scopes each discrete
+      // per-item DB block (anchor read, group/guild upsert) through
+      // `runConsumerInTenantContext` + `scopedHandle`. Consumer-only callers, and
+      // both tables derive tenant from the `instances` root.
+      'packages/api/src/plugins/sync-worker.ts',
+      // G5 leg B pt3: the connection/LID/contact-names/unread listeners scope
+      // each discrete (per-item, for the batch loops) DB block through
+      // `runConsumerInTenantContext` + `scopedHandle`. Consumer-only callers;
+      // the one cross-tenant access (the connection gauge) was split into
+      // `connection-gauge.ts`, which stays pending under its own entry.
+      'packages/api/src/plugins/event-listeners.ts',
+      // G5 leg C2: the dispatcher's per-thread markers, handoff audit insert,
+      // and self-send enumeration (tenant-keyed cache) run through
+      // `runDispatchDb` → worker scope + `scopedHandle`, keyed by the
+      // envelope-derived DispatchMetadata tenant. Its `agents` site alone
+      // stays pending (G6 persons backfill + session-cleaner caller).
+      'packages/api/src/plugins/agent-dispatcher.ts',
+      // G5 leg C2: `resolve()` scopes its `agent_routes` read from the
+      // threaded envelope tenant and tenant-keys its LRU cache. Its only
+      // callers are the dispatcher consumer paths above.
+      'packages/api/src/services/route-resolver.ts',
+      // G5 leg E: the follow-up lifecycle scopes every discrete DB block from a
+      // caller-threaded trusted tenant (hooks/sweeper/dispatcher/session-cleaner/
+      // automation-gate/routes all establish it), publishing between blocks. Its
+      // `agents` site alone stays pending (G6 persons backfill).
+      'packages/api/src/services/follow-up-lifecycle.ts',
+      // G5 leg E: the sweeper cron enumerates active tenants on the auth-plane
+      // connection and runs per-tenant scoped passes (plus a transitional
+      // NULL-tenant pass skipped under enforcement).
+      'packages/api/src/services/follow-up-sweeper.ts',
+      // G5 leg E: the event-replay executor captures its trusted tenant before
+      // detaching and scopes each `omni_events` batch read, revalidating tenant
+      // admissibility at dequeue and before each durable side-effect batch.
+      'packages/api/src/services/event-ops.ts',
+      // G5 leg F (deliverable (e)): the voice WebSocket upgrade's ownership
+      // read. It runs in `Bun.serve`'s raw `fetch`, before Hono, so it has no
+      // request scope; it opens its OWN worker scope for the CREDENTIAL's tenant
+      // and reads `instances` through `scopedHandle`. Its only caller is that
+      // upgrade path, which derives the tenant from the auth plane — never from
+      // the URL. Split out of `index.ts` precisely so it could NOT inherit that
+      // file's `control-plane` startup exemption.
+      'packages/api/src/ws/voice-instance-ownership.ts',
+      // G5 leg G: `getInstanceWithProvider` — the lookup every dispatch path
+      // starts from, with zero HTTP callers — reads through `scopedHandle`, and
+      // its consumer callers (session-cleaner's `runTenantWorkDb`, the four
+      // agent-dispatcher `runDispatchDb` sites) each open a short worker scope
+      // from the envelope's trusted tenant.
+      'packages/api/src/services/agent-runner.ts',
+      // G5 leg G: the cleanup path's participant read runs through
+      // `scopedHandle` inside the world its callers already threaded.
+      // `chat_participants` roots at `instances` via its REQUIRED `chat_id`, so
+      // it does not wait on the G6 `persons` backfill.
+      'packages/api/src/plugins/session-cleaner.ts',
+      // G5 leg G (deliverable (g)): every discrete `agent_sessions` block runs
+      // in a worker scope for the tenant the store's resolver returns, which the
+      // dispatcher supplies from the LOADED instance's persisted `tenantId`.
+      'packages/api/src/plugins/session-storage.ts',
+      // G5 leg G: `SyncJobService` takes a THREADED trusted tenant per discrete
+      // DB block (threaded, not caller-wrapped, because every mutation also
+      // publishes). All four worker callers thread it: the per-tenant cron
+      // fan-out, the `sync.started` consumer, the history-push tracker, and the
+      // post-reconnect backfill.
+      'packages/api/src/services/sync-jobs.ts',
+      // G5 leg H (the read-path leg): the `chats`/`messages`/`persons` services
+      // were already scope-aware (the `private get db()` -> `scopedHandle`
+      // getter, G4); what changed is that their LAST unscoped callers were
+      // converted. `message-persistence.ts` — the dominant inbound consumer —
+      // now wraps its five handlers in `runConsumerInTenantContext` and gives
+      // every fire-and-forget write it spawns its own `runTenantWorkDb` scope;
+      // the READ helpers of `agent-dispatcher.ts` (`runDispatchDb`),
+      // `media-processor.ts` (`runMediaDb`) and `sync-worker.ts`
+      // (`inSyncWorkerScope`) were brought inside a scope too. Paths that POLL
+      // for another consumer's commit scope each ATTEMPT separately — a single
+      // spanning transaction could never see the row it waits for.
+      // `instances.ts::instances` and `persons.ts::platform_identities` keep
+      // their own pending entries; the other sites in these three files are
+      // converted. `chats.ts::chats` joined the converted set in leg I (run13)
+      // when the automation-engine callbacks — its last unscoped caller —
+      // moved to `plugins/automation-actions.ts` and began scoping their
+      // resolution reads from the engine-threaded envelope tenant.
+      'packages/api/src/services/chats.ts',
+      'packages/api/src/services/messages.ts',
+      'packages/api/src/services/persons.ts',
+      // G5 run15: the periodic instance sweeps. The 30s health check and the
+      // once-per-boot `reconnectWithPool` fan out with `runForEachActiveTenantRow`
+      // (only the `listActive` READ is scoped; every plugin `getStatus`/`connect`
+      // runs outside it), and the single-row `fetchInstanceById` /
+      // `markInstanceInactive` paths derive their tenant from the instance-owner
+      // registry. Its only callers are its own timers and `index.ts`.
+      'packages/api/src/plugins/instance-monitor.ts',
+      // G5 run15: the batch executor was already fully scoped from the job's
+      // captured trusted tenant; `resumeJobs` — the restart-recovery whole-table
+      // scan, and the file's LAST unscoped caller — now fans out per active
+      // tenant and dispatches each job under its OWN persisted `tenant_id`.
+      'packages/api/src/services/batch-jobs.ts',
+      // G5 run15: both fire-and-forget `event-listeners` callers
+      // (`onInstanceConnect`, `updateLastSeenAt`) run detached and thread
+      // `trustedEnvelopeTenant(event)`; each DB block (instance read, message
+      // PAGE, `lastSeenAt` write) opens its own short scope so no worker
+      // transaction spans a `message.received` republish.
+      'packages/api/src/services/agent-replay.ts',
+      // G5 run15: `updateMessageLocalPath` is this file's only `messages` access
+      // and its last unscoped caller (`media-processor.downloadMediaFromUrl`) now
+      // wraps it in `runMediaDb`, keeping the network download outside the scope.
+      'packages/api/src/services/media-storage.ts',
+      // G5 run15: `access.ts` appears here for its `instances` access ONLY — the
+      // `approvePairingRequest` channel lookup, whose single caller is
+      // `routes/v2/instances.ts` inside the request transaction. Its sibling
+      // `access_rules` site keeps its own pending entry (held by `trpc/router.ts`).
+      'packages/api/src/services/access.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

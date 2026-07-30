@@ -19,12 +19,21 @@ import {
 } from '@omni/db';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
+import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 
 export interface CreateSyncJobOptions {
   instanceId: string;
   channelType: ChannelType;
   type: SyncJobType;
   config?: SyncJobConfig;
+  /**
+   * The work item's trusted tenant (G5, ADR-0008), threaded by a worker caller:
+   * the scheduler's per-tenant fan-out or the `sync.started` consumer's
+   * envelope. Derived from persisted ownership or producer-stamped metadata,
+   * NEVER from a payload claim. Omitted by route callers, which already run
+   * inside their own request scope, and by the flag-off world.
+   */
+  tenantId?: string | null;
 }
 
 export interface ListSyncJobsOptions {
@@ -52,6 +61,23 @@ export class SyncJobService {
     return scopedHandle(this.pool);
   }
 
+  /**
+   * Run one discrete DB block in the work item's world (G5, ADR-0008).
+   *
+   * Every mutating method here writes the database AND publishes a `sync.*`
+   * event, so a worker caller cannot wrap the whole call in a scope: a worker
+   * transaction held across a publish would make the event a pre-commit side
+   * effect — a phantom on rollback. Instead the caller THREADS its trusted
+   * tenant and each DB block scopes itself; the publish sits between blocks.
+   *
+   * With nothing threaded this passes straight through, so a route caller stays
+   * on its own request transaction and a legacy/flag-off worker keeps the exact
+   * pre-G5 ambient query.
+   */
+  private workDb<T>(trustedTenantId: string | null | undefined, fn: () => Promise<T>): Promise<T> {
+    return runTenantWorkDb(this.pool, trustedTenantId, fn);
+  }
+
   constructor(
     private readonly pool: Database,
     private eventBus: EventBus | null,
@@ -61,7 +87,7 @@ export class SyncJobService {
    * Create a new sync job
    */
   async create(options: CreateSyncJobOptions): Promise<SyncJob> {
-    const { instanceId, channelType, type, config = {} } = options;
+    const { instanceId, channelType, type, config = {}, tenantId } = options;
 
     const jobData: NewSyncJob = {
       instanceId,
@@ -72,13 +98,21 @@ export class SyncJobService {
       progress: { fetched: 0, stored: 0, duplicates: 0, mediaDownloaded: 0 },
     };
 
-    const [created] = await this.db.insert(syncJobs).values(jobData).returning();
+    // `sync_jobs` derives its tenant from the REQUIRED `instance_id` parent, so
+    // this insert is RLS-stamped under the threaded tenant and REFUSED outright
+    // if it names another tenant's instance.
+    const [created] = await this.workDb(tenantId, () => this.db.insert(syncJobs).values(jobData).returning());
 
     if (!created) {
       throw new Error('Failed to create sync job');
     }
 
-    // Emit sync.started event with proper metadata for hierarchical subjects
+    // Emit sync.started event with proper metadata for hierarchical subjects.
+    // The publish sits OUTSIDE the DB block above and carries the job's tenant
+    // EXPLICITLY (G5, ADR-0008): `created.tenantId` is what the row was actually
+    // stamped with by the derivation trigger, so the `sync.started` consumer
+    // derives its worker scope from persisted ownership rather than from
+    // whatever ambient scope happened to be active at publish time.
     if (this.eventBus) {
       await this.eventBus.publish(
         'sync.started',
@@ -88,7 +122,7 @@ export class SyncJobService {
           type,
           config,
         },
-        { instanceId, channelType },
+        { instanceId, channelType, tenantId: created.tenantId ?? undefined },
       );
     }
 
@@ -96,10 +130,17 @@ export class SyncJobService {
   }
 
   /**
-   * Get sync job by ID
+   * Get sync job by ID.
+   *
+   * `trustedTenantId` (G5, ADR-0008) is threaded by worker callers; a route
+   * caller omits it and stays on its own request scope. Under enforcement a job
+   * belonging to another tenant is invisible, so this raises `NotFoundError`
+   * rather than leaking its existence.
    */
-  async getById(id: string): Promise<SyncJob> {
-    const [result] = await this.db.select().from(syncJobs).where(eq(syncJobs.id, id)).limit(1);
+  async getById(id: string, trustedTenantId?: string | null): Promise<SyncJob> {
+    const [result] = await this.workDb(trustedTenantId, () =>
+      this.db.select().from(syncJobs).where(eq(syncJobs.id, id)).limit(1),
+    );
 
     if (!result) {
       throw new NotFoundError('SyncJob', id);
@@ -170,15 +211,17 @@ export class SyncJobService {
   /**
    * Start a sync job (set status to running)
    */
-  async start(id: string): Promise<SyncJob> {
-    const [updated] = await this.db
-      .update(syncJobs)
-      .set({
-        status: 'running',
-        startedAt: new Date(),
-      })
-      .where(eq(syncJobs.id, id))
-      .returning();
+  async start(id: string, trustedTenantId?: string | null): Promise<SyncJob> {
+    const [updated] = await this.workDb(trustedTenantId, () =>
+      this.db
+        .update(syncJobs)
+        .set({
+          status: 'running',
+          startedAt: new Date(),
+        })
+        .where(eq(syncJobs.id, id))
+        .returning(),
+    );
 
     if (!updated) {
       throw new NotFoundError('SyncJob', id);
@@ -190,8 +233,12 @@ export class SyncJobService {
   /**
    * Update job progress
    */
-  async updateProgress(id: string, progress: Partial<SyncJobProgress>): Promise<SyncJob> {
-    const job = await this.getById(id);
+  async updateProgress(
+    id: string,
+    progress: Partial<SyncJobProgress>,
+    trustedTenantId?: string | null,
+  ): Promise<SyncJob> {
+    const job = await this.getById(id, trustedTenantId);
     const currentProgress = (job.progress as SyncJobProgress) ?? {
       fetched: 0,
       stored: 0,
@@ -205,11 +252,9 @@ export class SyncJobService {
       lastProgressAt: new Date().toISOString(),
     };
 
-    const [updated] = await this.db
-      .update(syncJobs)
-      .set({ progress: updatedProgress })
-      .where(eq(syncJobs.id, id))
-      .returning();
+    const [updated] = await this.workDb(trustedTenantId, () =>
+      this.db.update(syncJobs).set({ progress: updatedProgress }).where(eq(syncJobs.id, id)).returning(),
+    );
 
     if (!updated) {
       throw new NotFoundError('SyncJob', id);
@@ -225,7 +270,7 @@ export class SyncJobService {
           type: job.type,
           progress: updatedProgress,
         },
-        { instanceId: job.instanceId, channelType: job.channel },
+        { instanceId: job.instanceId, channelType: job.channel, tenantId: updated.tenantId ?? undefined },
       );
     }
 
@@ -235,17 +280,19 @@ export class SyncJobService {
   /**
    * Complete a sync job successfully
    */
-  async complete(id: string): Promise<SyncJob> {
-    const job = await this.getById(id);
+  async complete(id: string, trustedTenantId?: string | null): Promise<SyncJob> {
+    const job = await this.getById(id, trustedTenantId);
 
-    const [updated] = await this.db
-      .update(syncJobs)
-      .set({
-        status: 'completed',
-        completedAt: new Date(),
-      })
-      .where(eq(syncJobs.id, id))
-      .returning();
+    const [updated] = await this.workDb(trustedTenantId, () =>
+      this.db
+        .update(syncJobs)
+        .set({
+          status: 'completed',
+          completedAt: new Date(),
+        })
+        .where(eq(syncJobs.id, id))
+        .returning(),
+    );
 
     if (!updated) {
       throw new NotFoundError('SyncJob', id);
@@ -261,7 +308,7 @@ export class SyncJobService {
           type: job.type,
           progress: job.progress,
         },
-        { instanceId: job.instanceId, channelType: job.channel },
+        { instanceId: job.instanceId, channelType: job.channel, tenantId: updated.tenantId ?? undefined },
       );
     }
 
@@ -271,18 +318,20 @@ export class SyncJobService {
   /**
    * Fail a sync job with error message
    */
-  async fail(id: string, errorMessage: string): Promise<SyncJob> {
-    const job = await this.getById(id);
+  async fail(id: string, errorMessage: string, trustedTenantId?: string | null): Promise<SyncJob> {
+    const job = await this.getById(id, trustedTenantId);
 
-    const [updated] = await this.db
-      .update(syncJobs)
-      .set({
-        status: 'failed',
-        errorMessage,
-        completedAt: new Date(),
-      })
-      .where(eq(syncJobs.id, id))
-      .returning();
+    const [updated] = await this.workDb(trustedTenantId, () =>
+      this.db
+        .update(syncJobs)
+        .set({
+          status: 'failed',
+          errorMessage,
+          completedAt: new Date(),
+        })
+        .where(eq(syncJobs.id, id))
+        .returning(),
+    );
 
     if (!updated) {
       throw new NotFoundError('SyncJob', id);
@@ -298,7 +347,7 @@ export class SyncJobService {
           type: job.type,
           error: errorMessage,
         },
-        { instanceId: job.instanceId, channelType: job.channel },
+        { instanceId: job.instanceId, channelType: job.channel, tenantId: updated.tenantId ?? undefined },
       );
     }
 
@@ -308,15 +357,17 @@ export class SyncJobService {
   /**
    * Cancel a sync job
    */
-  async cancel(id: string): Promise<SyncJob> {
-    const [updated] = await this.db
-      .update(syncJobs)
-      .set({
-        status: 'cancelled',
-        completedAt: new Date(),
-      })
-      .where(eq(syncJobs.id, id))
-      .returning();
+  async cancel(id: string, trustedTenantId?: string | null): Promise<SyncJob> {
+    const [updated] = await this.workDb(trustedTenantId, () =>
+      this.db
+        .update(syncJobs)
+        .set({
+          status: 'cancelled',
+          completedAt: new Date(),
+        })
+        .where(eq(syncJobs.id, id))
+        .returning(),
+    );
 
     if (!updated) {
       throw new NotFoundError('SyncJob', id);
@@ -328,28 +379,34 @@ export class SyncJobService {
   /**
    * Get active jobs for an instance
    */
-  async getActiveForInstance(instanceId: string): Promise<SyncJob[]> {
-    return this.db
-      .select()
-      .from(syncJobs)
-      .where(and(eq(syncJobs.instanceId, instanceId), inArray(syncJobs.status, ['pending', 'running'] as JobStatus[])));
+  async getActiveForInstance(instanceId: string, trustedTenantId?: string | null): Promise<SyncJob[]> {
+    return this.workDb(trustedTenantId, () =>
+      this.db
+        .select()
+        .from(syncJobs)
+        .where(
+          and(eq(syncJobs.instanceId, instanceId), inArray(syncJobs.status, ['pending', 'running'] as JobStatus[])),
+        ),
+    );
   }
 
   /**
    * Check if there's an active job of a specific type for an instance
    */
-  async hasActiveJob(instanceId: string, type: SyncJobType): Promise<boolean> {
-    const [job] = await this.db
-      .select()
-      .from(syncJobs)
-      .where(
-        and(
-          eq(syncJobs.instanceId, instanceId),
-          eq(syncJobs.type, type),
-          inArray(syncJobs.status, ['pending', 'running'] as JobStatus[]),
-        ),
-      )
-      .limit(1);
+  async hasActiveJob(instanceId: string, type: SyncJobType, trustedTenantId?: string | null): Promise<boolean> {
+    const [job] = await this.workDb(trustedTenantId, () =>
+      this.db
+        .select()
+        .from(syncJobs)
+        .where(
+          and(
+            eq(syncJobs.instanceId, instanceId),
+            eq(syncJobs.type, type),
+            inArray(syncJobs.status, ['pending', 'running'] as JobStatus[]),
+          ),
+        )
+        .limit(1),
+    );
 
     return !!job;
   }

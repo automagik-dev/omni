@@ -40,6 +40,7 @@ import {
   type BeforeMessageWriteContext,
   ClaudeCodeAgentProvider,
   type EventBus,
+  type EventMetadata,
   type IAgentProvider,
   InMemorySessionActivityStore,
   JOURNEY_STAGES,
@@ -57,6 +58,7 @@ import {
   type StreamDelta,
   WebhookAgentProvider,
   checkSessionReset,
+  classifyEnvelope,
   createLogger,
   createProviderClient,
   executeHooks,
@@ -88,6 +90,8 @@ import type { MediaStorageService } from '../services/media-storage';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import type { ResolvedRoute } from '../services/route-resolver';
 import { publishTurnOpen } from '../services/turn-events';
+import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
 import { fetchMediaUrl } from '../utils/safe-media-fetch';
 import { AgentDispatchLimiter, loadAgentDispatchLimiterConfig } from './agent-dispatch-limiter';
 import { getPlugin } from './loader';
@@ -647,6 +651,7 @@ export async function triggerErrorHandoff(
   instance: DispatchInstance,
   chatId: string,
   message: string,
+  trustedTenantId?: string,
 ): Promise<boolean> {
   const plugin = await getPlugin(channel);
   if (plugin?.capabilities?.canHandoff !== true) return false;
@@ -678,27 +683,84 @@ export async function triggerErrorHandoff(
     return false;
   }
 
-  // Step 2 — persist side-effects (pause + disarm + audit) best-effort. The
-  // message already reached the user, so a failure here must NOT flip the result
-  // to false — that would make the caller send a SECOND (plain error) message.
+  await persistErrorHandoffSideEffects(
+    services,
+    db,
+    channel,
+    instance,
+    chatId,
+    message,
+    sendResult?.messageId,
+    trustedTenantId,
+  );
+
+  log.info('agent_dispatch_error_handoff', { instanceId: instance.id, chatId, channel });
+  return true;
+}
+
+/**
+ * Step 2 of the error handoff — persist side-effects (pause + disarm + audit)
+ * best-effort. The message already reached the user, so a failure here must
+ * NOT propagate — that would make the caller send a SECOND (plain error)
+ * message.
+ *
+ * Tenant boundary (G5, ADR-0008): the chat lookup + pause write run in one
+ * short worker scope and the audit insert in another, both keyed by the
+ * envelope-derived `trustedTenantId`. The follow-up disarm sits BETWEEN them
+ * un-wrapped: it publishes events through its own service (its scoping is that
+ * service's conversion), and holding a dispatch transaction across an event
+ * publish is exactly what {@link runDispatchDb} forbids. A legacy message
+ * (`trustedTenantId` undefined) runs every step on the ambient pool
+ * byte-identically.
+ */
+async function persistErrorHandoffSideEffects(
+  services: Services,
+  db: Database,
+  channel: ChannelType,
+  instance: DispatchInstance,
+  chatId: string,
+  message: string,
+  sentMessageId: string | null | undefined,
+  trustedTenantId?: string,
+): Promise<void> {
   try {
-    const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
+    const chat = await runDispatchDb(db, trustedTenantId, async () => {
+      const found = await services.chats.findByExternalIdSmart(instance.id, chatId);
+      if (!found) return null;
+      const settings = (found.settings as Record<string, unknown> | null) ?? {};
+      await services.chats.update(found.id, { settings: { ...settings, agentPaused: true } });
+      return found;
+    });
     if (chat) {
-      const settings = (chat.settings as Record<string, unknown> | null) ?? {};
-      await services.chats.update(chat.id, { settings: { ...settings, agentPaused: true } });
-      await services.followUpLifecycle.disarm({ chatId: chat.id, instanceId: instance.id, reason: 'handoff' });
-      await db.insert(handoffLogs).values({
+      // The disarm THREADS the trusted tenant instead of being wrapped: the
+      // lifecycle scopes its own DB blocks from `tenantId` and publishes
+      // between them (G5 conversion of follow-up-lifecycle.ts).
+      await services.followUpLifecycle.disarm({
+        chatId: chat.id,
         instanceId: instance.id,
-        chatUuid: chat.id,
-        chatId,
-        toPhone: chatId,
-        text: message,
-        extraInfo: null,
-        agentId: instance.agentId ?? null,
-        externalMessageId: sendResult?.messageId ?? null,
-        handoffFields: null,
-        sentAt: new Date(),
-        metadata: { instanceChannel: channel, channelHandoffSupported: true, motivoHandoff: 'agent_dispatch_error' },
+        reason: 'handoff',
+        tenantId: trustedTenantId ?? null,
+      });
+      await runDispatchDb(db, trustedTenantId, async () => {
+        await scopedHandle(db)
+          .insert(handoffLogs)
+          .values({
+            instanceId: instance.id,
+            chatUuid: chat.id,
+            chatId,
+            toPhone: chatId,
+            text: message,
+            extraInfo: null,
+            agentId: instance.agentId ?? null,
+            externalMessageId: sentMessageId ?? null,
+            handoffFields: null,
+            sentAt: new Date(),
+            metadata: {
+              instanceChannel: channel,
+              channelHandoffSupported: true,
+              motivoHandoff: 'agent_dispatch_error',
+            },
+          });
       });
     }
   } catch (err) {
@@ -708,9 +770,6 @@ export async function triggerErrorHandoff(
       error: String(err),
     });
   }
-
-  log.info('agent_dispatch_error_handoff', { instanceId: instance.id, chatId, channel });
-  return true;
 }
 
 /**
@@ -731,9 +790,10 @@ async function maybeTriggerErrorHandoff(
   chatId: string,
   customerErrorBlocked: boolean,
   handoffTriggered: boolean,
+  trustedTenantId?: string,
 ): Promise<boolean> {
   if (!customerErrorBlocked || handoffTriggered) return false;
-  return triggerErrorHandoff(services, db, channel, instance, chatId, resolveErrorHandoffMessage());
+  return triggerErrorHandoff(services, db, channel, instance, chatId, resolveErrorHandoffMessage(), trustedTenantId);
 }
 
 async function handleDispatchFailure(
@@ -743,8 +803,17 @@ async function handleDispatchFailure(
   instance: DispatchInstance,
   chatId: string,
   error: unknown,
+  trustedTenantId?: string,
 ): Promise<void> {
-  const handedOff = await triggerErrorHandoff(services, db, channel, instance, chatId, resolveErrorHandoffMessage());
+  const handedOff = await triggerErrorHandoff(
+    services,
+    db,
+    channel,
+    instance,
+    chatId,
+    resolveErrorHandoffMessage(),
+    trustedTenantId,
+  );
   if (handedOff) return;
   // Per-instance override tier is null until the `agentErrorMessage` column
   // lands (see resolveDispatchErrorMessage note) — env + default for now.
@@ -928,6 +997,49 @@ function resolveMediaPath(mediaUrl: string): string | null {
 }
 
 /**
+ * Derive the trusted tenant a dispatch runs under from the inbound envelope
+ * (wish: omni-full-multitenancy G5; ADR-0008).
+ *
+ * Classifies the producer-stamped metadata — never the caller-facing payload:
+ *   * `tenant` → the trusted tenant id, threaded through `DispatchMetadata`
+ *     into tenant-bound presigning (and, as conversion proceeds, the worker
+ *     tenant scope);
+ *   * `legacy` → `undefined`: downstream behavior stays byte-identical to
+ *     pre-G5;
+ *   * `quarantine` → throws. The subscription layer terms quarantined
+ *     envelopes before any handler runs, so this is defence in depth — if one
+ *     slips through, deriving "no tenant" would process it globally, exactly
+ *     the fallback ADR-0008 forbids. The handler's catch logs and drops it.
+ */
+function trustedDispatchTenant(metadata: EventMetadata): string | undefined {
+  const classification = classifyEnvelope(metadata);
+  if (classification.world === 'quarantine') {
+    throw new Error(`agent-dispatcher: refusing to dispatch a quarantined envelope (${classification.reason})`);
+  }
+  return classification.world === 'tenant' ? classification.tenantId : undefined;
+}
+
+/**
+ * Run one DISCRETE dispatch DB block in the message's world (G5, ADR-0008).
+ *
+ * `trustedTenantId` is the envelope-derived tenant carried on
+ * `DispatchMetadata` ({@link trustedDispatchTenant} — quarantine was already
+ * refused at the subscription boundary):
+ *   * tenant world → a fresh SHORT worker tenant scope wraps exactly this
+ *     block; `scopedHandle(db)` inside `fn` returns its transaction;
+ *   * legacy world (`undefined`) → `fn` runs directly on the ambient pool,
+ *     byte-identical to pre-G5.
+ *
+ * The dispatch pipeline interleaves DB work with the LONG agent call, media
+ * waits, and channel sends, so a scope must never wrap more than one discrete
+ * DB block — the G4 leg-2 rule that a worker transaction never outlives its
+ * work item, applied at block granularity.
+ */
+function runDispatchDb<T>(db: Database, trustedTenantId: string | undefined, fn: () => Promise<T>): Promise<T> {
+  return trustedTenantId === undefined ? fn() : runInWorkerTenantScope(db, trustedTenantId, fn);
+}
+
+/**
  * Resolve a stored media reference (`messages.mediaLocalPath`) into the string
  * handed to the agent alongside processed text.
  *
@@ -936,17 +1048,25 @@ function resolveMediaPath(mediaUrl: string): string | null {
  * - `remote` mode: the reference is an S3 key, presigned into a time-limited
  *   GET URL at dispatch time (TTL from config) — never a stored expiring URL.
  *
+ * `trustedTenantId` (envelope-derived via {@link trustedDispatchTenant}) binds
+ * the presign to tenant + object + expiry (ADR-0008): `MediaStorageService`
+ * refuses references outside the tenant's own prefix and clamps the TTL to the
+ * 60s ceiling. A refusal degrades gracefully — the dispatch continues without
+ * a media URL rather than minting an unbound one. Undefined (legacy world)
+ * keeps the presign call byte-identical to pre-G5.
+ *
  * `mediaStorage` is optional so unit tests with a partial `services` mock fall
  * back to local resolution.
  */
 async function resolveDispatchMediaPath(
   mediaStorage: MediaStorageService | undefined,
   reference: string | null | undefined,
+  trustedTenantId?: string,
 ): Promise<string | null> {
   if (!reference) return null;
   if (mediaStorage?.getStorageMode?.() === 'remote') {
     try {
-      return await mediaStorage.presignedUrl(reference);
+      return await mediaStorage.presignedUrl(reference, undefined, trustedTenantId);
     } catch (error) {
       log.warn('Failed to presign processed media URL', { error: String(error) });
       return null;
@@ -981,7 +1101,10 @@ async function remoteMediaFile(
   // Audio (and any non-path type) stays URL-less in remote mode.
   if (!key || !type || !allowedTypes.includes(type)) return null;
   try {
-    return { url: await mediaStorage.presignedUrl(key), mimeType };
+    // Tenant-bound presign (ADR-0008): each message carries its own
+    // envelope-derived trusted tenant; legacy messages carry none and the
+    // presign call stays byte-identical to pre-G5.
+    return { url: await mediaStorage.presignedUrl(key, undefined, m.metadata.trustedTenantId), mimeType };
   } catch (error) {
     log.warn('Failed to presign media URL for dispatch', { error: String(error) });
     return null;
@@ -1125,14 +1248,21 @@ async function recoverProcessedMediaAfterTimeout(
   chatRecordId: string,
   externalId: string,
   column: string,
+  trustedTenantId?: string,
 ): Promise<{ content: string; localPath: string | null } | null> {
-  const refreshed = await services.messages.getByExternalId(chatRecordId, externalId);
+  const refreshed = await runDispatchDb(services.db, trustedTenantId, () =>
+    services.messages.getByExternalId(chatRecordId, externalId),
+  );
   if (!refreshed) return null;
   const recovered = checkProcessedColumn(refreshed, column);
   if (recovered === 'pending' || recovered === 'error') return null;
   return {
     content: recovered.content,
-    localPath: await resolveDispatchMediaPath(services.mediaStorage, refreshed.mediaLocalPath as string | null),
+    localPath: await resolveDispatchMediaPath(
+      services.mediaStorage,
+      refreshed.mediaLocalPath as string | null,
+      trustedTenantId,
+    ),
   };
 }
 
@@ -1146,6 +1276,7 @@ async function awaitMediaProcessing(
   chatId: string,
   externalId: string,
   contentType: string,
+  trustedTenantId?: string,
 ): Promise<{ content: string | null; localPath: string | null }> {
   const column = getProcessedColumn(contentType);
   if (!column) return MEDIA_WAIT_NULL;
@@ -1153,13 +1284,20 @@ async function awaitMediaProcessing(
   // Wait briefly for message-persistence to create the DB rows (race condition:
   // both media-processor and agent-dispatcher subscribe to message.received,
   // and the dispatcher's debounce may fire before persistence completes).
-  const chat = await waitForRecord(() => services.chats.findByExternalIdSmart(instanceId, chatId));
+  // Each poll attempt opens and closes its OWN short scope (G5, ADR-0008): this
+  // waits for another consumer's commit, which a single spanning transaction
+  // could never observe.
+  const chat = await waitForRecord(() =>
+    runDispatchDb(services.db, trustedTenantId, () => services.chats.findByExternalIdSmart(instanceId, chatId)),
+  );
   if (!chat) {
     log.warn('Chat not found for media wait', { instanceId, chatId });
     return MEDIA_WAIT_NULL;
   }
 
-  const msg = await waitForRecord(() => services.messages.getByExternalId(chat.id, externalId));
+  const msg = await waitForRecord(() =>
+    runDispatchDb(services.db, trustedTenantId, () => services.messages.getByExternalId(chat.id, externalId)),
+  );
   if (!msg) {
     log.warn('Message not found for media wait after retries', { instanceId, chatId, externalId });
     return MEDIA_WAIT_NULL;
@@ -1174,7 +1312,11 @@ async function awaitMediaProcessing(
   if (existing !== 'pending') {
     return {
       content: existing.content,
-      localPath: await resolveDispatchMediaPath(services.mediaStorage, msg.mediaLocalPath as string | null),
+      localPath: await resolveDispatchMediaPath(
+        services.mediaStorage,
+        msg.mediaLocalPath as string | null,
+        trustedTenantId,
+      ),
     };
   }
 
@@ -1183,7 +1325,11 @@ async function awaitMediaProcessing(
   if (cached) {
     mediaResultCache.delete(msg.id);
     if (!cached.content || cached.error) return MEDIA_WAIT_NULL;
-    const localPath = await resolveDispatchMediaPath(services.mediaStorage, msg.mediaLocalPath as string | null);
+    const localPath = await resolveDispatchMediaPath(
+      services.mediaStorage,
+      msg.mediaLocalPath as string | null,
+      trustedTenantId,
+    );
     return { content: cached.content, localPath };
   }
 
@@ -1201,7 +1347,7 @@ async function awaitMediaProcessing(
       msgId: msg.id,
       error: String(error),
     });
-    const recovered = await recoverProcessedMediaAfterTimeout(services, chat.id, externalId, column);
+    const recovered = await recoverProcessedMediaAfterTimeout(services, chat.id, externalId, column, trustedTenantId);
     if (recovered) return recovered;
     return MEDIA_WAIT_NULL;
   }
@@ -1209,8 +1355,14 @@ async function awaitMediaProcessing(
   if (!result.content || result.error) return MEDIA_WAIT_NULL;
 
   // Re-read message for localPath (media storage may have updated it)
-  const updated = await services.messages.getByExternalId(chat.id, externalId);
-  const localPath = await resolveDispatchMediaPath(services.mediaStorage, updated?.mediaLocalPath as string | null);
+  const updated = await runDispatchDb(services.db, trustedTenantId, () =>
+    services.messages.getByExternalId(chat.id, externalId),
+  );
+  const localPath = await resolveDispatchMediaPath(
+    services.mediaStorage,
+    updated?.mediaLocalPath as string | null,
+    trustedTenantId,
+  );
   return { content: result.content, localPath };
 }
 
@@ -1283,6 +1435,13 @@ type MessageAliasLookup = Services['messages'] & {
 interface QuotedLookupOptions {
   inboundAt?: Date;
   inboundText?: string;
+  /**
+   * Envelope-derived trusted tenant (G5, ADR-0008). Carried in the options bag
+   * rather than as a positional parameter because this function is exported and
+   * called from several places; `undefined` is the legacy world and leaves the
+   * lookup byte-identical to pre-G5.
+   */
+  trustedTenantId?: string;
 }
 
 function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
@@ -1329,10 +1488,14 @@ export async function resolveQuotedMessage(
   options: QuotedLookupOptions = {},
 ): Promise<string | null> {
   try {
-    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
-    if (!chat) return null;
-
-    const quoted = await lookupQuotedMessage(services.messages, chat.id, replyToId, providerAliases, options);
+    // One discrete read block — chat lookup plus the quoted-message lookup — in
+    // the envelope's world (G5, ADR-0008). Pure reads, no publish, so a single
+    // short scope is correct.
+    const quoted = await runDispatchDb(services.db, options.trustedTenantId, async () => {
+      const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+      if (!chat) return null;
+      return lookupQuotedMessage(services.messages, chat.id, replyToId, providerAliases, options);
+    });
     if (!quoted) return null;
 
     const sender = quoted.senderDisplayName ?? quoted.senderPlatformUserId ?? (quoted.isFromMe ? 'You' : 'unknown');
@@ -1443,7 +1606,14 @@ async function collectProcessedMedia(
 
     let result: { content: string | null; localPath: string | null };
     try {
-      result = await awaitMediaProcessing(services, instance.id, m.payload.chatId, m.payload.externalId, contentType);
+      result = await awaitMediaProcessing(
+        services,
+        instance.id,
+        m.payload.chatId,
+        m.payload.externalId,
+        contentType,
+        m.metadata.trustedTenantId,
+      );
     } catch (error) {
       log.warn('Media await failed', { externalId: m.payload.externalId, error: String(error) });
       result = MEDIA_WAIT_NULL;
@@ -1515,6 +1685,7 @@ async function prependQuotedContext(
     const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId, providerAliases, {
       inboundAt: extractInboundPlatformDate(rawPayload),
       inboundText: m.payload.content?.text,
+      trustedTenantId: m.metadata.trustedTenantId,
     });
     if (!quotedText) continue;
 
@@ -1537,14 +1708,17 @@ async function resolveContactName(
   instanceId: string,
   jid: string,
   cacheMap: Map<string, string>,
+  trustedTenantId?: string,
 ): Promise<string | null> {
   // Try cache first (fast path)
   const cachedName = cacheMap.get(jid);
   if (cachedName) return cachedName;
 
-  // Cache miss → query database
+  // Cache miss → query database, in the envelope's world (G5, ADR-0008)
   try {
-    const chat = await services.chats.findByExternalIdSmart(instanceId, jid);
+    const chat = await runDispatchDb(services.db, trustedTenantId, () =>
+      services.chats.findByExternalIdSmart(instanceId, jid),
+    );
     if (chat?.name) {
       log.debug('Contact name from DB fallback', { jid, name: chat.name });
       return chat.name;
@@ -1573,6 +1747,7 @@ async function applyJidMentionReplacement(
   jidToName: Map<string, string>,
   text: string,
   stats: MentionStats,
+  trustedTenantId?: string,
 ): Promise<string> {
   // Extract phone number from JID (supports @s.whatsapp.net, @lid, and device IDs like :3@s.whatsapp.net)
   const phoneMatch = jid.match(/^(\d+)(@s\.whatsapp\.net|@lid|:[\d]+@s\.whatsapp\.net)$/);
@@ -1581,7 +1756,7 @@ async function applyJidMentionReplacement(
     return text;
   }
 
-  const contactName = await resolveContactName(services, instanceId, jid, jidToName);
+  const contactName = await resolveContactName(services, instanceId, jid, jidToName, trustedTenantId);
   if (!contactName) {
     stats.unresolved++;
     return text;
@@ -1603,6 +1778,7 @@ async function replaceMentionsWithContactNames(
   text: string,
   mentionedJids: string[] | undefined,
   mentionedContacts: Array<{ jid: string; name?: string }> | undefined,
+  trustedTenantId?: string,
 ): Promise<string> {
   if (!mentionedJids?.length) return text;
 
@@ -1613,7 +1789,15 @@ async function replaceMentionsWithContactNames(
   let replacedText = text;
 
   for (const jid of mentionedJids) {
-    replacedText = await applyJidMentionReplacement(services, instanceId, jid, jidToName, replacedText, stats);
+    replacedText = await applyJidMentionReplacement(
+      services,
+      instanceId,
+      jid,
+      jidToName,
+      replacedText,
+      stats,
+      trustedTenantId,
+    );
   }
 
   log.debug('Mention replacement complete', {
@@ -1674,6 +1858,7 @@ async function prepareAgentContent(
       entry.text,
       mentionData.mentionedJids,
       mentionData.mentionedContacts,
+      messages[0]?.metadata.trustedTenantId,
     );
   }
 
@@ -1709,12 +1894,18 @@ async function resolvePersonId(
   instanceId: string,
   senderId: string,
   metadataPersonId?: string,
+  trustedTenantId?: string,
 ): Promise<string | undefined> {
   if (metadataPersonId) return metadataPersonId;
   if (!senderId) return undefined;
 
   for (let attempt = 0; attempt < 10; attempt++) {
-    const identity = await services.persons.getIdentityByPlatformId(channel, instanceId, senderId);
+    // Each attempt is its OWN short scope: this polls for another consumer's
+    // commit, so one transaction spanning the loop would pin a snapshot that can
+    // never contain the row it is waiting for — and would outlive its work item.
+    const identity = await runDispatchDb(services.db, trustedTenantId, () =>
+      services.persons.getIdentityByPlatformId(channel, instanceId, senderId),
+    );
     if (identity?.personId) return identity.personId;
     await sleep(200);
   }
@@ -1771,12 +1962,13 @@ async function resolveCustomerContext(
   services: Services,
   personId: string | undefined,
   externalContext?: OmniCustomerContext,
+  trustedTenantId?: string,
 ): Promise<OmniCustomerContext | undefined> {
   let storedContext: OmniCustomerContext | undefined;
 
   if (personId) {
     try {
-      const person = await services.persons.getById(personId);
+      const person = await runDispatchDb(services.db, trustedTenantId, () => services.persons.getById(personId));
       if (person && isRecord(person.metadata)) {
         storedContext = customerContextFromRecord(person.metadata);
       }
@@ -1799,9 +1991,12 @@ async function fetchSenderMetadata(
   channel: ChannelType,
   instanceId: string,
   senderId: string,
+  trustedTenantId?: string,
 ): Promise<{ avatarUrl?: string; platformUsername?: string }> {
   try {
-    const identity = await services.persons.getIdentityByPlatformId(channel, instanceId, senderId);
+    const identity = await runDispatchDb(services.db, trustedTenantId, () =>
+      services.persons.getIdentityByPlatformId(channel, instanceId, senderId),
+    );
     return {
       avatarUrl: identity?.profilePicUrl ?? undefined,
       platformUsername: identity?.platformUsername ?? undefined,
@@ -1820,11 +2015,14 @@ async function fetchChatMetadata(
   instanceId: string,
   chatId: string,
   chatType: string,
+  trustedTenantId?: string,
 ): Promise<{ chatName?: string; participantCount?: number }> {
   if (chatType !== 'group') return {};
 
   try {
-    const chat = await services.chats.findByExternalIdSmart(instanceId, chatId);
+    const chat = await runDispatchDb(services.db, trustedTenantId, () =>
+      services.chats.findByExternalIdSmart(instanceId, chatId),
+    );
     return {
       chatName: chat?.name ?? undefined,
       participantCount: chat?.participantCount ?? undefined,
@@ -2173,7 +2371,13 @@ async function dispatchViaStreamingProvider(
   const replyToId = messages[0]?.payload.replyToId ?? messages[0]?.payload.externalId;
 
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
-  const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
+  const dbContextMessages = await buildContextMessages(
+    services,
+    instance,
+    chatId,
+    currentMessageIds,
+    messages[0]?.metadata.trustedTenantId,
+  );
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
   const triggerFiles = toTriggerFiles(mediaFiles);
 
@@ -2197,6 +2401,7 @@ async function dispatchViaStreamingProvider(
     services,
     personId,
     extractA2ACustomerContext(messages, channel),
+    messages[0]?.metadata.trustedTenantId,
   );
   const trigger = buildMessageTrigger(
     traceId,
@@ -2325,27 +2530,35 @@ async function buildContextMessages(
   instance: Instance,
   chatId: string,
   currentMessageIds: string[],
+  trustedTenantId?: string,
 ): Promise<string[]> {
   try {
     // Per-instance configurable limit, capped at 200 (0 = disabled)
     const historyLimit = Math.min(Math.max(instance.groupHistorySize ?? 50, 0), 200);
     if (historyLimit === 0) return [];
 
-    // chatId here is the external JID, not internal UUID
-    const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
-    if (!chat) {
+    // One discrete read block in the envelope's world (G5, ADR-0008): the chat
+    // lookup and the history query it parameterises.
+    const loaded = await runDispatchDb(services.db, trustedTenantId, async () => {
+      // chatId here is the external JID, not internal UUID
+      const chat = await services.chats.findByExternalIdSmart(instance.id, chatId);
+      if (!chat) return null;
+
+      // DMs use a smaller context window (cap at 20) to keep context focused
+      const effectiveLimit = chat.chatType === 'group' ? historyLimit : Math.min(historyLimit, DM_HISTORY_LIMIT);
+
+      // Query recent messages (configurable limit, ordered by timestamp desc by default)
+      // Use the internal chat.id (UUID) for the query
+      const messagesResult = await services.messages.list({
+        chatId: chat.id,
+        limit: effectiveLimit,
+      });
+      return { chat, messagesResult };
+    });
+    if (!loaded) {
       return [];
     }
-
-    // DMs use a smaller context window (cap at 20) to keep context focused
-    const effectiveLimit = chat.chatType === 'group' ? historyLimit : Math.min(historyLimit, DM_HISTORY_LIMIT);
-
-    // Query recent messages (configurable limit, ordered by timestamp desc by default)
-    // Use the internal chat.id (UUID) for the query
-    const messagesResult = await services.messages.list({
-      chatId: chat.id,
-      limit: effectiveLimit,
-    });
+    const { chat, messagesResult } = loaded;
 
     const recentMessages = messagesResult.items;
 
@@ -2447,14 +2660,19 @@ async function dispatchViaTurnBasedProvider(
 ): Promise<boolean> {
   const messageId = messages[0]?.payload.externalId ?? '';
 
-  // Look up agent record for scoped key name
+  // Look up agent record for scoped key name. Discrete DB block in the
+  // message's world (G5, ADR-0008): tenant envelopes read through a short
+  // worker scope, legacy ones on the ambient pool byte-identically.
   let agentRecord: { id: string; name: string } | undefined;
   if (instance.agentId) {
-    const [row] = await db
-      .select({ id: agents.id, name: agents.name })
-      .from(agents)
-      .where(eq(agents.id, instance.agentId))
-      .limit(1);
+    const agentFkId = instance.agentId;
+    const [row] = await runDispatchDb(db, messages[0]?.metadata.trustedTenantId, () =>
+      scopedHandle(db)
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(eq(agents.id, agentFkId))
+        .limit(1),
+    );
     agentRecord = row;
   }
   if (!agentRecord) {
@@ -2485,22 +2703,27 @@ async function dispatchViaTurnBasedProvider(
   }
 
   // Open turn (turns.chat_id is text, accepts external JID)
-  const turn = await services.turns.open({
-    instanceId: instance.id,
-    chatId,
-    messageId,
-    agentId: agentRecord.id,
-    apiKeyId: scopedKey.id,
-  });
+  const turn = await runDispatchDb(db, messages[0]?.metadata.trustedTenantId, () =>
+    services.turns.open({
+      instanceId: instance.id,
+      chatId,
+      messageId,
+      agentId: agentRecord.id,
+      apiKeyId: scopedKey.id,
+    }),
+  );
 
   // Resolve internal UUIDs for the API key context columns (uuid types).
   // chatId is an external JID (e.g. "54958418317348@lid") and messageId is an
   // external WhatsApp ID (e.g. "3BB06F44A03A3AE78E5B") — neither is a valid UUID.
   // The api_keys context columns are uuid-typed, so we must resolve to internal IDs.
-  const contextChat = await services.chats.findByExternalIdSmart(instance.id, chatId);
-  const contextChatId = contextChat?.id ?? null;
-  const contextMsg =
-    contextChat && messageId ? await services.messages.getByExternalId(contextChat.id, messageId) : null;
+  const { contextChatId, contextMsg } = await runDispatchDb(db, messages[0]?.metadata.trustedTenantId, async () => {
+    const contextChat = await services.chats.findByExternalIdSmart(instance.id, chatId);
+    return {
+      contextChatId: contextChat?.id ?? null,
+      contextMsg: contextChat && messageId ? await services.messages.getByExternalId(contextChat.id, messageId) : null,
+    };
+  });
 
   // Set context on the scoped key so verb commands resolve to this chat
   await services.apiKeys.update(scopedKey.id, {
@@ -2625,7 +2848,13 @@ async function dispatchViaProvider(
 
   // Build context messages for group and DM conversations (messages since last bot response)
   const currentMessageIds = messages.map((msg) => msg.payload.externalId).filter((id): id is string => !!id);
-  const dbContextMessages = await buildContextMessages(services, instance, chatId, currentMessageIds);
+  const dbContextMessages = await buildContextMessages(
+    services,
+    instance,
+    chatId,
+    currentMessageIds,
+    messages[0]?.metadata.trustedTenantId,
+  );
   const allContextMessages = mergeContextMessages(extraContextMessages, dbContextMessages);
   const triggerFiles = toTriggerFiles(mediaFiles);
 
@@ -2646,6 +2875,7 @@ async function dispatchViaProvider(
     services,
     personId,
     extractA2ACustomerContext(messages, channel),
+    messages[0]?.metadata.trustedTenantId,
   );
   const trigger = buildMessageTrigger(
     traceId,
@@ -2732,7 +2962,9 @@ async function dispatchViaProvider(
 
       // If the agent triggered a handoff during this run (agentPaused: true),
       // suppress the response — the handoff message already notified the user.
-      const chatAfterRun = await services.chats.findByExternalIdSmart(instance.id, chatId);
+      const chatAfterRun = await runDispatchDb(db, messages[0]?.metadata.trustedTenantId, () =>
+        services.chats.findByExternalIdSmart(instance.id, chatId),
+      );
       const handoffTriggered = (chatAfterRun?.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
 
       // If newer inbound arrived while the agent was running, this reply was
@@ -2754,6 +2986,7 @@ async function dispatchViaProvider(
         chatId,
         result?.metadata.customerErrorBlocked === true,
         handoffTriggered,
+        messages[0]?.metadata.trustedTenantId,
       );
 
       if (result && result.parts.length > 0 && !handoffTriggered && !errorHandoffDone && !supersededByNewerInbound) {
@@ -2869,8 +3102,15 @@ async function dispatchViaLegacy(
     channel,
     instance.id,
     senderId,
+    messages[0]?.metadata.trustedTenantId,
   );
-  const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, chatId, chatType);
+  const { chatName, participantCount } = await fetchChatMetadata(
+    services,
+    instance.id,
+    chatId,
+    chatType,
+    messages[0]?.metadata.trustedTenantId,
+  );
 
   // Fire before_agent_start hooks (observational for v1 — mutations logged but not applied)
   // TODO: wire mutated context values back once DEC-5 allowlist infra (provider/agentId validation) exists
@@ -3133,13 +3373,22 @@ async function handleSessionReset(
  * Check whether a per_thread session has been initialized for this instance/thread.
  * Uses the agentSessions table with a dedicated 'thread_init:' key prefix.
  */
-async function checkPerThreadSessionExists(db: Database, instanceId: string, sessionId: string): Promise<boolean> {
+async function checkPerThreadSessionExists(
+  db: Database,
+  instanceId: string,
+  sessionId: string,
+  trustedTenantId?: string,
+): Promise<boolean> {
   const initKey = `thread_init:${sessionId}`;
-  const result = await db
-    .select({ instanceId: agentSessions.instanceId })
-    .from(agentSessions)
-    .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, initKey)))
-    .limit(1);
+  // Discrete DB block in the message's world (G5, ADR-0008): under a tenant
+  // envelope the check can only be satisfied by the tenant's OWN marker row.
+  const result = await runDispatchDb(db, trustedTenantId, () =>
+    scopedHandle(db)
+      .select({ instanceId: agentSessions.instanceId })
+      .from(agentSessions)
+      .where(and(eq(agentSessions.instanceId, instanceId), eq(agentSessions.sessionKey, initKey)))
+      .limit(1),
+  );
   return result.length > 0;
 }
 
@@ -3147,22 +3396,32 @@ async function checkPerThreadSessionExists(db: Database, instanceId: string, ses
  * Mark a per_thread session as initialized in the DB.
  * Called after the first lazy-init dispatch so subsequent triggers skip history fetch.
  */
-async function markPerThreadSessionInitialized(db: Database, instanceId: string, sessionId: string): Promise<void> {
+async function markPerThreadSessionInitialized(
+  db: Database,
+  instanceId: string,
+  sessionId: string,
+  trustedTenantId?: string,
+): Promise<void> {
   const initKey = `thread_init:${sessionId}`;
   const now = new Date();
-  await db
-    .insert(agentSessions)
-    .values({
-      instanceId,
-      sessionKey: initKey,
-      providerSessionData: { initialized: true, initializedAt: now.toISOString() },
-      lastUsedAt: now,
-      expiresAt: null,
-    })
-    .onConflictDoUpdate({
-      target: [agentSessions.instanceId, agentSessions.sessionKey],
-      set: { lastUsedAt: now, updatedAt: now },
-    });
+  // Discrete DB block in the message's world (G5, ADR-0008): the derivation
+  // trigger stamps the tenant from the instance, and a scope aimed at another
+  // tenant's instance is refused by the WITH CHECK rather than trusted.
+  await runDispatchDb(db, trustedTenantId, async () => {
+    await scopedHandle(db)
+      .insert(agentSessions)
+      .values({
+        instanceId,
+        sessionKey: initKey,
+        providerSessionData: { initialized: true, initializedAt: now.toISOString() },
+        lastUsedAt: now,
+        expiresAt: null,
+      })
+      .onConflictDoUpdate({
+        target: [agentSessions.instanceId, agentSessions.sessionKey],
+        set: { lastUsedAt: now, updatedAt: now },
+      });
+  });
   log.info('per_thread session initialized', { instanceId, sessionId });
 }
 
@@ -3188,12 +3447,16 @@ function mimeToContentType(mimeType: string): 'audio' | 'image' | 'video' | 'doc
  * Download a URL to a temp file and return the local path.
  * Returns null on any error (graceful degradation).
  */
-async function downloadToTempFile(url: string, mimeType: string): Promise<string | null> {
+async function downloadToTempFile(url: string, mimeType: string, trustedTenantId?: string): Promise<string | null> {
   try {
     // SSRF-guarded: rejects private/metadata targets (initial URL and every
     // redirect hop) before connecting — history-sync mediaUrl values originate
-    // from channel payloads, not from operator config.
-    const res = await fetchMediaUrl(url);
+    // from channel payloads, not from operator config. In a tenant context the
+    // `OMNI_MEDIA_URL_GUARD=off` escape hatch is SUBSUMED (G5 deliverable (b),
+    // ADR-0009): this URL is tenant-controlled, so no per-deployment flag may
+    // open private ranges to it. `trustedTenantId` comes from the LOADED
+    // instance's persisted ownership, never a payload claim.
+    const res = await fetchMediaUrl(url, { trustedTenantId });
     if (!res.ok) return null;
 
     const buffer = Buffer.from(await res.arrayBuffer());
@@ -3214,12 +3477,13 @@ async function processMediaFile(
   msg: HistorySyncMessage,
   mimeType: string,
   mediaService: ReturnType<typeof createMediaProcessingService> | null,
+  trustedTenantId?: string,
 ): Promise<string | null> {
   let localPath = msg.content.localPath ?? null;
   let ownedTempFile = false;
 
   if (!localPath && msg.content.mediaUrl && mediaService) {
-    localPath = await downloadToTempFile(msg.content.mediaUrl, mimeType);
+    localPath = await downloadToTempFile(msg.content.mediaUrl, mimeType, trustedTenantId);
     if (localPath) ownedTempFile = true;
   }
 
@@ -3262,6 +3526,7 @@ async function processHistoryMessage(
   mediaService: ReturnType<typeof createMediaProcessingService> | null,
   reactFn: ((msgId: string, emoji: string) => Promise<void>) | null,
   unreactFn: ((msgId: string, emoji: string) => Promise<void>) | null,
+  trustedTenantId?: string,
 ): Promise<string> {
   const timeStr = msg.timestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
   const header = `[${msg.from ?? 'Unknown'} - ${timeStr}]`;
@@ -3277,7 +3542,7 @@ async function processHistoryMessage(
 
   if (reactFn) reactFn(msg.externalId, startEmoji).catch(() => {});
 
-  const processedContent = await processMediaFile(msg, mimeType, mediaService);
+  const processedContent = await processMediaFile(msg, mimeType, mediaService, trustedTenantId);
 
   // Always remove start emoji; add done emoji only on success
   if (unreactFn) unreactFn(msg.externalId, startEmoji).catch(() => {});
@@ -3349,7 +3614,12 @@ async function fetchAndProcessThreadHistory(
   // Process in batches to cap concurrency
   for (let i = 0; i < mediaMessages.length; i += CONCURRENCY) {
     const batch = mediaMessages.slice(i, i + CONCURRENCY);
-    const results = await Promise.all(batch.map((msg) => processHistoryMessage(msg, mediaService, reactFn, unreactFn)));
+    const results = await Promise.all(
+      // The instance row's persisted `tenantId` is the ownership root (G2) — the
+      // trusted derivation that subsumes the media escape hatch for these
+      // tenant-controlled history URLs. Null in the flag-off world.
+      batch.map((msg) => processHistoryMessage(msg, mediaService, reactFn, unreactFn, instance.tenantId ?? undefined)),
+    );
     contextMessages.push(...results);
   }
 
@@ -3377,6 +3647,7 @@ async function handlePerThreadLazyInit(
   threadId: string,
   sessionId: string,
   db: Database,
+  trustedTenantId?: string,
 ): Promise<string[]> {
   log.info('per_thread lazy init', {
     instanceId: instance.id,
@@ -3390,7 +3661,7 @@ async function handlePerThreadLazyInit(
 
   // Persist the init marker so subsequent triggers skip history fetch
   try {
-    await markPerThreadSessionInitialized(db, instance.id, sessionId);
+    await markPerThreadSessionInitialized(db, instance.id, sessionId, trustedTenantId);
   } catch (err) {
     log.warn('Failed to mark per_thread session initialized', {
       error: String(err),
@@ -3420,9 +3691,10 @@ async function resolvePerThreadExtraContext(
   const rawThreadId = (firstMessage.payload.rawPayload as Record<string, unknown>)?.threadId as string | undefined;
   if (strategy !== 'per_thread' || !rawThreadId) return undefined;
   const sessionId = computeSessionId('per_thread', senderId, chatId, rawThreadId);
-  const sessionExists = await checkPerThreadSessionExists(db, instance.id, sessionId);
+  const trustedTenantId = firstMessage.metadata.trustedTenantId;
+  const sessionExists = await checkPerThreadSessionExists(db, instance.id, sessionId, trustedTenantId);
   if (sessionExists) return undefined;
-  return handlePerThreadLazyInit(services, instance, channel, chatId, rawThreadId, sessionId, db);
+  return handlePerThreadLazyInit(services, instance, channel, chatId, rawThreadId, sessionId, db, trustedTenantId);
 }
 
 /**
@@ -3569,6 +3841,7 @@ async function applyCloseContactGate(
   instanceId: string,
   chatId: string,
   chatSettings: ChatSettingsForGate | null,
+  trustedTenantId?: string,
 ): Promise<'skip' | 'reopened' | 'pass'> {
   if (chatSettings?.closed === true) {
     log.debug('Chat closed (terminal), skipping dispatch', {
@@ -3600,14 +3873,16 @@ async function applyCloseContactGate(
   // explicitly cleared. Report `reopened` so the handoff gate ignores any
   // stale flag.
   try {
-    await services.chats.update(chatRecordId, {
-      settings: {
-        ...(chatSettings as Record<string, unknown>),
-        agentPaused: false,
-        closeUntil: null,
-        agentResumedAt: new Date().toISOString(),
-      } as Record<string, unknown>,
-    });
+    await runDispatchDb(services.db, trustedTenantId, () =>
+      services.chats.update(chatRecordId, {
+        settings: {
+          ...(chatSettings as Record<string, unknown>),
+          agentPaused: false,
+          closeUntil: null,
+          agentResumedAt: new Date().toISOString(),
+        } as Record<string, unknown>,
+      }),
+    );
     log.info('Close cooldown expired, state cleaned', {
       instanceId,
       chatId,
@@ -3654,8 +3929,19 @@ async function processAgentResponse(
     buildAckConfig(instance),
   );
 
+  // The envelope-derived tenant for this whole dispatch (G5, ADR-0008); every
+  // discrete DB block below runs in its world.
+  const dispatchTenantId = firstMessage.metadata.trustedTenantId;
+
   // Resolve person ID (waits for message-persistence to create identity)
-  const personId = await resolvePersonId(services, channel, instance.id, senderId, firstMessage.metadata.personId);
+  const personId = await resolvePersonId(
+    services,
+    channel,
+    instance.id,
+    senderId,
+    firstMessage.metadata.personId,
+    dispatchTenantId,
+  );
   if (!personId) {
     log.warn('Could not resolve person ID, skipping agent', { instanceId: instance.id, chatId, senderId });
     ackHandle.remove();
@@ -3664,10 +3950,19 @@ async function processAgentResponse(
 
   // ── Close-contact gate — runs BEFORE the handoff/agentPaused gate ──
   // See applyCloseContactGate() for the full semantics.
-  const chatRecord = await services.chats.findByExternalIdSmart(instance.id, chatId);
+  const chatRecord = await runDispatchDb(db, dispatchTenantId, () =>
+    services.chats.findByExternalIdSmart(instance.id, chatId),
+  );
   const chatSettings = chatRecord?.settings as ChatSettingsForGate | null;
 
-  const gateResult = await applyCloseContactGate(services, chatRecord?.id ?? null, instance.id, chatId, chatSettings);
+  const gateResult = await applyCloseContactGate(
+    services,
+    chatRecord?.id ?? null,
+    instance.id,
+    chatId,
+    chatSettings,
+    dispatchTenantId,
+  );
   if (gateResult === 'skip') {
     ackHandle.remove();
     return;
@@ -3780,7 +4075,7 @@ async function processAgentResponse(
       error: String(error),
       traceId,
     });
-    await handleDispatchFailure(services, db, channel, instance, chatId, error);
+    await handleDispatchFailure(services, db, channel, instance, chatId, error, firstMessage.metadata.trustedTenantId);
   } finally {
     ackHandle.remove();
   }
@@ -3793,8 +4088,42 @@ async function processAgentResponse(
 /** Cache of IAgentProvider instances by "providerId:instanceId" */
 const providerCache = new Map<string, IAgentProvider>();
 
-/** Shared OpenClaw WS clients keyed by provider DB ID (DEC-3: one connection per provider) */
+/**
+ * Shared OpenClaw WS clients (DEC-3: one connection per provider) keyed by
+ * `providerId::tenant`.
+ *
+ * TENANT IN THE KEY (G5; ADR-0008). A pooled `OpenClawClient` HOLDS the Ed25519
+ * `devicePrivateKey` and `deviceToken` it was constructed with and signs every
+ * connect with them, so this map is a credential cache, not merely a connection
+ * cache. `agent_providers` is a G0-`split` table with no `tenant_id`, so one
+ * provider row is reachable from instances of different tenants, and
+ * `ProviderService` binds its secrets to the ACTIVE SCOPE — every other context
+ * fails closed to a null secret "rather than to someone else's key". Keyed by
+ * provider id ALONE, the first tenant to build a client would hand its device
+ * identity to every later tenant and short-circuit exactly that null. The
+ * scope-less legacy world keys on `-` and therefore still shares one client per
+ * provider, byte-identically.
+ */
 const openclawClientPool = new Map<string, OpenClawClient>();
+
+/** Test-only DI hook for the OpenClaw WS client constructor (see `_natsGenieProviderCtor`). */
+let _openClawClientCtor: typeof OpenClawClient = OpenClawClient;
+
+/**
+ * The pool key for `providerId` under the tenant its secrets were OPENED under.
+ *
+ * `openedForTenantId` is the threaded trusted tenant when the caller has one:
+ * `session-cleaner` reads the provider record inside `runTenantWorkDb(...,
+ * trustedTenantId, ...)` and then resolves the provider OUTSIDE that scope (a
+ * worker transaction must not span the provider call), so the ambient scope
+ * alone would key A's opened device key under the legacy `-` bucket and hand it
+ * to the next tenant. Nothing threaded falls back to the active request scope,
+ * and no scope at all is the legacy bucket — which is correct there, because a
+ * scope-less read never opened anything tenant-bound in the first place.
+ */
+function openclawPoolKey(providerId: string, openedForTenantId?: string | null): string {
+  return `${providerId}::${openedForTenantId ?? currentTenantScope()?.tenantId ?? '-'}`;
+}
 
 /**
  * Pick the first non-empty agentId from instance → provider schemaConfig.
@@ -3820,9 +4149,14 @@ function resolveRequiredAgentId(
 }
 
 /** Create an OpenClaw-based agent provider */
-function createOpenClawProviderInstance(provider: AgentProvider, instance: DispatchInstance): IAgentProvider {
-  // DEC-3: Reuse shared WS client per provider ID
-  let client = openclawClientPool.get(provider.id);
+function createOpenClawProviderInstance(
+  provider: AgentProvider,
+  instance: DispatchInstance,
+  openedForTenantId?: string | null,
+): IAgentProvider {
+  // DEC-3: Reuse the shared WS client per provider — within one tenant.
+  const poolKey = openclawPoolKey(provider.id, openedForTenantId);
+  let client = openclawClientPool.get(poolKey);
   if (!client) {
     const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
     // FIX-SCOPE: Pass device credentials from schemaConfig if present.
@@ -3845,9 +4179,9 @@ function createOpenClawProviderInstance(provider: AgentProvider, instance: Dispa
       origin: (schemaConfig.origin as string) ?? undefined,
       device: deviceConfig,
     };
-    client = new OpenClawClient(clientConfig);
+    client = new _openClawClientCtor(clientConfig);
     client.start(); // DEC-14: lazy connect — starts WS in background
-    openclawClientPool.set(provider.id, client);
+    openclawClientPool.set(poolKey, client);
   }
 
   const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
@@ -3921,7 +4255,12 @@ function createClaudeCodeProviderInstance(
       maxTurns: schemaConfig.maxTurns as number | undefined,
       pathToClaudeCodeExecutable: schemaConfig.pathToClaudeCodeExecutable as string | undefined,
     },
-    createSessionStorage(db, provider.id),
+    // G5 (ADR-0008): the session store is reached only from this consumer, so it
+    // establishes its own tenant scope from the LOADED instance's persisted
+    // ownership — `instances.tenantId` is the G2 ownership root, read from the
+    // database, never asserted by a payload. Null in the flag-off world, where
+    // the store keeps its pre-G5 ambient/plaintext path byte-identically.
+    createSessionStorage(db, provider.id, undefined, { resolveTenantId: () => instance.tenantId ?? null }),
     {
       timeoutMs: ((instance.agentTimeout ?? provider.defaultTimeout ?? 600) as number) * 1000,
       enableAutoSplit: instance.enableAutoSplit ?? true,
@@ -4081,6 +4420,11 @@ export function resolveProvider(
   provider: AgentProvider,
   instance: DispatchInstance,
   db: Database,
+  /**
+   * The tenant `provider`'s secrets were OPENED under, when the caller threads
+   * one instead of holding a scope across this call (see `openclawPoolKey`).
+   */
+  openedForTenantId?: string | null,
 ): IAgentProvider | null {
   const cacheKey = `${provider.id}:${instance.id}`;
   const cached = providerCache.get(cacheKey);
@@ -4096,7 +4440,7 @@ export function resolveProvider(
       agentProvider = createWebhookProvider(provider);
       break;
     case 'openclaw':
-      agentProvider = createOpenClawProviderInstance(provider, instance);
+      agentProvider = createOpenClawProviderInstance(provider, instance, openedForTenantId);
       break;
     case 'claude-code':
       agentProvider = createClaudeCodeProviderInstance(provider, instance, db);
@@ -4147,8 +4491,11 @@ export function invalidateProviderCache(providerId: string): void {
     }
   }
 
-  const openclawClient = openclawClientPool.get(providerId);
-  if (openclawClient) {
+  // Every TENANT's client for this provider — the pool is keyed
+  // `providerId::tenant`, and a config change invalidates all of them.
+  const poolPrefix = `${providerId}::`;
+  for (const [key, openclawClient] of openclawClientPool.entries()) {
+    if (!key.startsWith(poolPrefix)) continue;
     try {
       openclawClient.stop();
     } catch (err) {
@@ -4157,7 +4504,7 @@ export function invalidateProviderCache(providerId: string): void {
         error: String(err),
       });
     }
-    openclawClientPool.delete(providerId);
+    openclawClientPool.delete(key);
   }
 
   log.debug('Provider cache invalidated', { providerId, removed });
@@ -4199,19 +4546,27 @@ export async function applyAgentFkOverrides(
   db: Database,
   agentFkId: string,
   effectiveInstance: DispatchInstance,
+  trustedTenantId?: string,
 ): Promise<void> {
-  const [agentRow] = await db
-    .select({
-      id: agents.id,
-      name: agents.name,
-      agentProviderId: agents.agentProviderId,
-      agentType: agents.agentType,
-      metadata: agents.metadata,
-      configPath: agents.configPath,
-    })
-    .from(agents)
-    .where(eq(agents.id, agentFkId))
-    .limit(1);
+  // Discrete DB block in the message's world (G5, ADR-0008): a tenant envelope
+  // reads through a short worker scope — a forged cross-tenant agentId then
+  // resolves nothing and stamps nothing — while a legacy caller (including the
+  // still-pending session-cleaner path, which passes no tenant) runs on the
+  // ambient pool byte-identically.
+  const [agentRow] = await runDispatchDb(db, trustedTenantId, () =>
+    scopedHandle(db)
+      .select({
+        id: agents.id,
+        name: agents.name,
+        agentProviderId: agents.agentProviderId,
+        agentType: agents.agentType,
+        metadata: agents.metadata,
+        configPath: agents.configPath,
+      })
+      .from(agents)
+      .where(eq(agents.id, agentFkId))
+      .limit(1),
+  );
 
   if (!agentRow) return;
 
@@ -4274,10 +4629,11 @@ function mergeRouteOverrides(instance: Instance, route: ResolvedRoute): Dispatch
 async function applyInstanceFkAndReturn(
   db: Database,
   instance: Instance,
+  trustedTenantId?: string,
 ): Promise<{ instance: DispatchInstance; routeId: null }> {
   if (!instance.agentId) return { instance, routeId: null };
   const effectiveInstance: DispatchInstance = { ...instance };
-  await applyAgentFkOverrides(db, instance.agentId, effectiveInstance);
+  await applyAgentFkOverrides(db, instance.agentId, effectiveInstance, trustedTenantId);
   return { instance: effectiveInstance, routeId: null };
 }
 
@@ -4293,15 +4649,16 @@ async function resolveEffectiveInstance(
   instance: Instance,
   chatId: string | undefined,
   personId?: string,
+  trustedTenantId?: string,
 ): Promise<{ instance: DispatchInstance; routeId: string | null }> {
   // If chatId is undefined (chat not found in DB), skip chat-scoped route resolution
   // and return instance defaults. This is the safe path for LID-only chats.
   if (!chatId) {
     log.debug('No internal chatId — using instance default agent', { instanceId: instance.id, personId });
-    return applyInstanceFkAndReturn(db, instance);
+    return applyInstanceFkAndReturn(db, instance, trustedTenantId);
   }
   // Resolve route (chat > user > null)
-  const route = await services.routeResolver.resolve(instance.id, chatId, personId);
+  const route = await services.routeResolver.resolve(instance.id, chatId, personId, trustedTenantId);
 
   if (!route) {
     // No route matched - use instance defaults.
@@ -4316,7 +4673,7 @@ async function resolveEffectiveInstance(
   // Route-level agentId takes priority; fall back to instance-level agentId.
   const effectiveAgentFkId = route.agentId ?? instance.agentId;
   if (effectiveAgentFkId) {
-    await applyAgentFkOverrides(db, effectiveAgentFkId, effectiveInstance);
+    await applyAgentFkOverrides(db, effectiveAgentFkId, effectiveInstance, trustedTenantId);
   }
 
   log.debug('Route resolved and merged', {
@@ -4350,8 +4707,10 @@ async function processReactionTrigger(
   const channel = (metadata.channelType ?? baseInstance.channel) as ChannelType;
   const externalChatId = payload.chatId;
 
-  // Look up internal chat UUID for route resolution
-  const chat = await services.chats.findByExternalIdSmart(baseInstance.id, externalChatId);
+  // Look up internal chat UUID for route resolution, in the envelope's world
+  const chat = await runDispatchDb(db, metadata.trustedTenantId, () =>
+    services.chats.findByExternalIdSmart(baseInstance.id, externalChatId),
+  );
   const internalChatId = chat?.id; // undefined when chat not in DB (e.g. LID-only chats)
 
   // Resolve person ID for route matching (metadata.personId may not be set yet)
@@ -4364,6 +4723,7 @@ async function processReactionTrigger(
     baseInstance,
     internalChatId,
     reactionPersonId,
+    metadata.trustedTenantId,
   );
 
   log.info('Dispatching reaction trigger', {
@@ -4395,7 +4755,12 @@ async function processReactionTrigger(
         personId: effectivePersonId,
         rawPayload: payload.rawPayload as Record<string, unknown> | undefined,
       }).sessionId;
-      const customerContext = await resolveCustomerContext(services, effectivePersonId);
+      const customerContext = await resolveCustomerContext(
+        services,
+        effectivePersonId,
+        undefined,
+        metadata.trustedTenantId,
+      );
 
       const trigger: AgentTrigger = {
         traceId: metadata.traceId,
@@ -4467,8 +4832,15 @@ async function processReactionTrigger(
       channel,
       instance.id,
       payload.from,
+      metadata.trustedTenantId,
     );
-    const { chatName, participantCount } = await fetchChatMetadata(services, instance.id, externalChatId, chatType);
+    const { chatName, participantCount } = await fetchChatMetadata(
+      services,
+      instance.id,
+      externalChatId,
+      chatType,
+      metadata.trustedTenantId,
+    );
 
     const result = await services.agentRunner.run({
       instance,
@@ -4570,6 +4942,8 @@ async function isLidMatchingOwner(
   ownerPhone: string,
   ownerIsLid: boolean,
   lidJid: string,
+  db: Database,
+  trustedTenantId?: string,
 ): Promise<boolean> {
   // Direct LID match: when ownerIdentifier is itself a LID, compare directly
   if (ownerIsLid && extractPhoneFromJid(lidJid) === ownerPhone) {
@@ -4577,9 +4951,13 @@ async function isLidMatchingOwner(
     return true;
   }
 
-  // DB resolution: resolve LID -> phone JID, then compare with owner phone
+  // DB resolution: resolve LID -> phone JID, then compare with owner phone.
+  // The chat_id_mappings reads run in the message's world (G5, ADR-0008): a
+  // tenant envelope opens a short worker scope per read; a legacy envelope
+  // (no tenant) stays byte-identical on the ambient pool. The surrounding
+  // try/catch keeps DB-lookup failures non-critical, as before.
   try {
-    const mapping = await chatsService.findLidMapping(instanceId, lidJid);
+    const mapping = await runDispatchDb(db, trustedTenantId, () => chatsService.findLidMapping(instanceId, lidJid));
     if (!mapping) return false;
 
     const resolvedPhone = extractPhoneFromJid(mapping);
@@ -4590,7 +4968,9 @@ async function isLidMatchingOwner(
 
     // Reverse check: when owner is LID, also look up the owner's phone mapping
     if (ownerIsLid) {
-      const ownerMapping = await chatsService.findLidMapping(instanceId, ownerIdentifier);
+      const ownerMapping = await runDispatchDb(db, trustedTenantId, () =>
+        chatsService.findLidMapping(instanceId, ownerIdentifier),
+      );
       if (ownerMapping && extractPhoneFromJid(ownerMapping) === resolvedPhone) {
         log.debug('LID resolved to owner via reverse mapping', { lidJid, resolvedPhone, ownerIdentifier });
         return true;
@@ -4615,6 +4995,8 @@ async function resolveLidMentionBot(
   ownerIdentifier: string,
   mentionedJids: string[],
   messageContext: MessageContext,
+  db: Database,
+  trustedTenantId?: string,
 ): Promise<void> {
   const lidMentions = mentionedJids.filter((jid) => jid.endsWith('@lid'));
   if (lidMentions.length === 0) return;
@@ -4623,7 +5005,18 @@ async function resolveLidMentionBot(
   const ownerPhone = extractPhoneFromJid(ownerIdentifier);
 
   for (const lidJid of lidMentions) {
-    if (await isLidMatchingOwner(chatsService, instanceId, ownerIdentifier, ownerPhone, ownerIsLid, lidJid)) {
+    if (
+      await isLidMatchingOwner(
+        chatsService,
+        instanceId,
+        ownerIdentifier,
+        ownerPhone,
+        ownerIsLid,
+        lidJid,
+        db,
+        trustedTenantId,
+      )
+    ) {
       messageContext.mentionsBot = true;
       break;
     }
@@ -4636,10 +5029,15 @@ async function resolveEffectiveReplyFilter(
   instanceId: string,
   chatId: string,
   defaultFilter: Instance['agentReplyFilter'],
+  db: Database,
+  trustedTenantId?: string,
 ): Promise<Instance['agentReplyFilter']> {
-  const chat = await chatsService.findByExternalIdSmart(instanceId, chatId);
+  // chat_id_mappings read in the message's world (G5, ADR-0008): tenant
+  // envelope → short worker scope, legacy → ambient pass-through. routeResolver
+  // threads its own trustedTenantId and manages its own scope.
+  const chat = await runDispatchDb(db, trustedTenantId, () => chatsService.findByExternalIdSmart(instanceId, chatId));
   if (!chat?.id) return defaultFilter;
-  const route = await routeResolver.resolve(instanceId, chat.id);
+  const route = await routeResolver.resolve(instanceId, chat.id, undefined, trustedTenantId);
   return (route?.agentReplyFilter as Instance['agentReplyFilter']) ?? defaultFilter;
 }
 
@@ -4654,13 +5052,22 @@ async function resolveSlackThreadReply(
   instance: Instance,
   payload: MessageReceivedPayload,
   context: MessageContext,
+  db: Database,
+  trustedTenantId?: string,
 ): Promise<void> {
   if (instance.channel !== 'slack') return;
   const raw = payload.rawPayload ?? {};
   if (raw.isThreadReply !== true || !raw.threadTs) return;
-  const chat = await chatsService.findByExternalIdSmart(instance.id, payload.chatId);
-  if (!chat) return;
-  context.isReplyToBot = await messagesService.hasBotRepliedInThread(chat.id, raw.threadTs as string);
+  // chats + messages reads in the message's world (G5, ADR-0008): a tenant
+  // envelope runs the chat lookup and the thread-reply lookup in a short worker
+  // scope; a legacy envelope (no tenant) stays byte-identical on the ambient
+  // pool. When no chat is found, context.isReplyToBot is left unchanged.
+  const isReplyToBot = await runDispatchDb(db, trustedTenantId, async () => {
+    const chat = await chatsService.findByExternalIdSmart(instance.id, payload.chatId);
+    if (!chat) return undefined;
+    return messagesService.hasBotRepliedInThread(chat.id, raw.threadTs as string);
+  });
+  if (isReplyToBot !== undefined) context.isReplyToBot = isReplyToBot;
 }
 
 /** True if the chat is a newsletter or broadcast channel (agent never processes these). */
@@ -4747,9 +5154,45 @@ export function isFirstPartyInstanceSender(
 const ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS = 10_000;
 let cachedActiveOwnerIdentifiers: Array<string | null> | null = null;
 let cachedActiveOwnerIdentifiersAt = 0;
+/**
+ * Tenant-keyed variant of the owner-identifier cache (G5, ADR-0008; WISH
+ * "cache keys include tenant identity"). A GLOBAL cache here would serve
+ * tenant A's identifiers to tenant B inside the TTL — a cross-tenant
+ * identifier leak AND wrong self-send gating. Bounded by the number of active
+ * tenants in the process, entries overwritten on expiry.
+ */
+const tenantCachedActiveOwnerIdentifiers = new Map<string, { ids: Array<string | null>; at: number }>();
 
-async function listActiveOwnerIdentifiers(db: Database): Promise<Array<string | null>> {
+/** @internal test hook — clears both worlds' caches. */
+function resetActiveOwnerIdentifiersCache(): void {
+  cachedActiveOwnerIdentifiers = null;
+  cachedActiveOwnerIdentifiersAt = 0;
+  tenantCachedActiveOwnerIdentifiers.clear();
+}
+
+async function listActiveOwnerIdentifiers(db: Database, trustedTenantId?: string): Promise<Array<string | null>> {
   const now = Date.now();
+
+  // Tenant world (G5): the enumeration runs inside a short worker scope, so it
+  // sees — and the self-send guard therefore considers — only the tenant's own
+  // instances. Cross-tenant "self"-sends are two independent parties, not a
+  // loop, so per-tenant is the CORRECT guard semantics under multitenancy.
+  if (trustedTenantId !== undefined) {
+    const cached = tenantCachedActiveOwnerIdentifiers.get(trustedTenantId);
+    if (cached && now - cached.at < ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS) return cached.ids;
+    const rows = await runInWorkerTenantScope(db, trustedTenantId, () =>
+      scopedHandle(db)
+        .select({ ownerIdentifier: instances.ownerIdentifier })
+        .from(instances)
+        .where(eq(instances.isActive, true)),
+    );
+    if (!Array.isArray(rows)) return [];
+    const ids = rows.map((row) => row.ownerIdentifier);
+    tenantCachedActiveOwnerIdentifiers.set(trustedTenantId, { ids, at: now });
+    return ids;
+  }
+
+  // Legacy world: byte-identical pre-G5 path, global cache and ambient read.
   if (cachedActiveOwnerIdentifiers && now - cachedActiveOwnerIdentifiersAt < ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS) {
     return cachedActiveOwnerIdentifiers;
   }
@@ -4779,6 +5222,7 @@ async function shouldProcessMessage(
   db: Database,
   payload: MessageReceivedPayload,
   metadata: { instanceId?: string; channelType?: string; platformIdentityId?: string },
+  trustedTenantId?: string,
 ): Promise<Instance | null> {
   if (!metadata.instanceId) {
     log.debug('No instanceId in metadata', { from: payload.from, chatId: payload.chatId });
@@ -4805,7 +5249,13 @@ async function shouldProcessMessage(
     return null;
   }
 
-  const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
+  // Discrete DB block in the message's world (G5, ADR-0008): a tenant envelope
+  // reads the instance through a short worker scope, so a forged/foreign
+  // instanceId resolves to nothing and dispatch stops here. A legacy envelope
+  // (no tenant) runs on the ambient pool byte-identically.
+  const instance = await runDispatchDb(db, trustedTenantId, () =>
+    agentRunner.getInstanceWithProvider(metadata.instanceId as string),
+  );
   if (!instance?.agentId) {
     log.debug('Instance has no agentId', { instanceId: metadata.instanceId });
     return null;
@@ -4816,7 +5266,7 @@ async function shouldProcessMessage(
   // "assistant" instance can reply to messages from their own personal number
   // (another instance's owner). The separate "message from self" self-skip
   // above is unaffected — an instance still never replies to its own outbound.
-  const activeOwnerIdentifiers = await listActiveOwnerIdentifiers(db);
+  const activeOwnerIdentifiers = await listActiveOwnerIdentifiers(db, trustedTenantId);
   if (
     !instance.allowFirstParty &&
     isFirstPartyInstanceSender(payload, instance.ownerIdentifier, activeOwnerIdentifiers)
@@ -4866,10 +5316,12 @@ async function shouldProcessMessage(
       instance.ownerIdentifier as string,
       mentionedJids,
       messageContext,
+      db,
+      trustedTenantId,
     );
   }
 
-  await resolveSlackThreadReply(chatsService, messagesService, instance, payload, messageContext);
+  await resolveSlackThreadReply(chatsService, messagesService, instance, payload, messageContext, db, trustedTenantId);
 
   log.debug('Message context built', {
     instanceId: instance.id,
@@ -4889,6 +5341,8 @@ async function shouldProcessMessage(
     instance.id,
     payload.chatId,
     instance.agentReplyFilter,
+    db,
+    trustedTenantId,
   );
 
   // #371: null filter now means "allow all" instead of silently dropping every
@@ -4917,7 +5371,7 @@ async function shouldProcessMessage(
   // messages still reach the debounce buffer. Counting per-inbound-message
   // silently dropped mid-thought messages and corrupted the agent context.
 
-  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
+  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel, trustedTenantId);
   if (accessDenied) return null;
 
   return instance;
@@ -4933,6 +5387,7 @@ async function checkAccessWithFallback(
   instance: Instance,
   payload: { from: string; chatId: string; rawPayload?: unknown },
   channel: ChannelType,
+  trustedTenantId?: string,
 ): Promise<boolean> {
   const rawPayload = payload.rawPayload as Record<string, unknown> | undefined;
   const rawKey = rawPayload?.key as Record<string, unknown> | undefined;
@@ -4945,7 +5400,11 @@ async function checkAccessWithFallback(
   const resolvedSenderPhone = rawResolvedPhone && /^\d{7,15}$/.test(rawResolvedPhone) ? rawResolvedPhone : undefined;
   const primaryId = payload.from ?? '';
 
-  let accessResult = await accessService.checkAccess(instance, primaryId, channel);
+  // G5 (ADR-0008): the ALLOW/DENY decision is evaluated against rules read in
+  // the MESSAGE's world. `trustedTenantId` is the envelope-derived tenant
+  // (`trustedDispatchTenant`), threaded rather than wrapped because the service
+  // publishes `access.allowed`/`access.denied` between blocks.
+  let accessResult = await accessService.checkAccess(instance, primaryId, channel, trustedTenantId);
   if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
     log.warn('Access fallback to participantAlt', {
       instanceId: instance.id,
@@ -4953,7 +5412,7 @@ async function checkAccessWithFallback(
       participantAlt,
       chatId: payload.chatId,
     });
-    accessResult = await accessService.checkAccess(instance, participantAlt, channel);
+    accessResult = await accessService.checkAccess(instance, participantAlt, channel, trustedTenantId);
   }
   if (
     !accessResult.allowed &&
@@ -4967,7 +5426,7 @@ async function checkAccessWithFallback(
       resolvedSenderPhone,
       chatId: payload.chatId,
     });
-    accessResult = await accessService.checkAccess(instance, resolvedSenderPhone, channel);
+    accessResult = await accessService.checkAccess(instance, resolvedSenderPhone, channel, trustedTenantId);
   }
   if (accessResult.allowed) return false;
 
@@ -4984,9 +5443,11 @@ async function checkAccessWithFallback(
   // Guard against empty primaryId: a missing payload.from would otherwise create a
   // degenerate pairing entry shared by all anonymous senders.
   if (accessResult.mode === 'allowlist' && !accessResult.rule && primaryId) {
-    accessService.requestPairing(instance.id, primaryId, { channelType: instance.channel }).catch((err) => {
-      log.warn('Failed to create pairing request', { instanceId: instance.id, from: primaryId, error: String(err) });
-    });
+    accessService
+      .requestPairing(instance.id, primaryId, { channelType: instance.channel }, trustedTenantId)
+      .catch((err) => {
+        log.warn('Failed to create pairing request', { instanceId: instance.id, from: primaryId, error: String(err) });
+      });
   }
 
   if (accessResult.rule?.action !== 'silent_block' && accessResult.rule?.blockMessage) {
@@ -5005,10 +5466,21 @@ async function shouldProcessReaction(
   payload: ReactionReceivedPayload,
   metadata: { instanceId?: string; channelType?: string },
   eventType: 'reaction.received' | 'reaction.removed' = 'reaction.received',
+  db?: Database,
+  trustedTenantId?: string,
 ): Promise<Instance | null> {
   if (!metadata.instanceId) return null;
 
-  const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
+  // Discrete DB block in the reaction's world (G5, ADR-0008) — see the sibling
+  // block in `shouldProcessMessage`. `db` is optional only because the unit
+  // tests call this guard directly with no handle; without one there is nothing
+  // to open a scope on and the read stays ambient, exactly as before.
+  const instance =
+    db && trustedTenantId !== undefined
+      ? await runDispatchDb(db, trustedTenantId, () =>
+          agentRunner.getInstanceWithProvider(metadata.instanceId as string),
+        )
+      : await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentId) return null;
 
   if (!instanceTriggersOnEvent(instance, eventType)) return null;
@@ -5021,7 +5493,7 @@ async function shouldProcessReaction(
   const channel = (metadata.channelType ?? instance.channel) as ChannelType;
 
   // Access check for reactions (reuses LID fallback logic)
-  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel);
+  const accessDenied = await checkAccessWithFallback(accessService, instance, payload, channel, trustedTenantId);
   if (accessDenied) return null;
 
   if (reactionDedup.isDuplicate(payload.messageId, payload.emoji, payload.from)) {
@@ -5229,15 +5701,27 @@ export async function setupAgentDispatcher(
     if (firstMsg.metadata.resolvedInstance) {
       instance = firstMsg.metadata.resolvedInstance as DispatchInstance;
     } else {
-      // Fallback: resolve now if metadata doesn't carry it (shouldn't happen in normal flow)
-      const baseInstance = await agentRunner.getInstanceWithProvider(instanceId);
+      // Fallback: resolve now if metadata doesn't carry it (shouldn't happen in normal flow).
+      // Discrete DB block in the buffered message's world (G5, ADR-0008).
+      const baseInstance = await runDispatchDb(db, firstMsg.metadata.trustedTenantId, () =>
+        agentRunner.getInstanceWithProvider(instanceId),
+      );
       if (!baseInstance) {
         log.warn('Instance not found for debounced messages', { instanceId });
         return;
       }
       const externalChatId = firstMsg.payload.chatId;
-      const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
-      const resolved = await resolveEffectiveInstance(services, db, baseInstance, chat?.id, firstMsg.metadata.personId);
+      const chat = await runDispatchDb(db, firstMsg.metadata.trustedTenantId, () =>
+        services.chats.findByExternalIdSmart(instanceId, externalChatId),
+      );
+      const resolved = await resolveEffectiveInstance(
+        services,
+        db,
+        baseInstance,
+        chat?.id,
+        firstMsg.metadata.personId,
+        firstMsg.metadata.trustedTenantId,
+      );
       instance = resolved.instance;
     }
 
@@ -5276,6 +5760,11 @@ export async function setupAgentDispatcher(
         // agent dispatches on the customer side.
         await withIdempotency(db, event.id, 'agent-dispatcher-msg', async () => {
           try {
+            // Envelope-derived trusted tenant (G5, ADR-0008): stamped from
+            // producer metadata, never the payload; undefined for legacy
+            // envelopes (byte-identical world); throws on quarantine — caught
+            // below, so a bad envelope is dropped, never processed globally.
+            const trustedTenantId = trustedDispatchTenant(metadata);
             const instance = await shouldProcessMessage(
               agentRunner,
               accessService,
@@ -5285,6 +5774,7 @@ export async function setupAgentDispatcher(
               db,
               payload,
               metadata,
+              trustedTenantId,
             );
             if (!instance) return;
 
@@ -5292,7 +5782,9 @@ export async function setupAgentDispatcher(
 
             // Early route resolution: resolve route BEFORE debounce so per-user
             // debounce overrides (e.g. messageDebounceMode: 'disabled') take effect.
-            const chat = await services.chats.findByExternalIdSmart(instance.id, payload.chatId);
+            const chat = await runDispatchDb(db, trustedTenantId, () =>
+              services.chats.findByExternalIdSmart(instance.id, payload.chatId),
+            );
 
             // Resolve person ID for route matching. metadata.personId may not be set yet
             // (message-persistence runs in parallel), so fall back to identity lookup.
@@ -5303,6 +5795,7 @@ export async function setupAgentDispatcher(
               instance.id,
               payload.from,
               metadata.personId,
+              trustedTenantId,
             );
 
             const { instance: resolved, routeId } = await resolveEffectiveInstance(
@@ -5311,6 +5804,7 @@ export async function setupAgentDispatcher(
               instance,
               chat?.id,
               earlyPersonId,
+              trustedTenantId,
             );
 
             const debounceConfig = getDebounceConfig(resolved);
@@ -5343,6 +5837,9 @@ export async function setupAgentDispatcher(
                   journeyTracked: metadata.timings != null,
                   resolvedInstance: resolved,
                   routeId,
+                  // Envelope-derived trusted tenant (G5, ADR-0008) — hoisted
+                  // above, before the shouldProcessMessage gate.
+                  trustedTenantId,
                 },
                 timestamp: event.timestamp,
               },
@@ -5382,7 +5879,16 @@ export async function setupAgentDispatcher(
         // for the same reaction event.
         await withIdempotency(db, event.id, 'agent-dispatcher-reaction', async () => {
           try {
-            const instance = await shouldProcessReaction(agentRunner, accessService, reactionDedup, payload, metadata);
+            const instance = await shouldProcessReaction(
+              agentRunner,
+              accessService,
+              reactionDedup,
+              payload,
+              metadata,
+              'reaction.received',
+              db,
+              trustedDispatchTenant(metadata),
+            );
             if (!instance) return;
 
             const traceId = metadata.traceId ?? generateCorrelationId('trc');
@@ -5397,6 +5903,9 @@ export async function setupAgentDispatcher(
                 personId: metadata.personId,
                 platformIdentityId: metadata.platformIdentityId,
                 traceId,
+                // Envelope-derived trusted tenant (G5, ADR-0008) — producer
+                // metadata only; throws on quarantine, caught below.
+                trustedTenantId: trustedDispatchTenant(metadata),
               },
               event,
               db,
@@ -5439,6 +5948,8 @@ export async function setupAgentDispatcher(
               payload,
               metadata,
               'reaction.removed',
+              db,
+              trustedDispatchTenant(metadata),
             );
             if (!instance) return;
 
@@ -5454,6 +5965,9 @@ export async function setupAgentDispatcher(
                 personId: metadata.personId,
                 platformIdentityId: metadata.platformIdentityId,
                 traceId,
+                // Envelope-derived trusted tenant (G5, ADR-0008) — producer
+                // metadata only; throws on quarantine, caught below.
+                trustedTenantId: trustedDispatchTenant(metadata),
               },
               event,
               db,
@@ -5492,12 +6006,17 @@ export async function setupAgentDispatcher(
         // timer on a stale typing event.
         await withIdempotency(db, event.id, 'agent-dispatcher-typing', async () => {
           try {
-            const baseInstance = await agentRunner.getInstanceWithProvider(metadata.instanceId as string);
+            // Discrete DB block in the typing event's world (G5, ADR-0008).
+            const baseInstance = await runDispatchDb(db, trustedDispatchTenant(metadata), () =>
+              agentRunner.getInstanceWithProvider(metadata.instanceId as string),
+            );
             if (!baseInstance?.agentId) return;
 
             // Resolve route so per-user debounce overrides (e.g. restartOnTyping) take effect.
             // Use metadata personId directly — don't poll for identity here (typing is latency-sensitive).
-            const chat = await services.chats.findByExternalIdSmart(metadata.instanceId as string, payload.chatId);
+            const chat = await runDispatchDb(db, trustedDispatchTenant(metadata), () =>
+              services.chats.findByExternalIdSmart(metadata.instanceId as string, payload.chatId),
+            );
             const typingPersonId = metadata.personId;
             const { instance: resolved } = await resolveEffectiveInstance(
               services,
@@ -5505,6 +6024,7 @@ export async function setupAgentDispatcher(
               baseInstance,
               chat?.id,
               typingPersonId,
+              trustedDispatchTenant(metadata),
             );
 
             const debounceConfig = getDebounceConfig(resolved);
@@ -5644,6 +6164,23 @@ export const setupAgentResponder = setupAgentDispatcher;
 export const __test__ = {
   buildContextMessages,
   awaitMediaProcessing,
+  // Read helpers converted in the G5 read-path leg — exported so the
+  // worker-scope probes can assert their threading contract directly.
+  resolveQuotedMessage,
+  resolveContactName,
+  resolvePersonId,
+  resolveLidMentionBot,
+  resolveEffectiveReplyFilter,
+  resolveSlackThreadReply,
+  // The two inbound GUARDS. Exported so a probe can prove they THREAD the
+  // envelope-derived tenant into the access read — a property of the call site
+  // that no probe of `AccessService` itself can pin (the run12 lesson).
+  shouldProcessMessage,
+  shouldProcessReaction,
+  checkAccessWithFallback,
+  fetchSenderMetadata,
+  fetchChatMetadata,
+  applyCloseContactGate,
   downloadToTempFile,
   mediaCompletions,
   mediaResultCache,
@@ -5652,6 +6189,12 @@ export const __test__ = {
   extractMediaFiles,
   formatProcessedMedia,
   resolveDispatchMediaPath,
+  trustedDispatchTenant,
+  checkPerThreadSessionExists,
+  markPerThreadSessionInitialized,
+  listActiveOwnerIdentifiers,
+  resetActiveOwnerIdentifiersCache,
+  persistErrorHandoffSideEffects,
   MEDIA_WAIT_NULL,
   extractA2ACustomerContext,
   resolveCustomerContext,
@@ -5668,5 +6211,22 @@ export const __test__ = {
   /** Reset to the real NatsGenieProvider (call in afterEach). */
   resetNatsGenieProviderClass() {
     _natsGenieProviderCtor = NatsGenieProvider;
+  },
+  /** Override the OpenClawClient constructor for tests (no WS is opened). */
+  set OpenClawClientClass(cls: typeof OpenClawClient) {
+    _openClawClientCtor = cls;
+  },
+  /** Reset to the real OpenClawClient (call in afterEach). */
+  resetOpenClawClientClass() {
+    _openClawClientCtor = OpenClawClient;
+  },
+  /** The live pool keys (`providerId::tenant`) — for the pool-partitioning probes. */
+  openclawPoolKeys(): string[] {
+    return [...openclawClientPool.keys()];
+  },
+  /** Drop both provider caches WITHOUT stopping anything (test isolation only). */
+  resetProviderCaches() {
+    providerCache.clear();
+    openclawClientPool.clear();
   },
 };

@@ -50,6 +50,14 @@ export interface FollowUpStateRow {
   channelType?: ChannelType | null;
   /** Timestamp of the most recent inbound customer message — consumed by the 24h BSP window guard. */
   lastInboundCustomerMessageAt?: Date | null;
+  /**
+   * Trusted tenant of the row (G5, ADR-0008) — the row's PERSISTED ownership,
+   * read by the repo's claim query, never a caller/payload assertion. When set,
+   * every event this row fires carries it as explicit envelope metadata so
+   * downstream consumers classify `tenant` and establish the worker context.
+   * Legacy rows leave it unset and their envelopes stay byte-identical.
+   */
+  tenantId?: string | null;
 }
 
 /**
@@ -156,6 +164,20 @@ export function renderSyntheticPrompt(
 }
 
 /**
+ * Envelope metadata for a row's fired events. Spreads the row's trusted tenant
+ * (persisted ownership, claimed by the repo — G5, ADR-0008) when present so the
+ * publish stamps a versioned tenant envelope; a legacy row spreads nothing and
+ * its envelope is byte-identical to pre-G5.
+ */
+function rowEventMetadata(row: FollowUpStateRow): Record<string, string> {
+  return {
+    instanceId: row.instanceId,
+    ...(row.agentId ? { agentId: row.agentId } : {}),
+    ...(row.tenantId ? { tenantId: row.tenantId } : {}),
+  };
+}
+
+/**
  * Run one sweep tick. Safe to call concurrently thanks to the repo's locking
  * contract (see `findAndLockDue`).
  */
@@ -233,10 +255,7 @@ async function processRow(row: FollowUpStateRow, now: Date, deps: SweeperDeps, s
     ...(row.chatName ? { chatName: row.chatName } : {}),
   };
 
-  await deps.eventBus.publish('chat.idle_timeout', idlePayload, {
-    instanceId: row.instanceId,
-    ...(row.agentId ? { agentId: row.agentId } : {}),
-  });
+  await deps.eventBus.publish('chat.idle_timeout', idlePayload, rowEventMetadata(row));
 
   const firedPayload: FollowUpFiredPayload = {
     chatId: row.chatId,
@@ -246,10 +265,7 @@ async function processRow(row: FollowUpStateRow, now: Date, deps: SweeperDeps, s
     firedAt: now.getTime(),
     syntheticPrompt,
   };
-  await deps.eventBus.publish('follow_up.fired', firedPayload, {
-    instanceId: row.instanceId,
-    ...(row.agentId ? { agentId: row.agentId } : {}),
-  });
+  await deps.eventBus.publish('follow_up.fired', firedPayload, rowEventMetadata(row));
 
   // Advance the sequence — compute next fire or complete.
   const nextFireAtMs = computeNextFireAt(row.sequenceConfig, row.sequenceIndex, now.getTime());
@@ -288,10 +304,7 @@ async function processRow(row: FollowUpStateRow, now: Date, deps: SweeperDeps, s
     sequenceIndex: nextIndex,
     nextFireAt: nextFireAtMs,
   };
-  await deps.eventBus.publish('follow_up.armed', armedPayload, {
-    instanceId: row.instanceId,
-    ...(row.agentId ? { agentId: row.agentId } : {}),
-  });
+  await deps.eventBus.publish('follow_up.armed', armedPayload, rowEventMetadata(row));
 
   stats.fired += 1;
 }
@@ -319,10 +332,7 @@ async function emitDisarmed(
     sequenceIndex,
     reason,
   };
-  await deps.eventBus.publish('follow_up.disarmed', payload, {
-    instanceId: row.instanceId,
-    ...(row.agentId ? { agentId: row.agentId } : {}),
-  });
+  await deps.eventBus.publish('follow_up.disarmed', payload, rowEventMetadata(row));
 }
 
 async function emitSkipped(deps: SweeperDeps, row: FollowUpStateRow, reason: string): Promise<void> {
@@ -334,10 +344,7 @@ async function emitSkipped(deps: SweeperDeps, row: FollowUpStateRow, reason: str
     reason,
   };
   try {
-    await deps.eventBus.publish('follow_up.skipped', payload, {
-      instanceId: row.instanceId,
-      ...(row.agentId ? { agentId: row.agentId } : {}),
-    });
+    await deps.eventBus.publish('follow_up.skipped', payload, rowEventMetadata(row));
   } catch (err) {
     deps.logger.error('follow-up sweeper: failed to emit follow_up.skipped', {
       id: row.id,

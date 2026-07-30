@@ -20,7 +20,9 @@ import {
 import type { Database, OmniEvent } from '@omni/db';
 import { omniEvents } from '@omni/db';
 import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
-import { runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { isTenantWorkAdmissible } from '../tenancy/periodic-tenant-work';
+import { currentTenantScope, runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import type { DeadLetterService } from './dead-letters';
 import type { PayloadStoreService } from './payload-store';
 
@@ -82,12 +84,46 @@ export class EventOpsService {
     return scopedHandle(this.pool);
   }
 
+  /**
+   * The auth-plane read connection, injected after construction by
+   * `services/index.ts` (mirrors `followUpSweeper.setAuthPlane`). It is where the
+   * detached replay executor revalidates the replay's tenant is still admissible
+   * at dequeue (see {@link isReplayTenantAdmissible}). Legacy deployments omit it;
+   * a NULL-tenant replay is admissible without any read.
+   */
+  private authPlaneDb: Database | null = null;
+
   constructor(
     private readonly pool: Database,
     private eventBus: EventBus | null,
     private deadLetterService: DeadLetterService,
     private payloadStoreService: PayloadStoreService,
   ) {}
+
+  /**
+   * Inject the auth-plane read connection (wired by `services/index.ts`). Used
+   * only for dequeue-time tenant revalidation of the replay executor.
+   */
+  setAuthPlane(authPlaneDb: Database): void {
+    this.authPlaneDb = authPlaneDb;
+  }
+
+  /**
+   * Dequeue-time tenant revalidation for the background replay (RELEASE_SLOS
+   * "queued_retry_delayed_dlq_check"). A NULL-tenant (legacy) replay is always
+   * admissible and never touches the auth plane. A tenant replay is admissible
+   * only while its tenant is still `active`. Fails CLOSED for a tenant replay
+   * when no auth-plane connection was injected (the multitenancy world always
+   * wires one).
+   */
+  private async isReplayTenantAdmissible(replayTenantId: string | null): Promise<boolean> {
+    if (!replayTenantId) return true;
+    if (!this.authPlaneDb) {
+      log.warn('Replay has a tenant but no auth-plane connection is wired — refusing to run', { replayTenantId });
+      return false;
+    }
+    return isTenantWorkAdmissible(this.authPlaneDb, replayTenantId);
+  }
 
   // ===========================================================================
   // REPLAY OPERATIONS
@@ -96,7 +132,7 @@ export class EventOpsService {
   /**
    * Start a replay session
    */
-  async startReplay(options: ReplayOptions): Promise<ReplaySession> {
+  async startReplay(options: ReplayOptions, trustedTenantId?: string | null): Promise<ReplaySession> {
     // Validate options
     const validation = validateReplayOptions(options);
     if (!validation.valid) {
@@ -153,6 +189,12 @@ export class EventOpsService {
       }
     }
 
+    // Capture the TRUSTED replay tenant BEFORE detaching (G5, ADR-0008). A
+    // request path supplies it through the active scope; a non-request caller
+    // threads it explicitly. It travels into the executor as a VALUE — the
+    // executor must never read ALS (see the detach rationale below).
+    const replayTenantId = currentTenantScope()?.tenantId ?? trustedTenantId ?? null;
+
     // Start replay in background.
     //
     // `startReplay` may be running inside a tenant-scoped request transaction
@@ -160,9 +202,9 @@ export class EventOpsService {
     // scope: it outlives the request, and by the time its batch queries run the
     // request's transaction has committed and its pooled connection has been
     // released — issuing a query on it would be a use-after-commit. Detaching
-    // pins the executor (and every query it makes via `this.db`) to the ambient
-    // pool, the worker-context path G5 will own.
-    runDetachedFromTenantScope(() => this.executeReplay(sessionId, options)).catch((err) => {
+    // pins the executor to the ambient pool; each discrete DB block then opens
+    // its OWN short worker scope from the captured `replayTenantId`.
+    runDetachedFromTenantScope(() => this.executeReplay(sessionId, options, replayTenantId)).catch((err) => {
       log.error('Replay failed', { sessionId, error: String(err) });
     });
 
@@ -357,9 +399,23 @@ export class EventOpsService {
    * Execute replay in background
    */
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Replay execution is inherently complex
-  private async executeReplay(sessionId: string, options: ReplayOptions): Promise<void> {
+  private async executeReplay(sessionId: string, options: ReplayOptions, replayTenantId: string | null): Promise<void> {
     const session = this.replaySessions.get(sessionId);
     if (!session) return;
+
+    // Dequeue-time revalidation (RELEASE_SLOS "queued_retry_delayed_dlq_check"):
+    // between the request that started this replay and the moment the detached
+    // executor actually runs, the replay's tenant may have been suspended. A
+    // legacy (null-tenant) replay is always admissible. An inadmissible tenant
+    // stops the replay before ANY event is republished — no durable side effect.
+    if (!(await this.isReplayTenantAdmissible(replayTenantId))) {
+      session.status = 'failed';
+      session.error = 'replay tenant is no longer admissible (suspended/archived)';
+      session.completedAt = new Date();
+      this.activeReplayId = null;
+      log.warn('Replay refused at dequeue — tenant inadmissible', { sessionId, replayTenantId });
+      return;
+    }
 
     const errors: Array<{ eventId: string; error: string }> = [];
     const batchSize = 100;
@@ -367,14 +423,28 @@ export class EventOpsService {
 
     try {
       while (session.status === 'running') {
-        // Fetch batch of events
-        const events = await this.db
-          .select()
-          .from(omniEvents)
-          .where(this.buildReplayWhereClause(options))
-          .orderBy(asc(omniEvents.receivedAt))
-          .limit(batchSize)
-          .offset(offset);
+        // Re-revalidate before EACH batch of durable side effects (the batch
+        // below republishes events). A tenant suspended mid-replay stops at the
+        // next batch boundary. Legacy replays short-circuit to admissible.
+        if (!(await this.isReplayTenantAdmissible(replayTenantId))) {
+          session.status = 'failed';
+          session.error = 'replay tenant became inadmissible mid-replay (suspended/archived)';
+          log.warn('Replay halted mid-run — tenant inadmissible', { sessionId, replayTenantId });
+          break;
+        }
+
+        // Fetch batch of events — a discrete DB block scoped to the replay's
+        // tenant (G5): under enforcement only that tenant's `omni_events` are
+        // visible; a legacy replay reads ambient byte-identically.
+        const events = await runTenantWorkDb(this.pool, replayTenantId, () =>
+          this.db
+            .select()
+            .from(omniEvents)
+            .where(this.buildReplayWhereClause(options))
+            .orderBy(asc(omniEvents.receivedAt))
+            .limit(batchSize)
+            .offset(offset),
+        );
 
         if (events.length === 0) break;
 

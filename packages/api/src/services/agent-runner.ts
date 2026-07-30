@@ -21,6 +21,8 @@ import type { AgentReplyFilter, AgentSessionStrategy, ChannelType, Instance } fr
 import type { Database } from '@omni/db';
 import { agentProviders, instances, persons } from '@omni/db';
 import { eq } from 'drizzle-orm';
+import { isSealedCredentialField, openCredentialField } from '../tenancy/sealed-credentials';
+import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 
 const log = createLogger('agent-runner');
 
@@ -314,16 +316,33 @@ async function* processStreamChunks(
 // ============================================================================
 
 export class AgentRunnerService {
+  /**
+   * Provider clients, keyed `providerId::tenant`.
+   *
+   * TENANT IN THE KEY (G5; ADR-0008). A cached `IAgentClient` holds the
+   * `apiKey` it was built with and sends it as the provider's bearer
+   * credential, so this map caches a CREDENTIAL. `agent_providers` has no
+   * `tenant_id` (G0-`split`), so one provider row is reachable from instances of
+   * different tenants; keyed by provider id alone the first caller's client —
+   * and its key — would be served to every later tenant. The scope-less legacy
+   * path keys on `-`, so it still shares exactly one client per provider.
+   */
   private clientCache: Map<string, IAgentClient> = new Map();
 
   constructor(private db: Database) {}
+
+  /** The cache key for `providerId` under the tenant scope active right now. */
+  private clientCacheKey(providerId: string): string {
+    return `${providerId}::${currentTenantScope()?.tenantId ?? '-'}`;
+  }
 
   /**
    * Get or create an Agno client for a provider
    */
   private async getClient(providerId: string): Promise<IAgentClient> {
     // Check cache
-    const cached = this.clientCache.get(providerId);
+    const cacheKey = this.clientCacheKey(providerId);
+    const cached = this.clientCache.get(cacheKey);
     if (cached) return cached;
 
     // Fetch provider config from DB
@@ -339,28 +358,69 @@ export class AgentRunnerService {
       });
     }
 
-    if (!provider.apiKey) {
-      throw new ProviderError(`Provider ${providerId} has no API key configured`, 'AUTHENTICATION_FAILED', 401);
+    // G5 deliverable (g) (ADR-0008): `agent_providers.api_key` may hold a SEALED
+    // envelope. `ProviderService` is where that column is sealed, but this is a
+    // second reader — the legacy dispatch fallback and the `call_agent`
+    // automation action both land here — and what it produces goes on the wire
+    // as `Authorization: Bearer …`. Forwarding the envelope would leak
+    // ciphertext AND the tenant UUID into the provider's request logs and
+    // produce a 401 with no visible cause, which `tenancy/sealed-credentials.ts`
+    // names as the outcome that must never happen.
+    //
+    // DUAL WORLD, by construction: `openCredentialField` is the identity
+    // function for legacy plaintext and whenever no master key is configured, so
+    // a flag-off/key-absent deployment hands `createProviderClient` exactly the
+    // bytes it handed it before (g). Only a sealed value is decided here, and it
+    // fails CLOSED — a null never becomes a bearer token.
+    const apiKey = openCredentialField(currentTenantScope()?.tenantId ?? null, provider.apiKey);
+
+    if (!apiKey) {
+      throw new ProviderError(
+        isSealedCredentialField(provider.apiKey)
+          ? `Provider ${providerId} credential is not available in this tenant context`
+          : `Provider ${providerId} has no API key configured`,
+        'AUTHENTICATION_FAILED',
+        401,
+      );
     }
 
     // Create client
     const client = createProviderClient({
       schema: provider.schema,
       baseUrl: provider.baseUrl,
-      apiKey: provider.apiKey,
+      apiKey,
       defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
     });
 
     // Cache it
-    this.clientCache.set(providerId, client);
+    this.clientCache.set(cacheKey, client);
     return client;
   }
 
   /**
-   * Get full instance config with provider details
+   * Get full instance config with provider details.
+   *
+   * TENANT BOUNDARY (G5, ADR-0008). This is the lookup EVERY dispatch path
+   * starts from and it has zero HTTP callers — every caller is a NATS consumer.
+   * The read now goes through `scopedHandle`, so:
+   *
+   *   * inside a worker tenant scope (the converted consumers, which open one
+   *     from their envelope-derived tenant) it runs on that tenant-stamped
+   *     transaction and RLS decides visibility — a forged/foreign instanceId
+   *     resolves to `null` and the dispatch simply has nothing to act on;
+   *   * with no scope active — a legacy envelope, or the deprecated
+   *     `agent-responder` path — `scopedHandle` returns the ambient pool and the
+   *     query issued is byte-for-byte the pre-G5 one.
+   *
+   * `null` therefore means "not visible to this tenant" as well as "absent", and
+   * every caller already treats `null` as "skip".
    */
   async getInstanceWithProvider(instanceId: string): Promise<Instance | null> {
-    const [instance] = await this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1);
+    const [instance] = await scopedHandle(this.db)
+      .select()
+      .from(instances)
+      .where(eq(instances.id, instanceId))
+      .limit(1);
 
     return instance ?? null;
   }
@@ -601,7 +661,11 @@ export class AgentRunnerService {
    */
   clearCache(providerId?: string): void {
     if (providerId) {
-      this.clientCache.delete(providerId);
+      // Every TENANT's client for this provider (the key is `providerId::tenant`).
+      const prefix = `${providerId}::`;
+      for (const key of this.clientCache.keys()) {
+        if (key.startsWith(prefix)) this.clientCache.delete(key);
+      }
     } else {
       this.clientCache.clear();
     }

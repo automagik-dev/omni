@@ -355,37 +355,38 @@ make migrate-messages      # Live migration
 > **New work = PR to dev. Fixes = direct commit to dev.**
 
 ```
-main <── homolog <── dev <── feature PRs (auto-merge)
-  ▲          ▲         |
-promote   promote      └── direct commits (fixes/hotfixes)
-(human)   (human)
+main <── dev <── feature PRs (auto-merge)
+  ▲       |
+promote   └── direct commits (fixes/hotfixes)
+(human)
 ```
 
-Promotion is a **two-hop carry-exact roll**: `dev → homolog → main`. `dev` is
-integration; `homolog` is the staging/hml gate that must go green before
-production; `main` is production. Each hop is a PR a human merges — the version
-carries exactly (bump on `dev` only, never re-bumped on promotion).
+Promotion is a **single carry-exact hop**: `dev → main`. `dev` is integration;
+`main` is production. The hop is a PR a human merges — the version carries
+exactly (bump on `dev` only, never re-bumped on promotion).
+
+The `homolog` branch and its two-hop flow were retired on 2026-07-29: every
+promotion had been going `dev → main` directly anyway, leaving `homolog` 83
+commits stale, and the extra gate cost more than it caught at omni's current
+maturity. Its release-channel plumbing (`homolog` npm dist-tag,
+`.well-known/homolog.json`, HML image builds) is left dormant in the workflows
+rather than deleted, so restoring the gate later is re-creating one branch.
+The `omni-hml` Kubernetes namespace and `values-homolog.yaml` are the *staging
+environment* and are unaffected — they were never the same thing as the branch.
 
 ### Branch Roles
 
 | Branch | Purpose | Who commits | Protection |
 |--------|---------|-------------|------------|
-| `main` | Production | Human merges `homolog → main` promotion PR | PR-only, all checks required |
-| `homolog` | Staging / hml gate | Human merges `dev → homolog` promotion PR | PR-only, checks required |
+| `main` | Production | Human merges `dev → main` promotion PR | PR-only, all checks required |
 | `dev` | Integration | Agent + PRs | Direct commits OK, PRs need checks |
 | `feat/*` | New features | Worktrees, PR to `dev` | Auto-merge when green |
 | `fix/*` | Bug fixes | Direct on `dev` or worktree | — |
 
-### Promotion (dev → homolog → main)
+### Promotion (dev → main)
 
-1. **`dev → homolog`** — open when `dev` is ahead of `homolog` and green. Carry-exact
-   (no version re-bump). Human merges after homolog CI passes.
-2. **`homolog → main`** — open once `homolog` carries the promoted content. Human
-   merges; `main` merge triggers release-please. Keep `homolog` and `dev` in sync so
-   the next `dev → homolog` never re-conflicts on version files.
-
-Keep `homolog` fast-forwardable from `dev` (reset/promote, never let it drift) so
-promotions stay carry-exact rather than turning into version-file merge conflicts.
+Open when `dev` is ahead of `main` and green. Carry-exact (no version re-bump).
+A human merges after CI passes; the `main` merge triggers release-please.
 
 ### Conventional Commits (Required)
 

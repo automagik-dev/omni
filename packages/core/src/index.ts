@@ -55,6 +55,15 @@ export {
 // Metrics
 export * from './metrics';
 
+// Observability sink — redacted tenant fields for audit logs and traces (G5;
+// ADR-0008). The bounded/redacted metric-label counterpart travels with ./metrics.
+export * from './observability';
+
+// Tenant-bound secret sealing — credential/session-secret encryption with a
+// per-tenant key + tenant-as-AAD binding (G5; ADR-0008;
+// OWNERSHIP_MANIFEST `filesystem_session_state`).
+export * from './secrets';
+
 // Automations
 export * from './automations';
 
@@ -72,3 +81,7 @@ export * from './tracing';
 
 // Hooks
 export * from './hooks';
+
+// Tenant-egress broker (ADR-0009). The architecture guard beside it is a
+// dev/test tool and is intentionally NOT re-exported from the package root.
+export * from './egress';

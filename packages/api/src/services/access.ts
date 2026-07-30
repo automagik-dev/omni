@@ -18,8 +18,9 @@ import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type AccessMode, type AccessRule, type NewAccessRule, type RuleType, accessRules, instances } from '@omni/db';
 import { type SQL, and, count, desc, eq, gt, isNull, ne, or, sql } from 'drizzle-orm';
-import { CacheKeys } from '../cache/cache-keys';
+import { CacheKeys, CacheTTL, authCacheTtlMs } from '../cache/cache-keys';
 import { scopedHandle } from '../tenancy/tenant-scope';
+import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 
 /** Default pairing request expiry: 1 hour */
 const DEFAULT_PAIRING_EXPIRY_MS = 60 * 60 * 1000;
@@ -186,6 +187,7 @@ export class AccessService {
     instance: { id: string; accessMode: AccessMode },
     platformUserId: string,
     _channel: string,
+    trustedTenantId?: string | null,
   ): Promise<CheckAccessResult> {
     const { id: instanceId, accessMode } = instance;
 
@@ -193,15 +195,30 @@ export class AccessService {
       return { allowed: true, reason: 'Access control disabled', mode: 'disabled' };
     }
 
+    // The cache key carries the instance UUID, which belongs to exactly one
+    // tenant, so a decision cached for tenant A is unreachable from tenant B
+    // without already knowing that tenant's instance id. No tenant segment is
+    // added: changing the key would change flag-off cache behaviour.
     const cacheKey = CacheKeys.accessCheck(instanceId, platformUserId);
     const cached = await this.cache?.get<CheckAccessResult>(cacheKey);
     if (cached) return cached;
 
-    const rules = await this.getApplicableRules(instanceId);
+    // Discrete DB block in the caller's world (G5, ADR-0008): a consumer threads
+    // its envelope-derived tenant, so the ALLOW/DENY decision is evaluated
+    // against rules read inside that tenant's transaction. The scope closes
+    // before the decision publish below. A request caller threads nothing and
+    // stays on the edge transaction; a legacy consumer runs ambient,
+    // byte-identically to pre-G5.
+    const rules = await runTenantWorkDb(this.pool, trustedTenantId, () => this.getApplicableRules(instanceId));
     const matchingRule = rules.find((rule) => this.ruleMatches(rule, platformUserId));
     const result = this.evaluateMode(accessMode, matchingRule);
 
-    await this.cache?.set(cacheKey, result);
+    // G5 (RELEASE_SLOS auth_cache_invalidation_seconds_max): an allow/deny
+    // decision is cached authorization state — clamped to the revocation
+    // ceiling when multitenancy is enabled; the legacy 5-minute TTL flag-off
+    // (the explicit argument equals the cache's default, so flag-off behavior
+    // is unchanged).
+    await this.cache?.set(cacheKey, result, authCacheTtlMs(CacheTTL.ACCESS_CHECK));
     await this.publishResult(instanceId, platformUserId, result);
 
     return result;
@@ -240,105 +257,114 @@ export class AccessService {
     instanceId: string,
     platformUserId: string,
     options: { expiryMs?: number; channelType?: string } = {},
+    trustedTenantId?: string | null,
   ): Promise<PairingRequest | null> {
     const expiryMs = options.expiryMs ?? DEFAULT_PAIRING_EXPIRY_MS;
 
     // Run the check + insert atomically under a per-instance advisory lock.
     // pg_advisory_xact_lock serializes concurrent calls for the same instance
     // and is released automatically when the transaction ends.
-    const txResult = await this.db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${instanceId}))`);
+    //
+    // G5 (ADR-0008): a consumer caller threads its envelope-derived tenant, so
+    // the whole locked block runs inside that tenant's worker transaction (the
+    // advisory lock and the pairing rows are then tenant-scoped together). The
+    // event publish below stays OUTSIDE it. A legacy caller threads nothing and
+    // the transaction opens on the ambient pool exactly as before.
+    const txResult = await runTenantWorkDb(this.pool, trustedTenantId, () =>
+      this.db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${instanceId}))`);
 
-      // Clean expired requests
-      await tx
-        .delete(accessRules)
-        .where(
-          and(
-            eq(accessRules.instanceId, instanceId),
-            eq(accessRules.ruleType, 'pending_pairing'),
-            sql`${accessRules.expiresAt} <= now()`,
-          ),
-        );
+        // Clean expired requests
+        await tx
+          .delete(accessRules)
+          .where(
+            and(
+              eq(accessRules.instanceId, instanceId),
+              eq(accessRules.ruleType, 'pending_pairing'),
+              sql`${accessRules.expiresAt} <= now()`,
+            ),
+          );
 
-      // Reuse existing code if sender already has a pending request
-      const [existing] = await tx
-        .select()
-        .from(accessRules)
-        .where(
-          and(
-            eq(accessRules.instanceId, instanceId),
-            eq(accessRules.ruleType, 'pending_pairing'),
-            eq(accessRules.platformUserId, platformUserId),
-            gt(accessRules.expiresAt, new Date()),
-          ),
-        )
-        .limit(1);
+        // Reuse existing code if sender already has a pending request
+        const [existing] = await tx
+          .select()
+          .from(accessRules)
+          .where(
+            and(
+              eq(accessRules.instanceId, instanceId),
+              eq(accessRules.ruleType, 'pending_pairing'),
+              eq(accessRules.platformUserId, platformUserId),
+              gt(accessRules.expiresAt, new Date()),
+            ),
+          )
+          .limit(1);
 
-      if (existing) {
-        const metadata = existing.metadata as Record<string, unknown> | null;
+        if (existing) {
+          const metadata = existing.metadata as Record<string, unknown> | null;
+          return {
+            request: {
+              id: existing.id,
+              instanceId: existing.instanceId ?? instanceId,
+              platformUserId: existing.platformUserId ?? platformUserId,
+              pairingCode: (metadata?.pairingCode as string) ?? '',
+              expiresAt: existing.expiresAt ?? new Date(Date.now() + expiryMs),
+              createdAt: existing.createdAt,
+            } satisfies PairingRequest,
+            isNew: false,
+          };
+        }
+
+        // Rate limit: max pending per instance
+        const [countResult] = await tx
+          .select({ count: count() })
+          .from(accessRules)
+          .where(
+            and(
+              eq(accessRules.instanceId, instanceId),
+              eq(accessRules.ruleType, 'pending_pairing'),
+              gt(accessRules.expiresAt, new Date()),
+            ),
+          );
+
+        if ((countResult?.count ?? 0) >= MAX_PENDING_PER_INSTANCE) {
+          return null; // Rate-limited
+        }
+
+        // Generate code and insert new pairing request
+        const pairingCode = AccessService.generatePairingCode();
+        const expiresAt = new Date(Date.now() + expiryMs);
+
+        const [rule] = await tx
+          .insert(accessRules)
+          .values({
+            instanceId,
+            ruleType: 'pending_pairing',
+            platformUserId,
+            priority: 0,
+            enabled: true,
+            action: 'block',
+            expiresAt,
+            metadata: { pairingCode, requestedAt: Date.now() },
+          })
+          .returning();
+
+        if (!rule) {
+          throw new Error('Failed to create pairing request');
+        }
+
         return {
           request: {
-            id: existing.id,
-            instanceId: existing.instanceId ?? instanceId,
-            platformUserId: existing.platformUserId ?? platformUserId,
-            pairingCode: (metadata?.pairingCode as string) ?? '',
-            expiresAt: existing.expiresAt ?? new Date(Date.now() + expiryMs),
-            createdAt: existing.createdAt,
+            id: rule.id,
+            instanceId,
+            platformUserId,
+            pairingCode,
+            expiresAt,
+            createdAt: rule.createdAt,
           } satisfies PairingRequest,
-          isNew: false,
+          isNew: true,
         };
-      }
-
-      // Rate limit: max pending per instance
-      const [countResult] = await tx
-        .select({ count: count() })
-        .from(accessRules)
-        .where(
-          and(
-            eq(accessRules.instanceId, instanceId),
-            eq(accessRules.ruleType, 'pending_pairing'),
-            gt(accessRules.expiresAt, new Date()),
-          ),
-        );
-
-      if ((countResult?.count ?? 0) >= MAX_PENDING_PER_INSTANCE) {
-        return null; // Rate-limited
-      }
-
-      // Generate code and insert new pairing request
-      const pairingCode = AccessService.generatePairingCode();
-      const expiresAt = new Date(Date.now() + expiryMs);
-
-      const [rule] = await tx
-        .insert(accessRules)
-        .values({
-          instanceId,
-          ruleType: 'pending_pairing',
-          platformUserId,
-          priority: 0,
-          enabled: true,
-          action: 'block',
-          expiresAt,
-          metadata: { pairingCode, requestedAt: Date.now() },
-        })
-        .returning();
-
-      if (!rule) {
-        throw new Error('Failed to create pairing request');
-      }
-
-      return {
-        request: {
-          id: rule.id,
-          instanceId,
-          platformUserId,
-          pairingCode,
-          expiresAt,
-          createdAt: rule.createdAt,
-        } satisfies PairingRequest,
-        isNew: true,
-      };
-    });
+      }),
+    );
 
     if (!txResult) return null;
 

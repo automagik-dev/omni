@@ -156,7 +156,12 @@ describe.skipIf(!hasDocker)('media-processor remote read (MinIO)', () => {
       published,
     });
 
-    await processMessageMedia(ctx, audioPayload, { instanceId: 'inst-1', channelType: 'whatsapp-baileys' });
+    await processMessageMedia(
+      ctx,
+      audioPayload,
+      { instanceId: 'inst-1', channelType: 'whatsapp-baileys' },
+      { metadata: { correlationId: 'legacy' } },
+    );
 
     // The processor received a real, readable temp path — not the S3 key and not
     // a path under the local media base dir.
@@ -190,7 +195,12 @@ describe.skipIf(!hasDocker)('media-processor remote read (MinIO)', () => {
     });
 
     await expect(
-      processMessageMedia(ctx, audioPayload, { instanceId: 'inst-1', channelType: 'whatsapp-baileys' }),
+      processMessageMedia(
+        ctx,
+        audioPayload,
+        { instanceId: 'inst-1', channelType: 'whatsapp-baileys' },
+        { metadata: { correlationId: 'legacy' } },
+      ),
     ).rejects.toThrow('synthetic processing failure');
 
     // The temp file existed (bytes were read) but was removed by the finally block.
@@ -234,7 +244,12 @@ describe('media-processor local read (no MinIO)', () => {
       published,
     });
 
-    await processMessageMedia(ctx, audioPayload, { instanceId: 'inst-local', channelType: 'whatsapp-baileys' });
+    await processMessageMedia(
+      ctx,
+      audioPayload,
+      { instanceId: 'inst-local', channelType: 'whatsapp-baileys' },
+      { metadata: { correlationId: 'legacy' } },
+    );
 
     // Local mode hands the processor the canonical on-disk path (byte-for-byte
     // the pre-remote behavior), never a temp file.

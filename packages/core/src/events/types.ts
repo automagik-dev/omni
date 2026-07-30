@@ -187,6 +187,18 @@ export interface EventMetadata {
   timings?: Record<string, number>;
   /** agents.id UUID — set when an agent processes/sends this event */
   agentId?: string;
+  /**
+   * Versioned tenant-aware envelope (G5, ADR-0008). Both fields are stamped
+   * together by `stampTenantEnvelope` ONLY when a tenant context is present;
+   * a flag-off/legacy publish leaves both undefined and behaves byte-for-byte
+   * as before. Consumers classify on these via `classifyEnvelope` — see
+   * `events/envelope.ts`. `tenantId` is a trusted value derived by the producer
+   * from an authenticated context or a loaded resource's persisted ownership,
+   * never a caller/payload claim.
+   */
+  envelopeVersion?: number;
+  /** Trusted tenant this event belongs to; see `envelopeVersion`. */
+  tenantId?: string;
 }
 
 /**
