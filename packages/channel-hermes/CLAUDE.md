@@ -66,7 +66,7 @@ Throw `HermesApiError(code, message, context)` everywhere. Mapping is HTTP-statu
 
 ## Spec provenance
 
-Extracted from the official **Mutant Postman collection ("Hermes API")** — endpoints,
+Extracted from the official **Mutant Postman collection ("Hermes API"; the brand spells it "H3rmes")** — endpoints,
 payload examples and webhook fixtures all originate there. Features documented in the
 collection but not implemented in v1: marketing messages lite, block users, conversions
 events, CTA/product/catalog/flow/payment interactive variants, carousel/flow/payment

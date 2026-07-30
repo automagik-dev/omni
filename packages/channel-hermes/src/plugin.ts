@@ -57,7 +57,7 @@ interface HermesInstanceState {
 
 export class HermesPlugin extends BaseChannelPlugin {
   readonly id = 'hermes' as ChannelType;
-  readonly name = 'WhatsApp (Hermes / Mutant)';
+  readonly name = 'WhatsApp (H3rmes / Mutant)';
   readonly version = '1.0.0';
   readonly capabilities: ChannelCapabilities = HERMES_CAPABILITIES;
 

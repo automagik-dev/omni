@@ -52,7 +52,7 @@ Think of Omni as a deep-sea octopus. Each **channel** is a tentacle reaching int
 | **Telegram** | ✅ Available | Bot API, inline keyboards, groups, channels, threads, polls |
 | **A2A** | ✅ Available | Agent-to-agent channel integrations |
 | **Gupshup** | ✅ Available | Custom Integration webhook support |
-| **Hermes** (Mutant) | ✅ Available | Brazilian WhatsApp gateway — JWT auth, media, templates, interactive, Pix-ready webhook shapes |
+| **H3rmes** (Mutant) | ✅ Available | Brazilian WhatsApp gateway — JWT auth, media, templates, interactive, Pix-ready webhook shapes |
 | **Twilio WhatsApp** | ✅ Available | Twilio sender, webhook, and signature validation support |
 
 ## Install
