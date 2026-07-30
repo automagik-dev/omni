@@ -43,6 +43,7 @@ export const channelTypes = [
   'telegram',
   'a2a',
   'gupshup',
+  'hermes',
   'twilio-whatsapp',
   'internal',
 ] as const;
@@ -750,6 +751,19 @@ export const instances = pgTable(
     metaConnectionMethod: varchar('meta_connection_method', { length: 32 }).default('manual'),
     metaDisplayPhoneNumber: varchar('meta_display_phone_number', { length: 32 }),
     metaConnectedAt: timestamp('meta_connected_at', { withTimezone: true }),
+
+    // ---- Hermes (Mutant WhatsApp gateway) Configuration ----
+    // Per-instance credentials for the H3rmes API (Brazilian BSP-style gateway).
+    // hermesPassword is stored plain text for parity with the other channel
+    // credentials above — same cross-channel encryption-at-rest tech debt.
+    /** Customer-specific API base URL (each Hermes tenant gets its own host). */
+    hermesBaseUrl: text('hermes_base_url'),
+    hermesUsername: varchar('hermes_username', { length: 255 }),
+    hermesPassword: text('hermes_password'),
+    /** Hermes UUID of the WhatsApp LINE ("media_id" in their API) — webhook resolution key. */
+    hermesMediaId: varchar('hermes_media_id', { length: 64 }),
+    /** Meta template namespace required by Hermes template sends. */
+    hermesTemplateNamespace: varchar('hermes_template_namespace', { length: 128 }),
 
     // ---- Agent Reference ----
     /** FK to agents table (phase 3: replaces legacy agentProviderId + agentId varchar). */

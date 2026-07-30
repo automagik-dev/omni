@@ -10,6 +10,7 @@ import { type ChannelPlugin, channelRegistry } from '@omni/channel-sdk';
 
 import discordPlugin from '@omni/channel-discord';
 import gupshupPlugin from '@omni/channel-gupshup';
+import hermesPlugin from '@omni/channel-hermes';
 import slackPlugin from '@omni/channel-slack';
 import telegramPlugin from '@omni/channel-telegram';
 import whatsappPlugin from '@omni/channel-whatsapp';
@@ -25,6 +26,7 @@ for (const plugin of [
   whatsappCloudPlugin,
   slackPlugin,
   gupshupPlugin,
+  hermesPlugin,
 ] as ChannelPlugin[]) {
   channelRegistry.register(plugin);
 }

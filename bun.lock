@@ -139,6 +139,21 @@
         "typescript": "^5.0.0",
       },
     },
+    "packages/channel-hermes": {
+      "name": "@omni/channel-hermes",
+      "version": "2.260727.2",
+      "dependencies": {
+        "@omni/channel-sdk": "workspace:*",
+        "@omni/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.3",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
     "packages/channel-internal": {
       "name": "@omni/channel-internal",
       "version": "2.260727.2",
@@ -238,7 +253,7 @@
     },
     "packages/channel-whatsapp-cloud": {
       "name": "@omni/channel-whatsapp-cloud",
-      "version": "2.260510.1",
+      "version": "2.260727.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -260,6 +275,7 @@
       },
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.62",
+        "@omni/channel-hermes": "workspace:*",
         "@sentry/bun": "^10.43.0",
         "@snazzah/davey": "^0.1.11",
         "chalk": "^5.4.0",
@@ -715,6 +731,8 @@
     "@omni/channel-discord": ["@omni/channel-discord@workspace:packages/channel-discord"],
 
     "@omni/channel-gupshup": ["@omni/channel-gupshup@workspace:packages/channel-gupshup"],
+
+    "@omni/channel-hermes": ["@omni/channel-hermes@workspace:packages/channel-hermes"],
 
     "@omni/channel-internal": ["@omni/channel-internal@workspace:packages/channel-internal"],
 

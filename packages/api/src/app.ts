@@ -291,6 +291,26 @@ export function createApp(
     return plugin.handleWebhook(c.req.raw);
   });
 
+  // Public Hermes (Mutant WhatsApp gateway) webhook endpoint — auth-exempt.
+  // Hermes has no signature mechanism: authenticity rests on the per-instance
+  // path (unguessable instance UUID) plus the handler's cross-check of the
+  // payload's media_id against the instance's configured hermes_media_id.
+  // Must be mounted before protectedApp so Mutant's servers can reach it.
+  app.post('/api/v2/channels/hermes/:instanceId/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('hermes');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Hermes plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Public WhatsApp Cloud (Meta) webhook endpoint — auth-exempt, signed by Meta with HMAC-SHA256.
   // Unlike Gupshup/Twilio, the URL is GLOBAL (no :instanceId in path): instance resolution
   // happens inside the plugin via `metadata.phone_number_id` from the payload.

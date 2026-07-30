@@ -9,7 +9,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License" /></a>
   <img src="https://img.shields.io/badge/runtime-Bun-f9f1e1?style=flat-square&logo=bun" alt="Bun" />
   <img src="https://img.shields.io/badge/version-2.260530.1-8b5cf6?style=flat-square" alt="v2.260530.1" />
-  <img src="https://img.shields.io/badge/channels-8-25D366?style=flat-square" alt="8 channels" />
+  <img src="https://img.shields.io/badge/channels-9-25D366?style=flat-square" alt="9 channels" />
   <img src="https://img.shields.io/badge/event%20bus-NATS%20JetStream-27AAE1?style=flat-square" alt="NATS JetStream" />
 </p>
 
@@ -52,6 +52,7 @@ Think of Omni as a deep-sea octopus. Each **channel** is a tentacle reaching int
 | **Telegram** | ✅ Available | Bot API, inline keyboards, groups, channels, threads, polls |
 | **A2A** | ✅ Available | Agent-to-agent channel integrations |
 | **Gupshup** | ✅ Available | Custom Integration webhook support |
+| **Hermes** (Mutant) | ✅ Available | Brazilian WhatsApp gateway — JWT auth, media, templates, interactive, Pix-ready webhook shapes |
 | **Twilio WhatsApp** | ✅ Available | Twilio sender, webhook, and signature validation support |
 
 ## Install

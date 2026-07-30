@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.62",
+    "@omni/channel-hermes": "workspace:*",
     "@sentry/bun": "^10.43.0",
     "@snazzah/davey": "^0.1.11",
     "chalk": "^5.4.0",
