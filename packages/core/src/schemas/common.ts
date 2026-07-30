@@ -5,6 +5,7 @@
 import { z } from 'zod';
 import { CORE_EVENT_TYPES } from '../events/types';
 import { PROVIDER_SCHEMAS } from '../types/agent';
+import { CHANNEL_TYPES, CONTENT_TYPES } from '../types/channel';
 
 /**
  * UUID schema
@@ -71,32 +72,17 @@ export const MetadataSchema = z.record(z.string(), z.unknown());
 /**
  * Channel type enum
  */
-export const ChannelTypeSchema = z.enum([
-  'whatsapp-baileys',
-  'whatsapp-cloud',
-  'discord',
-  'slack',
-  'telegram',
-  'a2a',
-  'gupshup',
-  'twilio-whatsapp',
-  'internal',
-]);
+// Derived from the CHANNEL_TYPES tuple so the Zod surface can never drift from
+// the type union again (the hermes channel shipped in types/channel.ts but was
+// missing here, making `POST /instances {channel:'hermes'}` impossible).
+export const ChannelTypeSchema = z.enum(CHANNEL_TYPES);
 
 /**
  * Content type enum
  */
-export const ContentTypeSchema = z.enum([
-  'text',
-  'audio',
-  'image',
-  'video',
-  'document',
-  'sticker',
-  'contact',
-  'location',
-  'reaction',
-]);
+// Derived from CONTENT_TYPES for the same no-drift reason (this list was
+// missing poll/template/flow/location_request and every other post-v1 type).
+export const ContentTypeSchema = z.enum(CONTENT_TYPES);
 
 /**
  * Event type enum

@@ -11,6 +11,7 @@
 
 import type { ProviderSchema as CoreProviderSchema, FollowUpSequenceConfig } from '@omni/core';
 import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJobConfig } from '@omni/core/events';
+import { CONTENT_TYPES, type ContentType as CoreContentType } from '@omni/core/types';
 import { relations, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
@@ -144,18 +145,10 @@ export type ApiKeyProfileOverrides = {
 export const eventTypes = CORE_EVENT_TYPES;
 export type EventType = CoreEventType;
 
-export const contentTypes = [
-  'text',
-  'audio',
-  'image',
-  'video',
-  'document',
-  'sticker',
-  'contact',
-  'location',
-  'reaction',
-] as const;
-export type ContentType = (typeof contentTypes)[number];
+// Derived from core CONTENT_TYPES (same no-drift rule as eventTypes above) —
+// this local tuple had fallen behind by ten content types.
+export const contentTypes = CONTENT_TYPES;
+export type ContentType = CoreContentType;
 
 // ============================================================================
 // UNIFIED MESSAGES ENUMS
