@@ -1,3 +1,4 @@
+import { WhatsAppCloudConnect } from '@/components/instances/WhatsAppCloudConnect';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -64,7 +65,6 @@ const CHANNEL_OPTIONS: {
     description: 'Official Meta API. Requires business verification.',
     icon: WhatsAppIcon,
     color: 'bg-green-600',
-    disabled: true, // TODO: Implement later
   },
   {
     value: 'twilio-whatsapp',
@@ -116,10 +116,13 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
       });
       setCreatedInstance(instance);
 
-      // For WhatsApp, go to connect step
-      if (channel.startsWith('whatsapp')) {
+      if (channel === 'whatsapp-cloud') {
+        // WhatsApp Cloud goes through its own OAuth / manual wizard — do NOT
+        // auto-call connect (that's reserved for Baileys, which starts a socket).
         setStep('connect');
-        // Auto-start connection
+      } else if (channel.startsWith('whatsapp')) {
+        setStep('connect');
+        // Auto-start Baileys connection
         await connectInstance.mutateAsync({ id: instance.id });
       } else {
         // For other channels, we're done
@@ -274,8 +277,29 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
             </div>
           )}
 
-          {/* Step 3: Connect (WhatsApp) */}
-          {step === 'connect' && createdInstance && (
+          {/* Step 3: Connect (WhatsApp Cloud — Meta OAuth / manual) */}
+          {step === 'connect' && createdInstance && channel === 'whatsapp-cloud' && (
+            <div className="space-y-4">
+              <WhatsAppCloudConnect
+                instanceId={createdInstance.id}
+                onConnected={() => {
+                  onSuccess?.(createdInstance);
+                  handleReset();
+                }}
+              />
+              <div className="flex justify-between border-t pt-4">
+                <Button variant="outline" onClick={handleReset}>
+                  Cancel
+                </Button>
+                <Button variant="outline" onClick={handleComplete}>
+                  Skip for now
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Connect (WhatsApp Baileys) */}
+          {step === 'connect' && createdInstance && channel !== 'whatsapp-cloud' && (
             <div className="space-y-4">
               {status?.isConnected ? (
                 // Connected successfully

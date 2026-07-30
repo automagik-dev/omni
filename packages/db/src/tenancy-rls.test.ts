@@ -220,6 +220,13 @@ describe('delivery mechanism', () => {
     const files = readdirSync(drizzleDir)
       .filter((f) => f.endsWith('.sql'))
       .sort();
-    expect(files.at(-1)).toBe('0041_tenant_ownership_columns.sql');
+    // G3 landed with 0041 as the tip. Later feature migrations may follow, but
+    // none of them may be a tenancy-enforcement migration (the RLS DDL guard
+    // above checks their content statement by statement).
+    expect(files).toContain('0041_tenant_ownership_columns.sql');
+    const afterG3 = files.filter((f) => f > '0041_tenant_ownership_columns.sql');
+    for (const f of afterG3) {
+      expect(f).not.toMatch(/rls|tenancy|enforce/i);
+    }
   });
 });

@@ -305,6 +305,15 @@ export const REGISTERED_EGRESS: readonly RegisteredEgress[] = [
 
   // --- platform-vendor: compile-time-fixed vendor/first-party hosts --------
   {
+    file: 'packages/api/src/routes/v2/whatsapp-cloud.ts',
+    class: 'platform-vendor',
+    sites: 1,
+    justification:
+      'Compile-time graph.facebook.com host (WABA conversation_analytics GET). The path interpolates the ' +
+      'instance-stored waba_id and the query is server-built from validated numeric params — the tenant cannot ' +
+      'redirect the host.',
+  },
+  {
     file: 'packages/api/src/providers/openai/imagegen.ts',
     class: 'platform-vendor',
     sites: 2,

@@ -32,6 +32,12 @@ export const CONTENT_TYPES = [
   'live_location',
   'product',
   'pix',
+  // Meta Cloud API HSM template messages (descriptor carried via metadata.template)
+  'template',
+  // Meta Cloud API: asks the user to share their location (native button)
+  'location_request',
+  // Meta Cloud API WhatsApp Flow (descriptor carried via metadata.flow)
+  'flow',
   // Meta types (message lifecycle)
   'edit',
   'delete',

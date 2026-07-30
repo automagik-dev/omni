@@ -4,6 +4,7 @@
 
 export * from './channel';
 export * from './agent';
+export * from './whatsapp-cloud';
 
 /**
  * Common utility types

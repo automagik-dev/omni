@@ -57,6 +57,7 @@
         "@hono/swagger-ui": "^0.4.1",
         "@hono/zod-validator": "^0.4.3",
         "@omni/channel-sdk": "workspace:*",
+        "@omni/channel-whatsapp-cloud": "workspace:*",
         "@omni/core": "workspace:*",
         "@omni/db": "workspace:*",
         "@omni/media-processing": "workspace:*",
@@ -235,6 +236,22 @@
         "typescript": "^5.0.0",
       },
     },
+    "packages/channel-whatsapp-cloud": {
+      "name": "@omni/channel-whatsapp-cloud",
+      "version": "2.260510.1",
+      "dependencies": {
+        "@omni/channel-sdk": "workspace:*",
+        "@omni/core": "workspace:*",
+        "@omni/db": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.3",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
     "packages/cli": {
       "name": "@automagik/omni",
       "version": "2.260729.3",
@@ -266,6 +283,7 @@
         "@omni/channel-slack": "workspace:*",
         "@omni/channel-telegram": "workspace:*",
         "@omni/channel-whatsapp": "workspace:*",
+        "@omni/channel-whatsapp-cloud": "workspace:*",
         "@omni/core": "workspace:*",
         "@omni/sdk": "workspace:*",
         "@types/node": "^22.10.3",
@@ -709,6 +727,8 @@
     "@omni/channel-twilio-whatsapp": ["@omni/channel-twilio-whatsapp@workspace:packages/channel-twilio-whatsapp"],
 
     "@omni/channel-whatsapp": ["@omni/channel-whatsapp@workspace:packages/channel-whatsapp"],
+
+    "@omni/channel-whatsapp-cloud": ["@omni/channel-whatsapp-cloud@workspace:packages/channel-whatsapp-cloud"],
 
     "@omni/core": ["@omni/core@workspace:packages/core"],
 
