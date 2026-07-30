@@ -515,6 +515,19 @@ const sendTextSchema = z.object({
   replyTo: z.string().optional().describe('Message ID to reply to'),
   threadId: z.string().optional().describe('Thread/topic ID (e.g. Telegram forum topic)'),
   mentions: z.array(MentionSchema).optional().describe('Users/roles to mention'),
+  buttons: z
+    .array(
+      z.object({
+        text: z.string().min(1).describe('Button label'),
+        data: z.string().optional().describe('Callback payload (reply button / list row id)'),
+        url: z.string().url().optional().describe('Link button URL (mutually exclusive with data)'),
+      }),
+    )
+    .max(10)
+    .optional()
+    .describe(
+      'Inline buttons — channel maps them natively (WhatsApp Cloud: ≤3 reply buttons, 4-10 list; Telegram: inline keyboard)',
+    ),
 });
 
 // Send media schema
@@ -1079,7 +1092,7 @@ messagesRoutes.post('/send', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', issues: parsed.error.issues } }, 400);
   }
 
-  const { instanceId, to, replyTo, threadId, mentions } = parsed.data;
+  const { instanceId, to, replyTo, threadId, mentions, buttons } = parsed.data;
   // Strip internal routing headers and agent directives before sending (GH #300)
   const text = sanitizeOutboundText(parsed.data.text);
   if (!text) {
@@ -1109,7 +1122,7 @@ messagesRoutes.post('/send', async (c) => {
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     threadId,
-    content: { type: 'text', text } as OutgoingContent,
+    content: { type: 'text', text, ...(buttons?.length ? { buttons } : {}) } as OutgoingContent,
     replyTo,
     metadata: { ...(mentions ? { mentions } : {}), ...replyContext },
   };

@@ -22,6 +22,20 @@ export const SendTextSchema = z.object({
   to: z.string().min(1).openapi({ description: 'Recipient (phone number or platform ID)' }),
   text: z.string().min(1).openapi({ description: 'Message text' }),
   replyTo: z.string().optional().openapi({ description: 'Message ID to reply to' }),
+  buttons: z
+    .array(
+      z.object({
+        text: z.string().min(1).openapi({ description: 'Button label' }),
+        data: z.string().optional().openapi({ description: 'Callback payload (reply button / list row id)' }),
+        url: z.string().url().optional().openapi({ description: 'Link button URL (mutually exclusive with data)' }),
+      }),
+    )
+    .max(10)
+    .optional()
+    .openapi({
+      description:
+        'Inline buttons — mapped natively per channel (WhatsApp Cloud: up to 3 reply buttons, 4-10 become a list; Telegram: inline keyboard)',
+    }),
 });
 
 // Send media request
