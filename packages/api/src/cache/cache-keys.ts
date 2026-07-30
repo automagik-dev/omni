@@ -4,7 +4,31 @@
  * Provides typed cache key generation and domain-specific cache instances.
  */
 
+import { isMultitenancyEnabled } from '../tenancy/feature-flag';
 import { MemoryCache } from './memory-cache';
+
+/**
+ * Auth-cache invalidation ceiling (wish: omni-full-multitenancy, Group G5,
+ * deliverable (c); RELEASE_SLOS
+ * `revocation.auth_cache_invalidation_seconds_max: 15`).
+ *
+ * Any cached AUTHORIZATION fact (a validated API key, an allow/deny access
+ * decision) must die within this window, so an out-of-band revocation — one
+ * that did not pass through the in-process invalidation hooks — still stops
+ * authenticating within the release ceiling. Dual-world: the clamp binds only
+ * when multitenancy is enabled; flag-off keeps the legacy TTLs byte-identical.
+ */
+export const AUTH_CACHE_INVALIDATION_CEILING_SECONDS = 15;
+
+/**
+ * The TTL an AUTH cache write must use: the legacy TTL, clamped to the
+ * revocation ceiling when multitenancy is enabled. A legacy TTL already under
+ * the ceiling is honoured, not raised.
+ */
+export function authCacheTtlMs(legacyTtlMs: number): number {
+  if (!isMultitenancyEnabled()) return legacyTtlMs;
+  return Math.min(legacyTtlMs, AUTH_CACHE_INVALIDATION_CEILING_SECONDS * 1000);
+}
 
 /**
  * Cache key namespace definitions.

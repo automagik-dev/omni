@@ -71,13 +71,28 @@ v2Routes.route('/keys', keysRoutes); // API key management
 v2Routes.route('/context', contextRoutes); // Conversation context for turn-based agents
 v2Routes.route('/turns', turnsRoutes); // Turn lifecycle for turn-based agents
 v2Routes.route('/trust', trustRoutes); // Genie host fingerprint trust (omni-host-fingerprint-trust wish)
+v2Routes.route('/voice', voiceRoutes); // Voice session management - must be before root /:id catch-all (issue #496)
+v2Routes.route('/follow-up', followUpRoutes); // Idle-chat follow-up config at /api/v2/follow-up/{agents|instances|chats}/:id (issue #404) - must be before root /:id catch-all (issue #496)
+v2Routes.route('/handoffs', handoffsRoutes); // Handoff audit log at /api/v2/handoffs - must be before root /:id catch-all (issue #496)
+v2Routes.route('/instances', whatsappCloudRoutes); // WhatsApp Cloud (Meta) per-instance routes at /api/v2/instances/:id/whatsapp-cloud/*
+v2Routes.route('/', templatesRoutes); // WhatsApp Cloud HSM templates at /api/v2/instances/:id/whatsapp-templates/* (multi-segment paths only — safe re the /:id catch-all, mounted here per the issue #496 invariant anyway)
+
+// ---------------------------------------------------------------------------
+// ROOT MOUNTS — this block installs the '/' mounts and MUST stay last.
+//
+// INVARIANT: every router with a bare collection route (`get('/')`, and by
+// extension any single-segment path) must be mounted ABOVE this line.
+//
+// `automationsRoutes` is mounted at the root so `/api/v2/automation-logs` and
+// `/api/v2/automation-metrics` resolve, but it also defines `get('/:id')`,
+// which at the root becomes `GET /api/v2/:id` — a single-segment catch-all over
+// the whole v2 surface. Hono resolves same-path handlers in REGISTRATION ORDER,
+// so any prefix router registered below it loses its bare collection path to
+// the catch-all (issue #496; regressed for /handoffs, see this file's test in
+// __tests__/v2-mount-order.test.ts).
+// ---------------------------------------------------------------------------
 v2Routes.route('/', payloadsRoutes); // Payloads routes at /api/v2/events/:id/payloads and /api/v2/payload-config
 v2Routes.route('/', webhooksRoutes); // Webhook routes at /api/v2/webhooks/:source, /api/v2/webhook-sources, /api/v2/events/trigger
 v2Routes.route('/automations', automationsRoutes); // Automation routes at /api/v2/automations
 v2Routes.route('/', automationsRoutes); // Also mount at root for /api/v2/automation-logs, /api/v2/automation-metrics
 v2Routes.route('/', routesRoutes); // Agent routing routes at /api/v2/instances/:instanceId/routes and /api/v2/routes/metrics
-v2Routes.route('/voice', voiceRoutes); // Voice session management
-v2Routes.route('/follow-up', followUpRoutes); // Idle-chat follow-up config at /api/v2/follow-up/{agents|instances|chats}/:id (issue #404)
-v2Routes.route('/handoffs', handoffsRoutes); // Handoff audit log at /api/v2/handoffs
-v2Routes.route('/instances', whatsappCloudRoutes); // WhatsApp Cloud (Meta) per-instance routes at /api/v2/instances/:id/whatsapp-cloud/*
-v2Routes.route('/', templatesRoutes); // WhatsApp Cloud HSM templates at /api/v2/instances/:id/whatsapp-templates/*

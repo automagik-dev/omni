@@ -63,7 +63,8 @@
     },
     "packages/db": {
       "entry": ["src/online-ddl.ts"],
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      "ignore": ["src/backfill/**"]
     },
     "packages/media-processing": {
       "project": ["src/**/*.ts"]

@@ -5,6 +5,8 @@
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { ApiKeyService } from '../services/api-keys';
+import { currentTenantScope, runDetachedFromTenantScope } from '../tenancy/tenant-scope';
+import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import type { ApiKeyData, AppVariables } from '../types';
 
 /**
@@ -92,15 +94,34 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
 
   // Fire-and-forget: track turn activity if this key has an open turn.
   // Any API call from a scoped key automatically extends the turn's activity timer.
+  //
+  // G5 (ADR-0008) — the G4 leg-2 use-after-commit trap, closed. This is started
+  // from a REQUEST and its continuations resolve on later microtasks, so they can
+  // run after the request's tenant transaction has committed and its pooled
+  // connection has been released. Left attached, `scopedHandle` would still hand
+  // them that transaction through the ALS.
+  //
+  // The fix is the `batch-jobs.create` shape: CAPTURE the trusted tenant as a
+  // VALUE first — the edge-derived `authContext`, or the active scope read for
+  // its identity only — then run the whole thing DETACHED, opening its own short
+  // worker transaction for the tenant it captured.
+  //
+  // Reachability, stated plainly: under flag-on this block is not reached at all
+  // (the `authContext` early-return at the top of this middleware fires first),
+  // and flag-off there is no transaction to outlive — `runTenantWorkDb(pool,
+  // null, …)` runs `fn()` directly and `runDetachedFromTenantScope` is a no-op on
+  // an empty ALS, so the two queries issued are byte-for-byte the pre-G5 ones.
+  // The trap is latent, and this is what keeps it that way.
   if (services.turns) {
-    services.turns
-      .getOpenByApiKey(validatedKey.id)
-      .then((turn) => {
-        if (turn) {
-          services.turns.recordActivity(turn.id).catch(() => {});
-        }
-      })
-      .catch(() => {});
+    const turnsService = services.turns;
+    const activityTenantId = c.get('authContext')?.tenantId ?? currentTenantScope()?.tenantId ?? null;
+    const pool = services.db;
+    void runDetachedFromTenantScope(async () =>
+      runTenantWorkDb(pool, activityTenantId, async () => {
+        const turn = await turnsService.getOpenByApiKey(validatedKey.id);
+        if (turn) await turnsService.recordActivity(turn.id);
+      }),
+    ).catch(() => {});
   }
 
   await next();

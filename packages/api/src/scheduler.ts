@@ -22,8 +22,122 @@ import {
 import * as Sentry from '@sentry/bun';
 import { sentryEnabled } from './lib/sentry-scrub';
 import type { Services } from './services';
+import { runForEachActiveTenantRow } from './tenancy/periodic-tenant-work';
 
 const log = createLogger('scheduler:setup');
+
+/**
+ * Create one daily per-instance sync job, fanned out across tenants
+ * (G5, ADR-0008).
+ *
+ * This is the exact shape `runForEachActiveTenantRow` was written for: a
+ * whole-table `listActive()` read followed by a per-row side effect that WRITES
+ * a job row and PUBLISHES `sync.started`. A cron has no envelope and no
+ * credential, so it must ENUMERATE whose work exists rather than scan
+ * globally — under RLS enforcement the global scan is not even expressible.
+ *
+ * The three worlds are the helper's: flag-off runs the single pre-G5 ambient
+ * pass byte-identically; flag-on runs one scoped `listActive` per ACTIVE tenant
+ * (so a suspended tenant's daily sync stops at the next tick — dequeue-time
+ * revalidation at cron cadence) and threads that tenant into `syncJobs.create`,
+ * which scopes its own insert and stamps the published envelope; the
+ * transitional NULL-tenant pass is skipped under enforcement.
+ *
+ * `perRow` failures stay per-row: one instance that cannot be synced must not
+ * abort the rest of the tenant's pass, which is what the pre-G5 loop did too.
+ */
+async function createDailySyncJobs(services: Services, type: 'contacts' | 'groups'): Promise<number> {
+  let jobsCreated = 0;
+  await runForEachActiveTenantRow(
+    {
+      db: services.db,
+      authPlaneDb: services.authPlane.db,
+      jobName: `${type}-sync-daily`,
+      listActive: () => services.instances.listActive(),
+    },
+    async (instance, tenantId) => {
+      try {
+        await services.syncJobs.create({
+          instanceId: instance.id,
+          channelType: instance.channel,
+          type,
+          config: {},
+          tenantId,
+        });
+        jobsCreated++;
+      } catch (err) {
+        log.warn(`Failed to create ${type} sync job for instance`, {
+          instanceId: instance.id,
+          error: String(err),
+        });
+      }
+    },
+  );
+  return jobsCreated;
+}
+
+/**
+ * Re-emit cached unread counts for every active WhatsApp instance, fanned out
+ * across tenants (G5, ADR-0008).
+ *
+ * Structurally identical to `createDailySyncJobs` and converted for the same
+ * reason: a cron has no envelope and no credential, so it must ENUMERATE whose
+ * instances exist rather than scan the table — under RLS enforcement the global
+ * `listActive()` is not expressible at all. This was the last scheduler caller
+ * reaching `services/instances.ts::instances` unscoped.
+ *
+ * The per-row side effect is an IN-PROCESS plugin call, not a database write, so
+ * `runForEachActiveTenantRow` is the right helper: it scopes only the discrete
+ * `listActive` READ and runs `perRow` outside that scope, never pinning a pooled
+ * connection across the plugin call.
+ *
+ * Three worlds, from the helper: flag-off is the pre-G5 single ambient pass,
+ * byte for byte; flag-on runs one scoped pass per ACTIVE tenant (a suspended
+ * tenant stops being refreshed at the next tick); the transitional NULL-tenant
+ * pass is skipped under enforcement.
+ *
+ * Returns the number of instances refreshed — what the job logs.
+ */
+async function refreshUnreadCounts(
+  services: Services,
+  channelRegistry: ChannelRegistry,
+  env?: NodeJS.ProcessEnv,
+): Promise<number> {
+  const waPlugin = channelRegistry.get('whatsapp-baileys') as
+    | { refreshUnreadCounts?: (instanceId: string) => void }
+    | undefined;
+
+  // No plugin: return before any enumeration or query, exactly as the pre-G5
+  // early return did.
+  if (!waPlugin?.refreshUnreadCounts) return 0;
+  const refresh = waPlugin.refreshUnreadCounts.bind(waPlugin);
+
+  let refreshed = 0;
+  await runForEachActiveTenantRow(
+    {
+      db: services.db,
+      authPlaneDb: services.authPlane.db,
+      jobName: 'unread-count-refresh',
+      listActive: () => services.instances.listActive(),
+      env,
+    },
+    async (instance) => {
+      if (instance.channel !== 'whatsapp-baileys') return;
+      refresh(instance.id);
+      refreshed++;
+    },
+  );
+  return refreshed;
+}
+
+/** Test seam for {@link refreshUnreadCounts} — see the tenant fan-out probe. */
+export function __refreshUnreadCountsForTest(
+  services: Services,
+  channelRegistry: ChannelRegistry,
+  env?: NodeJS.ProcessEnv,
+): Promise<number> {
+  return refreshUnreadCounts(services, channelRegistry, env);
+}
 
 /**
  * Wrap a scheduled job handler with Sentry cron monitoring.
@@ -139,30 +253,11 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
       await withCronMonitor('contacts-sync-daily', '0 4 * * *', 15, 60, async () => {
         const startTime = Date.now();
         try {
-          // Get all active instances and create sync jobs for each
-          const instances = await services.instances.listActive();
-          let jobsCreated = 0;
-
-          for (const instance of instances) {
-            try {
-              await services.syncJobs.create({
-                instanceId: instance.id,
-                channelType: instance.channel,
-                type: 'contacts',
-                config: {},
-              });
-              jobsCreated++;
-            } catch (err) {
-              log.warn('Failed to create contacts sync job for instance', {
-                instanceId: instance.id,
-                error: String(err),
-              });
-            }
-          }
+          const jobsCreated = await createDailySyncJobs(services, 'contacts');
 
           const durationSec = (Date.now() - startTime) / 1000;
           recordScheduledJob('contacts-sync-daily', 'success', durationSec);
-          log.info('Daily contacts sync jobs created', { jobsCreated, instanceCount: instances.length });
+          log.info('Daily contacts sync jobs created', { jobsCreated });
         } catch (err) {
           const durationSec = (Date.now() - startTime) / 1000;
           recordScheduledJob('contacts-sync-daily', 'failure', durationSec);
@@ -181,30 +276,11 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
       await withCronMonitor('groups-sync-daily', '0 5 * * *', 15, 60, async () => {
         const startTime = Date.now();
         try {
-          // Get all active instances and create sync jobs for each
-          const instances = await services.instances.listActive();
-          let jobsCreated = 0;
-
-          for (const instance of instances) {
-            try {
-              await services.syncJobs.create({
-                instanceId: instance.id,
-                channelType: instance.channel,
-                type: 'groups',
-                config: {},
-              });
-              jobsCreated++;
-            } catch (err) {
-              log.warn('Failed to create groups sync job for instance', {
-                instanceId: instance.id,
-                error: String(err),
-              });
-            }
-          }
+          const jobsCreated = await createDailySyncJobs(services, 'groups');
 
           const durationSec = (Date.now() - startTime) / 1000;
           recordScheduledJob('groups-sync-daily', 'success', durationSec);
-          log.info('Daily groups sync jobs created', { jobsCreated, instanceCount: instances.length });
+          log.info('Daily groups sync jobs created', { jobsCreated });
         } catch (err) {
           const durationSec = (Date.now() - startTime) / 1000;
           recordScheduledJob('groups-sync-daily', 'failure', durationSec);
@@ -253,22 +329,11 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
       await withCronMonitor('unread-count-refresh', '0 * * * *', 5, 5, async () => {
         const startTime = Date.now();
         try {
-          const waPlugin = channelRegistry.get('whatsapp-baileys') as
-            | { refreshUnreadCounts?: (instanceId: string) => void }
-            | undefined;
-
-          if (!waPlugin?.refreshUnreadCounts) return;
-
-          const instances = await services.instances.listActive();
-          const waInstances = instances.filter((i) => i.channel === 'whatsapp-baileys');
-
-          for (const instance of waInstances) {
-            waPlugin.refreshUnreadCounts(instance.id);
-          }
+          const instanceCount = await refreshUnreadCounts(services, channelRegistry);
 
           const durationSec = (Date.now() - startTime) / 1000;
           recordScheduledJob('unread-count-refresh', 'success', durationSec);
-          log.debug('Refreshed unread counts', { instanceCount: waInstances.length });
+          log.debug('Refreshed unread counts', { instanceCount });
         } catch (err) {
           const durationSec = (Date.now() - startTime) / 1000;
           recordScheduledJob('unread-count-refresh', 'failure', durationSec);

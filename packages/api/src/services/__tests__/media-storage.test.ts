@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import type { MediaStorageBackend } from '@omni/channel-sdk';
 import type { Database } from '@omni/db';
 import { UnsafeMediaUrlError } from '../../utils/safe-media-fetch';
-import { MediaStorageService } from '../media-storage';
+import { MediaStorageService, PRESIGNED_URL_TTL_CEILING_SECONDS } from '../media-storage';
 
 const fakeDb = {} as unknown as Database;
 
@@ -217,6 +217,150 @@ describe('MediaStorageService.storeFromUrl (omni#500)', () => {
       UnsafeMediaUrlError,
     );
     expect(fetchMock).toHaveBeenCalledTimes(0);
+  });
+});
+
+// ── G5 tenant-context storage prefixing + presigned binding (ADR-0008) ─────
+//
+// Two-tenant probes for the leg-D contract: tenant-context writes land under
+// `tenants/<tenantId>/instances/<instanceId>/...`, presigns are bound to
+// tenant + object + expiry (TTL ceiling 60s), and the legacy/flag-off world is
+// byte-identical (no tenant → the pre-G5 key layout and presign call).
+
+const TENANT_A = '11111111-1111-4111-8111-111111111111';
+const TENANT_B = '22222222-2222-4222-8222-222222222222';
+const INSTANCE_ID = '33333333-3333-4333-8333-333333333333';
+const MESSAGE_ID = '44444444-4444-4444-8444-444444444444';
+const APRIL = new Date('2026-04-23T00:00:00Z');
+
+/** Backend stub that records every store/presign call it receives. */
+function capturingBackend() {
+  const stored: Array<{ key: string }> = [];
+  const presigns: Array<{ key: string; ttl: number | undefined }> = [];
+  const backend: MediaStorageBackend = {
+    mode: 'remote' as const,
+    store: async ({ key, buffer, mimeType }) => {
+      stored.push({ key });
+      return { reference: key, size: buffer.length, mimeType };
+    },
+    storeStream: async ({ key, mimeType }) => ({ reference: key, size: 0, mimeType }),
+    read: async () => Buffer.alloc(0),
+    stat: async () => null,
+    readRange: async () => Buffer.alloc(0),
+    readStream: async () => new ReadableStream(),
+    presignedUrl: async (key, ttl) => {
+      presigns.push({ key, ttl });
+      return `https://s3.example/${key}?ttl=${ttl ?? 'default'}`;
+    },
+  };
+  return { backend, stored, presigns };
+}
+
+describe('MediaStorageService tenant-context key layout (G5 ADR-0008)', () => {
+  it('prefixes tenant-context keys with tenants/<tenantId>/instances/<instanceId>/', () => {
+    const service = new MediaStorageService(fakeDb, undefined, capturingBackend().backend);
+    const key = service.buildKey(INSTANCE_ID, MESSAGE_ID, 'image/png', APRIL, TENANT_A);
+    expect(key).toBe(join('tenants', TENANT_A, 'instances', INSTANCE_ID, '2026-04', `${MESSAGE_ID}.png`));
+  });
+
+  it('legacy world (no tenant) keeps the pre-G5 key layout byte-identical', () => {
+    const service = new MediaStorageService(fakeDb, undefined, capturingBackend().backend);
+    const key = service.buildKey(INSTANCE_ID, MESSAGE_ID, 'image/png', APRIL);
+    expect(key).toBe(join(INSTANCE_ID, '2026-04', `${MESSAGE_ID}.png`));
+  });
+
+  it('fails closed on a non-UUID tenant/instance/message segment (traversal-safe)', () => {
+    const service = new MediaStorageService(fakeDb, undefined, capturingBackend().backend);
+    expect(() => service.buildKey(INSTANCE_ID, MESSAGE_ID, 'image/png', APRIL, '../../etc')).toThrow(
+      /non-UUID tenantId/,
+    );
+    expect(() => service.buildKey('..', MESSAGE_ID, 'image/png', APRIL, TENANT_A)).toThrow(/non-UUID instanceId/);
+    expect(() => service.buildKey(INSTANCE_ID, 'msg-1', 'image/png', APRIL, TENANT_A)).toThrow(/non-UUID messageId/);
+  });
+
+  it('storeFromBuffer with a trusted tenant stores under the tenant prefix', async () => {
+    const { backend, stored } = capturingBackend();
+    const service = new MediaStorageService(fakeDb, undefined, backend);
+    const result = await service.storeFromBuffer(
+      INSTANCE_ID,
+      MESSAGE_ID,
+      Buffer.from([1, 2, 3]),
+      'image/png',
+      APRIL,
+      TENANT_A,
+    );
+    expect(stored[0]?.key).toBe(join('tenants', TENANT_A, 'instances', INSTANCE_ID, '2026-04', `${MESSAGE_ID}.png`));
+    expect(result.localPath).toStartWith(join('tenants', TENANT_A));
+  });
+
+  it('storeFromBuffer without a tenant stores the legacy key byte-identically', async () => {
+    const { backend, stored } = capturingBackend();
+    const service = new MediaStorageService(fakeDb, undefined, backend);
+    await service.storeFromBuffer(INSTANCE_ID, MESSAGE_ID, Buffer.from([1, 2, 3]), 'image/png', APRIL);
+    expect(stored[0]?.key).toBe(join(INSTANCE_ID, '2026-04', `${MESSAGE_ID}.png`));
+  });
+});
+
+describe('MediaStorageService.presignedUrl tenant binding (G5 ADR-0008)', () => {
+  const tenantKey = (tenant: string) =>
+    join('tenants', tenant, 'instances', INSTANCE_ID, '2026-04', `${MESSAGE_ID}.png`);
+
+  it('legacy world passes the caller TTL to the backend verbatim (byte-identical)', async () => {
+    const { backend, presigns } = capturingBackend();
+    const service = new MediaStorageService(fakeDb, undefined, backend);
+    await service.presignedUrl('inst-1/2026-04/msg.png', 3600);
+    await service.presignedUrl('inst-1/2026-04/msg.png');
+    expect(presigns).toEqual([
+      { key: 'inst-1/2026-04/msg.png', ttl: 3600 },
+      { key: 'inst-1/2026-04/msg.png', ttl: undefined },
+    ]);
+  });
+
+  it('tenant-context presign of an own-prefix object clamps TTL to the 60s ceiling', async () => {
+    const { backend, presigns } = capturingBackend();
+    const service = new MediaStorageService(fakeDb, undefined, backend);
+    // TOUCHED by the later G5 leg that added the revocation gate: a
+    // tenant-context presign now also requires an admissibility check, and fails
+    // CLOSED without one. This test is about the TTL clamp, so it declares the
+    // tenant admissible and leaves every TTL assertion below unchanged. The gate
+    // itself is proven against synthetic epochs in
+    // `presign-revocation-ceiling.test.ts`.
+    service.setTenantAdmissibilityCheck(async () => true);
+    await service.presignedUrl(tenantKey(TENANT_A), 3600, TENANT_A); // over ceiling → clamped
+    await service.presignedUrl(tenantKey(TENANT_A), undefined, TENANT_A); // default → ceiling
+    await service.presignedUrl(tenantKey(TENANT_A), 30, TENANT_A); // under ceiling → kept
+    expect(presigns.map((p) => p.ttl)).toEqual([
+      PRESIGNED_URL_TTL_CEILING_SECONDS,
+      PRESIGNED_URL_TTL_CEILING_SECONDS,
+      30,
+    ]);
+  });
+
+  it("two-tenant probe: tenant B cannot presign tenant A's object", async () => {
+    const { backend, presigns } = capturingBackend();
+    const service = new MediaStorageService(fakeDb, undefined, backend);
+    await expect(service.presignedUrl(tenantKey(TENANT_A), 30, TENANT_B)).rejects.toThrow(
+      /outside the requesting tenant prefix/,
+    );
+    expect(presigns).toHaveLength(0); // refused before the backend was consulted
+  });
+
+  it('tenant-context presign refuses a legacy-keyed (unprefixed) reference', async () => {
+    const { backend, presigns } = capturingBackend();
+    const service = new MediaStorageService(fakeDb, undefined, backend);
+    await expect(service.presignedUrl(`${INSTANCE_ID}/2026-04/${MESSAGE_ID}.png`, 30, TENANT_A)).rejects.toThrow(
+      /outside the requesting tenant prefix/,
+    );
+    expect(presigns).toHaveLength(0);
+  });
+
+  it('refuses a malformed trusted tenant before touching the backend', async () => {
+    const { backend, presigns } = capturingBackend();
+    const service = new MediaStorageService(fakeDb, undefined, backend);
+    await expect(service.presignedUrl(tenantKey(TENANT_A), 30, 'not-a-uuid')).rejects.toThrow(/non-UUID tenantId/);
+    // A prefix-shaped forgery must not smuggle a traversal into the prefix check.
+    await expect(service.presignedUrl('tenants/../secrets/x.png', 30, '..')).rejects.toThrow(/non-UUID tenantId/);
+    expect(presigns).toHaveLength(0);
   });
 });
 

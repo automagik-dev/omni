@@ -8,6 +8,11 @@
  */
 
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
+import { boundedTenantLabel } from './tenant-labels';
+
+// Bounded/redacted tenant labels (wish G5; ADR-0008). Re-exported here so the
+// metric label helper travels with the metrics it labels.
+export * from './tenant-labels';
 
 /**
  * Singleton registry for all metrics
@@ -53,6 +58,20 @@ export const eventsProcessed = new Counter({
   name: 'omni_events_processed_total',
   help: 'Total number of events processed',
   labelNames: ['event_type', 'status'] as const,
+  registers: [registry],
+});
+
+/**
+ * Counter for events processed, labelled by a BOUNDED, REDACTED tenant bucket
+ * (wish G5; ADR-0008). The `tenant_bucket` label is never a raw tenant id and
+ * its cardinality is capped by construction — see ./tenant-labels. This is the
+ * tenant-aware sibling of {@link eventsProcessed}; the unlabelled counter is
+ * left untouched so legacy dashboards are byte-identical.
+ */
+export const tenantEventsProcessed = new Counter({
+  name: 'omni_tenant_events_processed_total',
+  help: 'Events processed, labelled by bounded/redacted tenant bucket (never a raw tenant id)',
+  labelNames: ['tenant_bucket', 'event_type', 'status'] as const,
   registers: [registry],
 });
 
@@ -355,11 +374,36 @@ export const openclawCircuitBreakerState = new Gauge({
 // ============================================================================
 
 /**
- * Record event processing
+ * Record event processing.
+ *
+ * When a trusted `tenantId` is supplied (a converted worker/consumer that has
+ * established a tenant context), a bounded/redacted tenant-labelled sample is
+ * ALSO recorded via {@link recordTenantEventProcessed}. Omitting it — every
+ * legacy/flag-off caller — records exactly what it always did, so the unlabelled
+ * series is byte-identical.
  */
-export function recordEventProcessed(eventType: string, status: 'success' | 'failure', durationSeconds: number): void {
+export function recordEventProcessed(
+  eventType: string,
+  status: 'success' | 'failure',
+  durationSeconds: number,
+  tenantId?: string | null,
+): void {
   eventsProcessed.inc({ event_type: eventType, status });
   eventProcessingDuration.observe({ event_type: eventType }, durationSeconds);
+  if (tenantId) recordTenantEventProcessed(tenantId, eventType, status);
+}
+
+/**
+ * Record a tenant-scoped event sample under a bounded, redacted tenant bucket.
+ * `tenantId` may be null/undefined for tenantless work, which lands in the
+ * shared tenantless bucket (see {@link boundedTenantLabel}).
+ */
+export function recordTenantEventProcessed(
+  tenantId: string | null | undefined,
+  eventType: string,
+  status: 'success' | 'failure',
+): void {
+  tenantEventsProcessed.inc({ tenant_bucket: boundedTenantLabel(tenantId), event_type: eventType, status });
 }
 
 /**

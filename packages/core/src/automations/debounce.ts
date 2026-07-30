@@ -25,6 +25,28 @@ export interface DebouncedMessage {
 }
 
 /**
+ * The tenant-envelope stamp a debounce window carries (wish:
+ * omni-full-multitenancy, G5; ADR-0008).
+ *
+ * The flush callback builds a SYNTHETIC event, so without carrying the
+ * producer-stamped envelope fields through the window, a debounced
+ * tenant-world automation would silently degrade to the legacy world at
+ * flush time. The stamp is taken from the CLASSIFIED envelope metadata of the
+ * events that entered the window (`classifyEnvelope` — trusted, never a
+ * payload claim); `null` means every event in the window was legacy.
+ */
+export interface DebounceEnvelopeStamp {
+  envelopeVersion: number;
+  tenantId: string;
+}
+
+/** Whether two window stamps describe the same world. */
+export function stampsEqual(a: DebounceEnvelopeStamp | null, b: DebounceEnvelopeStamp | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.tenantId === b.tenantId && a.envelopeVersion === b.envelopeVersion;
+}
+
+/**
  * Key for grouping messages: instanceId + personId
  */
 export type ConversationKey = string;
@@ -57,6 +79,8 @@ interface DebounceWindow {
     name?: string;
   };
   instanceId: string;
+  /** Envelope world of every message in this window — see DebounceEnvelopeStamp. */
+  stamp: DebounceEnvelopeStamp | null;
 }
 
 /**
@@ -67,6 +91,8 @@ export type DebounceCallback = (
   messages: DebouncedMessage[],
   from: { id: string; name?: string },
   instanceId: string,
+  /** The window's envelope stamp; `null` when the window is legacy. */
+  stamp: DebounceEnvelopeStamp | null,
 ) => void;
 
 /**
@@ -82,20 +108,38 @@ export class DebounceManager {
 
   /**
    * Add a message to the debounce queue
+   *
+   * `stamp` is the message's classified envelope world (G5). A window only
+   * ever holds ONE world: when a message arrives with a different stamp than
+   * the open window (which cannot happen while an instance's tenant is
+   * immutable — this is defence in depth against a producer bug), the open
+   * window is flushed FIRST and a fresh window starts with the new stamp, so
+   * no flush ever mixes two worlds and no message is dropped.
    */
   addMessage(
     key: ConversationKey,
     message: DebouncedMessage,
     from: { id: string; name?: string },
     instanceId: string,
+    stamp: DebounceEnvelopeStamp | null = null,
   ): void {
     // If mode is none, fire immediately
     if (this.config.mode === 'none') {
-      this.callback(key, [message], from, instanceId);
+      this.callback(key, [message], from, instanceId, stamp);
       return;
     }
 
     let window = this.windows.get(key);
+
+    if (window && !stampsEqual(window.stamp, stamp)) {
+      logger.warn('Debounce window stamp changed — flushing old window before starting a new one', {
+        key,
+        oldTenant: window.stamp?.tenantId ?? null,
+        newTenant: stamp?.tenantId ?? null,
+      });
+      this.fireWindow(key);
+      window = undefined;
+    }
 
     if (!window) {
       window = {
@@ -105,6 +149,7 @@ export class DebounceManager {
         timer: null,
         from,
         instanceId,
+        stamp,
       };
       this.windows.set(key, window);
     }
@@ -213,9 +258,9 @@ export class DebounceManager {
     this.windows.delete(key);
 
     // Callback with all messages
-    const { messages, from, instanceId } = window;
+    const { messages, from, instanceId, stamp } = window;
     logger.debug('Debounce window fired', { key, messageCount: messages.length });
-    this.callback(key, messages, from, instanceId);
+    this.callback(key, messages, from, instanceId, stamp);
   }
 
   /**

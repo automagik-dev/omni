@@ -4,6 +4,7 @@
 
 export * from './types';
 export * from './bus';
+export * from './envelope';
 export * from './nats';
 export * from './dead-letter';
 export * from './payload-store';

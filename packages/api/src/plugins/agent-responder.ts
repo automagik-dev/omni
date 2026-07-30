@@ -30,6 +30,7 @@ import {
   getSplitDelayConfig,
   shouldAgentReply,
 } from '../services/agent-runner';
+import { trustedEnvelopeTenant } from '../tenancy/worker-tenant-context';
 import { getPlugin } from './loader';
 
 const log = createLogger('agent-responder');
@@ -543,6 +544,7 @@ async function processIncomingMessage(
   agentRunner: AgentRunnerService,
   accessService: AccessService,
   debouncer: MessageDebouncer,
+  trustedTenantId?: string,
 ): Promise<void> {
   const instance = await agentRunner.getInstanceWithProvider(metadata.instanceId);
   if (!instance?.agentId) return;
@@ -554,7 +556,11 @@ async function processIncomingMessage(
   }
 
   const channel = (metadata.channelType ?? instance.channel) as ChannelType;
-  const accessResult = await accessService.checkAccess(instance, payload.from ?? '', channel);
+  // G5 (ADR-0008): the ALLOW/DENY decision is evaluated against rules read in
+  // the MESSAGE's world. `trustedTenantId` is the envelope-derived tenant
+  // (`trustedEnvelopeTenant`), threaded rather than wrapped because the service
+  // publishes `access.allowed`/`access.denied` between blocks.
+  const accessResult = await accessService.checkAccess(instance, payload.from ?? '', channel, trustedTenantId);
 
   if (!accessResult.allowed) {
     log.info('Access denied by rule', {
@@ -568,13 +574,15 @@ async function processIncomingMessage(
     // Trigger pairing flow for unknown senders in allowlist mode (no explicit rule matched).
     // Fire-and-forget: pairing request creation must not block message processing.
     if (accessResult.mode === 'allowlist' && !accessResult.rule && payload.from) {
-      accessService.requestPairing(instance.id, payload.from, { channelType: instance.channel }).catch((err) => {
-        log.warn('Failed to create pairing request', {
-          instanceId: instance.id,
-          from: payload.from,
-          error: String(err),
+      accessService
+        .requestPairing(instance.id, payload.from, { channelType: instance.channel }, trustedTenantId)
+        .catch((err) => {
+          log.warn('Failed to create pairing request', {
+            instanceId: instance.id,
+            from: payload.from,
+            error: String(err),
+          });
         });
-      });
     }
 
     await handleAccessDenied(channel, instance.id, payload.chatId, accessResult);
@@ -654,6 +662,7 @@ export async function setupAgentResponder(eventBus: EventBus, services: Services
               agentRunner,
               accessService,
               debouncer,
+              trustedEnvelopeTenant(event),
             );
           } catch (error) {
             log.error('Error processing message for agent response', {
