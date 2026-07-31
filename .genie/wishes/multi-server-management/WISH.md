@@ -13,7 +13,7 @@
 
 ## Summary
 
-Let one operator work against several Omni API servers (e.g. local dev, staging, production) from both the CLI and the dashboard. The CLI gains named server entries with add/list/switch/remove and a per-invocation override; the UI gains a server switcher dropdown with an "Add server" flow in the left sidebar. Each server entry stores its own URL and API key, and switching is a single action.
+Let one operator work against several Omni API servers (e.g. local dev, staging, production) from both the CLI and the dashboard. The CLI gains named server entries with add/list/switch/remove and a per-invocation override; the UI gains a server switcher dropdown with an "Add server" flow in the left sidebar. Each server entry stores its own URL and API key (single-tenant master-key auth, BAU), and switching is a single action. KHAL-platform session auth (code + URL login, multitenant SaaS mode) was split to the `saas-platform-auth` wish after plan review found it must be re-planned against omni's in-progress tenancy subsystem.
 
 ## Scope
 
@@ -32,7 +32,8 @@ Let one operator work against several Omni API servers (e.g. local dev, staging,
 
 - Per-server request-signing *keypairs* — one keypair per server is deferred. In scope instead (Group 2): the handshake records which server it is bound to and signing is skipped for other entries, because the API hard-rejects unknown-host signatures with 401 (`packages/api/src/middleware/genie-signature.ts:37-38,161-163`) rather than falling through.
 - Any change to the embedded local-server runtime config (`server.*` namespace consumed by `buildRuntimeEnv()`); `omni start/doctor/update` continue to read it untouched.
-- Server-side/API changes, including CORS configuration — the API's production default is an **empty** CORS allow-list (`packages/api/src/app.ts:23-43`), so reaching a remote server from the dashboard requires the operator to set `OMNI_CORS_ORIGINS` on that server. This wish documents the prerequisite (Add Server dialog copy distinguishes a CORS/network block from an invalid key) but does not change the API.
+- CORS configuration changes — the API's production default is an **empty** CORS allow-list (`packages/api/src/app.ts:23-43`), so reaching a remote server from the dashboard requires the operator to set `OMNI_CORS_ORIGINS` on that server. This wish documents the prerequisite (Add Server dialog copy distinguishes a CORS/network block from an invalid key) but does not change the CORS defaults.
+- KHAL-platform session auth (multitenant SaaS mode: device-flow login, session validation middleware, role-aware UI) — split to the `saas-platform-auth` wish, which depends on this one and must be sequenced with `omni-full-multitenancy`. Every server entry here authenticates with an API key.
 - Aggregated multi-server views (querying several servers at once, health dashboards) — every screen and command talks to exactly one active server.
 - Import/export or team-sharing of server lists.
 - Refactoring the ~30 CLI call sites that re-derive `config.apiUrl ?? 'http://localhost:8882'` — they keep working unchanged because resolution happens inside `loadConfig()`.
@@ -54,6 +55,7 @@ Let one operator work against several Omni API servers (e.g. local dev, staging,
 | 11 | Trust handshake appends its target server URL to `boundServers: string[]` in `host.json`; re-running against a new server registers the existing pubkey there without rotating keys; `signRequestIfHandshook()` signs only for bound servers (absent field = legacy, treated as bound to `default`) | The API returns 401 for unknown host signatures by design (`genie-signature.ts:161-163`); without binding, every command against a second server fails once any handshake exists. An array (not a single URL) because the handshake route is auth-exempt and idempotent (`trust.ts:184-186`), so one keypair can hold host records on several servers — and `--rotate` against server B must not silently unsign server A (`require-signed-instance.ts:149-159` rejects unsigned requests on opted-in instances). |
 | 12 | UI logout clears only the active entry's API key (entry retained), both call sites unified through `useAuth` | `Sidebar.tsx:110-113` and `useAuth.ts:46-50` currently implement logout differently (only the latter clears the query cache); keeping the entry makes re-login to the same server one step. |
 | 13 | The migrated UI `default` entry stores a same-origin sentinel (`baseUrl: null`), resolved to `VITE_API_URL \|\| window.location.origin` at call time | `sdk.ts:59,91` re-derive the origin on every call today; freezing it at migration would break dashboards later reached via a different hostname, port, or tunnel. Only explicitly added entries store absolute URLs. |
+| 14 | Auth-mode work (KHAL platform sessions) split to `saas-platform-auth` | Plan review found Groups 5–7 as merged were planned against the khal reference without reconciling omni's existing tenancy subsystem (`OMNI_MULTITENANCY_ENABLED`, `packages/api/src/tenancy/`, `platform-auth.ts` credential classes) — a re-plan sequenced with `omni-full-multitenancy`, carrying its own review surface. User approved the split 2026-07-31. |
 
 ## Simplicity Case
 
@@ -65,7 +67,7 @@ Let one operator work against several Omni API servers (e.g. local dev, staging,
 ## Dependencies
 
 **depends-on:** none
-**blocks:** none
+**blocks:** saas-platform-auth
 
 ## Success Criteria
 
@@ -134,7 +136,7 @@ make test-file F=packages/cli/src/__tests__/config.test.ts && make typecheck
 **Goal:** Users manage and target server entries from the command line, and every status surface names the active server.
 
 **Deliverables:**
-1. `packages/cli/src/commands/server.ts` exporting `createServerCommand()` with `add`, `list`, `use`, `remove`, `current` (commander pattern per `commands/auth.ts`), registered in the `COMMANDS` array in `src/index.ts` under helpGroup `System`; help text disambiguates the remote-server registry from the local `server.*` runtime config. `add` health-checks the target before saving: reachability via the health endpoint, and `auth.validate` when a key is provided — reporting unreachable (network) distinctly from unauthorized (401); `--skip-verify` bypasses for offline/pre-provisioning setups.
+1. `packages/cli/src/commands/server.ts` exporting `createServerCommand()` with `add`, `list`, `use`, `remove`, `current` (commander pattern per `commands/auth.ts`), registered in the `COMMANDS` array in `src/index.ts` under helpGroup `System`; help text disambiguates the remote-server registry from the local `server.*` runtime config. `add` verifies the target before persisting — reachability (health endpoint) plus key validity (`client.auth.validate()`) — aborting with distinct unreachable vs unauthorized messages; `--skip-verify` persists anyway (e.g. adding a currently offline server). No separate health command.
 2. Global `--server <name>` / `--server=<name>` flag stripped pre-commander (extending the `--json` mechanism at `index.ts:74-79` with a two-element splice); a missing or flag-like value fails fast; unknown names fail fast listing available entries. The value is handed to Group 1's env-transported override before any `loadConfig()`/`getClient()` call.
 3. `omni auth login [--server <name>]` persists `apiUrl`/`apiKey` into the targeted entry; `auth logout` clears only that entry's key; `auth status`, `getInlineStatus()`/`getConfigSummary()` (`src/status.ts`) display the active server name. When a targeted entry has no key, the not-authenticated error (`client.ts:25-26`) names the entry and suggests `omni auth login --server <name>`.
 4. Trust-handshake server binding: `omni trust handshake` appends the target server URL to `boundServers: string[]` in `host.json` (`src/signing.ts`, `commands/trust.ts`); re-running against a new server registers the **existing** pubkey there without rotating (handshake route is auth-exempt and idempotent, `trust.ts:184-186`). `signRequestIfHandshook()` signs only when the resolved target is bound (absent field = legacy, bound to `default`). The already-handshook early-return (`trust.ts:159-168`) names the bound servers and states that other entries are sent unsigned.
@@ -230,7 +232,7 @@ _What must be verified on dev after merge. The QA agent tests each criterion._
 | Remote servers unreachable from the browser: the API's production CORS default is an empty allow-list (`app.ts:23-43`) | High (for the UI half) | Known prerequisite, not a contingency: operator must set `OMNI_CORS_ORIGINS` on each remote server. Add Server dialog distinguishes the CORS/network `TypeError` from a 401 and surfaces the hint (Group 4). CLI is unaffected. |
 | Trust-handshake signing: the API returns 401 by design for unknown-host signatures (`genie-signature.ts:161-163`), so a global handshake breaks every second server | High | In scope (Group 2): bind the handshake to its server URL in `host.json` and skip signing for other entries; absent field = legacy `default`. Per-server *keypairs* stay deferred. |
 | `doctor`/`auth recover`/`start`/`update`/`install` feed `cliConfig.apiKey` into the local server env — a remote active server could leak its key into the local runtime, and `doctor`'s env-drift check would report permanent drift | High | Group 1 deliverable 3: those paths use the non-resolving `loadLocalRuntimeConfig()`; the isolation guarantee is unit-tested (Group 1 AC 4). |
-| UI API keys live in localStorage in plaintext — readable by any script running on the dashboard origin (XSS) | Medium | Same exposure as today's single `omni-api-key`, now × N servers. Interim posture: no third-party scripts in the dashboard, keys masked in all rendered output. Real fix is replacing pasted long-lived keys with short-lived sessions via device-code login — planned as a separate SaaS-auth wish layered on `omni-full-multitenancy`, out of scope here. |
+| UI API keys live in localStorage in plaintext — readable by any script running on the dashboard origin (XSS) | Medium | Same exposure as today's single `omni-api-key`, now × N servers. Interim posture: no third-party scripts in the dashboard, keys masked in all rendered output. Real fix is replacing pasted long-lived keys with platform sessions — the `saas-platform-auth` wish. |
 | CLI client singleton cache (`client.ts:14`) serves a stale server after override | Low | Override is set before first `getClient()` via pre-commander stripping; test asserts the flag wins. |
 | `queryClient.clear()` on switch causes a visible full-refetch flash | Low | Acceptable and consistent with logout behavior; hard reload is the fallback, matching `Sidebar.tsx` logout. |
 
@@ -277,6 +279,30 @@ All seven blocking/major findings from the first pass verified genuinely closed 
 | R2 | minor | `window` is undefined under `bun test` (verified empirically), so a bare `window.location.origin` in the sentinel resolver throws in Group 3's unit tests | Fixed: resolver reads `globalThis.window?.location.origin`; Group 3 deliverable 5 requires stubbing `globalThis.window` and `localStorage` |
 | R3 | minor | Single bound-URL shape leaves no re-binding path: `trust.ts:159-168` early-returns when handshook, and `--rotate` (`trust.ts:173`) overwrites keys — unsigning server A, which 401s on signature-required instances (`require-signed-instance.ts:149-159`) | Fixed: Decision 11 + Group 2 deliverable 4 switched to `boundServers: string[]` append; re-handshake registers the existing pubkey without rotating (route idempotent per `trust.ts:184-186`); already-handshook message lists bound servers; new Group 2 AC |
 | R4 | minor | Simplicity Case "deferred until measured" bullet was stale — cited the signing break and CORS discovery as future triggers when both are now addressed in scope | Fixed: bullet rewritten to defer only per-server *keypairs* and an API-side CORS default change, with new triggers |
+
+### Plan review (scope-merge: auth modes) — 2026-07-31 — Verdict: BLOCKED
+
+**Reviewer:** plan-review agent (independent, evidence-first). **Method:** full re-read; all seven khal reference citations verified exact against `/home/namastex/workspace/repos/khal/genie/repos/` (verifier properties, role hierarchy, device-flow endpoints, grants lifecycle — table in reviewer transcript); omni's actual `packages/api` auth chain and the governing `omni-full-multitenancy` wish audited.
+
+**Core problem (one-sided):** Groups 5–7 were planned against the khal *reference* while omni's *own* auth architecture went unexamined. Omni already has: an auth-mode flag (`OMNI_MULTITENANCY_ENABLED`, `tenancy/feature-flag.ts`) with a three-state enforcement posture (`tenancy/enforcement-posture.ts:58-67`), a 23-module `packages/api/src/tenancy/` subsystem, `middleware/platform-auth.ts` defining platform authority as a `credentialClass = tenant | platform` resolved through an isolated auth-bootstrap service with fail-closed properties, and a documented protected-chain order (`app.ts:390-404`) in which `scope-enforcer.ts:372-386` 401s any request without an `apiKey` context — all produced by `omni-full-multitenancy` (`risk: critical`, `execution_authorized: true`, in progress). **Carve-out: Groups 1–4 are unaffected, touch no `packages/api` file, and remain SHIP-ready** (all prior findings + R1–R4 verified still applied; `omni server add` verify-before-persist is a clean answer to the no-health-command directive).
+
+| # | Sev | Finding (evidence) | Requirement |
+|---|-----|--------------------|-------------|
+| 1 | blocker | `AUTH_MODE` duplicates `OMNI_MULTITENANCY_ENABLED` (`tenancy/feature-flag.ts`; posture `enforcement-posture.ts:58-67`; control-plane mount `app.ts:378-381`) — two flags over one behavior admit contradictory states the wish's own OUT bullet forbids | Reconcile to the existing flag/posture; no second mode flag |
+| 2 | blocker | A khal-session request 401s at `scope-enforcer.ts:372-386` (requires `apiKey` context); "runs alongside" names no chain position; two precedents exist (tenancy edge projects into `apiKey` — `middleware/auth.ts:20-27`; platform control-plane bypasses with own guard — `app.ts:375-377`) and neither is chosen | Choose and specify chain position + context projection |
+| 3 | blocker | "platform-admin" collides with omni's security-critical `credentialClass = platform` (`platform-auth.ts:2-14`): a shared-secret HS256 JWT would confer see-everything authority reaching neither auth-bootstrap, `credentialClass`, nor `scopeAllows` — the exact bypass `platform-auth.ts` exists to prevent | Rename the KHAL role concept; route authority through the real model |
+| 4 | blocker | Gate premise false: "omni today has no tenant row-ownership" — `packages/api/src/tenancy/` (23 modules incl. `route-ownership.ts`, `tenant-transaction.ts`) + `middleware/tenancy.ts` exist and are actively changing under `omni-full-multitenancy` (its G3/G4 are this very chain); "dependency is partial" is wrong in kind | Sequencing agreement with that wish before any `packages/api` middleware work |
+| 5 | major | `Authorization: Bearer` ambiguous across three consumers (`auth.ts:29-30`, `platform-auth.ts:24`, ported verifier) — no discriminator/precedence; today authMiddleware would feed a JWT to `apiKeys.validate` and 401 | Specify discriminator (e.g. three-segment JWT shape) + precedence |
+| 6 | major | Group 5 validation never runs the existing auth suites its own AC 1 claims unchanged (`tenancy.test.ts`, `scope-enforcer*.test.ts`, `genie-signature*.test.ts`, …) | Add `make test-api` to Group 5 validation |
+| 7 | major | The merge fuses a client-side convenience feature with a security-critical identity change on one branch/review surface; split is verified clean (no file overlap) | Reviewer recommends Groups 5–7 as separate wish; user decision pending |
+| 8 | minor | Wave 3 header ("after Wave 1") contradicts Group 5 `depends-on: none` | Fix whichever is wrong |
+| 9 | minor | Consume the platform-served `exchange_url` (`auth-device.ts:621,637`) rather than hardcoding; keep interval-from-server explicit in AC | Amend Group 6 |
+| 10 | minor | Unauthenticated `authMode`/`platformUrl` disclosure on the health payload should be a recorded decision | Add decision row |
+| 11 | minor | Simplicity Case "simplest complete design" bullet describes only the registry; auth-mode bullet claims minimality that ignores omni's existing machinery | Rewrite after 1–4 resolve |
+
+**Path forward per reviewer:** dispatch Waves 1–2 now; re-plan Groups 5–7 against the real surface (existing flag/posture, chosen chain position, renamed role concept, Bearer discriminator, sequencing agreed with `omni-full-multitenancy`); re-review required. Findings 8–11 follow Groups 5–7 wherever they live.
+
+---
 
 ---
 
