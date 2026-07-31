@@ -765,6 +765,8 @@ export const instances = pgTable(
     // ---- Agent Configuration (Instance Override) ----
     agentTimeout: integer('agent_timeout').notNull().default(600),
     agentStreamMode: boolean('agent_stream_mode').notNull().default(false),
+    /** Customer-facing reply when agent dispatch fails (null = OMNI_AGENT_DISPATCH_ERROR_MESSAGE env / built-in default, #737) */
+    agentErrorMessage: text('agent_error_message'),
     /** When agent should reply to messages */
     agentReplyFilter: jsonb('agent_reply_filter').$type<AgentReplyFilter>(),
     /** Session strategy for agent memory */
