@@ -69,7 +69,7 @@ Let one operator work against several Omni API servers (e.g. local dev, staging,
 
 ## Success Criteria
 
-- [ ] `omni server add staging --url https://staging.example.com --api-key omni_xxx` persists a named entry; `omni server list` shows it with the active one marked; `omni server use staging` switches; `omni server remove staging` deletes (refusing to remove the active entry without `--force` or auto-fallback).
+- [ ] `omni server add staging --url https://staging.example.com --api-key omni_xxx` health-checks the target (reachability + key validation, mirroring the UI Add Server dialog) and persists a named entry only on success (`--skip-verify` to bypass); `omni server list` shows it with the active one marked; `omni server use staging` switches; `omni server remove staging` deletes (refusing to remove the active entry without `--force` or auto-fallback).
 - [ ] Any existing command run with `--server <name>` targets that server for that invocation only, without changing the persisted active server.
 - [ ] An existing `~/.omni/config.json` with only flat `apiUrl`/`apiKey` keeps working: first load exposes it as the `default` server entry and all commands behave exactly as before.
 - [ ] `omni auth login` stores the key on the targeted server entry; `omni auth status` and `omni config list` name the active server and mask its key.
@@ -134,7 +134,7 @@ make test-file F=packages/cli/src/__tests__/config.test.ts && make typecheck
 **Goal:** Users manage and target server entries from the command line, and every status surface names the active server.
 
 **Deliverables:**
-1. `packages/cli/src/commands/server.ts` exporting `createServerCommand()` with `add`, `list`, `use`, `remove`, `current` (commander pattern per `commands/auth.ts`), registered in the `COMMANDS` array in `src/index.ts` under helpGroup `System`; help text disambiguates the remote-server registry from the local `server.*` runtime config.
+1. `packages/cli/src/commands/server.ts` exporting `createServerCommand()` with `add`, `list`, `use`, `remove`, `current` (commander pattern per `commands/auth.ts`), registered in the `COMMANDS` array in `src/index.ts` under helpGroup `System`; help text disambiguates the remote-server registry from the local `server.*` runtime config. `add` health-checks the target before saving: reachability via the health endpoint, and `auth.validate` when a key is provided — reporting unreachable (network) distinctly from unauthorized (401); `--skip-verify` bypasses for offline/pre-provisioning setups.
 2. Global `--server <name>` / `--server=<name>` flag stripped pre-commander (extending the `--json` mechanism at `index.ts:74-79` with a two-element splice); a missing or flag-like value fails fast; unknown names fail fast listing available entries. The value is handed to Group 1's env-transported override before any `loadConfig()`/`getClient()` call.
 3. `omni auth login [--server <name>]` persists `apiUrl`/`apiKey` into the targeted entry; `auth logout` clears only that entry's key; `auth status`, `getInlineStatus()`/`getConfigSummary()` (`src/status.ts`) display the active server name. When a targeted entry has no key, the not-authenticated error (`client.ts:25-26`) names the entry and suggests `omni auth login --server <name>`.
 4. Trust-handshake server binding: `omni trust handshake` appends the target server URL to `boundServers: string[]` in `host.json` (`src/signing.ts`, `commands/trust.ts`); re-running against a new server registers the **existing** pubkey there without rotating (handshake route is auth-exempt and idempotent, `trust.ts:184-186`). `signRequestIfHandshook()` signs only when the resolved target is bound (absent field = legacy, bound to `default`). The already-handshook early-return (`trust.ts:159-168`) names the bound servers and states that other entries are sent unsigned.
@@ -143,6 +143,7 @@ make test-file F=packages/cli/src/__tests__/config.test.ts && make typecheck
 
 **Acceptance Criteria:**
 - [ ] `add`/`list`/`use`/`remove`/`current` behave per the Success Criteria, including active-entry removal protection.
+- [ ] `omni server add` refuses to save an unreachable server or a rejected key, with distinct error messages for each; `--skip-verify` saves anyway.
 - [ ] `--server` (both forms) affects exactly one invocation; `omni server current` afterwards still shows the persisted active entry; missing value exits non-zero.
 - [ ] `omni server use <unknown>` and `--server <unknown>` exit non-zero listing known entries.
 - [ ] Root help shows the group; `omni server list --json` emits machine-readable output with masked keys (unmasked only under `--reveal`).
@@ -229,6 +230,7 @@ _What must be verified on dev after merge. The QA agent tests each criterion._
 | Remote servers unreachable from the browser: the API's production CORS default is an empty allow-list (`app.ts:23-43`) | High (for the UI half) | Known prerequisite, not a contingency: operator must set `OMNI_CORS_ORIGINS` on each remote server. Add Server dialog distinguishes the CORS/network `TypeError` from a 401 and surfaces the hint (Group 4). CLI is unaffected. |
 | Trust-handshake signing: the API returns 401 by design for unknown-host signatures (`genie-signature.ts:161-163`), so a global handshake breaks every second server | High | In scope (Group 2): bind the handshake to its server URL in `host.json` and skip signing for other entries; absent field = legacy `default`. Per-server *keypairs* stay deferred. |
 | `doctor`/`auth recover`/`start`/`update`/`install` feed `cliConfig.apiKey` into the local server env — a remote active server could leak its key into the local runtime, and `doctor`'s env-drift check would report permanent drift | High | Group 1 deliverable 3: those paths use the non-resolving `loadLocalRuntimeConfig()`; the isolation guarantee is unit-tested (Group 1 AC 4). |
+| UI API keys live in localStorage in plaintext — readable by any script running on the dashboard origin (XSS) | Medium | Same exposure as today's single `omni-api-key`, now × N servers. Interim posture: no third-party scripts in the dashboard, keys masked in all rendered output. Real fix is replacing pasted long-lived keys with short-lived sessions via device-code login — planned as a separate SaaS-auth wish layered on `omni-full-multitenancy`, out of scope here. |
 | CLI client singleton cache (`client.ts:14`) serves a stale server after override | Low | Override is set before first `getClient()` via pre-commander stripping; test asserts the flag wins. |
 | `queryClient.clear()` on switch causes a visible full-refetch flash | Low | Acceptable and consistent with logout behavior; hard reload is the fallback, matching `Sidebar.tsx` logout. |
 
