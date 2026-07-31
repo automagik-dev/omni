@@ -5236,6 +5236,22 @@ async function shouldProcessMessage(
     return null;
   }
 
+  // Reaction dual-emits: channel-whatsapp and channel-discord republish an
+  // inbound reaction as message.received (content.type='reaction') for
+  // backward compatibility with non-dispatch consumers (persistence, UI).
+  // Agent dispatch for reactions is exclusively the reaction.received
+  // subscription's job — that path honors the instance's triggerEvents +
+  // triggerReactions config. Without this skip, a reaction dispatches the
+  // agent as if it were a text message regardless of that config (and
+  // double-dispatches when reaction.received IS configured).
+  if (payload.content?.type === 'reaction') {
+    log.debug('Skipping reaction dual-emit on message path (reaction.received owns dispatch)', {
+      instanceId: metadata.instanceId,
+      chatId: payload.chatId,
+    });
+    return null;
+  }
+
   // Skip trash emoji messages - handled by session-cleaner plugin
   if (isTrashEmojiOnly(payload.content?.text)) {
     log.debug('Skipping trash emoji message (session-cleaner handles this)', {
