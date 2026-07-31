@@ -6,13 +6,14 @@
  * come back on the webhook as `interactive.nfm_reply` with `response_json`,
  * correlated by the `flow_token` echoed back verbatim.
  *
- * Only `flow_action: navigate` is supported — `data_exchange` flows require a
- * business-hosted encrypted data endpoint, which is out of this channel's
- * scope for now.
+ * Supports both `flow_action: navigate` (static flows) and `data_exchange`
+ * (endpoint-backed dynamic flows — the omni-hosted encrypted data endpoint
+ * resolves each screen; see handlers/flow-data.ts).
  */
 
 import type { WhatsAppFlowSend } from '@omni/core/schemas';
 import type { MetaWhatsAppClient } from '../client';
+import { buildFlowToken } from '../flows/resolver';
 import type { MetaOutboundMessage, MetaSendResponse } from '../types';
 import { toMetaPhone } from '../utils/identity';
 
@@ -28,17 +29,24 @@ export async function sendFlow(
   flow: WhatsAppFlowSend,
   replyTo?: string,
 ): Promise<SendFlowResult> {
-  const flowToken = flow.flowToken ?? crypto.randomUUID();
+  // Structured token (`omni.<flowRef>.<uuid>`) — the data endpoint recovers
+  // the flow ref from it, since Meta's decrypted payload has no flow id.
+  // Caller-supplied tokens pass through opaque.
+  const flowRef = flow.flowId ?? flow.flowName ?? 'unknown';
+  const flowToken = flow.flowToken ?? buildFlowToken(flowRef);
+  const flowAction = flow.flowAction ?? 'navigate';
 
   const parameters: Record<string, unknown> = {
     flow_message_version: '3',
     flow_token: flowToken,
     flow_cta: flow.cta,
-    flow_action: 'navigate',
+    flow_action: flowAction,
     ...(flow.flowId ? { flow_id: flow.flowId } : { flow_name: flow.flowName }),
     ...(flow.draft ? { mode: 'draft' } : {}),
   };
-  if (flow.screen) {
+  // navigate: entry screen is required client-side; data_exchange: the INIT
+  // call to the endpoint decides the first screen, so no payload is sent.
+  if (flow.screen && flowAction === 'navigate') {
     parameters.flow_action_payload = {
       screen: flow.screen,
       ...(flow.data && Object.keys(flow.data).length > 0 ? { data: flow.data } : {}),

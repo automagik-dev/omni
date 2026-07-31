@@ -15,12 +15,15 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import { MetaWhatsAppClient } from '@omni/channel-whatsapp-cloud';
+import { MetaWhatsAppClient, generateFlowKeyPair } from '@omni/channel-whatsapp-cloud';
 import { createLogger } from '@omni/core';
-import { WhatsAppFlowSendSchema } from '@omni/core/schemas';
+import { WhatsAppFlowSendSchema, validateFlowJson } from '@omni/core/schemas';
+import { whatsappFlowKeys } from '@omni/db';
+import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { requireInstanceAccess } from '../../middleware/auth';
+import { sealCredentialField } from '../../tenancy/sealed-credentials';
 import type { AppVariables } from '../../types';
 import { ensureWhatsAppCloud } from './whatsapp-cloud';
 
@@ -62,7 +65,26 @@ const createBodySchema = z.object({
   flowJson: z.string().min(1).optional(),
   /** Publish immediately after creation (requires valid flowJson). */
   publish: z.boolean().optional(),
+  /**
+   * Endpoint-backed (data_exchange) flow: the server registers this omni
+   * install's public flows-data URL as the flow's `endpoint_uri`. Requires
+   * META_FLOWS_PUBLIC_BASE_URL and a Flow JSON with data_api_version '3.0'.
+   */
+  dynamic: z.boolean().optional(),
 });
+
+const updateBodySchema = z
+  .object({
+    name: z.string().min(1).max(200).optional(),
+    categories: z.array(FlowCategorySchema).min(1).optional(),
+    /** Replaces the flow's screens (POST /{flow_id}/assets). */
+    flowJson: z.string().min(1).optional(),
+    /** Re-point (or newly point) the flow at this install's data endpoint. */
+    dynamic: z.boolean().optional(),
+  })
+  .refine((v) => v.name || v.categories || v.flowJson || v.dynamic !== undefined, {
+    message: 'Provide at least one of name, categories, flowJson, dynamic',
+  });
 
 const sendBodySchema = WhatsAppFlowSendSchema.and(
   z.object({
@@ -108,7 +130,7 @@ function readMetaConfig(instance: {
 }
 
 type FlowsClientResolution =
-  | { ok: true; client: MetaWhatsAppClient }
+  | { ok: true; client: MetaWhatsAppClient; instance: { id: string; tenantId: string | null } }
   | { ok: false; payload: { error: { code: string; message: string } } };
 
 /**
@@ -131,7 +153,29 @@ async function resolveFlowsClient(
     { accessToken: cfg.accessToken, phoneNumberId: cfg.phoneNumberId, apiVersion: cfg.apiVersion },
     cfg.wabaId,
   );
-  return { ok: true, client };
+  return { ok: true, client, instance: { id: instance.id, tenantId: instance.tenantId ?? null } };
+}
+
+/**
+ * Public flows-data URL for `instanceId` — becomes the flow's `endpoint_uri`
+ * for dynamic flows. Null when META_FLOWS_PUBLIC_BASE_URL is unset (dynamic
+ * flows are rejected with a clear error instead of registering a dead URL).
+ */
+function flowsDataEndpointUri(instanceId: string): string | null {
+  const base = process.env.META_FLOWS_PUBLIC_BASE_URL?.replace(/\/+$/, '');
+  if (!base) return null;
+  return `${base}/api/v2/channels/whatsapp-cloud/flows/data/${instanceId}`;
+}
+
+/** 422 payload for local Flow JSON validation failures (pre-Meta feedback). */
+function flowJsonInvalid(issues: ReturnType<typeof validateFlowJson>['issues']) {
+  return {
+    error: {
+      code: 'INVALID_FLOW_JSON',
+      message: 'Flow JSON failed local validation (checked before contacting Meta)',
+    },
+    issues,
+  } as const;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,13 +217,243 @@ whatsappFlowsRoutes.post(
     const resolved = await resolveFlowsClient(c.get('services'), instanceId);
     if (!resolved.ok) return c.json(resolved.payload, 400);
 
+    let endpointUri: string | undefined;
+    if (body.dynamic) {
+      const uri = flowsDataEndpointUri(instanceId);
+      if (!uri) {
+        return c.json(
+          jsonError('dynamic flows require META_FLOWS_PUBLIC_BASE_URL to be configured', 'NOT_CONFIGURED'),
+          400,
+        );
+      }
+      endpointUri = uri;
+    }
+
+    // Local validation catches the silent killers (data_api_version without an
+    // endpoint, RichText placement) before any Graph API round-trip.
+    if (body.flowJson) {
+      const local = validateFlowJson(body.flowJson, { dynamic: body.dynamic });
+      if (!local.valid) return c.json(flowJsonInvalid(local.issues), 422);
+    }
+
     const result = await resolved.client.createFlow({
       name: body.name,
       categories: body.categories,
       flowJson: body.flowJson,
       publish: body.publish,
+      endpointUri,
     });
-    return c.json({ data: { id: result.id } }, 201);
+    return c.json(
+      {
+        data: {
+          id: result.id,
+          endpointUri: endpointUri ?? null,
+          // Meta-side validation errors — a flow can be created and still be unopenable.
+          validationErrors: result.validation_errors ?? [],
+        },
+      },
+      201,
+    );
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Data-endpoint encryption keys — registered BEFORE the :flowId routes so
+// the literal 'keys' segment never matches as a flow id.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// POST /instances/:id/whatsapp-flows/keys — generate + register (or rotate)
+whatsappFlowsRoutes.post(
+  '/instances/:id/whatsapp-flows/keys',
+  instanceAccess,
+  zValidator('param', idParamSchema),
+  async (c) => {
+    const { id: instanceId } = c.req.valid('param');
+    const resolved = await resolveFlowsClient(c.get('services'), instanceId);
+    if (!resolved.ok) return c.json(resolved.payload, 400);
+
+    const { privateKeyPem, publicKeyPem } = await generateFlowKeyPair();
+    await resolved.client.uploadBusinessPublicKey(publicKeyPem);
+
+    // Sealed under the owning instance's tenant — the public data route
+    // unseals with instance.tenantId, so the pair stays symmetric.
+    const sealedPrivateKey = sealCredentialField(resolved.instance.tenantId, privateKeyPem);
+    const now = new Date();
+    const db = c.get('db');
+    await db
+      .insert(whatsappFlowKeys)
+      .values({
+        instanceId,
+        privateKeyPem: sealedPrivateKey,
+        publicKeyPem,
+        uploadedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: whatsappFlowKeys.instanceId,
+        set: {
+          privateKeyPem: sealedPrivateKey,
+          publicKeyPem,
+          uploadedAt: now,
+          updatedAt: now,
+        },
+      });
+
+    const status = await resolved.client.getBusinessPublicKey().catch(() => null);
+    log.info('flow encryption key registered', { instanceId });
+    return c.json(
+      {
+        data: {
+          uploaded: true,
+          signatureStatus: status?.business_public_key_signature_status ?? null,
+          endpointUri: flowsDataEndpointUri(instanceId),
+        },
+      },
+      201,
+    );
+  },
+);
+
+// GET /instances/:id/whatsapp-flows/keys — local presence + Meta signature status
+whatsappFlowsRoutes.get(
+  '/instances/:id/whatsapp-flows/keys',
+  instanceAccess,
+  zValidator('param', idParamSchema),
+  async (c) => {
+    const { id: instanceId } = c.req.valid('param');
+    const resolved = await resolveFlowsClient(c.get('services'), instanceId);
+    if (!resolved.ok) return c.json(resolved.payload, 400);
+
+    const db = c.get('db');
+    const [keyRow] = await db
+      .select({ uploadedAt: whatsappFlowKeys.uploadedAt, createdAt: whatsappFlowKeys.createdAt })
+      .from(whatsappFlowKeys)
+      .where(eq(whatsappFlowKeys.instanceId, instanceId))
+      .limit(1);
+
+    const remote = await resolved.client.getBusinessPublicKey().catch(() => null);
+    return c.json({
+      data: {
+        hasLocalKey: Boolean(keyRow),
+        uploadedAt: keyRow?.uploadedAt ?? null,
+        // MISMATCH → Meta encrypts with a key we no longer hold → 421 loop; rotate via POST.
+        signatureStatus: remote?.business_public_key_signature_status ?? null,
+        endpointUri: flowsDataEndpointUri(instanceId),
+      },
+    });
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /instances/:id/whatsapp-flows/:flowId — status + validation + endpoint
+// ─────────────────────────────────────────────────────────────────────────────
+
+whatsappFlowsRoutes.get(
+  '/instances/:id/whatsapp-flows/:flowId',
+  instanceAccess,
+  zValidator('param', flowIdParamSchema),
+  async (c) => {
+    const { id: instanceId, flowId } = c.req.valid('param');
+    const resolved = await resolveFlowsClient(c.get('services'), instanceId);
+    if (!resolved.ok) return c.json(resolved.payload, 400);
+
+    const flow = await resolved.client.getFlow(flowId);
+    return c.json({
+      data: {
+        id: flow.id,
+        name: flow.name,
+        status: flow.status,
+        categories: flow.categories,
+        validationErrors: flow.validation_errors ?? [],
+        endpointUri: flow.endpoint_uri ?? null,
+        preview: flow.preview ?? null,
+      },
+    });
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PUT /instances/:id/whatsapp-flows/:flowId — update screens and/or properties
+// ─────────────────────────────────────────────────────────────────────────────
+
+whatsappFlowsRoutes.put(
+  '/instances/:id/whatsapp-flows/:flowId',
+  instanceAccess,
+  zValidator('param', flowIdParamSchema),
+  zValidator('json', updateBodySchema),
+  async (c) => {
+    const { id: instanceId, flowId } = c.req.valid('param');
+    const body = c.req.valid('json');
+    const resolved = await resolveFlowsClient(c.get('services'), instanceId);
+    if (!resolved.ok) return c.json(resolved.payload, 400);
+
+    let endpointUri: string | undefined;
+    if (body.dynamic) {
+      const uri = flowsDataEndpointUri(instanceId);
+      if (!uri) {
+        return c.json(
+          jsonError('dynamic flows require META_FLOWS_PUBLIC_BASE_URL to be configured', 'NOT_CONFIGURED'),
+          400,
+        );
+      }
+      endpointUri = uri;
+    }
+
+    if (body.flowJson) {
+      const local = validateFlowJson(body.flowJson, { dynamic: body.dynamic });
+      if (!local.valid) return c.json(flowJsonInvalid(local.issues), 422);
+    }
+
+    if (body.name || body.categories || endpointUri) {
+      await resolved.client.updateFlowMetadata(flowId, {
+        name: body.name,
+        categories: body.categories,
+        endpointUri,
+      });
+    }
+
+    let validationErrors: unknown[] = [];
+    if (body.flowJson) {
+      const result = await resolved.client.updateFlowAssets(flowId, body.flowJson);
+      validationErrors = result.validation_errors ?? [];
+    }
+
+    return c.json({ data: { id: flowId, endpointUri: endpointUri ?? null, validationErrors } });
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE /instances/:id/whatsapp-flows/:flowId — draft-only delete
+// ─────────────────────────────────────────────────────────────────────────────
+
+whatsappFlowsRoutes.delete(
+  '/instances/:id/whatsapp-flows/:flowId',
+  instanceAccess,
+  zValidator('param', flowIdParamSchema),
+  async (c) => {
+    const { id: instanceId, flowId } = c.req.valid('param');
+    const resolved = await resolveFlowsClient(c.get('services'), instanceId);
+    if (!resolved.ok) return c.json(resolved.payload, 400);
+
+    const result = await resolved.client.deleteFlow(flowId);
+    return c.json({ success: result.success, flowId });
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /instances/:id/whatsapp-flows/:flowId/deprecate — retire a published flow
+// ─────────────────────────────────────────────────────────────────────────────
+
+whatsappFlowsRoutes.post(
+  '/instances/:id/whatsapp-flows/:flowId/deprecate',
+  instanceAccess,
+  zValidator('param', flowIdParamSchema),
+  async (c) => {
+    const { id: instanceId, flowId } = c.req.valid('param');
+    const resolved = await resolveFlowsClient(c.get('services'), instanceId);
+    if (!resolved.ok) return c.json(resolved.payload, 400);
+
+    const result = await resolved.client.deprecateFlow(flowId);
+    return c.json({ success: result.success, flowId });
   },
 );
 

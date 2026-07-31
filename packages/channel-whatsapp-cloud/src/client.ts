@@ -18,6 +18,18 @@ import { MetaApiError as MetaApiErrorClass, MetaErrorCode, mapHttpStatusToMetaEr
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** One entry of Meta's `validation_errors` array on flow create/update/get. */
+export interface MetaFlowValidationError {
+  error: string;
+  error_type: string;
+  message: string;
+  line_start?: number;
+  line_end?: number;
+  column_start?: number;
+  column_end?: number;
+  pointers?: Array<{ path: string; line_start?: number; line_end?: number }>;
+}
+
 type MetaTemplateComponent = NonNullable<MetaTemplatePayload['components']>[number];
 type MetaTemplateParameter = NonNullable<MetaTemplateComponent['parameters']>[number];
 
@@ -140,6 +152,8 @@ export class MetaWhatsAppClient {
   /**
    * POST /{waba_id}/flows — create a flow (optionally publishing immediately).
    * `flowJson` is the stringified Flow JSON (screens/layout definition).
+   * Meta returns `validation_errors` inline when `flow_json` is provided —
+   * always surface them (a flow that "creates fine" can still be unopenable).
    */
   async createFlow(input: {
     name: string;
@@ -147,7 +161,7 @@ export class MetaWhatsAppClient {
     flowJson?: string;
     publish?: boolean;
     endpointUri?: string;
-  }): Promise<{ id: string }> {
+  }): Promise<{ id: string; success?: boolean; validation_errors?: MetaFlowValidationError[] }> {
     this.requireWaba('createFlow');
     return this.post(`/${this.wabaId}/flows`, {
       name: input.name,
@@ -158,9 +172,60 @@ export class MetaWhatsAppClient {
     });
   }
 
+  /**
+   * POST /{flow_id}/assets — replace the flow's Flow JSON (multipart upload,
+   * `asset_type: FLOW_JSON`). The only way to update screens on an existing
+   * flow; DRAFT flows update in place, published flows require a new draft.
+   */
+  async updateFlowAssets(
+    flowId: string,
+    flowJson: string,
+  ): Promise<{ success: boolean; validation_errors?: MetaFlowValidationError[] }> {
+    const form = new FormData();
+    form.append('name', 'flow.json');
+    form.append('asset_type', 'FLOW_JSON');
+    form.append('file', new Blob([flowJson], { type: 'application/json' }), 'flow.json');
+    return this.postForm(`/${flowId}/assets`, form);
+  }
+
+  /**
+   * POST /{flow_id} — update flow properties. `endpoint_uri` lives here (it is
+   * a flow property, NOT part of Flow JSON in v6+): this is the only way to
+   * point an existing flow at a data-exchange endpoint.
+   */
+  async updateFlowMetadata(
+    flowId: string,
+    input: { name?: string; categories?: string[]; endpointUri?: string; applicationId?: string },
+  ): Promise<{ success: boolean }> {
+    return this.post(`/${flowId}`, {
+      ...(input.name ? { name: input.name } : {}),
+      ...(input.categories ? { categories: input.categories } : {}),
+      ...(input.endpointUri !== undefined ? { endpoint_uri: input.endpointUri } : {}),
+      ...(input.applicationId ? { application_id: input.applicationId } : {}),
+    });
+  }
+
+  /** GET /{flow_id} — status, validation errors, endpoint_uri and preview in one call. */
+  async getFlow(flowId: string): Promise<{
+    id: string;
+    name: string;
+    status: string;
+    categories: string[];
+    validation_errors: MetaFlowValidationError[];
+    endpoint_uri?: string;
+    preview?: { preview_url: string; expires_at: string };
+  }> {
+    return this.get(`/${flowId}?fields=id,name,status,categories,validation_errors,endpoint_uri,preview`);
+  }
+
   /** POST /{flow_id}/publish — requires zero validation errors. */
   async publishFlow(flowId: string): Promise<{ success: boolean }> {
     return this.post(`/${flowId}/publish`, {});
+  }
+
+  /** POST /{flow_id}/deprecate — retires a PUBLISHED flow (drafts use deleteFlow). */
+  async deprecateFlow(flowId: string): Promise<{ success: boolean }> {
+    return this.post(`/${flowId}/deprecate`, {});
   }
 
   /** DELETE /{flow_id} — only while the flow is still DRAFT. */
@@ -171,6 +236,33 @@ export class MetaWhatsAppClient {
   /** GET /{flow_id}?fields=preview — browser preview URL (valid ~30 days). */
   async getFlowPreview(flowId: string): Promise<{ preview?: { preview_url: string; expires_at: string } }> {
     return this.get(`/${flowId}?fields=preview.invalidate(false)`);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Flows data-endpoint encryption keys
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * POST /{phone_number_id}/whatsapp_business_encryption — register the
+   * 2048-bit RSA public key Meta uses to wrap the per-request AES key.
+   * Re-posting replaces the key (rotation).
+   */
+  async uploadBusinessPublicKey(publicKeyPem: string): Promise<{ success: boolean }> {
+    const form = new FormData();
+    form.append('business_public_key', publicKeyPem);
+    return this.postForm(`/${this.phoneNumberId}/whatsapp_business_encryption`, form);
+  }
+
+  /**
+   * GET /{phone_number_id}/whatsapp_business_encryption — the registered key +
+   * `business_public_key_signature_status` (VALID | MISMATCH). MISMATCH means
+   * Meta will keep calling the endpoint with a key we can't decrypt → 421 loop.
+   */
+  async getBusinessPublicKey(): Promise<{
+    business_public_key?: string;
+    business_public_key_signature_status?: 'VALID' | 'MISMATCH';
+  }> {
+    return this.get(`/${this.phoneNumberId}/whatsapp_business_encryption`);
   }
 
   private requireWaba(operation: string): void {
@@ -278,6 +370,18 @@ export class MetaWhatsAppClient {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(body),
+    });
+    if (!res.ok) throw await this.errorFromResponse(res, `POST ${path}`);
+    const text = await res.text();
+    return (text ? JSON.parse(text) : {}) as T;
+  }
+
+  /** Multipart POST — fetch sets the boundary Content-Type from the FormData. */
+  private async postForm<T = unknown>(path: string, form: FormData): Promise<T> {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+      body: form,
     });
     if (!res.ok) throw await this.errorFromResponse(res, `POST ${path}`);
     const text = await res.text();

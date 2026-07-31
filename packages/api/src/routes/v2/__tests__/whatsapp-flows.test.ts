@@ -144,7 +144,7 @@ describe('POST /instances/:id/whatsapp-flows', () => {
     });
 
     expect(res.status).toBe(201);
-    expect(await res.json()).toEqual({ data: { id: 'FLOW-NEW' } });
+    expect(await res.json()).toEqual({ data: { id: 'FLOW-NEW', endpointUri: null, validationErrors: [] } });
     expect(calls[0]?.url).toContain('/WABA-1/flows');
     expect(calls[0]?.method).toBe('POST');
     expect(calls[0]?.body).toEqual({ name: 'Onboarding', categories: ['SIGN_UP'], publish: false });

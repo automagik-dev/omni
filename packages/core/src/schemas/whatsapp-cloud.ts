@@ -376,6 +376,12 @@ export const WhatsAppFlowSendSchema = z
     /** Correlates the nfm_reply back to this send; generated when omitted. */
     flowToken: z.string().optional(),
     draft: z.boolean().optional(),
+    /**
+     * 'navigate' (default): static flow, screens resolved client-side.
+     * 'data_exchange': endpoint-backed flow — opening it calls the data
+     * endpoint with INIT; requires the flow to have a registered endpoint_uri.
+     */
+    flowAction: z.enum(['navigate', 'data_exchange']).optional(),
   })
   .refine((v) => Boolean(v.flowId) !== Boolean(v.flowName), {
     message: 'Provide exactly one of flowId or flowName',

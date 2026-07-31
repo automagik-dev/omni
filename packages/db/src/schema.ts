@@ -1052,6 +1052,41 @@ export const whatsappTemplates = pgTable(
 export type WhatsappTemplate = typeof whatsappTemplates.$inferSelect;
 export type NewWhatsappTemplate = typeof whatsappTemplates.$inferInsert;
 
+/**
+ * WhatsApp Flows data-endpoint encryption keys (one active keypair per
+ * instance). The public key is registered with Meta via
+ * POST /{phone_number_id}/whatsapp_business_encryption; the private key
+ * decrypts inbound data-exchange requests.
+ *
+ * `privateKeyPem` is sealed at rest via sealCredentialField (tenant-secret
+ * envelope) under the owning instance's tenant when tenancy + master key are
+ * configured; legacy plaintext otherwise — same codec as the credential
+ * columns on `instances`. Tenancy derives via `instance_id` (the
+ * whatsapp_templates precedent) — no denormalized tenant_id column.
+ * Rotation replaces the row (upsert on instance_id).
+ */
+export const whatsappFlowKeys = pgTable(
+  'whatsapp_flow_keys',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+    privateKeyPem: text('private_key_pem').notNull(),
+    publicKeyPem: text('public_key_pem').notNull(),
+    /** Set when the public key was accepted by Meta; null = generated but not registered. */
+    uploadedAt: timestamp('uploaded_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    instanceUnique: uniqueIndex('idx_wa_flow_keys_instance').on(t.instanceId),
+  }),
+);
+
+export type WhatsappFlowKey = typeof whatsappFlowKeys.$inferSelect;
+export type NewWhatsappFlowKey = typeof whatsappFlowKeys.$inferInsert;
+
 // ============================================================================
 // PERSONS (Identity Graph Root)
 // ============================================================================
