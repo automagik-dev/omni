@@ -22,11 +22,10 @@ export const InstanceSchema = z.object({
   agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
   agentProviderId: z.string().uuid().nullable().optional().openapi({ description: 'Provider ID (agent provider)' }),
   agentTimeout: z.number().openapi({ description: 'Agent timeout in seconds' }),
-  agentErrorMessage: z
-    .string()
-    .nullable()
-    .optional()
-    .openapi({ description: 'Customer-facing reply sent when agent dispatch fails (null = env/default fallback)' }),
+  agentErrorMessages: z.array(z.string()).nullable().optional().openapi({
+    description:
+      'Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback)',
+  }),
   agentStreamMode: z.boolean().openapi({ description: 'Whether streaming is enabled' }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
@@ -40,11 +39,10 @@ export const CreateInstanceSchema = z.object({
   channel: ChannelTypeSchema.openapi({ description: 'Channel type' }),
   agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
   agentTimeout: z.number().int().positive().default(600).openapi({ description: 'Agent timeout in seconds' }),
-  agentErrorMessage: z
-    .string()
-    .nullable()
-    .optional()
-    .openapi({ description: 'Customer-facing reply sent when agent dispatch fails (null = env/default fallback)' }),
+  agentErrorMessages: z.array(z.string()).nullable().optional().openapi({
+    description:
+      'Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback)',
+  }),
   agentStreamMode: z.boolean().default(false).openapi({ description: 'Enable streaming responses' }),
   isDefault: z.boolean().default(false).openapi({ description: 'Set as default instance for channel' }),
   token: z.string().optional().openapi({ description: 'Bot token for Discord instances' }),

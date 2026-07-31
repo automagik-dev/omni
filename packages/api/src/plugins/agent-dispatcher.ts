@@ -568,26 +568,32 @@ async function sendTextMessage(
 }
 
 /**
- * Built-in dispatch-failure message (#737). Kept in English for backwards
- * compatibility — non-English deployments override it globally via the
- * `OMNI_AGENT_DISPATCH_ERROR_MESSAGE` env var or per instance via the
- * `agentErrorMessage` column (see {@link resolveDispatchErrorMessage}).
+ * Built-in dispatch-failure message (#737). Defaults to pt-BR (the deployments
+ * this flow serves), matching the other customer-facing defaults
+ * (`DEFAULT_ERROR_HANDOFF_MESSAGE`, `SAFE_PROVIDER_ERROR_MESSAGE`). Other
+ * locales override globally via the `OMNI_AGENT_DISPATCH_ERROR_MESSAGE` env
+ * var or per instance via the `agentErrorMessages` column (see
+ * {@link resolveDispatchErrorMessage}).
  */
-export const DEFAULT_DISPATCH_ERROR_MESSAGE = '⚠️ Sorry, I ran into an issue processing your message. Please try again.';
+export const DEFAULT_DISPATCH_ERROR_MESSAGE = 'Opa, tive um probleminha aqui 😅 Pode mandar de novo?';
 
 /**
  * Resolve the customer-facing dispatch-failure message (#737). Precedence:
- *   1. per-instance override (localized per deployment),
+ *   1. per-instance `agentErrorMessages` — a list of variants, one picked at
+ *      random per failure so repeated errors don't read like a bot loop,
  *   2. `OMNI_AGENT_DISPATCH_ERROR_MESSAGE` env (global override),
  *   3. {@link DEFAULT_DISPATCH_ERROR_MESSAGE}.
- * Blank/whitespace-only values are ignored so they fall through to the next tier.
+ * Blank/whitespace-only entries are ignored so they fall through to the next
+ * tier. `random` is injectable for deterministic tests.
  */
 export function resolveDispatchErrorMessage(
-  instanceErrorMessage: string | null | undefined,
+  instanceErrorMessages: readonly string[] | null | undefined,
   env: Record<string, string | undefined> = process.env,
+  random: () => number = Math.random,
 ): string {
-  const instanceMsg = instanceErrorMessage?.trim();
-  if (instanceMsg) return instanceMsg;
+  const variants = (instanceErrorMessages ?? []).map((m) => m.trim()).filter(Boolean);
+  const picked = variants[Math.floor(random() * variants.length)];
+  if (picked) return picked;
   const envMsg = env.OMNI_AGENT_DISPATCH_ERROR_MESSAGE?.trim();
   if (envMsg) return envMsg;
   return DEFAULT_DISPATCH_ERROR_MESSAGE;
@@ -813,7 +819,7 @@ async function handleDispatchFailure(
     instance.id,
     chatId,
     error,
-    resolveDispatchErrorMessage(instance.agentErrorMessage),
+    resolveDispatchErrorMessage(instance.agentErrorMessages),
   ).catch(() => {});
 }
 
