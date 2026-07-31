@@ -466,11 +466,70 @@ function handleRecentLogs(req: Request): Response {
   });
 }
 
+// ── Trust / handshake fixtures ──
+
+/**
+ * Registered pubkeys, keyed by `${origin}|${pubkey}`.
+ *
+ * Mirrors the real route's idempotency: the same pubkey posted twice to one
+ * server yields the same host id, and the SAME pubkey posted to a second
+ * server registers there independently. Both properties are what the
+ * multi-server binding tests assert against.
+ */
+const registeredHosts = new Map<string, { id: string; pubkey: string; hostname: string }>();
+
+async function handleTrustHandshake(req: Request): Promise<Response> {
+  const origin = new URL(req.url).origin;
+  const body = (await req.json()) as { pubkey?: string; hostname?: string };
+  const pubkey = body.pubkey ?? '';
+  const mapKey = `${origin}|${pubkey}`;
+  const existing = registeredHosts.get(mapKey);
+  if (existing) return json({ data: existing });
+  const host = { id: crypto.randomUUID(), pubkey, hostname: body.hostname ?? 'unknown' };
+  registeredHosts.set(mapKey, host);
+  return json({ data: host }, 201);
+}
+
+// ── Request recording (signature assertions) ──
+
+export interface RecordedRequest {
+  origin: string;
+  method: string;
+  path: string;
+  /** True when the request carried the X-Genie-* operator-signing headers. */
+  signed: boolean;
+  hostId: string | null;
+}
+
+let recordedRequests: RecordedRequest[] = [];
+
+/** Requests seen since the last {@link clearRecordedRequests}, oldest first. */
+export function getRecordedRequests(): RecordedRequest[] {
+  return [...recordedRequests];
+}
+
+export function clearRecordedRequests(): void {
+  recordedRequests = [];
+}
+
+function recordRequest(req: Request, path: string): void {
+  const hostId = req.headers.get('x-genie-host-id');
+  recordedRequests.push({
+    origin: new URL(req.url).origin,
+    method: req.method,
+    path,
+    signed: hostId !== null && req.headers.get('x-genie-signature') !== null,
+    hostId,
+  });
+}
+
 // ── Auth middleware ──
 
 function checkAuth(req: Request, path: string): Response | null {
   if (!path.startsWith('/api/v2') || path.endsWith('/health')) return null;
-  const key = req.headers.get('x-api-key');
+  // Accept either header style: the SDK sends x-api-key, while the raw-fetch
+  // trust command sends `Authorization: Bearer`.
+  const key = req.headers.get('x-api-key') ?? req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
   if (key === MOCK_API_KEY) return null;
   return json({ error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } }, 401);
 }
@@ -505,6 +564,8 @@ const staticRoutes: Record<RouteKey, (req: Request) => Response | Promise<Respon
   'GET /api/v2/agents': () => json({ items: dynamicAgents }),
   'POST /api/v2/agents': handleCreateAgent,
   'GET /api/v2/logs/recent': handleRecentLogs,
+  'POST /api/v2/trust/handshake': handleTrustHandshake,
+  'GET /api/v2/trust/hosts': () => json(EMPTY_ITEMS),
 };
 
 /** Pattern routes: regex-matched paths */
@@ -555,6 +616,8 @@ async function handleRequest(req: Request): Promise<Response> {
   const path = url.pathname;
   const method = req.method;
 
+  recordRequest(req, path);
+
   // Auth check
   const authError = checkAuth(req, path);
   if (authError) return authError;
@@ -575,13 +638,31 @@ async function handleRequest(req: Request): Promise<Response> {
 
 // ── Server lifecycle ──
 
-interface MockApiHandle {
+export interface MockApiHandle {
   url: string;
   port: number;
   close: () => void;
 }
 
 let handle: MockApiHandle | null = null;
+
+/**
+ * Start an ADDITIONAL mock API on its own random port.
+ *
+ * Unlike {@link startMockApi} this is not a singleton and does not reset the
+ * shared fixtures — multi-server tests need two live servers at once, and
+ * resetting would clobber the suite that is already running against the
+ * singleton. Callers must close the handle themselves.
+ */
+export function startMockApiInstance(): MockApiHandle {
+  const server = Bun.serve({ port: 0, fetch: handleRequest });
+  const port = server.port ?? 0;
+  return {
+    url: `http://localhost:${port}`,
+    port,
+    close: () => server.stop(true),
+  };
+}
 
 /**
  * Start the mock API server on a random available port.

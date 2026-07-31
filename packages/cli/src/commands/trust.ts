@@ -17,9 +17,20 @@
 
 import { hostname as osHostname } from 'node:os';
 import { Command } from 'commander';
-import { hasAuth, loadConfig } from '../config.js';
+import { exitNotAuthenticated } from '../client.js';
+import { getTargetServerName, hasAuth, loadConfig } from '../config.js';
 import * as output from '../output.js';
-import { type OmniHostMetadata, generateAndStoreKeypair, loadSigningContext, writeHostMetadata } from '../signing.js';
+import {
+  type OmniHostMetadata,
+  bindingForServer,
+  boundServerBindings,
+  boundServerUrls,
+  generateAndStoreKeypair,
+  loadHostMetadata,
+  loadSigningContextForServer,
+  normalizeServerUrl,
+  writeHostMetadata,
+} from '../signing.js';
 
 interface TrustHost {
   id: string;
@@ -37,13 +48,16 @@ interface TrustHost {
 // Helpers
 // ============================================================================
 
+/** Base URL of the server this invocation targets (active entry or `--server`). */
+function targetBaseUrl(): string {
+  return normalizeServerUrl(loadConfig().apiUrl ?? 'http://localhost:8882');
+}
+
 function trustEndpoint(path: string): string {
   if (!hasAuth()) {
-    output.error('Not authenticated. Run: omni auth login --api-key <key>', undefined, 2);
+    exitNotAuthenticated();
   }
-  const config = loadConfig();
-  const baseUrl = (config.apiUrl ?? 'http://localhost:8882').replace(/\/+$/, '');
-  return `${baseUrl}/api/v2/trust${path}`;
+  return `${targetBaseUrl()}/api/v2/trust${path}`;
 }
 
 function authHeaders(): Record<string, string> {
@@ -56,19 +70,21 @@ function authHeaders(): Record<string, string> {
 }
 
 /**
- * If the operator has run `omni trust handshake`, this returns the
- * signing context that adds the X-Genie-* headers to every call. When no
- * keypair exists locally, it returns null and we go bearer-only — matches
- * the behavior before P0b shipped, no surprise lockout for operators
- * who haven't migrated yet.
+ * If the operator has run `omni trust handshake` AGAINST THE TARGET SERVER,
+ * this returns the signing context that adds the X-Genie-* headers to every
+ * call. When no keypair exists locally — or the target server has never seen
+ * this pubkey — it returns null and we go bearer-only, matching the behavior
+ * before P0b shipped.
  *
  * Pulled out as a module-level lazy cache so we don't re-read the key
- * file on every API call within a single CLI invocation.
+ * file on every API call within a single CLI invocation. The target server
+ * cannot change mid-invocation (`--server` is resolved once, pre-Commander),
+ * so a single-slot cache is sound.
  */
-let _cachedSigningContext: ReturnType<typeof loadSigningContext> | undefined;
-function getSigningContextOnce(): ReturnType<typeof loadSigningContext> {
+let _cachedSigningContext: ReturnType<typeof loadSigningContextForServer> | undefined;
+function getSigningContextOnce(): ReturnType<typeof loadSigningContextForServer> {
   if (_cachedSigningContext === undefined) {
-    _cachedSigningContext = loadSigningContext();
+    _cachedSigningContext = loadSigningContextForServer(targetBaseUrl());
   }
   return _cachedSigningContext;
 }
@@ -156,59 +172,102 @@ async function handleUpdate(id: string, options: { scope: string }): Promise<voi
   }
 }
 
+/**
+ * POST the pubkey to the target server's handshake route.
+ *
+ * We DO NOT sign this request — the server-side handshake route is auth-exempt
+ * by design (it's how new hosts bootstrap) and idempotent, so re-posting an
+ * existing pubkey to a second server registers it there without rotating.
+ */
+async function registerPubkey(
+  pubkey: string,
+  hostname: string,
+): Promise<{ id: string; pubkey: string; hostname: string }> {
+  try {
+    const res = await callApi<{ data: { id: string; pubkey: string; hostname: string } }>('POST', '/handshake', {
+      pubkey,
+      hostname,
+      capabilities: {
+        client: 'omni-cli',
+        platform: process.platform,
+        nodeVersion: process.version,
+      },
+    });
+    return res.data;
+  } catch (err) {
+    return output.error(`Handshake failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function handleHandshake(options: { rotate?: boolean; hostname?: string }): Promise<void> {
-  // Refuse to clobber an existing handshake unless --rotate. Quietly
-  // re-using the existing one is the right behavior — handshakes are
-  // idempotent on the server side too — but we want operators to know
-  // when nothing changed.
-  const existing = loadSigningContext();
+  const targetUrl = targetBaseUrl();
+  const serverName = getTargetServerName();
+  const existing = loadHostMetadata();
+
   if (existing && !options.rotate) {
-    output.success(`Already handshook as host ${existing.hostId}. Pass --rotate to issue a new keypair.`);
+    const bindings = boundServerBindings(existing);
+    const bound = boundServerUrls(existing);
+    const alreadyBound = bindingForServer(existing, targetUrl);
+
+    // Already bound to THIS server — nothing to do. Say which servers are
+    // covered: signing is per-server, so an operator with several entries must
+    // know that the rest are still going out bearer-only.
+    if (alreadyBound) {
+      output.success(
+        `Already handshook as host ${alreadyBound.hostId} for server '${serverName}' (${targetUrl}). Bound servers: ${bound.join(', ')} (each with its own host id). Requests to any other server entry are sent UNSIGNED (bearer only) — run \`omni trust handshake --server <name>\` there to bind it. Pass --rotate to issue a new keypair.`,
+      );
+      return;
+    }
+
+    // New server, existing key: register the SAME pubkey. Rotating here would
+    // invalidate the keypair on every server already bound to it. The id this
+    // server issues is stored ON THE BINDING — the top-level `hostId` belongs
+    // to the first server and stamping this one over it would make every
+    // request to the servers already bound 401 as an unknown host.
+    const registered = await registerPubkey(existing.pubkey, options.hostname ?? existing.hostname);
+    const meta: OmniHostMetadata = {
+      ...existing,
+      pubkey: registered.pubkey,
+      boundServers: [...bindings, { url: targetUrl, hostId: registered.id }],
+    };
+    writeHostMetadata(meta);
+
+    output.success(`Bound existing host key to server '${serverName}' (${targetUrl}) — no rotation.`);
+    output.data({
+      hostId: registered.id,
+      hostname: meta.hostname,
+      pubkey: meta.pubkey,
+      boundServers: meta.boundServers,
+      rotated: false,
+    });
     return;
   }
 
   // Generate the keypair (overwrites prior keys when --rotate is set —
   // intentional; rotation is "revoke + re-register with a new key" per
-  // the wish's decision record).
+  // the wish's decision record). Rotation resets the binding list: servers
+  // bound to the OLD key have never seen this one.
   const { pubkeyB64Url } = generateAndStoreKeypair();
   const hostname = options.hostname ?? osHostname();
-  const capabilities = {
-    client: 'omni-cli',
-    platform: process.platform,
-    nodeVersion: process.version,
-  };
-
-  // Hit the handshake endpoint. Note we DO NOT sign this request — the
-  // server-side handshake route is auth-exempt by design (it's how new
-  // hosts bootstrap), and we don't yet have a host_id to put in the
-  // signing headers.
-  let registered: { id: string; pubkey: string; hostname: string };
-  try {
-    registered = await callApi<{ data: { id: string; pubkey: string; hostname: string } }>('POST', '/handshake', {
-      pubkey: pubkeyB64Url,
-      hostname,
-      capabilities,
-    }).then((r) => r.data);
-  } catch (err) {
-    output.error(`Handshake failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  const registered = await registerPubkey(pubkeyB64Url, hostname);
 
   const meta: OmniHostMetadata = {
     hostId: registered.id,
     pubkey: registered.pubkey,
     hostname: registered.hostname,
     registeredAt: new Date().toISOString(),
+    boundServers: [{ url: targetUrl, hostId: registered.id }],
   };
   writeHostMetadata(meta);
 
-  output.success(`Operator-host registered: ${meta.hostId}`);
+  output.success(`Operator-host registered: ${meta.hostId} (server: ${serverName})`);
   output.data({
     hostId: meta.hostId,
     hostname: meta.hostname,
     pubkey: meta.pubkey,
+    boundServers: meta.boundServers,
     keysDir: '~/.omni/keys/',
-    nextStep:
-      'Future omni CLI calls will sign requests automatically. Run `omni trust list` to verify (lastSeenAt should advance after subsequent calls).',
+    nextStep: `Calls to '${serverName}' will now be signed automatically; other server entries stay bearer-only until you run \`omni trust handshake --server <name>\` against them. Run \`omni trust list\` to verify (lastSeenAt should advance after subsequent calls).`,
   });
 }
 
@@ -232,9 +291,17 @@ export function createTrustCommand(): Command {
   trust
     .command('handshake')
     .description(
-      'Register THIS omni CLI as a host (mints ed25519 keypair in ~/.omni/keys/, future API calls auto-sign).',
+      'Register THIS omni CLI as a host with the targeted server (mints ed25519 keypair in ~/.omni/keys/ on first run; later servers reuse it).',
     )
-    .option('--rotate', 'Issue a new keypair even if one already exists')
+    .addHelpText(
+      'after',
+      `
+Signing is per-server: only servers you have handshaken against recognize this
+keypair, so calls to other entries stay bearer-only. Bind another one with:
+  omni trust handshake --server <name>
+`,
+    )
+    .option('--rotate', 'Issue a new keypair even if one already exists (unbinds every previously bound server)')
     .option('--hostname <name>', 'Override the hostname reported to omni (defaults to os.hostname())')
     .action(handleHandshake);
 

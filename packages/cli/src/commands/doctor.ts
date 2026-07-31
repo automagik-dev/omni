@@ -52,9 +52,9 @@ import { Command } from 'commander';
 import {
   type Config,
   type ServerConfig,
-  loadConfig,
+  loadLocalRuntimeConfig,
   loadServerConfig,
-  saveConfig,
+  saveLocalRuntimeConfig,
   saveServerConfig,
 } from '../config.js';
 import { getHealthCheckUrl } from '../health.js';
@@ -352,7 +352,9 @@ function productionDeps(): DoctorDeps {
       }
     },
     validateStoredKey: async (apiPort: number) => {
-      const cliConfig = loadConfig();
+      // doctor diagnoses the LOCAL runtime: always the `default` server entry,
+      // never the active remote one (see runtime-env.ts rule 5).
+      const cliConfig = loadLocalRuntimeConfig();
       if (!cliConfig.apiKey) return false;
       const baseUrl = cliConfig.apiUrl ?? `http://localhost:${apiPort}`;
       try {
@@ -365,11 +367,11 @@ function productionDeps(): DoctorDeps {
     },
     loadState: () => ({
       serverConfig: loadServerConfig(),
-      cliConfig: loadConfig(),
+      cliConfig: loadLocalRuntimeConfig(),
     }),
     runPm2,
-    saveCliConfig: saveConfig,
-    reloadCliConfig: loadConfig,
+    saveCliConfig: saveLocalRuntimeConfig,
+    reloadCliConfig: loadLocalRuntimeConfig,
     generateApiKey,
     sleepMs: (ms: number) => Bun.sleep(ms),
     capturePm2Conf: async () => {
@@ -378,7 +380,7 @@ function productionDeps(): DoctorDeps {
       return stdout;
     },
     listLockedInstances: async () => {
-      const cliConfig = loadConfig();
+      const cliConfig = loadLocalRuntimeConfig();
       // Without a stored CLI key we can't even reach /instances. Fall
       // back to "no locked instances visible" rather than crash; the
       // cli-key-valid check already FAILs and surfaces the real problem.

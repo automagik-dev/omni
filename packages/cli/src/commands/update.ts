@@ -28,7 +28,7 @@ import { createOmniClient } from '@omni/sdk';
 import chalk from 'chalk';
 import { Command } from 'commander';
 import ora from 'ora';
-import { type Config, loadConfig, loadServerConfig, saveConfig } from '../config.js';
+import { type Config, loadConfig, loadLocalRuntimeConfig, loadServerConfig, saveConfig } from '../config.js';
 import { getHealthCheckUrl } from '../health.js';
 import { type CleanupReport, cleanupLegacyArtifacts } from '../legacy-cleanup.js';
 import * as output from '../output.js';
@@ -217,7 +217,8 @@ async function installLatest(channel: UpdateChannel): Promise<boolean> {
  */
 async function restartPm2Services(processNames: Pm2ProcessName[]): Promise<boolean> {
   const serverConfig = loadServerConfig();
-  const cliConfig = loadConfig();
+  // LOCAL entry, never the active server — see runtime-env.ts rule 5.
+  const cliConfig = loadLocalRuntimeConfig();
   const runtimeEnv = buildRuntimeEnv(serverConfig, cliConfig);
 
   let allSucceeded = true;
@@ -380,7 +381,9 @@ async function fetchHealthBody(apiPort: number, timeoutMs: number): Promise<Heal
  * what to do on failure (typically exit non-zero and point at `omni doctor`).
  */
 async function validateStoredKey(apiPort: number): Promise<boolean> {
-  const cliConfig = loadConfig();
+  // Probes the LOCAL server that was just restarted — must not follow the
+  // active remote entry (see runtime-env.ts rule 5).
+  const cliConfig = loadLocalRuntimeConfig();
   if (!cliConfig.apiKey) {
     return false;
   }

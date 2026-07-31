@@ -1,5 +1,6 @@
+import { ServerSwitcher } from '@/components/layout/ServerSwitcher';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { clearApiKey } from '@/lib/sdk';
+import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
 import {
   Activity,
@@ -84,6 +85,9 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed: controlledCollapsed, onCollapsedChange }: SidebarProps = {}) {
+  // Single logout path: useAuth clears the active server's key, the query cache,
+  // and redirects.
+  const { logout: handleLogout } = useAuth();
   const [internalCollapsed, setInternalCollapsed] = useState(() => {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem(STORAGE_KEY) === 'true';
@@ -106,11 +110,6 @@ export function Sidebar({ collapsed: controlledCollapsed, onCollapsedChange }: S
       setInternalCollapsed(stored === 'true');
     }
   }, []);
-
-  const handleLogout = () => {
-    clearApiKey();
-    window.location.href = '/login';
-  };
 
   const toggleCollapse = () => setCollapsed(!collapsed);
 
@@ -144,6 +143,11 @@ export function Sidebar({ collapsed: controlledCollapsed, onCollapsedChange }: S
           >
             {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
           </button>
+        </div>
+
+        {/* Active server */}
+        <div className={cn('flex border-b border-border/30 px-3 py-3', collapsed && 'justify-center')}>
+          <ServerSwitcher collapsed={collapsed} />
         </div>
 
         {/* Navigation */}

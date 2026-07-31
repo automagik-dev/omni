@@ -53,6 +53,7 @@ import { createResyncCommand } from './commands/resync.js';
 import { createSayCommand } from './commands/say.js';
 import { createSeeCommand } from './commands/see.js';
 import { createSendCommand } from './commands/send.js';
+import { createServerCommand } from './commands/server.js';
 import { createSettingsCommand } from './commands/settings.js';
 import { createSpeakCommand } from './commands/speak.js';
 import { createStartCommand } from './commands/start.js';
@@ -66,9 +67,9 @@ import { createUseCommand } from './commands/use.js';
 import { createVoiceCommand } from './commands/voice.js';
 import { createWebhooksCommand } from './commands/webhooks.js';
 import { createWhereCommand } from './commands/where.js';
-import { type CommandCategory, loadConfig, setRuntimeFormat } from './config.js';
+import { type CommandCategory, loadConfig, loadServers, setRuntimeFormat, setRuntimeServer } from './config.js';
 import { type CommandInfo, formatCommandGroups, formatExamples } from './help.js';
-import { areColorsEnabled, disableColors, flushStdout } from './output.js';
+import { areColorsEnabled, disableColors, error as exitWithError, flushStdout } from './output.js';
 
 // Handle --json flag early (before Commander) so it works anywhere in argv
 if (process.argv.includes('--json')) {
@@ -77,6 +78,59 @@ if (process.argv.includes('--json')) {
   const idx = process.argv.indexOf('--json');
   process.argv.splice(idx, 1);
 }
+
+/**
+ * Handle the global `--server <name>` / `--server=<name>` flag before
+ * Commander sees argv — same mechanism as `--json` above, and for the same
+ * reason: the flag must work in any position, including after a subcommand,
+ * without every subcommand declaring it.
+ *
+ * Order matters. This runs before ANY `loadConfig()` / `getClient()` call so
+ * the override is already in place by the time a command resolves its target.
+ */
+function applyServerFlag(): void {
+  const occurrences: number[] = [];
+  for (const [i, arg] of process.argv.entries()) {
+    if (arg === '--server' || arg.startsWith('--server=')) occurrences.push(i);
+  }
+  // A second occurrence would leave the first flag (or its value) in argv after
+  // the single splice below, and Commander would then choke on a stray token.
+  // Reject instead of silently targeting one of the two servers.
+  if (occurrences.length > 1) {
+    exitWithError('duplicate --server flag: pass it at most once');
+  }
+  const idx = occurrences[0] ?? -1;
+  if (idx === -1) return;
+
+  const arg = process.argv[idx];
+  let name: string | undefined;
+  if (arg.startsWith('--server=')) {
+    name = arg.slice('--server='.length);
+    process.argv.splice(idx, 1);
+  } else {
+    // Two-element splice: the flag AND its value. Removing only the flag would
+    // leave a bare server name in argv for Commander to treat as an argument.
+    name = process.argv[idx + 1];
+    process.argv.splice(idx, 2);
+  }
+
+  // A flag-like value means the operator forgot the name (`--server --json`);
+  // treating it as a server name would produce a baffling "unknown server".
+  if (!name || name.length === 0 || name.startsWith('-')) {
+    exitWithError('--server requires a server name (e.g. --server prod)', {
+      knownServers: Object.keys(loadServers().list).sort(),
+    });
+  }
+
+  const servers = loadServers();
+  if (!servers.list[name]) {
+    exitWithError(`Unknown server '${name}'`, { knownServers: Object.keys(servers.list).sort() });
+  }
+
+  setRuntimeServer(name);
+}
+
+applyServerFlag();
 import { selfHealManifestPin } from './manifest-pin.js';
 import { getConfigSummary, getInlineStatus } from './status.js';
 import { captureCliError, flushTelemetry } from './telemetry.js';
@@ -322,6 +376,12 @@ const COMMANDS: CommandDef[] = [
   },
   { create: createEventsCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Query message history' },
   { create: createAuthCommand, category: 'core', helpGroup: 'System', helpDescription: 'Authentication management' },
+  {
+    create: createServerCommand,
+    category: 'core',
+    helpGroup: 'System',
+    helpDescription: 'Registry of Omni servers to talk to (add, use, list)',
+  },
   { create: createSettingsCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Server settings' },
   { create: createBatchCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Batch operations' },
   {
@@ -558,8 +618,9 @@ ${c().bold('Quick Start')}:
   omni events list --limit 10
 
 ${c().bold('Global Flags')}:
-  --json         Output in JSON format (works with any command)
-  --no-color     Disable colored output
+  --json           Output in JSON format (works with any command)
+  --server <name>  Target one registered server for this command only (omni server list)
+  --no-color       Disable colored output
 `;
   return quickStart;
 });
