@@ -2615,7 +2615,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -2638,6 +2638,8 @@ export interface components {
             agentProviderId?: string | null;
             /** @description Agent timeout in seconds */
             agentTimeout: number;
+            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+            agentErrorMessages?: string[] | null;
             /** @description Whether streaming is enabled */
             agentStreamMode: boolean;
             /**
@@ -2658,7 +2660,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -2669,6 +2671,8 @@ export interface components {
              * @default 600
              */
             agentTimeout: number;
+            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+            agentErrorMessages?: string[] | null;
             /**
              * @description Enable streaming responses
              * @default false
@@ -2753,7 +2757,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -2865,6 +2869,8 @@ export interface components {
                  */
                 url?: string;
             }[];
+            /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
+            requestLocation?: boolean;
         };
         TTSVoice: {
             /** @description ElevenLabs voice ID */
@@ -6096,7 +6102,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6119,6 +6125,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
@@ -6159,7 +6167,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                    channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -6170,6 +6178,8 @@ export interface operations {
                      * @default 600
                      */
                     agentTimeout?: number;
+                    /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                    agentErrorMessages?: string[] | null;
                     /**
                      * @description Enable streaming responses
                      * @default false
@@ -6205,7 +6215,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6228,6 +6238,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
@@ -6288,7 +6300,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -6337,7 +6349,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6360,6 +6372,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
@@ -6465,7 +6479,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                    channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -6476,6 +6490,8 @@ export interface operations {
                      * @default 600
                      */
                     agentTimeout?: number;
+                    /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                    agentErrorMessages?: string[] | null;
                     /**
                      * @description Enable streaming responses
                      * @default false
@@ -6511,7 +6527,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6534,6 +6550,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
@@ -7426,6 +7444,8 @@ export interface operations {
                          */
                         url?: string;
                     }[];
+                    /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
+                    requestLocation?: boolean;
                 };
             };
         };

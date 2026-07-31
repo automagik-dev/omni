@@ -59,6 +59,13 @@ const createInstanceSchema = z.object({
   channel: ChannelTypeSchema.describe('Channel type (e.g., whatsapp-baileys, discord)'),
   agentId: z.string().uuid().nullable().optional().describe('Agent UUID referencing agents table'),
   agentTimeout: z.number().int().positive().default(600).describe('Agent timeout in seconds'),
+  agentErrorMessages: z
+    .array(z.string())
+    .optional()
+    .nullable()
+    .describe(
+      'Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = fall through to OMNI_AGENT_DISPATCH_ERROR_MESSAGE env, then built-in default)',
+    ),
   agentStreamMode: z.boolean().default(false).describe('Enable streaming responses'),
   agentReplyFilter: agentReplyFilterSchema.optional().nullable().describe('When agent should reply'),
   agentSessionStrategy: z
@@ -256,6 +263,7 @@ const createInstanceSchema = z.object({
 const updateInstanceSchema = createInstanceSchema.partial().extend({
   // Nullable fields in DB - can be set to null
   agentId: z.string().uuid().nullable().optional(),
+  agentErrorMessages: z.array(z.string()).nullable().optional(),
   agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
   triggerEvents: z.array(z.string()).nullable().optional(),
   telegramBotToken: z.string().nullable().optional(),
