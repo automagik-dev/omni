@@ -1,5 +1,5 @@
 import { queryKeys } from '@/lib/query';
-import { getClient } from '@/lib/sdk';
+import { apiFetch, getClient } from '@/lib/sdk';
 import type { SearchPersonsParams } from '@omni/sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -44,14 +44,8 @@ export function useLinkIdentities() {
 
   return useMutation({
     mutationFn: async ({ identityA, identityB }: { identityA: string; identityB: string }) => {
-      const client = getClient();
-      const baseUrl = (client as unknown as { baseUrl: string }).baseUrl || '';
-      const response = await fetch(`${baseUrl}/api/v2/persons/link`, {
+      const response = await apiFetch('/persons/link', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('omni-api-key') || ''}`,
-        },
         body: JSON.stringify({ identityA, identityB }),
       });
       if (!response.ok) {
@@ -74,14 +68,8 @@ export function useUnlinkIdentity() {
 
   return useMutation({
     mutationFn: async ({ identityId, reason }: { identityId: string; reason: string }) => {
-      const client = getClient();
-      const baseUrl = (client as unknown as { baseUrl: string }).baseUrl || '';
-      const response = await fetch(`${baseUrl}/api/v2/persons/unlink`, {
+      const response = await apiFetch('/persons/unlink', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('omni-api-key') || ''}`,
-        },
         body: JSON.stringify({ identityId, reason }),
       });
       if (!response.ok) {
@@ -112,14 +100,8 @@ export function useMergePersons() {
       targetPersonId: string;
       reason?: string;
     }) => {
-      const client = getClient();
-      const baseUrl = (client as unknown as { baseUrl: string }).baseUrl || '';
-      const response = await fetch(`${baseUrl}/api/v2/persons/merge`, {
+      const response = await apiFetch('/persons/merge', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('omni-api-key') || ''}`,
-        },
         body: JSON.stringify({ sourcePersonId, targetPersonId, reason }),
       });
       if (!response.ok) {

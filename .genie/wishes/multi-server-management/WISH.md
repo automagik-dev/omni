@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | APPROVED |
+| **Status** | IN_PROGRESS |
 | **Slug** | `multi-server-management` |
 | **Date** | 2026-07-31 |
 | **Author** | Felipe Rosa |
@@ -111,7 +111,7 @@ Groups 3 and 4 must merge together in one PR: `make check` runs knip dead-code d
 **Deliverables:**
 1. `servers` config block in `packages/cli/src/config.ts`: `{ active: string, list: Record<name, { url: string, apiKey?: string }> }`, with a Zod schema validating it on load (invalid entries dropped with a warning, never a crash).
 2. Lazy migration in `loadConfig()`: when `servers` is absent and flat `apiUrl`/`apiKey` exist, lift them into a `default` entry and set it active; effective `config.apiUrl`/`config.apiKey` are derived from the active entry for client-facing paths. The `--server` override is transported via `process.env` (same mechanism and bundler-duplication rationale as `setRuntimeFormat`, `config.ts:249-255`).
-3. Non-resolving accessor `loadLocalRuntimeConfig()` for local-runtime paths: `runtime-env.ts` (`buildRuntimeEnv`), `commands/start.ts`, `restart.ts`, `update.ts`, `install.ts`, `doctor.ts`, and `auth recover` read the local `default` entry regardless of the active server; `doctor`/`update` health probes (`doctor.ts:357,388`, `update.ts:387`) keep targeting `http://localhost:<apiPort>`.
+3. Non-resolving accessor `loadLocalRuntimeConfig()` for local-runtime paths: `runtime-env.ts` (`buildRuntimeEnv`), `commands/start.ts`, `restart.ts`, `update.ts`, `install.ts`, `doctor.ts`, and `auth recover` read the local `default` entry regardless of the active server; `doctor`/`update` health probes (`doctor.ts:357,388`, `update.ts:387`) resolve from the local `default` entry, never the active one (reviewer-corrected wording: hardcoding `localhost:<apiPort>` would break legitimate non-default local installs).
 4. `config list` shows one read-only, masked active-server row; `config get/set/delete` reject `servers.*` keys with a pointer to `omni server` (per Decision 10 — no dynamic `ConfigKey` entries).
 5. Unit tests in `packages/cli/src/__tests__/config.test.ts` covering migration, resolution, override, invalid-entry fallback, and the `buildRuntimeEnv` isolation guarantee — sandboxed via `OMNI_CONFIG_DIR` with `beforeEach`/`afterEach` env save-restore. Fix the stale header comment (`config.test.ts:4-6`) claiming import-time path caching (false — `getConfigDir()` reads the env on every call), and sandbox the existing `loadServerConfig()` test that currently reads the developer's real `~/.omni`.
 
@@ -301,6 +301,17 @@ All seven blocking/major findings from the first pass verified genuinely closed 
 | 11 | minor | Simplicity Case "simplest complete design" bullet describes only the registry; auth-mode bullet claims minimality that ignores omni's existing machinery | Rewrite after 1–4 resolve |
 
 **Path forward per reviewer:** dispatch Waves 1–2 now; re-plan Groups 5–7 against the real surface (existing flag/posture, chosen chain position, renamed role concept, Bearer discriminator, sequencing agreed with `omni-full-multitenancy`); re-review required. Findings 8–11 follow Groups 5–7 wherever they live.
+
+### Execution reviews — 2026-07-31 — all four groups closed after fix loops
+
+Each group: independent reviewer (≠ engineer) ran the validation personally; FIX-FIRST findings fixed by a separate fixer (one loop each); orchestrator re-validated before `genie task done`.
+
+| Group | Verdict → outcome | Notable findings fixed |
+|-------|-------------------|------------------------|
+| 1 (CLI config) | FIX-FIRST → done (40 config tests, 499-sweep) | HIGH: flat `apiUrl`/`apiKey` mirror tracked the *active* (possibly remote) entry — now mirrors `default` only, and `projectEntry`'s missing-entry branch returns safe defaults instead of inheriting the mirror (closes the remote-key-into-PM2 leak plus the older-CLI-build face of it). Also: knip unused export; `config unset apiUrl` silent no-op; warning emission now asserted. Accepted judgment call: doctor/update probes resolve from the `default` entry rather than hardcoded localhost (AC wording corrected in Group 1 deliverable 3). |
+| 3 (UI registry) | FIX-FIRST → done (19 UI tests) | HIGH: two literal NUL bytes in `sdk.ts` made the file binary to git (undiffable/unmergeable) — replaced with ` ` escapes; MEDIUM: `crypto.randomUUID()` undefined on non-secure origins (http://<remote-ip>) — guarded fallback with a negative-control test. Reviewer also confirmed the old `usePersons` `baseUrl` reach-in was always `undefined` (silently same-origin-only). |
+| 2 (CLI commands) | FIX-FIRST → done (93 cli tests, 567-sweep) | BLOCKER (empirically proven by reviewer): re-handshake overwrote the single `hostId` with the new server's UUID, hard-401ing the previously bound server — `boundServers` is now `Array<{url, hostId}>` with per-URL id selection in `loadSigningContextForServer` and legacy coercion; tests assert per-origin ids on the wire, not just header presence. Also: knip export; duplicate `--server` rejected; `add` trims names; keyless add probes health credential-free (no `'unset'` placeholder on the wire); `syncEffectiveIntoEntry` normalizes URLs so `auth login --api-url` can't desync an entry from its signing binding. |
+| 4 (UI switcher) | FIX-FIRST → done (19 UI tests, knip clean for apps/ui) | MAJOR: first-ever `apps/ui` test file missing from knip entry globs (CI gate) — `src/**/*.test.ts` added; dialog gained a staleness token so a hung validation resolving after close can't persist/activate; `removeServer` cache-discipline contract documented; last-entry removal tested. Wave-1 carried findings all closed: `switchServer(id, queryClient)` required arg, unknown-id no-op, dangling-pointer correction persisted. |
 
 ---
 

@@ -12,7 +12,7 @@
  */
 
 import { Command } from 'commander';
-import { loadConfig, loadServerConfig } from '../config.js';
+import { loadLocalRuntimeConfig, loadServerConfig } from '../config.js';
 import { getHealthCheckUrl, waitForHealth } from '../health.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, isPm2Available, pm2NotFoundError, runPm2 } from '../pm2.js';
@@ -35,7 +35,8 @@ async function runRestart(): Promise<void> {
   }
 
   const serverConfig = loadServerConfig();
-  const cliConfig = loadConfig();
+  // LOCAL entry, never the active server — see runtime-env.ts rule 5.
+  const cliConfig = loadLocalRuntimeConfig();
   const apiPort = serverConfig.port;
 
   output.info('Restarting omni services...');

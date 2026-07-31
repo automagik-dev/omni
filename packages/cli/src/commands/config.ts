@@ -11,11 +11,29 @@ import {
   CONFIG_KEYS,
   type ConfigKey,
   deleteConfigValue,
+  describeActiveServer,
   getConfigValue,
+  isServersConfigKey,
   isValidConfigKey,
+  maskConfigApiKey,
   setConfigValue,
 } from '../config.js';
 import * as output from '../output.js';
+
+/**
+ * Reject `servers` / `servers.*` keys with a pointer to `omni server`.
+ *
+ * The registry is deliberately NOT part of `ConfigKey`: that union is closed
+ * and its masking is keyed on the literal `apiKey`, so dynamic
+ * `servers.<name>.apiKey` keys would print credentials unmasked. Exits the
+ * process (via `output.error`) when the key belongs to the registry.
+ */
+function rejectServersKey(key: string): void {
+  if (!isServersConfigKey(key)) return;
+  output.error(`Config key '${key}' is managed by 'omni server', not 'omni config'`, {
+    use: ['omni server list', 'omni server add <name> <url> --api-key <key>', 'omni server use <name>'],
+  });
+}
 
 /** Handle config set with value */
 function handleSetWithValue(key: ConfigKey, value: string): void {
@@ -61,21 +79,24 @@ export function createConfigCommand(): Command {
     .description('List all configuration values')
     .action(() => {
       const items = Object.entries(CONFIG_KEYS).map(([key, meta]) => {
-        let value: string = getConfigValue(key as ConfigKey) ?? '-';
-
-        // Mask API key for security (show first 12 chars and last 4)
-        if (key === 'apiKey' && typeof value === 'string' && value !== '-') {
-          const len = value.length;
-          if (len > 16) {
-            value = `${value.slice(0, 12)}****${value.slice(-4)}`;
-          }
-        }
+        const raw: string = getConfigValue(key as ConfigKey) ?? '-';
+        // Mask API key for security — never echo a full key, however short.
+        const value = key === 'apiKey' && raw !== '-' ? maskConfigApiKey(raw) : raw;
 
         return {
           key,
           value,
           description: meta.description,
         };
+      });
+
+      // Read-only view of the remote-server registry (Decision 10): one row,
+      // key masked, managed exclusively by `omni server`.
+      const active = describeActiveServer();
+      items.push({
+        key: 'servers.active',
+        value: `${active.name} (${active.url}) key=${active.maskedKey}`,
+        description: 'Active server entry (read-only — manage with: omni server)',
       });
 
       output.data(items);
@@ -87,6 +108,7 @@ export function createConfigCommand(): Command {
     .description('Get a configuration value')
     .option('--raw', 'Output only the value (no key label, no formatting)')
     .action((key: string, options: { raw?: boolean }) => {
+      rejectServersKey(key);
       if (!isValidConfigKey(key)) {
         output.error(`Unknown config key: ${key}`, {
           availableKeys: Object.keys(CONFIG_KEYS),
@@ -112,6 +134,7 @@ export function createConfigCommand(): Command {
     .command('set <key> [value]')
     .description('Set or unset a configuration value')
     .action((key: string, value?: string) => {
+      rejectServersKey(key);
       if (!isValidConfigKey(key)) {
         output.error(`Unknown config key: ${key}`, {
           availableKeys: Object.keys(CONFIG_KEYS),
@@ -131,6 +154,7 @@ export function createConfigCommand(): Command {
     .command('unset <key>')
     .description('Remove a configuration value')
     .action((key: string) => {
+      rejectServersKey(key);
       if (!isValidConfigKey(key)) {
         output.error(`Unknown config key: ${key}`, {
           availableKeys: Object.keys(CONFIG_KEYS),

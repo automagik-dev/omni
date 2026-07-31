@@ -73,7 +73,14 @@
       "project": ["src/**/*.ts"]
     },
     "apps/ui": {
-      "entry": ["src/pages/*.tsx", "src/components/ui/*.tsx", "src/hooks/*.ts", "src/lib/*.ts", "src/types/*.ts"],
+      "entry": [
+        "src/pages/*.tsx",
+        "src/components/ui/*.tsx",
+        "src/hooks/*.ts",
+        "src/lib/*.ts",
+        "src/types/*.ts",
+        "src/**/*.test.ts"
+      ],
       "project": ["src/**/*.{ts,tsx}"],
       "ignoreDependencies": ["tailwindcss"]
     }
