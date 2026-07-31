@@ -88,8 +88,8 @@ describe('MessageDebouncer', () => {
 
       // Release the first flush
       resolveFirstFlush!();
-      // Allow the re-flush setTimeout(0) to fire
-      await wait(50);
+      // Late arrivals now wait out a fresh debounce window before firing.
+      await wait(200);
 
       // Second flush should have picked up the late arrivals
       expect(flushCalls.length).toBe(2);
@@ -245,7 +245,8 @@ describe('MessageDebouncer', () => {
 
       // Release first flush
       resolveFirstFlush!();
-      await wait(50);
+      // Late arrivals now wait out a fresh debounce window before firing.
+      await wait(200);
 
       // Should have exactly 2 flushes — the re-flush from finally picked up msg2.
       // Without the inFlight guard in onUserTyping, a third flush could fire from
@@ -430,7 +431,8 @@ describe('MessageDebouncer', () => {
 
       // Release first flush
       resolveFirstFlush!();
-      await wait(50);
+      // Late arrivals now wait out a fresh debounce window before firing.
+      await wait(200);
 
       // Second batch should flush automatically
       expect(flushCalls.length).toBe(2);
@@ -623,5 +625,106 @@ describe('MessageDebouncer', () => {
 
       expect(debouncer.hasPending('inst-1', 'chat-1')).toBe(false);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mid-flight arrivals re-arm the window instead of flushing immediately
+// ---------------------------------------------------------------------------
+
+describe('messages arriving mid-flight', () => {
+  function fixedConfig(ms: number): DebounceConfig {
+    return {
+      mode: 'fixed',
+      minMs: ms,
+      maxMs: ms,
+      groupMs: null,
+      maxWaitMs: null,
+      restartOnTyping: false,
+    } as DebounceConfig;
+  }
+
+  it('waits the debounce window before answering them', async () => {
+    const flushes: BufferedMessage[][] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((r) => {
+      releaseFirst = r;
+    });
+
+    const d = new MessageDebouncer(async (_key, msgs) => {
+      flushes.push(msgs);
+      if (flushes.length === 1) await firstDone;
+    });
+
+    d.buffer('inst-1', 'chat-1', makeMessage('oi'), fixedConfig(20));
+    await Bun.sleep(35); // first batch flushes and blocks
+
+    // user keeps typing while the agent is still answering the first message
+    d.buffer('inst-1', 'chat-1', makeMessage('quero plano'), fixedConfig(20));
+    d.buffer('inst-1', 'chat-1', makeMessage('pra 2 pessoas'), fixedConfig(20));
+
+    releaseFirst?.();
+    await Bun.sleep(5);
+
+    // The old behaviour flushed on a setTimeout(0), so the second batch would
+    // already be out here — back to back with the first reply.
+    expect(flushes.length).toBe(1);
+
+    await Bun.sleep(30);
+    expect(flushes.length).toBe(2);
+    // and both messages are answered together, with full context
+    expect(flushes[1]!.length).toBe(2);
+  });
+
+  it('still answers them — re-arming must not strand the buffer', async () => {
+    const flushes: BufferedMessage[][] = [];
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const d = new MessageDebouncer(async (_key, msgs) => {
+      flushes.push(msgs);
+      if (flushes.length === 1) await gate;
+    });
+
+    d.buffer('inst-1', 'chat-2', makeMessage('a'), fixedConfig(15));
+    await Bun.sleep(25);
+    d.buffer('inst-1', 'chat-2', makeMessage('b'), fixedConfig(15));
+    release?.();
+
+    await Bun.sleep(60);
+    expect(flushes.length).toBe(2);
+    expect(flushes[1]![0]?.payload.content?.text).toBe('b');
+  });
+
+  it('re-arms even in fixed mode, where a live timer normally blocks restarts', async () => {
+    // `restartTimer` refuses to restart a fixed-window timer unless forced.
+    // After a flush there is no live timer, so the new batch must get its own
+    // window — otherwise it would never fire.
+    const flushes: BufferedMessage[][] = [];
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const d = new MessageDebouncer(async (_key, msgs) => {
+      flushes.push(msgs);
+      if (flushes.length === 1) await gate;
+    });
+
+    d.buffer('inst-1', 'chat-3', makeMessage('x'), fixedConfig(15));
+    await Bun.sleep(25);
+    d.buffer('inst-1', 'chat-3', makeMessage('y'), fixedConfig(15));
+    release?.();
+    await Bun.sleep(60);
+
+    expect(flushes.length).toBe(2);
+  });
+
+  it('does not leak config state once the chat drains', async () => {
+    const d = new MessageDebouncer(async () => {});
+    d.buffer('inst-1', 'chat-4', makeMessage('only'), fixedConfig(10));
+    await Bun.sleep(40);
+    // nothing pending, nothing scheduled — a further wait produces no flush
+    expect(d.hasPending('inst-1', 'chat-4')).toBe(false);
   });
 });
