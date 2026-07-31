@@ -55,6 +55,7 @@ function applyAgentFields(body: Record<string, unknown>, opts: Record<string, un
   // agentFkId (--agent-fk-id) is now the primary way to set the agent (maps to agentId in DB)
   setVal(body, 'agentId', opts.agentFkId);
   if (opts.agentTimeout !== undefined) body.agentTimeout = opts.agentTimeout;
+  setVal(body, 'agentErrorMessage', opts.agentErrorMessage);
   setBool(body, 'agentStreamMode', opts.agentStreamMode);
   setVal(body, 'agentSessionStrategy', opts.agentSessionStrategy);
   setBool(body, 'agentPrefixSenderName', opts.agentPrefixSenderName);
@@ -304,6 +305,10 @@ export function createInstancesCommand(): Command {
     .option('--agent <id>', 'Agent ID')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
     .option('--agent-timeout <seconds>', 'Agent timeout in seconds', (v) => Number.parseInt(v, 10))
+    .option(
+      '--agent-error-message <text>',
+      'Customer-facing reply when agent dispatch fails (use "null" to clear; falls back to OMNI_AGENT_DISPATCH_ERROR_MESSAGE env, then built-in default)',
+    )
     .option('--agent-stream-mode', 'Enable streaming responses')
     .option('--agent-session-strategy <strategy>', 'Session strategy: per_user, per_chat, per_user_per_chat')
     .option('--agent-prefix-sender-name', 'Prefix messages with sender name')
@@ -905,6 +910,10 @@ export function createInstancesCommand(): Command {
     .option('--agent <id>', 'Agent ID (use "null" to clear)')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
     .option('--agent-timeout <seconds>', 'Agent timeout in seconds', (v) => Number.parseInt(v, 10))
+    .option(
+      '--agent-error-message <text>',
+      'Customer-facing reply when agent dispatch fails (use "null" to clear; falls back to OMNI_AGENT_DISPATCH_ERROR_MESSAGE env, then built-in default)',
+    )
     .option('--agent-stream-mode', 'Enable streaming responses')
     .option('--no-agent-stream-mode', 'Disable streaming responses')
     .option('--agent-session-strategy <strategy>', 'Session strategy: per_user, per_chat, per_user_per_chat')

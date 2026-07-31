@@ -570,8 +570,8 @@ async function sendTextMessage(
 /**
  * Built-in dispatch-failure message (#737). Kept in English for backwards
  * compatibility — non-English deployments override it globally via the
- * `OMNI_AGENT_DISPATCH_ERROR_MESSAGE` env var (a per-instance override tier is
- * a planned follow-up; see {@link resolveDispatchErrorMessage}).
+ * `OMNI_AGENT_DISPATCH_ERROR_MESSAGE` env var or per instance via the
+ * `agentErrorMessage` column (see {@link resolveDispatchErrorMessage}).
  */
 export const DEFAULT_DISPATCH_ERROR_MESSAGE = '⚠️ Sorry, I ran into an issue processing your message. Please try again.';
 
@@ -581,13 +581,6 @@ export const DEFAULT_DISPATCH_ERROR_MESSAGE = '⚠️ Sorry, I ran into an issue
  *   2. `OMNI_AGENT_DISPATCH_ERROR_MESSAGE` env (global override),
  *   3. {@link DEFAULT_DISPATCH_ERROR_MESSAGE}.
  * Blank/whitespace-only values are ignored so they fall through to the next tier.
- *
- * NOTE: the per-instance tier is wired through the first argument but no
- * `instances` column exists yet — callers pass `null` today and rely on the
- * env override. The column is a follow-up, deferred until the Drizzle snapshot
- * drift in `packages/db` is reconciled (re-adding it now would re-propose
- * already-migrated columns and crash auto-migrate). The tier is kept here +
- * tested so dropping the column in is a one-line call-site change.
  */
 export function resolveDispatchErrorMessage(
   instanceErrorMessage: string | null | undefined,
@@ -815,9 +808,13 @@ async function handleDispatchFailure(
     trustedTenantId,
   );
   if (handedOff) return;
-  // Per-instance override tier is null until the `agentErrorMessage` column
-  // lands (see resolveDispatchErrorMessage note) — env + default for now.
-  await sendErrorFeedback(channel, instance.id, chatId, error, resolveDispatchErrorMessage(null)).catch(() => {});
+  await sendErrorFeedback(
+    channel,
+    instance.id,
+    chatId,
+    error,
+    resolveDispatchErrorMessage(instance.agentErrorMessage),
+  ).catch(() => {});
 }
 
 function sleep(ms: number): Promise<void> {
