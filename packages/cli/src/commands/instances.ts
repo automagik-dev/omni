@@ -55,7 +55,10 @@ function applyAgentFields(body: Record<string, unknown>, opts: Record<string, un
   // agentFkId (--agent-fk-id) is now the primary way to set the agent (maps to agentId in DB)
   setVal(body, 'agentId', opts.agentFkId);
   if (opts.agentTimeout !== undefined) body.agentTimeout = opts.agentTimeout;
-  setVal(body, 'agentErrorMessage', opts.agentErrorMessage);
+  if (Array.isArray(opts.agentErrorMessage)) {
+    const messages = opts.agentErrorMessage as string[];
+    body.agentErrorMessages = messages.length === 1 && messages[0] === 'null' ? null : messages;
+  }
   setBool(body, 'agentStreamMode', opts.agentStreamMode);
   setVal(body, 'agentSessionStrategy', opts.agentSessionStrategy);
   setBool(body, 'agentPrefixSenderName', opts.agentPrefixSenderName);
@@ -307,7 +310,8 @@ export function createInstancesCommand(): Command {
     .option('--agent-timeout <seconds>', 'Agent timeout in seconds', (v) => Number.parseInt(v, 10))
     .option(
       '--agent-error-message <text>',
-      'Customer-facing reply when agent dispatch fails (use "null" to clear; falls back to OMNI_AGENT_DISPATCH_ERROR_MESSAGE env, then built-in default)',
+      'Customer-facing reply when agent dispatch fails; repeat the flag for multiple variants (one is picked at random per failure). Use "null" to clear; falls back to OMNI_AGENT_DISPATCH_ERROR_MESSAGE env, then built-in default',
+      (value: string, previous: string[] = []) => [...previous, value],
     )
     .option('--agent-stream-mode', 'Enable streaming responses')
     .option('--agent-session-strategy <strategy>', 'Session strategy: per_user, per_chat, per_user_per_chat')
@@ -912,7 +916,8 @@ export function createInstancesCommand(): Command {
     .option('--agent-timeout <seconds>', 'Agent timeout in seconds', (v) => Number.parseInt(v, 10))
     .option(
       '--agent-error-message <text>',
-      'Customer-facing reply when agent dispatch fails (use "null" to clear; falls back to OMNI_AGENT_DISPATCH_ERROR_MESSAGE env, then built-in default)',
+      'Customer-facing reply when agent dispatch fails; repeat the flag for multiple variants (one is picked at random per failure). Use "null" to clear; falls back to OMNI_AGENT_DISPATCH_ERROR_MESSAGE env, then built-in default',
+      (value: string, previous: string[] = []) => [...previous, value],
     )
     .option('--agent-stream-mode', 'Enable streaming responses')
     .option('--no-agent-stream-mode', 'Disable streaming responses')

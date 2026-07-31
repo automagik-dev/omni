@@ -2638,8 +2638,8 @@ export interface components {
             agentProviderId?: string | null;
             /** @description Agent timeout in seconds */
             agentTimeout: number;
-            /** @description Customer-facing reply sent when agent dispatch fails (null = env/default fallback) */
-            agentErrorMessage?: string | null;
+            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+            agentErrorMessages?: string[] | null;
             /** @description Whether streaming is enabled */
             agentStreamMode: boolean;
             /**
@@ -2671,8 +2671,8 @@ export interface components {
              * @default 600
              */
             agentTimeout: number;
-            /** @description Customer-facing reply sent when agent dispatch fails (null = env/default fallback) */
-            agentErrorMessage?: string | null;
+            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+            agentErrorMessages?: string[] | null;
             /**
              * @description Enable streaming responses
              * @default false
@@ -6125,8 +6125,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
-                            /** @description Customer-facing reply sent when agent dispatch fails (null = env/default fallback) */
-                            agentErrorMessage?: string | null;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
@@ -6178,8 +6178,8 @@ export interface operations {
                      * @default 600
                      */
                     agentTimeout?: number;
-                    /** @description Customer-facing reply sent when agent dispatch fails (null = env/default fallback) */
-                    agentErrorMessage?: string | null;
+                    /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                    agentErrorMessages?: string[] | null;
                     /**
                      * @description Enable streaming responses
                      * @default false
@@ -6238,8 +6238,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
-                            /** @description Customer-facing reply sent when agent dispatch fails (null = env/default fallback) */
-                            agentErrorMessage?: string | null;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
@@ -6372,8 +6372,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
-                            /** @description Customer-facing reply sent when agent dispatch fails (null = env/default fallback) */
-                            agentErrorMessage?: string | null;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
@@ -6490,8 +6490,8 @@ export interface operations {
                      * @default 600
                      */
                     agentTimeout?: number;
-                    /** @description Customer-facing reply sent when agent dispatch fails (null = env/default fallback) */
-                    agentErrorMessage?: string | null;
+                    /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                    agentErrorMessages?: string[] | null;
                     /**
                      * @description Enable streaming responses
                      * @default false
@@ -6550,8 +6550,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
-                            /** @description Customer-facing reply sent when agent dispatch fails (null = env/default fallback) */
-                            agentErrorMessage?: string | null;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
