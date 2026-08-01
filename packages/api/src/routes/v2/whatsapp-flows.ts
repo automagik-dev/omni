@@ -15,7 +15,7 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import { MetaWhatsAppClient, generateFlowKeyPair } from '@omni/channel-whatsapp-cloud';
+import { MetaWhatsAppClient, buildFlowToken, generateFlowKeyPair } from '@omni/channel-whatsapp-cloud';
 import { createLogger } from '@omni/core';
 import { WhatsAppFlowSendSchema, validateFlowJson } from '@omni/core/schemas';
 import { whatsappFlowKeys } from '@omni/db';
@@ -521,8 +521,10 @@ whatsappFlowsRoutes.post(
     }
 
     // Generate the correlation token here so it can be returned to the caller
-    // — the nfm_reply webhook echoes it back verbatim.
-    const flowToken = flow.flowToken ?? crypto.randomUUID();
+    // — the nfm_reply webhook echoes it back verbatim. Structured
+    // (`omni.<flowRef>.<uuid>`) so the data-exchange endpoint can recover
+    // which flow it is serving; caller-supplied tokens pass through opaque.
+    const flowToken = flow.flowToken ?? buildFlowToken(flow.flowId ?? flow.flowName ?? 'unknown');
 
     const result = await plugin.sendMessage(instanceId, {
       to,

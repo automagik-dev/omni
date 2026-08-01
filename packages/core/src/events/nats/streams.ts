@@ -106,11 +106,24 @@ export const STREAM_CONFIGS: Record<StreamName, Partial<StreamConfig>> = {
   },
   [STREAM_NAMES.SYSTEM]: {
     name: STREAM_NAMES.SYSTEM,
-    subjects: ['system.>', 'sync.>', 'batch-job.>', 'presence.>', 'chat.>', 'follow_up.>'],
+    subjects: [
+      'system.>',
+      'sync.>',
+      'batch-job.>',
+      'presence.>',
+      'chat.>',
+      'follow_up.>',
+      // Channel-ops events. template./channel. had NO stream before (publishes
+      // failed with 503 no-responders); flow. added with the Flows feature.
+      'flow.>',
+      'template.>',
+      'channel.>',
+    ],
     max_age: daysToNs(7),
     storage: NATS_STORAGE_FILE,
     retention: NATS_RETENTION_LIMITS,
-    description: 'Internal system events (dead_letter, replay, health, sync, batch-job, presence, chat, follow_up)',
+    description:
+      'Internal system events (dead_letter, replay, health, sync, batch-job, presence, chat, follow_up, flow, template, channel)',
   },
   [STREAM_NAMES.AGENT]: {
     name: STREAM_NAMES.AGENT,
@@ -143,6 +156,9 @@ export function getStreamForEventType(eventType: string): StreamName {
     presence: STREAM_NAMES.SYSTEM,
     chat: STREAM_NAMES.SYSTEM,
     follow_up: STREAM_NAMES.SYSTEM,
+    flow: STREAM_NAMES.SYSTEM,
+    template: STREAM_NAMES.SYSTEM,
+    channel: STREAM_NAMES.SYSTEM,
     agent: STREAM_NAMES.AGENT,
   };
 

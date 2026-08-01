@@ -65,6 +65,7 @@ export {
   parseFlowToken,
   errorScreenResponse,
 } from './flows/resolver';
+export { createDemoFlowResolver } from './flows/demo-resolver';
 export type { FlowResolver, FlowResolveContext, FlowScreenResponse } from './flows/resolver';
 export { generateFlowKeyPair } from './utils/flow-crypto';
 export type { MetaFlowValidationError } from './client';

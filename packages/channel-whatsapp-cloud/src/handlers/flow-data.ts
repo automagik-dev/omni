@@ -194,7 +194,16 @@ export async function handleFlowDataRequest(request: Request, ctx: FlowDataHandl
 
   const startedAt = performance.now();
   const screenResponse = await resolveScreen(ctx, resolveCtx);
-  await publishExchangeEvent(ctx, resolveCtx, screenResponse.screen, Math.round(performance.now() - startedAt));
+  const durationMs = Math.round(performance.now() - startedAt);
+  ctx.logger.info('[whatsapp-cloud] flow data exchange resolved', {
+    instanceId: ctx.instanceId,
+    flowRef: resolveCtx.flowRef,
+    action: resolveCtx.action,
+    screen: resolveCtx.screen,
+    responseScreen: screenResponse.screen,
+    durationMs,
+  });
+  await publishExchangeEvent(ctx, resolveCtx, screenResponse.screen, durationMs);
 
   return respond(screenResponse);
 }
