@@ -24,6 +24,7 @@ import type {
   SendResult,
 } from '@omni/channel-sdk';
 import type { Logger } from '@omni/core';
+import { markdownToWhatsApp } from '@omni/core';
 import type { EventPayloadMap } from '@omni/core/events';
 import { WhatsAppFlowSendSchema } from '@omni/core/schemas';
 import type { MetaInboundMessage, MetaTemplateStatusUpdate, MetaWebhookStatusEntry } from '@omni/core/schemas';
@@ -942,13 +943,23 @@ async function dispatchOutboundText(
   logger?: Logger,
 ): Promise<MetaSendResponse> {
   const { content, to, replyTo } = message;
+
+  // Markdown → sintaxe do WhatsApp, igual ao canal baileys. Sem isto o
+  // `**negrito**` do agente chegava CRU e o parser do WhatsApp casava os
+  // asteriscos errados: "**a**, **b**, **c**" virava "*a, **b, **c*" no
+  // aparelho (medido em 2026-08-01). O canal já recebe `messageFormatMode`
+  // na instância — só não o honrava aqui, ao contrário do baileys.
+  const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+  const text = content.text ?? '';
+  const formatted = formatMode === 'passthrough' ? text : markdownToWhatsApp(text);
+
   if (!content.buttons?.length) {
-    return sendText(client, to, content.text ?? '', replyTo);
+    return sendText(client, to, formatted, replyTo);
   }
   const { response, droppedRows } = await sendInteractive(
     client,
     to,
-    content.text ?? '',
+    formatted,
     content.buttons,
     replyTo,
     content.list?.buttonLabel,

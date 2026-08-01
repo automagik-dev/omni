@@ -15,8 +15,8 @@ import { createLogger } from '@omni/core';
 import type { StreamDelta } from '@omni/core';
 import type { WASocket, proto } from 'baileys';
 
+import { markdownToWhatsApp } from '@omni/core';
 import { isGroupJid } from '../jid';
-import { markdownToWhatsApp } from '../utils/markdown-to-whatsapp';
 import { splitWhatsAppMessage } from '../utils/split-message';
 
 const log = createLogger('whatsapp:sender:stream');

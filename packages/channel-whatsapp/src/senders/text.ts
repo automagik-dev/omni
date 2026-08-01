@@ -2,8 +2,8 @@
  * Text message sender
  */
 
+import { markdownToWhatsApp } from '@omni/core';
 import type { AnyMessageContent, WASocket } from 'baileys';
-import { markdownToWhatsApp } from '../utils/markdown-to-whatsapp';
 import { splitWhatsAppMessage } from '../utils/split-message';
 
 /**
