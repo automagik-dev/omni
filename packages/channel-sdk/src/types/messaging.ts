@@ -42,7 +42,19 @@ export interface OutgoingContent {
     data?: string;
     /** Link button URL. Mutually exclusive with data. */
     url?: string;
+    /** Secondary line under the option (WhatsApp Cloud list rows). */
+    description?: string;
   }>;
+
+  /** List presentation for channels that render options as a list. */
+  list?: {
+    /** Section header above the options (WhatsApp Cloud). */
+    sectionTitle?: string;
+    /** Label of the button that opens the list (WhatsApp Cloud). */
+    buttonLabel?: string;
+    /** Render a list even when the option count would fit inline buttons. */
+    forceList?: boolean;
+  };
 
   /** Poll (Telegram/WhatsApp/etc.) */
   poll?: {

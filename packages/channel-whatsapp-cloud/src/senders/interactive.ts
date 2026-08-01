@@ -1,12 +1,18 @@
 /**
  * Meta WhatsApp Cloud — interactive message sender (session buttons/lists).
  *
- * Maps the channel-agnostic `content.buttons` contract ({ text, data?, url? })
- * onto Meta's in-session interactive types. Meta's constraints drive the shape:
+ * Maps the channel-agnostic `content.buttons` contract
+ * ({ text, data?, url?, description? }) onto Meta's in-session interactive
+ * types. Meta's constraints drive the shape:
  *   - `interactive.button` — up to 3 reply buttons (title ≤ 20 chars, id ≤ 256)
  *   - `interactive.list`   — 4-10 options become a single-section list
- *                            (row title ≤ 24 chars); >10 rows is a Meta hard
+ *                            (row title ≤ 24 chars, row description ≤ 72,
+ *                            section title ≤ 24); >10 rows is a Meta hard
  *                            limit, the overflow is dropped (caller logs)
+ *   - a list is also chosen for ≤3 options when the caller asks for one
+ *     (`forceList`) or supplies presentation that only lists can render
+ *     (a row `description`, or a `sectionTitle`) — rendering reply buttons
+ *     there would drop that content silently
  *   - `interactive.cta_url`— exactly one URL button (session messages cannot
  *                            carry arbitrary URL buttons; cta_url is the only
  *                            in-session link affordance)
@@ -28,12 +34,28 @@ export interface InteractiveButton {
   data?: string;
   /** Link button URL — expressed via cta_url when it is the only button. */
   url?: string;
+  /**
+   * Secondary line under the row title. Lists only — Meta's reply buttons
+   * have no description affordance, so supplying one promotes the message to
+   * a list (see `planInteractive`).
+   */
+  description?: string;
+}
+
+/** List-specific presentation, ignored when the plan renders reply buttons. */
+export interface InteractiveListOptions {
+  /** Section header above the rows. */
+  sectionTitle?: string;
+  /** Render a list even with ≤3 options (default: count decides). */
+  forceList?: boolean;
 }
 
 const MAX_REPLY_BUTTONS = 3;
 const MAX_LIST_ROWS = 10;
 const MAX_BUTTON_TITLE = 20;
 const MAX_ROW_TITLE = 24;
+const MAX_ROW_DESCRIPTION = 72;
+const MAX_SECTION_TITLE = 24;
 const MAX_ID = 256;
 
 const truncate = (s: string, max: number): string => (s.length <= max ? s : `${s.slice(0, max - 1)}…`);
@@ -58,6 +80,7 @@ export function planInteractive(
   bodyText: string,
   buttons: InteractiveButton[],
   listButtonLabel: string,
+  listOptions: InteractiveListOptions = {},
 ): InteractivePlan {
   const replyButtons = buttons.filter((b) => !b.url);
   const urlButtons = buttons.filter((b) => b.url);
@@ -90,7 +113,15 @@ export function planInteractive(
     return { interactive: null, body, droppedRows: 0 };
   }
 
-  if (replyButtons.length <= MAX_REPLY_BUTTONS) {
+  // Descriptions and section titles only exist on lists, so asking for either
+  // implies a list — rendering reply buttons instead would drop them silently,
+  // which this module deliberately avoids (see the URL-button fallback above).
+  const wantsList =
+    listOptions.forceList === true ||
+    listOptions.sectionTitle !== undefined ||
+    replyButtons.some((b) => b.description !== undefined);
+
+  if (replyButtons.length <= MAX_REPLY_BUTTONS && !wantsList) {
     return {
       interactive: {
         type: 'button',
@@ -116,7 +147,12 @@ export function planInteractive(
         button: truncate(listButtonLabel, MAX_BUTTON_TITLE),
         sections: [
           {
-            rows: rows.map((b, i) => ({ id: buttonId(b, i), title: truncate(b.text, MAX_ROW_TITLE) })),
+            ...(listOptions.sectionTitle ? { title: truncate(listOptions.sectionTitle, MAX_SECTION_TITLE) } : {}),
+            rows: rows.map((b, i) => ({
+              id: buttonId(b, i),
+              title: truncate(b.text, MAX_ROW_TITLE),
+              ...(b.description ? { description: truncate(b.description, MAX_ROW_DESCRIPTION) } : {}),
+            })),
           },
         ],
       },
@@ -164,8 +200,9 @@ export async function sendInteractive(
   buttons: InteractiveButton[],
   replyTo?: string,
   listButtonLabel = 'Options',
+  listOptions: InteractiveListOptions = {},
 ): Promise<{ response: MetaSendResponse; droppedRows: number }> {
-  const plan = planInteractive(bodyText, buttons, listButtonLabel);
+  const plan = planInteractive(bodyText, buttons, listButtonLabel, listOptions);
 
   const payload: MetaOutboundMessage = plan.interactive
     ? {

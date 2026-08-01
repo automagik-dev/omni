@@ -945,7 +945,15 @@ async function dispatchOutboundText(
   if (!content.buttons?.length) {
     return sendText(client, to, content.text ?? '', replyTo);
   }
-  const { response, droppedRows } = await sendInteractive(client, to, content.text ?? '', content.buttons, replyTo);
+  const { response, droppedRows } = await sendInteractive(
+    client,
+    to,
+    content.text ?? '',
+    content.buttons,
+    replyTo,
+    content.list?.buttonLabel,
+    { sectionTitle: content.list?.sectionTitle, forceList: content.list?.forceList },
+  );
   if (droppedRows > 0) {
     logger?.warn('[whatsapp-cloud] interactive list capped at 10 rows — extra buttons dropped', { to, droppedRows });
   }

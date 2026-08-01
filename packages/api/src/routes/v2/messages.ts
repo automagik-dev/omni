@@ -521,6 +521,10 @@ const sendTextSchema = z.object({
         text: z.string().min(1).describe('Button label'),
         data: z.string().optional().describe('Callback payload (reply button / list row id)'),
         url: z.string().url().optional().describe('Link button URL (mutually exclusive with data)'),
+        description: z
+          .string()
+          .optional()
+          .describe('Secondary line under the option (WhatsApp Cloud list rows, ≤72 chars)'),
       }),
     )
     .max(10)
@@ -528,6 +532,17 @@ const sendTextSchema = z.object({
     .describe(
       'Inline buttons — channel maps them natively (WhatsApp Cloud: ≤3 reply buttons, 4-10 list; Telegram: inline keyboard)',
     ),
+  list: z
+    .object({
+      sectionTitle: z.string().optional().describe('Section header above the options (≤24 chars)'),
+      buttonLabel: z.string().optional().describe('Label of the button that opens the list (≤20 chars)'),
+      forceList: z
+        .boolean()
+        .optional()
+        .describe('Render a list even with ≤3 options (implied by any description/sectionTitle)'),
+    })
+    .optional()
+    .describe('List presentation (WhatsApp Cloud)'),
   requestLocation: z
     .boolean()
     .optional()
@@ -1096,7 +1111,7 @@ messagesRoutes.post('/send', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', issues: parsed.error.issues } }, 400);
   }
 
-  const { instanceId, to, replyTo, threadId, mentions, buttons, requestLocation } = parsed.data;
+  const { instanceId, to, replyTo, threadId, mentions, buttons, list, requestLocation } = parsed.data;
   // Strip internal routing headers and agent directives before sending (GH #300)
   const text = sanitizeOutboundText(parsed.data.text);
   if (!text) {
@@ -1130,6 +1145,7 @@ messagesRoutes.post('/send', async (c) => {
       type: requestLocation ? 'location_request' : 'text',
       text,
       ...(buttons?.length ? { buttons } : {}),
+      ...(list ? { list } : {}),
     } as OutgoingContent,
     replyTo,
     metadata: { ...(mentions ? { mentions } : {}), ...replyContext },
