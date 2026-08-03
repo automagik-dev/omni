@@ -70,6 +70,12 @@ export class MessageDebouncer {
   private inFlight: Set<string> = new Set();
   /** Timestamp of the first buffered message per chat — anchors the maxWaitMs cap. */
   private firstBufferedAt: Map<string, number> = new Map();
+  /**
+   * Last debounce config seen for a chat. The flush-completion path needs it to
+   * re-arm the timer for messages that arrived mid-flight; without it the only
+   * option was to flush them immediately, ignoring the collection window.
+   */
+  private lastConfig: Map<string, DebounceConfig> = new Map();
   private onFlush: (chatKey: string, messages: BufferedMessage[]) => Promise<void>;
   /** Injectable clock — defaults to Date.now; overridable for deterministic tests. */
   private now: () => number;
@@ -92,6 +98,7 @@ export class MessageDebouncer {
     // Anchor the max-wait window on the first message of a fresh batch so the
     // cap survives any number of timer restarts (typing or new messages).
     if (!this.firstBufferedAt.has(chatKey)) this.firstBufferedAt.set(chatKey, this.now());
+    this.lastConfig.set(chatKey, config);
 
     // If this chat is currently being processed, just accumulate — don't start
     // a new timer. The flush completion handler will pick up these messages.
@@ -191,12 +198,29 @@ export class MessageDebouncer {
     } finally {
       this.inFlight.delete(chatKey);
 
-      // Check if new messages arrived while we were processing.
-      // If so, flush them now (they've been accumulating in the buffer).
+      // Messages that arrived while we were processing. Re-arm the debounce
+      // window instead of flushing right away: an immediate flush answers a
+      // half-typed thought, and — because the previous reply is landing at the
+      // same moment — the user gets two messages back to back, the first one
+      // answering something they had already moved on from.
+      //
+      // Re-arming keeps the same guarantee the first batch had: wait for the
+      // person to finish. `force` is required because 'fixed'/'presence' modes
+      // refuse to restart a live timer, and here there is no live timer at all
+      // — the window must start fresh for this new batch.
       const pending = this.buffers.get(chatKey);
       if (pending?.length) {
-        // Use setTimeout(0) to avoid deep recursion
-        setTimeout(() => this.flush(chatKey), 0);
+        const config = this.lastConfig.get(chatKey);
+        if (config) {
+          this.restartTimer(chatKey, config, true);
+        } else {
+          // No config recorded (should not happen — buffer() always records it).
+          // Falling back to the old immediate flush is better than stranding
+          // the messages with no timer at all.
+          setTimeout(() => this.flush(chatKey), 0);
+        }
+      } else {
+        this.lastConfig.delete(chatKey);
       }
     }
   }
