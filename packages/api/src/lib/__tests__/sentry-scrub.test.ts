@@ -372,7 +372,7 @@ describe('sentryEnabled', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Meta WhatsApp Cloud — token + sensitive-key scrubbing (whatsapp-cloud wish)
+// Meta WhatsApp Cloud — token + sensitive-key scrubbing (whatsapp-business wish)
 // ---------------------------------------------------------------------------
 
 describe('scrubPii — Meta access tokens', () => {
@@ -406,7 +406,7 @@ describe('scrubPii — Meta access tokens', () => {
   });
 });
 
-describe('scrubEvent — sensitive-key field-level redaction (whatsapp-cloud)', () => {
+describe('scrubEvent — sensitive-key field-level redaction (whatsapp-business)', () => {
   test('redacts message text/body verbatim regardless of content', () => {
     const event: SentryEvent = {
       extra: {

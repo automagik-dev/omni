@@ -20,7 +20,7 @@ import { resolveChatId, resolveInstanceId } from '../resolve.js';
 
 const VALID_CHANNELS: Channel[] = [
   'whatsapp-baileys',
-  'whatsapp-cloud',
+  'whatsapp-business',
   'discord',
   'slack',
   'telegram',

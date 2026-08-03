@@ -220,13 +220,12 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
   // registered and unresolved flows degrade to an in-screen error message.
   const flowsDemoInstance = process.env.META_FLOWS_DEMO_INSTANCE;
   if (flowsDemoInstance) {
-    const waCloud = result.registry.get('whatsapp-cloud');
+    const waCloud = result.registry.get('whatsapp-business');
     if (waCloud && 'flowResolvers' in waCloud) {
       const { createDemoFlowResolver } = await import('@omni/channel-whatsapp-business');
-      (waCloud as import('@omni/channel-whatsapp-business').WhatsAppCloudPlugin).flowResolvers.registerInstanceDefault(
-        flowsDemoInstance,
-        createDemoFlowResolver(),
-      );
+      (
+        waCloud as import('@omni/channel-whatsapp-business').WhatsAppBusinessPlugin
+      ).flowResolvers.registerInstanceDefault(flowsDemoInstance, createDemoFlowResolver());
       pluginLog.info('WhatsApp Flows demo resolver registered', { instanceId: flowsDemoInstance });
     }
   }

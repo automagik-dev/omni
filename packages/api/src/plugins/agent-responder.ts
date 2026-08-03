@@ -296,7 +296,7 @@ function sleep(ms: number): Promise<void> {
 const CHANNEL_MESSAGE_LIMITS: Record<string, number> = {
   discord: 2000,
   'whatsapp-baileys': 65536,
-  'whatsapp-cloud': 65536,
+  'whatsapp-business': 65536,
   'twilio-whatsapp': 1600,
   slack: 40000,
   telegram: 4096,

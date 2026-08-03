@@ -93,7 +93,7 @@ function resolveKhalEnvironment(
 function channelToKhalSessionSegment(channel?: ChannelType | string): string | undefined {
   if (!channel) return undefined;
   if (channel === 'whatsapp-gupshup') return 'gupshup';
-  if (channel === 'whatsapp-cloud') return 'whatsapp';
+  if (channel === 'whatsapp-business') return 'whatsapp';
   if (channel === 'whatsapp-baileys') return 'whatsapp';
   return String(channel).replace(/^channel-/, '');
 }

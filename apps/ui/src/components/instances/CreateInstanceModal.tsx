@@ -60,7 +60,7 @@ const CHANNEL_OPTIONS: {
     color: 'bg-green-500',
   },
   {
-    value: 'whatsapp-cloud',
+    value: 'whatsapp-business',
     label: 'WhatsApp Cloud API',
     description: 'Official Meta API. Requires business verification.',
     icon: WhatsAppIcon,
@@ -116,7 +116,7 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
       });
       setCreatedInstance(instance);
 
-      if (channel === 'whatsapp-cloud') {
+      if (channel === 'whatsapp-business') {
         // WhatsApp Cloud goes through its own OAuth / manual wizard — do NOT
         // auto-call connect (that's reserved for Baileys, which starts a socket).
         setStep('connect');
@@ -278,7 +278,7 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
           )}
 
           {/* Step 3: Connect (WhatsApp Cloud — Meta OAuth / manual) */}
-          {step === 'connect' && createdInstance && channel === 'whatsapp-cloud' && (
+          {step === 'connect' && createdInstance && channel === 'whatsapp-business' && (
             <div className="space-y-4">
               <WhatsAppBusinessConnect
                 instanceId={createdInstance.id}
@@ -299,7 +299,7 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
           )}
 
           {/* Step 3: Connect (WhatsApp Baileys) */}
-          {step === 'connect' && createdInstance && channel !== 'whatsapp-cloud' && (
+          {step === 'connect' && createdInstance && channel !== 'whatsapp-business' && (
             <div className="space-y-4">
               {status?.isConnected ? (
                 // Connected successfully

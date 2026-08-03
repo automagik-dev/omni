@@ -38,7 +38,7 @@ import {
 
 export const channelTypes = [
   'whatsapp-baileys',
-  'whatsapp-cloud',
+  'whatsapp-business',
   'discord',
   'slack',
   'telegram',

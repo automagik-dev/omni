@@ -1,7 +1,7 @@
 /**
  * WhatsApp Cloud (Meta) — Embedded Signup + Manual connection wizard.
  *
- * Used inside CreateInstanceModal when channel === 'whatsapp-cloud'. Provides
+ * Used inside CreateInstanceModal when channel === 'whatsapp-business'. Provides
  * two tabs:
  *   1. Embedded Signup — Facebook JS SDK → FB.login(config_id) → backend
  *      exchanges the code for an access token (kept server-side), discovers
@@ -11,12 +11,12 @@
  *   2. Manual — paste accessToken + phoneNumberId + wabaId and POST /connect.
  *
  * Backend routes called (Groups 5+6 of the wish — implemented in parallel):
- *   POST /api/v2/instances/:id/whatsapp-cloud/oauth/exchange
- *   POST /api/v2/instances/:id/whatsapp-cloud/connect
+ *   POST /api/v2/instances/:id/whatsapp-business/oauth/exchange
+ *   POST /api/v2/instances/:id/whatsapp-business/connect
  *
  * Once the omni-side SDK regenerates (`make sdk-generate` after Groups 5+6
  * land), the apiFetch + JSON.parse calls should be replaced with the typed
- * `omni.whatsappCloud.*` wrappers.
+ * `omni.whatsappBusiness.*` wrappers.
  */
 
 import { Button } from '@/components/ui/button';
@@ -30,7 +30,7 @@ import { AlertCircle, Check, Phone } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 // ---------------------------------------------------------------------------
-// Local types — these mirror packages/core/src/schemas/whatsapp-cloud.ts
+// Local types — these mirror packages/core/src/schemas/whatsapp-business.ts
 // (EmbeddedSignupExchangeResponseSchema, WhatsAppBusinessConnectRequestSchema).
 // TODO: replace with `import type { ... } from '@omni/sdk'` after make sdk-generate.
 // ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ interface ConnectResponse {
 
 // ---------------------------------------------------------------------------
 // Config — embedded signup needs an App ID + config_id. We pull from Vite env
-// for now; long-term, the backend should expose /whatsapp-cloud/app-config.
+// for now; long-term, the backend should expose /whatsapp-business/app-config.
 // ---------------------------------------------------------------------------
 
 const META_APP_ID = (import.meta.env.VITE_META_APP_ID as string | undefined) ?? '';
@@ -169,8 +169,8 @@ function EmbeddedSignupPanel({
 
       // Exchange code for access token + discover phone numbers
       setStep('exchanging');
-      // TODO: switch to omni.whatsappCloud.exchangeCode(...) after make sdk-generate
-      const res = await apiFetch(`/instances/${instanceId}/whatsapp-cloud/oauth/exchange`, {
+      // TODO: switch to omni.whatsappBusiness.exchangeCode(...) after make sdk-generate
+      const res = await apiFetch(`/instances/${instanceId}/whatsapp-business/oauth/exchange`, {
         method: 'POST',
         body: JSON.stringify({ code }),
       });
@@ -206,8 +206,8 @@ function EmbeddedSignupPanel({
     setStep('connecting');
 
     try {
-      // TODO: switch to omni.whatsappCloud.connect(...) after make sdk-generate
-      const res = await apiFetch(`/instances/${instanceId}/whatsapp-cloud/connect`, {
+      // TODO: switch to omni.whatsappBusiness.connect(...) after make sdk-generate
+      const res = await apiFetch(`/instances/${instanceId}/whatsapp-business/connect`, {
         method: 'POST',
         body: JSON.stringify({
           exchangeHandle,
@@ -369,8 +369,8 @@ function ManualConnectPanel({
     setErrorMessage('');
     setSubmitting(true);
     try {
-      // TODO: switch to omni.whatsappCloud.connect(...) after make sdk-generate
-      const res = await apiFetch(`/instances/${instanceId}/whatsapp-cloud/connect`, {
+      // TODO: switch to omni.whatsappBusiness.connect(...) after make sdk-generate
+      const res = await apiFetch(`/instances/${instanceId}/whatsapp-business/connect`, {
         method: 'POST',
         body: JSON.stringify({
           accessToken: form.accessToken.trim(),

@@ -2,14 +2,14 @@
  * Internal types for the WhatsApp Cloud channel plugin.
  *
  * For shared types (template components, webhook payloads) see
- * @omni/core → packages/core/src/types/whatsapp-cloud.ts.
+ * @omni/core → packages/core/src/types/whatsapp-business.ts.
  */
 
 import type { WhatsAppTemplateComponent } from '@omni/core/schemas';
 import type { MetaTemplateCategory, MetaTemplateStatus } from '@omni/core/types';
 
 /** Per-instance Meta config persisted on `instances` table. */
-export interface WhatsAppCloudConfig {
+export interface WhatsAppBusinessConfig {
   accessToken: string;
   phoneNumberId: string;
   wabaId: string;

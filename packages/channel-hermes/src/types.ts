@@ -9,7 +9,7 @@
  *     except stickers which use `sticker: { link }`.
  *
  * Shared webhook schemas live in @omni/core →
- * packages/core/src/schemas/hermes.ts (envelope) + whatsapp-cloud.ts (inner
+ * packages/core/src/schemas/hermes.ts (envelope) + whatsapp-business.ts (inner
  * message/status shapes). Source of truth: the official Mutant Postman
  * collection ("Hermes API").
  */

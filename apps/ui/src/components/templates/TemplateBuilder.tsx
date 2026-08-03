@@ -5,7 +5,7 @@
  * placeholders), FOOTER and a BUTTONS array (QUICK_REPLY / URL / PHONE_NUMBER
  * / COPY_CODE, up to 10). Submits via POST /api/v2/instances/:id/whatsapp-templates.
  *
- * Mirrors `WhatsAppTemplateComponent` from packages/core/src/schemas/whatsapp-cloud.ts.
+ * Mirrors `WhatsAppTemplateComponent` from packages/core/src/schemas/whatsapp-business.ts.
  *
  * Tailwind-only — no MUI primitives. Use plain inputs/buttons; no design-system
  * <Select>, <FormGroup>, <Accordion> exist yet in apps/ui — we improvise with
@@ -24,7 +24,7 @@ import { AlertCircle, Trash2 } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 
 // ---------------------------------------------------------------------------
-// Constants (mirror packages/core/src/schemas/whatsapp-cloud.ts)
+// Constants (mirror packages/core/src/schemas/whatsapp-business.ts)
 // ---------------------------------------------------------------------------
 
 const MAX_BUTTONS = 10;

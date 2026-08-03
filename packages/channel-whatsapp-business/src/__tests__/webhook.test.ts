@@ -19,7 +19,7 @@ import { describe, expect, test } from 'bun:test';
 import { createInboundDedupeCache } from '@omni/channel-sdk';
 
 import { handleMetaWebhook, handleVerifyChallenge } from '../handlers/webhook';
-import type { WhatsAppCloudPlugin } from '../plugin';
+import type { WhatsAppBusinessPlugin } from '../plugin';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -40,13 +40,13 @@ interface LogCall {
 }
 
 interface Harness {
-  plugin: WhatsAppCloudPlugin;
+  plugin: WhatsAppBusinessPlugin;
   emits: EmitCall[];
   logs: LogCall[];
 }
 
 /**
- * Build a stub plugin that mimics the WhatsAppCloudPlugin surface required
+ * Build a stub plugin that mimics the WhatsAppBusinessPlugin surface required
  * by the webhook handler. All emit* methods just record their calls.
  */
 function makeHarness(opts?: {
@@ -90,7 +90,7 @@ function makeHarness(opts?: {
   // that the real plugin would have emitted — so existing assertions on
   // `emit*` shapes continue to work without depending on internal cast.
   const stub = {
-    id: 'whatsapp-cloud',
+    id: 'whatsapp-business',
     getLogger: () => logger,
     findInstanceByPhoneNumberId: (pid: string) => {
       if (!withInstance) return undefined;
@@ -98,7 +98,7 @@ function makeHarness(opts?: {
       return [instanceId, state] as const;
     },
 
-    // Inbound message dispatch — minimal port of WhatsAppCloudPlugin.handleInboundMessage
+    // Inbound message dispatch — minimal port of WhatsAppBusinessPlugin.handleInboundMessage
     // (dedupe + reaction split + text extraction). Mirrors the assertions the
     // tests already make on `emits[].method` / `.params`.
     async handleInboundMessage(
@@ -114,7 +114,7 @@ function makeHarness(opts?: {
       contacts: Array<{ profile?: { name?: string }; wa_id?: string }> | undefined,
       dedupeCache: { isDuplicate: (instanceId: string, key: string, channel: string, logger: unknown) => boolean },
     ) {
-      if (dedupeCache.isDuplicate(iid, msg.id, 'whatsapp-cloud', logger)) return false;
+      if (dedupeCache.isDuplicate(iid, msg.id, 'whatsapp-business', logger)) return false;
       if (msg.type === 'reaction' && msg.reaction) {
         emits.push({
           method: msg.reaction.emoji ? 'reaction.received' : 'reaction.removed',
@@ -182,7 +182,7 @@ function makeHarness(opts?: {
   };
 
   return {
-    plugin: stub as unknown as WhatsAppCloudPlugin,
+    plugin: stub as unknown as WhatsAppBusinessPlugin,
     emits,
     logs,
   };
@@ -207,7 +207,7 @@ async function signBody(body: string, secret: string): Promise<string> {
 /** Build a POST Request with body + valid signature header. */
 async function makeSignedPost(body: string, secret: string = APP_SECRET): Promise<Request> {
   const sig = await signBody(body, secret);
-  return new Request('https://example.com/api/v2/channels/whatsapp-cloud/webhook', {
+  return new Request('https://example.com/api/v2/channels/whatsapp-business/webhook', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -238,7 +238,7 @@ function envelope(field: string, value: Record<string, unknown>, entryId = '1076
 describe('handleVerifyChallenge (GET)', () => {
   test('returns 200 + challenge body for matching verify_token', () => {
     const req = new Request(
-      `https://example.com/api/v2/channels/whatsapp-cloud/webhook?hub.mode=subscribe&hub.verify_token=${VERIFY_TOKEN}&hub.challenge=abc123`,
+      `https://example.com/api/v2/channels/whatsapp-business/webhook?hub.mode=subscribe&hub.verify_token=${VERIFY_TOKEN}&hub.challenge=abc123`,
       { method: 'GET' },
     );
 
@@ -251,7 +251,7 @@ describe('handleVerifyChallenge (GET)', () => {
 
   test('returns 403 when verify_token mismatches', () => {
     const req = new Request(
-      'https://example.com/api/v2/channels/whatsapp-cloud/webhook?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=abc123',
+      'https://example.com/api/v2/channels/whatsapp-business/webhook?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=abc123',
       { method: 'GET' },
     );
     const res = handleVerifyChallenge(req, VERIFY_TOKEN);
@@ -260,7 +260,7 @@ describe('handleVerifyChallenge (GET)', () => {
 
   test('returns 403 when hub.mode is missing', () => {
     const req = new Request(
-      `https://example.com/api/v2/channels/whatsapp-cloud/webhook?hub.verify_token=${VERIFY_TOKEN}&hub.challenge=abc123`,
+      `https://example.com/api/v2/channels/whatsapp-business/webhook?hub.verify_token=${VERIFY_TOKEN}&hub.challenge=abc123`,
       { method: 'GET' },
     );
     const res = handleVerifyChallenge(req, VERIFY_TOKEN);
@@ -270,7 +270,7 @@ describe('handleVerifyChallenge (GET)', () => {
   test('handleMetaWebhook delegates GET to challenge handler', async () => {
     const { plugin } = makeHarness();
     const req = new Request(
-      `https://example.com/api/v2/channels/whatsapp-cloud/webhook?hub.mode=subscribe&hub.verify_token=${VERIFY_TOKEN}&hub.challenge=challenge42`,
+      `https://example.com/api/v2/channels/whatsapp-business/webhook?hub.mode=subscribe&hub.verify_token=${VERIFY_TOKEN}&hub.challenge=challenge42`,
       { method: 'GET' },
     );
     const res = await handleMetaWebhook(req, plugin, APP_SECRET, VERIFY_TOKEN);
@@ -287,7 +287,7 @@ describe('handleMetaWebhook (POST) — signature verification', () => {
   test('rejects POST without X-Hub-Signature-256 header with 401', async () => {
     const { plugin } = makeHarness();
     const body = JSON.stringify(envelope('messages', { metadata: { phone_number_id: '1' } }));
-    const req = new Request('https://example.com/api/v2/channels/whatsapp-cloud/webhook', {
+    const req = new Request('https://example.com/api/v2/channels/whatsapp-business/webhook', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body,
@@ -300,7 +300,7 @@ describe('handleMetaWebhook (POST) — signature verification', () => {
   test('rejects POST with malformed signature with 401', async () => {
     const { plugin } = makeHarness();
     const body = JSON.stringify(envelope('messages', { metadata: { phone_number_id: '1' } }));
-    const req = new Request('https://example.com/api/v2/channels/whatsapp-cloud/webhook', {
+    const req = new Request('https://example.com/api/v2/channels/whatsapp-business/webhook', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

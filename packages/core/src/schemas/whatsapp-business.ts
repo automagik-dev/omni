@@ -9,7 +9,7 @@
  *   - HSM template components (HEADER/BODY/FOOTER/BUTTONS)
  *   - Embedded Signup OAuth + connect endpoints
  *
- * Type-level companions live at packages/core/src/types/whatsapp-cloud.ts.
+ * Type-level companions live at packages/core/src/types/whatsapp-business.ts.
  */
 
 import { z } from 'zod';
@@ -340,7 +340,7 @@ export const EmbeddedSignupExchangeResponseSchema = z.object({
  * One of the two MUST be present; the route enforces this via a Zod
  * refinement so the schema rejects requests with neither / both.
  */
-export const WhatsAppCloudConnectRequestSchema = z
+export const WhatsAppBusinessConnectRequestSchema = z
   .object({
     accessToken: z.string().min(1).optional(),
     exchangeHandle: z.string().min(1).optional(),
@@ -388,7 +388,7 @@ export const WhatsAppFlowSendSchema = z
     path: ['flowId'],
   });
 
-export const WhatsAppCloudRegisterRequestSchema = z.object({
+export const WhatsAppBusinessRegisterRequestSchema = z.object({
   /** 6-digit PIN required by Meta for new number registration. */
   pin: z
     .string()
@@ -425,6 +425,6 @@ export type MetaWebhookPayload = z.infer<typeof MetaWebhookPayloadSchema>;
 export type MetaTemplateStatusUpdate = z.infer<typeof MetaTemplateStatusUpdateSchema>;
 export type EmbeddedSignupExchangeRequest = z.infer<typeof EmbeddedSignupExchangeRequestSchema>;
 export type EmbeddedSignupExchangeResponse = z.infer<typeof EmbeddedSignupExchangeResponseSchema>;
-export type WhatsAppCloudConnectRequest = z.infer<typeof WhatsAppCloudConnectRequestSchema>;
+export type WhatsAppBusinessConnectRequest = z.infer<typeof WhatsAppBusinessConnectRequestSchema>;
 export type WhatsAppFlowSend = z.infer<typeof WhatsAppFlowSendSchema>;
 export type SendTemplateRequest = z.infer<typeof SendTemplateRequestSchema>;

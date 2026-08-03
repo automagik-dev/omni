@@ -41,7 +41,7 @@ status: current
 
 /webhook/                     # Incoming webhooks from channels
 ├── whatsapp-baileys/:id
-├── whatsapp-cloud
+├── whatsapp-business
 ├── discord
 └── slack
 ```

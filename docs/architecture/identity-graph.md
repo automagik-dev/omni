@@ -353,7 +353,7 @@ export class IdentityService {
             eq(platformIdentities.platformUserId, phone.replace(/[^0-9]/g, ''))
           ),
           and(
-            eq(platformIdentities.channel, 'whatsapp-cloud'),
+            eq(platformIdentities.channel, 'whatsapp-business'),
             eq(platformIdentities.platformUserId, phone.replace(/[^0-9]/g, ''))
           )
         ),

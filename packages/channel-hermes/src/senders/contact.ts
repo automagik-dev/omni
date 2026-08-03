@@ -3,7 +3,7 @@
  *
  * `contacts` is the Cloud-API contact array (Hermes passes it through).
  * We accept a simplified input shape and expand it, mirroring the
- * whatsapp-cloud sibling.
+ * whatsapp-business sibling.
  */
 
 import type { HermesClient } from '../client';

@@ -36,7 +36,7 @@ import {
   type MetaWebhookStatusEntry,
 } from '@omni/core/schemas';
 
-import type { WhatsAppCloudPlugin } from '../plugin';
+import type { WhatsAppBusinessPlugin } from '../plugin';
 import { verifyMetaSignature } from '../utils/signature';
 
 // Meta caps webhook bodies at 1 MB. We accept up to 2 MB to be safe.
@@ -68,7 +68,7 @@ export function handleVerifyChallenge(request: Request, verifyToken: string): Re
  */
 export async function handleMetaWebhook(
   request: Request,
-  plugin: WhatsAppCloudPlugin,
+  plugin: WhatsAppBusinessPlugin,
   appSecret: string,
   verifyToken: string,
 ): Promise<Response> {
@@ -85,14 +85,14 @@ export async function handleMetaWebhook(
   try {
     body = await request.text();
   } catch (err) {
-    logger.warn('[whatsapp-cloud] failed to read webhook body', { err: String(err) });
+    logger.warn('[whatsapp-business] failed to read webhook body', { err: String(err) });
     // Meta retries on 5xx but not 2xx — we already failed to read so reply 200
     // to suppress retries that would just fail the same way.
     return new Response('OK', { status: 200 });
   }
 
   if (body.length > MAX_BODY_BYTES) {
-    logger.warn('[whatsapp-cloud] oversized webhook body rejected', { size: body.length });
+    logger.warn('[whatsapp-business] oversized webhook body rejected', { size: body.length });
     return new Response('OK', { status: 200 });
   }
 
@@ -101,7 +101,7 @@ export async function handleMetaWebhook(
   const signature = request.headers.get('x-hub-signature-256');
   const valid = await verifyMetaSignature(body, signature, appSecret);
   if (!valid) {
-    logger.warn('[whatsapp-cloud] invalid X-Hub-Signature-256 — rejecting webhook', {
+    logger.warn('[whatsapp-business] invalid X-Hub-Signature-256 — rejecting webhook', {
       hasHeader: signature !== null,
     });
     return new Response('Unauthorized', { status: 401 });
@@ -112,13 +112,13 @@ export async function handleMetaWebhook(
   try {
     parsedJson = JSON.parse(body);
   } catch {
-    logger.warn('[whatsapp-cloud] webhook body is not valid JSON');
+    logger.warn('[whatsapp-business] webhook body is not valid JSON');
     return new Response('OK', { status: 200 });
   }
 
   const validated = MetaWebhookPayloadSchema.safeParse(parsedJson);
   if (!validated.success) {
-    logger.warn('[whatsapp-cloud] webhook payload failed schema validation', {
+    logger.warn('[whatsapp-business] webhook payload failed schema validation', {
       issues: validated.error.issues.slice(0, 5),
     });
     return new Response('OK', { status: 200 });
@@ -134,7 +134,7 @@ export async function handleMetaWebhook(
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────
 
-async function processValidatedPayload(plugin: WhatsAppCloudPlugin, payload: MetaWebhookPayload): Promise<void> {
+async function processValidatedPayload(plugin: WhatsAppBusinessPlugin, payload: MetaWebhookPayload): Promise<void> {
   const logger = plugin.getLogger();
 
   for (const entry of payload.entry) {
@@ -157,12 +157,12 @@ const CHANNEL_ALERT_FIELDS = new Set([
 ]);
 
 type MetaWebhookChange = MetaWebhookPayload['entry'][number]['changes'][number];
-type WebhookLogger = ReturnType<WhatsAppCloudPlugin['getLogger']>;
-type InboundContacts = Parameters<WhatsAppCloudPlugin['handleInboundMessage']>[2];
-type InboundDedupeCache = Parameters<WhatsAppCloudPlugin['handleInboundMessage']>[3];
+type WebhookLogger = ReturnType<WhatsAppBusinessPlugin['getLogger']>;
+type InboundContacts = Parameters<WhatsAppBusinessPlugin['handleInboundMessage']>[2];
+type InboundDedupeCache = Parameters<WhatsAppBusinessPlugin['handleInboundMessage']>[3];
 
 async function processChange(
-  plugin: WhatsAppCloudPlugin,
+  plugin: WhatsAppBusinessPlugin,
   change: MetaWebhookChange,
   entryId: string,
   logger: WebhookLogger,
@@ -179,7 +179,7 @@ async function processChange(
   }
 
   if (change.field !== 'messages') {
-    logger.debug('[whatsapp-cloud] ignoring unsupported webhook field', { field: change.field });
+    logger.debug('[whatsapp-business] ignoring unsupported webhook field', { field: change.field });
     return;
   }
 
@@ -187,7 +187,7 @@ async function processChange(
 }
 
 async function processChannelAlert(
-  plugin: WhatsAppCloudPlugin,
+  plugin: WhatsAppBusinessPlugin,
   change: MetaWebhookChange,
   entryId: string,
   logger: WebhookLogger,
@@ -198,7 +198,7 @@ async function processChannelAlert(
   // dashboards scoped per-instance still fire.
   const matches = plugin.findInstancesByWabaId(entryId);
   if (matches.length === 0) {
-    logger.debug('[whatsapp-cloud] channel alert arrived with no matching WABA', {
+    logger.debug('[whatsapp-business] channel alert arrived with no matching WABA', {
       field: change.field,
       wabaId: entryId,
     });
@@ -208,7 +208,7 @@ async function processChannelAlert(
   await Promise.all(
     matches.map(([instanceId]) =>
       plugin.handleChannelAlert(instanceId, alertType, value).catch((err) => {
-        logger.warn('[whatsapp-cloud] failed to emit channel.alert', {
+        logger.warn('[whatsapp-business] failed to emit channel.alert', {
           instanceId,
           field: change.field,
           err: String(err),
@@ -219,13 +219,13 @@ async function processChannelAlert(
 }
 
 async function processTemplateStatusUpdate(
-  plugin: WhatsAppCloudPlugin,
+  plugin: WhatsAppBusinessPlugin,
   change: MetaWebhookChange,
   logger: WebhookLogger,
 ): Promise<void> {
   const parsed = MetaTemplateStatusUpdateSchema.safeParse(change.value);
   if (!parsed.success) {
-    logger.warn('[whatsapp-cloud] template_status_update payload invalid', {
+    logger.warn('[whatsapp-business] template_status_update payload invalid', {
       issues: parsed.error.issues.slice(0, 3),
     });
     return;
@@ -243,7 +243,7 @@ async function processTemplateStatusUpdate(
   try {
     await handleTemplateStatusUpdate(getDb(), parsed.data, plugin);
   } catch (err) {
-    logger.warn('[whatsapp-cloud] failed to handle template status update', {
+    logger.warn('[whatsapp-business] failed to handle template status update', {
       metaTemplateId: parsed.data.message_template_id,
       err: String(err),
     });
@@ -251,7 +251,7 @@ async function processTemplateStatusUpdate(
 }
 
 async function processMessagesChange(
-  plugin: WhatsAppCloudPlugin,
+  plugin: WhatsAppBusinessPlugin,
   change: MetaWebhookChange,
   logger: WebhookLogger,
 ): Promise<void> {
@@ -261,7 +261,7 @@ async function processMessagesChange(
   const phoneNumberId = metadata?.phone_number_id;
 
   if (!phoneNumberId) {
-    logger.warn('[whatsapp-cloud] webhook change missing metadata.phone_number_id');
+    logger.warn('[whatsapp-business] webhook change missing metadata.phone_number_id');
     return;
   }
 
@@ -269,7 +269,7 @@ async function processMessagesChange(
   if (!resolved) {
     // Unknown phone_number_id — log + ack 200 (NOT 4xx). Meta will disable
     // the app after repeated 4xx, so silent drop is correct here.
-    logger.warn('[whatsapp-cloud] no instance for phone_number_id — dropping change', {
+    logger.warn('[whatsapp-business] no instance for phone_number_id — dropping change', {
       phoneNumberId,
     });
     return;
@@ -289,7 +289,7 @@ async function processMessagesChange(
 
 // --- Inbound messages ---
 async function emitInboundMessages(
-  plugin: WhatsAppCloudPlugin,
+  plugin: WhatsAppBusinessPlugin,
   instanceId: string,
   messages: unknown[],
   contacts: InboundContacts,
@@ -305,7 +305,7 @@ async function emitInboundMessages(
       if (!m.id || !m.type) continue;
       await plugin.handleInboundMessage(instanceId, msg as MetaInboundMessage, contacts, dedupeCache);
     } catch (err) {
-      logger.warn('[whatsapp-cloud] failed to emit inbound message', {
+      logger.warn('[whatsapp-business] failed to emit inbound message', {
         instanceId,
         err: String(err),
       });
@@ -315,7 +315,7 @@ async function emitInboundMessages(
 
 // --- Status updates (sent/delivered/read/failed) ---
 async function emitStatusUpdates(
-  plugin: WhatsAppCloudPlugin,
+  plugin: WhatsAppBusinessPlugin,
   instanceId: string,
   statuses: unknown[],
   logger: WebhookLogger,
@@ -326,7 +326,7 @@ async function emitStatusUpdates(
       if (!s.id || !s.status) continue;
       await plugin.handleStatusUpdate(instanceId, status as MetaWebhookStatusEntry);
     } catch (err) {
-      logger.warn('[whatsapp-cloud] failed to emit status event', {
+      logger.warn('[whatsapp-business] failed to emit status event', {
         instanceId,
         err: String(err),
       });

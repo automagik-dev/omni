@@ -5,7 +5,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ChannelRegistry } from '@omni/channel-sdk';
-import type { WhatsAppCloudPlugin } from '@omni/channel-whatsapp-business';
+import type { WhatsAppBusinessPlugin } from '@omni/channel-whatsapp-business';
 import { type EventBus, createLogger } from '@omni/core';
 import { type Database, type Instance, whatsappFlowKeys } from '@omni/db';
 import { eq } from 'drizzle-orm';
@@ -325,14 +325,14 @@ export function createApp(
   // calls `handlers/webhook.ts::handleMetaWebhook` (reading META_VERIFY_TOKEN
   // and META_APP_SECRET from env). The plugin owns env access — keeping the
   // app.ts wiring identical to the Gupshup/Twilio pattern.
-  app.get('/api/v2/channels/whatsapp-cloud/webhook', async (c) => {
+  app.get('/api/v2/channels/whatsapp-business/webhook', async (c) => {
     const channelRegistry = c.get('channelRegistry');
 
     if (!channelRegistry) {
       return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
     }
 
-    const plugin = channelRegistry.get('whatsapp-cloud');
+    const plugin = channelRegistry.get('whatsapp-business');
     if (!plugin?.handleWebhook) {
       return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } }, 503);
     }
@@ -340,14 +340,14 @@ export function createApp(
     return plugin.handleWebhook(c.req.raw);
   });
 
-  app.post('/api/v2/channels/whatsapp-cloud/webhook', async (c) => {
+  app.post('/api/v2/channels/whatsapp-business/webhook', async (c) => {
     const channelRegistry = c.get('channelRegistry');
 
     if (!channelRegistry) {
       return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
     }
 
-    const plugin = channelRegistry.get('whatsapp-cloud');
+    const plugin = channelRegistry.get('whatsapp-business');
     if (!plugin?.handleWebhook) {
       return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } }, 503);
     }
@@ -366,14 +366,14 @@ export function createApp(
   // (`handleFlowData` → handlers/flow-data.ts). Status codes are part of
   // Meta's contract: 404 unknown instance, 421 undecryptable (client
   // re-fetches the public key), 427 bad flow token, 432 bad signature.
-  app.post('/api/v2/channels/whatsapp-cloud/flows/data/:instanceId', async (c) => {
+  app.post('/api/v2/channels/whatsapp-business/flows/data/:instanceId', async (c) => {
     const channelRegistry = c.get('channelRegistry');
 
     if (!channelRegistry) {
       return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
     }
 
-    const plugin = channelRegistry.get('whatsapp-cloud') as WhatsAppCloudPlugin | undefined;
+    const plugin = channelRegistry.get('whatsapp-business') as WhatsAppBusinessPlugin | undefined;
     if (!plugin?.handleFlowData) {
       return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } }, 503);
     }
@@ -381,7 +381,7 @@ export function createApp(
     const instanceId = c.req.param('instanceId');
     const services = c.get('services');
     const instance = await services.instances.getById(instanceId).catch(() => null);
-    if (!instance || instance.channel !== 'whatsapp-cloud') {
+    if (!instance || instance.channel !== 'whatsapp-business') {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Unknown instance' } }, 404);
     }
 

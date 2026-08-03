@@ -49,7 +49,7 @@ const row = (overrides: Partial<FollowUpStateRow> = {}): FollowUpStateRow => ({
 
 describe('channelHasMessagingWindow', () => {
   test('WhatsApp BSP channels have a 24h window', () => {
-    expect(channelHasMessagingWindow('whatsapp-cloud')).toBe(true);
+    expect(channelHasMessagingWindow('whatsapp-business')).toBe(true);
     expect(channelHasMessagingWindow('hermes')).toBe(true);
     expect(channelHasMessagingWindow('twilio-whatsapp')).toBe(true);
     expect(channelHasMessagingWindow('whatsapp-baileys')).toBe(false);
@@ -69,7 +69,7 @@ describe('channelHasMessagingWindow', () => {
 describe('channelSupportsTypingIndicator', () => {
   test.each<[ChannelType, boolean]>([
     ['whatsapp-baileys', true],
-    ['whatsapp-cloud', true],
+    ['whatsapp-business', true],
     // hermes: gateway HTTP puro — a API não expõe typing/presence.
     ['hermes', false],
     ['twilio-whatsapp', true],
@@ -109,14 +109,14 @@ describe('createMessagingWindowProbe', () => {
 
   test('returns unknown when lastInboundCustomerMessageAt is missing', () => {
     const probe = createMessagingWindowProbe();
-    const r = row({ channelType: 'whatsapp-cloud', lastInboundCustomerMessageAt: null });
+    const r = row({ channelType: 'whatsapp-business', lastInboundCustomerMessageAt: null });
     expect(probe(r, now)).toBe('unknown');
   });
 
   test('returns within when last inbound is inside the 24h window', () => {
     const probe = createMessagingWindowProbe();
     const r = row({
-      channelType: 'whatsapp-cloud',
+      channelType: 'whatsapp-business',
       lastInboundCustomerMessageAt: new Date(now.getTime() - (MESSAGING_WINDOW_MS - 60_000)),
     });
     expect(probe(r, now)).toBe('within');
@@ -125,7 +125,7 @@ describe('createMessagingWindowProbe', () => {
   test('returns expired when last inbound is older than 24h', () => {
     const probe = createMessagingWindowProbe();
     const r = row({
-      channelType: 'whatsapp-cloud',
+      channelType: 'whatsapp-business',
       lastInboundCustomerMessageAt: new Date(now.getTime() - MESSAGING_WINDOW_MS - 1),
     });
     expect(probe(r, now)).toBe('expired');
@@ -134,7 +134,7 @@ describe('createMessagingWindowProbe', () => {
   test('honours custom windowMs override (test-only)', () => {
     const probe = createMessagingWindowProbe({ windowMs: 60_000 });
     const r = row({
-      channelType: 'whatsapp-cloud',
+      channelType: 'whatsapp-business',
       lastInboundCustomerMessageAt: new Date(now.getTime() - 61_000),
     });
     expect(probe(r, now)).toBe('expired');

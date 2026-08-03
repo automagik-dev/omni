@@ -1,7 +1,7 @@
 /**
- * Fixture-based audit of Sentry scrubbing for whatsapp-cloud events.
+ * Fixture-based audit of Sentry scrubbing for whatsapp-business events.
  *
- * The wish (`.genie/wishes/whatsapp-cloud-channel/WISH.md`) requires the
+ * The wish (`.genie/wishes/whatsapp-business-channel/WISH.md`) requires the
  * `beforeSend` hook to mask every sensitive Meta-side field that could leak
  * via error contexts: `text` (message body), E.164 phones, `profile_name`,
  * `verified_name`, `access_token`, and `Bearer …` headers.
@@ -84,7 +84,7 @@ function buildRealisticMetaEvent() {
       },
     },
     tags: {
-      channel: 'whatsapp-cloud',
+      channel: 'whatsapp-business',
       'error.code': 'OMNI_OUTSIDE_24H_WINDOW',
       'http.url': '/api/v2/messages/+5511999998888',
     },
@@ -96,7 +96,7 @@ function buildRealisticMetaEvent() {
   };
 }
 
-describe('Sentry scrubbing — whatsapp-cloud audit fixture', () => {
+describe('Sentry scrubbing — whatsapp-business audit fixture', () => {
   const event = buildRealisticMetaEvent();
   const original = JSON.stringify(event);
   const result = scrubEvent(event as Parameters<typeof scrubEvent>[0]);
@@ -176,7 +176,7 @@ describe('Sentry scrubbing — whatsapp-cloud audit fixture', () => {
   });
 });
 
-describe('Sentry scrubbing — whatsapp-cloud breadcrumb edge cases', () => {
+describe('Sentry scrubbing — whatsapp-business breadcrumb edge cases', () => {
   test('breadcrumb with embedded "text:" pattern is dropped (existing rule)', () => {
     const bc = {
       type: 'log',

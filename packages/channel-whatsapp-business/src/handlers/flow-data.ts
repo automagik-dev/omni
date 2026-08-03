@@ -55,7 +55,7 @@ async function intake(request: Request, ctx: FlowDataHandlerContext): Promise<In
 
   const signature = request.headers.get('x-hub-signature-256');
   if (!ctx.appSecret || !signature || !(await verifyMetaSignature(rawBody, signature, ctx.appSecret))) {
-    ctx.logger.warn('[whatsapp-cloud] flow data request failed signature verification', {
+    ctx.logger.warn('[whatsapp-business] flow data request failed signature verification', {
       instanceId: ctx.instanceId,
       hasSignature: Boolean(signature),
     });
@@ -83,7 +83,7 @@ async function intake(request: Request, ctx: FlowDataHandlerContext): Promise<In
     const privateKey = await importFlowPrivateKey(ctx.privateKeyPem);
     return { decrypted: await decryptFlowRequest(parsed, privateKey) };
   } catch (err) {
-    ctx.logger.warn('[whatsapp-cloud] flow data decrypt failed — responding 421', {
+    ctx.logger.warn('[whatsapp-business] flow data decrypt failed — responding 421', {
       instanceId: ctx.instanceId,
       error: err instanceof FlowDecryptError ? err.message : String(err),
     });
@@ -95,7 +95,7 @@ async function intake(request: Request, ctx: FlowDataHandlerContext): Promise<In
 async function resolveScreen(ctx: FlowDataHandlerContext, resolveCtx: FlowResolveContext): Promise<FlowScreenResponse> {
   const resolver = ctx.registry.lookup(resolveCtx);
   if (!resolver) {
-    ctx.logger.warn('[whatsapp-cloud] no flow resolver registered — responding with error screen', {
+    ctx.logger.warn('[whatsapp-business] no flow resolver registered — responding with error screen', {
       instanceId: ctx.instanceId,
       flowRef: resolveCtx.flowRef,
     });
@@ -113,7 +113,7 @@ async function resolveScreen(ctx: FlowDataHandlerContext, resolveCtx: FlowResolv
       ),
     ]);
   } catch (err) {
-    ctx.logger.error('[whatsapp-cloud] flow resolver failed', {
+    ctx.logger.error('[whatsapp-business] flow resolver failed', {
       instanceId: ctx.instanceId,
       flowRef: resolveCtx.flowRef,
       action: resolveCtx.action,
@@ -143,7 +143,7 @@ async function publishExchangeEvent(
     });
   } catch (err) {
     // Observability must never break the synchronous response.
-    ctx.logger.warn('[whatsapp-cloud] flow.data_exchange event publish failed', {
+    ctx.logger.warn('[whatsapp-business] flow.data_exchange event publish failed', {
       instanceId: ctx.instanceId,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -169,7 +169,7 @@ export async function handleFlowDataRequest(request: Request, ctx: FlowDataHandl
   // screen earlier) — acknowledge, don't resolve.
   const dataBag = (payload.data ?? {}) as Record<string, unknown>;
   if (dataBag.error != null || dataBag.error_message != null) {
-    ctx.logger.warn('[whatsapp-cloud] flow client error notification', {
+    ctx.logger.warn('[whatsapp-business] flow client error notification', {
       instanceId: ctx.instanceId,
       flowToken: payload.flow_token,
       error: dataBag.error,
@@ -195,7 +195,7 @@ export async function handleFlowDataRequest(request: Request, ctx: FlowDataHandl
   const startedAt = performance.now();
   const screenResponse = await resolveScreen(ctx, resolveCtx);
   const durationMs = Math.round(performance.now() - startedAt);
-  ctx.logger.info('[whatsapp-cloud] flow data exchange resolved', {
+  ctx.logger.info('[whatsapp-business] flow data exchange resolved', {
     instanceId: ctx.instanceId,
     flowRef: resolveCtx.flowRef,
     action: resolveCtx.action,

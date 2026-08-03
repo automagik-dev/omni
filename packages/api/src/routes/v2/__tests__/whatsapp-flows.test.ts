@@ -44,7 +44,7 @@ function mountFlowsRoutes(options: MountOptions = {}): {
       instances: {
         getById: mock(async (id: string) => ({
           id,
-          channel: options.channel ?? 'whatsapp-cloud',
+          channel: options.channel ?? 'whatsapp-business',
           metaAccessToken: options.metaAccessToken === undefined ? 'META-TOKEN' : options.metaAccessToken,
           metaPhoneNumberId: 'PHONE-1',
           metaWabaId: 'WABA-1',
@@ -111,7 +111,7 @@ describe('GET /instances/:id/whatsapp-flows', () => {
     expect(calls[0]?.url).toContain('/WABA-1/flows');
   });
 
-  test('400s when the instance is not whatsapp-cloud', async () => {
+  test('400s when the instance is not whatsapp-business', async () => {
     const { app } = mountFlowsRoutes({ channel: 'whatsapp' });
 
     const res = await app.request(`/instances/${INSTANCE_ID}/whatsapp-flows`);

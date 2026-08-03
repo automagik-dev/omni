@@ -615,7 +615,7 @@ export const PENDING_G5_CEILING = 12;
  * remaining 12 are a floor rather than a backlog. No site moved between the two
  * pending classes this run, and no new pending site was opened.
  */
-// 18 after the G4/G5 conversion sweep (6 + 12). 19 after the whatsapp-cloud
+// 18 after the G4/G5 conversion sweep (6 + 12). 19 after the whatsapp-business
 // channel landed: its template-status webhook adds ONE genuinely new
 // pending-G4 site (a bare getDb() in a credential-less webhook path — see its
 // registry entry). Nothing was reclassified; the raise is a real new site in
@@ -1637,7 +1637,7 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: '*',
     class: 'pending-G4-conversion',
     justification:
-      'Bare getDb() acquisition (lazy-imported) in the Meta template-status webhook path of the whatsapp-cloud ' +
+      'Bare getDb() acquisition (lazy-imported) in the Meta template-status webhook path of the whatsapp-business ' +
       'channel. The webhook is authenticated by app-secret HMAC, not by a tenant credential — Meta configures ONE ' +
       'global callback per app, so there is no request credential to derive a tenant from; the affected instance ' +
       'is resolved from the payload (metaTemplateId/wabaId) by the templates service. Converting it means routing ' +

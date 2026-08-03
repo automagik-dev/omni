@@ -1,5 +1,5 @@
 /**
- * WhatsApp Cloud Flows routes (whatsapp-cloud-revival wish).
+ * WhatsApp Cloud Flows routes (whatsapp-business-revival wish).
  *
  * Mounted at /api/v2 — routes carry their own /instances/:id/whatsapp-flows
  * prefix so we land alongside other nested instance resources (mirrors
@@ -25,7 +25,7 @@ import { z } from 'zod';
 import { requireInstanceAccess } from '../../middleware/auth';
 import { sealCredentialField } from '../../tenancy/sealed-credentials';
 import type { AppVariables } from '../../types';
-import { ensureWhatsAppCloud } from './whatsapp-cloud';
+import { ensureWhatsAppBusiness } from './whatsapp-business';
 
 const log = createLogger('routes:whatsapp-flows');
 
@@ -134,7 +134,7 @@ type FlowsClientResolution =
   | { ok: false; payload: { error: { code: string; message: string } } };
 
 /**
- * Resolve the instance, enforce the whatsapp-cloud channel guard, and build a
+ * Resolve the instance, enforce the whatsapp-business channel guard, and build a
  * WABA-scoped Graph API client. Any `ok: false` result maps to a 400 response.
  */
 async function resolveFlowsClient(
@@ -142,7 +142,7 @@ async function resolveFlowsClient(
   instanceId: string,
 ): Promise<FlowsClientResolution> {
   const instance = await services.instances.getById(instanceId);
-  const guard = ensureWhatsAppCloud(instance);
+  const guard = ensureWhatsAppBusiness(instance);
   if (!guard.ok) return guard;
 
   const cfg = readMetaConfig(instance);
@@ -164,7 +164,7 @@ async function resolveFlowsClient(
 function flowsDataEndpointUri(instanceId: string): string | null {
   const base = process.env.META_FLOWS_PUBLIC_BASE_URL?.replace(/\/+$/, '');
   if (!base) return null;
-  return `${base}/api/v2/channels/whatsapp-cloud/flows/data/${instanceId}`;
+  return `${base}/api/v2/channels/whatsapp-business/flows/data/${instanceId}`;
 }
 
 /** 422 payload for local Flow JSON validation failures (pre-Meta feedback). */
@@ -512,12 +512,12 @@ whatsappFlowsRoutes.post(
     const channelRegistry = c.get('channelRegistry');
 
     const instance = await services.instances.getById(instanceId);
-    const guard = ensureWhatsAppCloud(instance);
+    const guard = ensureWhatsAppBusiness(instance);
     if (!guard.ok) return c.json(guard.payload, 400);
 
-    const plugin = channelRegistry?.get('whatsapp-cloud');
+    const plugin = channelRegistry?.get('whatsapp-business');
     if (!plugin) {
-      return c.json(jsonError('whatsapp-cloud plugin not registered', 'PLUGIN_NOT_FOUND'), 500);
+      return c.json(jsonError('whatsapp-business plugin not registered', 'PLUGIN_NOT_FOUND'), 500);
     }
 
     // Generate the correlation token here so it can be returned to the caller

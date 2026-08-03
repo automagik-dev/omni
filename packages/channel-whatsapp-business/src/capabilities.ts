@@ -10,7 +10,7 @@
 import { DEFAULT_CAPABILITIES } from '@omni/channel-sdk';
 import type { ChannelCapabilities } from '@omni/channel-sdk';
 
-export const WHATSAPP_CLOUD_CAPABILITIES: ChannelCapabilities = {
+export const WHATSAPP_BUSINESS_CAPABILITIES: ChannelCapabilities = {
   ...DEFAULT_CAPABILITIES,
   canSendText: true,
   canSendMedia: true,

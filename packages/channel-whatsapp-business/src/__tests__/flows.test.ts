@@ -9,7 +9,7 @@ import type { EventBus, PublishResult, Subscription } from '@omni/core/events';
 import type { MetaInboundMessage } from '@omni/core/schemas';
 
 import { MetaWhatsAppClient } from '../client';
-import { WhatsAppCloudPlugin } from '../plugin';
+import { WhatsAppBusinessPlugin } from '../plugin';
 import { sendFlow } from '../senders/flow';
 import type { MetaSendResponse } from '../types';
 
@@ -220,7 +220,7 @@ function createContext(eventBus: MockEventBus): PluginContext {
 describe('inbound nfm_reply (real plugin)', () => {
   it('emits message.received with the flow body as text and response_json in rawPayload', async () => {
     const instanceId = '00000000-0000-4000-8000-000000000042';
-    const plugin = new WhatsAppCloudPlugin();
+    const plugin = new WhatsAppBusinessPlugin();
     const eventBus = new MockEventBus();
     await plugin.initialize(createContext(eventBus));
     const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(

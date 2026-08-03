@@ -16,7 +16,7 @@
 
 - DB schema / migrations → `@omni/db` (`instances.hermes_*` columns). This package must NOT import `@omni/db`.
 - Shared Zod schemas → `@omni/core` (`packages/core/src/schemas/hermes.ts` envelope +
-  `whatsapp-cloud.ts` inner message/status shapes).
+  `whatsapp-business.ts` inner message/status shapes).
 - Webhook route mount → `@omni/api`.
 
 ## The media_id gotcha

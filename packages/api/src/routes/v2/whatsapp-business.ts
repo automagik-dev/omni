@@ -1,7 +1,7 @@
 /**
  * WhatsApp Cloud (Meta) — channel-specific routes.
  *
- * Mounted at `/api/v2/instances/:id/whatsapp-cloud/...` (see v2/index.ts).
+ * Mounted at `/api/v2/instances/:id/whatsapp-business/...` (see v2/index.ts).
  *
  * Surface (Group 5 of the wish — Embedded Signup + connection lifecycle):
  *   - POST   /oauth/exchange     — code → access_token + WABA discovery
@@ -37,8 +37,8 @@ import {
 import { createLogger } from '@omni/core';
 import {
   EmbeddedSignupExchangeRequestSchema,
-  WhatsAppCloudConnectRequestSchema,
-  WhatsAppCloudRegisterRequestSchema,
+  WhatsAppBusinessConnectRequestSchema,
+  WhatsAppBusinessRegisterRequestSchema,
 } from '@omni/core/schemas';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -46,14 +46,14 @@ import * as oauthTokenCache from '../../lib/oauth-token-cache';
 import { requireInstanceAccess } from '../../middleware/auth';
 import type { AppVariables } from '../../types';
 
-const log = createLogger('api:whatsapp-cloud');
+const log = createLogger('api:whatsapp-business');
 
-export const whatsappCloudRoutes = new Hono<{ Variables: AppVariables }>();
+export const whatsappBusinessRoutes = new Hono<{ Variables: AppVariables }>();
 
 const instanceAccess = requireInstanceAccess((c) => c.req.param('id') ?? '');
 
 // All routes are :id-scoped — enforce instance access on every request.
-whatsappCloudRoutes.use('/:id/whatsapp-cloud/*', instanceAccess);
+whatsappBusinessRoutes.use('/:id/whatsapp-business/*', instanceAccess);
 
 /**
  * Read META_* env vars at request time so tests can mutate process.env.
@@ -67,19 +67,19 @@ function readMetaAppEnv(): { appId: string | undefined; appSecret: string | unde
 }
 
 /**
- * Channel-guard: returns a 400 response if the instance is not whatsapp-cloud.
+ * Channel-guard: returns a 400 response if the instance is not whatsapp-business.
  * Also consumed by routes/v2/whatsapp-flows.ts.
  */
-export function ensureWhatsAppCloud(instance: { channel: string }):
+export function ensureWhatsAppBusiness(instance: { channel: string }):
   | { ok: true }
   | { ok: false; payload: { error: { code: string; message: string } } } {
-  if (instance.channel !== 'whatsapp-cloud') {
+  if (instance.channel !== 'whatsapp-business') {
     return {
       ok: false,
       payload: {
         error: {
           code: 'WRONG_CHANNEL',
-          message: `Instance channel is "${instance.channel}", expected "whatsapp-cloud"`,
+          message: `Instance channel is "${instance.channel}", expected "whatsapp-business"`,
         },
       },
     };
@@ -109,11 +109,11 @@ function buildClientFromInstance(instance: {
 }
 
 // ---------------------------------------------------------------------------
-// POST /:id/whatsapp-cloud/oauth/exchange
+// POST /:id/whatsapp-business/oauth/exchange
 // ---------------------------------------------------------------------------
 
-whatsappCloudRoutes.post(
-  '/:id/whatsapp-cloud/oauth/exchange',
+whatsappBusinessRoutes.post(
+  '/:id/whatsapp-business/oauth/exchange',
   zValidator('json', EmbeddedSignupExchangeRequestSchema),
   async (c) => {
     const { code } = c.req.valid('json');
@@ -155,12 +155,12 @@ whatsappCloudRoutes.post(
 );
 
 // ---------------------------------------------------------------------------
-// POST /:id/whatsapp-cloud/connect
+// POST /:id/whatsapp-business/connect
 // ---------------------------------------------------------------------------
 
-whatsappCloudRoutes.post(
-  '/:id/whatsapp-cloud/connect',
-  zValidator('json', WhatsAppCloudConnectRequestSchema),
+whatsappBusinessRoutes.post(
+  '/:id/whatsapp-business/connect',
+  zValidator('json', WhatsAppBusinessConnectRequestSchema),
   async (c) => {
     const id = c.req.param('id');
     const body = c.req.valid('json');
@@ -169,7 +169,7 @@ whatsappCloudRoutes.post(
     const { apiVersion } = readMetaAppEnv();
 
     const instance = await services.instances.getById(id);
-    const guard = ensureWhatsAppCloud(instance);
+    const guard = ensureWhatsAppBusiness(instance);
     if (!guard.ok) return c.json(guard.payload, 400);
 
     // Resolve the access token: either consume the single-use handle from
@@ -245,9 +245,9 @@ whatsappCloudRoutes.post(
     }
 
     // Boot the plugin runtime — passes credentials via InstanceConfig.
-    const plugin = channelRegistry?.get('whatsapp-cloud');
+    const plugin = channelRegistry?.get('whatsapp-business');
     if (!plugin) {
-      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'whatsapp-cloud plugin not registered' } }, 500);
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'whatsapp-business plugin not registered' } }, 500);
     }
 
     try {
@@ -267,7 +267,7 @@ whatsappCloudRoutes.post(
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      log.error('plugin.connect failed for whatsapp-cloud', { instanceId: id, error: message });
+      log.error('plugin.connect failed for whatsapp-business', { instanceId: id, error: message });
       return c.json({ error: { code: 'CONNECT_FAILED', message } }, 500);
     }
 
@@ -283,19 +283,19 @@ whatsappCloudRoutes.post(
 );
 
 // ---------------------------------------------------------------------------
-// POST /:id/whatsapp-cloud/register
+// POST /:id/whatsapp-business/register
 // ---------------------------------------------------------------------------
 
-whatsappCloudRoutes.post(
-  '/:id/whatsapp-cloud/register',
-  zValidator('json', WhatsAppCloudRegisterRequestSchema),
+whatsappBusinessRoutes.post(
+  '/:id/whatsapp-business/register',
+  zValidator('json', WhatsAppBusinessRegisterRequestSchema),
   async (c) => {
     const id = c.req.param('id');
     const services = c.get('services');
     const { pin } = c.req.valid('json');
 
     const instance = await services.instances.getById(id);
-    const guard = ensureWhatsAppCloud(instance);
+    const guard = ensureWhatsAppBusiness(instance);
     if (!guard.ok) return c.json(guard.payload, 400);
     if (!instance.metaAccessToken || !instance.metaPhoneNumberId) {
       return c.json(
@@ -321,15 +321,15 @@ whatsappCloudRoutes.post(
 );
 
 // ---------------------------------------------------------------------------
-// POST /:id/whatsapp-cloud/subscribe-app
+// POST /:id/whatsapp-business/subscribe-app
 // ---------------------------------------------------------------------------
 
-whatsappCloudRoutes.post('/:id/whatsapp-cloud/subscribe-app', async (c) => {
+whatsappBusinessRoutes.post('/:id/whatsapp-business/subscribe-app', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
 
   const instance = await services.instances.getById(id);
-  const guard = ensureWhatsAppCloud(instance);
+  const guard = ensureWhatsAppBusiness(instance);
   if (!guard.ok) return c.json(guard.payload, 400);
   if (!instance.metaAccessToken || !instance.metaWabaId) {
     return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected (missing WABA id)' } }, 409);
@@ -350,15 +350,15 @@ whatsappCloudRoutes.post('/:id/whatsapp-cloud/subscribe-app', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /:id/whatsapp-cloud/connection
+// GET /:id/whatsapp-business/connection
 // ---------------------------------------------------------------------------
 
-whatsappCloudRoutes.get('/:id/whatsapp-cloud/connection', async (c) => {
+whatsappBusinessRoutes.get('/:id/whatsapp-business/connection', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
 
   const instance = await services.instances.getById(id);
-  const guard = ensureWhatsAppCloud(instance);
+  const guard = ensureWhatsAppBusiness(instance);
   if (!guard.ok) return c.json(guard.payload, 400);
 
   // Deliberately omit `metaAccessToken` from the response.
@@ -378,20 +378,20 @@ whatsappCloudRoutes.get('/:id/whatsapp-cloud/connection', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// DELETE /:id/whatsapp-cloud/connection
+// DELETE /:id/whatsapp-business/connection
 // ---------------------------------------------------------------------------
 
-whatsappCloudRoutes.delete('/:id/whatsapp-cloud/connection', async (c) => {
+whatsappBusinessRoutes.delete('/:id/whatsapp-business/connection', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
 
   const instance = await services.instances.getById(id);
-  const guard = ensureWhatsAppCloud(instance);
+  const guard = ensureWhatsAppBusiness(instance);
   if (!guard.ok) return c.json(guard.payload, 400);
 
   // Best-effort plugin disconnect.
-  const plugin = channelRegistry?.get('whatsapp-cloud');
+  const plugin = channelRegistry?.get('whatsapp-business');
   if (plugin) {
     try {
       await plugin.disconnect(id);
@@ -422,15 +422,15 @@ whatsappCloudRoutes.delete('/:id/whatsapp-cloud/connection', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /:id/whatsapp-cloud/quality
+// GET /:id/whatsapp-business/quality
 // ---------------------------------------------------------------------------
 
-whatsappCloudRoutes.get('/:id/whatsapp-cloud/quality', async (c) => {
+whatsappBusinessRoutes.get('/:id/whatsapp-business/quality', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
 
   const instance = await services.instances.getById(id);
-  const guard = ensureWhatsAppCloud(instance);
+  const guard = ensureWhatsAppBusiness(instance);
   if (!guard.ok) return c.json(guard.payload, 400);
 
   const client = buildClientFromInstance(instance);
@@ -446,7 +446,7 @@ whatsappCloudRoutes.get('/:id/whatsapp-cloud/quality', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /:id/whatsapp-cloud/analytics
+// GET /:id/whatsapp-business/analytics
 // ---------------------------------------------------------------------------
 
 const analyticsQuerySchema = z.object({
@@ -455,13 +455,13 @@ const analyticsQuerySchema = z.object({
   granularity: z.enum(['HALF_HOUR', 'DAY', 'MONTH']).default('DAY'),
 });
 
-whatsappCloudRoutes.get('/:id/whatsapp-cloud/analytics', zValidator('query', analyticsQuerySchema), async (c) => {
+whatsappBusinessRoutes.get('/:id/whatsapp-business/analytics', zValidator('query', analyticsQuerySchema), async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
   const { start, end, granularity } = c.req.valid('query');
 
   const instance = await services.instances.getById(id);
-  const guard = ensureWhatsAppCloud(instance);
+  const guard = ensureWhatsAppBusiness(instance);
   if (!guard.ok) return c.json(guard.payload, 400);
   if (!instance.metaAccessToken || !instance.metaWabaId) {
     return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected' } }, 409);
@@ -503,15 +503,15 @@ whatsappCloudRoutes.get('/:id/whatsapp-cloud/analytics', zValidator('query', ana
 });
 
 // ---------------------------------------------------------------------------
-// GET /:id/whatsapp-cloud/profile
+// GET /:id/whatsapp-business/profile
 // ---------------------------------------------------------------------------
 
-whatsappCloudRoutes.get('/:id/whatsapp-cloud/profile', async (c) => {
+whatsappBusinessRoutes.get('/:id/whatsapp-business/profile', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
 
   const instance = await services.instances.getById(id);
-  const guard = ensureWhatsAppCloud(instance);
+  const guard = ensureWhatsAppBusiness(instance);
   if (!guard.ok) return c.json(guard.payload, 400);
 
   const client = buildClientFromInstance(instance);
@@ -527,7 +527,7 @@ whatsappCloudRoutes.get('/:id/whatsapp-cloud/profile', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// PUT /:id/whatsapp-cloud/profile
+// PUT /:id/whatsapp-business/profile
 // ---------------------------------------------------------------------------
 
 const updateProfileSchema = z.object({
@@ -539,13 +539,13 @@ const updateProfileSchema = z.object({
   websites: z.array(z.string().url()).max(2).optional(),
 });
 
-whatsappCloudRoutes.put('/:id/whatsapp-cloud/profile', zValidator('json', updateProfileSchema), async (c) => {
+whatsappBusinessRoutes.put('/:id/whatsapp-business/profile', zValidator('json', updateProfileSchema), async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
   const body = c.req.valid('json');
 
   const instance = await services.instances.getById(id);
-  const guard = ensureWhatsAppCloud(instance);
+  const guard = ensureWhatsAppBusiness(instance);
   if (!guard.ok) return c.json(guard.payload, 400);
 
   const client = buildClientFromInstance(instance);
@@ -561,7 +561,7 @@ whatsappCloudRoutes.put('/:id/whatsapp-cloud/profile', zValidator('json', update
 });
 
 // ---------------------------------------------------------------------------
-// POST /:id/whatsapp-cloud/profile/photo
+// POST /:id/whatsapp-business/profile/photo
 //
 // Minimal photo upload — accepts a multipart `file` field and forwards it to
 // Meta as a `/{phone_number_id}/whatsapp_business_profile` update.
@@ -582,7 +582,7 @@ whatsappCloudRoutes.put('/:id/whatsapp-cloud/profile', zValidator('json', update
 /**
  * Parse the multipart body of a profile-photo upload and validate the `file`
  * field. Returns a 400-shaped payload on parse/validation failure (caller
- * responds with status 400), mirroring the `ensureWhatsAppCloud` guard shape.
+ * responds with status 400), mirroring the `ensureWhatsAppBusiness` guard shape.
  */
 async function readProfilePhotoUpload(
   c: Context<{ Variables: AppVariables }>,
@@ -611,13 +611,13 @@ async function readProfilePhotoUpload(
   };
 }
 
-whatsappCloudRoutes.post('/:id/whatsapp-cloud/profile/photo', async (c) => {
+whatsappBusinessRoutes.post('/:id/whatsapp-business/profile/photo', async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
   const { appId: envAppId } = readMetaAppEnv();
 
   const instance = await services.instances.getById(id);
-  const guard = ensureWhatsAppCloud(instance);
+  const guard = ensureWhatsAppBusiness(instance);
   if (!guard.ok) return c.json(guard.payload, 400);
   if (!instance.metaAccessToken || !instance.metaPhoneNumberId) {
     return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected' } }, 409);

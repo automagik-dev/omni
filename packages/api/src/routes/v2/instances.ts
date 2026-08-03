@@ -678,7 +678,7 @@ instancesRoutes.get('/supported-channels', async (c) => {
 
   const staticChannels = [
     {
-      id: 'whatsapp-cloud' as const,
+      id: 'whatsapp-business' as const,
       name: 'WhatsApp Business Cloud',
       description: 'Official WhatsApp Business API',
       loaded: false as const,
