@@ -1633,7 +1633,7 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   // word-boundary did exactly that, so the sites no longer scan and the guard's
   // own staleness check removed them.
   {
-    file: 'packages/channel-whatsapp-cloud/src/handlers/webhook.ts',
+    file: 'packages/channel-whatsapp-business/src/handlers/webhook.ts',
     table: '*',
     class: 'pending-G4-conversion',
     justification:

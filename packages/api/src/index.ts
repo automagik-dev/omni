@@ -222,8 +222,8 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
   if (flowsDemoInstance) {
     const waCloud = result.registry.get('whatsapp-cloud');
     if (waCloud && 'flowResolvers' in waCloud) {
-      const { createDemoFlowResolver } = await import('@omni/channel-whatsapp-cloud');
-      (waCloud as import('@omni/channel-whatsapp-cloud').WhatsAppCloudPlugin).flowResolvers.registerInstanceDefault(
+      const { createDemoFlowResolver } = await import('@omni/channel-whatsapp-business');
+      (waCloud as import('@omni/channel-whatsapp-business').WhatsAppCloudPlugin).flowResolvers.registerInstanceDefault(
         flowsDemoInstance,
         createDemoFlowResolver(),
       );

@@ -59,7 +59,7 @@
         "@hono/swagger-ui": "^0.4.1",
         "@hono/zod-validator": "^0.4.3",
         "@omni/channel-sdk": "workspace:*",
-        "@omni/channel-whatsapp-cloud": "workspace:*",
+        "@omni/channel-whatsapp-business": "workspace:*",
         "@omni/core": "workspace:*",
         "@omni/db": "workspace:*",
         "@omni/media-processing": "workspace:*",
@@ -253,8 +253,8 @@
         "typescript": "^5.0.0",
       },
     },
-    "packages/channel-whatsapp-cloud": {
-      "name": "@omni/channel-whatsapp-cloud",
+    "packages/channel-whatsapp-business": {
+      "name": "@omni/channel-whatsapp-business",
       "version": "2.260731.3",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
@@ -302,7 +302,7 @@
         "@omni/channel-slack": "workspace:*",
         "@omni/channel-telegram": "workspace:*",
         "@omni/channel-whatsapp": "workspace:*",
-        "@omni/channel-whatsapp-cloud": "workspace:*",
+        "@omni/channel-whatsapp-business": "workspace:*",
         "@omni/core": "workspace:*",
         "@omni/sdk": "workspace:*",
         "@types/node": "^22.10.3",
@@ -749,7 +749,7 @@
 
     "@omni/channel-whatsapp": ["@omni/channel-whatsapp@workspace:packages/channel-whatsapp"],
 
-    "@omni/channel-whatsapp-cloud": ["@omni/channel-whatsapp-cloud@workspace:packages/channel-whatsapp-cloud"],
+    "@omni/channel-whatsapp-business": ["@omni/channel-whatsapp-business@workspace:packages/channel-whatsapp-business"],
 
     "@omni/core": ["@omni/core@workspace:packages/core"],
 

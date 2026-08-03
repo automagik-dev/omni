@@ -31,7 +31,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 // ---------------------------------------------------------------------------
 // Local types — these mirror packages/core/src/schemas/whatsapp-cloud.ts
-// (EmbeddedSignupExchangeResponseSchema, WhatsAppCloudConnectRequestSchema).
+// (EmbeddedSignupExchangeResponseSchema, WhatsAppBusinessConnectRequestSchema).
 // TODO: replace with `import type { ... } from '@omni/sdk'` after make sdk-generate.
 // ---------------------------------------------------------------------------
 
@@ -70,14 +70,14 @@ const META_CONFIG_ID = (import.meta.env.VITE_META_EMBEDDED_SIGNUP_CONFIG_ID as s
 
 // ---------------------------------------------------------------------------
 
-interface WhatsAppCloudConnectProps {
+interface WhatsAppBusinessConnectProps {
   instanceId: string;
   onConnected: (result: ConnectResponse) => void;
 }
 
 type EmbeddedStep = 'idle' | 'awaiting_popup' | 'exchanging' | 'choose_number' | 'connecting' | 'connected';
 
-export function WhatsAppCloudConnect({ instanceId, onConnected }: WhatsAppCloudConnectProps) {
+export function WhatsAppBusinessConnect({ instanceId, onConnected }: WhatsAppBusinessConnectProps) {
   return (
     <Tabs defaultValue="embedded">
       <TabsList className="w-full">

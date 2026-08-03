@@ -33,7 +33,7 @@ import {
   registerPhoneNumber as registerPhoneNumberOAuth,
   subscribeApp,
   uploadHeaderMedia,
-} from '@omni/channel-whatsapp-cloud';
+} from '@omni/channel-whatsapp-business';
 import { createLogger } from '@omni/core';
 import {
   EmbeddedSignupExchangeRequestSchema,
@@ -648,7 +648,7 @@ whatsappCloudRoutes.post('/:id/whatsapp-cloud/profile/photo', async (c) => {
 
   try {
     // Resumable upload (create session → upload bytes → handle).
-    // Reuses the same flow as `uploadHeaderMedia` in @omni/channel-whatsapp-cloud
+    // Reuses the same flow as `uploadHeaderMedia` in @omni/channel-whatsapp-business
     // — token in Authorization header, no query string, MetaApiError throws.
     const { handle } = await uploadHeaderMedia(
       appIdForUpload,

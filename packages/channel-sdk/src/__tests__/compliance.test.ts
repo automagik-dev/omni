@@ -49,7 +49,7 @@ import {
   MetaErrorCode,
   WHATSAPP_CLOUD_CAPABILITIES,
   WhatsAppCloudPlugin,
-} from '../../../channel-whatsapp-cloud/src/index';
+} from '../../../channel-whatsapp-business/src/index';
 import {
   WHATSAPP_CAPABILITIES,
   WhatsAppError,
@@ -137,13 +137,13 @@ const channels: ChannelDescriptor[] = [
   },
   {
     name: 'whatsapp-cloud',
-    packageName: '@omni/channel-whatsapp-cloud',
+    packageName: '@omni/channel-whatsapp-business',
     pluginClass: WhatsAppCloudPlugin as unknown as typeof BaseChannelPlugin,
     errorClass: MetaApiError,
     capabilities: WHATSAPP_CLOUD_CAPABILITIES,
-    pluginSourcePath: channelPath('whatsapp-cloud', 'plugin.ts'),
-    handlerSourcePaths: [channelPath('whatsapp-cloud', 'handlers', 'webhook.ts')],
-    errorSourcePath: channelPath('whatsapp-cloud', 'utils', 'errors.ts'),
+    pluginSourcePath: channelPath('whatsapp-business', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('whatsapp-business', 'handlers', 'webhook.ts')],
+    errorSourcePath: channelPath('whatsapp-business', 'utils', 'errors.ts'),
   },
   {
     name: 'twilio-whatsapp',

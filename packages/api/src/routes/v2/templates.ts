@@ -8,7 +8,7 @@
  * Scopes are enforced globally by middleware/scope-enforcer via SCOPE_MAP
  * entries (see packages/api/src/constants/scopes.ts).
  *
- * Pure-service module @omni/channel-whatsapp-cloud/src/templates.ts holds the
+ * Pure-service module @omni/channel-whatsapp-business/src/templates.ts holds the
  * Graph API logic; this file only handles HTTP plumbing + instance access +
  * outbound dispatch.
  */
@@ -21,7 +21,7 @@ import {
   deleteTemplate as metaDeleteTemplate,
   syncTemplatesToDb,
   uploadHeaderMedia,
-} from '@omni/channel-whatsapp-cloud';
+} from '@omni/channel-whatsapp-business';
 import { createLogger } from '@omni/core';
 import {
   MetaTemplateCategorySchema,

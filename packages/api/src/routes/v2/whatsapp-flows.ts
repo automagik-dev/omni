@@ -15,7 +15,7 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import { MetaWhatsAppClient, buildFlowToken, generateFlowKeyPair } from '@omni/channel-whatsapp-cloud';
+import { MetaWhatsAppClient, buildFlowToken, generateFlowKeyPair } from '@omni/channel-whatsapp-business';
 import { createLogger } from '@omni/core';
 import { WhatsAppFlowSendSchema, validateFlowJson } from '@omni/core/schemas';
 import { whatsappFlowKeys } from '@omni/db';

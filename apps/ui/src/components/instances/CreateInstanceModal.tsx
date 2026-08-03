@@ -1,4 +1,4 @@
-import { WhatsAppCloudConnect } from '@/components/instances/WhatsAppCloudConnect';
+import { WhatsAppBusinessConnect } from '@/components/instances/WhatsAppBusinessConnect';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -280,7 +280,7 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
           {/* Step 3: Connect (WhatsApp Cloud — Meta OAuth / manual) */}
           {step === 'connect' && createdInstance && channel === 'whatsapp-cloud' && (
             <div className="space-y-4">
-              <WhatsAppCloudConnect
+              <WhatsAppBusinessConnect
                 instanceId={createdInstance.id}
                 onConnected={() => {
                   onSuccess?.(createdInstance);

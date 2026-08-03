@@ -5,7 +5,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ChannelRegistry } from '@omni/channel-sdk';
-import type { WhatsAppCloudPlugin } from '@omni/channel-whatsapp-cloud';
+import type { WhatsAppCloudPlugin } from '@omni/channel-whatsapp-business';
 import { type EventBus, createLogger } from '@omni/core';
 import { type Database, type Instance, whatsappFlowKeys } from '@omni/db';
 import { eq } from 'drizzle-orm';

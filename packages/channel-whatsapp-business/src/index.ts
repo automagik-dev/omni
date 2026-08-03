@@ -9,7 +9,7 @@
  *
  * @example
  * ```typescript
- * import whatsappCloudPlugin from '@omni/channel-whatsapp-cloud';
+ * import whatsappCloudPlugin from '@omni/channel-whatsapp-business';
  * channelRegistry.register(whatsappCloudPlugin);
  * ```
  */
