@@ -25,9 +25,9 @@ import {
   DEFAULT_SERVER_CONFIG,
   type ServerConfig,
   getConfigPath,
-  loadConfig,
+  loadLocalRuntimeConfig,
   loadServerConfig,
-  saveConfig,
+  saveLocalRuntimeConfig,
   saveServerConfig,
 } from '../config.js';
 import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
@@ -134,7 +134,9 @@ function resolveFreshConfig(options: InstallOptions): ResolvedConfig {
  * flag overrides (`--port`, `--database-url`, `--api-key`) change values.
  */
 function resolveReinstallConfig(options: InstallOptions): ResolvedConfig {
-  const cliConfig = loadConfig();
+  // `omni install` provisions the LOCAL server — read/write the `default`
+  // entry, never whichever remote entry happens to be active.
+  const cliConfig = loadLocalRuntimeConfig();
   const serverConfig = loadServerConfig();
 
   let databaseUrl = serverConfig.databaseUrl;
@@ -251,8 +253,8 @@ async function startServices(
 // ----------------------------------------------------------------------------
 
 function writeConfigFile(cfg: ResolvedConfig, useCanonicalPgserve: boolean): void {
-  const existing = loadConfig();
-  saveConfig({
+  const existing = loadLocalRuntimeConfig();
+  saveLocalRuntimeConfig({
     ...existing,
     apiUrl: `http://localhost:${cfg.port}`,
     apiKey: cfg.apiKey,

@@ -40,9 +40,19 @@ describe('streams', () => {
       expect(config.subjects).toEqual(['custom.>']);
     });
 
-    test('SYSTEM stream captures system.>, sync.>, batch-job.>, presence.>, chat.>, and follow_up.> subjects', () => {
+    test('SYSTEM stream captures system/sync/batch-job/presence/chat/follow_up/flow/template/channel subjects', () => {
       const config = STREAM_CONFIGS.SYSTEM;
-      expect(config.subjects).toEqual(['system.>', 'sync.>', 'batch-job.>', 'presence.>', 'chat.>', 'follow_up.>']);
+      expect(config.subjects).toEqual([
+        'system.>',
+        'sync.>',
+        'batch-job.>',
+        'presence.>',
+        'chat.>',
+        'follow_up.>',
+        'flow.>',
+        'template.>',
+        'channel.>',
+      ]);
     });
   });
 

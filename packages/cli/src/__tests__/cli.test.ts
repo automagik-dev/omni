@@ -8,11 +8,19 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'bun';
-import { MOCK_API_KEY, startMockApi, stopMockApi } from './mock-api';
+import {
+  MOCK_API_KEY,
+  type MockApiHandle,
+  clearRecordedRequests,
+  getRecordedRequests,
+  startMockApi,
+  startMockApiInstance,
+  stopMockApi,
+} from './mock-api';
 
 /**
  * Pre-suite guard (#413): fail fast if a prior test run leaked a PM2 god
@@ -1051,6 +1059,395 @@ describe('CLI Integration Tests', () => {
 
       expect(result.exitCode).not.toBe(0);
       expect(result.stderr).toContain('No message type');
+    });
+  });
+});
+
+// ── Multi-server registry tests (wish: multi-server-management, Group 2) ──
+//
+// Fully isolated from the suites above: its own HOME (so its own
+// `~/.omni/config.json` AND `~/.omni/keys/`) and its own two mock servers, so
+// the trust-handshake tests can bind a keypair without leaking signing headers
+// into the single-server suites.
+//
+// The tests inside are ordered as a narrative — `add` seeds the entries that
+// the later `use` / `remove` / handshake cases operate on.
+describe('CLI Multi-Server Tests', () => {
+  let MS_HOME = '';
+  let serverA: MockApiHandle;
+  let serverB: MockApiHandle;
+
+  /** Run the CLI against the multi-server HOME. */
+  async function ms(args: string[], env: Record<string, string> = {}): Promise<CliResult> {
+    const proc = spawn({
+      cmd: ['bun', CLI_PATH, ...args],
+      env: { ...process.env, HOME: MS_HOME, PM2_HOME: join(MS_HOME, '.pm2'), ...env },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+    return { stdout, stderr, exitCode };
+  }
+
+  async function msJson<T>(args: string[]): Promise<T> {
+    const result = await ms([...args, '--json']);
+    if (result.exitCode !== 0) {
+      throw new Error(`CLI failed (${result.exitCode}): ${result.stderr || result.stdout}`);
+    }
+    return JSON.parse(result.stdout) as T;
+  }
+
+  interface ServerRow {
+    name: string;
+    url: string;
+    apiKey: string;
+    active: boolean;
+  }
+
+  function hostJson(): {
+    pubkey: string;
+    hostId: string;
+    boundServers?: Array<{ url: string; hostId: string }>;
+  } {
+    return JSON.parse(readFileSync(join(MS_HOME, '.omni', 'keys', 'host.json'), 'utf-8'));
+  }
+
+  beforeAll(() => {
+    MS_HOME = mkdtempSync(join(tmpdir(), '.omni-multiserver-'));
+    mkdirSync(join(MS_HOME, '.omni'), { recursive: true });
+    serverA = startMockApiInstance();
+    serverB = startMockApiInstance();
+
+    writeFileSync(
+      join(MS_HOME, '.omni', 'config.json'),
+      JSON.stringify(
+        {
+          apiUrl: serverA.url,
+          apiKey: MOCK_API_KEY,
+          format: 'human',
+          servers: {
+            active: 'default',
+            list: { default: { url: serverA.url, apiKey: MOCK_API_KEY } },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+  });
+
+  afterAll(() => {
+    serverA?.close();
+    serverB?.close();
+    if (MS_HOME && existsSync(MS_HOME)) {
+      rmSync(MS_HOME, { recursive: true, force: true });
+    }
+  });
+
+  describe('server add', () => {
+    test('add verifies the target and persists it', async () => {
+      const result = await ms(['server', 'add', 'prod', serverB.url, '--api-key', MOCK_API_KEY]);
+
+      assertSuccess(result, 'server add prod');
+      const rows = await msJson<ServerRow[]>(['server', 'list']);
+      const prod = rows.find((r) => r.name === 'prod');
+      expect(prod).toBeDefined();
+      expect(prod?.url).toBe(serverB.url);
+      // Added, not activated — `--use` / `server use` is the explicit switch.
+      expect(prod?.active).toBe(false);
+    });
+
+    test('add aborts with an unreachable error when the URL does not answer', async () => {
+      const result = await ms(['server', 'add', 'dead', 'http://127.0.0.1:1', '--api-key', MOCK_API_KEY]);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('unreachable');
+      const rows = await msJson<ServerRow[]>(['server', 'list']);
+      expect(rows.find((r) => r.name === 'dead')).toBeUndefined();
+    });
+
+    test('add aborts with an unauthorized error when the key is rejected', async () => {
+      const result = await ms(['server', 'add', 'badkey', serverA.url, '--api-key', 'not-a-real-key']);
+
+      expect(result.exitCode).not.toBe(0);
+      // Distinct from the unreachable path — the server answered, the key did not.
+      expect(result.stderr).toContain('unauthorized');
+      expect(result.stderr).not.toContain('unreachable');
+      const rows = await msJson<ServerRow[]>(['server', 'list']);
+      expect(rows.find((r) => r.name === 'badkey')).toBeUndefined();
+    });
+
+    test('add stores the trimmed name so lookups can reach it', async () => {
+      const result = await ms(['server', 'add', '  padded  ', serverB.url, '--api-key', MOCK_API_KEY]);
+      assertSuccess(result, 'server add "  padded  "');
+
+      const rows = await msJson<ServerRow[]>(['server', 'list']);
+      expect(rows.find((r) => r.name === 'padded')).toBeDefined();
+      expect(rows.find((r) => r.name === '  padded  ')).toBeUndefined();
+
+      assertSuccess(await ms(['server', 'current', '--server', 'padded']), 'target the trimmed entry');
+      await ms(['server', 'remove', 'padded']);
+    });
+
+    test('add --skip-verify persists without probing', async () => {
+      const result = await ms(['server', 'add', 'offline', 'http://127.0.0.1:1', '--skip-verify']);
+
+      assertSuccess(result, 'server add --skip-verify');
+      const rows = await msJson<ServerRow[]>(['server', 'list']);
+      expect(rows.find((r) => r.name === 'offline')?.url).toBe('http://127.0.0.1:1');
+
+      await ms(['server', 'remove', 'offline']);
+    });
+  });
+
+  describe('server list masking', () => {
+    test('list masks API keys in human and JSON output', async () => {
+      const human = await ms(['server', 'list']);
+      assertSuccess(human, 'server list');
+      expect(human.stdout).not.toContain(MOCK_API_KEY);
+
+      const rows = await msJson<ServerRow[]>(['server', 'list']);
+      for (const row of rows) {
+        expect(row.apiKey).not.toBe(MOCK_API_KEY);
+      }
+      expect(rows.find((r) => r.name === 'default')?.apiKey).toBe(`${MOCK_API_KEY.slice(0, 12)}...`);
+    });
+
+    test('list --reveal prints full API keys', async () => {
+      const rows = await msJson<ServerRow[]>(['server', 'list', '--reveal']);
+      expect(rows.find((r) => r.name === 'default')?.apiKey).toBe(MOCK_API_KEY);
+    });
+  });
+
+  describe('--server flag', () => {
+    test('one-shot --server targets an entry without persisting it', async () => {
+      const overridden = await msJson<{ name: string; active: string; overridden: boolean }>([
+        'server',
+        'current',
+        '--server',
+        'prod',
+      ]);
+      expect(overridden.name).toBe('prod');
+      expect(overridden.active).toBe('default');
+      expect(overridden.overridden).toBe(true);
+
+      // The very next invocation is back on the persisted active entry.
+      const after = await msJson<{ name: string; active: string; overridden: boolean }>(['server', 'current']);
+      expect(after.name).toBe('default');
+      expect(after.active).toBe('default');
+      expect(after.overridden).toBe(false);
+    });
+
+    test('--server=<name> form works too', async () => {
+      const current = await msJson<{ name: string }>(['server', 'current', '--server=prod']);
+      expect(current.name).toBe('prod');
+    });
+
+    test('--server routes the request to that server', async () => {
+      clearRecordedRequests();
+      const result = await ms(['instances', 'list', '--server', 'prod']);
+
+      assertSuccess(result, 'instances list --server prod');
+      const origins = getRecordedRequests().map((r) => r.origin);
+      expect(origins).toContain(serverB.url);
+      expect(origins).not.toContain(serverA.url);
+    });
+
+    test('unknown --server exits non-zero listing known entries', async () => {
+      const result = await ms(['--server', 'nope', 'server', 'list']);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("Unknown server 'nope'");
+      expect(result.stderr).toContain('default');
+      expect(result.stderr).toContain('prod');
+    });
+
+    test('--server without a value exits non-zero', async () => {
+      const result = await ms(['server', 'list', '--server']);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('--server requires a server name');
+    });
+
+    test('repeating --server exits non-zero instead of corrupting argv', async () => {
+      const result = await ms(['instances', 'list', '--server', 'prod', '--server', 'default']);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('duplicate --server flag');
+    });
+
+    test('--server with a flag-like value exits non-zero', async () => {
+      const result = await ms(['server', 'list', '--server', '--json']);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('--server requires a server name');
+    });
+  });
+
+  describe('server use / remove / current', () => {
+    test('use switches the persisted active entry', async () => {
+      const result = await ms(['server', 'use', 'prod']);
+      assertSuccess(result, 'server use prod');
+
+      const current = await msJson<{ name: string; active: string }>(['server', 'current']);
+      expect(current.name).toBe('prod');
+      expect(current.active).toBe('prod');
+
+      await ms(['server', 'use', 'default']);
+    });
+
+    test('use with an unknown name exits non-zero listing known entries', async () => {
+      const result = await ms(['server', 'use', 'ghost']);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("Unknown server 'ghost'");
+      expect(result.stderr).toContain('default');
+    });
+
+    test('remove refuses to drop the active entry without --force', async () => {
+      const result = await ms(['server', 'remove', 'default']);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('active server');
+      const rows = await msJson<ServerRow[]>(['server', 'list']);
+      expect(rows.find((r) => r.name === 'default')).toBeDefined();
+    });
+
+    test('remove --force drops the active entry and falls back to another', async () => {
+      await ms(['server', 'add', 'scratch', serverB.url, '--api-key', MOCK_API_KEY, '--use']);
+      expect((await msJson<{ active: string }>(['server', 'current'])).active).toBe('scratch');
+
+      const refused = await ms(['server', 'remove', 'scratch']);
+      expect(refused.exitCode).not.toBe(0);
+
+      const forced = await ms(['server', 'remove', 'scratch', '--force']);
+      assertSuccess(forced, 'server remove --force');
+
+      const current = await msJson<{ active: string }>(['server', 'current']);
+      expect(current.active).toBe('default');
+      const rows = await msJson<ServerRow[]>(['server', 'list']);
+      expect(rows.find((r) => r.name === 'scratch')).toBeUndefined();
+    });
+  });
+
+  describe('auth scoping', () => {
+    test('a keyless entry errors with the --server-scoped login hint', async () => {
+      await ms(['server', 'add', 'keyless', serverB.url]);
+
+      const result = await ms(['instances', 'list', '--server', 'keyless']);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('keyless');
+      expect(result.stderr).toContain('omni auth login --server keyless');
+    });
+
+    test('auth login --server writes the key into that entry only', async () => {
+      const result = await ms(['auth', 'login', '--server', 'keyless', '--api-key', MOCK_API_KEY]);
+      assertSuccess(result, 'auth login --server keyless');
+
+      const rows = await msJson<ServerRow[]>(['server', 'list', '--reveal']);
+      expect(rows.find((r) => r.name === 'keyless')?.apiKey).toBe(MOCK_API_KEY);
+      // Untargeted entries keep whatever they had.
+      expect(rows.find((r) => r.name === 'default')?.apiKey).toBe(MOCK_API_KEY);
+      expect(rows.find((r) => r.name === 'keyless')?.url).toBe(serverB.url);
+    });
+
+    test('auth logout --server clears only that entry key', async () => {
+      const result = await ms(['auth', 'logout', '--server', 'keyless']);
+      assertSuccess(result, 'auth logout --server keyless');
+
+      const rows = await msJson<ServerRow[]>(['server', 'list', '--reveal']);
+      expect(rows.find((r) => r.name === 'keyless')?.apiKey).toBe('-');
+      expect(rows.find((r) => r.name === 'default')?.apiKey).toBe(MOCK_API_KEY);
+      expect(rows.find((r) => r.name === 'prod')?.apiKey).toBe(MOCK_API_KEY);
+    });
+
+    test('auth status names the targeted server', async () => {
+      const result = await ms(['auth', 'status']);
+      assertSuccess(result, 'auth status');
+      expect(result.stdout).toContain('authenticated');
+      expect(result.stdout).toContain('default');
+    });
+  });
+
+  describe('trust handshake server binding', () => {
+    test('handshake binds the targeted server only', async () => {
+      const result = await ms(['trust', 'handshake']);
+      assertSuccess(result, 'trust handshake');
+
+      const meta = hostJson();
+      expect(meta.boundServers).toEqual([{ url: serverA.url, hostId: meta.hostId }]);
+    });
+
+    test('requests to a non-bound server are sent unsigned and still succeed', async () => {
+      clearRecordedRequests();
+      const result = await ms(['instances', 'list', '--server', 'prod']);
+
+      assertSuccess(result, 'instances list --server prod (unsigned)');
+      const toB = getRecordedRequests().filter((r) => r.origin === serverB.url);
+      expect(toB.length).toBeGreaterThan(0);
+      expect(toB.every((r) => r.signed === false)).toBe(true);
+    });
+
+    test('requests to the bound server stay signed', async () => {
+      clearRecordedRequests();
+      const result = await ms(['instances', 'list']);
+
+      assertSuccess(result, 'instances list (signed)');
+      const toA = getRecordedRequests().filter((r) => r.origin === serverA.url);
+      expect(toA.length).toBeGreaterThan(0);
+      expect(toA.every((r) => r.signed === true)).toBe(true);
+      expect(toA[0].hostId).toBe(hostJson().hostId);
+    });
+
+    test('re-handshaking against another server binds it without rotating', async () => {
+      const before = hostJson();
+
+      const result = await ms(['trust', 'handshake', '--server', 'prod']);
+      assertSuccess(result, 'trust handshake --server prod');
+      expect(result.stdout).toContain('no rotation');
+
+      const after = hostJson();
+      expect(after.pubkey).toBe(before.pubkey);
+      // The top-level id belongs to the FIRST server (A) and must survive
+      // binding B: stamping B's id here made every later request to A carry an
+      // id A never issued → 401 unknown host.
+      expect(after.hostId).toBe(before.hostId);
+
+      const bindings = after.boundServers ?? [];
+      expect(bindings.map((b) => b.url)).toEqual([serverA.url, serverB.url]);
+      // Each server issues its own row, so the ids differ.
+      const idForA = bindings[0].hostId;
+      const idForB = bindings[1].hostId;
+      expect(idForA).toBe(before.hostId);
+      expect(idForB).not.toBe(idForA);
+
+      // Both servers now sign — binding B did not unbind A — and each request
+      // carries the id THAT server issued.
+      clearRecordedRequests();
+      assertSuccess(await ms(['instances', 'list', '--server', 'prod']), 'signed against prod');
+      assertSuccess(await ms(['instances', 'list']), 'signed against default');
+      const recorded = getRecordedRequests().filter((r) => r.path === '/api/v2/instances');
+      expect(recorded.length).toBeGreaterThanOrEqual(2);
+      expect(recorded.every((r) => r.signed === true)).toBe(true);
+
+      const toA = recorded.filter((r) => r.origin === serverA.url);
+      const toB = recorded.filter((r) => r.origin === serverB.url);
+      expect(toA.length).toBeGreaterThan(0);
+      expect(toB.length).toBeGreaterThan(0);
+      expect(toA.every((r) => r.hostId === idForA)).toBe(true);
+      expect(toB.every((r) => r.hostId === idForB)).toBe(true);
+    });
+
+    test('an already-bound handshake reports the bound servers', async () => {
+      const result = await ms(['trust', 'handshake']);
+
+      assertSuccess(result, 'trust handshake (already bound)');
+      expect(result.stdout).toContain('Already handshook');
+      expect(result.stdout).toContain(serverA.url);
+      expect(result.stdout).toContain(serverB.url);
+      expect(result.stdout).toContain('UNSIGNED');
     });
   });
 });

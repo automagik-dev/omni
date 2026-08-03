@@ -24,10 +24,15 @@
  *      when the stored value is the legacy 5432 default.
  *   4. Always include `OMNI_PACKAGES_DIR` (drift-fix between install.ts and
  *      restart.ts) and honor the dynamic `nodeEnv` / `logLevel` from config.
+ *   5. NEVER derive `OMNI_API_KEY` from the *active* server entry. The
+ *      multi-server registry (`config.servers`) lets an operator point the CLI
+ *      at a remote Omni API; the locally supervised process must keep using the
+ *      LOCAL (`default`) entry, so `cliConfig` must always come from
+ *      `loadLocalRuntimeConfig()` — which is also this module's default.
  */
 
 import { join } from 'node:path';
-import type { Config, ServerConfig } from './config.js';
+import { type Config, type ServerConfig, loadLocalRuntimeConfig } from './config.js';
 import {
   CANONICAL_PG_PORT,
   buildDatabaseUrlForTransport,
@@ -212,8 +217,12 @@ function applyScopedCredentials(url: string, creds: { username: string; password
  * `useCanonicalPgserve: false` triggers a one-shot warning surfaced by
  * `omni doctor --fix` (which rewrites the config). The env keys remain
  * in {@link RuntimeEnv} until a future major bumps the env contract.
+ *
+ * `cliConfig` defaults to {@link loadLocalRuntimeConfig} — the LOCAL
+ * (`default`) server entry — so the local process can never inherit a remote
+ * server's API key even if a caller forgets to pass one (see rule 5 above).
  */
-export function buildRuntimeEnv(serverConfig: ServerConfig, cliConfig: Config): RuntimeEnv {
+export function buildRuntimeEnv(serverConfig: ServerConfig, cliConfig: Config = loadLocalRuntimeConfig()): RuntimeEnv {
   const pgservePort = resolvePgservePort(serverConfig);
   // When the canonical Unix socket is live, also publish PGHOST/PGPORT so
   // postgres.js routes through the socket. See PGHOST doc on RuntimeEnv

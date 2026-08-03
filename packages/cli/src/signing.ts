@@ -26,17 +26,54 @@
 import { type KeyObject, createHash, createPrivateKey, sign as edSign, generateKeyPairSync } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getConfigDir } from './config.js';
+import { getConfigDir, loadLocalRuntimeConfig } from './config.js';
 
 const KEY_FILENAME_PRIV = 'omni-cli.ed25519';
 const KEY_FILENAME_PUB = 'omni-cli.ed25519.pub';
 const HOST_JSON_FILENAME = 'host.json';
 
+/**
+ * One server this keypair is registered with, and the host id THAT server
+ * issued for it.
+ *
+ * The id is per-server: each omni instance mints its own row (its own UUID)
+ * when the pubkey is handshaken there. Carrying a single id across servers
+ * makes every request to the other servers 401 "unknown host", which is why
+ * bindings are (url, hostId) pairs rather than bare urls.
+ */
+export interface ServerBinding {
+  url: string;
+  hostId: string;
+}
+
 export interface OmniHostMetadata {
+  /**
+   * The host id issued by the FIRST server this keypair was registered with.
+   * Kept as the legacy/default id (older CLIs read only this field, and
+   * {@link loadSigningContext} still uses it); never overwritten by binding an
+   * additional server — only a `--rotate` handshake replaces it.
+   */
   hostId: string;
   pubkey: string;
   hostname: string;
   registeredAt: string;
+  /**
+   * Servers this keypair is registered with, each with the host id that server
+   * issued. URLs are normalized by {@link normalizeServerUrl}.
+   *
+   * A handshake registers the pubkey with ONE server; other servers in the
+   * registry have never seen it, so signing headers sent to them are at best
+   * ignored and at worst rejected. Requests therefore carry X-Genie-* headers
+   * only for bound servers — everything else goes bearer-only.
+   *
+   * Legacy shapes are coerced on load (see {@link loadHostMetadata}):
+   *   - ABSENT (host.json written before multi-server support) → bound to the
+   *     local `default` entry, the only server those installs could have
+   *     handshaken against, with the top-level `hostId`.
+   *   - `string[]` (written before per-server ids) → each url paired with the
+   *     top-level `hostId`.
+   */
+  boundServers?: ServerBinding[];
 }
 
 export interface SigningHeaders {
@@ -106,26 +143,115 @@ export function signRequest(opts: {
 }
 
 /**
+ * Canonical form of a server base URL for binding comparisons: trimmed, with
+ * trailing slashes removed. Deliberately conservative — host casing and port
+ * are left alone so `localhost` and `127.0.0.1` stay distinct entries.
+ */
+export function normalizeServerUrl(url: string): string {
+  return url.trim().replace(/\/+$/, '');
+}
+
+/**
+ * Read `~/.omni/keys/host.json`, or null when this CLI has never handshaken.
+ *
+ * Requires the private key to exist too: metadata without a key cannot sign,
+ * and treating that state as "handshook" would make every caller fail later
+ * with a confusing crypto error instead of falling back to bearer-only.
+ */
+export function loadHostMetadata(): OmniHostMetadata | null {
+  const hostJsonFile = hostJsonPath();
+  if (!existsSync(hostJsonFile) || !existsSync(privateKeyPath())) {
+    return null;
+  }
+  const raw = JSON.parse(readFileSync(hostJsonFile, 'utf-8')) as Omit<OmniHostMetadata, 'boundServers'> & {
+    boundServers?: Array<string | ServerBinding>;
+  };
+  return { ...raw, boundServers: coerceBindings(raw.hostId, raw.boundServers) };
+}
+
+/**
+ * Normalize the on-disk `boundServers` value into (url, hostId) pairs.
+ *
+ * Both legacy shapes predate per-server ids, so they can only be attributed to
+ * the top-level `hostId` — which is exactly the id those installs were signing
+ * with, so the coercion is behavior-preserving.
+ */
+function coerceBindings(hostId: string, raw: Array<string | ServerBinding> | undefined): ServerBinding[] {
+  if (!raw || raw.length === 0) {
+    // Absent: legacy install, bound to the LOCAL `default` entry — never the
+    // active one, since a legacy handshake could only have targeted the local API.
+    return [{ url: normalizeServerUrl(loadLocalRuntimeConfig().apiUrl ?? 'http://localhost:8882'), hostId }];
+  }
+  return raw.map((entry) =>
+    typeof entry === 'string'
+      ? { url: normalizeServerUrl(entry), hostId }
+      : { url: normalizeServerUrl(entry.url), hostId: entry.hostId },
+  );
+}
+
+/** Bindings of loaded metadata — always populated by {@link loadHostMetadata}. */
+export function boundServerBindings(meta: OmniHostMetadata): ServerBinding[] {
+  return coerceBindings(meta.hostId, meta.boundServers);
+}
+
+/** Base URLs of the servers this keypair is registered with. */
+export function boundServerUrls(meta: OmniHostMetadata): string[] {
+  return boundServerBindings(meta).map((b) => b.url);
+}
+
+/** The binding for `url`, or undefined when that server has never seen this key. */
+export function bindingForServer(meta: OmniHostMetadata, url: string): ServerBinding | undefined {
+  const normalized = normalizeServerUrl(url);
+  return boundServerBindings(meta).find((b) => b.url === normalized);
+}
+
+/**
+ * Signing context for a specific target server, or null when requests to that
+ * server must go out unsigned (no keypair at all, or a keypair the target
+ * server has never seen).
+ *
+ * Uses the host id THAT server issued — not the top-level one, which belongs to
+ * whichever server was handshaken first.
+ */
+export function loadSigningContextForServer(url: string): SigningContext | null {
+  const meta = loadHostMetadata();
+  if (!meta) {
+    return null;
+  }
+  const binding = bindingForServer(meta, url);
+  if (!binding) {
+    return null;
+  }
+  return buildSigningContext(binding.hostId);
+}
+
+/**
  * Load the operator's signing context from `~/.omni/keys/`. Returns null
  * when no keypair is present (the CLI then continues bearer-only — same
  * behavior as before this module existed).
+ *
+ * Ignores server binding — callers that put headers on the wire should use
+ * {@link loadSigningContextForServer} instead.
  *
  * Errors loading an existing keypair (file unreadable, malformed JSON,
  * etc.) bubble up — silently falling back to bearer would mask a key
  * file that was tampered with or partially written.
  */
 export function loadSigningContext(): SigningContext | null {
-  const hostJsonFile = hostJsonPath();
-  const privKeyFile = privateKeyPath();
-  if (!existsSync(hostJsonFile) || !existsSync(privKeyFile)) {
+  const meta = loadHostMetadata();
+  if (!meta) {
     return null;
   }
-  const meta = JSON.parse(readFileSync(hostJsonFile, 'utf-8')) as OmniHostMetadata;
-  const privKeyBuf = readFileSync(privKeyFile);
+  return buildSigningContext(meta.hostId);
+}
+
+/** Read the private key off disk and bind it to one host id. */
+function buildSigningContext(hostId: string): SigningContext {
+  const privKeyBuf = readFileSync(privateKeyPath());
   const privateKey = createPrivateKey({ key: privKeyBuf });
   return {
-    hostId: meta.hostId,
-    signRequest: (method, path, body) => signRequest({ hostId: meta.hostId, privateKey, method, path, body }),
+    hostId,
+    signRequest: (method, path, body) => signRequest({ hostId, privateKey, method, path, body }),
   };
 }
 

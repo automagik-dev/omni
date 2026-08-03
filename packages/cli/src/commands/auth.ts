@@ -9,7 +9,17 @@
 
 import { createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
-import { deleteConfigValue, getConfigDir, getConfigPath, loadConfig, loadServerConfig, saveConfig } from '../config.js';
+import {
+  deleteConfigValue,
+  getConfigDir,
+  getConfigPath,
+  getTargetServerName,
+  loadConfig,
+  loadLocalRuntimeConfig,
+  loadServerConfig,
+  saveConfig,
+  saveLocalRuntimeConfig,
+} from '../config.js';
 import { credentialStatusFields } from '../lib/credential-status.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
@@ -100,7 +110,9 @@ async function restartApiWithNewKey(newKey: string): Promise<{ success: boolean;
     // newly generated key. The other fields (DATABASE_URL, PGSERVE_DATA, etc.)
     // come from `~/.omni/config.json`, NOT from the calling shell.
     const serverConfig = loadServerConfig();
-    const cliConfig = loadConfig();
+    // `auth recover` repairs the LOCAL runtime — read the `default` entry, not
+    // whichever remote entry is active (see runtime-env.ts rule 5).
+    const cliConfig = loadLocalRuntimeConfig();
     const runtimeEnv = { ...buildRuntimeEnv(serverConfig, cliConfig), OMNI_API_KEY: newKey };
 
     // Persist the key via `pm2 set` and bounce the process. We intentionally
@@ -134,14 +146,19 @@ async function validateKey(apiUrl: string, apiKey: string): Promise<boolean> {
 // HELPERS - OUTPUT
 // ============================================================================
 
-/** Update CLI config with a new API key (and optional URL). */
-function updateConfig(apiKey: string, apiUrl?: string): void {
-  const config = loadConfig();
+/**
+ * Update the LOCAL server entry with a recovered/rotated API key (and optional
+ * URL). Only used by `auth recover`, which repairs the locally supervised
+ * omni-api — the key it recovers comes from the local PM2 process, so it must
+ * land in the `default` entry regardless of the active server.
+ */
+function updateLocalConfig(apiKey: string, apiUrl?: string): void {
+  const config = loadLocalRuntimeConfig();
   config.apiKey = apiKey;
   if (apiUrl) {
     config.apiUrl = apiUrl;
   }
-  saveConfig(config);
+  saveLocalRuntimeConfig(config);
 }
 
 /** Print manual recovery instructions when automation fails. */
@@ -191,7 +208,7 @@ async function tryRecoverFromPm2Env(apiUrl: string, apiUrlOverride?: string): Pr
     return false;
   }
 
-  updateConfig(found.key, apiUrlOverride);
+  updateLocalConfig(found.key, apiUrlOverride);
   output.success('API key recovered successfully!', {
     keyPrefix: maskApiKey(found.key),
     configPath: getConfigPath(),
@@ -210,7 +227,7 @@ function handleRotationFailure(newKey: string, processName: string | null, apiUr
     output.warn(`Failed to restart ${processName} with new key.`);
   }
   printManualInstructions(newKey);
-  updateConfig(newKey, apiUrlOverride);
+  updateLocalConfig(newKey, apiUrlOverride);
   output.warn(`Config updated with new key (${maskApiKey(newKey)}) but API restart failed.`);
   output.raw('  After fixing the DB and restarting the API, run: omni status');
   output.raw('');
@@ -237,7 +254,7 @@ async function handleRotationSuccess(
       output.raw(`  Attempt ${attempt + 1} failed, retrying...`);
     }
   }
-  updateConfig(newKey, apiUrlOverride);
+  updateLocalConfig(newKey, apiUrlOverride);
 
   if (valid) {
     output.success('API key rotated and recovered successfully!', {
@@ -294,11 +311,24 @@ export function createAuthCommand(): Command {
   // omni auth login
   auth
     .command('login')
-    .description('Save API credentials')
+    .description('Save API credentials into the targeted server entry')
     .requiredOption('--api-key <key>', 'API key for authentication')
-    .option('--api-url <url>', 'API base URL (default: http://localhost:8882)')
+    .option('--api-url <url>', 'API base URL (default: the targeted server entry URL)')
+    .addHelpText(
+      'after',
+      `
+Credentials are written to the server entry this command targets — the active
+one, or the entry named by the global flag:
+  omni auth login --server prod --api-key <key>
+`,
+    )
     .action(async (options: { apiKey: string; apiUrl?: string }) => {
+      // `loadConfig()` has already resolved the targeted entry (active, or the
+      // one named by the global `--server` flag) into apiUrl/apiKey, and
+      // `saveConfig()` writes back into that same entry — so login is
+      // multi-server aware without any explicit plumbing here.
       const config = loadConfig();
+      const serverName = getTargetServerName();
       config.apiKey = options.apiKey;
 
       if (options.apiUrl) {
@@ -322,7 +352,8 @@ export function createAuthCommand(): Command {
         // Save config
         saveConfig(config);
 
-        output.success('Logged in successfully', {
+        output.success(`Logged in successfully (server: ${serverName})`, {
+          server: serverName,
           apiUrl: config.apiUrl,
           keyName: result.keyName,
           keyPrefix: result.keyPrefix,
@@ -341,9 +372,14 @@ export function createAuthCommand(): Command {
     .description('Show current authentication status')
     .action(async () => {
       const config = loadConfig();
+      const serverName = getTargetServerName();
 
       if (!config.apiKey) {
-        output.error('Not logged in. Run: omni auth login --api-key <key>', undefined, 2);
+        output.error(
+          `Not logged in for server "${serverName}". Run: omni auth login --server ${serverName} --api-key <key>`,
+          undefined,
+          2,
+        );
       }
 
       // Type guard: output.error is never, so apiKey is guaranteed here
@@ -363,6 +399,7 @@ export function createAuthCommand(): Command {
 
         output.data({
           status: 'authenticated',
+          server: serverName,
           apiUrl: config.apiUrl,
           keyName: result.keyName,
           keyPrefix: result.keyPrefix,
@@ -380,10 +417,16 @@ export function createAuthCommand(): Command {
   // omni auth logout
   auth
     .command('logout')
-    .description('Clear stored credentials')
+    .description('Clear stored credentials for the targeted server entry')
     .action(() => {
+      // Scoped by construction: `deleteConfigValue` round-trips through
+      // loadConfig/saveConfig, both of which resolve the SAME targeted entry —
+      // every other entry keeps its key.
+      const serverName = getTargetServerName();
       deleteConfigValue('apiKey');
-      output.success('Logged out successfully');
+      output.success(`Logged out of server "${serverName}" (other server entries keep their keys)`, {
+        server: serverName,
+      });
     });
 
   // omni auth recover
@@ -393,7 +436,7 @@ export function createAuthCommand(): Command {
     .option('--api-url <url>', 'API base URL (default: http://localhost:8882)')
     .option('--rotate', 'Generate a new key instead of recovering the existing one')
     .action(async (options: { apiUrl?: string; rotate?: boolean }) => {
-      const config = loadConfig();
+      const config = loadLocalRuntimeConfig();
       const apiUrl = options.apiUrl ?? config.apiUrl ?? 'http://localhost:8882';
       const shouldRotate = options.rotate === true;
 

@@ -56,6 +56,20 @@ export type {
 export { sendFlow } from './senders/flow';
 export type { SendFlowResult } from './senders/flow';
 
+// WhatsApp Flows data-exchange endpoint pieces — resolver registry (register
+// screen logic per flow), token helpers, and crypto/keygen used by the keys
+// REST route (`POST /instances/:id/whatsapp-flows/keys`).
+export {
+  FlowResolverRegistry,
+  buildFlowToken,
+  parseFlowToken,
+  errorScreenResponse,
+} from './flows/resolver';
+export { createDemoFlowResolver } from './flows/demo-resolver';
+export type { FlowResolver, FlowResolveContext, FlowScreenResponse } from './flows/resolver';
+export { generateFlowKeyPair } from './utils/flow-crypto';
+export type { MetaFlowValidationError } from './client';
+
 // Embedded Signup OAuth helpers — pure functions consumed by the REST surface
 // at `packages/api/src/routes/v2/whatsapp-cloud.ts` (Group 5).
 export {

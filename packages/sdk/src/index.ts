@@ -155,5 +155,15 @@ export type {
 // Errors
 export { OmniApiError, OmniConfigError, type ApiErrorDetails } from './errors';
 
+// WhatsApp Flow JSON builder (hand-authored — not OpenAPI-generated)
+export {
+  flow,
+  FlowBuilder,
+  ScreenBuilder,
+  FormBuilder,
+  FlowBuilderError,
+} from './flow-builder';
+export type { FlowOptions, ScreenOptions, DataSourceItem, FlowComponent } from './flow-builder';
+
 // Generated types (for advanced usage)
 export type { paths, components, operations } from './types.generated';

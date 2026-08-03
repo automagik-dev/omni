@@ -122,8 +122,16 @@ export const OutgoingMessageSchema = z.object({
           text: z.string(),
           data: z.string().optional(),
           url: z.string().url().optional(),
+          description: z.string().optional(),
         }),
       )
+      .optional(),
+    list: z
+      .object({
+        sectionTitle: z.string().optional(),
+        buttonLabel: z.string().optional(),
+        forceList: z.boolean().optional(),
+      })
       .optional(),
     poll: z
       .object({

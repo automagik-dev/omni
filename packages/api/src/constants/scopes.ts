@@ -354,7 +354,13 @@ export const SCOPE_MAP: Record<string, string> = {
   // --- whatsapp-flows (mounted at root: /instances/:id/whatsapp-flows/...) ---
   'GET /instances/:id/whatsapp-flows': 'instances:read',
   'POST /instances/:id/whatsapp-flows': 'instances:write',
+  'GET /instances/:id/whatsapp-flows/keys': 'instances:read',
+  'POST /instances/:id/whatsapp-flows/keys': 'instances:write',
+  'GET /instances/:id/whatsapp-flows/:flowId': 'instances:read',
+  'PUT /instances/:id/whatsapp-flows/:flowId': 'instances:write',
+  'DELETE /instances/:id/whatsapp-flows/:flowId': 'instances:write',
   'POST /instances/:id/whatsapp-flows/:flowId/publish': 'instances:write',
+  'POST /instances/:id/whatsapp-flows/:flowId/deprecate': 'instances:write',
   'GET /instances/:id/whatsapp-flows/:flowId/preview': 'instances:read',
   'POST /instances/:id/whatsapp-flows/send': 'instances:write',
 

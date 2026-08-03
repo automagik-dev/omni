@@ -1,67 +1,129 @@
 /**
  * SDK Client singleton for UI
  *
- * Creates and manages the Omni SDK client instance.
+ * Creates and manages the Omni SDK client instance for the *active* server in
+ * the registry (see `@/lib/servers`). The singleton is keyed by the active
+ * entry, so switching servers can never serve a cached client pointed at the
+ * previous host or holding the previous key.
  */
 
 import { type OmniClient, createOmniClient } from '@omni/sdk';
+import {
+  type ServerEntry,
+  clearActiveApiKey,
+  getActiveServer,
+  listServers,
+  resolveBaseUrl,
+  setActiveApiKey,
+  setActiveServerId,
+} from './servers';
 
 let client: OmniClient | null = null;
+let clientSignature: string | null = null;
 
-const API_KEY_STORAGE_KEY = 'omni-api-key';
+/** Identity of the connection a cached client was built for. */
+function signatureOf(entry: ServerEntry, baseUrl: string): string {
+  return `${entry.id}\u0000${baseUrl}\u0000${entry.apiKey ?? ''}`;
+}
 
 /**
- * Get the API key from storage
+ * Drop the cached client. The next `getClient()` rebuilds it from the active
+ * registry entry.
+ */
+export function resetClient(): void {
+  client = null;
+  clientSignature = null;
+}
+
+/**
+ * Get the API key of the active server
  */
 export function getApiKey(): string | null {
-  return localStorage.getItem(API_KEY_STORAGE_KEY);
+  return getActiveServer()?.apiKey ?? null;
 }
 
 /**
- * Set the API key in storage
+ * Store the API key on the active server (creating the default entry if the
+ * registry is still empty)
  */
 export function setApiKey(apiKey: string): void {
-  localStorage.setItem(API_KEY_STORAGE_KEY, apiKey);
-  client = null; // Reset client to recreate with new key
+  setActiveApiKey(apiKey);
+  resetClient();
 }
 
 /**
- * Clear the API key and reset the client
+ * Clear the API key of the active server and reset the client.
+ * The server entry itself is retained.
  */
 export function clearApiKey(): void {
-  localStorage.removeItem(API_KEY_STORAGE_KEY);
-  client = null;
+  clearActiveApiKey();
+  resetClient();
 }
 
 /**
- * Check if the user is authenticated (has an API key)
+ * Check if the user is authenticated (the active server has an API key)
  */
 export function isAuthenticated(): boolean {
   return !!getApiKey();
 }
 
 /**
- * Get or create the Omni SDK client
+ * Base URL of the active server.
+ *
+ * For migrated / same-origin entries this resolves lazily:
+ * in dev, Vite proxies /api to the API server; in prod the API serves the UI on
+ * the same origin. The SDK appends /api/v2, so this is an origin only.
+ */
+export function getBaseUrl(): string {
+  return resolveBaseUrl(getActiveServer());
+}
+
+/**
+ * Switch the dashboard to another registered server.
+ *
+ * Resets the SDK singleton and clears the query cache so no data from the
+ * previous server survives the switch — the same cache discipline as logout in
+ * `useAuth`. `queryClient` is REQUIRED: an optional cache wipe is a cache wipe
+ * that eventually gets forgotten at a call site, and the failure mode (one
+ * server's chats rendered under another server's key) is silent.
+ *
+ * Unknown ids are a no-op: pointing the registry at an id it does not contain
+ * would leave `getActiveServerId()` dangling, so a stale switcher entry or a
+ * concurrent removal cannot desync the pointer from the registry.
+ *
+ * @returns `true` when the active server changed, `false` for an unknown id.
+ */
+export function switchServer(id: string, queryClient: { clear: () => void }): boolean {
+  if (!listServers().some((server) => server.id === id)) {
+    return false;
+  }
+
+  setActiveServerId(id);
+  resetClient();
+  queryClient.clear();
+  return true;
+}
+
+/**
+ * Get or create the Omni SDK client for the active server
  *
  * @throws Error if not authenticated
  */
 export function getClient(): OmniClient {
-  const apiKey = getApiKey();
-  if (!apiKey) {
+  const entry = getActiveServer();
+  if (!entry?.apiKey) {
     throw new Error('Not authenticated');
   }
 
-  if (!client) {
-    // In dev, Vite proxies /api to the API server (localhost:5173/api -> localhost:8882/api)
-    // In prod, the API serves the UI and /api/v2 is on the same origin
-    // SDK appends /api/v2 to baseUrl, so baseUrl should be origin only (empty for same-origin)
-    // Using window.location.origin as fallback since SDK requires non-empty baseUrl
-    const baseUrl = import.meta.env.VITE_API_URL || window.location.origin;
+  const baseUrl = resolveBaseUrl(entry);
+  const signature = signatureOf(entry, baseUrl);
 
+  if (!client || clientSignature !== signature) {
     client = createOmniClient({
       baseUrl,
-      apiKey,
+      apiKey: entry.apiKey,
     });
+    clientSignature = signature;
   }
 
   return client;
@@ -79,23 +141,22 @@ export function getClientOrNull(): OmniClient | null {
 }
 
 /**
- * Make an authenticated API fetch call.
+ * Make an authenticated API fetch call against the active server.
  * Used for endpoints not yet in the auto-generated SDK.
  */
 export async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
-  const apiKey = getApiKey();
-  if (!apiKey) {
+  const entry = getActiveServer();
+  if (!entry?.apiKey) {
     throw new Error('Not authenticated');
   }
 
-  const baseUrl = import.meta.env.VITE_API_URL || window.location.origin;
-  const url = `${baseUrl}/api/v2${path}`;
+  const url = `${resolveBaseUrl(entry)}/api/v2${path}`;
 
   return fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
+      'x-api-key': entry.apiKey,
       ...options?.headers,
     },
   });

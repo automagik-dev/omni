@@ -24,6 +24,7 @@ import type {
   SendResult,
 } from '@omni/channel-sdk';
 import type { Logger } from '@omni/core';
+import { markdownToWhatsApp } from '@omni/core';
 import type { EventPayloadMap } from '@omni/core/events';
 import { WhatsAppFlowSendSchema } from '@omni/core/schemas';
 import type { MetaInboundMessage, MetaTemplateStatusUpdate, MetaWebhookStatusEntry } from '@omni/core/schemas';
@@ -31,6 +32,8 @@ import type { ChannelType, ContentType } from '@omni/core/types';
 
 import { WHATSAPP_CLOUD_CAPABILITIES } from './capabilities';
 import { MetaWhatsAppClient } from './client';
+import { FlowResolverRegistry } from './flows/resolver';
+import { handleFlowDataRequest } from './handlers/flow-data';
 import { handleMetaWebhook } from './handlers/webhook';
 import {
   type SendTemplateButton,
@@ -336,6 +339,35 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     }
 
     return handleMetaWebhook(request, this, appSecret, verifyToken);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // WhatsApp Flows data-exchange endpoint
+  // ─────────────────────────────────────────────────────────────
+
+  /** Screen resolvers for endpoint-backed flows (see flows/resolver.ts). */
+  readonly flowResolvers = new FlowResolverRegistry();
+
+  /**
+   * Handle one encrypted data-exchange request for `instanceId`. The caller
+   * (API public route) owns instance lookup and private-key unsealing — this
+   * method owns signature verification, crypto and screen resolution.
+   */
+  async handleFlowData(request: Request, opts: { instanceId: string; privateKeyPem: string }): Promise<Response> {
+    return handleFlowDataRequest(request, {
+      instanceId: opts.instanceId,
+      channelType: this.id,
+      privateKeyPem: opts.privateKeyPem,
+      appSecret: process.env.META_APP_SECRET ?? '',
+      registry: this.flowResolvers,
+      logger: this.logger,
+      publishEvent: (payload) =>
+        this.eventBus.publish('flow.data_exchange', payload, {
+          instanceId: opts.instanceId,
+          channelType: this.id,
+          source: `channel:${this.id}`,
+        }),
+    });
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -942,10 +974,28 @@ async function dispatchOutboundText(
   logger?: Logger,
 ): Promise<MetaSendResponse> {
   const { content, to, replyTo } = message;
+
+  // Markdown → sintaxe do WhatsApp, igual ao canal baileys. Sem isto o
+  // `**negrito**` do agente chegava CRU e o parser do WhatsApp casava os
+  // asteriscos errados: "**a**, **b**, **c**" virava "*a, **b, **c*" no
+  // aparelho (medido em 2026-08-01). O canal já recebe `messageFormatMode`
+  // na instância — só não o honrava aqui, ao contrário do baileys.
+  const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+  const text = content.text ?? '';
+  const formatted = formatMode === 'passthrough' ? text : markdownToWhatsApp(text);
+
   if (!content.buttons?.length) {
-    return sendText(client, to, content.text ?? '', replyTo);
+    return sendText(client, to, formatted, replyTo);
   }
-  const { response, droppedRows } = await sendInteractive(client, to, content.text ?? '', content.buttons, replyTo);
+  const { response, droppedRows } = await sendInteractive(
+    client,
+    to,
+    formatted,
+    content.buttons,
+    replyTo,
+    content.list?.buttonLabel,
+    { sectionTitle: content.list?.sectionTitle, forceList: content.list?.forceList },
+  );
   if (droppedRows > 0) {
     logger?.warn('[whatsapp-cloud] interactive list capped at 10 rows — extra buttons dropped', { to, droppedRows });
   }

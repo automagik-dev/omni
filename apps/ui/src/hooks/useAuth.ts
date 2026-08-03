@@ -23,7 +23,8 @@ export function useAuth() {
   // Login mutation
   const loginMutation = useMutation({
     mutationFn: async (apiKey: string) => {
-      // Set the key first
+      // Store the key on the active server entry first (creating the default
+      // same-origin entry when the registry is still empty)
       setApiKey(apiKey);
       // Then validate it
       const result = await getClient().auth.validate();
@@ -42,7 +43,9 @@ export function useAuth() {
     },
   });
 
-  // Logout function
+  // Logout: drops the active server's key (the entry itself is kept) and wipes
+  // the cache so no data survives into the next session. Single logout path for
+  // the whole app — the sidebar calls this too.
   const logout = () => {
     clearApiKey();
     queryClient.clear();

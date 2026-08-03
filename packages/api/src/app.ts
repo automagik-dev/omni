@@ -5,14 +5,17 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ChannelRegistry } from '@omni/channel-sdk';
+import type { WhatsAppCloudPlugin } from '@omni/channel-whatsapp-cloud';
 import { type EventBus, createLogger } from '@omni/core';
-import type { Database, Instance } from '@omni/db';
+import { type Database, type Instance, whatsappFlowKeys } from '@omni/db';
+import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { serveStatic } from 'hono/bun';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { timing } from 'hono/timing';
+import { openCredentialField } from './tenancy/sealed-credentials';
 
 const httpLog = createLogger('http');
 
@@ -350,6 +353,53 @@ export function createApp(
     }
 
     return plugin.handleWebhook(c.req.raw);
+  });
+
+  // Public WhatsApp Flows data-exchange endpoint — auth-exempt sibling of the
+  // webhook above. Authenticated by X-Hub-Signature-256 + payload encryption
+  // (only the instance's registered private key can decrypt). `:instanceId`
+  // selects the keypair; the whatsapp-flows routes set this URL as the flow's
+  // `endpoint_uri` when created/updated with `dynamic: true`.
+  //
+  // Instance lookup + private-key unsealing happen HERE (the API owns DB and
+  // sealing); signature/crypto/screen-resolution happen in the plugin
+  // (`handleFlowData` → handlers/flow-data.ts). Status codes are part of
+  // Meta's contract: 404 unknown instance, 421 undecryptable (client
+  // re-fetches the public key), 427 bad flow token, 432 bad signature.
+  app.post('/api/v2/channels/whatsapp-cloud/flows/data/:instanceId', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('whatsapp-cloud') as WhatsAppCloudPlugin | undefined;
+    if (!plugin?.handleFlowData) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } }, 503);
+    }
+
+    const instanceId = c.req.param('instanceId');
+    const services = c.get('services');
+    const instance = await services.instances.getById(instanceId).catch(() => null);
+    if (!instance || instance.channel !== 'whatsapp-cloud') {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Unknown instance' } }, 404);
+    }
+
+    const db = c.get('db');
+    const [keyRow] = await db
+      .select()
+      .from(whatsappFlowKeys)
+      .where(eq(whatsappFlowKeys.instanceId, instanceId))
+      .limit(1);
+    // No key row, or sealed under a key we can't open → 421: Meta re-fetches
+    // the public key and ops gets a signal instead of a silent decrypt loop.
+    const privateKeyPem = keyRow ? openCredentialField(instance.tenantId, keyRow.privateKeyPem) : null;
+    if (!privateKeyPem) {
+      httpLog.warn('Flow data request without usable private key', { instanceId, hasKeyRow: Boolean(keyRow) });
+      return c.body(null, 421);
+    }
+
+    return plugin.handleFlowData(c.req.raw, { instanceId, privateKeyPem });
   });
 
   // Public Twilio WhatsApp webhook endpoint - auth-exempt, verified by X-Twilio-Signature in the plugin.

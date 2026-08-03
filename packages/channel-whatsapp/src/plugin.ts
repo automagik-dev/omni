@@ -1155,7 +1155,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Apply markdown→WhatsApp format conversion for text messages
     const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
     if (processed.content.type === 'text' && formatMode !== 'passthrough' && processed.content.text) {
-      const { markdownToWhatsApp } = await import('./utils/markdown-to-whatsapp');
+      const { markdownToWhatsApp } = await import('@omni/core');
       const converted = markdownToWhatsApp(processed.content.text);
       processed = { ...processed, content: { ...processed.content, text: converted } };
     }

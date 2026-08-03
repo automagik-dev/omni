@@ -24,7 +24,9 @@ import {
   _paths,
   canonicalSigningInput,
   generateAndStoreKeypair,
+  loadHostMetadata,
   loadSigningContext,
+  loadSigningContextForServer,
   signRequest,
   writeHostMetadata,
 } from '../signing';
@@ -170,6 +172,60 @@ describe('generateAndStoreKeypair → loadSigningContext round-trip', () => {
       registeredAt: '2026-04-30T12:00:00.000Z',
     });
     expect(loadSigningContext()).toBeNull();
+  });
+
+  test('per-server bindings sign with the id THAT server issued', () => {
+    const { pubkeyB64Url } = generateAndStoreKeypair();
+    writeHostMetadata({
+      hostId: 'id-from-a',
+      pubkey: pubkeyB64Url,
+      hostname: 'test-machine',
+      registeredAt: '2026-04-30T12:00:00.000Z',
+      boundServers: [
+        { url: 'https://a.example.com', hostId: 'id-from-a' },
+        { url: 'https://b.example.com', hostId: 'id-from-b' },
+      ],
+    });
+
+    expect(loadSigningContextForServer('https://a.example.com')?.hostId).toBe('id-from-a');
+    // Trailing slash is normalized away before the lookup.
+    expect(loadSigningContextForServer('https://b.example.com/')?.hostId).toBe('id-from-b');
+    // Unbound server → unsigned.
+    expect(loadSigningContextForServer('https://c.example.com')).toBeNull();
+  });
+
+  test('legacy string[] boundServers coerce to the top-level hostId', () => {
+    const { pubkeyB64Url } = generateAndStoreKeypair();
+    require('node:fs').writeFileSync(
+      _paths.hostJson(),
+      JSON.stringify({
+        hostId: 'legacy-id',
+        pubkey: pubkeyB64Url,
+        hostname: 'test-machine',
+        registeredAt: '2026-04-30T12:00:00.000Z',
+        boundServers: ['https://a.example.com/', 'https://b.example.com'],
+      }),
+    );
+
+    expect(loadHostMetadata()?.boundServers).toEqual([
+      { url: 'https://a.example.com', hostId: 'legacy-id' },
+      { url: 'https://b.example.com', hostId: 'legacy-id' },
+    ]);
+    expect(loadSigningContextForServer('https://b.example.com')?.hostId).toBe('legacy-id');
+  });
+
+  test('absent boundServers coerce to the local default URL', () => {
+    const { pubkeyB64Url } = generateAndStoreKeypair();
+    writeHostMetadata({
+      hostId: 'legacy-id',
+      pubkey: pubkeyB64Url,
+      hostname: 'test-machine',
+      registeredAt: '2026-04-30T12:00:00.000Z',
+    });
+
+    expect(loadHostMetadata()?.boundServers).toEqual([{ url: 'http://localhost:8882', hostId: 'legacy-id' }]);
+    expect(loadSigningContextForServer('http://localhost:8882')?.hostId).toBe('legacy-id');
+    expect(loadSigningContextForServer('https://remote.example.com')).toBeNull();
   });
 
   test('private key file gets 0600 perms (no group/other read)', () => {

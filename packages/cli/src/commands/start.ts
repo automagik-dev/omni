@@ -8,7 +8,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Command } from 'commander';
-import { loadConfig, loadServerConfig } from '../config.js';
+import { loadLocalRuntimeConfig, loadServerConfig } from '../config.js';
 import { getHealthCheckUrl, waitForHealth } from '../health.js';
 import { EMBEDDED_PGSERVE_DATA_DIR, readDataDirMajor } from '../lib/embedded-canonical-migration.js';
 import * as output from '../output.js';
@@ -78,7 +78,8 @@ async function runStart(): Promise<void> {
 
   // 3. Start omni-api via PM2 with complete env from config and hardened flags
   output.info(`Starting ${PM2_PROCESSES.api} (port ${apiPort})...`);
-  const cliConfig = loadConfig();
+  // LOCAL entry, never the active server — see runtime-env.ts rule 5.
+  const cliConfig = loadLocalRuntimeConfig();
   const env = buildRuntimeEnv(serverConfig, cliConfig);
   const launcherPath = getServerLauncherPath();
   const apiArgs = buildPm2StartArgs({

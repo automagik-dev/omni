@@ -28,6 +28,10 @@ export const SendTextSchema = z.object({
         text: z.string().min(1).openapi({ description: 'Button label' }),
         data: z.string().optional().openapi({ description: 'Callback payload (reply button / list row id)' }),
         url: z.string().url().optional().openapi({ description: 'Link button URL (mutually exclusive with data)' }),
+        description: z
+          .string()
+          .optional()
+          .openapi({ description: 'Secondary line under the option (WhatsApp Cloud list rows, ≤72 chars)' }),
       }),
     )
     .max(10)
@@ -36,6 +40,19 @@ export const SendTextSchema = z.object({
       description:
         'Inline buttons — mapped natively per channel (WhatsApp Cloud: up to 3 reply buttons, 4-10 become a list; Telegram: inline keyboard)',
     }),
+  list: z
+    .object({
+      sectionTitle: z.string().optional().openapi({ description: 'Section header above the options (≤24 chars)' }),
+      buttonLabel: z
+        .string()
+        .optional()
+        .openapi({ description: 'Label of the button that opens the list (≤20 chars, default "Options")' }),
+      forceList: z.boolean().optional().openapi({
+        description: 'Render a list even with ≤3 options (implied by any description/sectionTitle)',
+      }),
+    })
+    .optional()
+    .openapi({ description: 'List presentation (WhatsApp Cloud)' }),
   requestLocation: z.boolean().optional().openapi({
     description: 'Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text)',
   }),

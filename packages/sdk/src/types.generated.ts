@@ -2152,6 +2152,162 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/instances/{id}/whatsapp-flows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List flows
+         * @description List the WABA's WhatsApp Flows with status and categories.
+         */
+        get: operations["listWhatsappFlows"];
+        put?: never;
+        /**
+         * Create flow
+         * @description Create a flow (optionally dynamic/endpoint-backed). Flow JSON is validated locally before contacting Meta; Meta-side validation_errors are always returned.
+         */
+        post: operations["createWhatsappFlow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/whatsapp-flows/{flowId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get flow
+         * @description Status, categories, Meta validation errors, endpoint_uri and preview URL.
+         */
+        get: operations["getWhatsappFlow"];
+        /**
+         * Update flow
+         * @description Update screens (flowJson → asset upload) and/or properties (name, categories, dynamic → endpoint_uri).
+         */
+        put: operations["updateWhatsappFlow"];
+        post?: never;
+        /**
+         * Delete flow (draft only)
+         * @description Deletes a DRAFT flow. Published flows must be deprecated instead.
+         */
+        delete: operations["deleteWhatsappFlow"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/whatsapp-flows/{flowId}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish flow
+         * @description Publish a draft flow (requires zero validation errors).
+         */
+        post: operations["publishWhatsappFlow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/whatsapp-flows/{flowId}/deprecate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deprecate flow
+         * @description Retire a PUBLISHED flow.
+         */
+        post: operations["deprecateWhatsappFlow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/whatsapp-flows/{flowId}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get flow preview URL
+         * @description Browser preview URL for the flow (valid ~30 days).
+         */
+        get: operations["getWhatsappFlowPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/whatsapp-flows/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send flow message
+         * @description Send an interactive flow message through the channel plugin. Returns the flowToken echoed back on the completion webhook (nfm_reply). Use flowAction 'data_exchange' for endpoint-backed flows.
+         */
+        post: operations["sendWhatsappFlow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/whatsapp-flows/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Data-endpoint key status
+         * @description Local key presence + Meta-side signature status (MISMATCH explains 421 loops).
+         */
+        get: operations["getWhatsappFlowKeysStatus"];
+        put?: never;
+        /**
+         * Generate + register data-endpoint encryption keys
+         * @description Generates a 2048-bit RSA keypair, registers the public key with Meta (whatsapp_business_encryption) and stores the private key sealed. Calling again rotates the key.
+         */
+        post: operations["registerWhatsappFlowKeys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/platform/tenants": {
         parameters: {
             query?: never;
@@ -2615,7 +2771,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -2638,6 +2794,8 @@ export interface components {
             agentProviderId?: string | null;
             /** @description Agent timeout in seconds */
             agentTimeout: number;
+            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+            agentErrorMessages?: string[] | null;
             /** @description Whether streaming is enabled */
             agentStreamMode: boolean;
             /**
@@ -2658,7 +2816,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -2669,6 +2827,8 @@ export interface components {
              * @default 600
              */
             agentTimeout: number;
+            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+            agentErrorMessages?: string[] | null;
             /**
              * @description Enable streaming responses
              * @default false
@@ -2753,7 +2913,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -2865,6 +3025,8 @@ export interface components {
                  */
                 url?: string;
             }[];
+            /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
+            requestLocation?: boolean;
         };
         TTSVoice: {
             /** @description ElevenLabs voice ID */
@@ -5098,6 +5260,108 @@ export interface components {
             /** @description Voice session ID to leave */
             sessionId: string;
         };
+        FlowSummary: {
+            /** @description Meta flow id */
+            id: string;
+            name: string;
+            /** @description DRAFT | PUBLISHED | DEPRECATED | BLOCKED | THROTTLED */
+            status: string;
+            categories: string[];
+        };
+        FlowDetail: {
+            /** @description Meta flow id */
+            id: string;
+            name: string;
+            /** @description DRAFT | PUBLISHED | DEPRECATED | BLOCKED | THROTTLED */
+            status: string;
+            categories: string[];
+            /** @description Meta-side Flow JSON validation errors */
+            validationErrors: {
+                /** @description Error code (e.g. INVALID_PROPERTY_TYPE) */
+                error: string;
+                /** @description Error class (e.g. FLOW_JSON_ERROR) */
+                error_type: string;
+                /** @description Human-readable explanation */
+                message: string;
+                line_start?: number;
+                line_end?: number;
+                column_start?: number;
+                column_end?: number;
+                pointers?: {
+                    /** @description JSON path of the offending node */
+                    path: string;
+                }[];
+            }[];
+            /** @description Registered data-exchange endpoint (dynamic flows) */
+            endpointUri: string | null;
+            /** @description Browser preview (valid ~30 days) */
+            preview: {
+                preview_url: string;
+                expires_at: string;
+            } | null;
+        };
+        FlowValidationError: {
+            /** @description Error code (e.g. INVALID_PROPERTY_TYPE) */
+            error: string;
+            /** @description Error class (e.g. FLOW_JSON_ERROR) */
+            error_type: string;
+            /** @description Human-readable explanation */
+            message: string;
+            line_start?: number;
+            line_end?: number;
+            column_start?: number;
+            column_end?: number;
+            pointers?: {
+                /** @description JSON path of the offending node */
+                path: string;
+            }[];
+        };
+        CreateFlowRequest: {
+            /** @description Flow name (shown in WhatsApp Manager) */
+            name: string;
+            categories: ("SIGN_UP" | "SIGN_IN" | "APPOINTMENT_BOOKING" | "LEAD_GENERATION" | "CONTACT_US" | "CUSTOMER_SUPPORT" | "SURVEY" | "OTHER")[];
+            /** @description Stringified Flow JSON (screens/layout) */
+            flowJson?: string;
+            /** @description Publish immediately (requires valid flowJson) */
+            publish?: boolean;
+            /** @description Endpoint-backed (data_exchange) flow: registers this omni install's flows-data URL as endpoint_uri. Requires META_FLOWS_PUBLIC_BASE_URL and Flow JSON with data_api_version '3.0'. */
+            dynamic?: boolean;
+        };
+        UpdateFlowRequest: {
+            name?: string;
+            categories?: ("SIGN_UP" | "SIGN_IN" | "APPOINTMENT_BOOKING" | "LEAD_GENERATION" | "CONTACT_US" | "CUSTOMER_SUPPORT" | "SURVEY" | "OTHER")[];
+            /** @description Replaces the flow screens (asset upload) */
+            flowJson?: string;
+            /** @description Point the flow at this install's data endpoint */
+            dynamic?: boolean;
+        };
+        SendFlowRequest: {
+            /** @description Recipient phone (E.164 or digits) */
+            to: string;
+            /** @description Meta flow id (exactly one of flowId/flowName) */
+            flowId?: string;
+            flowName?: string;
+            /** @description Button label that opens the flow */
+            cta: string;
+            bodyText: string;
+            headerText?: string;
+            footerText?: string;
+            /** @description Entry screen (navigate flows) */
+            screen?: string;
+            /** @description Prefill data for the first screen */
+            data?: {
+                [key: string]: unknown;
+            };
+            /** @description Correlation token; generated when omitted */
+            flowToken?: string;
+            /** @description Send an unpublished flow (mode: draft) */
+            draft?: boolean;
+            /**
+             * @description 'data_exchange' opens the flow against the data endpoint (INIT decides screen 1)
+             * @enum {string}
+             */
+            flowAction?: "navigate" | "data_exchange";
+        };
         PlatformTenant: {
             /**
              * Format: uuid
@@ -6096,7 +6360,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6119,6 +6383,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
@@ -6159,7 +6425,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                    channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -6170,6 +6436,8 @@ export interface operations {
                      * @default 600
                      */
                     agentTimeout?: number;
+                    /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                    agentErrorMessages?: string[] | null;
                     /**
                      * @description Enable streaming responses
                      * @default false
@@ -6205,7 +6473,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6228,6 +6496,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
@@ -6288,7 +6558,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -6337,7 +6607,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6360,6 +6630,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
@@ -6465,7 +6737,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                    channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -6476,6 +6748,8 @@ export interface operations {
                      * @default 600
                      */
                     agentTimeout?: number;
+                    /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                    agentErrorMessages?: string[] | null;
                     /**
                      * @description Enable streaming responses
                      * @default false
@@ -6511,7 +6785,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6534,6 +6808,8 @@ export interface operations {
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
                             agentTimeout: number;
+                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
+                            agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
                             /**
@@ -7426,6 +7702,8 @@ export interface operations {
                          */
                         url?: string;
                     }[];
+                    /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
+                    requestLocation?: boolean;
                 };
             };
         };
@@ -17454,6 +17732,723 @@ export interface operations {
                             code: string;
                             /** @description Error message */
                             message: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listWhatsappFlows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Flows on the WABA */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /** @description Meta flow id */
+                            id: string;
+                            name: string;
+                            /** @description DRAFT | PUBLISHED | DEPRECATED | BLOCKED | THROTTLED */
+                            status: string;
+                            categories: string[];
+                        }[];
+                        meta: {
+                            count: number;
+                        };
+                    };
+                };
+            };
+            /** @description Not a whatsapp-cloud instance / not connected */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    createWhatsappFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Flow name (shown in WhatsApp Manager) */
+                    name: string;
+                    categories: ("SIGN_UP" | "SIGN_IN" | "APPOINTMENT_BOOKING" | "LEAD_GENERATION" | "CONTACT_US" | "CUSTOMER_SUPPORT" | "SURVEY" | "OTHER")[];
+                    /** @description Stringified Flow JSON (screens/layout) */
+                    flowJson?: string;
+                    /** @description Publish immediately (requires valid flowJson) */
+                    publish?: boolean;
+                    /** @description Endpoint-backed (data_exchange) flow: registers this omni install's flows-data URL as endpoint_uri. Requires META_FLOWS_PUBLIC_BASE_URL and Flow JSON with data_api_version '3.0'. */
+                    dynamic?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Flow created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            id: string;
+                            endpointUri: string | null;
+                            validationErrors: {
+                                /** @description Error code (e.g. INVALID_PROPERTY_TYPE) */
+                                error: string;
+                                /** @description Error class (e.g. FLOW_JSON_ERROR) */
+                                error_type: string;
+                                /** @description Human-readable explanation */
+                                message: string;
+                                line_start?: number;
+                                line_end?: number;
+                                column_start?: number;
+                                column_end?: number;
+                                pointers?: {
+                                    /** @description JSON path of the offending node */
+                                    path: string;
+                                }[];
+                            }[];
+                        };
+                    };
+                };
+            };
+            /** @description Bad request / missing META_FLOWS_PUBLIC_BASE_URL */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Flow JSON failed local validation */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getWhatsappFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                flowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Flow detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Meta flow id */
+                            id: string;
+                            name: string;
+                            /** @description DRAFT | PUBLISHED | DEPRECATED | BLOCKED | THROTTLED */
+                            status: string;
+                            categories: string[];
+                            /** @description Meta-side Flow JSON validation errors */
+                            validationErrors: {
+                                /** @description Error code (e.g. INVALID_PROPERTY_TYPE) */
+                                error: string;
+                                /** @description Error class (e.g. FLOW_JSON_ERROR) */
+                                error_type: string;
+                                /** @description Human-readable explanation */
+                                message: string;
+                                line_start?: number;
+                                line_end?: number;
+                                column_start?: number;
+                                column_end?: number;
+                                pointers?: {
+                                    /** @description JSON path of the offending node */
+                                    path: string;
+                                }[];
+                            }[];
+                            /** @description Registered data-exchange endpoint (dynamic flows) */
+                            endpointUri: string | null;
+                            /** @description Browser preview (valid ~30 days) */
+                            preview: {
+                                preview_url: string;
+                                expires_at: string;
+                            } | null;
+                        };
+                    };
+                };
+            };
+            /** @description Channel guard failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    updateWhatsappFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                flowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    categories?: ("SIGN_UP" | "SIGN_IN" | "APPOINTMENT_BOOKING" | "LEAD_GENERATION" | "CONTACT_US" | "CUSTOMER_SUPPORT" | "SURVEY" | "OTHER")[];
+                    /** @description Replaces the flow screens (asset upload) */
+                    flowJson?: string;
+                    /** @description Point the flow at this install's data endpoint */
+                    dynamic?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Flow updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            id: string;
+                            endpointUri: string | null;
+                            validationErrors: {
+                                /** @description Error code (e.g. INVALID_PROPERTY_TYPE) */
+                                error: string;
+                                /** @description Error class (e.g. FLOW_JSON_ERROR) */
+                                error_type: string;
+                                /** @description Human-readable explanation */
+                                message: string;
+                                line_start?: number;
+                                line_end?: number;
+                                column_start?: number;
+                                column_end?: number;
+                                pointers?: {
+                                    /** @description JSON path of the offending node */
+                                    path: string;
+                                }[];
+                            }[];
+                        };
+                    };
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Flow JSON failed local validation */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    deleteWhatsappFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                flowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success: boolean;
+                        flowId: string;
+                    };
+                };
+            };
+            /** @description Channel guard failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    publishWhatsappFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                flowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success: boolean;
+                        flowId: string;
+                    };
+                };
+            };
+            /** @description Channel guard failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    deprecateWhatsappFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                flowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deprecated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success: boolean;
+                        flowId: string;
+                    };
+                };
+            };
+            /** @description Channel guard failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getWhatsappFlowPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                flowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preview URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        previewUrl: string;
+                        expiresAt: string;
+                    };
+                };
+            };
+            /** @description No preview available */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    sendWhatsappFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Recipient phone (E.164 or digits) */
+                    to: string;
+                    /** @description Meta flow id (exactly one of flowId/flowName) */
+                    flowId?: string;
+                    flowName?: string;
+                    /** @description Button label that opens the flow */
+                    cta: string;
+                    bodyText: string;
+                    headerText?: string;
+                    footerText?: string;
+                    /** @description Entry screen (navigate flows) */
+                    screen?: string;
+                    /** @description Prefill data for the first screen */
+                    data?: {
+                        [key: string]: unknown;
+                    };
+                    /** @description Correlation token; generated when omitted */
+                    flowToken?: string;
+                    /** @description Send an unpublished flow (mode: draft) */
+                    draft?: boolean;
+                    /**
+                     * @description 'data_exchange' opens the flow against the data endpoint (INIT decides screen 1)
+                     * @enum {string}
+                     */
+                    flowAction?: "navigate" | "data_exchange";
+                };
+            };
+        };
+        responses: {
+            /** @description Flow message sent */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        messageId?: string;
+                        flowToken: string;
+                    };
+                };
+            };
+            /** @description Channel guard failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Send failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getWhatsappFlowKeysStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Key status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Private key stored for this instance */
+                            hasLocalKey: boolean;
+                            uploadedAt: string | null;
+                            /** @description Meta-side status: VALID | MISMATCH (MISMATCH → rotate via POST) */
+                            signatureStatus: string | null;
+                            endpointUri: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Channel guard failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    registerWhatsappFlowKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Key registered */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Private key stored for this instance */
+                            hasLocalKey: boolean;
+                            uploadedAt: string | null;
+                            /** @description Meta-side status: VALID | MISMATCH (MISMATCH → rotate via POST) */
+                            signatureStatus: string | null;
+                            endpointUri: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Channel guard failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
                         };
                     };
                 };
