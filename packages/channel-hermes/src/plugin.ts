@@ -367,7 +367,7 @@ export class HermesPlugin extends BaseChannelPlugin {
   // Inbound handlers (called by handlers/webhook.ts)
   //
   // Public wrappers around the protected emit* helpers exposed by
-  // BaseChannelPlugin — same pattern as the whatsapp-cloud sibling: all
+  // BaseChannelPlugin — same pattern as the whatsapp-business sibling: all
   // event-emission logic stays inside the plugin class so the webhook
   // handler remains a pure dispatcher.
   // ─────────────────────────────────────────────────────────────
@@ -631,7 +631,7 @@ async function dispatchOutboundMedia(client: HermesClient, message: OutgoingMess
 
 /**
  * Template descriptor is carried via `metadata.template` (same convention
- * as whatsapp-cloud). The namespace comes from the instance config
+ * as whatsapp-business). The namespace comes from the instance config
  * (`hermesTemplateNamespace`) unless the descriptor overrides it.
  */
 async function dispatchOutboundTemplate(

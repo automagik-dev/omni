@@ -1,4 +1,4 @@
-# channel-whatsapp-cloud — Patterns
+# channel-whatsapp-business — Patterns
 
 > Package-local conventions for the WhatsApp Cloud (Meta) channel plugin.
 > For the broader Omni architecture see `../../AGENTS.md` and `../../.claude/CLAUDE.md`.
@@ -6,7 +6,7 @@
 ## What this package owns
 
 - Outbound REST calls to Graph API v25.0 (`graph.facebook.com/{version}`).
-- Inbound webhook (HMAC-SHA256 signed) at `/api/v2/channels/whatsapp-cloud/webhook`.
+- Inbound webhook (HMAC-SHA256 signed) at `/api/v2/channels/whatsapp-business/webhook`.
 - OAuth Embedded Signup helpers (`exchangeCodeForToken`, `getWabaDetails`, `registerPhoneNumber`, `subscribeApp`).
 - HSM template CRUD + sync with `whatsapp_templates` table.
 - Capability declarations (24h messaging window, supported media types, etc.).
@@ -14,23 +14,23 @@
 ## What it does NOT own
 
 - DB schema / migrations → `@omni/db` (`packages/db/`).
-- Shared Zod schemas → `@omni/core` (`packages/core/src/schemas/whatsapp-cloud.ts`).
-- Shared types → `@omni/core` (`packages/core/src/types/whatsapp-cloud.ts`).
-- REST routes for OAuth / templates → `@omni/api` (`packages/api/src/routes/v2/whatsapp-cloud.ts`, `routes/v2/templates.ts`).
+- Shared Zod schemas → `@omni/core` (`packages/core/src/schemas/whatsapp-business.ts`).
+- Shared types → `@omni/core` (`packages/core/src/types/whatsapp-business.ts`).
+- REST routes for OAuth / templates → `@omni/api` (`packages/api/src/routes/v2/whatsapp-business.ts`, `routes/v2/templates.ts`).
 - Webhook route mount → `@omni/api` (`packages/api/src/app.ts`).
 - Frontend UI → `apps/ui`.
 - Sentry scrubbing → `@omni/api` (`packages/api/src/lib/sentry-scrub.ts`).
 
-This package is a **plugin**, not a service. It exposes `WhatsAppCloudPlugin` as default export, registered by the bundled server entry.
+This package is a **plugin**, not a service. It exposes `WhatsAppBusinessPlugin` as default export, registered by the bundled server entry.
 
 ## File map
 
 ```
 src/
-├── plugin.ts                    # WhatsAppCloudPlugin class — lifecycle + dispatch
+├── plugin.ts                    # WhatsAppBusinessPlugin class — lifecycle + dispatch
 ├── client.ts                    # MetaWhatsAppClient — Graph API wrapper (fetch-based)
-├── capabilities.ts              # WHATSAPP_CLOUD_CAPABILITIES (hasMessagingWindow, sticker, buttons, etc.)
-├── types.ts                     # Internal types (WhatsAppCloudConfig, MetaOutboundMessage, …)
+├── capabilities.ts              # WHATSAPP_BUSINESS_CAPABILITIES (hasMessagingWindow, sticker, buttons, etc.)
+├── types.ts                     # Internal types (WhatsAppBusinessConfig, MetaOutboundMessage, …)
 ├── oauth.ts                     # exchangeCodeForToken / getWabaDetails / registerPhoneNumber / subscribeApp
 ├── templates.ts                 # Template CRUD + sync helpers
 ├── senders/                     # One file per outbound content type
@@ -58,7 +58,7 @@ src/
     └── oauth.test.ts
 
 Cross-package audit (lives in @omni/api because it imports the scrub module):
-  packages/api/src/lib/__tests__/sentry-scrub-whatsapp-cloud-audit.test.ts
+  packages/api/src/lib/__tests__/sentry-scrub-whatsapp-business-audit.test.ts
                                   # Fixture-based audit of beforeSend coverage
                                   # for Meta-shaped events (tokens, phones,
                                   # profile_name, message body).
@@ -109,7 +109,7 @@ by the API route (`app.ts`), never read here.
 
 Meta enforces this server-side — we don't pre-check. When a send attempt fails with code `131047` or `131051`, the client returns `MetaApiError(OMNI_OUTSIDE_24H_WINDOW)` and the caller (agent dispatcher) can switch to a template send.
 
-The follow-up sweeper (`@omni/core/src/automations/follow-up`) consumes `hasMessagingWindow: true` + `messagingWindowMs: 24h` from `WHATSAPP_CLOUD_CAPABILITIES` to disarm sequences past the window.
+The follow-up sweeper (`@omni/core/src/automations/follow-up`) consumes `hasMessagingWindow: true` + `messagingWindowMs: 24h` from `WHATSAPP_BUSINESS_CAPABILITIES` to disarm sequences past the window.
 
 ## Adding a new sender
 
@@ -117,11 +117,11 @@ The follow-up sweeper (`@omni/core/src/automations/follow-up`) consumes `hasMess
 2. The function should build a `MetaOutboundMessage` object and call `client.sendMessage(payload)`.
 3. Add a unit test in `__tests__/senders.test.ts` mocking the client.
 4. Wire the new content type into `plugin.ts::sendMessage` dispatch logic.
-5. Update `WHATSAPP_CLOUD_CAPABILITIES` if the new sender changes capabilities.
+5. Update `WHATSAPP_BUSINESS_CAPABILITIES` if the new sender changes capabilities.
 
 ## Adding a new webhook event
 
-1. If it's a new Zod-validated shape → add it to `packages/core/src/schemas/whatsapp-cloud.ts`.
+1. If it's a new Zod-validated shape → add it to `packages/core/src/schemas/whatsapp-business.ts`.
 2. If it's a new domain event → add it to `packages/core/src/events/types.ts` (`CORE_EVENT_TYPES` tuple + payload interface + `EventPayloadMap` entry).
 3. Parse and dispatch in `src/handlers/webhook.ts`.
 4. Add a fixture-based test in `__tests__/webhook.test.ts`.
@@ -136,7 +136,7 @@ The Python source we ported from:
 | `meta_template_service.py` | `src/templates.ts` |
 | `meta_whatsapp_client.py` | `src/client.ts` |
 | `meta_webhook_routes.py` | `src/handlers/webhook.ts` + `@omni/api` mount |
-| `meta_whatsapp_routes.py` | `@omni/api/src/routes/v2/whatsapp-cloud.ts` |
+| `meta_whatsapp_routes.py` | `@omni/api/src/routes/v2/whatsapp-business.ts` |
 | `meta_template_routes.py` | `@omni/api/src/routes/v2/templates.ts` |
-| Pydantic schemas | `packages/core/src/schemas/whatsapp-cloud.ts` |
+| Pydantic schemas | `packages/core/src/schemas/whatsapp-business.ts` |
 | `MetaTemplate` SQLAlchemy model | `packages/db/src/schema.ts::whatsappTemplates` |

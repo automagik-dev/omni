@@ -64,7 +64,7 @@ import { z } from 'zod';
 
 export const ChannelTypeSchema = z.enum([
   'whatsapp-baileys',
-  'whatsapp-cloud',
+  'whatsapp-business',
   'discord',
   'slack',
   'telegram',

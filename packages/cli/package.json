@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni",
-  "version": "2.260803.1",
+  "version": "2.260803.2",
   "description": "LLM-optimized CLI for Omni",
   "type": "module",
   "bin": {
@@ -63,7 +63,7 @@
     "@omni/channel-slack": "workspace:*",
     "@omni/channel-telegram": "workspace:*",
     "@omni/channel-whatsapp": "workspace:*",
-    "@omni/channel-whatsapp-cloud": "workspace:*",
+    "@omni/channel-whatsapp-business": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/sdk": "workspace:*",
     "@types/node": "^22.10.3",

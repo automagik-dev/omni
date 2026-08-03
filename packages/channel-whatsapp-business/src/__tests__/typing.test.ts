@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import type { Logger, PluginContext, PluginStorage } from '@omni/channel-sdk';
 import type { EventBus, PublishResult, Subscription } from '@omni/core/events';
 import type { MetaInboundMessage } from '@omni/core/schemas';
-import { WhatsAppCloudPlugin } from '../plugin';
+import { WhatsAppBusinessPlugin } from '../plugin';
 
 const instanceId = '00000000-0000-4000-8000-000000000001';
 const PHONE_NUMBER_ID = '999888777';
@@ -121,18 +121,18 @@ function inboundText(wamid: string, from: string = CUSTOMER): MetaInboundMessage
   } as MetaInboundMessage;
 }
 
-async function receiveInbound(plugin: WhatsAppCloudPlugin, msg: MetaInboundMessage): Promise<void> {
+async function receiveInbound(plugin: WhatsAppBusinessPlugin, msg: MetaInboundMessage): Promise<void> {
   const state = plugin.getInstanceState(instanceId);
   if (!state) throw new Error('instance not connected in test setup');
   await plugin.handleInboundMessage(instanceId, msg, undefined, state.dedupeCache);
 }
 
-describe('WhatsAppCloudPlugin.sendTyping', () => {
-  let plugin: WhatsAppCloudPlugin;
+describe('WhatsAppBusinessPlugin.sendTyping', () => {
+  let plugin: WhatsAppBusinessPlugin;
   let fetchSpy: ReturnType<typeof spyOn>;
 
   beforeEach(async () => {
-    plugin = new WhatsAppCloudPlugin();
+    plugin = new WhatsAppBusinessPlugin();
     await plugin.initialize(createContext(new MockEventBus()));
     // connect() validates the token via GET /{phone_number_id}.
     fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(okResponse({ id: PHONE_NUMBER_ID }));

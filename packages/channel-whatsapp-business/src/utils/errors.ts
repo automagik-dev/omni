@@ -5,7 +5,7 @@
  * every channel error participates in the core hierarchy) while preserving
  * the historical public surface:
  *   - `.code` carries the Meta wire code (`META_*`) — callers such as
- *     `@omni/api/src/routes/v2/whatsapp-cloud.ts` compare it against
+ *     `@omni/api/src/routes/v2/whatsapp-business.ts` compare it against
  *     `MetaErrorCode` values.
  *   - `.context` carries the structured Graph API context (httpStatus,
  *     fbtrace_id, …).
@@ -100,7 +100,7 @@ export class MetaApiError extends ChannelError {
   declare readonly context: MetaApiErrorContext;
 
   constructor(code: MetaErrorCodeType, message: string, context: MetaApiErrorContext = {}) {
-    super(CORE_CODE_MAP[code] ?? ERROR_CODES.UNKNOWN, message, 'whatsapp-cloud', undefined, {
+    super(CORE_CODE_MAP[code] ?? ERROR_CODES.UNKNOWN, message, 'whatsapp-business', undefined, {
       recoverable: RETRYABLE_CODES.has(code),
       context: { ...context },
     });

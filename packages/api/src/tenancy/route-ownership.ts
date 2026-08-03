@@ -276,7 +276,7 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'fixed 200 acks with no row data.',
   },
   {
-    route: 'GET /api/v2/channels/whatsapp-cloud/webhook',
+    route: 'GET /api/v2/channels/whatsapp-business/webhook',
     class: 'public-by-contract',
     justification:
       "Meta webhook verification challenge. Auth-exempt because Meta's servers send no credential; the handler " +
@@ -285,7 +285,7 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'matched — a configuration fact, not tenant data.',
   },
   {
-    route: 'POST /api/v2/channels/whatsapp-cloud/webhook',
+    route: 'POST /api/v2/channels/whatsapp-business/webhook',
     class: 'public-by-contract',
     justification:
       "Meta Cloud API callback. Auth-exempt for Meta's servers; authenticity is the X-Hub-Signature-256 HMAC the " +
@@ -296,7 +296,7 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'so the surface is not a resource-existence oracle.',
   },
   {
-    route: 'POST /api/v2/channels/whatsapp-cloud/flows/data/:instanceId',
+    route: 'POST /api/v2/channels/whatsapp-business/flows/data/:instanceId',
     class: 'public-by-contract',
     justification:
       "WhatsApp Flows data-exchange endpoint. Auth-exempt for Meta's servers; authenticity is double: the " +
@@ -307,6 +307,40 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'private key is unsealed server-side via openCredentialField under that record’s tenant. Responses are ' +
       'AES-GCM-encrypted screen payloads readable only by the requesting WhatsApp client, or bare status codes ' +
       '(404/421/427/432) that reveal no row data.',
+  },
+  // ── Frozen legacy aliases of the whatsapp-business public surface ──────────
+  // The channel was renamed whatsapp-cloud → whatsapp-business; these URLs are
+  // pasted into Meta App dashboards (webhook) and registered as flow
+  // endpoint_uri values (flows/data) by existing customers, so the old paths
+  // stay registered PERMANENTLY, bound to the exact same handlers.
+  {
+    route: 'GET /api/v2/channels/whatsapp-cloud/webhook',
+    class: 'public-by-contract',
+    justification:
+      'Frozen legacy alias of GET /api/v2/channels/whatsapp-business/webhook (same handler reference, zero added ' +
+      'surface). See the canonical entry for the full contract justification.',
+  },
+  {
+    route: 'POST /api/v2/channels/whatsapp-cloud/webhook',
+    class: 'public-by-contract',
+    justification:
+      'Frozen legacy alias of POST /api/v2/channels/whatsapp-business/webhook (same handler reference, zero added ' +
+      'surface). See the canonical entry for the full contract justification.',
+  },
+  {
+    route: 'POST /api/v2/channels/whatsapp-cloud/flows/data/:instanceId',
+    class: 'public-by-contract',
+    justification:
+      'Frozen legacy alias of POST /api/v2/channels/whatsapp-business/flows/data/:instanceId (same handler ' +
+      'reference, zero added surface). Pre-rename flows carry this path in their Meta-side endpoint_uri.',
+  },
+  {
+    route: 'ALL /api/v2/instances/:instanceId/whatsapp-cloud/*',
+    class: 'public-by-contract',
+    justification:
+      'Legacy REST alias: rewrites the path segment to /whatsapp-business/ and re-dispatches through the full ' +
+      'pipeline — the INNER canonical route enforces auth, scopes and ownership; this catch-all only rewrites the ' +
+      'URL and can serve nothing by itself. Kept permanently for pre-rename API consumers.',
   },
 ];
 
@@ -375,7 +409,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'DELETE /api/v2/instances/:id/block',
   'DELETE /api/v2/instances/:id/guilds/:guildId/config',
   'DELETE /api/v2/instances/:id/profile/picture',
-  'DELETE /api/v2/instances/:id/whatsapp-cloud/connection',
+  'DELETE /api/v2/instances/:id/whatsapp-business/connection',
   'DELETE /api/v2/instances/:id/whatsapp-templates/:templateId',
   'DELETE /api/v2/instances/:instanceId/routes/:id',
   'DELETE /api/v2/messages/:id',
@@ -456,10 +490,10 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/instances/:id/sync',
   'GET /api/v2/instances/:id/sync/:jobId',
   'GET /api/v2/instances/:id/users/:userId/profile',
-  'GET /api/v2/instances/:id/whatsapp-cloud/analytics',
-  'GET /api/v2/instances/:id/whatsapp-cloud/connection',
-  'GET /api/v2/instances/:id/whatsapp-cloud/profile',
-  'GET /api/v2/instances/:id/whatsapp-cloud/quality',
+  'GET /api/v2/instances/:id/whatsapp-business/analytics',
+  'GET /api/v2/instances/:id/whatsapp-business/connection',
+  'GET /api/v2/instances/:id/whatsapp-business/profile',
+  'GET /api/v2/instances/:id/whatsapp-business/quality',
   'GET /api/v2/instances/:id/whatsapp-flows',
   'GET /api/v2/instances/:id/whatsapp-flows/:flowId',
   'GET /api/v2/instances/:id/whatsapp-flows/:flowId/preview',
@@ -589,11 +623,11 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/instances/:id/resync',
   'POST /api/v2/instances/:id/sync',
   'POST /api/v2/instances/:id/sync/profile',
-  'POST /api/v2/instances/:id/whatsapp-cloud/connect',
-  'POST /api/v2/instances/:id/whatsapp-cloud/oauth/exchange',
-  'POST /api/v2/instances/:id/whatsapp-cloud/profile/photo',
-  'POST /api/v2/instances/:id/whatsapp-cloud/register',
-  'POST /api/v2/instances/:id/whatsapp-cloud/subscribe-app',
+  'POST /api/v2/instances/:id/whatsapp-business/connect',
+  'POST /api/v2/instances/:id/whatsapp-business/oauth/exchange',
+  'POST /api/v2/instances/:id/whatsapp-business/profile/photo',
+  'POST /api/v2/instances/:id/whatsapp-business/register',
+  'POST /api/v2/instances/:id/whatsapp-business/subscribe-app',
   'POST /api/v2/instances/:id/whatsapp-flows',
   'POST /api/v2/instances/:id/whatsapp-flows/:flowId/deprecate',
   'POST /api/v2/instances/:id/whatsapp-flows/:flowId/publish',
@@ -655,7 +689,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'PUT /api/v2/instances/:id/presence',
   'PUT /api/v2/instances/:id/profile/name',
   'PUT /api/v2/instances/:id/profile/picture',
-  'PUT /api/v2/instances/:id/whatsapp-cloud/profile',
+  'PUT /api/v2/instances/:id/whatsapp-business/profile',
   'PUT /api/v2/instances/:id/whatsapp-flows/:flowId',
   'PUT /api/v2/instances/:id/profile/status',
   'PUT /api/v2/payload-config/:eventType',

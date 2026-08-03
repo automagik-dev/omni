@@ -9,21 +9,21 @@
  *
  * @example
  * ```typescript
- * import whatsappCloudPlugin from '@omni/channel-whatsapp-cloud';
- * channelRegistry.register(whatsappCloudPlugin);
+ * import whatsappBusinessPlugin from '@omni/channel-whatsapp-business';
+ * channelRegistry.register(whatsappBusinessPlugin);
  * ```
  */
 
-import { WhatsAppCloudPlugin } from './plugin';
+import { WhatsAppBusinessPlugin } from './plugin';
 
-const plugin = new WhatsAppCloudPlugin();
+const plugin = new WhatsAppBusinessPlugin();
 export default plugin;
 
 // Plugin class — exposed so apps/tests can subclass or override.
-export { WhatsAppCloudPlugin } from './plugin';
+export { WhatsAppBusinessPlugin } from './plugin';
 
 // Capabilities — declarative, useful for capability discovery.
-export { WHATSAPP_CLOUD_CAPABILITIES } from './capabilities';
+export { WHATSAPP_BUSINESS_CAPABILITIES } from './capabilities';
 
 // HTTP client — exposed so OAuth routes (Group 5) and template service (Group 6)
 // can reuse the same Graph API wrapper with their own (token, phone_number_id).
@@ -71,7 +71,7 @@ export { generateFlowKeyPair } from './utils/flow-crypto';
 export type { MetaFlowValidationError } from './client';
 
 // Embedded Signup OAuth helpers — pure functions consumed by the REST surface
-// at `packages/api/src/routes/v2/whatsapp-cloud.ts` (Group 5).
+// at `packages/api/src/routes/v2/whatsapp-business.ts` (Group 5).
 export {
   exchangeCodeForToken,
   getWabaDetails,
@@ -90,7 +90,7 @@ export { toMetaPhone, toE164, phonesEqual } from './utils/identity';
 
 // Internal types
 export type {
-  WhatsAppCloudConfig,
+  WhatsAppBusinessConfig,
   MetaAppLevelConfig,
   MetaOutboundMessage,
   MetaMediaPayload,

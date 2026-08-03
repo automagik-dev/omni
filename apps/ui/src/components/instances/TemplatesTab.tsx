@@ -2,7 +2,7 @@
  * WhatsApp HSM templates list + builder shell.
  *
  * Designed to plug into `InstanceDetail`'s Tabs as a new tab visible only
- * when the instance's channel is `whatsapp-cloud`. Lists templates with
+ * when the instance's channel is `whatsapp-business`. Lists templates with
  * filters (status / category / language), provides a "Sync from Meta"
  * action, and surfaces a builder dialog for creating new templates.
  *

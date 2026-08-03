@@ -31,7 +31,7 @@ export interface HermesMediaSource {
 /**
  * Map a MIME type to a Hermes media kind.
  *
- *   - `image/webp` → `sticker` (matches the whatsapp-cloud heuristic)
+ *   - `image/webp` → `sticker` (matches the whatsapp-business heuristic)
  *   - `image/*`    → `image`
  *   - `audio/*`    → `audio`
  *   - `video/*`    → `video`

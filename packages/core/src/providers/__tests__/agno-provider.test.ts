@@ -19,7 +19,7 @@ function createTrigger(overrides: Partial<AgentTrigger> = {}): AgentTrigger {
     type: 'mention',
     event: {} as AgentTrigger['event'],
     source: {
-      channelType: 'whatsapp-cloud',
+      channelType: 'whatsapp-business',
       instanceId: 'inst-1',
       chatId: 'group-1',
       messageId: 'msg-1',
@@ -159,11 +159,11 @@ describe('AgnoAgentProvider', () => {
         instanceId: 'inst-1',
         chatId: 'group-1',
         messageId: 'msg-1',
-        channel: 'whatsapp-cloud',
+        channel: 'whatsapp-business',
       },
       platform: {
         id: '5511999999999',
-        channel: 'whatsapp-cloud',
+        channel: 'whatsapp-business',
         instanceId: 'inst-1',
       },
       sender: { displayName: 'Example User' },

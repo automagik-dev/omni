@@ -87,7 +87,7 @@ export interface ChatParticipant {
 // Channel type enum
 export type Channel =
   | 'whatsapp-baileys'
-  | 'whatsapp-cloud'
+  | 'whatsapp-business'
   | 'discord'
   | 'slack'
   | 'telegram'

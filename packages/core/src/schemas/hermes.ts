@@ -10,7 +10,7 @@
  * `media_id` is the Hermes UUID of the WhatsApp LINE (not a file id) — it is
  * the webhook → instance resolution key, playing the same role
  * `metadata.phone_number_id` plays for the Meta webhook. The inner message
- * objects are validated by the whatsapp-cloud schemas (source of truth for
+ * objects are validated by the whatsapp-business schemas (source of truth for
  * the Cloud API shapes); `InboundMediaSchema.file` carries the
  * Hermes-specific direct download URL.
  *
@@ -18,7 +18,7 @@
  */
 
 import { z } from 'zod';
-import { MetaInboundMessageSchema, MetaWebhookStatusEntrySchema } from './whatsapp-cloud';
+import { MetaInboundMessageSchema, MetaWebhookStatusEntrySchema } from './whatsapp-business';
 
 /** `contacts[]` entry — sender profile attached to inbound messages. */
 export const HermesContactSchema = z.object({

@@ -919,7 +919,7 @@ export interface VoiceUserChannelPayload {
 export interface ChannelAlertPayload {
   instanceId: string;
   channelType: ChannelType;
-  /** Provider-side category — for whatsapp-cloud one of the four Meta fields above. */
+  /** Provider-side category — for whatsapp-business one of the four Meta fields above. */
   alertType:
     | 'account_alerts'
     | 'account_update'

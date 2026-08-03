@@ -4,7 +4,7 @@
 
 export const CHANNEL_TYPES = [
   'whatsapp-baileys',
-  'whatsapp-cloud',
+  'whatsapp-business',
   'discord',
   'slack',
   'telegram',

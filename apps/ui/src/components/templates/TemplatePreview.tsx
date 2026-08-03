@@ -7,7 +7,7 @@
  * template will look like before submitting it to Meta for approval.
  *
  * The component shape mirrors `WhatsAppTemplateComponent` from
- * packages/core/src/schemas/whatsapp-cloud.ts.
+ * packages/core/src/schemas/whatsapp-business.ts.
  */
 
 import { cn } from '@/lib/utils';

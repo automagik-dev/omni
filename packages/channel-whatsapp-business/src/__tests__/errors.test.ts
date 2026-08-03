@@ -20,7 +20,7 @@ describe('MetaApiError hierarchy', () => {
     expect(err).toBeInstanceOf(OmniError);
     expect(err).toBeInstanceOf(Error);
     expect(err.name).toBe('MetaApiError');
-    expect(err.channelType).toBe('whatsapp-cloud');
+    expect(err.channelType).toBe('whatsapp-business');
   });
 
   it('exposes channelCode and preserves the Meta wire code on .code', () => {

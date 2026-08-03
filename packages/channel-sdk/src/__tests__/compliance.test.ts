@@ -47,9 +47,9 @@ import {
 import {
   MetaApiError,
   MetaErrorCode,
-  WHATSAPP_CLOUD_CAPABILITIES,
-  WhatsAppCloudPlugin,
-} from '../../../channel-whatsapp-cloud/src/index';
+  WHATSAPP_BUSINESS_CAPABILITIES,
+  WhatsAppBusinessPlugin,
+} from '../../../channel-whatsapp-business/src/index';
 import {
   WHATSAPP_CAPABILITIES,
   WhatsAppError,
@@ -136,14 +136,14 @@ const channels: ChannelDescriptor[] = [
     errorSourcePath: channelPath('hermes', 'utils', 'errors.ts'),
   },
   {
-    name: 'whatsapp-cloud',
-    packageName: '@omni/channel-whatsapp-cloud',
-    pluginClass: WhatsAppCloudPlugin as unknown as typeof BaseChannelPlugin,
+    name: 'whatsapp-business',
+    packageName: '@omni/channel-whatsapp-business',
+    pluginClass: WhatsAppBusinessPlugin as unknown as typeof BaseChannelPlugin,
     errorClass: MetaApiError,
-    capabilities: WHATSAPP_CLOUD_CAPABILITIES,
-    pluginSourcePath: channelPath('whatsapp-cloud', 'plugin.ts'),
-    handlerSourcePaths: [channelPath('whatsapp-cloud', 'handlers', 'webhook.ts')],
-    errorSourcePath: channelPath('whatsapp-cloud', 'utils', 'errors.ts'),
+    capabilities: WHATSAPP_BUSINESS_CAPABILITIES,
+    pluginSourcePath: channelPath('whatsapp-business', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('whatsapp-business', 'handlers', 'webhook.ts')],
+    errorSourcePath: channelPath('whatsapp-business', 'utils', 'errors.ts'),
   },
   {
     name: 'twilio-whatsapp',
@@ -219,7 +219,7 @@ const errorConstructorArgs: Record<string, unknown[]> = {
   discord: [DiscordErrorCode.SEND_FAILED, 'compliance test'],
   slack: [SlackErrorCode.SEND_FAILED, 'compliance test'],
   'twilio-whatsapp': [TwilioWhatsAppErrorCode.SEND_FAILED, 'compliance test'],
-  'whatsapp-cloud': [MetaErrorCode.INVALID_REQUEST, 'compliance test'],
+  'whatsapp-business': [MetaErrorCode.INVALID_REQUEST, 'compliance test'],
   hermes: [HermesErrorCode.INVALID_REQUEST, 'compliance test'],
 };
 
@@ -228,7 +228,15 @@ const errorConstructorArgs: Record<string, unknown[]> = {
 describe('SDK compliance test infrastructure', () => {
   it('has descriptors for all 7 channels', () => {
     const names = channels.map((c) => c.name).sort();
-    expect(names).toEqual(['discord', 'hermes', 'slack', 'telegram', 'twilio-whatsapp', 'whatsapp', 'whatsapp-cloud']);
+    expect(names).toEqual([
+      'discord',
+      'hermes',
+      'slack',
+      'telegram',
+      'twilio-whatsapp',
+      'whatsapp',
+      'whatsapp-business',
+    ]);
   });
 
   for (const channel of channels) {

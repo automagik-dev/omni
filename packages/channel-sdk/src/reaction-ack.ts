@@ -166,14 +166,14 @@ export function startAck(
     ackProvider.ack(instanceId, chatId, messageId, emoji).catch(() => {
       // ASM-1: WhatsApp fallback to typing indicator when reaction fails
       if (
-        (channel === 'whatsapp' || channel === 'whatsapp-baileys' || channel === 'whatsapp-cloud') &&
+        (channel === 'whatsapp' || channel === 'whatsapp-baileys' || channel === 'whatsapp-business') &&
         plugin?.sendTyping
       ) {
         plugin.sendTyping(instanceId, chatId, timeoutMs).catch(() => {});
       }
     });
   } else if (
-    (channel === 'whatsapp' || channel === 'whatsapp-baileys' || channel === 'whatsapp-cloud') &&
+    (channel === 'whatsapp' || channel === 'whatsapp-baileys' || channel === 'whatsapp-business') &&
     plugin?.sendTyping
   ) {
     // No ack provider available, use typing indicator as fallback

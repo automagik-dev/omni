@@ -1273,9 +1273,9 @@ channels:
     enabled: true
     package: "@omni/channel-whatsapp-baileys"
 
-  whatsapp-cloud:
+  whatsapp-business:
     enabled: true
-    package: "@omni/channel-whatsapp-cloud"
+    package: "@omni/channel-whatsapp-business"
     config:
       appId: ${WHATSAPP_APP_ID}
       appSecret: ${WHATSAPP_APP_SECRET}

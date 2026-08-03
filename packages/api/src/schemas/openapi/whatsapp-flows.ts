@@ -3,7 +3,7 @@
  * (packages/api/src/routes/v2/whatsapp-flows.ts).
  *
  * The public Meta-facing data-exchange endpoint
- * (POST /channels/whatsapp-cloud/flows/data/:instanceId) is deliberately NOT
+ * (POST /channels/whatsapp-business/flows/data/:instanceId) is deliberately NOT
  * registered — like the channel webhooks, it is not a customer-SDK surface.
  */
 
@@ -143,7 +143,7 @@ export function registerWhatsappFlowsSchemas(registry: OpenAPIRegistry): void {
         },
       },
       400: {
-        description: 'Not a whatsapp-cloud instance / not connected',
+        description: 'Not a whatsapp-business instance / not connected',
         content: { 'application/json': { schema: ErrorSchema } },
       },
     },
