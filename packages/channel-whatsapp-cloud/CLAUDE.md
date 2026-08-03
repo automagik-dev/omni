@@ -39,13 +39,18 @@ src/
 │   ├── location.ts
 │   ├── contact.ts
 │   ├── reaction.ts
-│   └── template.ts
+│   ├── template.ts
+│   └── flow.ts                  # interactive.flow (navigate + data_exchange, structured flow tokens)
+├── flows/
+│   └── resolver.ts              # FlowResolverRegistry + buildFlowToken/parseFlowToken
 ├── handlers/
-│   └── webhook.ts               # handleVerifyChallenge + handleMetaWebhook
+│   ├── webhook.ts               # handleVerifyChallenge + handleMetaWebhook
+│   └── flow-data.ts             # encrypted Flows data-exchange endpoint (200/421/427/432)
 ├── utils/
 │   ├── identity.ts              # toMetaPhone (digits-only), toE164, phonesEqual
 │   ├── errors.ts                # MetaApiError + MetaErrorCode taxonomy
-│   └── signature.ts             # verifyMetaSignature (HMAC-SHA256, timing-safe)
+│   ├── signature.ts             # verifyMetaSignature (HMAC-SHA256, timing-safe)
+│   └── flow-crypto.ts           # RSA-OAEP unwrap + AES-128-GCM (flipped-IV response), keygen
 └── __tests__/                   # bun:test
     ├── senders.test.ts
     ├── webhook.test.ts
@@ -89,6 +94,16 @@ Inbound `wamid` values must be deduped via `createInboundDedupeCache` (shared wi
 ### Signature verification
 
 `X-Hub-Signature-256: sha256=<hex>` over the **raw request body** using HMAC-SHA256 with `META_APP_SECRET`. Compare using a constant-time check (Web Crypto `crypto.subtle` + manual constant-time byte compare). Reject with 401 + warn-log on mismatch — do not include any token diff in the log.
+
+### WhatsApp Flows
+
+Full guide: `docs/channels/whatsapp-flows.md`. Package-side pieces: the flow
+sender emits structured tokens `omni.<flowId>.<uuid>` (the data endpoint's only
+way to know which flow it serves); `handlers/flow-data.ts` owns the encrypted
+data-exchange contract (421 = can't decrypt → check key `signature_status`,
+427 = bad token, 432 = bad HMAC); screen logic registers on
+`plugin.flowResolvers` and must resolve within ~8s. Private keys are unsealed
+by the API route (`app.ts`), never read here.
 
 ### 24h window enforcement
 

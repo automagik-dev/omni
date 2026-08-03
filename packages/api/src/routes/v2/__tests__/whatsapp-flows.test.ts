@@ -144,7 +144,7 @@ describe('POST /instances/:id/whatsapp-flows', () => {
     });
 
     expect(res.status).toBe(201);
-    expect(await res.json()).toEqual({ data: { id: 'FLOW-NEW' } });
+    expect(await res.json()).toEqual({ data: { id: 'FLOW-NEW', endpointUri: null, validationErrors: [] } });
     expect(calls[0]?.url).toContain('/WABA-1/flows');
     expect(calls[0]?.method).toBe('POST');
     expect(calls[0]?.body).toEqual({ name: 'Onboarding', categories: ['SIGN_UP'], publish: false });
@@ -228,7 +228,8 @@ describe('POST /instances/:id/whatsapp-flows/send', () => {
     expect(res.status).toBe(201);
     const json = (await res.json()) as { messageId: string; flowToken: string };
     expect(json.messageId).toBe('wamid.SENT-FLOW');
-    expect(json.flowToken).toMatch(/^[0-9a-f-]{36}$/);
+    // Structured token: omni.<flowRef>.<uuid> — the data endpoint parses the ref out.
+    expect(json.flowToken).toMatch(/^omni\.FLOW-1\.[0-9a-f-]{36}$/);
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const [instanceId, message] = sendMessage.mock.calls[0] as [

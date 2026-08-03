@@ -105,6 +105,9 @@ export const CORE_EVENT_TYPES = [
   // Channel-side operator alerts (Meta WABA quality drops, account flags, etc.)
   // Single event; consumers filter on payload.alertType.
   'channel.alert',
+  // WhatsApp Flows — one event per data-exchange endpoint hit (INIT/data_exchange/BACK).
+  // Observability + async consumers; the synchronous screen response is resolved in-process.
+  'flow.data_exchange',
 ] as const;
 
 export type CoreEventType = (typeof CORE_EVENT_TYPES)[number];
@@ -958,6 +961,32 @@ export interface TemplateStatusChangedPayload {
   rejectionReason?: string;
 }
 
+// ─── WhatsApp Flows data exchange ─────────────────────────────────────────
+
+/**
+ * Emitted once per WhatsApp Flows data-endpoint hit (after the synchronous
+ * encrypted response has been resolved in-process). Never emitted for `ping`
+ * health checks. `flowId` is parsed from structured flow tokens
+ * (`omni.<flowId>.<uuid>`) and is null for caller-supplied opaque tokens.
+ */
+export interface FlowDataExchangePayload {
+  instanceId: string;
+  channelType: ChannelType;
+  /** Meta flow id when derivable from the flow token, else null. */
+  flowId: string | null;
+  /** Echoed verbatim from the send — correlates endpoint hits to the send. */
+  flowToken: string;
+  action: 'INIT' | 'data_exchange' | 'BACK';
+  /** Screen the user was on (empty for INIT). */
+  screen?: string;
+  /** Decrypted user-submitted data for this step. */
+  data?: Record<string, unknown>;
+  /** Screen the resolver responded with (SUCCESS terminates the flow). */
+  responseScreen?: string;
+  /** Wall-clock time spent resolving the response. */
+  durationMs: number;
+}
+
 /**
  * Event type map for type-safe event handling (core events only)
  */
@@ -1031,6 +1060,7 @@ export interface EventPayloadMap {
   'voice.user_left_channel': VoiceUserChannelPayload;
   'template.status_changed': TemplateStatusChangedPayload;
   'channel.alert': ChannelAlertPayload;
+  'flow.data_exchange': FlowDataExchangePayload;
 }
 
 /**

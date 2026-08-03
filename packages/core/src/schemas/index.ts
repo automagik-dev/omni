@@ -14,4 +14,5 @@ export * from './instance';
 export * from './message';
 export * from './person';
 export * from './whatsapp-cloud';
+export * from './whatsapp-flows';
 export * from './hermes';

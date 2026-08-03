@@ -46,6 +46,7 @@ import { registerProviderSchemas } from '../schemas/openapi/providers';
 import { registerSettingsSchemas } from '../schemas/openapi/settings';
 import { registerVoiceSchemas } from '../schemas/openapi/voice';
 import { registerWebhookSchemas } from '../schemas/openapi/webhooks';
+import { registerWhatsappFlowsSchemas } from '../schemas/openapi/whatsapp-flows';
 
 // Register all schemas
 registerAgentSchemas(registry);
@@ -71,6 +72,7 @@ registerJourneySchemas(registry);
 registerConversationSchemas(registry);
 registerFollowUpSchemas(registry);
 registerVoiceSchemas(registry);
+registerWhatsappFlowsSchemas(registry);
 // Flag-gated, but still documented: "no REST endpoints without OpenAPI docs"
 // has no exception for a surface that 404s when the flag is off.
 registerPlatformTenantSchemas(registry);

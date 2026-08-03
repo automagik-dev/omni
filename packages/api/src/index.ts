@@ -214,6 +214,23 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
     pluginLog.warn('Some channel plugins failed to load', { failed: result.failed });
   }
 
+  // Smoke-test harness for the WhatsApp Flows data-exchange path: register the
+  // reference resolver as the given instance's default. Env-gated — set
+  // META_FLOWS_DEMO_INSTANCE=<instanceId> in dev only; without it nothing is
+  // registered and unresolved flows degrade to an in-screen error message.
+  const flowsDemoInstance = process.env.META_FLOWS_DEMO_INSTANCE;
+  if (flowsDemoInstance) {
+    const waCloud = result.registry.get('whatsapp-cloud');
+    if (waCloud && 'flowResolvers' in waCloud) {
+      const { createDemoFlowResolver } = await import('@omni/channel-whatsapp-cloud');
+      (waCloud as import('@omni/channel-whatsapp-cloud').WhatsAppCloudPlugin).flowResolvers.registerInstanceDefault(
+        flowsDemoInstance,
+        createDemoFlowResolver(),
+      );
+      pluginLog.info('WhatsApp Flows demo resolver registered', { instanceId: flowsDemoInstance });
+    }
+  }
+
   // Auto-reconnect previously active instances.
   //
   // G5 (ADR-0008/ADR-0003): the startup reconnect is a whole-table `instances`

@@ -32,6 +32,8 @@ import type { ChannelType, ContentType } from '@omni/core/types';
 
 import { WHATSAPP_CLOUD_CAPABILITIES } from './capabilities';
 import { MetaWhatsAppClient } from './client';
+import { FlowResolverRegistry } from './flows/resolver';
+import { handleFlowDataRequest } from './handlers/flow-data';
 import { handleMetaWebhook } from './handlers/webhook';
 import {
   type SendTemplateButton,
@@ -337,6 +339,35 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     }
 
     return handleMetaWebhook(request, this, appSecret, verifyToken);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // WhatsApp Flows data-exchange endpoint
+  // ─────────────────────────────────────────────────────────────
+
+  /** Screen resolvers for endpoint-backed flows (see flows/resolver.ts). */
+  readonly flowResolvers = new FlowResolverRegistry();
+
+  /**
+   * Handle one encrypted data-exchange request for `instanceId`. The caller
+   * (API public route) owns instance lookup and private-key unsealing — this
+   * method owns signature verification, crypto and screen resolution.
+   */
+  async handleFlowData(request: Request, opts: { instanceId: string; privateKeyPem: string }): Promise<Response> {
+    return handleFlowDataRequest(request, {
+      instanceId: opts.instanceId,
+      channelType: this.id,
+      privateKeyPem: opts.privateKeyPem,
+      appSecret: process.env.META_APP_SECRET ?? '',
+      registry: this.flowResolvers,
+      logger: this.logger,
+      publishEvent: (payload) =>
+        this.eventBus.publish('flow.data_exchange', payload, {
+          instanceId: opts.instanceId,
+          channelType: this.id,
+          source: `channel:${this.id}`,
+        }),
+    });
   }
 
   // ─────────────────────────────────────────────────────────────

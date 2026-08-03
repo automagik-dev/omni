@@ -295,6 +295,19 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'claim. Responses are fixed acks (200/401) and carry no row data; unknown phone_number_id still acks 200 ' +
       'so the surface is not a resource-existence oracle.',
   },
+  {
+    route: 'POST /api/v2/channels/whatsapp-cloud/flows/data/:instanceId',
+    class: 'public-by-contract',
+    justification:
+      "WhatsApp Flows data-exchange endpoint. Auth-exempt for Meta's servers; authenticity is double: the " +
+      'X-Hub-Signature-256 HMAC verified against the server-held META_APP_SECRET over the raw body (432 on ' +
+      'mismatch), and RSA-OAEP payload encryption — only the private key registered for the :instanceId row can ' +
+      'decrypt the request (421 otherwise), so a forged path yields nothing. The tenant comes from the ' +
+      'server-side instance record addressed by the path (the Gupshup/Twilio per-instance precedent); the ' +
+      'private key is unsealed server-side via openCredentialField under that record’s tenant. Responses are ' +
+      'AES-GCM-encrypted screen payloads readable only by the requesting WhatsApp client, or bare status codes ' +
+      '(404/421/427/432) that reveal no row data.',
+  },
 ];
 
 /**
@@ -358,6 +371,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'DELETE /api/v2/follow-up/chats/:id',
   'DELETE /api/v2/follow-up/instances/:id',
   'DELETE /api/v2/instances/:id',
+  'DELETE /api/v2/instances/:id/whatsapp-flows/:flowId',
   'DELETE /api/v2/instances/:id/block',
   'DELETE /api/v2/instances/:id/guilds/:guildId/config',
   'DELETE /api/v2/instances/:id/profile/picture',
@@ -447,7 +461,9 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/instances/:id/whatsapp-cloud/profile',
   'GET /api/v2/instances/:id/whatsapp-cloud/quality',
   'GET /api/v2/instances/:id/whatsapp-flows',
+  'GET /api/v2/instances/:id/whatsapp-flows/:flowId',
   'GET /api/v2/instances/:id/whatsapp-flows/:flowId/preview',
+  'GET /api/v2/instances/:id/whatsapp-flows/keys',
   'GET /api/v2/instances/:id/whatsapp-templates',
   'GET /api/v2/instances/:id/whatsapp-templates/:templateId',
   'GET /api/v2/instances/:instanceId/routes',
@@ -579,7 +595,9 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/instances/:id/whatsapp-cloud/register',
   'POST /api/v2/instances/:id/whatsapp-cloud/subscribe-app',
   'POST /api/v2/instances/:id/whatsapp-flows',
+  'POST /api/v2/instances/:id/whatsapp-flows/:flowId/deprecate',
   'POST /api/v2/instances/:id/whatsapp-flows/:flowId/publish',
+  'POST /api/v2/instances/:id/whatsapp-flows/keys',
   'POST /api/v2/instances/:id/whatsapp-flows/send',
   'POST /api/v2/instances/:id/whatsapp-templates',
   'POST /api/v2/instances/:id/whatsapp-templates/:templateId/send-test',
@@ -638,6 +656,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'PUT /api/v2/instances/:id/profile/name',
   'PUT /api/v2/instances/:id/profile/picture',
   'PUT /api/v2/instances/:id/whatsapp-cloud/profile',
+  'PUT /api/v2/instances/:id/whatsapp-flows/:flowId',
   'PUT /api/v2/instances/:id/profile/status',
   'PUT /api/v2/payload-config/:eventType',
   'PUT /api/v2/settings/:key',
