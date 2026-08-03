@@ -9,7 +9,7 @@ describe('Plugin validation', () => {
   describe('isValidChannelType', () => {
     it('should accept valid channel types', () => {
       expect(isValidChannelType('whatsapp-baileys')).toBe(true);
-      expect(isValidChannelType('whatsapp-cloud')).toBe(true);
+      expect(isValidChannelType('whatsapp-business')).toBe(true);
       expect(isValidChannelType('discord')).toBe(true);
       expect(isValidChannelType('slack')).toBe(true);
       expect(isValidChannelType('telegram')).toBe(true);

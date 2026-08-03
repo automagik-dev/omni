@@ -40,7 +40,7 @@ import { trustRoutes } from './trust';
 import { turnsRoutes } from './turns';
 import { voiceRoutes } from './voice';
 import { webhooksRoutes } from './webhooks';
-import { whatsappCloudRoutes } from './whatsapp-cloud';
+import { whatsappBusinessRoutes } from './whatsapp-business';
 import { whatsappFlowsRoutes } from './whatsapp-flows';
 
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
@@ -75,7 +75,7 @@ v2Routes.route('/trust', trustRoutes); // Genie host fingerprint trust (omni-hos
 v2Routes.route('/voice', voiceRoutes); // Voice session management - must be before root /:id catch-all (issue #496)
 v2Routes.route('/follow-up', followUpRoutes); // Idle-chat follow-up config at /api/v2/follow-up/{agents|instances|chats}/:id (issue #404) - must be before root /:id catch-all (issue #496)
 v2Routes.route('/handoffs', handoffsRoutes); // Handoff audit log at /api/v2/handoffs - must be before root /:id catch-all (issue #496)
-v2Routes.route('/instances', whatsappCloudRoutes); // WhatsApp Cloud (Meta) per-instance routes at /api/v2/instances/:id/whatsapp-cloud/*
+v2Routes.route('/instances', whatsappBusinessRoutes); // WhatsApp Cloud (Meta) per-instance routes at /api/v2/instances/:id/whatsapp-business/*
 v2Routes.route('/', templatesRoutes); // WhatsApp Cloud HSM templates at /api/v2/instances/:id/whatsapp-templates/* (multi-segment paths only — safe re the /:id catch-all, mounted here per the issue #496 invariant anyway)
 v2Routes.route('/', whatsappFlowsRoutes); // WhatsApp Flows at /api/v2/instances/:id/whatsapp-flows/* (multi-segment paths only — same invariant as templatesRoutes above)
 

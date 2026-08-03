@@ -14,7 +14,7 @@ import hermesPlugin from '@omni/channel-hermes';
 import slackPlugin from '@omni/channel-slack';
 import telegramPlugin from '@omni/channel-telegram';
 import whatsappPlugin from '@omni/channel-whatsapp';
-import whatsappCloudPlugin from '@omni/channel-whatsapp-cloud';
+import whatsappBusinessPlugin from '@omni/channel-whatsapp-business';
 
 // Pre-register all bundled channel plugins
 // Type assertion needed: channel plugins implement ChannelPlugin but
@@ -23,7 +23,7 @@ for (const plugin of [
   telegramPlugin,
   discordPlugin,
   whatsappPlugin,
-  whatsappCloudPlugin,
+  whatsappBusinessPlugin,
   slackPlugin,
   gupshupPlugin,
   hermesPlugin,

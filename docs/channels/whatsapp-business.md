@@ -5,7 +5,7 @@
 
 ## When to use this vs. WhatsApp (Baileys)
 
-| Concern | `whatsapp-baileys` | `whatsapp-cloud` |
+| Concern | `whatsapp-baileys` | `whatsapp-business` |
 |---|---|---|
 | Officiality | Unofficial (Baileys reverse-engineered protocol) | ✅ Official Meta API |
 | Risk of number ban | Yes (Meta's anti-ToS detection) | No |
@@ -17,7 +17,7 @@
 | Cost | Free | Per-conversation pricing (Meta) |
 | Embedded Signup OAuth | N/A | ✅ Supported |
 
-Use `whatsapp-cloud` for B2B, regulated industries, or any case where number-ban risk is unacceptable. Use `whatsapp-baileys` for consumer / community use cases or when group chats matter.
+Use `whatsapp-business` for B2B, regulated industries, or any case where number-ban risk is unacceptable. Use `whatsapp-baileys` for consumer / community use cases or when group chats matter.
 
 ## Prerequisites
 
@@ -49,7 +49,7 @@ META_WEBHOOK_BASE_URL=https://api.example.com # Public URL Meta should hit (only
 
 In Meta App Dashboard → **WhatsApp** → **Configuration**:
 
-1. **Callback URL**: `${META_WEBHOOK_BASE_URL}/api/v2/channels/whatsapp-cloud/webhook`
+1. **Callback URL**: `${META_WEBHOOK_BASE_URL}/api/v2/channels/whatsapp-business/webhook`
 2. **Verify Token**: same value as `META_VERIFY_TOKEN` in your env.
 3. **Webhook Fields** to subscribe to (all of these — Omni emits a `channel.alert` core event for the WABA-scoped ones):
    - `messages` — inbound messages + outbound status updates (REQUIRED)
@@ -61,6 +61,22 @@ In Meta App Dashboard → **WhatsApp** → **Configuration**:
 
 Meta will GET your webhook URL with `hub.mode=subscribe&hub.verify_token=<token>&hub.challenge=<n>`. Omni's handler responds with the challenge if the token matches.
 
+### Legacy URLs (channel renamed from `whatsapp-cloud`)
+
+This channel was called `whatsapp-cloud` until 2026-08 ("Cloud API" named a
+distinction against Meta's On-Premises API, retired in Oct/2025). Every old
+URL keeps working **permanently** — do not rush to reconfigure Meta apps:
+
+| Legacy (frozen alias) | Canonical |
+|---|---|
+| `/api/v2/channels/whatsapp-cloud/webhook` | `/api/v2/channels/whatsapp-business/webhook` |
+| `/api/v2/channels/whatsapp-cloud/flows/data/:instanceId` | `/api/v2/channels/whatsapp-business/flows/data/:instanceId` |
+| `/api/v2/instances/:id/whatsapp-cloud/*` | `/api/v2/instances/:id/whatsapp-business/*` |
+
+Stored data was migrated (`instances.channel` etc. → `whatsapp-business`,
+migration 0047); historical `omni_events` jsonb payloads keep the old
+`channelType` value — queries over historical events must match both.
+
 ### 3. Onboard a phone number
 
 You have two paths:
@@ -70,7 +86,7 @@ You have two paths:
 1. In Omni UI: click "Add Instance" → channel "WhatsApp Cloud API" → choose "Embedded Signup".
 2. Meta JS SDK pops a Facebook login dialog with `FB.login({ config_id: META_EMBEDDED_SIGNUP_CONFIG_ID })`.
 3. User authorizes; the SDK returns a short-lived `code`.
-4. Omni POSTs the code to `/api/v2/instances/:id/whatsapp-cloud/oauth/exchange` which:
+4. Omni POSTs the code to `/api/v2/instances/:id/whatsapp-business/oauth/exchange` which:
    - Exchanges code → long-lived `access_token` via `/oauth/access_token`.
    - Discovers WABAs + phone numbers via `/me/businesses` + `/{waba_id}/phone_numbers`.
 5. User picks the phone to onboard.
@@ -99,7 +115,7 @@ omni instances connect <instance-id> \
 For numbers added via Embedded Signup, Meta requires a 6-digit PIN registration before the number can send:
 
 ```bash
-omni instances whatsapp-cloud:register <instance-id> --pin 123456
+omni instances whatsapp-business:register <instance-id> --pin 123456
 ```
 
 The PIN is one you set during onboarding — it's also required if you ever de-register and re-register.
@@ -135,7 +151,7 @@ The template must be **approved** by Meta beforehand (status: `APPROVED` in `/wh
 
 ### Other content types
 
-`image`, `audio`, `video`, `document`, `sticker`, `location`, `contact`, `reaction`. See `packages/channel-whatsapp-cloud/src/senders/` for each builder.
+`image`, `audio`, `video`, `document`, `sticker`, `location`, `contact`, `reaction`. See `packages/channel-whatsapp-business/src/senders/` for each builder.
 
 ## Channel alerts (WABA-scoped webhooks)
 
@@ -144,7 +160,7 @@ Beyond message + template lifecycle, Meta pushes operator-facing alerts on the W
 ```ts
 {
   instanceId: string;
-  channelType: 'whatsapp-cloud';
+  channelType: 'whatsapp-business';
   alertType: 'account_alerts' | 'account_update' | 'phone_number_quality_update' | 'phone_number_name_update' | 'other';
   severity: 'info' | 'warning' | 'critical';   // inferred — see source
   message: string;                              // best-effort human summary
@@ -200,7 +216,7 @@ Use the `template.status_changed` core event (`packages/core/src/events/types.ts
 
 ### Quality rating dropped to RED
 
-- Meta lowered your number's quality due to user reports / blocks. Pull `/whatsapp-cloud/quality` to inspect. Reduce send volume + improve template targeting.
+- Meta lowered your number's quality due to user reports / blocks. Pull `/whatsapp-business/quality` to inspect. Reduce send volume + improve template targeting.
 
 ## Privacy / PII
 
@@ -211,7 +227,7 @@ Sentry scrubbing in `packages/api/src/lib/sentry-scrub.ts` masks the following f
 - `profile_name` / `verified_name` / `display_name` field values → `[redacted]`.
 - Free-text patterns: phone numbers → `[phone]`, JIDs → `[jid]`, emails → `[email]`, Meta tokens (EAA prefix, 40+ chars) → `[meta_token]`, Bearer headers → `Bearer [token]`.
 
-Audited via `packages/api/src/lib/__tests__/sentry-scrub-whatsapp-cloud-audit.test.ts` — every release runs this against a synthetic Meta event fixture.
+Audited via `packages/api/src/lib/__tests__/sentry-scrub-whatsapp-business-audit.test.ts` — every release runs this against a synthetic Meta event fixture.
 
 ## References
 

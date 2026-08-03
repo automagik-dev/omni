@@ -330,6 +330,13 @@
       "when": 1784600000000,
       "tag": "0046_whatsapp_flow_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1784700000000,
+      "tag": "0047_rename_whatsapp_cloud_to_business",
+      "breakpoints": true
     }
   ]
 }

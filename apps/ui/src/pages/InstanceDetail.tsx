@@ -122,7 +122,7 @@ export function InstanceDetail() {
               <Webhook className="mr-2 h-4 w-4" />
               Webhooks
             </TabsTrigger>
-            {instance.channel === 'whatsapp-cloud' && (
+            {instance.channel === 'whatsapp-business' && (
               <TabsTrigger value="templates">
                 <FileText className="mr-2 h-4 w-4" />
                 Templates
@@ -346,7 +346,7 @@ export function InstanceDetail() {
           </TabsContent>
 
           {/* Templates Tab (WhatsApp Cloud only) */}
-          {instance.channel === 'whatsapp-cloud' && (
+          {instance.channel === 'whatsapp-business' && (
             <TabsContent value="templates">
               <TemplatesTab instanceId={instance.id} />
             </TabsContent>

@@ -213,18 +213,18 @@ function buildInstanceConnectOptions(instance: {
   if (instance.channel === 'twilio-whatsapp') {
     applyTwilioWhatsAppOptions(options, instance);
   }
-  if (instance.channel === 'whatsapp-cloud') {
-    applyWhatsAppCloudOptions(options, instance);
+  if (instance.channel === 'whatsapp-business') {
+    applyWhatsAppBusinessOptions(options, instance);
   }
   return options;
 }
 
 /**
- * whatsapp-cloud reconnect credentials — the plugin's `connect()` reads these
+ * whatsapp-business reconnect credentials — the plugin's `connect()` reads these
  * from `config.options` (same keys as `config.credentials` in the manual
  * connect route). Persisted on `instances` by the connect/oauth routes.
  */
-function applyWhatsAppCloudOptions(
+function applyWhatsAppBusinessOptions(
   options: Record<string, unknown>,
   instance: {
     metaAccessToken?: string | null;

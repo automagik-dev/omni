@@ -2,7 +2,7 @@
  * Meta WhatsApp Cloud — Embedded Signup OAuth helpers.
  *
  * Pure functions (no DB, no Hono). The corresponding REST surface lives in
- * `packages/api/src/routes/v2/whatsapp-cloud.ts` (Group 5).
+ * `packages/api/src/routes/v2/whatsapp-business.ts` (Group 5).
  *
  * Ported from TalkFlow `meta_oauth_service.py`:
  *   - exchange_code_for_token

@@ -2771,7 +2771,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -2816,7 +2816,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -2913,7 +2913,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -3024,7 +3024,18 @@ export interface components {
                  * @description Link button URL (mutually exclusive with data)
                  */
                 url?: string;
+                /** @description Secondary line under the option (WhatsApp Cloud list rows, ≤72 chars) */
+                description?: string;
             }[];
+            /** @description List presentation (WhatsApp Cloud) */
+            list?: {
+                /** @description Section header above the options (≤24 chars) */
+                sectionTitle?: string;
+                /** @description Label of the button that opens the list (≤20 chars, default "Options") */
+                buttonLabel?: string;
+                /** @description Render a list even with ≤3 options (implied by any description/sectionTitle) */
+                forceList?: boolean;
+            };
             /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
             requestLocation?: boolean;
         };
@@ -6360,7 +6371,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6425,7 +6436,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -6473,7 +6484,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6558,7 +6569,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -6607,7 +6618,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6737,7 +6748,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -6785,7 +6796,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-cloud" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -7701,7 +7712,18 @@ export interface operations {
                          * @description Link button URL (mutually exclusive with data)
                          */
                         url?: string;
+                        /** @description Secondary line under the option (WhatsApp Cloud list rows, ≤72 chars) */
+                        description?: string;
                     }[];
+                    /** @description List presentation (WhatsApp Cloud) */
+                    list?: {
+                        /** @description Section header above the options (≤24 chars) */
+                        sectionTitle?: string;
+                        /** @description Label of the button that opens the list (≤20 chars, default "Options") */
+                        buttonLabel?: string;
+                        /** @description Render a list even with ≤3 options (implied by any description/sectionTitle) */
+                        forceList?: boolean;
+                    };
                     /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
                     requestLocation?: boolean;
                 };
@@ -17770,7 +17792,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description Not a whatsapp-cloud instance / not connected */
+            /** @description Not a whatsapp-business instance / not connected */
             400: {
                 headers: {
                     [name: string]: unknown;

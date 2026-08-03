@@ -139,7 +139,7 @@ describe('AgnoClient', () => {
           instanceId: 'inst-1',
           chatId: 'chat-123',
           messageId: 'msg-789',
-          channel: 'whatsapp-cloud',
+          channel: 'whatsapp-business',
         },
       });
 
@@ -156,7 +156,7 @@ describe('AgnoClient', () => {
       expect(headers['x-khal-message-id']).toBe('msg-789');
       expect(headers['x-omni-instance-id']).toBe('inst-1');
       expect(headers['x-omni-chat-id']).toBe('chat-123');
-      expect(headers['x-omni-channel']).toBe('whatsapp-cloud');
+      expect(headers['x-omni-channel']).toBe('whatsapp-business');
       expect(formData.get('session_id')).toBe('khal-session-123');
     });
 
@@ -181,7 +181,7 @@ describe('AgnoClient', () => {
         userId: 'person-uuid',
         platform: {
           id: '5511999999999',
-          channel: 'whatsapp-cloud',
+          channel: 'whatsapp-business',
           instanceId: 'inst-1',
         },
         sender: { displayName: 'Example User' },
@@ -194,7 +194,7 @@ describe('AgnoClient', () => {
           instanceId: 'inst-1',
           chatId: 'group-1',
           messageId: 'msg-789',
-          channel: 'whatsapp-cloud',
+          channel: 'whatsapp-business',
         },
       });
 
@@ -206,7 +206,7 @@ describe('AgnoClient', () => {
       expect(formData.get('reply_to_message_id')).toBe('msg-456');
       expect(JSON.parse(String(formData.get('platform')))).toEqual({
         id: '5511999999999',
-        channel: 'whatsapp-cloud',
+        channel: 'whatsapp-business',
         instanceId: 'inst-1',
       });
       expect(JSON.parse(String(formData.get('sender')))).toEqual({ displayName: 'Example User' });
@@ -217,7 +217,7 @@ describe('AgnoClient', () => {
         instanceId: 'inst-1',
         chatId: 'group-1',
         messageId: 'msg-789',
-        channel: 'whatsapp-cloud',
+        channel: 'whatsapp-business',
       });
     });
 

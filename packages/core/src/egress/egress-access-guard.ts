@@ -305,7 +305,7 @@ export const REGISTERED_EGRESS: readonly RegisteredEgress[] = [
 
   // --- platform-vendor: compile-time-fixed vendor/first-party hosts --------
   {
-    file: 'packages/api/src/routes/v2/whatsapp-cloud.ts',
+    file: 'packages/api/src/routes/v2/whatsapp-business.ts',
     class: 'platform-vendor',
     sites: 1,
     justification:

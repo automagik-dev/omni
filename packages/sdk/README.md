@@ -67,7 +67,7 @@ const instance = await omni.instances.get('uuid');
 // Create an instance
 const instance = await omni.instances.create({
   name: 'My Instance',
-  channel: 'whatsapp-baileys', // or 'whatsapp-cloud', 'discord', 'slack', 'telegram'
+  channel: 'whatsapp-baileys', // or 'whatsapp-business', 'discord', 'slack', 'telegram'
   agentProviderId: 'optional-provider-uuid',
   agentId: 'default',
 });

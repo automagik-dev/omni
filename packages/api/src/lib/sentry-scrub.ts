@@ -92,7 +92,7 @@ const BEARER_TOKEN_RE = /\bBearer\s+[A-Za-z0-9_\-.+/=]{20,}/gi;
  *
  * Match is case-insensitive. The exact list trades a tiny risk of
  * over-redaction (e.g. legitimate non-sensitive `description` in some span
- * data) for guaranteed coverage of the wish's whatsapp-cloud audit list:
+ * data) for guaranteed coverage of the wish's whatsapp-business audit list:
  * `text`, `body`, `caption`, `profile_name`, `verified_name`, `access_token`.
  */
 const SENSITIVE_KEYS = new Set<string>([

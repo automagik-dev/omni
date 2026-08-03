@@ -338,18 +338,18 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /voice/sessions': 'voice:read',
   'GET /voice/sessions/:id': 'voice:read',
 
-  // --- whatsapp-cloud (Meta Cloud API): mounted at /instances/:id/whatsapp-cloud/* ---
-  'POST /instances/:id/whatsapp-cloud/oauth/exchange': 'instances:write',
-  'POST /instances/:id/whatsapp-cloud/connect': 'instances:write',
-  'POST /instances/:id/whatsapp-cloud/register': 'instances:write',
-  'POST /instances/:id/whatsapp-cloud/subscribe-app': 'instances:write',
-  'GET /instances/:id/whatsapp-cloud/connection': 'instances:read',
-  'DELETE /instances/:id/whatsapp-cloud/connection': 'instances:write',
-  'GET /instances/:id/whatsapp-cloud/quality': 'instances:read',
-  'GET /instances/:id/whatsapp-cloud/analytics': 'instances:read',
-  'GET /instances/:id/whatsapp-cloud/profile': 'instances:read',
-  'PUT /instances/:id/whatsapp-cloud/profile': 'instances:write',
-  'POST /instances/:id/whatsapp-cloud/profile/photo': 'instances:write',
+  // --- whatsapp-business (Meta Cloud API): mounted at /instances/:id/whatsapp-business/* ---
+  'POST /instances/:id/whatsapp-business/oauth/exchange': 'instances:write',
+  'POST /instances/:id/whatsapp-business/connect': 'instances:write',
+  'POST /instances/:id/whatsapp-business/register': 'instances:write',
+  'POST /instances/:id/whatsapp-business/subscribe-app': 'instances:write',
+  'GET /instances/:id/whatsapp-business/connection': 'instances:read',
+  'DELETE /instances/:id/whatsapp-business/connection': 'instances:write',
+  'GET /instances/:id/whatsapp-business/quality': 'instances:read',
+  'GET /instances/:id/whatsapp-business/analytics': 'instances:read',
+  'GET /instances/:id/whatsapp-business/profile': 'instances:read',
+  'PUT /instances/:id/whatsapp-business/profile': 'instances:write',
+  'POST /instances/:id/whatsapp-business/profile/photo': 'instances:write',
 
   // --- whatsapp-flows (mounted at root: /instances/:id/whatsapp-flows/...) ---
   'GET /instances/:id/whatsapp-flows': 'instances:read',

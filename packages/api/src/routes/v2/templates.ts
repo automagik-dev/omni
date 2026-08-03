@@ -1,5 +1,5 @@
 /**
- * WhatsApp Cloud HSM template routes (Group 6 of whatsapp-cloud-channel wish).
+ * WhatsApp Cloud HSM template routes (Group 6 of whatsapp-business-channel wish).
  *
  * Mounted at /api/v2 — routes carry their own /instances/:id/whatsapp-templates
  * prefix so we land alongside other nested instance resources (routes,
@@ -8,7 +8,7 @@
  * Scopes are enforced globally by middleware/scope-enforcer via SCOPE_MAP
  * entries (see packages/api/src/constants/scopes.ts).
  *
- * Pure-service module @omni/channel-whatsapp-cloud/src/templates.ts holds the
+ * Pure-service module @omni/channel-whatsapp-business/src/templates.ts holds the
  * Graph API logic; this file only handles HTTP plumbing + instance access +
  * outbound dispatch.
  */
@@ -21,7 +21,7 @@ import {
   deleteTemplate as metaDeleteTemplate,
   syncTemplatesToDb,
   uploadHeaderMedia,
-} from '@omni/channel-whatsapp-cloud';
+} from '@omni/channel-whatsapp-business';
 import { createLogger } from '@omni/core';
 import {
   MetaTemplateCategorySchema,
@@ -325,7 +325,7 @@ templatesRoutes.post(
       // mirror failed. Log the orphan so it can be reconciled by a sync run.
       // We surface a 500 to the caller because the local state is now lagging
       // Meta; the next ?sync=true list call will resolve it.
-      log.error('[whatsapp-cloud] local template mirror failed after Meta create', {
+      log.error('[whatsapp-business] local template mirror failed after Meta create', {
         instanceId,
         metaTemplateId: result.id,
         name: body.name,

@@ -28,7 +28,7 @@ import { maybeNudgeForGenieBackedAgent } from '../utils/genie-wiring-nudge.js';
 
 const VALID_CHANNELS: Channel[] = [
   'whatsapp-baileys',
-  'whatsapp-cloud',
+  'whatsapp-business',
   'discord',
   'slack',
   'telegram',
@@ -679,16 +679,16 @@ export function createInstancesCommand(): Command {
         try {
           const id = await resolveInstanceId(rawId);
 
-          // WhatsApp Cloud manual connect — hits /whatsapp-cloud/connect when
+          // WhatsApp Cloud manual connect — hits /whatsapp-business/connect when
           // the operator supplies the three required Meta identifiers.
-          const wantsWhatsAppCloud = options.accessToken && options.phoneNumberId && options.wabaId;
+          const wantsWhatsAppBusiness = options.accessToken && options.phoneNumberId && options.wabaId;
 
-          if (wantsWhatsAppCloud) {
+          if (wantsWhatsAppBusiness) {
             // Verify the instance channel matches before hitting the endpoint.
             const instance = await client.instances.get(id);
-            if ((instance as { channel?: string }).channel !== 'whatsapp-cloud') {
+            if ((instance as { channel?: string }).channel !== 'whatsapp-business') {
               output.error(
-                `Instance ${id} is not a whatsapp-cloud instance (channel=${(instance as { channel?: string }).channel}). --access-token/--phone-number-id/--waba-id only apply to whatsapp-cloud.`,
+                `Instance ${id} is not a whatsapp-business instance (channel=${(instance as { channel?: string }).channel}). --access-token/--phone-number-id/--waba-id only apply to whatsapp-business.`,
               );
               return;
             }
@@ -698,7 +698,7 @@ export function createInstancesCommand(): Command {
             const baseUrl = cfg.apiUrl ?? 'http://localhost:8882';
             const apiKey = cfg.apiKey ?? '';
 
-            const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/whatsapp-cloud/connect`, {
+            const resp = await fetch(`${baseUrl}/api/v2/instances/${id}/whatsapp-business/connect`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
               body: JSON.stringify({

@@ -34,7 +34,7 @@ function mountMessagesRoutes(options: MountOptions = {}): {
   app.use('*', async (c, next) => {
     c.set('services', {
       instances: {
-        getById: mock(async (id: string) => ({ id, channel: 'whatsapp-cloud' })),
+        getById: mock(async (id: string) => ({ id, channel: 'whatsapp-business' })),
       },
       persons: {
         getIdentityForChannel: mock(async () => null),

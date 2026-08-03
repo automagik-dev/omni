@@ -22,7 +22,7 @@ import type { Database, NewWhatsappTemplate, WhatsappTemplate } from '@omni/db';
 import { and, eq, inArray, or, whatsappTemplates } from '@omni/db';
 
 import type { MetaWhatsAppClient } from './client';
-import type { WhatsAppCloudPlugin } from './plugin';
+import type { WhatsAppBusinessPlugin } from './plugin';
 import { MetaApiError, MetaErrorCode, mapHttpStatusToMetaError } from './utils/errors';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -378,7 +378,7 @@ export async function syncTemplatesToDb(
 export async function handleTemplateStatusUpdate(
   db: Database,
   update: MetaTemplateStatusUpdate,
-  plugin: WhatsAppCloudPlugin,
+  plugin: WhatsAppBusinessPlugin,
 ): Promise<void> {
   const newStatus = mapMetaEventToStatus(update.event);
 

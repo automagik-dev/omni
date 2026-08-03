@@ -104,7 +104,7 @@ async function makeContext(opts: HarnessOptions = {}): Promise<{
   const events: EventPayloadMap['flow.data_exchange'][] = [];
   const ctx: FlowDataHandlerContext = {
     instanceId: 'inst-1',
-    channelType: 'whatsapp-cloud',
+    channelType: 'whatsapp-business',
     privateKeyPem: opts.privateKeyPem ?? privateKeyPem,
     appSecret: APP_SECRET,
     registry: opts.registry ?? new FlowResolverRegistry(),

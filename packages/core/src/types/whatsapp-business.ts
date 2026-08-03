@@ -3,7 +3,7 @@
  *
  * Mirrors the Graph API component shapes for HSM templates and webhook payloads.
  * Source of truth for runtime validation lives at:
- *   packages/core/src/schemas/whatsapp-cloud.ts (Zod schemas)
+ *   packages/core/src/schemas/whatsapp-business.ts (Zod schemas)
  */
 
 export const META_TEMPLATE_CATEGORIES = ['MARKETING', 'UTILITY', 'AUTHENTICATION'] as const;
@@ -54,7 +54,7 @@ export interface WhatsAppTemplateButtonsComponent {
   buttons: MetaTemplateButton[];
 }
 
-// WhatsAppTemplateComponent is exported from ../schemas/whatsapp-cloud (Zod source of truth).
+// WhatsAppTemplateComponent is exported from ../schemas/whatsapp-business (Zod source of truth).
 
 /**
  * Webhook value.metadata shape — present on every entry change.
@@ -96,4 +96,4 @@ export interface MetaInboundContext {
 export type MetaStatusType = 'sent' | 'delivered' | 'read' | 'failed';
 
 // MetaWebhookStatusEntry and MetaTemplateStatusUpdate are exported from
-// ../schemas/whatsapp-cloud (Zod source of truth).
+// ../schemas/whatsapp-business (Zod source of truth).

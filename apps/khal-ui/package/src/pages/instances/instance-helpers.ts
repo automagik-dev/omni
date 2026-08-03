@@ -21,7 +21,7 @@ export function isProductionInstance(id: string | null | undefined): boolean {
 
 const CHANNEL_LABELS: Record<string, string> = {
   'whatsapp-baileys': 'WhatsApp (Baileys)',
-  'whatsapp-cloud': 'WhatsApp Cloud',
+  'whatsapp-business': 'WhatsApp Cloud',
   'twilio-whatsapp': 'Twilio WhatsApp',
   discord: 'Discord',
   slack: 'Slack',

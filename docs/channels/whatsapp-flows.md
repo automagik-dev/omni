@@ -94,7 +94,7 @@ Setup, once per instance:
 
 1. Set `META_FLOWS_PUBLIC_BASE_URL` (public HTTPS base, e.g. the ngrok URL in
    dev). The data endpoint is
-   `POST {base}/api/v2/channels/whatsapp-cloud/flows/data/:instanceId`
+   `POST {base}/api/v2/channels/whatsapp-business/flows/data/:instanceId`
    (auth-exempt; authenticated by Meta's HMAC signature + the fact that only
    the registered key can decrypt).
 2. `POST .../whatsapp-flows/keys` — generates a 2048-bit RSA keypair, uploads
@@ -107,7 +107,7 @@ Setup, once per instance:
 4. Register a resolver (in-process — must answer within ~8s):
 
 ```typescript
-import plugin from '@omni/channel-whatsapp-cloud';
+import plugin from '@omni/channel-whatsapp-business';
 
 plugin.flowResolvers.register('<flowId>', {
   resolve: async ({ action, screen, data, flowToken }) => {
@@ -149,10 +149,10 @@ the endpoint never hangs and never 5xxs for resolver failures.
 | Local Flow JSON validator | `packages/core/src/schemas/whatsapp-flows.ts` |
 | Management routes | `packages/api/src/routes/v2/whatsapp-flows.ts` |
 | Public data endpoint mount | `packages/api/src/app.ts` (flows/data) |
-| Crypto (RSA-OAEP + AES-GCM) | `packages/channel-whatsapp-cloud/src/utils/flow-crypto.ts` |
-| Endpoint handler | `packages/channel-whatsapp-cloud/src/handlers/flow-data.ts` |
-| Resolver registry + tokens | `packages/channel-whatsapp-cloud/src/flows/resolver.ts` |
-| Flow sender | `packages/channel-whatsapp-cloud/src/senders/flow.ts` |
-| Graph API client (flows section) | `packages/channel-whatsapp-cloud/src/client.ts` |
+| Crypto (RSA-OAEP + AES-GCM) | `packages/channel-whatsapp-business/src/utils/flow-crypto.ts` |
+| Endpoint handler | `packages/channel-whatsapp-business/src/handlers/flow-data.ts` |
+| Resolver registry + tokens | `packages/channel-whatsapp-business/src/flows/resolver.ts` |
+| Flow sender | `packages/channel-whatsapp-business/src/senders/flow.ts` |
+| Graph API client (flows section) | `packages/channel-whatsapp-business/src/client.ts` |
 | SDK builder | `packages/sdk/src/flow-builder.ts` |
 | Key storage | `packages/db/src/schema.ts` (`whatsapp_flow_keys`) |

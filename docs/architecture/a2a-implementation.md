@@ -75,7 +75,7 @@ omni-1h2  Foundation (CHANNEL_TYPES, agentCard, event types)
 ```typescript
 export const CHANNEL_TYPES = [
   'whatsapp-baileys',
-  'whatsapp-cloud',
+  'whatsapp-business',
   'discord',
   'slack',
   'telegram',

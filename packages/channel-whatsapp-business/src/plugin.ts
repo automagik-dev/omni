@@ -30,7 +30,7 @@ import { WhatsAppFlowSendSchema } from '@omni/core/schemas';
 import type { MetaInboundMessage, MetaTemplateStatusUpdate, MetaWebhookStatusEntry } from '@omni/core/schemas';
 import type { ChannelType, ContentType } from '@omni/core/types';
 
-import { WHATSAPP_CLOUD_CAPABILITIES } from './capabilities';
+import { WHATSAPP_BUSINESS_CAPABILITIES } from './capabilities';
 import { MetaWhatsAppClient } from './client';
 import { FlowResolverRegistry } from './flows/resolver';
 import { handleFlowDataRequest } from './handlers/flow-data';
@@ -48,7 +48,7 @@ import {
   sendTemplate,
   sendText,
 } from './senders';
-import type { MetaSendResponse, WhatsAppCloudConfig } from './types';
+import type { MetaSendResponse, WhatsAppBusinessConfig } from './types';
 import { MetaApiError, MetaErrorCode } from './utils/errors';
 import { toMetaPhone } from './utils/identity';
 
@@ -61,9 +61,9 @@ const META_MEDIA_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'video'
  */
 const downloadGuard = createDownloadGuard();
 
-interface WhatsAppCloudInstanceState {
+interface WhatsAppBusinessInstanceState {
   client: MetaWhatsAppClient;
-  config: WhatsAppCloudConfig;
+  config: WhatsAppBusinessConfig;
   dedupeCache: DedupeCache;
   /**
    * chat (digits-only phone) → wamid of the newest inbound message. Meta's
@@ -76,14 +76,14 @@ interface WhatsAppCloudInstanceState {
 /** Cap on remembered chats per instance — oldest insertion evicted beyond it. */
 const MAX_TYPING_WAMID_CHATS = 1000;
 
-export class WhatsAppCloudPlugin extends BaseChannelPlugin {
-  readonly id = 'whatsapp-cloud' as ChannelType;
-  readonly name = 'WhatsApp (Meta Cloud API)';
+export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
+  readonly id = 'whatsapp-business' as ChannelType;
+  readonly name = 'WhatsApp Business API (Meta)';
   readonly version = '1.0.0';
-  readonly capabilities: ChannelCapabilities = WHATSAPP_CLOUD_CAPABILITIES;
+  readonly capabilities: ChannelCapabilities = WHATSAPP_BUSINESS_CAPABILITIES;
 
   /** instanceId → live state */
-  private waCloudInstances = new Map<string, WhatsAppCloudInstanceState>();
+  private waInstances = new Map<string, WhatsAppBusinessInstanceState>();
 
   /** phone_number_id → instanceId (reverse index — O(1) webhook resolution). */
   private byPhoneNumberId = new Map<string, string>();
@@ -100,10 +100,10 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   }
 
   protected override async onDestroy(): Promise<void> {
-    for (const [, state] of this.waCloudInstances) {
+    for (const [, state] of this.waInstances) {
       state.dedupeCache.dispose();
     }
-    this.waCloudInstances.clear();
+    this.waInstances.clear();
     this.byPhoneNumberId.clear();
     this.byWabaId.clear();
     this.logger.info('WhatsApp Cloud plugin destroyed');
@@ -124,7 +124,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
    *     metaConnectionMethod (optional)
    *
    * The OAuth flow that populates these values lives in Group 5
-   * (packages/api/src/routes/v2/whatsapp-cloud.ts → exchange/connect routes).
+   * (packages/api/src/routes/v2/whatsapp-business.ts → exchange/connect routes).
    */
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
     const creds = (config.credentials ?? {}) as Record<string, unknown>;
@@ -137,19 +137,19 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     if (!accessToken) {
       throw new MetaApiError(
         MetaErrorCode.AUTH_FAILED,
-        'metaAccessToken is required to connect a whatsapp-cloud instance',
+        'metaAccessToken is required to connect a whatsapp-business instance',
       );
     }
     if (!phoneNumberId) {
       throw new MetaApiError(
         MetaErrorCode.PHONE_NOT_FOUND,
-        'metaPhoneNumberId is required to connect a whatsapp-cloud instance',
+        'metaPhoneNumberId is required to connect a whatsapp-business instance',
       );
     }
     if (!wabaId) {
       throw new MetaApiError(
         MetaErrorCode.INVALID_REQUEST,
-        'metaWabaId is required to connect a whatsapp-cloud instance',
+        'metaWabaId is required to connect a whatsapp-business instance',
       );
     }
 
@@ -181,7 +181,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
       );
     }
 
-    const cloudConfig: WhatsAppCloudConfig = {
+    const businessConfig: WhatsAppBusinessConfig = {
       accessToken,
       phoneNumberId,
       wabaId,
@@ -194,7 +194,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     const dedupeCache = createInboundDedupeCache();
     const lastInboundWamid = new Map<string, string>();
 
-    this.waCloudInstances.set(instanceId, { client, config: cloudConfig, dedupeCache, lastInboundWamid });
+    this.waInstances.set(instanceId, { client, config: businessConfig, dedupeCache, lastInboundWamid });
     this.byPhoneNumberId.set(phoneNumberId, instanceId);
     let wabaSet = this.byWabaId.get(wabaId);
     if (!wabaSet) {
@@ -206,7 +206,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     await this.updateInstanceStatus(instanceId, config, {
       state: 'connected',
       since: new Date(),
-      message: `Connected via Meta Cloud API (${connectionMethod})`,
+      message: `Connected via WhatsApp Business API (${connectionMethod})`,
     });
 
     await this.emitInstanceConnected(instanceId, {
@@ -220,10 +220,10 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   async disconnect(instanceId: string): Promise<void> {
     this.logger.info('Disconnecting WhatsApp Cloud instance', { instanceId });
 
-    const state = this.waCloudInstances.get(instanceId);
+    const state = this.waInstances.get(instanceId);
     if (state) {
       state.dedupeCache.dispose();
-      this.waCloudInstances.delete(instanceId);
+      this.waInstances.delete(instanceId);
       this.byPhoneNumberId.delete(state.config.phoneNumberId);
       const wabaSet = this.byWabaId.get(state.config.wabaId);
       if (wabaSet) {
@@ -246,7 +246,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   // ─────────────────────────────────────────────────────────────
 
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
-    const state = this.waCloudInstances.get(instanceId);
+    const state = this.waInstances.get(instanceId);
     if (!state) {
       return {
         success: false,
@@ -376,17 +376,17 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
 
   override async getHealth(instanceId?: string): Promise<HealthStatus> {
     const checks: HealthCheck[] = [];
-    const single = instanceId ? this.waCloudInstances.get(instanceId) : undefined;
-    const states: Array<readonly [string, WhatsAppCloudInstanceState]> = instanceId
+    const single = instanceId ? this.waInstances.get(instanceId) : undefined;
+    const states: Array<readonly [string, WhatsAppBusinessInstanceState]> = instanceId
       ? single
         ? [[instanceId, single] as const]
         : []
-      : Array.from(this.waCloudInstances.entries());
+      : Array.from(this.waInstances.entries());
 
     for (const [id, state] of states) {
       const ok = await state.client.ping();
       checks.push({
-        name: `whatsapp-cloud:${id}`,
+        name: `whatsapp-business:${id}`,
         status: ok ? 'pass' : 'fail',
         message: ok
           ? `Phone ${state.config.phoneNumberId} reachable`
@@ -449,12 +449,12 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
     if (duration === 0) return; // Meta has no "stop typing" — it self-dismisses.
 
-    const state = this.waCloudInstances.get(instanceId);
+    const state = this.waInstances.get(instanceId);
     if (!state) return; // Contract: typing is best-effort; never throw from here.
 
     const wamid = state.lastInboundWamid.get(toMetaPhone(chatId));
     if (!wamid) {
-      this.logger.debug('[whatsapp-cloud] sendTyping skipped — no inbound wamid remembered for chat', {
+      this.logger.debug('[whatsapp-business] sendTyping skipped — no inbound wamid remembered for chat', {
         instanceId,
         chatId,
       });
@@ -464,7 +464,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
     try {
       await state.client.sendTypingIndicator(wamid);
     } catch (err) {
-      this.logger.debug('[whatsapp-cloud] sendTyping failed (best-effort, ignored)', {
+      this.logger.debug('[whatsapp-business] sendTyping failed (best-effort, ignored)', {
         instanceId,
         chatId,
         err: String(err),
@@ -479,7 +479,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
    * active chats near the young end).
    */
   private rememberInboundWamid(instanceId: string, from: string, wamid: string): void {
-    const state = this.waCloudInstances.get(instanceId);
+    const state = this.waInstances.get(instanceId);
     if (!state) return;
     const chatKey = toMetaPhone(from);
     state.lastInboundWamid.delete(chatKey);
@@ -510,7 +510,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
       downloadGuard.checkSize(media.file_size, this.logger, {
         instanceId,
         url: media.url,
-        channel: 'whatsapp-cloud',
+        channel: 'whatsapp-business',
       });
     }
     const bytes = await state.client.downloadMedia(media.url);
@@ -518,8 +518,8 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   }
 
   /** Live state for `instanceId`, or throw `META_NOT_CONNECTED`. */
-  private requireInstanceState(instanceId: string, operation: string): WhatsAppCloudInstanceState {
-    const state = this.waCloudInstances.get(instanceId);
+  private requireInstanceState(instanceId: string, operation: string): WhatsAppBusinessInstanceState {
+    const state = this.waInstances.get(instanceId);
     if (!state) {
       throw new MetaApiError(MetaErrorCode.NOT_CONNECTED, 'WhatsApp Cloud instance not connected', {
         operation,
@@ -533,13 +533,13 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   // ─────────────────────────────────────────────────────────────
 
   /** Look up the live state for an instance — used by the webhook handler. */
-  getInstanceState(instanceId: string): WhatsAppCloudInstanceState | undefined {
-    return this.waCloudInstances.get(instanceId);
+  getInstanceState(instanceId: string): WhatsAppBusinessInstanceState | undefined {
+    return this.waInstances.get(instanceId);
   }
 
   /** Iterate all connected instance ids — used by webhook for phone_number_id → instance resolution. */
   getConnectedInstanceIds(): string[] {
-    return Array.from(this.waCloudInstances.keys());
+    return Array.from(this.waInstances.keys());
   }
 
   /**
@@ -550,10 +550,10 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
    * is the resolution mechanism used by `handleWebhook` after signature
    * verification. O(1) via the `byPhoneNumberId` reverse index.
    */
-  findInstanceByPhoneNumberId(phoneNumberId: string): readonly [string, WhatsAppCloudInstanceState] | undefined {
+  findInstanceByPhoneNumberId(phoneNumberId: string): readonly [string, WhatsAppBusinessInstanceState] | undefined {
     const id = this.byPhoneNumberId.get(phoneNumberId);
     if (!id) return undefined;
-    const state = this.waCloudInstances.get(id);
+    const state = this.waInstances.get(id);
     return state ? ([id, state] as const) : undefined;
   }
 
@@ -566,12 +566,12 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
    *
    * O(K) where K is the number of instances sharing the WABA — typically 1.
    */
-  findInstancesByWabaId(wabaId: string): Array<readonly [string, WhatsAppCloudInstanceState]> {
+  findInstancesByWabaId(wabaId: string): Array<readonly [string, WhatsAppBusinessInstanceState]> {
     const ids = this.byWabaId.get(wabaId);
     if (!ids || ids.size === 0) return [];
-    const matches: Array<readonly [string, WhatsAppCloudInstanceState]> = [];
+    const matches: Array<readonly [string, WhatsAppBusinessInstanceState]> = [];
     for (const id of ids) {
-      const state = this.waCloudInstances.get(id);
+      const state = this.waInstances.get(id);
       if (state) matches.push([id, state] as const);
     }
     return matches;
@@ -605,8 +605,8 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   ): Promise<boolean> {
     const wamid = msg.id;
 
-    if (dedupeCache.isDuplicate(instanceId, wamid, 'whatsapp-cloud', this.logger)) {
-      this.logger.debug('[whatsapp-cloud] duplicate inbound dropped', { instanceId, wamid });
+    if (dedupeCache.isDuplicate(instanceId, wamid, 'whatsapp-business', this.logger)) {
+      this.logger.debug('[whatsapp-business] duplicate inbound dropped', { instanceId, wamid });
       return false;
     }
 
@@ -619,7 +619,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
 
     const content = extractInboundContent(msg);
     if (!content) {
-      this.logger.warn('[whatsapp-cloud] inbound message has no extractable content', {
+      this.logger.warn('[whatsapp-business] inbound message has no extractable content', {
         instanceId,
         wamid,
         type: msg.type,
@@ -711,7 +711,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
       if (!value) continue;
       const sanitized = sanitizeMessage(value, this.logger, { instanceId, messageId: wamid });
       if (!sanitized.ok) {
-        this.logger.warn('[whatsapp-cloud] inbound text rejected by sanitizer', {
+        this.logger.warn('[whatsapp-business] inbound text rejected by sanitizer', {
           instanceId,
           wamid,
           field,
@@ -842,7 +842,7 @@ export class WhatsAppCloudPlugin extends BaseChannelPlugin {
   ): Promise<void> {
     const newStatus = mapTemplateEventToStatus(update.event);
     if (!newStatus) {
-      this.logger.debug('[whatsapp-cloud] unmapped template lifecycle event', {
+      this.logger.debug('[whatsapp-business] unmapped template lifecycle event', {
         instanceId,
         event: update.event,
         metaTemplateId: update.message_template_id,
@@ -939,7 +939,7 @@ async function dispatchOutbound(
   if (content.type === 'flow') {
     return dispatchOutboundFlow(client, message);
   }
-  return { ok: false, error: `Unsupported content.type=${content.type} for whatsapp-cloud` };
+  return { ok: false, error: `Unsupported content.type=${content.type} for whatsapp-business` };
 }
 
 /**
@@ -997,7 +997,7 @@ async function dispatchOutboundText(
     { sectionTitle: content.list?.sectionTitle, forceList: content.list?.forceList },
   );
   if (droppedRows > 0) {
-    logger?.warn('[whatsapp-cloud] interactive list capped at 10 rows — extra buttons dropped', { to, droppedRows });
+    logger?.warn('[whatsapp-business] interactive list capped at 10 rows — extra buttons dropped', { to, droppedRows });
   }
   return response;
 }
