@@ -499,6 +499,80 @@ describe('planInteractive', () => {
     const list = asList.interactive as { action: { sections: Array<{ rows: Array<{ title: string }> }> } };
     expect(list.action.sections[0]?.rows[0]?.title).toHaveLength(24);
   });
+
+  it('renders row descriptions and a section title on lists', () => {
+    const plan = planInteractive(
+      'Slots',
+      [
+        { text: 'Mon 13/07 · 08:30', description: 'Clinic A · Dr. Ricardo', data: 's1' },
+        { text: 'Wed 15/07 · 14:00', description: 'Clinic B · Dr. Helena', data: 's2' },
+        { text: 'Tue 14/07 · 11:00', description: 'Telehealth · Dr. Paulo', data: 's3' },
+        { text: 'Thu 16/07 · 09:00', data: 's4' },
+      ],
+      'See times',
+      { sectionTitle: 'OPHTHALMOLOGY' },
+    );
+
+    const list = plan.interactive as {
+      type: string;
+      action: {
+        button: string;
+        sections: Array<{ title?: string; rows: Array<{ title: string; description?: string }> }>;
+      };
+    };
+    expect(list.type).toBe('list');
+    expect(list.action.button).toBe('See times');
+    expect(list.action.sections[0]?.title).toBe('OPHTHALMOLOGY');
+    expect(list.action.sections[0]?.rows[0]?.description).toBe('Clinic A · Dr. Ricardo');
+    // A row without a description simply omits the key.
+    expect(list.action.sections[0]?.rows[3]).not.toHaveProperty('description');
+  });
+
+  it('promotes ≤3 options to a list when forceList is set', () => {
+    const buttons = [
+      { text: 'A', data: 'a' },
+      { text: 'B', data: 'b' },
+      { text: 'C', data: 'c' },
+    ];
+    expect((planInteractive('Pick', buttons, 'Options').interactive as { type: string }).type).toBe('button');
+    expect(
+      (planInteractive('Pick', buttons, 'Options', { forceList: true }).interactive as { type: string }).type,
+    ).toBe('list');
+  });
+
+  it('promotes ≤3 options to a list rather than dropping descriptions or section titles', () => {
+    // Reply buttons have no description affordance — rendering them here would
+    // silently discard content the caller explicitly supplied.
+    const withDescription = planInteractive('Pick', [{ text: 'A', description: 'detail' }], 'Options');
+    expect((withDescription.interactive as { type: string }).type).toBe('list');
+
+    const withSection = planInteractive('Pick', [{ text: 'A' }], 'Options', { sectionTitle: 'GROUP' });
+    expect((withSection.interactive as { type: string }).type).toBe('list');
+  });
+
+  it('truncates descriptions and section titles to Meta limits (72 / 24)', () => {
+    const plan = planInteractive(
+      't',
+      Array.from({ length: 4 }, () => ({ text: 'row', description: 'd'.repeat(100) })),
+      'Options',
+      { sectionTitle: 'S'.repeat(60) },
+    );
+    const list = plan.interactive as {
+      action: { sections: Array<{ title?: string; rows: Array<{ description?: string }> }> };
+    };
+    expect(list.action.sections[0]?.rows[0]?.description).toHaveLength(72);
+    expect(list.action.sections[0]?.title).toHaveLength(24);
+  });
+
+  it('omits the section title key when none is given (unchanged payload shape)', () => {
+    const plan = planInteractive(
+      'Menu',
+      Array.from({ length: 4 }, (_, i) => ({ text: `Option ${i + 1}` })),
+      'Choose',
+    );
+    const list = plan.interactive as { action: { sections: Array<Record<string, unknown>> } };
+    expect(list.action.sections[0]).not.toHaveProperty('title');
+  });
 });
 
 describe('sendInteractive', () => {

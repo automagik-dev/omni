@@ -85,3 +85,7 @@ export * from './hooks';
 // Tenant-egress broker (ADR-0009). The architecture guard beside it is a
 // dev/test tool and is intentionally NOT re-exported from the package root.
 export * from './egress';
+
+// WhatsApp text formatting — compartilhado pelos DOIS canais WhatsApp
+// (baileys e cloud), que precisam converter markdown igual.
+export { markdownToWhatsApp } from './markdown-to-whatsapp';
