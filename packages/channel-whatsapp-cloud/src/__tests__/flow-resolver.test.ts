@@ -3,9 +3,9 @@ import { FlowResolverRegistry, buildFlowToken, parseFlowToken } from '../flows/r
 
 describe('flow token', () => {
   test('build → parse round-trips the flow ref', () => {
-    const token = buildFlowToken('1381873504009404');
-    expect(token.startsWith('omni.1381873504009404.')).toBe(true);
-    expect(parseFlowToken(token)).toBe('1381873504009404');
+    const token = buildFlowToken('1234567890123456');
+    expect(token.startsWith('omni.1234567890123456.')).toBe(true);
+    expect(parseFlowToken(token)).toBe('1234567890123456');
   });
 
   test('refs containing dots survive (uuid is always the last segment)', () => {
