@@ -314,7 +314,7 @@ export function createApp(
     return plugin.handleWebhook(c.req.raw);
   });
 
-  // Public WhatsApp Cloud (Meta) webhook endpoint — auth-exempt, signed by Meta with HMAC-SHA256.
+  // Public WhatsApp Business API (Meta) webhook endpoint — auth-exempt, signed by Meta with HMAC-SHA256.
   // Unlike Gupshup/Twilio, the URL is GLOBAL (no :instanceId in path): instance resolution
   // happens inside the plugin via `metadata.phone_number_id` from the payload.
   //
@@ -325,7 +325,12 @@ export function createApp(
   // calls `handlers/webhook.ts::handleMetaWebhook` (reading META_VERIFY_TOKEN
   // and META_APP_SECRET from env). The plugin owns env access — keeping the
   // app.ts wiring identical to the Gupshup/Twilio pattern.
-  app.get('/api/v2/channels/whatsapp-business/webhook', async (c) => {
+  //
+  // Registered under TWO paths: `channels/whatsapp-business` (canonical) and
+  // `channels/whatsapp-cloud` (frozen legacy alias — this URL is pasted into
+  // Meta App dashboards by customers; renaming it would break every already-
+  // configured app, so the alias is PERMANENT).
+  const handleWhatsAppBusinessWebhook = async (c: Context<{ Variables: AppVariables }>) => {
     const channelRegistry = c.get('channelRegistry');
 
     if (!channelRegistry) {
@@ -334,26 +339,17 @@ export function createApp(
 
     const plugin = channelRegistry.get('whatsapp-business');
     if (!plugin?.handleWebhook) {
-      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } }, 503);
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Business plugin not loaded' } }, 503);
     }
 
     return plugin.handleWebhook(c.req.raw);
-  });
+  };
 
-  app.post('/api/v2/channels/whatsapp-business/webhook', async (c) => {
-    const channelRegistry = c.get('channelRegistry');
-
-    if (!channelRegistry) {
-      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
-    }
-
-    const plugin = channelRegistry.get('whatsapp-business');
-    if (!plugin?.handleWebhook) {
-      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } }, 503);
-    }
-
-    return plugin.handleWebhook(c.req.raw);
-  });
+  app.get('/api/v2/channels/whatsapp-business/webhook', handleWhatsAppBusinessWebhook);
+  app.post('/api/v2/channels/whatsapp-business/webhook', handleWhatsAppBusinessWebhook);
+  // Legacy alias (pre-rename channel id) — see comment above. Do not remove.
+  app.get('/api/v2/channels/whatsapp-cloud/webhook', handleWhatsAppBusinessWebhook);
+  app.post('/api/v2/channels/whatsapp-cloud/webhook', handleWhatsAppBusinessWebhook);
 
   // Public WhatsApp Flows data-exchange endpoint — auth-exempt sibling of the
   // webhook above. Authenticated by X-Hub-Signature-256 + payload encryption
@@ -366,7 +362,11 @@ export function createApp(
   // (`handleFlowData` → handlers/flow-data.ts). Status codes are part of
   // Meta's contract: 404 unknown instance, 421 undecryptable (client
   // re-fetches the public key), 427 bad flow token, 432 bad signature.
-  app.post('/api/v2/channels/whatsapp-business/flows/data/:instanceId', async (c) => {
+  //
+  // Dual-registered like the webhook: flows created before the rename carry
+  // the whatsapp-cloud path in their Meta-side `endpoint_uri` — the legacy
+  // alias keeps them serving. New flows are wired to the canonical path.
+  const handleWhatsAppFlowsData = async (c: Context<{ Variables: AppVariables }>) => {
     const channelRegistry = c.get('channelRegistry');
 
     if (!channelRegistry) {
@@ -375,10 +375,10 @@ export function createApp(
 
     const plugin = channelRegistry.get('whatsapp-business') as WhatsAppBusinessPlugin | undefined;
     if (!plugin?.handleFlowData) {
-      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Cloud plugin not loaded' } }, 503);
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'WhatsApp Business plugin not loaded' } }, 503);
     }
 
-    const instanceId = c.req.param('instanceId');
+    const instanceId = c.req.param('instanceId') ?? '';
     const services = c.get('services');
     const instance = await services.instances.getById(instanceId).catch(() => null);
     if (!instance || instance.channel !== 'whatsapp-business') {
@@ -400,6 +400,21 @@ export function createApp(
     }
 
     return plugin.handleFlowData(c.req.raw, { instanceId, privateKeyPem });
+  };
+
+  app.post('/api/v2/channels/whatsapp-business/flows/data/:instanceId', handleWhatsAppFlowsData);
+  // Legacy alias (pre-rename channel id) — see comment above. Do not remove.
+  app.post('/api/v2/channels/whatsapp-cloud/flows/data/:instanceId', handleWhatsAppFlowsData);
+
+  // Legacy REST alias: /api/v2/instances/:id/whatsapp-cloud/* re-dispatches to
+  // the canonical /whatsapp-business/* path through the full pipeline (auth,
+  // scopes and ownership are enforced by the INNER canonical match — this
+  // catch-all only rewrites the URL). Kept permanently for pre-rename API
+  // consumers (older SDKs, khal-ui builds, remote installs).
+  app.all('/api/v2/instances/:instanceId/whatsapp-cloud/*', (c) => {
+    const url = new URL(c.req.url);
+    url.pathname = url.pathname.replace('/whatsapp-cloud/', '/whatsapp-business/');
+    return app.fetch(new Request(url.toString(), c.req.raw), c.env);
   });
 
   // Public Twilio WhatsApp webhook endpoint - auth-exempt, verified by X-Twilio-Signature in the plugin.

@@ -308,6 +308,40 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'AES-GCM-encrypted screen payloads readable only by the requesting WhatsApp client, or bare status codes ' +
       '(404/421/427/432) that reveal no row data.',
   },
+  // ── Frozen legacy aliases of the whatsapp-business public surface ──────────
+  // The channel was renamed whatsapp-cloud → whatsapp-business; these URLs are
+  // pasted into Meta App dashboards (webhook) and registered as flow
+  // endpoint_uri values (flows/data) by existing customers, so the old paths
+  // stay registered PERMANENTLY, bound to the exact same handlers.
+  {
+    route: 'GET /api/v2/channels/whatsapp-cloud/webhook',
+    class: 'public-by-contract',
+    justification:
+      'Frozen legacy alias of GET /api/v2/channels/whatsapp-business/webhook (same handler reference, zero added ' +
+      'surface). See the canonical entry for the full contract justification.',
+  },
+  {
+    route: 'POST /api/v2/channels/whatsapp-cloud/webhook',
+    class: 'public-by-contract',
+    justification:
+      'Frozen legacy alias of POST /api/v2/channels/whatsapp-business/webhook (same handler reference, zero added ' +
+      'surface). See the canonical entry for the full contract justification.',
+  },
+  {
+    route: 'POST /api/v2/channels/whatsapp-cloud/flows/data/:instanceId',
+    class: 'public-by-contract',
+    justification:
+      'Frozen legacy alias of POST /api/v2/channels/whatsapp-business/flows/data/:instanceId (same handler ' +
+      'reference, zero added surface). Pre-rename flows carry this path in their Meta-side endpoint_uri.',
+  },
+  {
+    route: 'ALL /api/v2/instances/:instanceId/whatsapp-cloud/*',
+    class: 'public-by-contract',
+    justification:
+      'Legacy REST alias: rewrites the path segment to /whatsapp-business/ and re-dispatches through the full ' +
+      'pipeline — the INNER canonical route enforces auth, scopes and ownership; this catch-all only rewrites the ' +
+      'URL and can serve nothing by itself. Kept permanently for pre-rename API consumers.',
+  },
 ];
 
 /**
