@@ -3024,7 +3024,18 @@ export interface components {
                  * @description Link button URL (mutually exclusive with data)
                  */
                 url?: string;
+                /** @description Secondary line under the option (WhatsApp Cloud list rows, ≤72 chars) */
+                description?: string;
             }[];
+            /** @description List presentation (WhatsApp Cloud) */
+            list?: {
+                /** @description Section header above the options (≤24 chars) */
+                sectionTitle?: string;
+                /** @description Label of the button that opens the list (≤20 chars, default "Options") */
+                buttonLabel?: string;
+                /** @description Render a list even with ≤3 options (implied by any description/sectionTitle) */
+                forceList?: boolean;
+            };
             /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
             requestLocation?: boolean;
         };
@@ -7701,7 +7712,18 @@ export interface operations {
                          * @description Link button URL (mutually exclusive with data)
                          */
                         url?: string;
+                        /** @description Secondary line under the option (WhatsApp Cloud list rows, ≤72 chars) */
+                        description?: string;
                     }[];
+                    /** @description List presentation (WhatsApp Cloud) */
+                    list?: {
+                        /** @description Section header above the options (≤24 chars) */
+                        sectionTitle?: string;
+                        /** @description Label of the button that opens the list (≤20 chars, default "Options") */
+                        buttonLabel?: string;
+                        /** @description Render a list even with ≤3 options (implied by any description/sectionTitle) */
+                        forceList?: boolean;
+                    };
                     /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
                     requestLocation?: boolean;
                 };

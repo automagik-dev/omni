@@ -61,6 +61,22 @@ In Meta App Dashboard → **WhatsApp** → **Configuration**:
 
 Meta will GET your webhook URL with `hub.mode=subscribe&hub.verify_token=<token>&hub.challenge=<n>`. Omni's handler responds with the challenge if the token matches.
 
+### Legacy URLs (channel renamed from `whatsapp-cloud`)
+
+This channel was called `whatsapp-cloud` until 2026-08 ("Cloud API" named a
+distinction against Meta's On-Premises API, retired in Oct/2025). Every old
+URL keeps working **permanently** — do not rush to reconfigure Meta apps:
+
+| Legacy (frozen alias) | Canonical |
+|---|---|
+| `/api/v2/channels/whatsapp-cloud/webhook` | `/api/v2/channels/whatsapp-business/webhook` |
+| `/api/v2/channels/whatsapp-cloud/flows/data/:instanceId` | `/api/v2/channels/whatsapp-business/flows/data/:instanceId` |
+| `/api/v2/instances/:id/whatsapp-cloud/*` | `/api/v2/instances/:id/whatsapp-business/*` |
+
+Stored data was migrated (`instances.channel` etc. → `whatsapp-business`,
+migration 0047); historical `omni_events` jsonb payloads keep the old
+`channelType` value — queries over historical events must match both.
+
 ### 3. Onboard a phone number
 
 You have two paths:
