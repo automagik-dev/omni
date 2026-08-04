@@ -1,6 +1,30 @@
 # Slack user-token (DM consultiva) + paridade de features
 
-Branch `feat/slack-user-dm` · base `dev@1ccf79f0`
+Branch `feat/889-slack-user-token` · base `dev@1ccf79f0` · issue #889
+
+## Status: frentes A, B e C ENTREGUES
+
+| Commit | O quê |
+|---|---|
+| `b3644fcc` | thread como relação de primeira classe (migration 0048) |
+| `9f62d6bc` | agendamento + permalink no contrato (migration 0049) |
+| `b14d8c97` | ScheduledMessageService + sweeper |
+| `0d2dae44` | edit/delete/star saem do duck-typing |
+| `6fb7cc81` | authMode 'user': xoxp, conversations.open, mpim, search |
+| `f2647e6a` | credenciais na tabela (0050), rotas HTTP, formatação mrkdwn |
+| `4c1bdf6e` | permalink, pin/star (0051), replyToMessageId resolvido |
+
+As três decisões em aberto foram resolvidas assim: **um plugin com `authMode`**
+(o transporte é o mesmo Socket Mode), **A antes de B**, e **duck-typing
+consertado** junto.
+
+Ficou fora, e é trabalho real: `sendTyping` e `sendPresenceStatus` seguem
+duck-typed; não há CLI pras rotas novas; e o modo user nunca foi exercitado
+contra o Slack real — só há cobertura unitária.
+
+O texto abaixo é o plano original, mantido como registro do raciocínio.
+
+---
 
 ## Objetivo
 
