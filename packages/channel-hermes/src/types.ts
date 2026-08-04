@@ -85,7 +85,30 @@ export interface HermesInteractiveListPayload {
   };
 }
 
-export type HermesInteractivePayload = HermesInteractiveButtonPayload | HermesInteractiveListPayload;
+export interface HermesInteractiveCtaUrlPayload {
+  type: 'cta_url';
+  header?: { type: 'image'; image: { link: string } };
+  body: { text: string };
+  footer?: { text: string };
+  action: { name: 'cta_url'; parameters: { display_text: string; url: string } };
+}
+
+/**
+ * Not in the published Postman collection, but Hermes proxies the Cloud API
+ * shape verbatim — accepted live on 2026-08-04 (renders WhatsApp's native
+ * "Send location" button).
+ */
+export interface HermesInteractiveLocationRequestPayload {
+  type: 'location_request_message';
+  body: { text: string };
+  action: { name: 'send_location' };
+}
+
+export type HermesInteractivePayload =
+  | HermesInteractiveButtonPayload
+  | HermesInteractiveListPayload
+  | HermesInteractiveCtaUrlPayload
+  | HermesInteractiveLocationRequestPayload;
 
 /**
  * Inner `message` object POSTed to /api/v2/messages — WITHOUT `media_id`,
