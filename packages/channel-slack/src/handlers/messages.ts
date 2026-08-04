@@ -88,7 +88,14 @@ export function extractMessageMeta(event: Record<string, unknown>): SlackMessage
     ts,
     userId,
     teamId,
-    isDm: channelType === 'im',
+    // 'im' is a 1:1 DM; 'mpim' is a multi-person DM. Both are direct
+    // conversations rather than channels, and both were previously misread as
+    // channels because only 'im' was checked (#889).
+    isDm: channelType === 'im' || channelType === 'mpim',
+    // Kept distinct from isDm: an mpim has several humans in it, so anything
+    // that means "one person on the other side" (chatName, 1:1 assumptions)
+    // must not treat it like an im.
+    isMpim: channelType === 'mpim',
     isThreadReply: threadTs !== undefined && threadTs !== ts,
     channelType,
   };
@@ -137,6 +144,7 @@ function buildRawPayload(
     channelType: meta.channelType,
     teamId: meta.teamId,
     isDm: meta.isDm,
+    isMpim: meta.isMpim === true,
     isThreadReply: meta.isThreadReply,
     files: msg.files,
     ...extra,

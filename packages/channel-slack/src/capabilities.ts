@@ -51,7 +51,13 @@ export const SLACK_CAPABILITIES: ChannelCapabilities = {
   canGetPermalink: true,
   canPinMessage: true,
   // Slack search needs a user token (`search:read`); a bot token cannot search.
-  // Flipped per-instance once the user-token auth mode lands (#889 frente B).
+  //
+  // Stays false because ChannelCapabilities is a static property of the
+  // plugin, not per instance — and whether search works depends on the
+  // instance's authMode. Declaring true would promise it for bot-mode
+  // instances too. searchMessages() throws a specific error in bot mode
+  // instead, so a caller learns the capability is absent rather than reading
+  // an empty result as "no matches" (#889).
   canSearchMessages: false,
 
   // Rich content

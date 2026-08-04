@@ -8,6 +8,26 @@
 export type SlackConnectionMode = 'socket' | 'http';
 
 /**
+ * Which identity outbound actions are performed as (#889).
+ *
+ * - `bot` (default): posts as the app's bot user via `xoxb`.
+ * - `user`: posts as the human who authorized the app, via `xoxp`. Actions
+ *   are indistinguishable from the person doing them by hand, and it unlocks
+ *   `search.messages`, which no bot token can call.
+ *
+ * This is NOT a transport switch. There is no realtime API that a user token
+ * can open on its own: RTM is closed to granular apps, and Socket Mode
+ * requires an app-level `xapp`. Inbound always arrives over Socket Mode or
+ * the HTTP receiver; what changes in `user` mode is that the app subscribes
+ * to *user-scoped* events (`im:history`, `mpim:history`, …), so it sees the
+ * workspace from that person's perspective.
+ *
+ * @see https://docs.slack.dev/apis/events-api/ — "Workspace Events … are
+ *   perspectival to a member installing your application"
+ */
+export type SlackAuthMode = 'bot' | 'user';
+
+/**
  * Per-channel configuration overrides.
  * Fields set here take precedence over instance-level defaults.
  */
@@ -28,6 +48,16 @@ export interface SlackChannelConfig {
 export interface SlackConfig {
   /** Bot User OAuth Token (xoxb-...) */
   botToken?: string;
+  /**
+   * User OAuth Token (xoxp-...). Required when `authMode` is 'user'.
+   * Actions taken with it are attributed to the human who authorized the app.
+   */
+  userToken?: string;
+  /**
+   * Identity for outbound actions: 'bot' (default) or 'user'.
+   * See {@link SlackAuthMode} — this does not change the inbound transport.
+   */
+  authMode?: SlackAuthMode;
   /** App-Level Token for Socket Mode (xapp-...) */
   appToken?: string;
   /** Signing Secret for request verification (required for HTTP mode) */
@@ -117,6 +147,15 @@ export interface RetryConfig {
  */
 export interface SlackConnectionOptions {
   botToken: string;
+  /**
+   * User token (`xoxp`). Required when authMode is 'user' — outbound calls go
+   * out as the authorizing human. The bot token is still required alongside
+   * it: Bolt authenticates the socket with it, and it is the fallback for
+   * calls the user token has no scope for.
+   */
+  userToken?: string;
+  /** Identity used for outbound actions (default: 'bot'). */
+  authMode?: SlackAuthMode;
   /** Required for Socket Mode; not used for HTTP mode */
   appToken?: string;
   /** Required for HTTP mode; optional for Socket Mode */
@@ -142,8 +181,14 @@ export interface SlackMessageMeta {
   userId: string;
   /** Team/workspace ID */
   teamId?: string;
-  /** Whether this is a DM */
+  /** Whether this is a direct conversation — covers both `im` and `mpim` (#889). */
   isDm: boolean;
+  /**
+   * Whether this is specifically a multi-person DM (`mpim`). Distinct from
+   * isDm because an mpim has several humans in it, so 1:1 assumptions
+   * (a single counterpart, using their name as the chat name) do not hold.
+   */
+  isMpim?: boolean;
   /** Whether this is a thread reply */
   isThreadReply: boolean;
   /** Channel type: channel, group, im, mpim */
@@ -285,11 +330,15 @@ export interface SlackManifest {
   oauth_config: {
     scopes: {
       bot: string[];
+      /** User-token scopes, requested only for authMode 'user' (#889). */
+      user?: string[];
     };
   };
   settings: {
     event_subscriptions: {
       bot_events: string[];
+      /** Events delivered on the authorizing user's behalf (#889). */
+      user_events?: string[];
     };
     interactivity?: {
       is_enabled: boolean;

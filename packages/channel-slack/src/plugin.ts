@@ -51,7 +51,7 @@ import {
   scheduleTextMessage,
   sendTextMessage,
 } from './senders/text';
-import type { ReplyToMode, SlackConfig, SlackConnectionMode, SlackInteractionPayload } from './types';
+import type { ReplyToMode, SlackAuthMode, SlackConfig, SlackConnectionMode, SlackInteractionPayload } from './types';
 import { SlackError, SlackErrorCode } from './types';
 
 /** Download size guard — 50MB default; applied to inbound file metadata before dispatching */
@@ -76,18 +76,44 @@ function resolveSlackTokens(
   slackConfig: SlackConfig,
   rawOptions: Record<string, unknown>,
   rawCredentials: Record<string, unknown>,
-): { botToken: string; appToken?: string; signingSecret?: string; mode: SlackConnectionMode } {
+): {
+  botToken: string;
+  userToken?: string;
+  authMode: SlackAuthMode;
+  appToken?: string;
+  signingSecret?: string;
+  mode: SlackConnectionMode;
+} {
   const botToken =
     slackConfig.botToken ??
     (rawOptions.token as string | undefined) ??
     (rawCredentials.botToken as string | undefined) ??
     (rawCredentials.token as string | undefined);
+  const userToken = slackConfig.userToken ?? (rawCredentials.userToken as string | undefined);
+  const authMode: SlackAuthMode = slackConfig.authMode ?? 'bot';
   const appToken = slackConfig.appToken ?? (rawCredentials.appToken as string | undefined);
   const signingSecret = slackConfig.signingSecret ?? (rawCredentials.signingSecret as string | undefined);
   const mode: SlackConnectionMode = slackConfig.mode ?? 'socket';
 
+  // The bot token stays mandatory even in user mode: Bolt authenticates the
+  // socket with it, and it is the fallback for calls the user token lacks
+  // scope for. User mode changes who ACTS, not who connects.
   if (!botToken) {
     throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'botToken (xoxb-...) is required');
+  }
+  if (authMode === 'user' && !userToken) {
+    throw new SlackError(
+      SlackErrorCode.INVALID_TOKEN,
+      "userToken (xoxp-...) is required when authMode is 'user' — without it every action would silently go out as the bot",
+    );
+  }
+  if (userToken && !userToken.startsWith('xoxp-')) {
+    // Catch a bot token pasted into the user slot. Left unchecked, the plugin
+    // would look like it was acting as the human while posting as the bot.
+    throw new SlackError(
+      SlackErrorCode.INVALID_TOKEN,
+      'userToken must be a user token (xoxp-...); got a token with a different prefix',
+    );
   }
   if (mode === 'socket' && !appToken) {
     throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'appToken (xapp-...) is required for Socket Mode');
@@ -96,7 +122,7 @@ function resolveSlackTokens(
     throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'signingSecret is required for HTTP mode');
   }
 
-  return { botToken, appToken, signingSecret, mode };
+  return { botToken, userToken, authMode, appToken, signingSecret, mode };
 }
 
 /**
@@ -253,6 +279,8 @@ export class SlackPlugin extends BaseChannelPlugin {
       connection = createBoltApp(
         {
           botToken: resolved.botToken,
+          userToken: resolved.userToken,
+          authMode: resolved.authMode,
           appToken: resolved.appToken,
           signingSecret: resolved.signingSecret,
           retryConfig: slackConfig.retryConfig,
@@ -430,7 +458,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const base =
       streamMode === 'native'
         ? createNativeStreamSender({
-            client: connection.client,
+            client: connection.actingClient,
             channelId: chatId,
             threadTs,
             throttleMs,
@@ -441,7 +469,7 @@ export class SlackPlugin extends BaseChannelPlugin {
             logger: this.logger,
           })
         : createSlackStreamSender({
-            client: connection.client,
+            client: connection.actingClient,
             channelId: chatId,
             threadTs,
             streamMode,
@@ -524,13 +552,13 @@ export class SlackPlugin extends BaseChannelPlugin {
     const delivered =
       status === ''
         ? await clearTypingStatus({
-            client: connection.client,
+            client: connection.actingClient,
             channelId: chatId,
             threadTs,
             logger: this.logger,
           })
         : await setSlackThreadStatus({
-            client: connection.client,
+            client: connection.actingClient,
             channelId: chatId,
             threadTs,
             status,
@@ -547,7 +575,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         if (this.presenceStatusTimers.get(timerKey) !== timer) return;
         this.presenceStatusTimers.delete(timerKey);
         clearTypingStatus({
-          client: connection.client,
+          client: connection.actingClient,
           channelId: chatId,
           threadTs,
           logger: this.logger,
@@ -592,7 +620,7 @@ export class SlackPlugin extends BaseChannelPlugin {
    */
   async editMessage(instanceId: string, channelId: string, messageTs: string, newText: string): Promise<void> {
     const connection = this.getConnection(instanceId);
-    await editSlackMessage(connection.client, channelId, messageTs, newText, 'convert', this.logger);
+    await editSlackMessage(connection.actingClient, channelId, messageTs, newText, 'convert', this.logger);
   }
 
   /**
@@ -600,7 +628,7 @@ export class SlackPlugin extends BaseChannelPlugin {
    */
   async deleteMessage(instanceId: string, channelId: string, messageTs: string): Promise<void> {
     const connection = this.getConnection(instanceId);
-    await deleteSlackMessage(connection.client, channelId, messageTs, this.logger);
+    await deleteSlackMessage(connection.actingClient, channelId, messageTs, this.logger);
   }
 
   /**
@@ -624,7 +652,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const threadTs = this.resolveThreadTs(config?.replyToMode ?? 'all', message.replyTo, message.threadId);
 
     return scheduleTextMessage(
-      connection.client,
+      connection.actingClient,
       {
         channelId: message.to,
         text: message.content.text,
@@ -640,10 +668,97 @@ export class SlackPlugin extends BaseChannelPlugin {
     );
   }
 
+  /**
+   * Resolve (or open) the DM channel with a user (#889).
+   *
+   * Before this the plugin could only reply to a DM that arrived — there was
+   * no way to START one, because nothing mapped a user id to its DM channel.
+   * That is the difference between a reactive bot and a consultative agent.
+   *
+   * Slack's conversations.open is idempotent: calling it for an existing DM
+   * returns the same channel rather than creating a second one.
+   *
+   * @param instanceId - Instance to open as
+   * @param userId - Slack user id (`U…`) to open a DM with
+   * @returns The DM channel id (`D…`)
+   */
+  async openDirectMessage(instanceId: string, userId: string): Promise<string> {
+    const connection = this.getConnection(instanceId);
+
+    try {
+      const result = await connection.actingClient.conversations.open({ users: userId });
+      const channelId = (result.channel as { id?: string } | undefined)?.id;
+      if (!channelId) {
+        throw new SlackError(SlackErrorCode.SEND_FAILED, `conversations.open returned no channel for user ${userId}`);
+      }
+      return channelId;
+    } catch (error) {
+      if (error instanceof SlackError) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new SlackError(SlackErrorCode.SEND_FAILED, `Failed to open DM with ${userId}: ${message}`);
+    }
+  }
+
+  /**
+   * Full-text message search (#889).
+   *
+   * User token only — `search.messages` requires the `search:read` scope,
+   * which a bot token cannot hold. In bot mode this throws rather than
+   * returning an empty list, so the caller learns the capability is missing
+   * instead of concluding there were no matches.
+   *
+   * Note results are affected by the search preferences set in that user's
+   * Slack UI, so this is not a neutral index query.
+   */
+  async searchMessages(
+    instanceId: string,
+    query: string,
+    options: { count?: number; page?: number } = {},
+  ): Promise<Array<{ channelId?: string; ts?: string; text?: string; permalink?: string; username?: string }>> {
+    const connection = this.getConnection(instanceId);
+    const config = this.slackConfigs.get(instanceId);
+
+    if (config?.authMode !== 'user' || !connection.userClient) {
+      throw new SlackError(
+        SlackErrorCode.SEND_FAILED,
+        "search.messages needs a user token (search:read); this instance runs in 'bot' auth mode",
+      );
+    }
+
+    try {
+      const result = await connection.userClient.search.messages({
+        query,
+        count: options.count ?? 20,
+        page: options.page ?? 1,
+      });
+
+      const matches = (result.messages as { matches?: unknown[] } | undefined)?.matches ?? [];
+      return matches.map((raw) => {
+        const m = raw as {
+          channel?: { id?: string };
+          ts?: string;
+          text?: string;
+          permalink?: string;
+          username?: string;
+        };
+        return {
+          channelId: m.channel?.id,
+          ts: m.ts,
+          text: m.text,
+          permalink: m.permalink,
+          username: m.username,
+        };
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new SlackError(SlackErrorCode.SEND_FAILED, `Search failed: ${message}`);
+    }
+  }
+
   /** Cancel a natively scheduled message (#889). */
   async cancelScheduledMessage(instanceId: string, channelId: string, scheduledId: string): Promise<void> {
     const connection = this.getConnection(instanceId);
-    await cancelScheduledSlackMessage(connection.client, channelId, scheduledId, this.logger);
+    await cancelScheduledSlackMessage(connection.actingClient, channelId, scheduledId, this.logger);
   }
 
   /**
@@ -657,7 +772,7 @@ export class SlackPlugin extends BaseChannelPlugin {
   async getPermalink(instanceId: string, channelId: string, messageTs: string): Promise<string | null> {
     const connection = this.getConnection(instanceId);
     try {
-      const result = await connection.client.chat.getPermalink({
+      const result = await connection.actingClient.chat.getPermalink({
         channel: channelId,
         message_ts: messageTs,
       });
@@ -678,7 +793,7 @@ export class SlackPlugin extends BaseChannelPlugin {
   async addReaction(instanceId: string, channelId: string, messageTs: string, emoji: string): Promise<void> {
     const connection = this.getConnection(instanceId);
     const { addReaction } = await import('./tools');
-    await addReaction(connection.client, channelId, messageTs, emoji, this.logger);
+    await addReaction(connection.actingClient, channelId, messageTs, emoji, this.logger);
   }
 
   /**
@@ -687,7 +802,7 @@ export class SlackPlugin extends BaseChannelPlugin {
   async removeReaction(instanceId: string, channelId: string, messageTs: string, emoji: string): Promise<void> {
     const connection = this.getConnection(instanceId);
     const { removeReaction } = await import('./tools');
-    await removeReaction(connection.client, channelId, messageTs, emoji, this.logger);
+    await removeReaction(connection.actingClient, channelId, messageTs, emoji, this.logger);
   }
 
   /**
@@ -731,7 +846,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const connection = this.getConnection(instanceId);
 
     try {
-      const result = await connection.client.users.info({ user: userId });
+      const result = await connection.actingClient.users.info({ user: userId });
       const user = result.user as Record<string, unknown> | undefined;
       if (!user) return {};
 
@@ -830,11 +945,15 @@ export class SlackPlugin extends BaseChannelPlugin {
     if (!channelId || !threadTs) return { totalFetched: 0, messages: [] };
 
     const botUserId = connection.botUserId;
-    const botToken = (this.slackConfigs.get(instanceId) as Record<string, unknown>)?.botToken as string | undefined;
-    if (!botToken) {
-      this.logger.warn('fetchHistory: no botToken for instance', { instanceId });
-      return { totalFetched: 0, messages: [] };
-    }
+    // Read the token off the CONNECTION, not slackConfigs (#889).
+    //
+    // resolveSlackTokens accepts the token from config OR from `credentials`,
+    // but this used to look only at slackConfigs.botToken. An instance
+    // configured through credentials therefore returned an empty history with
+    // nothing but a warning — a silent hole in per_thread context, not an
+    // error anyone would notice. connection.botToken is whatever was resolved,
+    // so it is populated either way.
+    const botToken = connection.botToken;
 
     const limit = options.limit ?? 200;
     // Always fetch fresh history — the thread-starter cache uses a long TTL (6h)
@@ -858,7 +977,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     let cursor: string | undefined;
 
     do {
-      const response = await connection.client.conversations.replies({
+      const response = await connection.actingClient.conversations.replies({
         channel: channelId,
         ts: threadTs,
         limit: Math.min(200, maxMessages - messages.length),
@@ -956,7 +1075,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const connection = this.getConnection(instanceId);
     const slackName = SlackPlugin.EMOJI_TO_SLACK[emoji] ?? emoji.replace(/^:|:$/g, '');
     try {
-      await connection.client.reactions.add({ channel: chatId, timestamp: messageId, name: slackName });
+      await connection.actingClient.reactions.add({ channel: chatId, timestamp: messageId, name: slackName });
     } catch (err) {
       this.logger.warn('react: failed to add reaction', { chatId, messageId, emoji, error: String(err) });
     }
@@ -969,7 +1088,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const connection = this.getConnection(instanceId);
     const slackName = SlackPlugin.EMOJI_TO_SLACK[emoji] ?? emoji.replace(/^:|:$/g, '');
     try {
-      await connection.client.reactions.remove({ channel: chatId, timestamp: messageId, name: slackName });
+      await connection.actingClient.reactions.remove({ channel: chatId, timestamp: messageId, name: slackName });
     } catch (err) {
       this.logger.warn('unreact: failed to remove reaction', { chatId, messageId, emoji, error: String(err) });
     }
@@ -993,9 +1112,11 @@ export class SlackPlugin extends BaseChannelPlugin {
     if (!emojiName) return;
 
     // Fire-and-forget
-    connection.client.reactions.add({ channel: channelId, timestamp: messageTs, name: emojiName }).catch((err) => {
-      this.logger.warn('ack reaction: failed to add', { channelId, messageTs, emoji: emojiName, error: String(err) });
-    });
+    connection.actingClient.reactions
+      .add({ channel: channelId, timestamp: messageTs, name: emojiName })
+      .catch((err) => {
+        this.logger.warn('ack reaction: failed to add', { channelId, messageTs, emoji: emojiName, error: String(err) });
+      });
 
     // Track for removal if configured
     if (config.removeAckAfterReply !== false) {
@@ -1026,7 +1147,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       if (!emojiName) continue;
 
       this.pendingAckReactions.delete(key);
-      connection.client.reactions.remove({ channel: channelId, timestamp: ts, name: emojiName }).catch((err) => {
+      connection.actingClient.reactions.remove({ channel: channelId, timestamp: ts, name: emojiName }).catch((err) => {
         this.logger.warn('ack reaction: failed to remove', { channelId, ts, emoji: emojiName, error: String(err) });
       });
       break; // Only remove once
@@ -1059,7 +1180,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     if (!resolvedThread) return;
 
     await clearTypingStatus({
-      client: connection.client,
+      client: connection.actingClient,
       channelId,
       threadTs: resolvedThread,
       logger: this.logger,
@@ -1134,14 +1255,25 @@ export class SlackPlugin extends BaseChannelPlugin {
   ): Promise<Record<string, unknown>> {
     const displayName = await this.resolveUserDisplayName(instanceId, from);
     const isDm = rawPayload.isDm as boolean;
-    const chatName = isDm ? displayName : undefined;
+    const isMpim = rawPayload.isMpim === true;
+
+    // An mpim is a DIRECT conversation with SEVERAL people, so it is both
+    // isDm and a group. Deriving isGroup from !isDm alone (as before mpim was
+    // recognized) would file a multi-person DM as a 1:1 (#889).
+    const isOneToOne = isDm && !isMpim;
+
+    // Only a 1:1 has a single counterpart whose name can stand in for the
+    // conversation name. For an mpim it would name the chat after whichever
+    // member happened to speak.
+    const chatName = isOneToOne ? displayName : undefined;
+
     return {
       ...rawPayload,
       displayName,
       senderName: displayName,
       pushName: displayName,
       chatName,
-      isGroup: !isDm,
+      isGroup: !isOneToOne,
     };
   }
 
@@ -1243,7 +1375,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         onDmRejected: async (_instId, channelId, _userId, message) => {
           try {
             await sendTextMessage(
-              connection.client,
+              connection.actingClient,
               {
                 channelId,
                 text: message,
@@ -1349,7 +1481,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
 
     return sendTextMessage(
-      connection.client,
+      connection.actingClient,
       {
         channelId,
         text: message.content.text ?? '',
@@ -1379,7 +1511,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       const buffer = Buffer.from(message.metadata.base64 as string, 'base64');
       const filename = message.content.filename || `file-${Date.now()}`;
       return uploadFile(
-        connection.client,
+        connection.actingClient,
         {
           channelId,
           content: buffer,
@@ -1396,7 +1528,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     }
 
     return uploadFileFromUrl(
-      connection.client,
+      connection.actingClient,
       {
         channelId,
         url: message.content.mediaUrl,
@@ -1420,7 +1552,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       throw new SlackError(SlackErrorCode.SEND_FAILED, 'Reaction requires emoji and target message');
     }
     const { addReaction } = await import('./tools');
-    await addReaction(connection.client, channelId, targetTs, emoji, this.logger);
+    await addReaction(connection.actingClient, channelId, targetTs, emoji, this.logger);
     return targetTs;
   }
 
