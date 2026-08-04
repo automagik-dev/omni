@@ -105,6 +105,12 @@ export interface CreateMessageOptions {
   quotedSenderName?: string;
   isForwarded?: boolean;
   forwardedFromExternalId?: string;
+  // Thread (#889) — a reply points at ONE message; a thread is a
+  // sub-conversation. Slack `thread_ts`, Discord sub-channel, Telegram forum
+  // topic all land here instead of being collapsed into replyToExternalId.
+  threadExternalId?: string;
+  /** Slack `reply_broadcast`: posted in the thread AND surfaced in the channel. */
+  isThreadBroadcast?: boolean;
   // Actor FK
   senderAgentId?: string | null;
   // Raw data
@@ -316,9 +322,12 @@ export class MessageService {
 
   /**
    * Check if the bot has participated in a specific thread.
-   * Matches two cases:
-   *  1. Bot replied in the thread (replyToExternalId == threadTs)
-   *  2. Bot started the thread (externalId == threadTs, root message)
+   * Matches three cases:
+   *  1. Bot replied in the thread (threadExternalId == threadTs) — since #889
+   *  2. Bot replied in the thread (replyToExternalId == threadTs) — rows
+   *     written before #889, when Slack collapsed thread into reply. Kept so
+   *     the check keeps working against history without a backfill.
+   *  3. Bot started the thread (externalId == threadTs, root message)
    */
   async hasBotRepliedInThread(chatId: string, threadExternalId: string): Promise<boolean> {
     const [result] = await this.db
@@ -328,7 +337,11 @@ export class MessageService {
         and(
           eq(messages.chatId, chatId),
           eq(messages.isFromMe, true),
-          or(eq(messages.replyToExternalId, threadExternalId), eq(messages.externalId, threadExternalId)),
+          or(
+            eq(messages.threadExternalId, threadExternalId),
+            eq(messages.replyToExternalId, threadExternalId),
+            eq(messages.externalId, threadExternalId),
+          ),
         ),
       )
       .limit(1);
@@ -502,6 +515,9 @@ export class MessageService {
           quotedSenderName: options.quotedSenderName,
           isForwarded: options.isForwarded ?? false,
           forwardedFromExternalId: options.forwardedFromExternalId,
+          // Thread (#889)
+          threadExternalId: options.threadExternalId,
+          isThreadBroadcast: options.isThreadBroadcast ?? false,
           // Raw data
           rawPayload: options.rawPayload,
           // Event links

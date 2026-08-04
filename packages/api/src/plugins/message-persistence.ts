@@ -874,6 +874,10 @@ async function handleMessageReceived(
     replyToExternalId: truncate(payload.replyToId, 255),
     quotedText: quotedMessage?.conversation as string | undefined,
     quotedSenderName: truncate(quotedMessage?.pushName as string | undefined, 255),
+    // Thread (#889) — previously dropped: threadId rode along in the payload
+    // for per_thread session routing and was never persisted.
+    threadExternalId: truncate(payload.threadId, 255),
+    isThreadBroadcast: rawPayload?.isThreadBroadcast === true,
     isForwarded: !!(rawPayload?.isForwarded || rawPayload?.forwardingScore),
     rawPayload,
   });
@@ -1072,6 +1076,9 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               rawPayload: sentContent.rawPayload,
               // Reply info - truncate varchar(255) fields
               replyToExternalId: truncate(payload.replyToId, 255),
+              // Thread (#889) — keep outbound symmetric with inbound, otherwise
+              // our own thread replies read back as top-level channel messages.
+              threadExternalId: truncate(payload.threadId, 255),
             });
 
             return { chat, message, created };

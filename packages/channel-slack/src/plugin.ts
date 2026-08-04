@@ -1431,6 +1431,19 @@ export class SlackPlugin extends BaseChannelPlugin {
           : undefined;
     const chatName = typeof rawPayload.chatName === 'string' ? rawPayload.chatName : undefined;
 
+    // Thread vs reply (#889).
+    //
+    // Slack has no "reply to a specific message" primitive — threads ARE the
+    // reply mechanism. We used to pass `thread_ts` as `replyToId`, which the
+    // core stored in `replyToExternalId`, making a Slack thread reply
+    // indistinguishable from a WhatsApp quote once persisted.
+    //
+    // `threadId` now carries `thread_ts` into its own column, and `replyToId`
+    // stays empty for Slack. The incoming `replyToId` argument is retained in
+    // the signature for the shared callback shape.
+    const threadTs = typeof rawPayload.threadTs === 'string' ? rawPayload.threadTs : undefined;
+    void replyToId;
+
     const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId,
@@ -1439,7 +1452,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       senderName,
       chatName,
       content,
-      replyToId,
+      threadId: threadTs,
       rawPayload,
       timings,
     });

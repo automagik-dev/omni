@@ -165,6 +165,8 @@ interface ThreadProbeRow {
   id: string;
   chatId: string;
   isFromMe: boolean;
+  /** Set since #889; null on rows written before thread had its own column. */
+  threadExternalId?: string | null;
   replyToExternalId: string | null;
   externalId: string;
 }
@@ -199,12 +201,16 @@ function createHasBotRepliedDbMock(rows: ThreadProbeRow[] = [], capture?: QueryC
       limit: (limitValue: number) => {
         if (capture) capture.limitArg = limitValue;
 
-        const [chatId, isFromMe, threadViaReply, threadViaExternal] = query.params;
+        const [chatId, isFromMe, threadViaThread, threadViaReply, threadViaExternal] = query.params;
         const result = rows
           .filter((row) => {
             if (row.chatId !== chatId) return false;
             if (row.isFromMe !== isFromMe) return false;
-            return row.replyToExternalId === threadViaReply || row.externalId === threadViaExternal;
+            return (
+              (row.threadExternalId != null && row.threadExternalId === threadViaThread) ||
+              row.replyToExternalId === threadViaReply ||
+              row.externalId === threadViaExternal
+            );
           })
           .slice(0, limitValue)
           .map((row) => ({ id: row.id }));
@@ -227,6 +233,26 @@ describe('MessageService.hasBotRepliedInThread', () => {
         chatId: 'chat-1',
         isFromMe: true,
         replyToExternalId: 'thread-1',
+        externalId: 'msg-bot-1',
+      },
+    ]);
+    const service = new MessageService(db, null);
+
+    const replied = await service.hasBotRepliedInThread('chat-1', 'thread-1');
+
+    expect(replied).toBe(true);
+  });
+
+  test('returns true when bot replied in thread via threadExternalId (#889)', async () => {
+    // Post-#889 shape: Slack no longer writes thread_ts into replyToExternalId,
+    // so this row would be invisible without the threadExternalId branch.
+    const db = createHasBotRepliedDbMock([
+      {
+        id: 'msg-1',
+        chatId: 'chat-1',
+        isFromMe: true,
+        threadExternalId: 'thread-1',
+        replyToExternalId: null,
         externalId: 'msg-bot-1',
       },
     ]);
@@ -304,9 +330,10 @@ describe('MessageService.hasBotRepliedInThread', () => {
     await service.hasBotRepliedInThread('chat-99', 'thread-99');
 
     expect(capture.limitArg).toBe(1);
-    expect(capture.whereParams).toEqual(['chat-99', true, 'thread-99', 'thread-99']);
+    expect(capture.whereParams).toEqual(['chat-99', true, 'thread-99', 'thread-99', 'thread-99']);
     expect(capture.whereSql).toContain('"messages"."chat_id" =');
     expect(capture.whereSql).toContain('"messages"."is_from_me" =');
+    expect(capture.whereSql).toContain('"messages"."thread_external_id" =');
     expect(capture.whereSql).toContain('"messages"."reply_to_external_id" =');
     expect(capture.whereSql).toContain('"messages"."external_id" =');
     expect(capture.whereSql).toContain(' or ');

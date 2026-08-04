@@ -1477,6 +1477,26 @@ export const messages = pgTable(
     quotedText: text('quoted_text'),
     quotedSenderName: varchar('quoted_sender_name', { length: 255 }),
 
+    // Thread (#889)
+    // Distinct from reply/quote: a reply points at ONE message, a thread is a
+    // sub-conversation every participant can post into. Slack models it with
+    // `thread_ts` (the root message ts), Discord with a real sub-channel,
+    // Telegram with forum `message_thread_id`. Before this, Slack collapsed
+    // thread into `replyToExternalId`, making a thread reply indistinguishable
+    // from a WhatsApp quote.
+    threadExternalId: varchar('thread_external_id', { length: 255 }),
+    threadRootMessageId: uuid('thread_root_message_id'),
+    // Slack `reply_broadcast`: posted in the thread AND surfaced in the channel.
+    // This is the "quote in thread vs quote in channel" distinction — it needs
+    // its own field because it is orthogonal to threadExternalId.
+    isThreadBroadcast: boolean('is_thread_broadcast').notNull().default(false),
+    // Denormalized thread stats, maintained on the ROOT message.
+    replyCount: integer('reply_count').notNull().default(0),
+    latestReplyAt: timestamp('latest_reply_at', { withTimezone: true }),
+
+    // Stable deep link to the message on the platform (Slack chat.getPermalink).
+    permalink: text('permalink'),
+
     // Forward
     forwardedFromMessageId: uuid('forwarded_from_message_id'),
     forwardedFromExternalId: varchar('forwarded_from_external_id', { length: 255 }),
@@ -1545,6 +1565,13 @@ export const messages = pgTable(
       table.replyToExternalId,
       table.isFromMe,
     ),
+    // Fetch a whole thread in platform order (#889).
+    threadExternalIdx: index('messages_thread_external_idx').on(
+      table.chatId,
+      table.threadExternalId,
+      table.platformTimestamp,
+    ),
+    threadRootIdx: index('messages_thread_root_idx').on(table.threadRootMessageId),
     hasMediaIdx: index('messages_has_media_idx').on(table.hasMedia),
     originalEventIdx: index('messages_original_event_idx').on(table.originalEventId),
   }),
