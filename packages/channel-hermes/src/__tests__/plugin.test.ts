@@ -102,6 +102,138 @@ describe('HermesPlugin', () => {
     });
   });
 
+  it('renders content.buttons (≤3, no descriptions) as an interactive button envelope', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ message: { id: HERMES_UUID } }));
+
+    const result = await plugin.sendMessage(instanceId, {
+      to: '5511999998888',
+      content: {
+        type: 'text',
+        text: 'Qual cadastro deseja usar?',
+        buttons: [
+          { text: 'João', data: 'cad_1' },
+          { text: 'Maria', data: 'cad_2' },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+    const envelope = sentEnvelope(fetchSpy, 1) as { message: Record<string, unknown> };
+    expect(envelope.message).toMatchObject({
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: 'Qual cadastro deseja usar?' },
+        action: {
+          buttons: [
+            { type: 'reply', reply: { id: 'cad_1', title: 'João' } },
+            { type: 'reply', reply: { id: 'cad_2', title: 'Maria' } },
+          ],
+        },
+      },
+    });
+  });
+
+  it('renders 4+ buttons as an interactive list with the buttonLabel', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ message: { id: HERMES_UUID } }));
+
+    const result = await plugin.sendMessage(instanceId, {
+      to: '5511999998888',
+      content: {
+        type: 'text',
+        text: 'Escolha um horário:',
+        buttons: [
+          { text: '08:30', data: 's1', description: 'Unidade Centro' },
+          { text: '09:15', data: 's2' },
+          { text: '14:00', data: 's3' },
+          { text: '16:40', data: 's4' },
+        ],
+        list: { buttonLabel: 'Ver horários', sectionTitle: 'Quinta 06/08' },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    const envelope = sentEnvelope(fetchSpy, 1) as { message: { interactive: Record<string, unknown> } };
+    expect(envelope.message.interactive).toMatchObject({
+      type: 'list',
+      action: {
+        button: 'Ver horários',
+        sections: [
+          {
+            title: 'Quinta 06/08',
+            rows: [
+              { id: 's1', title: '08:30', description: 'Unidade Centro' },
+              { id: 's2', title: '09:15' },
+              { id: 's3', title: '14:00' },
+              { id: 's4', title: '16:40' },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it('renders a single URL button as cta_url', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ message: { id: HERMES_UUID } }));
+
+    await plugin.sendMessage(instanceId, {
+      to: '5511999998888',
+      content: {
+        type: 'text',
+        text: 'Sua carteirinha está no app.',
+        buttons: [{ text: 'Abrir o app', url: 'https://app.example.com' }],
+      },
+    });
+
+    const envelope = sentEnvelope(fetchSpy, 1) as { message: { interactive: Record<string, unknown> } };
+    expect(envelope.message.interactive).toMatchObject({
+      type: 'cta_url',
+      action: { name: 'cta_url', parameters: { display_text: 'Abrir o app', url: 'https://app.example.com' } },
+    });
+  });
+
+  it('converts markdown to WhatsApp syntax on text sends (messageFormatMode default)', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ message: { id: HERMES_UUID } }));
+
+    await plugin.sendMessage(instanceId, {
+      to: '5511999998888',
+      content: { type: 'text', text: 'me informe seu **CPF** e **data de nascimento**' },
+    });
+
+    const envelope = sentEnvelope(fetchSpy, 1) as { message: Record<string, unknown> };
+    expect(envelope.message.text).toBe('me informe seu *CPF* e *data de nascimento*');
+  });
+
+  it('honors messageFormatMode=passthrough (raw markdown untouched)', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ message: { id: HERMES_UUID } }));
+
+    await plugin.sendMessage(instanceId, {
+      to: '5511999998888',
+      content: { type: 'text', text: '**raw**' },
+      metadata: { messageFormatMode: 'passthrough' },
+    });
+
+    const envelope = sentEnvelope(fetchSpy, 1) as { message: Record<string, unknown> };
+    expect(envelope.message.text).toBe('**raw**');
+  });
+
+  it('dispatches location_request as the location_request_message interactive', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ message: { id: HERMES_UUID } }));
+
+    const result = await plugin.sendMessage(instanceId, {
+      to: '5511999998888',
+      content: { type: 'location_request', text: 'Compartilhe sua localização 📍' },
+    });
+
+    expect(result.success).toBe(true);
+    const envelope = sentEnvelope(fetchSpy, 1) as { message: { interactive: Record<string, unknown> } };
+    expect(envelope.message.interactive).toEqual({
+      type: 'location_request_message',
+      body: { text: 'Compartilhe sua localização 📍' },
+      action: { name: 'send_location' },
+    });
+  });
+
   it('fails fast (no message.failed) for unsupported content types', async () => {
     const result = await plugin.sendMessage(instanceId, {
       to: '5511999998888',

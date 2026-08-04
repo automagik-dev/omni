@@ -16,7 +16,13 @@
  * username/password) + dedupe cache keyed by `wamid`.
  */
 
-import { BaseChannelPlugin, createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
+import {
+  BaseChannelPlugin,
+  createDownloadGuard,
+  createInboundDedupeCache,
+  planInteractive,
+  sanitizeMessage,
+} from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
   DedupeCache,
@@ -29,6 +35,7 @@ import type {
   PluginContext,
   SendResult,
 } from '@omni/channel-sdk';
+import { markdownToWhatsApp } from '@omni/core';
 import type { Logger } from '@omni/core';
 import type { HermesContact, MetaInboundMessage, MetaWebhookStatusEntry } from '@omni/core/schemas';
 import type { ChannelType, ContentType } from '@omni/core/types';
@@ -36,7 +43,16 @@ import type { ChannelType, ContentType } from '@omni/core/types';
 import { HERMES_CAPABILITIES } from './capabilities';
 import { HermesClient } from './client';
 import { handleHermesWebhookRequest } from './handlers/webhook';
-import { sendContact, sendLocation, sendMedia, sendReaction, sendTemplate, sendText } from './senders';
+import {
+  sendContact,
+  sendLocation,
+  sendLocationRequest,
+  sendMedia,
+  sendPlannedInteractive,
+  sendReaction,
+  sendTemplate,
+  sendText,
+} from './senders';
 import type { HermesConfig, HermesSendResponse } from './types';
 import { HermesApiError, HermesErrorCode } from './utils/errors';
 
@@ -176,7 +192,7 @@ export class HermesPlugin extends BaseChannelPlugin {
     if (correlationId) this.captureT10(correlationId);
 
     try {
-      const dispatched = await dispatchOutbound(state, message);
+      const dispatched = await dispatchOutbound(state, message, this.logger);
       if (!dispatched.ok) {
         return { success: false, error: dispatched.error, retryable: false, timestamp: Date.now() };
       }
@@ -571,12 +587,19 @@ type OutboundDispatchResult = { ok: true; response: HermesSendResponse } | { ok:
  * without emitting `message.failed` (nothing was attempted against the
  * Hermes API). Sender failures propagate as thrown `HermesApiError`s.
  */
-async function dispatchOutbound(state: HermesInstanceState, message: OutgoingMessage): Promise<OutboundDispatchResult> {
+async function dispatchOutbound(
+  state: HermesInstanceState,
+  message: OutgoingMessage,
+  logger?: Logger,
+): Promise<OutboundDispatchResult> {
   const { client } = state;
   const { content, to, replyTo } = message;
 
   if (content.type === 'text') {
-    return { ok: true, response: await sendText(client, to, content.text ?? '', replyTo) };
+    return dispatchOutboundText(client, message, logger);
+  }
+  if (content.type === 'location_request') {
+    return { ok: true, response: await sendLocationRequest(client, to, resolveOutboundText(message), replyTo) };
   }
   if (HERMES_MEDIA_TYPES.has(content.type)) {
     return dispatchOutboundMedia(client, message);
@@ -607,6 +630,52 @@ async function dispatchOutbound(state: HermesInstanceState, message: OutgoingMes
     return dispatchOutboundTemplate(state, message);
   }
   return { ok: false, error: `Unsupported content.type=${content.type} for hermes` };
+}
+
+/**
+ * Markdown → WhatsApp syntax, honoring the instance's `messageFormatMode`
+ * (same contract as the whatsapp-business and baileys channels — without it
+ * the agent's `**bold**` reaches the device raw and WhatsApp pairs the
+ * asterisks wrong).
+ */
+function resolveOutboundText(message: OutgoingMessage): string {
+  const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+  const text = message.content.text ?? '';
+  return formatMode === 'passthrough' ? text : markdownToWhatsApp(text);
+}
+
+/**
+ * Text content — plain send, or the best-fitting Cloud API interactive type
+ * when `content.buttons` is present (shared `planInteractive` mapper: reply
+ * buttons ≤3, list 4-10, cta_url for a single URL button). Overflow beyond
+ * the 10-row list limit is dropped with a warn log — never silently.
+ */
+async function dispatchOutboundText(
+  client: HermesClient,
+  message: OutgoingMessage,
+  logger?: Logger,
+): Promise<OutboundDispatchResult> {
+  const { content, to, replyTo } = message;
+  const formatted = resolveOutboundText(message);
+
+  if (!content.buttons?.length) {
+    return { ok: true, response: await sendText(client, to, formatted, replyTo) };
+  }
+
+  const plan = planInteractive(formatted, content.buttons, content.list?.buttonLabel ?? 'Options', {
+    sectionTitle: content.list?.sectionTitle,
+    forceList: content.list?.forceList,
+  });
+  if (plan.droppedRows > 0) {
+    logger?.warn('[hermes] interactive list capped at 10 rows — extra buttons dropped', {
+      to,
+      droppedRows: plan.droppedRows,
+    });
+  }
+  const response = plan.interactive
+    ? await sendPlannedInteractive(client, to, plan.interactive, replyTo)
+    : await sendText(client, to, plan.body, replyTo);
+  return { ok: true, response };
 }
 
 /**

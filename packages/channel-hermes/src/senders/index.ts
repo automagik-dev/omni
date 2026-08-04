@@ -16,6 +16,8 @@ export { sendTemplate, type SendTemplateOptions } from './template';
 export {
   sendInteractiveButtons,
   sendInteractiveList,
+  sendLocationRequest,
+  sendPlannedInteractive,
   type InteractiveButton,
   type InteractiveListSection,
   type SendInteractiveListOptions,
