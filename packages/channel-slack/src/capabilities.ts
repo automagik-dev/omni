@@ -45,6 +45,15 @@ export const SLACK_CAPABILITIES: ChannelCapabilities = {
   canReplyToMessage: true,
   canForwardMessage: false,
 
+  // Scheduling / permalinks (#889)
+  canScheduleMessage: true,
+  maxScheduleAheadMs: 120 * 24 * 60 * 60 * 1000, // Slack rejects post_at beyond 120 days
+  canGetPermalink: true,
+  canPinMessage: true,
+  // Slack search needs a user token (`search:read`); a bot token cannot search.
+  // Flipped per-instance once the user-token auth mode lands (#889 frente B).
+  canSearchMessages: false,
+
   // Rich content
   canSendContact: false,
   canSendLocation: false,

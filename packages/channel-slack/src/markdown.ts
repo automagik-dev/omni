@@ -14,7 +14,7 @@
  * Also handles chunking messages to 4000-char Slack limit.
  */
 
-const MAX_SLACK_MESSAGE_LENGTH = 4000;
+export const MAX_SLACK_MESSAGE_LENGTH = 4000;
 
 /**
  * Convert standard Markdown to Slack mrkdwn

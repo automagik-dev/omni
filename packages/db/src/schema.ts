@@ -202,6 +202,17 @@ export type MessageStatus = (typeof messageStatuses)[number];
 export const deliveryStatuses = ['pending', 'sent', 'delivered', 'read', 'failed'] as const;
 export type DeliveryStatus = (typeof deliveryStatuses)[number];
 
+/**
+ * Who holds the timer for a scheduled message (#889).
+ * 'platform' = the channel schedules natively (Slack chat.scheduleMessage) and
+ * delivery survives omni downtime. 'local' = omni sends it at send_at.
+ */
+export const scheduledMessageDeliveryModes = ['platform', 'local'] as const;
+export type ScheduledMessageDeliveryMode = (typeof scheduledMessageDeliveryModes)[number];
+
+export const scheduledMessageStatuses = ['pending', 'sent', 'canceled', 'failed'] as const;
+export type ScheduledMessageStatus = (typeof scheduledMessageStatuses)[number];
+
 // ============================================================================
 // UNIFIED MESSAGES JSONB TYPES
 // ============================================================================
@@ -1086,6 +1097,73 @@ export const whatsappFlowKeys = pgTable(
 
 export type WhatsappFlowKey = typeof whatsappFlowKeys.$inferSelect;
 export type NewWhatsappFlowKey = typeof whatsappFlowKeys.$inferInsert;
+
+/**
+ * Scheduled outbound messages (#889).
+ *
+ * Two delivery modes, chosen per channel by the `canScheduleMessage`
+ * capability:
+ *
+ * - `platform` — the channel schedules natively (Slack chat.scheduleMessage).
+ *   Delivery survives omni being down. `externalScheduledId` holds the
+ *   platform handle used to cancel.
+ * - `local` — omni holds the message and sends it at `sendAt` itself, for
+ *   channels with no native scheduling.
+ *
+ * This table exists even for `platform` mode, and that is deliberate: Slack's
+ * chat.scheduledMessages.list only returns what the SAME token scheduled, so
+ * the platform cannot be our source of truth for "what is pending". Anything
+ * scheduled through omni is recorded here; reconciliation against the platform
+ * is best-effort.
+ */
+export const scheduledMessages = pgTable(
+  'scheduled_messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+    /** Platform chat/channel id (not the internal chats.id — the target may not be known to us yet). */
+    chatExternalId: varchar('chat_external_id', { length: 255 }).notNull(),
+    /** Post into this thread when set (Slack thread_ts). */
+    threadExternalId: varchar('thread_external_id', { length: 255 }),
+    /** Slack reply_broadcast: post in the thread AND surface in the channel. */
+    isThreadBroadcast: boolean('is_thread_broadcast').notNull().default(false),
+
+    /** Serialized OutgoingContent — mirrors what sendMessage would receive. */
+    content: jsonb('content').$type<Record<string, unknown>>().notNull(),
+
+    /** When it should go out. Always stored UTC-aware. */
+    sendAt: timestamp('send_at', { withTimezone: true }).notNull(),
+    deliveryMode: varchar('delivery_mode', { length: 20 }).notNull().$type<ScheduledMessageDeliveryMode>(),
+    status: varchar('status', { length: 20 }).notNull().default('pending').$type<ScheduledMessageStatus>(),
+
+    /** Platform handle for cancellation (Slack scheduled_message_id). */
+    externalScheduledId: varchar('external_scheduled_id', { length: 255 }),
+    /** externalId of the message once it actually went out. */
+    sentExternalId: varchar('sent_external_id', { length: 255 }),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    canceledAt: timestamp('canceled_at', { withTimezone: true }),
+    failedAt: timestamp('failed_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+
+    /** Agent that scheduled it, when it came from a dispatch rather than a human. */
+    createdByAgentId: uuid('created_by_agent_id'),
+    tenantId: uuid('tenant_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    /** The sweeper's hot path: pending rows whose time has come. */
+    dueIdx: index('scheduled_messages_due_idx').on(t.status, t.sendAt),
+    instanceIdx: index('scheduled_messages_instance_idx').on(t.instanceId, t.status),
+    chatIdx: index('scheduled_messages_chat_idx').on(t.instanceId, t.chatExternalId),
+  }),
+);
+
+export type ScheduledMessage = typeof scheduledMessages.$inferSelect;
+export type NewScheduledMessage = typeof scheduledMessages.$inferInsert;
 
 // ============================================================================
 // PERSONS (Identity Graph Root)

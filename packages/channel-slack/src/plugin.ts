@@ -44,7 +44,13 @@ import { clearTypingStatus, setSlackThreadStatus } from './handlers/typing';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
 import { createNativeStreamSender } from './senders/native-stream';
 import { createSlackStreamSender } from './senders/stream';
-import { deleteSlackMessage, editSlackMessage, sendTextMessage } from './senders/text';
+import {
+  cancelScheduledSlackMessage,
+  deleteSlackMessage,
+  editSlackMessage,
+  scheduleTextMessage,
+  sendTextMessage,
+} from './senders/text';
 import type { ReplyToMode, SlackConfig, SlackConnectionMode, SlackInteractionPayload } from './types';
 import { SlackError, SlackErrorCode } from './types';
 
@@ -595,6 +601,75 @@ export class SlackPlugin extends BaseChannelPlugin {
   async deleteMessage(instanceId: string, channelId: string, messageTs: string): Promise<void> {
     const connection = this.getConnection(instanceId);
     await deleteSlackMessage(connection.client, channelId, messageTs, this.logger);
+  }
+
+  /**
+   * Schedule a message natively via chat.scheduleMessage (#889).
+   *
+   * Returns the scheduled_message_id, which is the cancellation handle — not
+   * the eventual message ts. Text only for now: chat.scheduleMessage takes no
+   * file upload, so media has to be uploaded at send time by the local path.
+   */
+  async scheduleMessage(instanceId: string, message: OutgoingMessage, sendAt: Date): Promise<string> {
+    const connection = this.getConnection(instanceId);
+    const config = this.slackConfigs.get(instanceId);
+
+    if (message.content.type !== 'text' || !message.content.text) {
+      throw new SlackError(
+        SlackErrorCode.SEND_FAILED,
+        `Only text messages can be scheduled (got '${message.content.type}') — chat.scheduleMessage carries no attachment.`,
+      );
+    }
+
+    const threadTs = this.resolveThreadTs(config?.replyToMode ?? 'all', message.replyTo, message.threadId);
+
+    return scheduleTextMessage(
+      connection.client,
+      {
+        channelId: message.to,
+        text: message.content.text,
+        threadTs,
+        replyBroadcast: message.metadata?.isThreadBroadcast === true,
+        username: config?.defaultUsername,
+        iconUrl: config?.defaultIconUrl,
+        iconEmoji: config?.defaultIconEmoji,
+        formatMode: message.metadata?.messageFormatMode,
+        postAt: sendAt,
+      },
+      this.logger,
+    );
+  }
+
+  /** Cancel a natively scheduled message (#889). */
+  async cancelScheduledMessage(instanceId: string, channelId: string, scheduledId: string): Promise<void> {
+    const connection = this.getConnection(instanceId);
+    await cancelScheduledSlackMessage(connection.client, channelId, scheduledId, this.logger);
+  }
+
+  /**
+   * Resolve a permalink to a message (#889).
+   *
+   * Slack has no quote API — the client renders the card by unfurling a
+   * permalink — so this is the input a quote is built from. Returns null
+   * rather than throwing: a missing permalink degrades a quote to a
+   * blockquote, it does not fail the send.
+   */
+  async getPermalink(instanceId: string, channelId: string, messageTs: string): Promise<string | null> {
+    const connection = this.getConnection(instanceId);
+    try {
+      const result = await connection.client.chat.getPermalink({
+        channel: channelId,
+        message_ts: messageTs,
+      });
+      return (result.permalink as string | undefined) ?? null;
+    } catch (error) {
+      this.logger.warn('Failed to resolve permalink', {
+        error: error instanceof Error ? error.message : String(error),
+        channelId,
+        messageTs,
+      });
+      return null;
+    }
   }
 
   /**

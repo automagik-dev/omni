@@ -455,4 +455,43 @@ export interface ChannelPlugin {
    * @param emoji - Emoji to remove
    */
   unreact?(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void>;
+
+  /**
+   * Schedule a message for future delivery on the platform itself (#889).
+   *
+   * Only implement when the channel schedules natively, and declare
+   * `canScheduleMessage: true`. Channels without native support are handled by
+   * omni's local sweeper instead — do not fake it here.
+   *
+   * The returned handle is what cancelScheduledMessage() takes. It is NOT the
+   * eventual message id: the message does not exist until it is delivered.
+   *
+   * @param instanceId - Instance to schedule from
+   * @param message - Same shape sendMessage() accepts
+   * @param sendAt - Delivery time (platform limits apply; Slack allows ≤120 days)
+   * @returns Platform handle for later cancellation
+   */
+  scheduleMessage?(instanceId: string, message: OutgoingMessage, sendAt: Date): Promise<string>;
+
+  /**
+   * Cancel a message previously scheduled via scheduleMessage().
+   *
+   * @param instanceId - Instance that owns the scheduled message
+   * @param chatId - Channel/chat the message was scheduled to
+   * @param scheduledId - Handle returned by scheduleMessage()
+   */
+  cancelScheduledMessage?(instanceId: string, chatId: string, scheduledId: string): Promise<void>;
+
+  /**
+   * Resolve a stable deep link to a message (#889).
+   *
+   * Used to render quotes: Slack has no quote API — the client renders a card
+   * by unfurling a permalink — so a quote is built from this plus a blockquote
+   * fallback.
+   *
+   * @param instanceId - Instance to resolve from
+   * @param chatId - Channel/chat containing the message
+   * @param messageId - Platform message id
+   */
+  getPermalink?(instanceId: string, chatId: string, messageId: string): Promise<string | null>;
 }
