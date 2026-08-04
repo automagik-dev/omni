@@ -196,6 +196,11 @@ function buildInstanceConnectOptions(instance: {
   metaApiVersion?: string | null;
   metaDisplayPhoneNumber?: string | null;
   metaConnectionMethod?: string | null;
+  hermesBaseUrl?: string | null;
+  hermesUsername?: string | null;
+  hermesPassword?: string | null;
+  hermesMediaId?: string | null;
+  hermesTemplateNamespace?: string | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
@@ -216,7 +221,32 @@ function buildInstanceConnectOptions(instance: {
   if (instance.channel === 'whatsapp-business') {
     applyWhatsAppBusinessOptions(options, instance);
   }
+  if (instance.channel === 'hermes') {
+    applyHermesOptions(options, instance);
+  }
   return options;
+}
+
+/**
+ * hermes reconnect credentials — the plugin's `connect()` reads these from
+ * `config.options` (same keys as `config.credentials` in the manual connect
+ * route). Persisted on `instances` by the create/connect/PATCH routes.
+ */
+function applyHermesOptions(
+  options: Record<string, unknown>,
+  instance: {
+    hermesBaseUrl?: string | null;
+    hermesUsername?: string | null;
+    hermesPassword?: string | null;
+    hermesMediaId?: string | null;
+    hermesTemplateNamespace?: string | null;
+  },
+): void {
+  if (instance.hermesBaseUrl) options.hermesBaseUrl = instance.hermesBaseUrl;
+  if (instance.hermesUsername) options.hermesUsername = instance.hermesUsername;
+  if (instance.hermesPassword) options.hermesPassword = instance.hermesPassword;
+  if (instance.hermesMediaId) options.hermesMediaId = instance.hermesMediaId;
+  if (instance.hermesTemplateNamespace) options.hermesTemplateNamespace = instance.hermesTemplateNamespace;
 }
 
 /**
