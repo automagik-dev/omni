@@ -51,10 +51,12 @@ import { createRequirementsCommand } from './commands/requirements.js';
 import { createRestartCommand } from './commands/restart.js';
 import { createResyncCommand } from './commands/resync.js';
 import { createSayCommand } from './commands/say.js';
+import { createScheduleCommand } from './commands/schedule.js';
 import { createSeeCommand } from './commands/see.js';
 import { createSendCommand } from './commands/send.js';
 import { createServerCommand } from './commands/server.js';
 import { createSettingsCommand } from './commands/settings.js';
+import { createSlackCommand } from './commands/slack.js';
 import { createSpeakCommand } from './commands/speak.js';
 import { createStartCommand } from './commands/start.js';
 import { createStatusCommand } from './commands/status.js';
@@ -305,6 +307,18 @@ const COMMANDS: CommandDef[] = [
     category: 'advanced',
     helpGroup: 'Management',
     helpDescription: 'Idle-chat follow-up config (agents/instances/chats)',
+  },
+  {
+    create: createScheduleCommand,
+    category: 'core',
+    helpGroup: 'Core',
+    helpDescription: 'Schedule messages for later delivery',
+  },
+  {
+    create: createSlackCommand,
+    category: 'advanced',
+    helpGroup: 'Management',
+    helpDescription: 'Slack-only: open a DM by user id, search messages',
   },
   {
     create: createAgentsCommand,

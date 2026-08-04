@@ -288,6 +288,16 @@ const CLI_COMMANDS: Record<string, string> = {
   'followUp.unsetChat': 'follow-up unset chats',
 
   // ============================================================================
+  // SCHEDULED MESSAGES + SLACK-ONLY (#889)
+  // ============================================================================
+  'scheduledMessages.schedule': 'schedule send',
+  'scheduledMessages.listPending': 'schedule list',
+  'scheduledMessages.get': 'schedule get',
+  'scheduledMessages.cancel': 'schedule cancel',
+  'slack.openDm': 'slack dm',
+  'slack.search': 'slack search',
+
+  // ============================================================================
   // SYSTEM
   // ============================================================================
   'system.health': 'status',

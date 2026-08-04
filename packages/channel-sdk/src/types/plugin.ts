@@ -13,6 +13,26 @@ import type { ConnectionStatus, InstanceConfig } from './instance';
 import type { OutgoingMessage, SendResult } from './messaging';
 import type { StreamSender } from './streaming';
 
+/** Kinds of presence indicator a channel may show (#889). */
+export type PresenceStatusType = 'typing' | 'recording' | 'paused';
+
+/**
+ * Outcome of a presence-status send.
+ *
+ * `delivered: false` with a `reason` is a normal result, not an error — Slack
+ * simply has no thread to attach the status to when the conversation has not
+ * started one yet.
+ */
+export interface PresenceStatusResult {
+  delivered?: boolean;
+  /** Platform API actually used, for observability. */
+  method?: string;
+  threadId?: string;
+  status?: string;
+  loadingMessages?: string[];
+  reason?: string;
+}
+
 export type GroupParticipantAction = 'add' | 'remove' | 'promote' | 'demote';
 export type GroupSetting = 'announcement' | 'not_announcement' | 'locked' | 'unlocked';
 
@@ -201,6 +221,33 @@ export interface ChannelPlugin {
    * @param duration - How long to show typing (ms), 0 to stop
    */
   sendTyping?(instanceId: string, chatId: string, duration?: number): Promise<void>;
+
+  /**
+   * Send a rich presence/status indicator (#889).
+   *
+   * A richer sibling of sendTyping for channels whose "someone is working on
+   * this" signal is not a plain typing bubble. Slack's is thread-scoped
+   * (`assistant.threads.setStatus`) and carries a status string — which is why
+   * Slack reports `canSendTyping: false` while still implementing this.
+   *
+   * Returns a report rather than void: not-delivered is a normal outcome
+   * (Slack has no thread context to attach to, say), and the caller needs to
+   * distinguish that from a failure. Declared here instead of being probed
+   * with `'sendPresenceStatus' in plugin` at the call site.
+   *
+   * @param instanceId - Instance to send from
+   * @param chatId - Chat to show the indicator in
+   * @param type - Indicator kind
+   * @param duration - How long to hold it (ms) before auto-clearing
+   * @param options - Channel extras (Slack: thread, status text, loading copy)
+   */
+  sendPresenceStatus?(
+    instanceId: string,
+    chatId: string,
+    type: PresenceStatusType,
+    duration?: number,
+    options?: { threadId?: string; status?: string; loadingMessages?: string[] },
+  ): Promise<PresenceStatusResult | undefined>;
 
   /**
    * Mark messages as read

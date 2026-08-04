@@ -2165,7 +2165,7 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
   });
 
   // Show "recording" presence before sending (if plugin supports it)
-  if ('sendTyping' in plugin && typeof plugin.sendTyping === 'function') {
+  if (typeof plugin.sendTyping === 'function') {
     const presenceDuration = data.presenceDelay ?? Math.min(ttsResult.durationMs, 15000);
     try {
       await (plugin as { sendTyping: (id: string, chatId: string, duration?: number) => Promise<void> }).sendTyping(
@@ -2411,11 +2411,12 @@ type PresenceStatusSender = {
 };
 
 function hasPresenceStatusSender(plugin: unknown): plugin is PresenceStatusSender {
+  // sendPresenceStatus is on the ChannelPlugin contract since #889, but this
+  // guard also accepts a bare object, so the shape check stays.
   return (
     typeof plugin === 'object' &&
     plugin !== null &&
-    'sendPresenceStatus' in plugin &&
-    typeof (plugin as { sendPresenceStatus?: unknown }).sendPresenceStatus === 'function'
+    typeof (plugin as PresenceStatusSender).sendPresenceStatus === 'function'
   );
 }
 
@@ -2463,7 +2464,7 @@ messagesRoutes.post('/send/presence', zValidator('json', sendPresenceSchema), as
         loadingMessages,
       })
     : await (async (): Promise<PresenceStatusResult> => {
-        if (!('sendTyping' in plugin) || typeof plugin.sendTyping !== 'function') {
+        if (typeof plugin.sendTyping !== 'function') {
           throw new OmniError({
             code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
             message: `Channel ${instance.channel} plugin does not implement sendTyping`,
