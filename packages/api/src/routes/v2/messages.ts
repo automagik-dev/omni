@@ -2468,7 +2468,7 @@ messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), asyn
   );
 
   // Check if plugin has markAsRead method
-  if (!('markAsRead' in plugin) || typeof plugin.markAsRead !== 'function') {
+  if (typeof plugin.markAsRead !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} plugin does not implement markAsRead`,
@@ -2524,7 +2524,7 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
   );
 
   // Check if plugin has markAsRead method
-  if (!('markAsRead' in plugin) || typeof plugin.markAsRead !== 'function') {
+  if (typeof plugin.markAsRead !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} plugin does not implement markAsRead`,
@@ -2898,7 +2898,7 @@ messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema
   }
 
   // Check if plugin has editMessage method
-  if (!('editMessage' in plugin) || typeof plugin.editMessage !== 'function') {
+  if (typeof plugin.editMessage !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} plugin does not implement editMessage`,
@@ -2911,11 +2911,7 @@ messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema
 
   // Edit via channel plugin — catch and surface plugin errors
   try {
-    await (
-      plugin as {
-        editMessage: (instanceId: string, channelId: string, messageId: string, text: string) => Promise<void>;
-      }
-    ).editMessage(instanceId, channelId, resolvedMessageId, text);
+    await plugin.editMessage(instanceId, channelId, resolvedMessageId, text);
   } catch (error) {
     // Re-throw typed errors (WhatsAppError, OmniError) for the global error handler
     if (error instanceof OmniError) throw error;
@@ -2976,7 +2972,7 @@ messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSc
   }
 
   // Check if plugin has deleteMessage method
-  if (!('deleteMessage' in plugin) || typeof plugin.deleteMessage !== 'function') {
+  if (typeof plugin.deleteMessage !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} plugin does not implement deleteMessage`,
@@ -2988,11 +2984,7 @@ messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSc
   const resolvedMessageId = await resolveChannelMessageId(services, messageId, instanceId);
 
   // Delete via channel plugin
-  await (
-    plugin as {
-      deleteMessage: (instanceId: string, channelId: string, messageId: string, fromMe?: boolean) => Promise<void>;
-    }
-  ).deleteMessage(instanceId, channelId, resolvedMessageId, fromMe);
+  await plugin.deleteMessage(instanceId, channelId, resolvedMessageId, fromMe);
 
   return c.json({
     success: true,
@@ -3040,7 +3032,7 @@ messagesRoutes.post('/:id/star', zValidator('json', starMessageSchema), async (c
     });
   }
 
-  if (!('starMessage' in plugin) || typeof plugin.starMessage !== 'function') {
+  if (typeof plugin.starMessage !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} does not support starring messages`,
@@ -3049,17 +3041,7 @@ messagesRoutes.post('/:id/star', zValidator('json', starMessageSchema), async (c
     });
   }
 
-  await (
-    plugin as {
-      starMessage: (
-        instanceId: string,
-        chatId: string,
-        messageId: string,
-        star: boolean,
-        fromMe?: boolean,
-      ) => Promise<void>;
-    }
-  ).starMessage(instanceId, channelId, messageId, true, fromMe);
+  await plugin.starMessage(instanceId, channelId, messageId, true, fromMe);
 
   return c.json({
     success: true,
@@ -3097,7 +3079,7 @@ messagesRoutes.delete('/:id/star', zValidator('json', starMessageSchema), async 
     });
   }
 
-  if (!('starMessage' in plugin) || typeof plugin.starMessage !== 'function') {
+  if (typeof plugin.starMessage !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} does not support starring messages`,
@@ -3106,17 +3088,7 @@ messagesRoutes.delete('/:id/star', zValidator('json', starMessageSchema), async 
     });
   }
 
-  await (
-    plugin as {
-      starMessage: (
-        instanceId: string,
-        chatId: string,
-        messageId: string,
-        star: boolean,
-        fromMe?: boolean,
-      ) => Promise<void>;
-    }
-  ).starMessage(instanceId, channelId, messageId, false, fromMe);
+  await plugin.starMessage(instanceId, channelId, messageId, false, fromMe);
 
   return c.json({
     success: true,

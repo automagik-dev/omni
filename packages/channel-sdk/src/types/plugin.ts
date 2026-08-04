@@ -457,6 +457,51 @@ export interface ChannelPlugin {
   unreact?(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void>;
 
   /**
+   * Edit a previously sent message.
+   *
+   * Declared here rather than probed with `'editMessage' in plugin` (#889).
+   * Duck-typing meant the contract said nothing about the shape, so each call
+   * site re-declared its own signature inline and drifted.
+   *
+   * Implement only when `canEditMessage` is true. Note some platforms only let
+   * you edit your OWN messages — Slack's chat.update with a user token does.
+   *
+   * @param instanceId - Instance that sent the message
+   * @param chatId - Channel/chat containing the message
+   * @param messageId - Platform message id
+   * @param newText - Replacement text
+   */
+  editMessage?(instanceId: string, chatId: string, messageId: string, newText: string): Promise<void>;
+
+  /**
+   * Delete a previously sent message. Implement only when `canDeleteMessage`.
+   *
+   * @param instanceId - Instance that sent the message
+   * @param chatId - Channel/chat containing the message
+   * @param messageId - Platform message id
+   * @param fromMe - Whether the target was sent by us (WhatsApp message key).
+   */
+  deleteMessage?(instanceId: string, chatId: string, messageId: string, fromMe?: boolean): Promise<void>;
+
+  /**
+   * Star / unstar (bookmark) a message, where the platform has the concept.
+   *
+   * @param instanceId - Instance to act as
+   * @param chatId - Channel/chat containing the message
+   * @param messageId - Platform message id
+   * @param starred - Desired state
+   * @param fromMe - Whether the target message was sent by us. WhatsApp needs
+   *   it to address the message key; defaults to true in that plugin.
+   */
+  starMessage?(
+    instanceId: string,
+    chatId: string,
+    messageId: string,
+    starred: boolean,
+    fromMe?: boolean,
+  ): Promise<void>;
+
+  /**
    * Schedule a message for future delivery on the platform itself (#889).
    *
    * Only implement when the channel schedules natively, and declare
