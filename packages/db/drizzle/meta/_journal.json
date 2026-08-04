@@ -358,6 +358,13 @@
       "when": 1785000000000,
       "tag": "0050_slack_user_token",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1785100000000,
+      "tag": "0051_message_pin_star",
+      "breakpoints": true
     }
   ]
 }

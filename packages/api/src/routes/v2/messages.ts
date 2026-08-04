@@ -248,6 +248,81 @@ type PluginCapability =
   | 'canSendTyping'
   | 'canReceiveReadReceipts';
 
+const permalinkQuerySchema = z.object({
+  instanceId: z.string().uuid(),
+  channelId: z.string().min(1).describe('Platform chat/channel id containing the message'),
+});
+
+/**
+ * GET /messages/:id/permalink — resolve a stable deep link (#889).
+ *
+ * Resolved lazily and cached on the row: a permalink costs one API call and
+ * almost no message is ever linked to, so paying it at ingest for every
+ * message would be wasteful.
+ *
+ * This is also the input a quote is built from — Slack has no quote API, its
+ * client renders the card by unfurling a permalink.
+ */
+messagesRoutes.get('/:id/permalink', zValidator('query', permalinkQuerySchema), async (c) => {
+  const messageId = c.req.param('id');
+  const { instanceId, channelId } = c.req.valid('query');
+  const services = c.get('services');
+
+  const chat = await services.chats.getByExternalId(instanceId, channelId);
+  const stored = chat ? await services.messages.getByExternalId(chat.id, messageId) : null;
+  if (stored?.permalink) {
+    return c.json({ data: { messageId, permalink: stored.permalink, cached: true } });
+  }
+
+  const { instance, plugin } = await getPluginForInstance(services, c.get('channelRegistry'), instanceId);
+
+  if (typeof plugin.getPermalink !== 'function') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} cannot resolve permalinks`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  const permalink = await plugin.getPermalink(instanceId, channelId, messageId);
+  if (!permalink) {
+    throw new OmniError({
+      code: ERROR_CODES.NOT_FOUND,
+      message: `No permalink available for message ${messageId}`,
+      recoverable: false,
+    });
+  }
+
+  if (chat) {
+    // Cache best-effort; the caller already has its answer.
+    await services.messages.setPermalink(chat.id, messageId, permalink).catch(() => {});
+  }
+
+  return c.json({ data: { messageId, permalink, cached: false } });
+});
+
+/**
+ * Mirror a star/unstar into our own row (#889).
+ *
+ * Best-effort by design: the platform already accepted the change, so a
+ * bookkeeping failure must not turn a successful star into an error response.
+ */
+async function persistStarState(
+  services: Services,
+  instanceId: string,
+  channelExternalId: string,
+  messageExternalId: string,
+  starred: boolean,
+): Promise<void> {
+  try {
+    const chat = await services.chats.getByExternalId(instanceId, channelExternalId);
+    if (chat) await services.messages.setStarred(chat.id, messageExternalId, starred);
+  } catch {
+    // Intentionally swallowed — see the doc comment.
+  }
+}
+
 /**
  * Get validated plugin for an instance with capability check
  */
@@ -3043,6 +3118,11 @@ messagesRoutes.post('/:id/star', zValidator('json', starMessageSchema), async (c
 
   await plugin.starMessage(instanceId, channelId, messageId, true, fromMe);
 
+  // Persist AFTER the channel accepted it, so the row reflects the platform
+  // rather than an intent that may have failed (#889). Best-effort: the star
+  // did happen, and failing the response would misreport that.
+  await persistStarState(services, instanceId, channelId, messageId, true);
+
   return c.json({
     success: true,
     data: { messageId, starred: true },
@@ -3089,6 +3169,8 @@ messagesRoutes.delete('/:id/star', zValidator('json', starMessageSchema), async 
   }
 
   await plugin.starMessage(instanceId, channelId, messageId, false, fromMe);
+
+  await persistStarState(services, instanceId, channelId, messageId, false);
 
   return c.json({
     success: true,

@@ -509,6 +509,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/media/:instanceId/*',
   'GET /api/v2/messages',
   'GET /api/v2/messages/:id',
+  'GET /api/v2/messages/:id/permalink',
   'GET /api/v2/messages/by-external',
   'GET /api/v2/messages/tts/voices',
   'GET /api/v2/payload-config',

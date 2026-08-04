@@ -920,6 +920,44 @@ export class MessageService {
   }
 
   /**
+   * Record that a message was starred / unstarred (#889).
+   *
+   * Called after the channel accepted the change, so the row reflects the
+   * platform rather than an intent that may have failed.
+   */
+  async setStarred(chatId: string, externalId: string, starred: boolean): Promise<void> {
+    await this.db
+      .update(messages)
+      .set({ starredAt: starred ? new Date() : null, updatedAt: new Date() })
+      .where(and(eq(messages.chatId, chatId), eq(messages.externalId, externalId)));
+  }
+
+  /** Record that a message was pinned / unpinned (#889). */
+  async setPinned(chatId: string, externalId: string, pinned: boolean, pinnedBy?: string): Promise<void> {
+    await this.db
+      .update(messages)
+      .set({
+        pinnedAt: pinned ? new Date() : null,
+        pinnedBy: pinned ? (pinnedBy ?? null) : null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(messages.chatId, chatId), eq(messages.externalId, externalId)));
+  }
+
+  /**
+   * Cache a resolved permalink (#889).
+   *
+   * Permalinks are resolved lazily — one API call each, and almost no message
+   * is ever linked to — so this is called on first use rather than at ingest.
+   */
+  async setPermalink(chatId: string, externalId: string, permalink: string): Promise<void> {
+    await this.db
+      .update(messages)
+      .set({ permalink, updatedAt: new Date() })
+      .where(and(eq(messages.chatId, chatId), eq(messages.externalId, externalId)));
+  }
+
+  /**
    * Update reply-to message reference (when we later find the referenced message)
    */
   async updateReplyToReference(id: string, replyToMessageId: string): Promise<void> {

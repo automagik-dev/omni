@@ -1583,7 +1583,15 @@ export const messages = pgTable(
     latestReplyAt: timestamp('latest_reply_at', { withTimezone: true }),
 
     // Stable deep link to the message on the platform (Slack chat.getPermalink).
+    // Resolved lazily, not on ingest: a permalink costs an API call per message
+    // and almost none are ever linked to.
     permalink: text('permalink'),
+
+    // Pin / star, per MESSAGE (#889). `ChatSettings.pinned` is a different
+    // thing entirely — it pins the CONVERSATION in the sidebar.
+    pinnedAt: timestamp('pinned_at', { withTimezone: true }),
+    pinnedBy: varchar('pinned_by', { length: 255 }),
+    starredAt: timestamp('starred_at', { withTimezone: true }),
 
     // Forward
     forwardedFromMessageId: uuid('forwarded_from_message_id'),
