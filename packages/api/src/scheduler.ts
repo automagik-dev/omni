@@ -9,7 +9,7 @@
  * @see events-ops wish (DEC-9)
  */
 
-import type { ChannelRegistry } from '@omni/channel-sdk';
+import type { ChannelRegistry, ChannelType } from '@omni/channel-sdk';
 import {
   CronExpressions,
   createLogger,
@@ -22,6 +22,7 @@ import {
 import * as Sentry from '@sentry/bun';
 import { sentryEnabled } from './lib/sentry-scrub';
 import type { Services } from './services';
+import { ScheduledMessageService, createPluginResolver } from './services/scheduled-messages';
 import { runForEachActiveTenantRow } from './tenancy/periodic-tenant-work';
 
 const log = createLogger('scheduler:setup');
@@ -315,6 +316,40 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
       });
     },
   });
+
+  // Scheduled-message sweeper — every 15 seconds (#889).
+  //
+  // Only local-mode rows are swept: platform-mode messages are held by the
+  // channel itself (Slack chat.scheduleMessage) and firing them here would
+  // double-post. Needs the registry to reach plugin.sendMessage, so it stays
+  // unregistered when there is none.
+  if (channelRegistry) {
+    const scheduledMessages = new ScheduledMessageService(
+      services.db,
+      createPluginResolver(services.db, (channel) => channelRegistry.get(channel as ChannelType) ?? undefined),
+    );
+
+    scheduler.register({
+      name: 'scheduled-message-sweeper',
+      cron: '*/15 * * * * *',
+      runOnStart: false,
+      handler: async () => {
+        await withCronMonitor('scheduled-message-sweeper', '*/15 * * * * *', 1, 1, async () => {
+          const startTime = Date.now();
+          try {
+            const stats = await scheduledMessages.sweep();
+            recordScheduledJob('scheduled-message-sweeper', 'success', (Date.now() - startTime) / 1000);
+            if (stats.scanned > 0) {
+              log.debug('Scheduled-message sweep tick', { ...stats });
+            }
+          } catch (err) {
+            recordScheduledJob('scheduled-message-sweeper', 'failure', (Date.now() - startTime) / 1000);
+            throw err;
+          }
+        });
+      },
+    });
+  }
 
   // Unread count refresh — hourly
   // Re-emits cached unread counts from WhatsApp plugin to DB so stale counts get corrected.
