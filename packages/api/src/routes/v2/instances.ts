@@ -538,7 +538,16 @@ function applyTwilioWhatsAppConnectionOptions(
   }
 }
 
-function applyHermesConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
+function applyHermesConnectionOptions(
+  options: Record<string, unknown>,
+  input: {
+    hermesBaseUrl?: string | null;
+    hermesUsername?: string | null;
+    hermesPassword?: string | null;
+    hermesMediaId?: string | null;
+    hermesTemplateNamespace?: string | null;
+  },
+): void {
   if (input.hermesBaseUrl) options.hermesBaseUrl = input.hermesBaseUrl;
   if (input.hermesUsername) options.hermesUsername = input.hermesUsername;
   if (input.hermesPassword) options.hermesPassword = input.hermesPassword;
@@ -1384,6 +1393,9 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
       restartOptions.twilioStatusCallbackUrl = instance.twilioStatusCallbackUrl;
       restartOptions.twilioWebhookUrl = instance.twilioWebhookUrl;
       restartOptions.twilioValidateSignature = instance.twilioValidateSignature;
+    }
+    if (instance.channel === 'hermes') {
+      applyHermesConnectionOptions(restartOptions, instance);
     }
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
