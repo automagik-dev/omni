@@ -715,6 +715,13 @@ export const instances = pgTable(
 
     // ---- Slack Configuration ----
     slackBotToken: text('slack_bot_token'),
+    /**
+     * User OAuth token (xoxp) for authMode 'user' (#889). Sealed like the
+     * other credential columns. Bound to a PERSON: it dies with their account.
+     */
+    slackUserToken: text('slack_user_token'),
+    /** 'bot' (default) or 'user' — identity outbound actions are taken as. */
+    slackAuthMode: varchar('slack_auth_mode', { length: 10 }),
     slackAppToken: text('slack_app_token'),
     slackSigningSecret: text('slack_signing_secret'),
 
@@ -1115,6 +1122,10 @@ export type NewWhatsappFlowKey = typeof whatsappFlowKeys.$inferInsert;
  * the platform cannot be our source of truth for "what is pending". Anything
  * scheduled through omni is recorded here; reconciliation against the platform
  * is best-effort.
+ *
+ * Tenancy derives via `instance_id` (the whatsapp_templates / whatsapp_flow_keys
+ * precedent) — no denormalized tenant_id column, so the table stays outside the
+ * RLS tenant-table manifest by construction.
  */
 export const scheduledMessages = pgTable(
   'scheduled_messages',
@@ -1150,7 +1161,6 @@ export const scheduledMessages = pgTable(
 
     /** Agent that scheduled it, when it came from a dispatch rather than a human. */
     createdByAgentId: uuid('created_by_agent_id'),
-    tenantId: uuid('tenant_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

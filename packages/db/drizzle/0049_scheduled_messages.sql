@@ -21,9 +21,10 @@
 -- chat_external_id is the PLATFORM id, not chats.id — a message can be
 -- scheduled to a conversation we have never persisted.
 --
--- Tenancy derives via instance_id (whatsapp_templates / whatsapp_flow_keys
--- precedent); tenant_id is denormalized only to keep sweeper queries from
--- joining instances on the hot path.
+-- Tenancy derives via instance_id (the whatsapp_templates / whatsapp_flow_keys
+-- precedent) — no denormalized tenant_id column, so the table stays outside the
+-- RLS tenant-table manifest by construction. The sweeper scopes per tenant by
+-- restricting to that tenant's instances.
 --
 -- Hand-written following the 0044-0048 precedent (snapshot drift keeps
 -- drizzle-kit generate interactive). Additive + idempotent.
@@ -50,7 +51,6 @@ CREATE TABLE IF NOT EXISTS "scheduled_messages" (
   "last_error" text,
   "attempt_count" integer DEFAULT 0 NOT NULL,
   "created_by_agent_id" uuid,
-  "tenant_id" uuid,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );

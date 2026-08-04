@@ -21,8 +21,10 @@
 import type { ChannelPlugin, OutgoingMessage } from '@omni/channel-sdk';
 import { type Logger, createLogger } from '@omni/core';
 import type { Database, ScheduledMessage, ScheduledMessageDeliveryMode } from '@omni/db';
-import { instances, scheduledMessages } from '@omni/db';
-import { and, asc, eq, lte, sql } from 'drizzle-orm';
+import { instances, resolveEnforcementMode, scheduledMessages } from '@omni/db';
+import { type SQL, and, asc, eq, lte, sql } from 'drizzle-orm';
+import { isMultitenancyEnabled } from '../tenancy/feature-flag';
+import { enumerateActiveWorkTenants } from '../tenancy/periodic-tenant-work';
 
 /** How many due rows a single tick will attempt. Keeps a backlog from stalling the loop. */
 const MAX_PER_TICK = 50;
@@ -40,13 +42,21 @@ export interface ScheduleMessageInput {
   /** Slack reply_broadcast: post in the thread AND surface it in the channel. */
   isThreadBroadcast?: boolean;
   createdByAgentId?: string;
-  tenantId?: string;
 }
 
 export interface SweepStats {
   scanned: number;
   sent: number;
   failed: number;
+}
+
+/** Which rows a sweep pass may touch (ADR-0008). */
+type SweepWorld = { kind: 'all' } | { kind: 'tenant'; tenantId: string } | { kind: 'legacy-rows' };
+
+function accumulate(total: SweepStats, pass: SweepStats): void {
+  total.scanned += pass.scanned;
+  total.sent += pass.sent;
+  total.failed += pass.failed;
 }
 
 /** Resolves the plugin for an instance. Injected so tests need no registry. */
@@ -74,6 +84,9 @@ function parseOutgoingContent(raw: unknown, scheduledMessageId: string): Outgoin
 
 export class ScheduledMessageService {
   private readonly logger: Logger;
+  /** Auth-plane read connection — the one identity allowed to read `tenants`. */
+  private authPlaneDb?: Database;
+  private warnedMissingAuthPlane = false;
 
   constructor(
     private readonly db: Database,
@@ -138,7 +151,6 @@ export class ScheduledMessageService {
         status: 'pending',
         externalScheduledId,
         createdByAgentId: input.createdByAgentId,
-        tenantId: input.tenantId,
       })
       .returning();
 
@@ -195,13 +207,86 @@ export class ScheduledMessageService {
   }
 
   /**
+   * Inject the auth-plane read connection used to enumerate active tenants.
+   * Wired after construction, mirroring FollowUpSweeperService (ADR-0008).
+   */
+  setAuthPlane(db: Database): void {
+    this.authPlaneDb = db;
+  }
+
+  /**
    * Send local-mode messages whose time has come.
    *
    * Platform-mode rows are skipped: the channel owns their timer. They are
    * reconciled to 'sent' separately, not here — firing them again would
    * double-post.
+   *
+   * A cron has no envelope and no credential, so under multitenancy it must
+   * ENUMERATE whose work exists rather than scan the table globally — the
+   * global scan is not even expressible under RLS enforcement. Flag-off keeps
+   * the single ambient pass; flag-on runs one scoped pass per ACTIVE tenant,
+   * so a suspended tenant stops having messages delivered at the next tick,
+   * plus a transitional NULL-tenant pass that is skipped under enforcement.
+   * Same shape as follow-up-sweeper (#404, ADR-0008).
    */
   async sweep(): Promise<SweepStats> {
+    if (!isMultitenancyEnabled()) {
+      return this.sweepWorld({ kind: 'all' });
+    }
+
+    const totals: SweepStats = { scanned: 0, sent: 0, failed: 0 };
+
+    if (this.authPlaneDb) {
+      for (const tenantId of await enumerateActiveWorkTenants(this.authPlaneDb)) {
+        try {
+          accumulate(totals, await this.sweepWorld({ kind: 'tenant', tenantId }));
+        } catch (error) {
+          // One tenant's failure must not starve a sibling's queue.
+          this.logger.warn('scheduled-message sweeper: tenant pass failed', {
+            tenantId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } else if (!this.warnedMissingAuthPlane) {
+      this.warnedMissingAuthPlane = true;
+      this.logger.warn(
+        'scheduled-message sweeper: multitenancy is enabled but no auth-plane connection was injected — tenant rows will not be swept',
+      );
+    }
+
+    if (resolveEnforcementMode(process.env) !== 'enforced') {
+      accumulate(totals, await this.sweepWorld({ kind: 'legacy-rows' }));
+    }
+
+    return totals;
+  }
+
+  /**
+   * Restrict a sweep to one tenant's rows, the legacy untenanted rows, or all.
+   *
+   * There is no tenant_id column here by design — tenancy derives via
+   * instance_id (the whatsapp_flow_keys precedent) — so the predicate reaches
+   * through the owning instance instead. `EXISTS` rather than a join keeps the
+   * row shape and the `FOR UPDATE` target as `scheduled_messages` alone;
+   * `FOR UPDATE` cannot be applied across a join here.
+   */
+  private worldPredicate(world: SweepWorld): SQL[] {
+    if (world.kind === 'tenant') {
+      return [
+        sql`EXISTS (SELECT 1 FROM ${instances} WHERE ${instances.id} = ${scheduledMessages.instanceId} AND ${instances.tenantId} = ${world.tenantId})`,
+      ];
+    }
+    if (world.kind === 'legacy-rows') {
+      return [
+        sql`EXISTS (SELECT 1 FROM ${instances} WHERE ${instances.id} = ${scheduledMessages.instanceId} AND ${instances.tenantId} IS NULL)`,
+      ];
+    }
+    return [];
+  }
+
+  /** One sweep pass over a single world. */
+  private async sweepWorld(world: SweepWorld): Promise<SweepStats> {
     const stats: SweepStats = { scanned: 0, sent: 0, failed: 0 };
 
     const due = await this.db.transaction(async (tx) =>
@@ -213,6 +298,7 @@ export class ScheduledMessageService {
             eq(scheduledMessages.status, 'pending'),
             eq(scheduledMessages.deliveryMode, 'local'),
             lte(scheduledMessages.sendAt, new Date()),
+            ...this.worldPredicate(world),
           ),
         )
         .orderBy(asc(scheduledMessages.sendAt))

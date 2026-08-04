@@ -351,6 +351,13 @@
       "when": 1784900000000,
       "tag": "0049_scheduled_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1785000000000,
+      "tag": "0050_slack_user_token",
+      "breakpoints": true
     }
   ]
 }

@@ -296,6 +296,13 @@ describe('db-access guard', () => {
       // `routes/v2/instances.ts` inside the request transaction. Its sibling
       // `access_rules` site keeps its own pending entry (held by `trpc/router.ts`).
       'packages/api/src/services/access.ts',
+      // #889: scheduled messages. Route paths run inside the request
+      // transaction; the 15s sweeper enumerates active tenants via
+      // enumerateActiveWorkTenants and runs one scoped pass each, with the
+      // transitional NULL-tenant pass skipped under enforcement — the
+      // follow-up-sweeper shape. Its `instances` site is the single-column
+      // channel lookup reached from inside those same passes.
+      'packages/api/src/services/scheduled-messages.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

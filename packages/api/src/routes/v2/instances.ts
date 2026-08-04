@@ -160,6 +160,12 @@ const createInstanceSchema = z.object({
   agentGatePrompt: z.string().nullable().default(null).describe('Custom prompt for response gate (null = use default)'),
   telegramBotToken: z.string().optional().nullable().describe('Telegram bot token (persisted for reconnection)'),
   discordBotToken: z.string().optional().nullable().describe('Discord bot token (persisted for reconnection)'),
+  slackUserToken: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('Slack user token xoxp (required when slackAuthMode is user)'),
+  slackAuthMode: z.enum(['bot', 'user']).optional().nullable().describe('Slack identity for outbound actions'),
   slackBotToken: z.string().optional().nullable().describe('Slack bot token (persisted for reconnection)'),
   slackAppToken: z.string().optional().nullable().describe('Slack app token (persisted for reconnection)'),
   slackSigningSecret: z.string().optional().nullable().describe('Slack signing secret (persisted for reconnection)'),
@@ -269,6 +275,8 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   telegramBotToken: z.string().nullable().optional(),
   discordBotToken: z.string().nullable().optional(),
   slackBotToken: z.string().nullable().optional(),
+  slackUserToken: z.string().nullable().optional(),
+  slackAuthMode: z.enum(['bot', 'user']).nullable().optional(),
   slackAppToken: z.string().nullable().optional(),
   gupshupCallbackUrl: z.string().nullable().optional(),
   gupshupAuthToken: z.string().nullable().optional(),
@@ -407,6 +415,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'telegramBotToken',
   'discordBotToken',
   'slackBotToken',
+  'slackUserToken',
   'slackAppToken',
   'slackSigningSecret',
   'gupshupAuthToken',
@@ -442,14 +451,28 @@ function applySlackConnectOptions(
   opts: Record<string, unknown>,
   instance: {
     slackBotToken?: string | null;
+    slackUserToken?: string | null;
+    slackAuthMode?: string | null;
     slackAppToken?: string | null;
     slackSigningSecret?: string | null;
     profileMetadata?: Record<string, unknown> | null;
   },
-  overrides?: { slackBotToken?: string | null; slackAppToken?: string | null; slackSigningSecret?: string | null },
+  overrides?: {
+    slackBotToken?: string | null;
+    slackUserToken?: string | null;
+    slackAuthMode?: string | null;
+    slackAppToken?: string | null;
+    slackSigningSecret?: string | null;
+  },
 ): void {
   const botToken = overrides?.slackBotToken ?? instance.slackBotToken ?? opts.token;
   if (botToken) opts.botToken = botToken;
+  const userToken = overrides?.slackUserToken ?? instance.slackUserToken;
+  if (userToken) opts.userToken = userToken;
+  // Only forward an explicit mode. Absent means 'bot', and the plugin already
+  // defaults that way — writing 'bot' here would just be noise.
+  const authMode = overrides?.slackAuthMode ?? instance.slackAuthMode;
+  if (authMode) opts.authMode = authMode;
   const appToken = overrides?.slackAppToken ?? instance.slackAppToken;
   if (appToken) opts.appToken = appToken;
   const signingSecret = overrides?.slackSigningSecret ?? instance.slackSigningSecret;
@@ -479,6 +502,8 @@ type InstanceConnectionOptionsInput = {
   forceNewQr: boolean;
   token?: string;
   telegramReactionLevel?: string | null;
+  slackUserToken?: string | null;
+  slackAuthMode?: string | null;
   slackAppToken?: string | null;
   slackSigningSecret?: string | null;
   whatsapp?: { syncFullHistory?: boolean };
@@ -501,6 +526,8 @@ function applyTelegramConnectionOptions(options: Record<string, unknown>, input:
 
 function applySlackConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
   if (input.token) options.botToken = input.token;
+  if (input.slackUserToken) options.userToken = input.slackUserToken;
+  if (input.slackAuthMode) options.authMode = input.slackAuthMode;
   if (input.slackAppToken) options.appToken = input.slackAppToken;
   if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
 }
@@ -610,6 +637,8 @@ function buildTokenPersistUpdates(
   body: {
     token?: string;
     slackBotToken?: string;
+    slackUserToken?: string;
+    slackAuthMode?: string;
     slackAppToken?: string;
     slackSigningSecret?: string;
     twilioAuthToken?: string;
@@ -620,6 +649,8 @@ function buildTokenPersistUpdates(
   if (tokenField && body.token) updates[tokenField] = body.token;
   if (channel === 'slack') {
     if (body.slackBotToken) updates.slackBotToken = body.slackBotToken;
+    if (body.slackUserToken) updates.slackUserToken = body.slackUserToken;
+    if (body.slackAuthMode) updates.slackAuthMode = body.slackAuthMode;
     if (body.slackAppToken) updates.slackAppToken = body.slackAppToken;
     if (body.slackSigningSecret) updates.slackSigningSecret = body.slackSigningSecret;
   }
@@ -757,6 +788,8 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     forceNewQr: true,
     token: connectToken,
     telegramReactionLevel: instance.telegramReactionLevel,
+    slackUserToken: instance.slackUserToken,
+    slackAuthMode: instance.slackAuthMode,
     slackAppToken: instance.slackAppToken,
     slackSigningSecret: instance.slackSigningSecret,
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
@@ -1101,6 +1134,8 @@ instancesRoutes.post('/:id/pair', instanceAccess, zValidator('json', pairingCode
 const connectInstanceSchema = z.object({
   token: z.string().optional().describe('Bot token for Discord/Telegram instances'),
   slackBotToken: z.string().optional().describe('Slack bot token (xoxb-...)'),
+  slackUserToken: z.string().optional().describe('Slack user token (xoxp-...), for authMode user'),
+  slackAuthMode: z.enum(['bot', 'user']).optional().describe('Act as the bot (default) or as the authorizing user'),
   slackAppToken: z.string().optional().describe('Slack app-level token (xapp-...)'),
   slackSigningSecret: z.string().optional().describe('Slack signing secret'),
   forceNewQr: z.boolean().optional().describe('Force new QR code for WhatsApp (re-authentication)'),
@@ -1134,6 +1169,8 @@ function buildConnectConnectionOptions(
     forceNewQr,
     token: connectToken,
     telegramReactionLevel: instance.telegramReactionLevel,
+    slackUserToken: body.slackUserToken ?? instance.slackUserToken,
+    slackAuthMode: body.slackAuthMode ?? instance.slackAuthMode,
     slackAppToken: body.slackAppToken ?? instance.slackAppToken,
     slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
     whatsapp: body.whatsapp,
@@ -1321,6 +1358,8 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
       restartOptions.telegramReactionLevel = instance.telegramReactionLevel;
     } else if (instance.channel === 'slack') {
       if (restartToken) restartOptions.botToken = restartToken;
+      if (instance.slackUserToken) restartOptions.userToken = instance.slackUserToken;
+      if (instance.slackAuthMode) restartOptions.authMode = instance.slackAuthMode;
       if (instance.slackAppToken) restartOptions.appToken = instance.slackAppToken;
     }
     if (instance.channel === 'slack') {
