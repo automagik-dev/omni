@@ -1400,6 +1400,9 @@ export class SlackPlugin extends BaseChannelPlugin {
         channels: config.channels,
       },
       reliability,
+      // Authorizing human in user mode (#889) — resolved after start(), so a
+      // getter rather than a value.
+      () => connection.actingUserId,
     );
 
     // Reaction handlers — pass getter so botUserId resolves after start()

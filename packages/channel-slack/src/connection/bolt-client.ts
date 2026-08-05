@@ -62,6 +62,12 @@ export interface BoltConnection {
   actingClient: WebClient;
   /** User-token client when authMode is 'user'; undefined otherwise. */
   userClient?: WebClient;
+  /**
+   * Slack user id of the authorizing human, resolved from the user token at
+   * start (#889). Needed for self-filtering: in user mode the identity we post
+   * AS is this person, not the bot user.
+   */
+  actingUserId?: string;
   botToken: string;
   botUserId?: string;
   botName?: string;
@@ -302,6 +308,19 @@ export async function startBoltConnection(connection: BoltConnection, logger: Lo
       teamId: connection.teamId,
       teamName: connection.teamName,
     });
+
+    // In user mode, resolve the authorizing human too (#889). Self-filtering
+    // needs it: a message that person types themselves carries no bot_id and
+    // their own user id, so comparing only against botUserId would let the
+    // agent answer on their behalf in their own conversation.
+    if (connection.userClient) {
+      const userAuth = await connection.userClient.auth.test();
+      connection.actingUserId = (userAuth.user_id as string | undefined) ?? undefined;
+      logger.info('Acting user identity resolved', {
+        actingUserId: connection.actingUserId,
+        actingUser: userAuth.user,
+      });
+    }
   } catch (error) {
     logger.warn('Failed to resolve bot identity before start — self-message filtering may be unreliable', {
       error: String(error),

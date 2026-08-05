@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { extractMessageMeta } from '../handlers/messages';
+import { extractMessageMeta, shouldSkipMessage } from '../handlers/messages';
 import { buildSlackManifest } from '../manifest';
 
 describe('extractMessageMeta — DM classification', () => {
@@ -55,5 +55,31 @@ describe('buildSlackManifest — user scopes', () => {
     // The transport is unchanged in user mode; only the vantage point moves.
     const manifest = buildSlackManifest({ includeUserScopes: true });
     expect(manifest.settings.socket_mode_enabled).toBe(true);
+  });
+});
+
+describe('self-filtering in user mode', () => {
+  // Verified live against Slack (#889): a message posted with a user token
+  // carries a bot_id (the app's) even though `user` is the human. Our own
+  // outbound is therefore already skipped by the bot_id line — but a message
+  // the human types HIMSELF has no bot_id, so the acting user id must be in
+  // the self set or the agent answers in his own conversation.
+  const BOT = 'U0BOT';
+  const HUMAN = 'U05JY99CNSC';
+
+  it('skips what we posted ourselves — a user-token post carries bot_id', () => {
+    expect(shouldSkipMessage({ user: HUMAN, bot_id: 'B123' }, [BOT, HUMAN])).toBe(true);
+  });
+
+  it("skips the human's OWN typing in user mode (no bot_id)", () => {
+    expect(shouldSkipMessage({ user: HUMAN }, [BOT, HUMAN])).toBe(true);
+  });
+
+  it('would NOT skip it with only the bot id — the bug this guards', () => {
+    expect(shouldSkipMessage({ user: HUMAN }, [BOT])).toBe(false);
+  });
+
+  it('still processes a real counterpart', () => {
+    expect(shouldSkipMessage({ user: 'U05J8EZQ1S7' }, [BOT, HUMAN])).toBe(false);
   });
 });
