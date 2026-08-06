@@ -267,6 +267,15 @@ const createInstanceSchema = z.object({
 // so we must explicitly override fields that have defaults to strip the default value.
 // Without this, a PATCH that omits e.g. readReceipts would reset it to 'on'.
 const updateInstanceSchema = createInstanceSchema.partial().extend({
+  /**
+   * Channel-specific connection config (#889).
+   *
+   * Was absent from this schema, so a PATCH carrying it returned 200 and
+   * silently dropped it — zod strips unknown keys. That made Slack's
+   * `mode: 'http'` unreachable through the API: the connect route only knows
+   * appToken/signingSecret, and the plugin reads mode/httpPort from here.
+   */
+  profileMetadata: z.record(z.unknown()).nullable().optional(),
   // Nullable fields in DB - can be set to null
   agentId: z.string().uuid().nullable().optional(),
   agentErrorMessages: z.array(z.string()).nullable().optional(),
@@ -440,6 +449,11 @@ function applySlackProfileMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): void {
   if (!metadata) return;
+  // Connection mode + port (#889). Without these, `mode: 'http'` was
+  // unreachable through the API: the connect route only knows appToken and
+  // signingSecret, so every instance fell back to Socket Mode.
+  if (metadata.mode) opts.mode = metadata.mode;
+  if (metadata.httpPort) opts.httpPort = metadata.httpPort;
   if (metadata.replyToMode) opts.replyToMode = metadata.replyToMode;
   if (metadata.streamMode) opts.streamMode = metadata.streamMode;
   if (metadata.dmPolicy) opts.dmPolicy = metadata.dmPolicy;
@@ -506,6 +520,7 @@ type InstanceConnectionOptionsInput = {
   slackAuthMode?: string | null;
   slackAppToken?: string | null;
   slackSigningSecret?: string | null;
+  profileMetadata?: Record<string, unknown> | null;
   whatsapp?: { syncFullHistory?: boolean };
   gupshupCallbackUrl?: string | null;
   gupshupAuthToken?: string | null;
@@ -525,6 +540,12 @@ function applyTelegramConnectionOptions(options: Record<string, unknown>, input:
 }
 
 function applySlackConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
+  // Connection mode + per-instance Slack config live in profileMetadata (#889).
+  // Only the RESTART path applied them (applySlackConnectOptions); connect
+  // built its options from tokens alone, so an instance configured for
+  // `mode: 'http'` still came up in Socket Mode and failed on the missing
+  // appToken.
+  applySlackProfileMetadata(options, input.profileMetadata);
   if (input.token) options.botToken = input.token;
   if (input.slackUserToken) options.userToken = input.slackUserToken;
   if (input.slackAuthMode) options.authMode = input.slackAuthMode;
@@ -792,6 +813,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     slackAuthMode: instance.slackAuthMode,
     slackAppToken: instance.slackAppToken,
     slackSigningSecret: instance.slackSigningSecret,
+    profileMetadata: instance.profileMetadata,
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
     gupshupAuthToken: instance.gupshupAuthToken,
     gupshupEventId: instance.gupshupEventId,
@@ -1173,6 +1195,7 @@ function buildConnectConnectionOptions(
     slackAuthMode: body.slackAuthMode ?? instance.slackAuthMode,
     slackAppToken: body.slackAppToken ?? instance.slackAppToken,
     slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
+    profileMetadata: instance.profileMetadata,
     whatsapp: body.whatsapp,
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
     gupshupAuthToken: instance.gupshupAuthToken,
