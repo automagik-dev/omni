@@ -93,9 +93,28 @@ Os dois são *silent-success*: nada lança, nada loga, o estado é que fica erra
 
 **Suíte**: typecheck 23/23 · biome limpo · 979 testes em `channel-slack`/`channel-sdk`/`db` verdes (as falhas restantes na `api` são os testes de MinIO, que sobem container Docker).
 
-## O que NÃO está provado
+### Entrega inbound, ponta a ponta
 
-**A entrega inbound ponta a ponta.** O caminho está montado e a Request URL verificada pela própria Slack, mas nenhuma mensagem digitada por um humano percorreu ainda o ciclo completo até o banco. É o único item que falta para fechar.
+O omni deste branch rodando, recebendo pela Request URL e persistindo:
+
+```
+messages=63 · chats=9 · events=63
+chat_types: dm, group
+Received · from U08JN9LGYQN · chatId C0B9DQJG3FD
+```
+
+São 9 conversas e 63 mensagens de canais onde o BOT NÃO ESTÁ — a perspectiva
+de usuário funcionando, que é o objetivo do issue.
+
+Três confirmações que só o banco podia dar:
+
+- **`0` mensagens do próprio usuário autorizado persistidas**, apesar de ele
+  ter digitado durante o teste. O evento chegou e o `actingUserId` filtrou —
+  sem esse fix, o agente trataria a fala do dono como inbound e responderia
+  por cima dele.
+- **8 mensagens com `thread_external_id` preenchido** — a coluna da `0048`
+  recebendo dado real, o que antes era colapsado em `replyToExternalId`.
+- `chat_types: dm, group` — a classificação de mpim separando corretamente.
 
 ## Superfície nova
 
