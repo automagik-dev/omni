@@ -15,29 +15,24 @@
  *   6. Print an agent handoff block addressed TO the AI agent running this.
  */
 
-import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Command } from 'commander';
-import ora from 'ora';
 import {
-  type Config,
   DEFAULT_SERVER_CONFIG,
-  type ServerConfig,
   getConfigPath,
   loadLocalRuntimeConfig,
   loadServerConfig,
   saveLocalRuntimeConfig,
   saveServerConfig,
 } from '../config.js';
-import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
-import { detectReinstall, installPm2Logrotate, writeSystemdUnit } from '../install-helpers.js';
+import { DEFAULT_API_PORT } from '../health.js';
+import { detectReinstall } from '../install-helpers.js';
+import { startInstallServices } from '../install-services.js';
 import { resolveCanonicalPgservePreference } from '../lib/canonical-pgserve.js';
-import { NATS_BINARY_PATH, ensureNats } from '../nats-install.js';
+import { ensureNats } from '../nats-install.js';
 import * as output from '../output.js';
-import { PM2_PROCESSES, buildPm2StartArgs, getPm2LogDir, isPm2Available, runPm2 } from '../pm2.js';
-import { buildEmbeddedDatabaseUrl, buildRuntimeEnv } from '../runtime-env.js';
-import { getServerBundlePath, getServerLauncherPath } from '../server-bundle.js';
+import { buildEmbeddedDatabaseUrl } from '../runtime-env.js';
 import { generateApiKey, maskApiKey } from '../utils/keys.js';
 import { VERSION } from '../version.js';
 
@@ -161,93 +156,6 @@ function resolveReinstallConfig(options: InstallOptions): ResolvedConfig {
   };
 }
 
-function buildInstallRuntimeEnv(
-  cfg: ResolvedConfig,
-  forceCleanup: boolean,
-  useCanonicalPgserve: boolean,
-): Record<string, string> {
-  const serverConfig: ServerConfig = {
-    ...DEFAULT_SERVER_CONFIG,
-    port: cfg.port,
-    databaseUrl: cfg.databaseUrl,
-    dataDir: cfg.dataDir,
-    useCanonicalPgserve,
-  };
-  const env = buildRuntimeEnv(serverConfig, { apiKey: cfg.apiKey } as Config) as Record<string, string>;
-  if (forceCleanup) env.OMNI_PGSERVE_FORCE_CLEANUP = 'true';
-  return env;
-}
-
-// ----------------------------------------------------------------------------
-// Service start
-// ----------------------------------------------------------------------------
-
-async function startServices(
-  cfg: ResolvedConfig,
-  forceCleanup: boolean,
-  forceSystemd: boolean,
-  useCanonicalPgserve: boolean,
-): Promise<boolean> {
-  if (forceSystemd) {
-    writeSystemdUnit(cfg.dataDir);
-    return false;
-  }
-
-  if (!(await isPm2Available())) {
-    output.warn('PM2 not found in PATH.\n  Install it with: bun add -g pm2\n  Then run: omni start');
-    return false;
-  }
-
-  const bundlePath = getServerBundlePath();
-  if (!existsSync(bundlePath)) {
-    output.warn(
-      `Server bundle not found at: ${bundlePath}\n  Install @automagik/omni from npm: bun add -g @automagik/omni\n  Or build locally: make cli-build-full`,
-    );
-    return false;
-  }
-
-  mkdirSync(getPm2LogDir(), { recursive: true });
-  await installPm2Logrotate();
-
-  const runtimeEnv = buildInstallRuntimeEnv(cfg, forceCleanup, useCanonicalPgserve);
-
-  // Delete existing processes so the new hardened flags take effect (reinstall path).
-  await runPm2(['delete', PM2_PROCESSES.api]);
-  await runPm2(['delete', PM2_PROCESSES.nats]);
-
-  const apiSpinner = ora(`Starting ${PM2_PROCESSES.api} on port ${cfg.port}...`).start();
-  const apiArgs = buildPm2StartArgs({
-    kind: 'api',
-    script: getServerLauncherPath(),
-    name: PM2_PROCESSES.api,
-    interpreter: 'bash',
-  });
-  const apiCode = await runPm2(apiArgs, runtimeEnv);
-  if (apiCode !== 0) {
-    apiSpinner.fail(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`);
-    return false;
-  }
-  apiSpinner.succeed(`${PM2_PROCESSES.api} started`);
-
-  if (existsSync(NATS_BINARY_PATH)) {
-    const natsSpinner = ora(`Starting ${PM2_PROCESSES.nats}...`).start();
-    const natsDataDir = join(cfg.dataDir, 'nats');
-    mkdirSync(natsDataDir, { recursive: true });
-    const natsArgs = buildPm2StartArgs({
-      kind: 'nats',
-      script: NATS_BINARY_PATH,
-      name: PM2_PROCESSES.nats,
-      scriptArgs: ['-js', '-sd', natsDataDir],
-    });
-    const natsCode = await runPm2(natsArgs);
-    if (natsCode !== 0) natsSpinner.warn(`${PM2_PROCESSES.nats} failed to start — check NATS binary`);
-    else natsSpinner.succeed(`${PM2_PROCESSES.nats} started`);
-  } else {
-    output.warn(`NATS binary not found at ${NATS_BINARY_PATH} — skipping`);
-  }
-  return true;
-}
-
 // ----------------------------------------------------------------------------
 // Persistence, health, handoff
 // ----------------------------------------------------------------------------
@@ -268,14 +176,6 @@ function writeConfigFile(cfg: ResolvedConfig, useCanonicalPgserve: boolean): voi
     // commands honor it without operator passing flags or env vars.
     useCanonicalPgserve,
   });
-}
-
-async function checkHealth(port: number): Promise<boolean> {
-  const spinner = ora(`Checking health at http://localhost:${port}/api/v2/health...`).start();
-  const healthy = await waitForHealth(port);
-  if (healthy) spinner.succeed('Server is healthy');
-  else spinner.warn(`Health check failed after ${HEALTH_TIMEOUT_MS / 1000}s — check: omni logs --process api`);
-  return healthy;
 }
 
 /**
@@ -372,12 +272,14 @@ async function runInstall(options: InstallOptions): Promise<void> {
   const useCanonicalPgserve = await resolveCanonicalPgservePreference(signals.isReinstall, cfg);
 
   await ensureNats();
-  const servicesStarted = await startServices(cfg, forceCleanup, forceSystemd, useCanonicalPgserve);
+  const servicesStarted = await startInstallServices(cfg, forceCleanup, forceSystemd, useCanonicalPgserve);
+
+  if (!forceSystemd && !servicesStarted) {
+    output.error('Installation did not complete because the local services are not ready.', undefined, 1);
+  }
 
   writeConfigFile(cfg, useCanonicalPgserve);
   output.success(`Config written to ${getConfigPath()}`);
-
-  if (servicesStarted) await checkHealth(cfg.port);
 
   const apiKeyDisplay = apiKeyFreshlyGenerated ? cfg.apiKey : maskApiKey(cfg.apiKey);
   output.raw(buildAgentHandoffBlock(cfg, apiKeyDisplay));

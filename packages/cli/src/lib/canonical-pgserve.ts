@@ -309,7 +309,7 @@ export async function setupCanonicalPgserve(): Promise<string | null> {
   if (!(await ensurePgserveBinary())) {
     // ensurePgserveBinary already emitted the actionable autopg
     // install.sh hint. Bare warn here just labels the abort surface.
-    output.warn('Canonical pgserve setup skipped — staying on embedded mode.');
+    output.warn('Canonical pgserve setup could not start.');
     return null;
   }
   if (!(await runPgserveInstall())) return null;
@@ -320,11 +320,11 @@ export async function setupCanonicalPgserve(): Promise<string | null> {
   // db-create + role connect races startup, silently no-ops (best-effort), and
   // the operator is left with omni-api crash-looping on a missing `omni` db
   // until they re-run `omni doctor --fix`.
-  await waitForCanonicalReady(port);
-  // Best-effort: db-create failure does not abort the install; operator
-  // can rerun `omni doctor --fix` later. The URL is still returned so
-  // the caller persists the correct port even when DB creation lags.
-  await ensureOmniDatabaseExists(port);
+  if (!(await waitForCanonicalReady(port))) {
+    output.warn(`Canonical pgserve did not become ready on port ${port}.`);
+    return null;
+  }
+  if (!(await ensureOmniDatabaseExists(port))) return null;
   // Provision the dedicated non-superuser role scoped to the omni DB.
   // Best-effort: failure logs a warning and falls back to legacy
   // postgres:postgres at omni-api startup via the sentinel-missing path
@@ -349,8 +349,8 @@ export async function setupCanonicalPgserve(): Promise<string | null> {
  * Semantics:
  *   - Fresh install → ALWAYS canonical (auto-installs `pgserve` globally
  *     when missing, runs `pgserve install`, reads `pgserve url`). If
- *     canonical setup completely fails, falls back to embedded with a warn
- *     — the install still completes.
+ *     canonical setup fails, the later dependency probe prevents service
+ *     installation from being reported as successful.
  *   - Reinstall → preserves the operator's existing
  *     `serverConfig.useCanonicalPgserve`. If `true`, re-runs setup
  *     (idempotent) to refresh the canonical url. If `false`/undefined,
@@ -377,9 +377,7 @@ export async function resolveCanonicalPgservePreference(
   output.raw('  Canonical pgserve mode (default for new installs)');
   const url = await setupCanonicalPgserve();
   if (!url) {
-    output.warn(
-      'Canonical pgserve setup did not complete — falling back to embedded pgserve. Run `omni doctor --fix` later to migrate.',
-    );
+    output.warn('Canonical pgserve setup did not complete.');
     output.raw('');
     return false;
   }

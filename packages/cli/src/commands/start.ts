@@ -15,6 +15,14 @@ import * as output from '../output.js';
 import { PM2_PROCESSES, buildPm2StartArgs, getPm2LogDir, isPm2Available, pm2NotFoundError, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
 import { bundleNotFoundError, getServerBundlePath, getServerLauncherPath } from '../server-bundle.js';
+import {
+  databaseTargetFromRuntimeEnv,
+  formatLifecycleFailure,
+  runServiceStartSequence,
+  tcpTargetFromUrl,
+  waitForDatabaseReady,
+  waitForTcpReady,
+} from '../service-lifecycle.js';
 
 // ============================================================================
 // CONSTANTS
@@ -76,11 +84,14 @@ async function runStart(): Promise<void> {
   // Ensure hardened log directory exists before pm2 spawns.
   mkdirSync(getPm2LogDir(), { recursive: true });
 
-  // 3. Start omni-api via PM2 with complete env from config and hardened flags
-  output.info(`Starting ${PM2_PROCESSES.api} (port ${apiPort})...`);
   // LOCAL entry, never the active server — see runtime-env.ts rule 5.
   const cliConfig = loadLocalRuntimeConfig();
   const env = buildRuntimeEnv(serverConfig, cliConfig);
+  const natsTarget = tcpTargetFromUrl(env.NATS_URL);
+  if (!natsTarget) {
+    output.error(`Invalid NATS URL in runtime configuration: ${env.NATS_URL}`, undefined, 1);
+  }
+
   const launcherPath = getServerLauncherPath();
   const apiArgs = buildPm2StartArgs({
     kind: 'api',
@@ -88,41 +99,47 @@ async function runStart(): Promise<void> {
     name: PM2_PROCESSES.api,
     interpreter: 'bash',
   });
-  const apiCode = await runPm2(apiArgs, env);
-  if (apiCode !== 0) {
-    output.error(`Failed to start ${PM2_PROCESSES.api} (pm2 exit code ${apiCode})`, undefined, 1);
-    return;
-  }
-
-  // 4. Start omni-nats if binary exists
   const natsPath = join(homedir(), '.omni', 'nats-server');
-  if (existsSync(natsPath)) {
-    output.info(`Starting ${PM2_PROCESSES.nats}...`);
-    const natsDataDir = join(serverConfig.dataDir, 'nats');
-    mkdirSync(natsDataDir, { recursive: true });
-    const natsArgs = buildPm2StartArgs({
-      kind: 'nats',
-      script: natsPath,
-      name: PM2_PROCESSES.nats,
-      scriptArgs: ['-js', '-sd', natsDataDir],
-    });
-    const natsCode = await runPm2(natsArgs);
-    if (natsCode !== 0) {
-      output.warn(`${PM2_PROCESSES.nats} failed to start — run 'omni install' to download NATS first`);
-    }
-  } else {
-    output.warn(`NATS binary not found at ${natsPath} — skipping. Run 'omni install' to set it up.`);
+  const natsDataDir = join(serverConfig.dataDir, 'nats');
+  const natsArgs = buildPm2StartArgs({
+    kind: 'nats',
+    script: natsPath,
+    name: PM2_PROCESSES.nats,
+    scriptArgs: ['-js', '-sd', natsDataDir],
+  });
+  const healthUrl = getHealthCheckUrl(apiPort);
+
+  const result = await runServiceStartSequence({
+    checkDatabase: async () => {
+      output.info('Waiting for database readiness...');
+      return waitForDatabaseReady(databaseTargetFromRuntimeEnv(env));
+    },
+    startNats: async () => {
+      if (!existsSync(natsPath)) return false;
+      mkdirSync(natsDataDir, { recursive: true });
+      output.info(`Starting ${PM2_PROCESSES.nats}...`);
+      return (await runPm2(natsArgs)) === 0;
+    },
+    checkNats: async () => {
+      output.info(`Waiting for NATS at ${natsTarget.host}:${natsTarget.port}...`);
+      return waitForTcpReady(natsTarget.host, natsTarget.port);
+    },
+    startApi: async () => {
+      output.info(`Starting ${PM2_PROCESSES.api} (port ${apiPort})...`);
+      return (await runPm2(apiArgs, env)) === 0;
+    },
+    checkApi: async () => {
+      output.info(`Waiting for health check at ${healthUrl}...`);
+      return waitForHealth(apiPort, START_HEALTH_TIMEOUT_MS);
+    },
+  });
+
+  if (!result.ok) {
+    const hint = result.phase === 'nats-start' && !existsSync(natsPath) ? ` Run 'omni install' to install NATS.` : '';
+    output.error(`${formatLifecycleFailure(result)}.${hint}`, undefined, 1);
   }
 
-  // 5. Wait for health check
-  const healthUrl = getHealthCheckUrl(apiPort);
-  output.info(`Waiting for health check at ${healthUrl}...`);
-  const healthy = await waitForHealth(apiPort, START_HEALTH_TIMEOUT_MS);
-  if (healthy) {
-    output.success(`Server is healthy at ${healthUrl}`);
-  } else {
-    output.warn(`Health check did not pass within ${START_HEALTH_TIMEOUT_MS / 1000}s — server may still be starting`);
-  }
+  output.success(`Server is healthy at ${healthUrl}`);
 }
 
 // ============================================================================
