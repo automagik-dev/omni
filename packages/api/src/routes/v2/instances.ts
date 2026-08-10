@@ -1379,13 +1379,13 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     if (restartToken) restartOptions.token = restartToken;
     if (instance.channel === 'telegram') {
       restartOptions.telegramReactionLevel = instance.telegramReactionLevel;
-    } else if (instance.channel === 'slack') {
-      if (restartToken) restartOptions.botToken = restartToken;
-      if (instance.slackUserToken) restartOptions.userToken = instance.slackUserToken;
-      if (instance.slackAuthMode) restartOptions.authMode = instance.slackAuthMode;
-      if (instance.slackAppToken) restartOptions.appToken = instance.slackAppToken;
     }
     if (instance.channel === 'slack') {
+      // applySlackConnectOptions covers every Slack option (bot/user token,
+      // authMode, appToken, signingSecret and the profileMetadata config).
+      // An inline block used to repeat four of those right above this call —
+      // duplicated, and its extra branches pushed this handler past the
+      // cognitive-complexity ceiling.
       applySlackConnectOptions(restartOptions, instance);
     }
     if (instance.channel === 'twilio-whatsapp') {
