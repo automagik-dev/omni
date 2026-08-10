@@ -61,7 +61,7 @@ export const BOT_EVENTS = [
  * `im:write` opens DMs (conversations.open). Note the USER scope for opening
  * a channel is `channels:write`, not the bot's `channels:manage`.
  */
-export const USER_SCOPES = [
+const USER_SCOPES = [
   'channels:history',
   'channels:read',
   'chat:write',
@@ -92,7 +92,7 @@ export const USER_SCOPES = [
  *
  * @see https://docs.slack.dev/apis/events-api/
  */
-export const USER_EVENTS = [
+const USER_EVENTS = [
   'message.channels',
   'message.groups',
   'message.im',
