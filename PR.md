@@ -1,101 +1,97 @@
-# Slack como postura consultiva: user token, thread de primeira classe e agendamento
+# Slack as a consultative surface: user token, first-class threads, scheduling
 
-Closes #889 · 13 commits · 45 arquivos · +3500/−96 · 4 migrations
+Closes #889 · 4 migrations
 
-## Por que
+## Why
 
-O `channel-slack` só sabia agir **como bot**: reativo, respondendo onde é mencionado, enxergando apenas o que o bot enxerga. O objetivo aqui é uma segunda postura — **agir como a pessoa** (`xoxp`), abrindo DM, lendo o workspace pela ótica dela e usando `search.messages`, que bot token nenhum consegue chamar.
+`channel-slack` only knew how to act **as the bot**: reactive, answering where it is mentioned, seeing only what the bot can see. This adds a second posture — **acting as the person** (`xoxp`): opening DMs, reading the workspace from their vantage point, and calling `search.messages`, which no bot token can.
 
-Ao abrir o capô, o gargalo não era o plugin — que já é o mais completo do repo — e sim o **core**. Metade desta PR é isso.
+Opening the hood, the bottleneck was not the plugin — already the most complete channel in the repo — but the **core**. Half of this PR is that.
 
-## A descoberta que definiu o desenho
+## The finding that shaped the design
 
-Dá pra receber push com identidade de usuário, mas **não com o `xoxp`**. A Events API tem os *Workspace Events*, que são ["perspectival to a member installing your application"](https://docs.slack.dev/apis/events-api/): assinando com user scopes (`im:history`, `mpim:history`, …), o app vê o workspace pela ótica daquela pessoa.
+You *can* receive push with a user identity, but **not with the `xoxp` itself**. The Events API has *Workspace Events*, which are ["perspectival to a member installing your application"](https://docs.slack.dev/apis/events-api/): subscribed with user scopes (`im:history`, `mpim:history`, …), the app sees the workspace through that person's eyes.
 
-O **transporte não muda**: RTM está fechada para apps granulares e Socket Mode exige app-level token. Continua Socket Mode ou HTTP receiver; muda o ponto de vista.
+The **transport does not change**: RTM is closed to granular apps and Socket Mode requires an app-level token. It stays Socket Mode or the HTTP receiver; only the vantage point moves.
 
-Por isso é **um plugin com `authMode`**, não dois: a máquina de eventos é a mesma, só o cliente de escrita troca.
+Hence **one plugin with an `authMode`**, not two: the event machinery is identical, only the writing client swaps.
 
-## Core (toca todos os canais)
+## Core (affects every channel)
 
-### Thread virou relação de primeira classe — `0048`
+### Threads became a first-class relation — `0048`
 
-Não havia representação de thread. O `threadId` viajava no payload só para rotear sessão `per_thread` e **era descartado na persistência**. O único caminho modelado (`chats.parent_chat_id` + `chat_type='thread'`) é código morto: `inferChatType()` só inspeciona sufixo de JID do WhatsApp.
+There was no representation of a thread. `threadId` rode along in the event payload purely to route `per_thread` agent sessions, and **was dropped at persistence time**. The one modelled path (`chats.parent_chat_id` + `chat_type='thread'`) is dead code: `inferChatType()` only inspects WhatsApp JID suffixes.
 
-Dano prático: o Slack mandava `replyToId = thread_ts`, então **uma resposta em thread ficava indistinguível de um quote do WhatsApp** depois de gravada.
+The practical damage: Slack sent `replyToId = thread_ts`, so **a thread reply was indistinguishable from a WhatsApp quote** once stored.
 
-Reply aponta para UMA mensagem; thread é uma sub-conversa. Relações diferentes, colunas diferentes. `is_thread_broadcast` carrega o `reply_broadcast` do Slack — postado NA thread e espelhado no canal — e é ortogonal ao `thread_ts`, por isso coluna própria.
+A reply points at ONE message; a thread is a sub-conversation. Different relations, different columns. `is_thread_broadcast` carries Slack's `reply_broadcast` — posted *in* the thread and mirrored to the channel — and is orthogonal to `thread_ts`, hence its own column.
 
-Sem backfill: participação em thread nunca foi registrada e não dá para reconstruir. `hasBotRepliedInThread` ganhou o branch novo mantendo os antigos, para o histórico seguir funcionando.
+No backfill: thread membership was never recorded and cannot be reconstructed. `hasBotRepliedInThread` gained the new branch while keeping the old ones, so history keeps working.
 
-### Agendamento — `0049`
+### Scheduling — `0049`
 
-Dois modos, escolhidos pela capability `canScheduleMessage`:
+Two delivery modes, chosen by the `canScheduleMessage` capability:
 
-- **`platform`** — o canal agenda nativo (`chat.scheduleMessage`); a entrega sobrevive ao omni estar fora do ar
-- **`local`** — o omni segura e o sweeper envia
+- **`platform`** — the channel schedules natively (`chat.scheduleMessage`); delivery survives omni being down
+- **`local`** — omni holds the message and the sweeper sends it
 
-A linha existe **mesmo no modo platform**, deliberadamente: o `chat.scheduledMessages.list` do Slack só devolve o que foi agendado pelo MESMO token, então a plataforma não pode ser fonte da verdade sobre o que está pendente.
+The row exists **even in platform mode**, deliberately: Slack's `chat.scheduledMessages.list` only returns what the *same token* scheduled, so the platform can never be the source of truth for what is pending.
 
-O sweeper enumera tenants ativos (`enumerateActiveWorkTenants`, ADR-0008) e usa `FOR UPDATE SKIP LOCKED` — ticks sobrepostos não disparam a mesma linha duas vezes.
+The sweeper enumerates active tenants (`enumerateActiveWorkTenants`, ADR-0008) and uses `FOR UPDATE SKIP LOCKED`, so overlapping ticks cannot double-send a row.
 
-### Permalink, pin/star, `replyToMessageId` — `0051`
+### Permalink, per-message pin/star, `replyToMessageId` — `0051`
 
-`reply_to_message_id` existia no schema desde a `0000` e **nunca foi escrito uma vez**; os dois helpers que o resolveriam também não tinham chamador. Pin/star por mensagem não existia (o `pinned` do `ChatSettings` fixa a *conversa*). Permalink é resolvido preguiçosamente — é uma chamada de API por mensagem e quase nenhuma é linkada.
+`reply_to_message_id` has existed since `0000` and **was never written once**; the two helpers that would resolve it had no callers either. Per-message pin/star did not exist (`ChatSettings.pinned` pins the *conversation*). Permalinks resolve lazily — one API call each, and almost no message is ever linked to.
 
-### Contrato de canal
+### Channel contract
 
-`editMessage`/`deleteMessage`/`starMessage`/`sendPresenceStatus` saíram do `'x' in plugin` e entraram no `ChannelPlugin`. Ao unificar, apareceu que **o contrato estava mudo e os casts inline é que estavam certos**: `starMessage` e `deleteMessage` têm um parâmetro `fromMe` que nenhuma declaração central tinha. Escrever só o que o contrato sugeria teria quebrado star/delete no WhatsApp.
+`editMessage` / `deleteMessage` / `starMessage` / `sendPresenceStatus` moved out of `'x' in plugin` and into `ChannelPlugin`. Unifying them surfaced that **the contract was silent and the inline casts were right**: `starMessage` and `deleteMessage` take a `fromMe` parameter no central declaration had. Writing only what the contract implied would have broken star/delete on WhatsApp.
 
 ## User token — `0050`
 
-`authMode: 'bot' | 'user'`. O `BoltConnection` ganha `actingClient`: em modo bot é o mesmo cliente; em modo user é um cliente `xoxp`. O `client` do bot **fica** — o Bolt autentica o socket com ele e é fallback para chamadas sem escopo de usuário.
+`authMode: 'bot' | 'user'`. `BoltConnection` gains an `actingClient`: the same client in bot mode, an `xoxp` client in user mode. The bot `client` **stays** — Bolt authenticates the socket with it, and it is the fallback for calls the user token has no scope for.
 
-- **`conversations.open`** não existia em lugar nenhum do repo. Sem ele o plugin só respondia DM que chegava, nunca iniciava uma — a diferença entre bot reativo e agente consultivo.
-- **`mpim` reconhecido**, com armadilha: `isDm` passou a cobrir `im` e `mpim`, mas `buildEnrichedPayload` derivava `isGroup: !isDm`, o que marcaria um DM de **várias** pessoas como 1:1. Daí `isMpim` separado. Na conta usada nos testes: **127 ims e 72 mpims** — 72 conversas que antes eram classificadas como canal.
-- **`search.messages`**, exclusivo de user token.
+- **`conversations.open`** did not exist anywhere in the repo. Without it the plugin could only answer a DM that arrived, never start one — the difference between a reactive bot and a consultative agent.
+- **`mpim` recognised**, with a trap: `isDm` now covers `im` and `mpim`, but `buildEnrichedPayload` derived `isGroup: !isDm`, which would file a DM with *several* people as 1:1. Hence a separate `isMpim`. On the account used for testing: **127 ims and 72 mpims** — 72 conversations previously classified as channels.
+- **`search.messages`**, user-token only.
 
-Guardas: `authMode: 'user'` sem `userToken` falha alto (senão toda ação sairia como bot em silêncio); token sem prefixo `xoxp-` é recusado; `searchMessages` em modo bot **lança** em vez de devolver lista vazia, que seria lida como "nada encontrado".
+Guards: `authMode: 'user'` without a `userToken` fails loudly (otherwise every action would silently go out as the bot); a token without the `xoxp-` prefix is rejected; `searchMessages` in bot mode **throws** rather than returning an empty list, which would read as "no matches".
 
-## Formatação (bug vivo, já afetava o modo bot)
+## Formatting (a live bug, already affecting bot mode)
 
-O conversor de mrkdwn **não escapava `&`, `<`, `>`**. Um texto contendo `<@U099>` era enviado cru e o Slack **renderizava como menção real**, pingando alguém sem relação com o assunto.
+The mrkdwn converter **did not escape `&`, `<`, `>`**. Text containing `<@U099>` was sent raw and Slack **rendered it as a real mention**, pinging someone unrelated to the conversation.
 
-Também: a conversão varria blocos de código (`**kwargs` de um exemplo Python virava `*kwargs`), itálico markdown virava **negrito** no Slack, e o `chunkMessage` cortava fences deixando ``` desbalanceado.
+Also: conversion swept through fenced code (`**kwargs` in a Python sample became `*kwargs`), markdown italic came out as **bold** in Slack, and `chunkMessage` split fences leaving ``` unbalanced.
 
-## Um bug que só apareceu rodando de verdade
+## A bug that only surfaced against the real API
 
-Postando com user token, a mensagem volta com `user` = o humano **mas também com `bot_id`** (o do app). O que o plugin posta é filtrado por isso — sem loop de eco. Mas uma mensagem que **a pessoa digita** não tem `bot_id`, e o auto-filtro comparava só com o `botUserId`, que vem do token de bot e nunca bate com o humano.
+Posting with a user token, the message comes back with `user` = the human **but also with a `bot_id`** (the app's). What the plugin posts is filtered by that line — no echo loop. But a message the **person types themselves** has no `bot_id`, and the self-filter compared only against `botUserId`, which comes from the bot token and never matches the human.
 
-Consequência: numa DM entre duas pessoas, o dono digita e o agente trata como inbound, podendo **responder em nome dele**. Não é loop — é o agente falando por cima do próprio dono.
+Consequence: in a DM between two people, the owner types, the agent reads it as inbound and may **answer on their behalf**. Not a loop — the agent talking over its own principal.
 
-## Dois gates de governança mudaram o desenho
+## Two governance gates changed the design
 
-1. Eu tinha posto `tenant_id` denormalizado em `scheduled_messages`, o que arrastou a tabela para o manifesto histórico das 29 e quebrou os gates do G0/migration 0041. A precedente do repo para tabela nova é `whatsapp_flow_keys`: tenancy deriva via `instance_id` e a tabela fica **fora do manifesto por construção**.
-2. O ratchet do db-access proíbe crescer o débito de acesso não-escopado, e o sweeper varria globalmente. Levantar o teto seria burlar o gate — então o sweeper passou a enumerar tenants.
+1. A denormalized `tenant_id` on `scheduled_messages` dragged the table into the historical 29-table manifest and broke the G0 / migration-0041 gates. The repo's precedent for a new table is `whatsapp_flow_keys`: tenancy derives via `instance_id` and the table stays **outside the manifest by construction**.
+2. The db-access ratchet forbids growing unscoped access, and the sweeper scanned globally. Raising the ceiling would game the gate, so the sweeper now enumerates tenants.
 
-## HTTP mode era inalcançável pela API
+## HTTP mode was unreachable through the API
 
-Descoberto subindo o servidor de verdade, depois de tudo acima passar no typecheck e na suíte: `profileMetadata` não estava no `updateInstanceSchema` (PATCH devolvia 200 e o zod descartava), e o connect montava as options só dos tokens — quem lia metadata era o caminho de **restart**. Resultado: dava para configurar `mode: 'http'`, o banco guardava certo, e a instância nunca conectava por ele.
+Found by booting the server for real, after everything above passed typecheck and the suite: `profileMetadata` was missing from `updateInstanceSchema` (a PATCH returned 200 and zod stripped it), and the connect route built options from tokens alone — the only caller of `applySlackProfileMetadata` was the **restart** path. Net effect: you could configure `mode: 'http'`, the database stored it correctly, and the instance never connected that way.
 
-Os dois são *silent-success*: nada lança, nada loga, o estado é que fica errado. Tem teste de regressão que falha 3/5 se os fixes forem revertidos.
+Both are silent-success failures: nothing throws, nothing logs, the state is just wrong. There is a regression test that fails 3 of 5 cases if the fixes are reverted.
 
-## Validação
+## Validation
 
-**Contra o Slack real**, com token de usuário:
+**Against real Slack**, with a user token:
 
-- **escapamento confirmado morto em produção** — `<@U…>` armazenado como `&lt;@…&gt;`, nenhum ping; `<!channel>` idem; `**kwargs` intacto dentro de bloco de código
-- `getPermalink` · thread reply · `reply_broadcast` (com `subtype: thread_broadcast`, provando que a coluna mapeia distinção real) · `conversations.replies` · `reactions.add` · `scheduleMessage`→`list`→`delete` · `search.messages` · `conversations.open` idempotente
+- **escaping confirmed dead in production** — `<@U…>` stored as `&lt;@…&gt;`, no ping; `<!channel>` likewise; `**kwargs` intact inside a code fence
+- `getPermalink` · thread reply · `reply_broadcast` (with `subtype: thread_broadcast` present, proving the column maps a real distinction) · `conversations.replies` · `reactions.add` · `scheduleMessage`→`list`→`delete` · `search.messages` · idempotent `conversations.open`
 
-**Migrations** rodadas do zero num Postgres 18 descartável: 52/52; colunas, defaults, índices e FK cascade verificados no banco; as 4 reaplicadas com `ON_ERROR_STOP=1` — idempotentes de fato.
+**Migrations** run from scratch on a throwaway Postgres 18: 52/52; columns, defaults, indexes and FK cascade verified in the database; the four reapplied under `ON_ERROR_STOP=1` — idempotent in fact, not just by intent.
 
-**Servidor**: o omni deste branch sobe com a instância Slack em `authMode: user` + `mode: http`, com `actingUserId` resolvido e o receiver HTTP no ar.
+### Inbound, end to end
 
-**Suíte**: typecheck 23/23 · biome limpo · 979 testes em `channel-slack`/`channel-sdk`/`db` verdes (as falhas restantes na `api` são os testes de MinIO, que sobem container Docker).
-
-### Entrega inbound, ponta a ponta
-
-O omni deste branch rodando, recebendo pela Request URL e persistindo:
+This branch's omni running, receiving over the Request URL and persisting:
 
 ```
 messages=63 · chats=9 · events=63
@@ -103,26 +99,23 @@ chat_types: dm, group
 Received · from U08JN9LGYQN · chatId C0B9DQJG3FD
 ```
 
-São 9 conversas e 63 mensagens de canais onde o BOT NÃO ESTÁ — a perspectiva
-de usuário funcionando, que é o objetivo do issue.
+Nine conversations and 63 messages from channels **the bot is not in** — the user perspective working, which is the point of the issue.
 
-Três confirmações que só o banco podia dar:
+Three confirmations only the database could give:
 
-- **`0` mensagens do próprio usuário autorizado persistidas**, apesar de ele
-  ter digitado durante o teste. O evento chegou e o `actingUserId` filtrou —
-  sem esse fix, o agente trataria a fala do dono como inbound e responderia
-  por cima dele.
-- **8 mensagens com `thread_external_id` preenchido** — a coluna da `0048`
-  recebendo dado real, o que antes era colapsado em `replyToExternalId`.
-- `chat_types: dm, group` — a classificação de mpim separando corretamente.
+- **`0` messages from the authorizing user persisted**, despite them typing during the test. The event arrived and `actingUserId` filtered it — without that fix the agent would treat its owner's words as inbound and answer over them.
+- **8 messages with `thread_external_id` populated** — the `0048` column taking real data, where before it collapsed into `replyToExternalId`.
+- `chat_types: dm, group` — mpim classification separating correctly.
 
-## Superfície nova
+**Suite**: typecheck 23/23 · biome clean · 5716 pass. The 6 remaining failures are the MinIO tests, which spin up a Docker container unavailable on the dev machine — they pass in CI.
 
-**Migrations** `0048` `0049` `0050` `0051` · **Rotas** `/scheduled-messages` (CRUD), `/slack/dm/open`, `/slack/search`, `GET /messages/:id/permalink` · **CLI** `omni schedule send|list|get|cancel`, `omni slack dm|search` · **Capabilities** `canScheduleMessage`, `maxScheduleAheadMs`, `canGetPermalink`, `canPinMessage`, `canSearchMessages`
+## New surface
 
-## Notas de revisão
+**Migrations** `0048` `0049` `0050` `0051` · **Routes** `/scheduled-messages` (CRUD), `/slack/dm/open`, `/slack/search`, `GET /messages/:id/permalink` · **CLI** `omni schedule send|list|get|cancel`, `omni slack dm|search` · **Capabilities** `canScheduleMessage`, `maxScheduleAheadMs`, `canGetPermalink`, `canPinMessage`, `canSearchMessages`
 
-- `canSearchMessages` fica `false`: `ChannelCapabilities` é estático no plugin, não por instância, e declarar `true` prometeria busca também para instâncias em modo bot
-- Não existe API de quote no Slack — o card é *unfurl* de permalink, comportamento de cliente e não contrato. O fallback determinístico é blockquote + permalink
-- `scheduleTextMessage` **não** faz chunking: chunk viraria várias mensagens agendadas com handles separados e um cancelamento poderia disparar pela metade
-- `post_at` vai em segundos inteiros, com teste travando (passar ms agendaria para daqui ~55 mil anos)
+## Review notes
+
+- `canSearchMessages` stays `false`: `ChannelCapabilities` is static on the plugin, not per instance, and declaring `true` would promise search for bot-mode instances too
+- Slack has no quote API — the card is a permalink unfurl, client behaviour rather than contract. The deterministic fallback is blockquote + permalink
+- `scheduleTextMessage` does **not** chunk: chunks would become several scheduled messages with separate handles, so a later cancel could half-fire
+- `post_at` is sent in whole seconds, with a test pinning it (passing ms would schedule ~55k years out)
