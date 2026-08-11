@@ -16,6 +16,7 @@
  * @see media-processing-realtime wish
  */
 
+import type { ChannelPlugin } from '@omni/channel-sdk';
 import type { ChannelType, EventBus, MessageReceivedPayload, OmniEvent } from '@omni/core';
 import { classifyEnvelope, createLogger, isValidUuid } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -32,6 +33,7 @@ import type { Services } from '../services';
 import { MediaStorageService } from '../services/media-storage';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runConsumerInTenantContext, runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
+import { getPlugin } from './loader';
 
 const log = createLogger('media-processor');
 
@@ -156,6 +158,12 @@ interface MediaProcessorContext {
     video?: string;
     document?: string;
   };
+  /**
+   * Resolve a channel plugin by id — used to materialize deferred inbound media
+   * (channels that emit a `content.mediaId` but no URL). Defaults to the global
+   * registry's `getPlugin`; injectable so tests avoid the shared singleton.
+   */
+  resolveChannelPlugin?: (id: ChannelType) => Promise<ChannelPlugin | undefined>;
 }
 
 /**
@@ -236,6 +244,59 @@ async function downloadMediaFromUrl(
 }
 
 /**
+ * Materialize inbound media whose bytes live behind the channel plugin's own
+ * authenticated fetch rather than a public URL.
+ *
+ * Meta Cloud (`whatsapp-business`) inbound webhooks carry only a `media_id`
+ * (surfaced on `content.mediaId`) — the bytes require a two-step Graph call the
+ * plugin implements as `downloadInboundMedia`. We invoke it, store the returned
+ * buffer via `storeFromBuffer` (the URL path's `storeFromUrl` can't fetch an
+ * authenticated, short-lived Graph URL), and record the stored reference on the
+ * message row. Returns the stored path on success, null on failure.
+ */
+async function downloadMediaViaPlugin(
+  ctx: MediaProcessorContext,
+  instanceId: string,
+  messageId: string,
+  channelType: ChannelType,
+  mediaRef: string,
+  fallbackMimeType: string,
+  platformTimestamp: Date | undefined,
+  trustedTenantId?: string,
+): Promise<string | null> {
+  const plugin = await (ctx.resolveChannelPlugin ?? getPlugin)(channelType);
+  if (!plugin?.downloadInboundMedia) {
+    log.warn('Channel plugin cannot materialize deferred media', { channelType, messageId });
+    return null;
+  }
+  try {
+    const { buffer, mimeType } = await plugin.downloadInboundMedia(instanceId, mediaRef);
+    // `storeFromBuffer` is a discrete DB block and gets its own short worker
+    // scope (G5, ADR-0008); the plugin download above is NETWORK I/O and must
+    // never be held inside a worker transaction. A legacy envelope (undefined
+    // `trustedTenantId`) writes ambient, byte-identical to pre-G5.
+    const result = await ctx.mediaStorage.storeFromBuffer(
+      instanceId,
+      messageId,
+      buffer,
+      mimeType || fallbackMimeType,
+      platformTimestamp,
+      trustedTenantId,
+    );
+    await runMediaDb(ctx, trustedTenantId, () => ctx.mediaStorage.updateMessageLocalPath(messageId, result.localPath));
+    log.debug('Downloaded inbound media via plugin', { messageId, channelType, filePath: result.localPath });
+    return result.localPath;
+  } catch (error) {
+    log.error('Failed to download inbound media via plugin', {
+      error: String(error),
+      channelType,
+      messageId,
+    });
+    return null;
+  }
+}
+
+/**
  * Resolve media file path for a message
  * Handles both local paths and URL downloads
  */
@@ -290,6 +351,22 @@ async function resolveMediaPath(
       mimeType,
       message.platformTimestamp ?? undefined,
       channelType,
+      trustedTenantId,
+    );
+    if (!filePath) return null;
+  }
+
+  // Channel-native deferred media (e.g. Meta Cloud `media_id`): no public URL,
+  // so materialize the bytes through the plugin's authenticated download.
+  if (!filePath && content.mediaId && channelType) {
+    filePath = await downloadMediaViaPlugin(
+      ctx,
+      instanceId,
+      message.id,
+      channelType,
+      content.mediaId,
+      mimeType,
+      message.platformTimestamp ?? undefined,
       trustedTenantId,
     );
     if (!filePath) return null;
@@ -776,6 +853,7 @@ export const __test__ = {
   resolveSafeMediaContentEventId,
   processMessageMedia,
   downloadMediaFromUrl,
+  downloadMediaViaPlugin,
 };
 
 export type { MediaProcessorContext };
