@@ -234,6 +234,14 @@ export interface MessageReceivedPayload {
     type: ContentType;
     text?: string;
     mediaUrl?: string;
+    /**
+     * Channel-native media handle for deferred downloads (e.g. a Meta Cloud
+     * `media_id`). Set when the bytes are NOT available via a public `mediaUrl`
+     * and must be materialized through the channel plugin's own authenticated
+     * `downloadInboundMedia(instanceId, mediaId)` fetch. Distinct from the
+     * persisted `messages.mediaId` UUID.
+     */
+    mediaId?: string;
     mimeType?: string;
     localPath?: string;
     isVoiceNote?: boolean;

@@ -648,6 +648,12 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
         type: content.type,
         text: content.text ?? content.caption,
         mediaUrl: content.mediaUrl,
+        // Meta Cloud defers the media download — the webhook carries only a
+        // `media_id`, not a public URL (see `extractMediaContent`). Surface it
+        // on the event so the media pipeline can materialize the bytes via
+        // `downloadInboundMedia`; without this, inbound audio/image/video/doc
+        // is persisted but never downloaded or transcribed.
+        mediaId: content.mediaId,
         mimeType: content.mimeType,
         isVoiceNote: content.isVoiceNote,
       },
