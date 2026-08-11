@@ -91,6 +91,57 @@ interface ExtractedContent {
 type MessageContent = proto.IMessage;
 type ContentExtractor = (message: MessageContent) => ExtractedContent | null;
 
+/** Join non-empty, trimmed parts with newlines; undefined when nothing survives. */
+function joinLines(...parts: Array<string | null | undefined>): string | undefined {
+  const text = parts.filter((p): p is string => typeof p === 'string' && p.trim().length > 0).join('\n');
+  return text.length > 0 ? text : undefined;
+}
+
+/** Render visible button labels as `[A] [B]`; undefined when there are none. */
+function bracketButtons(labels: Array<string | null | undefined>): string | undefined {
+  const clean = labels.filter((l): l is string => typeof l === 'string' && l.trim().length > 0);
+  return clean.length > 0 ? clean.map((l) => `[${l.trim()}]`).join(' ') : undefined;
+}
+
+/**
+ * Bot-interactive message flattening (issue #902).
+ *
+ * WhatsApp's native interactive UX — list menus, quick-reply buttons, and the
+ * modern nativeFlow / template variants — is what a bot SENDS, so it has no
+ * response handler and previously fell through to `extractUnknownContent`,
+ * landing in the DB as `"Unknown message type: listMessage"`. These formatters
+ * flatten each into a readable text transcript (title / body / footer + the
+ * visible option labels) so chat history, audit logs, and QA tooling see the
+ * actual bot output instead of a placeholder.
+ */
+function extractListMessageText(list: proto.Message.IListMessage): string | undefined {
+  const rows = (list.sections ?? []).flatMap((s) => (s.rows ?? []).map((r) => (r.title ? `• ${r.title}` : '')));
+  return joinLines(list.title, list.description, ...rows, list.footerText);
+}
+
+function extractButtonsMessageText(bm: proto.Message.IButtonsMessage): string | undefined {
+  const labels = bracketButtons((bm.buttons ?? []).map((b) => b.buttonText?.displayText));
+  return joinLines(bm.contentText ?? bm.text, bm.footerText, labels);
+}
+
+function extractInteractiveMessageText(im: proto.Message.IInteractiveMessage): string | undefined {
+  const labels = bracketButtons((im.nativeFlowMessage?.buttons ?? []).map((b) => b.name));
+  return joinLines(im.header?.title, im.header?.subtitle, im.body?.text, im.footer?.text, labels);
+}
+
+function extractTemplateMessageText(tpl: proto.Message.ITemplateMessage): string | undefined {
+  const hydrated = tpl.hydratedTemplate ?? tpl.hydratedFourRowTemplate;
+  if (hydrated) {
+    const labels = bracketButtons(
+      (hydrated.hydratedButtons ?? []).map(
+        (b) => b.quickReplyButton?.displayText ?? b.urlButton?.displayText ?? b.callButton?.displayText,
+      ),
+    );
+    return joinLines(hydrated.hydratedTitleText, hydrated.hydratedContentText, hydrated.hydratedFooterText, labels);
+  }
+  return tpl.interactiveMessageTemplate ? extractInteractiveMessageText(tpl.interactiveMessageTemplate) : undefined;
+}
+
 /**
  * Content extractors for each message type
  * Each extractor handles one specific message type
@@ -328,6 +379,41 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
     extract: (m) => ({
       type: 'text' as ContentType,
       text: m.buttonsResponseMessage?.selectedDisplayText ?? m.buttonsResponseMessage?.selectedButtonId ?? undefined,
+    }),
+  },
+  // Bot-sent interactive list menu (issue #902) — flatten to a text transcript.
+  // Must stay BEFORE the trailing wrapper extractors so the slice(0, -N) offsets
+  // below keep pointing at the wrappers (and so deviceSent/ephemeral/viewOnce
+  // re-extraction reaches these interactive types).
+  {
+    check: (m) => !!m.listMessage,
+    extract: (m) => ({
+      type: 'text' as ContentType,
+      text: m.listMessage ? extractListMessageText(m.listMessage) : undefined,
+    }),
+  },
+  // Bot-sent quick-reply buttons (legacy buttonsMessage) — issue #902
+  {
+    check: (m) => !!m.buttonsMessage,
+    extract: (m) => ({
+      type: 'text' as ContentType,
+      text: m.buttonsMessage ? extractButtonsMessageText(m.buttonsMessage) : undefined,
+    }),
+  },
+  // Bot-sent modern interactive message (nativeFlow / flows) — issue #902
+  {
+    check: (m) => !!m.interactiveMessage,
+    extract: (m) => ({
+      type: 'text' as ContentType,
+      text: m.interactiveMessage ? extractInteractiveMessageText(m.interactiveMessage) : undefined,
+    }),
+  },
+  // Bot-sent template message (hydrated four-row / interactive template) — issue #902
+  {
+    check: (m) => !!m.templateMessage,
+    extract: (m) => ({
+      type: 'text' as ContentType,
+      text: m.templateMessage ? extractTemplateMessageText(m.templateMessage) : undefined,
     }),
   },
   // Sender key distribution - internal E2E encryption, ignore
