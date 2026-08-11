@@ -93,6 +93,9 @@ export type { SanitizeOptions, SanitizeResult } from './sanitize';
 export { createDownloadGuard, DownloadTooLargeError } from './download-guard';
 export type { DownloadGuard, DownloadGuardConfig, DownloadGuardContext } from './download-guard';
 
+export { planInteractive } from './interactive-plan';
+export type { InteractiveButton, InteractiveListOptions, InteractivePlan } from './interactive-plan';
+
 // ─────────────────────────────────────────────────────────────
 // Media storage backends (shared by @omni/api and channel plugins)
 // ─────────────────────────────────────────────────────────────

@@ -10,7 +10,12 @@ import { describe, expect, it, spyOn } from 'bun:test';
 
 import { HermesClient } from '../client';
 import { sendContact } from '../senders/contact';
-import { sendInteractiveButtons, sendInteractiveList } from '../senders/interactive';
+import {
+  sendInteractiveButtons,
+  sendInteractiveList,
+  sendLocationRequest,
+  sendPlannedInteractive,
+} from '../senders/interactive';
 import { sendLocation } from '../senders/location';
 import { resolveHermesMediaType, sendMedia } from '../senders/media';
 import { sendReaction } from '../senders/reaction';
@@ -243,6 +248,44 @@ describe('sendTemplate', () => {
 });
 
 describe('interactive senders', () => {
+  it('sendPlannedInteractive wraps a pre-built interactive object verbatim', async () => {
+    const client = makeClient();
+    const spy = spyOn(client, 'sendMessage').mockResolvedValueOnce(OK_RESPONSE);
+
+    const interactive = {
+      type: 'cta_url',
+      body: { text: 'See dates' },
+      action: { name: 'cta_url', parameters: { display_text: 'Open', url: 'https://x.example' } },
+    };
+    await sendPlannedInteractive(client, '+55 11 99999-8888', interactive, 'wamid.reply');
+
+    expect(spy).toHaveBeenCalledWith({
+      to: '5511999998888',
+      recipient_type: 'individual',
+      type: 'interactive',
+      interactive,
+      context: { message_id: 'wamid.reply' },
+    });
+  });
+
+  it('sendLocationRequest produces the location_request_message shape', async () => {
+    const client = makeClient();
+    const spy = spyOn(client, 'sendMessage').mockResolvedValueOnce(OK_RESPONSE);
+
+    await sendLocationRequest(client, '5511999998888', 'Share your location');
+
+    expect(spy).toHaveBeenCalledWith({
+      to: '5511999998888',
+      recipient_type: 'individual',
+      type: 'interactive',
+      interactive: {
+        type: 'location_request_message',
+        body: { text: 'Share your location' },
+        action: { name: 'send_location' },
+      },
+    });
+  });
+
   it('produces the interactive button shape from the spec', async () => {
     const client = makeClient();
     const spy = spyOn(client, 'sendMessage').mockResolvedValueOnce(OK_RESPONSE);

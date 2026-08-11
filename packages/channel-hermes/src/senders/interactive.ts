@@ -10,6 +10,7 @@ import type { HermesClient } from '../client';
 import type {
   HermesInteractiveButtonPayload,
   HermesInteractiveListPayload,
+  HermesInteractivePayload,
   HermesOutboundMessage,
   HermesSendResponse,
 } from '../types';
@@ -53,6 +54,51 @@ export async function sendInteractiveButtons(
     recipient_type: 'individual',
     type: 'interactive',
     interactive,
+  };
+  if (replyTo) payload.context = { message_id: replyTo };
+  return client.sendMessage(payload);
+}
+
+/**
+ * Send a pre-built Cloud API `interactive` object (the output of the shared
+ * `planInteractive` mapper) — button, list, or cta_url.
+ */
+export async function sendPlannedInteractive(
+  client: HermesClient,
+  to: string,
+  interactive: Record<string, unknown>,
+  replyTo?: string,
+): Promise<HermesSendResponse> {
+  const payload: HermesOutboundMessage = {
+    to: toHermesPhone(to),
+    recipient_type: 'individual',
+    type: 'interactive',
+    interactive: interactive as unknown as HermesInteractivePayload,
+  };
+  if (replyTo) payload.context = { message_id: replyTo };
+  return client.sendMessage(payload);
+}
+
+/**
+ * Ask the user to share their location — renders WhatsApp's native
+ * "Send location" button under the body text. The shared location arrives
+ * as a regular inbound `location` message on the webhook.
+ */
+export async function sendLocationRequest(
+  client: HermesClient,
+  to: string,
+  bodyText: string,
+  replyTo?: string,
+): Promise<HermesSendResponse> {
+  const payload: HermesOutboundMessage = {
+    to: toHermesPhone(to),
+    recipient_type: 'individual',
+    type: 'interactive',
+    interactive: {
+      type: 'location_request_message',
+      body: { text: bodyText },
+      action: { name: 'send_location' },
+    },
   };
   if (replyTo) payload.context = { message_id: replyTo };
   return client.sendMessage(payload);

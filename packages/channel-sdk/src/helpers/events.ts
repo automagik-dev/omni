@@ -38,6 +38,12 @@ export interface EmitMessageReceivedParams {
     type: ContentType;
     text?: string;
     mediaUrl?: string;
+    /**
+     * Channel-native media handle for deferred downloads (e.g. a Meta Cloud
+     * `media_id`). Set when the bytes are not available via a public `mediaUrl`
+     * and must be materialized through the plugin's own `downloadInboundMedia`.
+     */
+    mediaId?: string;
     localPath?: string;
     mimeType?: string;
     isVoiceNote?: boolean;

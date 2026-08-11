@@ -184,6 +184,11 @@ const createInstanceSchema = z.object({
     .nullable()
     .describe('Public Twilio inbound webhook URL for signature validation'),
   twilioValidateSignature: z.boolean().default(true).describe('Validate X-Twilio-Signature on webhooks'),
+  hermesBaseUrl: z.string().optional().nullable().describe('Hermes API base URL (e.g. https://waap-api.h3rmes.com)'),
+  hermesUsername: z.string().optional().nullable().describe('Hermes account username'),
+  hermesPassword: z.string().optional().nullable().describe('Hermes account password'),
+  hermesMediaId: z.string().optional().nullable().describe('Hermes line UUID (media_id) — required on every send'),
+  hermesTemplateNamespace: z.string().optional().nullable().describe('Meta template namespace for HSM sends'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
     .default('on')
@@ -430,6 +435,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'gupshupAuthToken',
   'webhookVerifyToken',
   'twilioAuthToken',
+  'hermesPassword',
 ] as const;
 
 /** Strip secret tokens from an instance before returning it in API responses */
@@ -533,6 +539,11 @@ type InstanceConnectionOptionsInput = {
   twilioStatusCallbackUrl?: string | null;
   twilioWebhookUrl?: string | null;
   twilioValidateSignature?: boolean | null;
+  hermesBaseUrl?: string | null;
+  hermesUsername?: string | null;
+  hermesPassword?: string | null;
+  hermesMediaId?: string | null;
+  hermesTemplateNamespace?: string | null;
 };
 
 function applyTelegramConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
@@ -575,6 +586,23 @@ function applyTwilioWhatsAppConnectionOptions(
   }
 }
 
+function applyHermesConnectionOptions(
+  options: Record<string, unknown>,
+  input: {
+    hermesBaseUrl?: string | null;
+    hermesUsername?: string | null;
+    hermesPassword?: string | null;
+    hermesMediaId?: string | null;
+    hermesTemplateNamespace?: string | null;
+  },
+): void {
+  if (input.hermesBaseUrl) options.hermesBaseUrl = input.hermesBaseUrl;
+  if (input.hermesUsername) options.hermesUsername = input.hermesUsername;
+  if (input.hermesPassword) options.hermesPassword = input.hermesPassword;
+  if (input.hermesMediaId) options.hermesMediaId = input.hermesMediaId;
+  if (input.hermesTemplateNamespace) options.hermesTemplateNamespace = input.hermesTemplateNamespace;
+}
+
 function applyChannelSpecificConnectionOptions(
   options: Record<string, unknown>,
   input: InstanceConnectionOptionsInput,
@@ -591,6 +619,9 @@ function applyChannelSpecificConnectionOptions(
       return;
     case 'twilio-whatsapp':
       applyTwilioWhatsAppConnectionOptions(options, input);
+      return;
+    case 'hermes':
+      applyHermesConnectionOptions(options, input);
       return;
   }
 }
@@ -825,6 +856,11 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     twilioStatusCallbackUrl: instance.twilioStatusCallbackUrl,
     twilioWebhookUrl: instance.twilioWebhookUrl,
     twilioValidateSignature: instance.twilioValidateSignature,
+    hermesBaseUrl: instance.hermesBaseUrl,
+    hermesUsername: instance.hermesUsername,
+    hermesPassword: instance.hermesPassword,
+    hermesMediaId: instance.hermesMediaId,
+    hermesTemplateNamespace: instance.hermesTemplateNamespace,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -1169,6 +1205,11 @@ const connectInstanceSchema = z.object({
   twilioStatusCallbackUrl: z.string().optional().describe('Twilio outbound status callback URL'),
   twilioWebhookUrl: z.string().optional().describe('Public Twilio inbound webhook URL for signature validation'),
   twilioValidateSignature: z.boolean().optional().describe('Validate X-Twilio-Signature on webhooks'),
+  hermesBaseUrl: z.string().optional().describe('Hermes API base URL'),
+  hermesUsername: z.string().optional().describe('Hermes account username'),
+  hermesPassword: z.string().optional().describe('Hermes account password'),
+  hermesMediaId: z.string().optional().describe('Hermes line UUID (media_id)'),
+  hermesTemplateNamespace: z.string().optional().describe('Meta template namespace for HSM sends'),
   whatsapp: z
     .object({
       syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
@@ -1208,6 +1249,11 @@ function buildConnectConnectionOptions(
     twilioStatusCallbackUrl: body.twilioStatusCallbackUrl ?? instance.twilioStatusCallbackUrl,
     twilioWebhookUrl: body.twilioWebhookUrl ?? instance.twilioWebhookUrl,
     twilioValidateSignature: body.twilioValidateSignature ?? instance.twilioValidateSignature,
+    hermesBaseUrl: body.hermesBaseUrl ?? instance.hermesBaseUrl,
+    hermesUsername: body.hermesUsername ?? instance.hermesUsername,
+    hermesPassword: body.hermesPassword ?? instance.hermesPassword,
+    hermesMediaId: body.hermesMediaId ?? instance.hermesMediaId,
+    hermesTemplateNamespace: body.hermesTemplateNamespace ?? instance.hermesTemplateNamespace,
   });
 }
 
@@ -1241,17 +1287,30 @@ function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInsta
     ...buildTokenPersistUpdates(instance.channel, body),
   };
 
-  if (instance.channel !== 'twilio-whatsapp') return updates;
+  if (instance.channel === 'twilio-whatsapp') {
+    return {
+      ...updates,
+      twilioAccountSid: body.twilioAccountSid ?? instance.twilioAccountSid,
+      twilioFrom: body.twilioFrom ?? instance.twilioFrom,
+      twilioMessagingServiceSid: body.twilioMessagingServiceSid ?? instance.twilioMessagingServiceSid,
+      twilioStatusCallbackUrl: body.twilioStatusCallbackUrl ?? instance.twilioStatusCallbackUrl,
+      twilioWebhookUrl: body.twilioWebhookUrl ?? instance.twilioWebhookUrl,
+      twilioValidateSignature: body.twilioValidateSignature ?? instance.twilioValidateSignature,
+    };
+  }
 
-  return {
-    ...updates,
-    twilioAccountSid: body.twilioAccountSid ?? instance.twilioAccountSid,
-    twilioFrom: body.twilioFrom ?? instance.twilioFrom,
-    twilioMessagingServiceSid: body.twilioMessagingServiceSid ?? instance.twilioMessagingServiceSid,
-    twilioStatusCallbackUrl: body.twilioStatusCallbackUrl ?? instance.twilioStatusCallbackUrl,
-    twilioWebhookUrl: body.twilioWebhookUrl ?? instance.twilioWebhookUrl,
-    twilioValidateSignature: body.twilioValidateSignature ?? instance.twilioValidateSignature,
-  };
+  if (instance.channel === 'hermes') {
+    return {
+      ...updates,
+      hermesBaseUrl: body.hermesBaseUrl ?? instance.hermesBaseUrl,
+      hermesUsername: body.hermesUsername ?? instance.hermesUsername,
+      hermesPassword: body.hermesPassword ?? instance.hermesPassword,
+      hermesMediaId: body.hermesMediaId ?? instance.hermesMediaId,
+      hermesTemplateNamespace: body.hermesTemplateNamespace ?? instance.hermesTemplateNamespace,
+    };
+  }
+
+  return updates;
 }
 
 /**
@@ -1396,6 +1455,9 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
       restartOptions.twilioStatusCallbackUrl = instance.twilioStatusCallbackUrl;
       restartOptions.twilioWebhookUrl = instance.twilioWebhookUrl;
       restartOptions.twilioValidateSignature = instance.twilioValidateSignature;
+    }
+    if (instance.channel === 'hermes') {
+      applyHermesConnectionOptions(restartOptions, instance);
     }
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {

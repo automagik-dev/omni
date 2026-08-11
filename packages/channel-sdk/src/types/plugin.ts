@@ -250,6 +250,21 @@ export interface ChannelPlugin {
   ): Promise<PresenceStatusResult | undefined>;
 
   /**
+   * Materialize inbound media bytes from a channel-native handle.
+   *
+   * Optional — implement for channels whose inbound webhooks defer the download
+   * and carry only a media reference (e.g. a Meta Cloud `media_id`) rather than
+   * a public `mediaUrl`. The realtime media pipeline invokes this when a
+   * `message.received` content has a `mediaId` but no `mediaUrl`/local path, so
+   * the bytes can be stored and processed (transcription, OCR, …).
+   *
+   * @param instanceId - Instance the media belongs to
+   * @param mediaRef - Channel-native media handle (as set on `content.mediaId`)
+   * @returns The downloaded bytes and their resolved MIME type
+   */
+  downloadInboundMedia?(instanceId: string, mediaRef: string): Promise<{ buffer: Buffer; mimeType: string }>;
+
+  /**
    * Mark messages as read
    *
    * Optional - only implement if canReceiveReadReceipts capability is true.
