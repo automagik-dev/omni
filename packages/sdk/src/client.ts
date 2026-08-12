@@ -401,6 +401,41 @@ export interface PairingActionResult {
   message?: string;
 }
 
+export interface WhatsAppPasskeyCredential {
+  id: string;
+  rawId: string;
+  type: 'public-key';
+  response: {
+    clientDataJSON: string;
+    authenticatorData: string;
+    signature: string;
+    userHandle: string | null;
+  };
+}
+
+export type WhatsAppPasskeyState =
+  | {
+      state: 'request';
+      publicKey: Record<string, unknown>;
+      requestedAt: string;
+    }
+  | {
+      state: 'confirmation';
+      code: string;
+      requiresUserConfirmation: boolean;
+      requestedAt: string;
+    }
+  | {
+      state: 'confirming';
+      requestedAt: string;
+    }
+  | {
+      state: 'error';
+      phase: 'request' | 'continuation';
+      message: string;
+      requestedAt: string;
+    };
+
 /**
  * Query parameters for listing settings
  */
@@ -1479,6 +1514,31 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         throwIfError(response, error);
         return data?.data ?? { code: '', phoneNumber: '', message: '', expiresIn: 0 };
+      },
+
+      async passkey(id: string): Promise<WhatsAppPasskeyState | null> {
+        const response = await apiFetch(`${baseUrl}/api/v2/instances/${id}/passkey`, {});
+        const json = (await response.json()) as { data?: WhatsAppPasskeyState | null };
+        if (!response.ok) throw OmniApiError.from(json, response.status);
+        return json.data ?? null;
+      },
+
+      async submitPasskey(id: string, credential: WhatsAppPasskeyCredential): Promise<void> {
+        const response = await apiFetch(`${baseUrl}/api/v2/instances/${id}/passkey/response`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(credential),
+        });
+        const json = (await response.json()) as { data?: { status: string } };
+        if (!response.ok) throw OmniApiError.from(json, response.status);
+      },
+
+      async confirmPasskey(id: string): Promise<void> {
+        const response = await apiFetch(`${baseUrl}/api/v2/instances/${id}/passkey/confirm`, {
+          method: 'POST',
+        });
+        const json = (await response.json()) as { data?: { status: string } };
+        if (!response.ok) throw OmniApiError.from(json, response.status);
       },
 
       /**

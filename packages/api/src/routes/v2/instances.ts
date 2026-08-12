@@ -1075,6 +1075,32 @@ const pairingCodeSchema = z.object({
   phoneNumber: z.string().min(10).max(20).describe('Phone number in international format (e.g., +5511999999999)'),
 });
 
+const passkeyBase64UrlSchema = z
+  .string()
+  .min(1)
+  .regex(/^[A-Za-z0-9_-]+$/);
+const passkeyCredentialSchema = z.object({
+  id: passkeyBase64UrlSchema,
+  rawId: passkeyBase64UrlSchema,
+  type: z.literal('public-key'),
+  response: z.object({
+    clientDataJSON: passkeyBase64UrlSchema,
+    authenticatorData: passkeyBase64UrlSchema,
+    signature: passkeyBase64UrlSchema,
+    userHandle: passkeyBase64UrlSchema.nullable(),
+  }),
+});
+
+type WhatsAppPasskeyPlugin = {
+  getPasskeyState: (id: string) => unknown;
+  submitPasskeyResponse: (id: string, credential: z.infer<typeof passkeyCredentialSchema>) => Promise<void>;
+  confirmPasskey: (id: string) => Promise<void>;
+};
+
+function supportsPasskey(plugin: ChannelPlugin): plugin is ChannelPlugin & WhatsAppPasskeyPlugin {
+  return 'getPasskeyState' in plugin && 'submitPasskeyResponse' in plugin && 'confirmPasskey' in plugin;
+}
+
 /**
  * POST /instances/:id/pair - Request pairing code for phone authentication
  *
@@ -1130,6 +1156,72 @@ instancesRoutes.post('/:id/pair', instanceAccess, zValidator('json', pairingCode
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return c.json({ error: { code: 'PAIRING_FAILED', message } }, 500);
+  }
+});
+
+instancesRoutes.get('/:id/passkey', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+  const instance = await services.instances.getById(id);
+
+  if (!instance.channel.startsWith('whatsapp')) {
+    return c.json({ error: { code: 'INVALID_OPERATION', message: 'Passkey is only available for WhatsApp.' } }, 400);
+  }
+
+  const plugin = channelRegistry?.get(instance.channel as Parameters<ChannelRegistry['get']>[0]);
+  if (!plugin || !supportsPasskey(plugin)) {
+    return c.json(
+      { error: { code: 'NOT_SUPPORTED', message: 'This WhatsApp connector does not support passkey.' } },
+      400,
+    );
+  }
+
+  return c.json({ data: plugin.getPasskeyState(id) });
+});
+
+instancesRoutes.post(
+  '/:id/passkey/response',
+  instanceAccess,
+  zValidator('json', passkeyCredentialSchema),
+  async (c) => {
+    const id = c.req.param('id');
+    const services = c.get('services');
+    const channelRegistry = c.get('channelRegistry');
+    const instance = await services.instances.getById(id);
+    const plugin = channelRegistry?.get(instance.channel as Parameters<ChannelRegistry['get']>[0]);
+
+    if (!instance.channel.startsWith('whatsapp') || !plugin || !supportsPasskey(plugin)) {
+      return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Passkey is not available for this instance.' } }, 400);
+    }
+
+    try {
+      await plugin.submitPasskeyResponse(id, c.req.valid('json'));
+      return c.json({ data: { status: 'submitted' } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to submit passkey response.';
+      return c.json({ error: { code: 'PASSKEY_FAILED', message } }, 500);
+    }
+  },
+);
+
+instancesRoutes.post('/:id/passkey/confirm', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+  const instance = await services.instances.getById(id);
+  const plugin = channelRegistry?.get(instance.channel as Parameters<ChannelRegistry['get']>[0]);
+
+  if (!instance.channel.startsWith('whatsapp') || !plugin || !supportsPasskey(plugin)) {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'Passkey is not available for this instance.' } }, 400);
+  }
+
+  try {
+    await plugin.confirmPasskey(id);
+    return c.json({ data: { status: 'confirmed' } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to confirm passkey pairing.';
+    return c.json({ error: { code: 'PASSKEY_FAILED', message } }, 500);
   }
 });
 
