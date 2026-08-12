@@ -121,6 +121,8 @@ export type {
   // Instance types
   ConnectInstanceBody,
   RequestPairingCodeBody,
+  WhatsAppPasskeyCredential,
+  WhatsAppPasskeyState,
   ListContactsParams,
   ListGroupsParams,
   Contact,

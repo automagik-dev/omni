@@ -22,7 +22,15 @@ import type {
   StreamSender,
 } from '@omni/channel-sdk';
 import type { ChannelType, ContentType } from '@omni/core/types';
-import type { GroupMetadata, WAMessage, WASocket, proto } from 'baileys';
+import type {
+  GroupMetadata,
+  PasskeyConnectionUpdate,
+  PasskeyCredentialResponse,
+  PasskeyPublicKeyCredentialRequestOptions,
+  WAMessage,
+  WASocket,
+  proto,
+} from 'baileys';
 
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
@@ -187,6 +195,29 @@ export interface WhatsAppConnectionOptions {
  */
 export interface WhatsAppConfig extends WhatsAppConnectionOptions {}
 
+export type WhatsAppPasskeyState =
+  | {
+      state: 'request';
+      publicKey: PasskeyPublicKeyCredentialRequestOptions;
+      requestedAt: string;
+    }
+  | {
+      state: 'confirmation';
+      code: string;
+      requiresUserConfirmation: boolean;
+      requestedAt: string;
+    }
+  | {
+      state: 'confirming';
+      requestedAt: string;
+    }
+  | {
+      state: 'error';
+      phase: 'request' | 'continuation';
+      message: string;
+      requestedAt: string;
+    };
+
 /**
  * WhatsApp Channel Plugin
  *
@@ -219,6 +250,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /** Active socket connections per instance */
   private sockets = new Map<string, WASocket>();
+
+  /** Ephemeral passkey ceremonies requested by WhatsApp during pairing. */
+  private passkeyStates = new Map<string, WhatsAppPasskeyState>();
 
   /** Plugin configuration */
   private pluginConfig: WhatsAppConfig = {};
@@ -854,6 +888,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
     // If forcing new QR, disconnect existing socket and clear auth state
     if (config.options?.forceNewQr === true) {
+      this.passkeyStates.delete(instanceId);
       const existingSocket = this.sockets.get(instanceId);
       if (existingSocket) {
         existingSocket.ev.removeAllListeners('connection.update');
@@ -1032,6 +1067,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /** Clear all per-instance caches to prevent memory leaks on reconnect cycles */
   private clearInstanceCaches(instanceId: string): void {
+    this.passkeyStates.delete(instanceId);
     this.groupMetadataCache.delete(instanceId);
     this.groupsCache.delete(instanceId);
     this.contactsCache.delete(instanceId);
@@ -1097,6 +1133,102 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       const message = error instanceof Error ? error.message : String(error);
       throw new WhatsAppError(ErrorCode.PAIRING_FAILED, `Failed to request pairing code: ${message}`);
     }
+  }
+
+  getPasskeyState(instanceId: string): WhatsAppPasskeyState | null {
+    return this.passkeyStates.get(instanceId) ?? null;
+  }
+
+  async submitPasskeyResponse(instanceId: string, credential: PasskeyCredentialResponse): Promise<void> {
+    const sock = this.sockets.get(instanceId);
+    if (!sock) {
+      throw new WhatsAppError(ErrorCode.NOT_CONNECTED, `Instance ${instanceId} is not connected.`);
+    }
+
+    const current = this.passkeyStates.get(instanceId);
+    if (current?.state !== 'request') {
+      throw new WhatsAppError(ErrorCode.PAIRING_FAILED, 'No passkey authentication is pending.');
+    }
+
+    this.passkeyStates.set(instanceId, { state: 'confirming', requestedAt: current.requestedAt });
+    try {
+      await sock.sendPasskeyResponse(credential);
+    } catch (error) {
+      this.passkeyStates.set(instanceId, current);
+      throw error;
+    }
+  }
+
+  async confirmPasskey(instanceId: string): Promise<void> {
+    const sock = this.sockets.get(instanceId);
+    if (!sock) {
+      throw new WhatsAppError(ErrorCode.NOT_CONNECTED, `Instance ${instanceId} is not connected.`);
+    }
+
+    const current = this.passkeyStates.get(instanceId);
+    if (current?.state !== 'confirmation') {
+      throw new WhatsAppError(ErrorCode.PAIRING_FAILED, 'No passkey confirmation is pending.');
+    }
+
+    this.passkeyStates.set(instanceId, { state: 'confirming', requestedAt: current.requestedAt });
+    try {
+      await sock.sendPasskeyConfirmation();
+    } catch (error) {
+      this.passkeyStates.set(instanceId, current);
+      throw error;
+    }
+  }
+
+  async handlePasskeyUpdate(instanceId: string, update: PasskeyConnectionUpdate): Promise<void> {
+    const requestedAt = new Date().toISOString();
+    if (update.state === 'request') {
+      this.passkeyStates.set(instanceId, { state: 'request', publicKey: update.publicKey, requestedAt });
+      return;
+    }
+
+    if (update.state === 'error') {
+      this.passkeyStates.set(instanceId, {
+        state: 'error',
+        phase: update.phase,
+        message: update.message,
+        requestedAt,
+      });
+      return;
+    }
+
+    if (update.skipHandoffUX) {
+      this.passkeyStates.set(instanceId, { state: 'confirming', requestedAt });
+      const sock = this.sockets.get(instanceId);
+      if (!sock) {
+        this.passkeyStates.set(instanceId, {
+          state: 'error',
+          phase: 'continuation',
+          message: 'WhatsApp connection ended before passkey confirmation.',
+          requestedAt,
+        });
+        return;
+      }
+      try {
+        await sock.sendPasskeyConfirmation();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to confirm passkey pairing.';
+        this.passkeyStates.set(instanceId, {
+          state: 'error',
+          phase: 'continuation',
+          message,
+          requestedAt,
+        });
+        this.logger.warn('Failed to auto-confirm passkey pairing', { instanceId, error: message });
+      }
+      return;
+    }
+
+    this.passkeyStates.set(instanceId, {
+      state: 'confirmation',
+      code: update.code,
+      requiresUserConfirmation: true,
+      requestedAt,
+    });
   }
 
   /**
@@ -2596,6 +2728,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @internal
    */
   async handleConnected(instanceId: string, sock: WASocket): Promise<void> {
+    this.passkeyStates.delete(instanceId);
     // Get profile info
     let profileName: string | undefined;
     let profilePicUrl: string | undefined;

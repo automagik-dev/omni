@@ -10,6 +10,9 @@
  * omni instances status <id>
  * omni instances qr <id>
  * omni instances pair <id> --phone <number>
+ * omni instances passkey <id>
+ * omni instances passkey-submit <id> --response-file <path>
+ * omni instances passkey-confirm <id>
  * omni instances connect <id>
  * omni instances disconnect <id>
  * omni instances restart <id>
@@ -18,7 +21,7 @@
  * omni instances syncs <id> [job-id]
  */
 
-import type { Channel } from '@omni/sdk';
+import type { Channel, WhatsAppPasskeyCredential } from '@omni/sdk';
 import { Command } from 'commander';
 import qrcode from 'qrcode-terminal';
 import { getClient } from '../client.js';
@@ -629,6 +632,52 @@ export function createInstancesCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to request pairing code: ${message}`);
+      }
+    });
+
+  instances
+    .command('passkey <id>')
+    .description('Get the pending WhatsApp passkey ceremony')
+    .action(async (rawId: string) => {
+      const client = getClient();
+      try {
+        const id = await resolveInstanceId(rawId);
+        output.data(await client.instances.passkey(id));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get passkey state: ${message}`);
+      }
+    });
+
+  instances
+    .command('passkey-submit <id>')
+    .description('Submit a WebAuthn assertion for WhatsApp pairing')
+    .requiredOption('--response-file <path>', 'JSON file containing the one-time WebAuthn assertion')
+    .action(async (rawId: string, options: { responseFile: string }) => {
+      const client = getClient();
+      try {
+        const id = await resolveInstanceId(rawId);
+        const credential = (await Bun.file(options.responseFile).json()) as WhatsAppPasskeyCredential;
+        await client.instances.submitPasskey(id, credential);
+        output.success('Passkey response submitted');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to submit passkey response: ${message}`);
+      }
+    });
+
+  instances
+    .command('passkey-confirm <id>')
+    .description('Confirm a pending WhatsApp passkey pairing')
+    .action(async (rawId: string) => {
+      const client = getClient();
+      try {
+        const id = await resolveInstanceId(rawId);
+        await client.instances.confirmPasskey(id);
+        output.success('Passkey pairing confirmed');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to confirm passkey pairing: ${message}`);
       }
     });
 
