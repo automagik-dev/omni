@@ -226,4 +226,79 @@ describe('extractContent — bot-interactive messages (omni#902)', () => {
     expect(content?.type).toBe('text');
     expect(content?.text).toBe('Oi\n[Ok]');
   });
+
+  it('classifies a buttonsMessage with an image header as image + button transcript caption', () => {
+    const content = extractContent(
+      wrap({
+        buttonsMessage: {
+          contentText: 'Confira a oferta',
+          imageMessage: {
+            url: 'https://mmg.whatsapp.net/v/t62.7118-24/offer.enc?oe=9',
+            mimetype: 'image/jpeg',
+          },
+          buttons: [{ buttonId: 'b1', buttonText: { displayText: 'Comprar' } }],
+        },
+      }),
+    );
+    expect(content?.type).toBe('image');
+    expect(content?.mediaUrl).toBe('https://mmg.whatsapp.net/v/t62.7118-24/offer.enc?oe=9');
+    expect(content?.mimeType).toBe('image/jpeg');
+    expect(content?.caption).toBe('Confira a oferta\n[Comprar]');
+  });
+
+  it('classifies an interactiveMessage with a document header as document + body caption', () => {
+    const content = extractContent(
+      wrap({
+        interactiveMessage: {
+          body: { text: 'Segue seu contrato' },
+          header: {
+            title: 'Contrato',
+            documentMessage: {
+              url: 'https://mmg.whatsapp.net/v/t62.7119-24/contract.enc?oe=10',
+              mimetype: 'application/pdf',
+              fileName: 'contrato.pdf',
+            },
+          },
+          nativeFlowMessage: { buttons: [{ name: 'review_and_pay', buttonParamsJson: '{}' }] },
+        },
+      }),
+    );
+    expect(content?.type).toBe('document');
+    expect(content?.mediaUrl).toBe('https://mmg.whatsapp.net/v/t62.7119-24/contract.enc?oe=10');
+    expect(content?.filename).toBe('contrato.pdf');
+    expect(content?.mimeType).toBe('application/pdf');
+    expect(content?.caption).toBe('Contrato\nSegue seu contrato\n[review_and_pay]');
+  });
+
+  it('classifies a hydrated templateMessage with a video header as video + transcript caption', () => {
+    const content = extractContent(
+      wrap({
+        templateMessage: {
+          hydratedTemplate: {
+            hydratedContentText: 'Assista ao tutorial',
+            videoMessage: {
+              url: 'https://mmg.whatsapp.net/v/t62.7161-24/tutorial.enc?oe=11',
+              mimetype: 'video/mp4',
+            },
+            hydratedButtons: [{ index: 0, quickReplyButton: { displayText: 'Entendi', id: 'q1' } }],
+          },
+        },
+      }),
+    );
+    expect(content?.type).toBe('video');
+    expect(content?.mediaUrl).toBe('https://mmg.whatsapp.net/v/t62.7161-24/tutorial.enc?oe=11');
+    expect(content?.mimeType).toBe('video/mp4');
+    expect(content?.caption).toBe('Assista ao tutorial\n[Entendi]');
+  });
+
+  it('keeps a buttonsMessage WITHOUT a media header as plain text', () => {
+    const content = extractContent(
+      wrap({
+        buttonsMessage: { contentText: 'Sem mídia', buttons: [{ buttonId: 'b1', buttonText: { displayText: 'Ok' } }] },
+      }),
+    );
+    expect(content?.type).toBe('text');
+    expect(content?.mediaUrl).toBeUndefined();
+    expect(content?.text).toBe('Sem mídia\n[Ok]');
+  });
 });
