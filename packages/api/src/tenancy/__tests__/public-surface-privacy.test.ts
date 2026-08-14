@@ -38,8 +38,8 @@ function leakyDb(): AppVariables['db'] {
     },
   ];
   const aggregate = [
-    { channel: 'whatsapp', total: 7, active: 5 },
-    { channel: 'discord', total: 3, active: 2 },
+    { channel: 'whatsapp', total: FIXTURE_COUNTS.whatsapp.total, active: FIXTURE_COUNTS.whatsapp.active },
+    { channel: 'discord', total: FIXTURE_COUNTS.discord.total, active: FIXTURE_COUNTS.discord.active },
   ];
   // A real Promise carrying an extra `groupBy`, so `.from(t)` is awaitable
   // directly (the /info shape) AND chainable (the /health shape) without
@@ -64,20 +64,28 @@ function publicApp() {
   app.use('*', async (c, next) => {
     c.set('db', leakyDb());
     c.set('eventBus', { isConnected: () => true } as unknown as EventBus);
-    c.set('channelRegistry', fakeRegistry(['i-1', 'i-2', 'i-3']));
+    c.set('channelRegistry', fakeRegistry(Array.from({ length: FIXTURE_COUNTS.connected }, (_, i) => `i-${i}`)));
     await next();
   });
   app.route('/api/v2', healthRoutes);
   return app;
 }
 
-/** Every scalar in a JSON tree, flattened, so a leak cannot hide in nesting. */
-function scalars(value: unknown, out: unknown[] = []): unknown[] {
+/**
+ * Every scalar in a JSON tree, flattened, so a leak cannot hide in nesting.
+ * Fields named in `exclude` are skipped wherever they appear: their values are
+ * benign process metadata, not tenant data, and would otherwise produce
+ * accidental collisions with the forbidden counts.
+ */
+function scalars(value: unknown, exclude: ReadonlySet<string> = new Set(), out: unknown[] = []): unknown[] {
   if (value === null || typeof value !== 'object') {
     out.push(value);
     return out;
   }
-  for (const entry of Object.values(value as Record<string, unknown>)) scalars(entry, out);
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (exclude.has(key)) continue;
+    scalars(entry, exclude, out);
+  }
   return out;
 }
 
@@ -89,6 +97,39 @@ function keysDeep(value: unknown, out: string[] = []): string[] {
   }
   return out;
 }
+
+/**
+ * Deliberately large, distinctive fixture magnitudes. A genuine leak of a
+ * tenant count surfaces one of these unmistakable numbers, whereas an unrelated
+ * small integer a public handler legitimately emits — a `uptime` of a few
+ * seconds, a sub-millisecond `latency` — can never collide with one by
+ * coincidence. This is what lets the value scan stay strict without depending
+ * on how long the process has been alive when the test happens to run.
+ */
+const FIXTURE_COUNTS = {
+  whatsapp: { total: 613, active: 409 },
+  discord: { total: 400, active: 208 },
+  connected: 419,
+} as const;
+
+/** Every seeded count that must never appear on a public surface. */
+const FORBIDDEN_COUNTS: readonly number[] = [
+  FIXTURE_COUNTS.whatsapp.total + FIXTURE_COUNTS.discord.total, // 1013 instances
+  FIXTURE_COUNTS.whatsapp.active + FIXTURE_COUNTS.discord.active, // 617 active
+  FIXTURE_COUNTS.connected, // 419 connected
+  FIXTURE_COUNTS.whatsapp.total,
+  FIXTURE_COUNTS.whatsapp.active,
+  FIXTURE_COUNTS.discord.total,
+  FIXTURE_COUNTS.discord.active,
+];
+
+/**
+ * Process/build metadata excluded from the value scan: their values are
+ * unrelated to tenant inventory. `uptime` in particular is a free-running clock
+ * that would otherwise collide with a small count by pure coincidence — the
+ * original flake — so it is skipped by field name rather than by value.
+ */
+const BENIGN_FIELDS: ReadonlySet<string> = new Set(['uptime', 'timestamp', 'version']);
 
 const WORLDS: readonly (string | undefined)[] = [undefined, 'true'];
 
@@ -117,11 +158,17 @@ describe.each(WORLDS.map((flag) => [flag === 'true' ? 'tenant mode on' : 'legacy
       expect(body.checks).toBeDefined();
 
       expect(body.instances).toBeUndefined();
-      expect(keysDeep(body)).not.toContain('byChannel');
-      // The seeded fixture totals are 10 instances, 7 active, 3 connected.
-      // None of those numbers may appear anywhere in the document.
-      const values = scalars(body);
-      for (const leaked of [10, 7, 3, 5, 2]) expect(values).not.toContain(leaked);
+      // Structural guard: a leak arriving under one of the aggregation keys is
+      // caught by shape alone. (`connected` is intentionally NOT checked here —
+      // it is a legitimate key on the NATS check, `checks.nats.details.connected`.)
+      for (const key of ['instances', 'byChannel', 'total', 'active']) {
+        expect(keysDeep(body)).not.toContain(key);
+      }
+      // Value guard for a leak arriving under some OTHER key: the seeded counts
+      // are distinctive large numbers, and benign process fields (uptime,
+      // timestamp, version) are excluded, so no accidental collision is possible.
+      const values = scalars(body, BENIGN_FIELDS);
+      for (const leaked of FORBIDDEN_COUNTS) expect(values).not.toContain(leaked);
       expect(JSON.stringify(body)).not.toContain('whatsapp');
       expect(JSON.stringify(body)).not.toContain('discord');
     });
@@ -133,8 +180,12 @@ describe.each(WORLDS.map((flag) => [flag === 'true' ? 'tenant mode on' : 'legacy
       expect(res.status).toBe(200);
       expect(body.version).toBeDefined();
       expect(body.instances).toBeUndefined();
-      const values = scalars(body);
-      for (const leaked of [10, 7, 3]) expect(values).not.toContain(leaked);
+      // /info carries no NATS check, so every aggregation key is unambiguous here.
+      for (const key of ['instances', 'byChannel', 'total', 'active', 'connected']) {
+        expect(keysDeep(body)).not.toContain(key);
+      }
+      const values = scalars(body, BENIGN_FIELDS);
+      for (const leaked of FORBIDDEN_COUNTS) expect(values).not.toContain(leaked);
     });
 
     test('GET /health/consumers exposes no consumer names, streams, sequences, event ids, or timestamps', async () => {
