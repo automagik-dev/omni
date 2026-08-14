@@ -91,6 +91,123 @@ interface ExtractedContent {
 type MessageContent = proto.IMessage;
 type ContentExtractor = (message: MessageContent) => ExtractedContent | null;
 
+/** Join non-empty, trimmed parts with newlines; undefined when nothing survives. */
+function joinLines(...parts: Array<string | null | undefined>): string | undefined {
+  const text = parts.filter((p): p is string => typeof p === 'string' && p.trim().length > 0).join('\n');
+  return text.length > 0 ? text : undefined;
+}
+
+/** Render visible button labels as `[A] [B]`; undefined when there are none. */
+function bracketButtons(labels: Array<string | null | undefined>): string | undefined {
+  const clean = labels.filter((l): l is string => typeof l === 'string' && l.trim().length > 0);
+  return clean.length > 0 ? clean.map((l) => `[${l.trim()}]`).join(' ') : undefined;
+}
+
+/**
+ * Bot-interactive message flattening (issue #902).
+ *
+ * WhatsApp's native interactive UX — list menus, quick-reply buttons, and the
+ * modern nativeFlow / template variants — is what a bot SENDS, so it has no
+ * response handler and previously fell through to `extractUnknownContent`,
+ * landing in the DB as `"Unknown message type: listMessage"`. These formatters
+ * flatten each into a readable text transcript (title / body / footer + the
+ * visible option labels) so chat history, audit logs, and QA tooling see the
+ * actual bot output instead of a placeholder.
+ */
+function extractListMessageText(list: proto.Message.IListMessage): string | undefined {
+  const rows = (list.sections ?? []).flatMap((s) => (s.rows ?? []).map((r) => (r.title ? `• ${r.title}` : '')));
+  return joinLines(list.title, list.description, ...rows, list.footerText);
+}
+
+function extractButtonsMessageText(bm: proto.Message.IButtonsMessage): string | undefined {
+  const labels = bracketButtons((bm.buttons ?? []).map((b) => b.buttonText?.displayText));
+  return joinLines(bm.contentText ?? bm.text, bm.footerText, labels);
+}
+
+function extractInteractiveMessageText(im: proto.Message.IInteractiveMessage): string | undefined {
+  const labels = bracketButtons((im.nativeFlowMessage?.buttons ?? []).map((b) => b.name));
+  return joinLines(im.header?.title, im.header?.subtitle, im.body?.text, im.footer?.text, labels);
+}
+
+function extractTemplateMessageText(tpl: proto.Message.ITemplateMessage): string | undefined {
+  const hydrated = tpl.hydratedTemplate ?? tpl.hydratedFourRowTemplate;
+  if (hydrated) {
+    const labels = bracketButtons(
+      (hydrated.hydratedButtons ?? []).map(
+        (b) => b.quickReplyButton?.displayText ?? b.urlButton?.displayText ?? b.callButton?.displayText,
+      ),
+    );
+    return joinLines(hydrated.hydratedTitleText, hydrated.hydratedContentText, hydrated.hydratedFooterText, labels);
+  }
+  return tpl.interactiveMessageTemplate ? extractInteractiveMessageText(tpl.interactiveMessageTemplate) : undefined;
+}
+
+/**
+ * A bot-interactive container (buttonsMessage, interactiveMessage.header, a
+ * hydrated template) can carry a media header — an image/video/document shown
+ * above the buttons. When present, classify the message as that media so the
+ * bytes are downloaded like any other media (mediaUrl hoisted, see omni#500),
+ * and fold the interactive text transcript into the caption. Returns null when
+ * the container has no media header (caller falls back to a text message).
+ */
+interface InteractiveMediaContainer {
+  imageMessage?: proto.Message.IImageMessage | null;
+  videoMessage?: proto.Message.IVideoMessage | null;
+  documentMessage?: proto.Message.IDocumentMessage | null;
+}
+
+function extractInteractiveMediaHeader(
+  container: InteractiveMediaContainer,
+  caption: string | undefined,
+): ExtractedContent | null {
+  if (container.imageMessage) {
+    return {
+      type: 'image',
+      caption: caption ?? container.imageMessage.caption ?? undefined,
+      mimeType: container.imageMessage.mimetype ?? 'image/jpeg',
+      mediaUrl: container.imageMessage.url ?? undefined,
+    };
+  }
+  if (container.videoMessage) {
+    return {
+      type: 'video',
+      caption: caption ?? container.videoMessage.caption ?? undefined,
+      mimeType: container.videoMessage.mimetype ?? 'video/mp4',
+      mediaUrl: container.videoMessage.url ?? undefined,
+    };
+  }
+  if (container.documentMessage) {
+    return {
+      type: 'document',
+      filename: container.documentMessage.fileName ?? undefined,
+      caption: caption ?? container.documentMessage.caption ?? undefined,
+      mimeType: container.documentMessage.mimetype ?? 'application/octet-stream',
+      mediaUrl: container.documentMessage.url ?? undefined,
+    };
+  }
+  return null;
+}
+
+/** buttonsMessage → media header (if any) with the button transcript as caption, else text. */
+function extractButtonsMessage(bm: proto.Message.IButtonsMessage): ExtractedContent {
+  const text = extractButtonsMessageText(bm);
+  return extractInteractiveMediaHeader(bm, text) ?? { type: 'text', text };
+}
+
+/** interactiveMessage → media header (if any) with the body transcript as caption, else text. */
+function extractInteractiveMessage(im: proto.Message.IInteractiveMessage): ExtractedContent {
+  const text = extractInteractiveMessageText(im);
+  return extractInteractiveMediaHeader(im.header ?? {}, text) ?? { type: 'text', text };
+}
+
+/** templateMessage → media header on the hydrated template (if any) with transcript as caption, else text. */
+function extractTemplateMessage(tpl: proto.Message.ITemplateMessage): ExtractedContent {
+  const text = extractTemplateMessageText(tpl);
+  const hydrated = tpl.hydratedTemplate ?? tpl.hydratedFourRowTemplate;
+  const media = hydrated ? extractInteractiveMediaHeader(hydrated, text) : null;
+  return media ?? { type: 'text', text };
+}
+
 /**
  * Content extractors for each message type
  * Each extractor handles one specific message type
@@ -329,6 +446,34 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
       type: 'text' as ContentType,
       text: m.buttonsResponseMessage?.selectedDisplayText ?? m.buttonsResponseMessage?.selectedButtonId ?? undefined,
     }),
+  },
+  // Bot-sent interactive list menu (issue #902) — flatten to a text transcript.
+  // Must stay BEFORE the trailing wrapper extractors so the slice(0, -N) offsets
+  // below keep pointing at the wrappers (and so deviceSent/ephemeral/viewOnce
+  // re-extraction reaches these interactive types).
+  {
+    check: (m) => !!m.listMessage,
+    extract: (m) => ({
+      type: 'text' as ContentType,
+      text: m.listMessage ? extractListMessageText(m.listMessage) : undefined,
+    }),
+  },
+  // Bot-sent quick-reply buttons (legacy buttonsMessage) — issue #902.
+  // A media header (image/video/document above the buttons) is classified as
+  // that media with the button transcript as caption; otherwise a text message.
+  {
+    check: (m) => !!m.buttonsMessage,
+    extract: (m) => (m.buttonsMessage ? extractButtonsMessage(m.buttonsMessage) : null),
+  },
+  // Bot-sent modern interactive message (nativeFlow / flows) — issue #902
+  {
+    check: (m) => !!m.interactiveMessage,
+    extract: (m) => (m.interactiveMessage ? extractInteractiveMessage(m.interactiveMessage) : null),
+  },
+  // Bot-sent template message (hydrated four-row / interactive template) — issue #902
+  {
+    check: (m) => !!m.templateMessage,
+    extract: (m) => (m.templateMessage ? extractTemplateMessage(m.templateMessage) : null),
   },
   // Sender key distribution - internal E2E encryption, ignore
   {
