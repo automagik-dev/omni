@@ -127,6 +127,40 @@ export interface ChannelCapabilities {
   canCloseContact?: boolean;
 
   // ─────────────────────────────────────────────────────────────
+  // Scheduling, permalinks and pinning (issue #889)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Whether the channel schedules messages natively (Slack
+   * chat.scheduleMessage). When `true`, omni delegates the timer to the
+   * platform, so delivery survives omni being down. When false/absent, omni
+   * parks the message and sends it itself at `sendAt`.
+   *
+   * Note this says nothing about *listing*: Slack only reports scheduled
+   * messages created by the same token, which is why omni keeps its own
+   * `scheduled_messages` table either way.
+   */
+  canScheduleMessage?: boolean;
+
+  /** Longest lead time the platform accepts when scheduling natively (Slack: 120 days). */
+  maxScheduleAheadMs?: number;
+
+  /**
+   * Whether the channel can resolve a stable deep link to a message
+   * (Slack chat.getPermalink). Required to render quotes as unfurled cards.
+   */
+  canGetPermalink?: boolean;
+
+  /** Whether individual messages can be pinned (as opposed to pinning a chat). */
+  canPinMessage?: boolean;
+
+  /**
+   * Whether the channel exposes full-text message search. Slack does, but only
+   * with a user token (`search:read`) — a bot token cannot search.
+   */
+  canSearchMessages?: boolean;
+
+  // ─────────────────────────────────────────────────────────────
   // Messaging-window constraints (issue #404)
   // ─────────────────────────────────────────────────────────────
 

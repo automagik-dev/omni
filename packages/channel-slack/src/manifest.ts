@@ -53,6 +53,55 @@ export const BOT_EVENTS = [
 ] as const;
 
 /**
+ * User-token scopes for `authMode: 'user'` (#889).
+ *
+ * Acting as the authorizing human rather than the bot. `search:read` is the
+ * one that has no bot equivalent at all — a bot token simply cannot search.
+ *
+ * `im:write` opens DMs (conversations.open). Note the USER scope for opening
+ * a channel is `channels:write`, not the bot's `channels:manage`.
+ */
+const USER_SCOPES = [
+  'channels:history',
+  'channels:read',
+  'chat:write',
+  'groups:history',
+  'groups:read',
+  'im:history',
+  'im:read',
+  'im:write',
+  'mpim:history',
+  'mpim:read',
+  'mpim:write',
+  'reactions:read',
+  'reactions:write',
+  'search:read',
+  'users:read',
+] as const;
+
+/**
+ * Events delivered on the AUTHORIZING USER's behalf (#889).
+ *
+ * These are Slack's "Workspace Events": subscribed with user scopes, they are
+ * perspectival to the member who installed the app, so the agent sees the DMs
+ * and channels that person sees.
+ *
+ * The transport is unchanged — there is no realtime API a `xoxp` can open by
+ * itself. Delivery is still Socket Mode (app-level `xapp`) or the HTTP
+ * receiver; only the vantage point changes.
+ *
+ * @see https://docs.slack.dev/apis/events-api/
+ */
+const USER_EVENTS = [
+  'message.channels',
+  'message.groups',
+  'message.im',
+  'message.mpim',
+  'reaction_added',
+  'reaction_removed',
+] as const;
+
+/**
  * Build a Slack App Manifest for the Omni bot
  */
 export function buildSlackManifest(options?: {
@@ -61,6 +110,8 @@ export function buildSlackManifest(options?: {
   displayName?: string;
   backgroundColor?: string;
   slashCommands?: SlackSlashCommand[];
+  /** Request user-token scopes and user-scoped events too (authMode 'user'). */
+  includeUserScopes?: boolean;
 }): SlackManifest {
   const {
     appName = 'Omni Bot',
@@ -68,6 +119,7 @@ export function buildSlackManifest(options?: {
     displayName = 'Omni',
     backgroundColor = '#4A154B',
     slashCommands = [],
+    includeUserScopes = false,
   } = options ?? {};
 
   return {
@@ -93,11 +145,13 @@ export function buildSlackManifest(options?: {
     oauth_config: {
       scopes: {
         bot: [...REQUIRED_BOT_SCOPES],
+        ...(includeUserScopes ? { user: [...USER_SCOPES] } : {}),
       },
     },
     settings: {
       event_subscriptions: {
         bot_events: [...BOT_EVENTS],
+        ...(includeUserScopes ? { user_events: [...USER_EVENTS] } : {}),
       },
       interactivity: {
         is_enabled: true,

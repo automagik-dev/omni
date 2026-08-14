@@ -113,3 +113,6 @@ deploy/helm/omni/charts/*.tgz
 
 # Personal per-machine helm overrides (never commit)
 deploy/helm/omni/values-local.yaml
+
+# Local #889 test env (contains DB password)
+.env.889

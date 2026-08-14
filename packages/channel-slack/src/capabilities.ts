@@ -45,6 +45,21 @@ export const SLACK_CAPABILITIES: ChannelCapabilities = {
   canReplyToMessage: true,
   canForwardMessage: false,
 
+  // Scheduling / permalinks (#889)
+  canScheduleMessage: true,
+  maxScheduleAheadMs: 120 * 24 * 60 * 60 * 1000, // Slack rejects post_at beyond 120 days
+  canGetPermalink: true,
+  canPinMessage: true,
+  // Slack search needs a user token (`search:read`); a bot token cannot search.
+  //
+  // Stays false because ChannelCapabilities is a static property of the
+  // plugin, not per instance — and whether search works depends on the
+  // instance's authMode. Declaring true would promise it for bot-mode
+  // instances too. searchMessages() throws a specific error in bot mode
+  // instead, so a caller learns the capability is absent rather than reading
+  // an empty result as "no matches" (#889).
+  canSearchMessages: false,
+
   // Rich content
   canSendContact: false,
   canSendLocation: false,

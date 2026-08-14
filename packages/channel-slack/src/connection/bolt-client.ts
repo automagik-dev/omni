@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Logger } from '@omni/channel-sdk';
 import { App, type AppOptions, HTTPReceiver } from '@slack/bolt';
-import type { WebClient } from '@slack/web-api';
+import { WebClient } from '@slack/web-api';
 import type { SlackConnectionOptions } from '../types';
 import { SlackError, SlackErrorCode } from '../types';
 
@@ -21,11 +21,53 @@ import { SlackError, SlackErrorCode } from '../types';
 const HTTP_MAX_BODY_BYTES = 1024 * 1024;
 
 /**
+ * Build the client used for outbound ACTIONS.
+ *
+ * In user mode this is a `xoxp` client so posts/edits/reactions land as the
+ * authorizing human; in bot mode it is Bolt's own client. Returned alongside
+ * `client` rather than replacing it — the socket and any bot-only scope still
+ * need the bot token.
+ */
+function buildActingClients(
+  options: SlackConnectionOptions,
+  botClient: WebClient,
+): { actingClient: WebClient; userClient?: WebClient } {
+  if (options.authMode !== 'user') return { actingClient: botClient };
+  if (!options.userToken) {
+    throw new SlackError(SlackErrorCode.CONNECTION_FAILED, "userToken is required when authMode is 'user'");
+  }
+  const userClient = new WebClient(options.userToken);
+  return { actingClient: userClient, userClient };
+}
+
+/**
  * Active Bolt.js App instance wrapper
  */
 export interface BoltConnection {
   app: App;
+  /**
+   * Bot-authenticated client. Bolt owns this one and uses it for the socket
+   * handshake, so it always exists regardless of authMode.
+   */
   client: WebClient;
+  /**
+   * Client for outbound ACTIONS (#889). Identical to `client` in bot mode; a
+   * user-token (`xoxp`) client in user mode, so posts, edits and reactions are
+   * attributed to the authorizing human.
+   *
+   * Kept separate from `client` on purpose: some calls must stay on the bot
+   * token (the socket, anything the user token has no scope for), so
+   * overwriting `client` would be wrong.
+   */
+  actingClient: WebClient;
+  /** User-token client when authMode is 'user'; undefined otherwise. */
+  userClient?: WebClient;
+  /**
+   * Slack user id of the authorizing human, resolved from the user token at
+   * start (#889). Needed for self-filtering: in user mode the identity we post
+   * AS is this person, not the bot user.
+   */
+  actingUserId?: string;
   botToken: string;
   botUserId?: string;
   botName?: string;
@@ -102,6 +144,7 @@ function createSocketBoltApp(options: SlackConnectionOptions, logger: Logger): B
   return {
     app,
     client: app.client,
+    ...buildActingClients(options, app.client),
     botToken: options.botToken,
     mode: 'socket',
   };
@@ -149,6 +192,7 @@ function createHttpBoltApp(options: SlackConnectionOptions, logger: Logger): Bol
   return {
     app,
     client: app.client,
+    ...buildActingClients(options, app.client),
     botToken: options.botToken,
     mode: 'http',
     httpPort: options.httpPort,
@@ -264,6 +308,19 @@ export async function startBoltConnection(connection: BoltConnection, logger: Lo
       teamId: connection.teamId,
       teamName: connection.teamName,
     });
+
+    // In user mode, resolve the authorizing human too (#889). Self-filtering
+    // needs it: a message that person types themselves carries no bot_id and
+    // their own user id, so comparing only against botUserId would let the
+    // agent answer on their behalf in their own conversation.
+    if (connection.userClient) {
+      const userAuth = await connection.userClient.auth.test();
+      connection.actingUserId = (userAuth.user_id as string | undefined) ?? undefined;
+      logger.info('Acting user identity resolved', {
+        actingUserId: connection.actingUserId,
+        actingUser: userAuth.user,
+      });
+    }
   } catch (error) {
     logger.warn('Failed to resolve bot identity before start — self-message filtering may be unreliable', {
       error: String(error),

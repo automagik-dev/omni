@@ -761,6 +761,40 @@ async function resolveOrCreateChat(
 }
 
 /**
+ * Resolve a reply's target to our own row id (#889).
+ *
+ * `replyToMessageId` has existed on the schema since 0000 and was never once
+ * written: only the platform's `replyToExternalId` was stored, so nothing
+ * could join a reply to the message it answers without a second lookup by
+ * external id. Both helpers (resolveReplyToMessage, updateReplyToReference)
+ * already existed and had no callers.
+ *
+ * Best-effort: a reply can arrive before the message it answers (history sync
+ * out of order, or a quote of something older than our retention), and that
+ * must not fail the persist.
+ */
+async function linkReplyTarget(
+  services: Services,
+  chatId: string,
+  messageId: string,
+  replyToExternalId: string | undefined,
+): Promise<void> {
+  if (!replyToExternalId) return;
+  try {
+    const replyToMessageId = await services.messages.resolveReplyToMessage(chatId, replyToExternalId);
+    if (replyToMessageId) {
+      await services.messages.updateReplyToReference(messageId, replyToMessageId);
+    }
+  } catch (error) {
+    log.debug('Could not resolve reply target', {
+      chatId,
+      replyToExternalId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * Handle message.received event - main processing logic
  */
 async function handleMessageReceived(
@@ -874,6 +908,10 @@ async function handleMessageReceived(
     replyToExternalId: truncate(payload.replyToId, 255),
     quotedText: quotedMessage?.conversation as string | undefined,
     quotedSenderName: truncate(quotedMessage?.pushName as string | undefined, 255),
+    // Thread (#889) — previously dropped: threadId rode along in the payload
+    // for per_thread session routing and was never persisted.
+    threadExternalId: truncate(payload.threadId, 255),
+    isThreadBroadcast: rawPayload?.isThreadBroadcast === true,
     isForwarded: !!(rawPayload?.isForwarded || rawPayload?.forwardingScore),
     rawPayload,
   });
@@ -892,6 +930,8 @@ async function handleMessageReceived(
 
   if (created) {
     log.debug('Created message', { externalId: payload.externalId, chatId: chat.id });
+
+    await linkReplyTarget(services, chat.id, message.id, payload.replyToId);
   }
 
   // Step 6: Record participant activity
@@ -1072,6 +1112,9 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               rawPayload: sentContent.rawPayload,
               // Reply info - truncate varchar(255) fields
               replyToExternalId: truncate(payload.replyToId, 255),
+              // Thread (#889) — keep outbound symmetric with inbound, otherwise
+              // our own thread replies read back as top-level channel messages.
+              threadExternalId: truncate(payload.threadId, 255),
             });
 
             return { chat, message, created };

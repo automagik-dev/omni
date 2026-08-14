@@ -1393,6 +1393,24 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'tenant-boundary',
   },
   {
+    // Scheduled outbound messages (#889): the channel lookup that resolves
+    // which plugin owns an instance, so the sweeper/route can reach
+    // sendMessage. `scheduled_messages` itself is NOT registered here — it
+    // carries no tenant_id (tenancy derives via instance_id, the
+    // whatsapp_flow_keys precedent), so it is not an RLS tenant table and the
+    // scanner does not track it.
+    //
+    // The 15s sweeper cron has no envelope and no credential, so it ENUMERATES
+    // rather than scans: flag-off runs the single ambient pass byte-identically;
+    // flag-on runs one scoped pass per ACTIVE tenant via
+    // enumerateActiveWorkTenants (ADR-0008, periodic-tenant-work.ts), reaching
+    // tenancy through the owning instance, so a suspended tenant stops having
+    // messages delivered at the next tick. Same shape as follow-up-sweeper.
+    file: 'packages/api/src/services/scheduled-messages.ts',
+    table: 'instances',
+    class: 'tenant-boundary',
+  },
+  {
     file: 'packages/api/src/services/instances.ts',
     table: 'instances',
     class: 'pending-G5-conversion',

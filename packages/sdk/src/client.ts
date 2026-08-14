@@ -3969,6 +3969,85 @@ export function createOmniClient(config: OmniClientConfig) {
      * closest-defined wins at runtime. See the wish for the full resolution
      * hierarchy.
      */
+    /**
+     * Deferred sends (#889). The delivery mode is chosen server-side from the
+     * channel's canScheduleMessage capability — platform-native where the
+     * channel supports it (Slack), otherwise omni's own sweeper.
+     */
+    scheduledMessages: {
+      async schedule(input: {
+        instanceId: string;
+        chatId: string;
+        content: Record<string, unknown>;
+        sendAt: string;
+        threadId?: string;
+        isThreadBroadcast?: boolean;
+      }): Promise<Record<string, unknown>> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/scheduled-messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        });
+        const json = (await resp.json()) as { data?: Record<string, unknown> };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? {};
+      },
+      /**
+       * Pending messages scheduled THROUGH omni. A message someone scheduled
+       * by hand in the Slack UI is invisible here — chat.scheduledMessages.list
+       * only reports what the calling token itself scheduled.
+       */
+      async listPending(instanceId: string, limit?: number): Promise<Record<string, unknown>[]> {
+        const query = new URLSearchParams({ instanceId });
+        if (limit !== undefined) query.set('limit', String(limit));
+        const resp = await apiFetch(`${baseUrl}/api/v2/scheduled-messages?${query}`);
+        const json = (await resp.json()) as { data?: Record<string, unknown>[] };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? [];
+      },
+      async get(id: string): Promise<Record<string, unknown> | null> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/scheduled-messages/${id}`);
+        const json = (await resp.json()) as { data?: Record<string, unknown> };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? null;
+      },
+      async cancel(id: string): Promise<Record<string, unknown>> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/scheduled-messages/${id}`, { method: 'DELETE' });
+        const json = (await resp.json()) as { data?: Record<string, unknown> };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? {};
+      },
+    },
+
+    /** Slack-only surface (#889): open a DM by user id, and search. */
+    slack: {
+      /** Idempotent on Slack's side — an existing DM returns the same channel. */
+      async openDm(instanceId: string, userId: string): Promise<{ userId: string; channelId: string }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/slack/dm/open`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instanceId, userId }),
+        });
+        const json = (await resp.json()) as { data?: { userId: string; channelId: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? { userId, channelId: '' };
+      },
+      /** Requires an instance in `user` auth mode — search:read is user-token only. */
+      async search(
+        instanceId: string,
+        query: string,
+        options?: { count?: number; page?: number },
+      ): Promise<Record<string, unknown>[]> {
+        const params = new URLSearchParams({ instanceId, query });
+        if (options?.count !== undefined) params.set('count', String(options.count));
+        if (options?.page !== undefined) params.set('page', String(options.page));
+        const resp = await apiFetch(`${baseUrl}/api/v2/slack/search?${params}`);
+        const json = (await resp.json()) as { data?: Record<string, unknown>[] };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json?.data ?? [];
+      },
+    },
+
     followUp: {
       async getAgent(id: string): Promise<components['schemas']['FollowUpSequenceConfig'] | null> {
         const resp = await apiFetch(`${baseUrl}/api/v2/follow-up/agents/${id}`);

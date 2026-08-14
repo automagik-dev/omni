@@ -88,19 +88,39 @@ export function extractMessageMeta(event: Record<string, unknown>): SlackMessage
     ts,
     userId,
     teamId,
-    isDm: channelType === 'im',
+    // 'im' is a 1:1 DM; 'mpim' is a multi-person DM. Both are direct
+    // conversations rather than channels, and both were previously misread as
+    // channels because only 'im' was checked (#889).
+    isDm: channelType === 'im' || channelType === 'mpim',
+    // Kept distinct from isDm: an mpim has several humans in it, so anything
+    // that means "one person on the other side" (chatName, 1:1 assumptions)
+    // must not treat it like an im.
+    isMpim: channelType === 'mpim',
     isThreadReply: threadTs !== undefined && threadTs !== ts,
     channelType,
   };
 }
 
-/** Check if a message should be skipped (bot, subtype, own message) */
-function shouldSkipMessage(msg: Record<string, unknown>, botUserId: string | undefined): boolean {
+/**
+ * Check if a message should be skipped (bot, subtype, own message).
+ *
+ * `selfUserIds` is every identity this instance posts AS. In bot mode that is
+ * just the bot user; in user mode (#889) it also includes the authorizing
+ * human, and that second entry is not optional:
+ *
+ * A message the plugin itself posts with a user token carries a `bot_id` (the
+ * app's) and is caught by the first line — so there is no echo loop. But a
+ * message the HUMAN types themselves, from their phone, carries no bot_id and
+ * their own user id. Comparing only against the bot user id would let the
+ * agent treat its own principal's typing as inbound and answer their
+ * counterpart on their behalf. Verified live against Slack.
+ */
+export function shouldSkipMessage(msg: Record<string, unknown>, selfUserIds: Array<string | undefined>): boolean {
   if (msg.subtype === 'bot_message' || msg.bot_id) return true;
   if (msg.subtype === 'message_changed' || msg.subtype === 'message_deleted') return true;
   const userId = msg.user as string | undefined;
   if (!userId) return true;
-  if (botUserId && userId === botUserId) return true;
+  if (selfUserIds.some((id) => id && id === userId)) return true;
   return false;
 }
 
@@ -137,6 +157,7 @@ function buildRawPayload(
     channelType: meta.channelType,
     teamId: meta.teamId,
     isDm: meta.isDm,
+    isMpim: meta.isMpim === true,
     isThreadReply: meta.isThreadReply,
     files: msg.files,
     ...extra,
@@ -313,13 +334,16 @@ export function setupMessageHandlers(
   logger: Logger,
   filterConfig?: ChannelFilterConfig,
   reliability?: ReliabilityOptions,
+  /** Authorizing human's user id when authMode is 'user' (#889). */
+  actingUserId?: string | undefined | (() => string | undefined),
 ): void {
   const resolveBotUserId = () => (typeof botUserId === 'function' ? botUserId() : botUserId);
+  const resolveActingUserId = () => (typeof actingUserId === 'function' ? actingUserId() : actingUserId);
 
   // Handle all messages (channels, groups, DMs, mpim)
   app.message(async ({ message }) => {
     const msg = message as unknown as Record<string, unknown>;
-    if (shouldSkipMessage(msg, resolveBotUserId())) return;
+    if (shouldSkipMessage(msg, [resolveBotUserId(), resolveActingUserId()])) return;
 
     const userId = msg.user as string;
     const meta = extractMessageMeta(msg);
