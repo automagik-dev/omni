@@ -73,9 +73,12 @@ function publicApp() {
 
 /**
  * Every scalar in a JSON tree, flattened, so a leak cannot hide in nesting.
- * Fields named in `exclude` are skipped wherever they appear: their values are
- * benign process metadata, not tenant data, and would otherwise produce
- * accidental collisions with the forbidden counts.
+ * A field named in `exclude` has only its own LEAF scalar dropped — the benign
+ * process metadata (`uptime`, `timestamp`, `version`) that would otherwise
+ * collide with a forbidden count by coincidence. The exclusion is leaf-only on
+ * purpose: an object or array under such a key is still recursed into, so a
+ * forbidden count nested beneath a key that happens to be named `version` (etc.)
+ * can never be swallowed by the skip.
  */
 function scalars(value: unknown, exclude: ReadonlySet<string> = new Set(), out: unknown[] = []): unknown[] {
   if (value === null || typeof value !== 'object') {
@@ -83,7 +86,8 @@ function scalars(value: unknown, exclude: ReadonlySet<string> = new Set(), out: 
     return out;
   }
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (exclude.has(key)) continue;
+    const isLeaf = entry === null || typeof entry !== 'object';
+    if (isLeaf && exclude.has(key)) continue;
     scalars(entry, exclude, out);
   }
   return out;
