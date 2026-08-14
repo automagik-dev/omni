@@ -96,6 +96,56 @@ describe('WhatsAppPlugin', () => {
     });
   });
 
+  describe('passkey pairing', () => {
+    const instanceId = 'passkey-instance';
+
+    it('keeps the challenge and submits the WebAuthn response on the same socket', async () => {
+      const plugin = new WhatsAppPlugin();
+      const sendPasskeyResponse = mock(async () => {});
+      (plugin as any).sockets = new Map([[instanceId, { sendPasskeyResponse }]]);
+
+      await plugin.handlePasskeyUpdate(instanceId, {
+        state: 'request',
+        publicKey: { challenge: 'AQID', rpId: 'whatsapp.com' },
+      });
+      expect(plugin.getPasskeyState(instanceId)).toMatchObject({
+        state: 'request',
+        publicKey: { challenge: 'AQID', rpId: 'whatsapp.com' },
+      });
+
+      const credential = {
+        id: 'AQID',
+        rawId: 'AQID',
+        type: 'public-key' as const,
+        response: {
+          clientDataJSON: 'AQID',
+          authenticatorData: 'AQID',
+          signature: 'AQID',
+          userHandle: null,
+        },
+      };
+      await plugin.submitPasskeyResponse(instanceId, credential);
+
+      expect(sendPasskeyResponse).toHaveBeenCalledWith(credential);
+      expect(plugin.getPasskeyState(instanceId)?.state).toBe('confirming');
+    });
+
+    it('auto-confirms the handoff when WhatsApp says no comparison is required', async () => {
+      const plugin = new WhatsAppPlugin();
+      const sendPasskeyConfirmation = mock(async () => {});
+      (plugin as any).sockets = new Map([[instanceId, { sendPasskeyConfirmation }]]);
+
+      await plugin.handlePasskeyUpdate(instanceId, {
+        state: 'confirmation',
+        code: '1234-5678',
+        skipHandoffUX: true,
+      });
+
+      expect(sendPasskeyConfirmation).toHaveBeenCalledTimes(1);
+      expect(plugin.getPasskeyState(instanceId)?.state).toBe('confirming');
+    });
+  });
+
   describe('editMessage', () => {
     const BOT_JID = '5511999999999@s.whatsapp.net';
     const INSTANCE_ID = 'test-instance';

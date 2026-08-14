@@ -66,6 +66,7 @@ function createMockPlugin() {
     handleConnected: mock(async () => {}),
     handleConnectionError: mock(() => {}),
     handleQrCode: mock(async () => {}),
+    handlePasskeyUpdate: mock(async () => {}),
   } as unknown as Parameters<typeof setupConnectionHandlers>[1];
 }
 
@@ -269,6 +270,37 @@ describe('connection handler – reconnect regression', () => {
       await sock.emit('connection.update', { connection: 'open' });
 
       expect(plugin.handleConnected).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('passkey pairing', () => {
+    it('moves the socket out of QR expiry tracking and ignores later QR refreshes', async () => {
+      const sock = createMockSocket();
+      const plugin = createMockPlugin();
+
+      setupConnectionHandlers(
+        sock as unknown as Parameters<typeof setupConnectionHandlers>[0],
+        plugin,
+        instanceId,
+        async () => {},
+        async () => {},
+      );
+
+      await sock.emit('connection.update', { qr: 'first-qr' });
+      await sock.emit('connection.update', {
+        passkey: {
+          state: 'request',
+          publicKey: { challenge: 'AQID', rpId: 'whatsapp.com' },
+        },
+      });
+      await sock.emit('connection.update', { qr: 'stale-refresh' });
+
+      expect(plugin.handleQrCode).toHaveBeenCalledTimes(1);
+      expect(plugin.handlePasskeyUpdate).toHaveBeenCalledTimes(1);
+      expect(plugin.handlePasskeyUpdate).toHaveBeenCalledWith(instanceId, {
+        state: 'request',
+        publicKey: { challenge: 'AQID', rpId: 'whatsapp.com' },
+      });
     });
   });
 

@@ -65,6 +65,9 @@ const MAX_QR_CYCLES = 2; // 2 cycles = 6 total QR codes before giving up
  */
 const activeQrCodes = new Map<string, { code: string; displayedAt: number }>();
 
+/** Instances whose current socket has moved from QR/code into passkey authentication. */
+const passkeyInstances = new Set<string>();
+
 /**
  * Track connection timeouts per instance
  * If QR is scanned but connection hangs, we detect it
@@ -273,6 +276,7 @@ async function handleConnectionClose(
     qrCodeAttempts.delete(instanceId);
     qrCycleAttempts.delete(instanceId);
     authenticatedInstances.delete(instanceId);
+    passkeyInstances.delete(instanceId);
     cancelPendingReconnect(instanceId);
     await plugin.handleDisconnected(instanceId, 'Logged out from WhatsApp', false);
     return;
@@ -353,6 +357,7 @@ async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, 
   qrCodeAttempts.delete(instanceId);
   qrCycleAttempts.delete(instanceId);
   activeQrCodes.delete(instanceId);
+  passkeyInstances.delete(instanceId);
   clearConnectionTimeout(instanceId);
 
   // Mark as authenticated - now we CAN auto-reconnect if disconnected later
@@ -380,9 +385,18 @@ export function setupConnectionHandlers(
   config: ReconnectConfig = DEFAULT_RECONNECT_CONFIG,
 ): void {
   sock.ev.on('connection.update', async (update: Partial<ConnectionState>) => {
-    const { connection, lastDisconnect, qr } = update;
+    const { connection, lastDisconnect, passkey, qr } = update;
 
-    if (qr) {
+    if (passkey) {
+      passkeyInstances.add(instanceId);
+      activeQrCodes.delete(instanceId);
+      qrCodeAttempts.delete(instanceId);
+      qrCycleAttempts.delete(instanceId);
+      clearConnectionTimeout(instanceId);
+      await plugin.handlePasskeyUpdate(instanceId, passkey);
+    }
+
+    if (qr && !passkey && !passkeyInstances.has(instanceId)) {
       const shouldContinue = await handleQrCode(plugin, instanceId, qr, clearAuthAndReconnect);
       if (!shouldContinue) {
         // Auth was cleared and reconnect triggered, socket will be replaced
@@ -431,6 +445,7 @@ export function resetConnectionState(instanceId: string): void {
   qrCodeAttempts.delete(instanceId);
   qrCycleAttempts.delete(instanceId);
   activeQrCodes.delete(instanceId);
+  passkeyInstances.delete(instanceId);
   authenticatedInstances.delete(instanceId);
   clearConnectionTimeout(instanceId);
   cancelPendingReconnect(instanceId);
