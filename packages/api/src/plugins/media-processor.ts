@@ -29,6 +29,7 @@ import {
   setGlobalCircuitBreakerStateChangeCallback,
 } from '@omni/media-processing';
 import { eq } from 'drizzle-orm';
+import { z } from 'zod';
 import type { Services } from '../services';
 import { MediaStorageService } from '../services/media-storage';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
@@ -270,7 +271,9 @@ async function downloadMediaViaPlugin(
     return null;
   }
   try {
-    const { buffer, mimeType } = await plugin.downloadInboundMedia(instanceId, mediaRef);
+    // downloadInboundMedia is a runtime plugin boundary — the shape is a
+    // promise, not a guarantee. Parse before the bytes reach storage.
+    const { buffer, mimeType } = pluginMediaSchema.parse(await plugin.downloadInboundMedia(instanceId, mediaRef));
     // `storeFromBuffer` is a discrete DB block and gets its own short worker
     // scope (G5, ADR-0008); the plugin download above is NETWORK I/O and must
     // never be held inside a worker transaction. A legacy envelope (undefined
@@ -295,6 +298,12 @@ async function downloadMediaViaPlugin(
     return null;
   }
 }
+
+/** mimeType stays optional: fallbackMimeType covers a plugin that omits it. */
+export const pluginMediaSchema = z.object({
+  buffer: z.instanceof(Buffer),
+  mimeType: z.string().min(1).optional(),
+});
 
 /**
  * Resolve media file path for a message
