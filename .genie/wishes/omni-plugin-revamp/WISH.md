@@ -33,7 +33,9 @@ encodes that shape in CI gates so it cannot silently rot again.
   `omni-feature-implementor`
 - Fold `plugins/omni/rules/omni-agent.md` into the omni-agent skill; delete it
 - Simplify the SessionStart hook to a probe (no auto-install); shrink
-  `omni-runner.js` to ≤ 80 lines
+  `omni-runner.js` to ≤ 80 lines — SUPERSEDED (2026-08-13): hooks-v2#retire
+  removed the SessionStart hook entirely; the health probe moved to
+  `genie doctor` (genie PR #2780, omni PR #905)
 - Enrich `plugin.json`: repository, license, keywords; no `mcpServers` key
 - CI anti-rot gates: skills lint (size, frontmatter, grammar) + fresh-install
   smoke that builds the CLI from source and checks every named subcommand
@@ -60,7 +62,7 @@ encodes that shape in CI gates so it cannot silently rot again.
 | # | Decision | Rationale |
 |---|----------|-----------|
 | 1 | Delete all 11 slash commands | User decision. Genie ships zero; removes ~280 lines duplicating references 1:1. |
-| 2 | SessionStart hook: probe only, no auto-install | User decision. Keeps the signal, drops a 430-line shim that installs software silently. |
+| 2 | SessionStart hook: probe only, no auto-install | User decision. Keeps the signal, drops a 430-line shim that installs software silently. **SUPERSEDED (2026-08-13): hooks-v2#retire removed the SessionStart hook; the health probe moved to `genie doctor` (genie PR #2780, omni PR #905) — do not re-add the hook here.** |
 | 3 | CLI-only: no MCP, now or planned | User decision after learning `packages/mcp` does not exist. One surface is the simpler contract. |
 | 4 | Single skill location + CI gates, no mirror sync | Omni skills have exactly one consumer. |
 | 5 | Fold the two pointer-agents; keep `omni-feature-implementor` | The first two point into omni-ops; the third covers repo-internal dev no skill does. |

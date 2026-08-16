@@ -10,8 +10,10 @@
  *   health - Ensure omni is installed, check server health, auto-recover
  *   run    - Forward args to omni CLI (only subcommand that may exit non-zero)
  *
- * The health subcommand is the primary entry point — it runs on SessionStart
- * and handles both first-time installation and ongoing health checks.
+ * The SessionStart hook that invoked `health` was retired (hooks-v2#retire):
+ * the health probe now lives in `genie doctor` as its `omni bridge health`
+ * check. Nothing fires this runner automatically on session start anymore;
+ * the subcommands below remain for explicit operator use.
  *
  * Usage: node omni-runner.js <setup|health|run> [args...]
  */
