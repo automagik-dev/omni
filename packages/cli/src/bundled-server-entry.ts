@@ -8,6 +8,7 @@
 
 import { type ChannelPlugin, channelRegistry } from '@omni/channel-sdk';
 
+import ascPlugin from '@omni/channel-asc';
 import discordPlugin from '@omni/channel-discord';
 import gupshupPlugin from '@omni/channel-gupshup';
 import hermesPlugin from '@omni/channel-hermes';
@@ -27,6 +28,7 @@ for (const plugin of [
   slackPlugin,
   gupshupPlugin,
   hermesPlugin,
+  ascPlugin,
 ] as ChannelPlugin[]) {
   channelRegistry.register(plugin);
 }

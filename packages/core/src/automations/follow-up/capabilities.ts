@@ -54,6 +54,7 @@ export const DEFAULT_TYPING_INDICATOR_MS = 2500;
 const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<ChannelType>([
   'whatsapp-business',
   'hermes',
+  'asc',
   'twilio-whatsapp',
 ]);
 
@@ -71,6 +72,9 @@ const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<Channel
 const CHANNELS_WITH_TYPING_INDICATOR: ReadonlySet<ChannelType> = new Set<ChannelType>([
   'whatsapp-baileys',
   'whatsapp-business',
+  // asc mirrors the whatsapp-business mechanism (typing via the newest
+  // inbound wamid) — same silent no-op when no wamid is remembered.
+  'asc',
   'twilio-whatsapp',
   'discord',
   'slack',

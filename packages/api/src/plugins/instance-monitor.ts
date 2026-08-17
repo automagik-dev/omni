@@ -201,6 +201,9 @@ function buildInstanceConnectOptions(instance: {
   hermesPassword?: string | null;
   hermesMediaId?: string | null;
   hermesTemplateNamespace?: string | null;
+  ascBaseUrl?: string | null;
+  ascToken?: string | null;
+  ascOriginador?: string | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
@@ -223,6 +226,9 @@ function buildInstanceConnectOptions(instance: {
   }
   if (instance.channel === 'hermes') {
     applyHermesOptions(options, instance);
+  }
+  if (instance.channel === 'asc') {
+    applyAscOptions(options, instance);
   }
   return options;
 }
@@ -247,6 +253,27 @@ function applyHermesOptions(
   if (instance.hermesPassword) options.hermesPassword = instance.hermesPassword;
   if (instance.hermesMediaId) options.hermesMediaId = instance.hermesMediaId;
   if (instance.hermesTemplateNamespace) options.hermesTemplateNamespace = instance.hermesTemplateNamespace;
+}
+
+/**
+ * asc reconnect credentials — the plugin's `connect()` reads these from
+ * `config.options` (same keys as `config.credentials` in the manual connect
+ * route). Persisted on `instances` by the create/connect/PATCH routes. The
+ * webhook verify token reuses the shared webhookVerifyToken column.
+ */
+function applyAscOptions(
+  options: Record<string, unknown>,
+  instance: {
+    ascBaseUrl?: string | null;
+    ascToken?: string | null;
+    ascOriginador?: string | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (instance.ascBaseUrl) options.ascBaseUrl = instance.ascBaseUrl;
+  if (instance.ascToken) options.ascToken = instance.ascToken;
+  if (instance.ascOriginador) options.ascOriginador = instance.ascOriginador;
+  if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 
 /**

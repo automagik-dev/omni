@@ -108,6 +108,21 @@
         "typescript": "^5.0.0",
       },
     },
+    "packages/channel-asc": {
+      "name": "@omni/channel-asc",
+      "version": "2.260804.3",
+      "dependencies": {
+        "@omni/channel-sdk": "workspace:*",
+        "@omni/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "typescript": "^5.7.3",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
     "packages/channel-discord": {
       "name": "@omni/channel-discord",
       "version": "2.260804.3",
@@ -295,6 +310,7 @@
       "devDependencies": {
         "@omni/api": "workspace:*",
         "@omni/channel-a2a": "workspace:*",
+        "@omni/channel-asc": "workspace:*",
         "@omni/channel-discord": "workspace:*",
         "@omni/channel-gupshup": "workspace:*",
         "@omni/channel-hermes": "workspace:*",
@@ -730,6 +746,8 @@
     "@omni/api": ["@omni/api@workspace:packages/api"],
 
     "@omni/channel-a2a": ["@omni/channel-a2a@workspace:packages/channel-a2a"],
+
+    "@omni/channel-asc": ["@omni/channel-asc@workspace:packages/channel-asc"],
 
     "@omni/channel-discord": ["@omni/channel-discord@workspace:packages/channel-discord"],
 
