@@ -147,6 +147,7 @@ describe('buildRuntimeEnv', () => {
 
     const env = buildRuntimeEnv(serverConfig, cliConfig);
 
+    expect(env.API_HOST).toBe('127.0.0.1');
     expect(env.API_PORT).toBe('8882');
     expect(env.DATABASE_URL).toBe(buildEmbeddedDatabaseUrl());
     expect(env.OMNI_API_KEY).toBe('omni_sk_test-key');

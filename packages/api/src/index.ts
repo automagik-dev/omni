@@ -98,7 +98,9 @@ import { resolveInstanceTenantId } from './ws/voice-instance-ownership';
 
 // Configuration
 const PORT = Number.parseInt(process.env.API_PORT ?? '8882', 10);
-const HOST = process.env.API_HOST ?? '0.0.0.0';
+// Fail closed for direct/local launches. Container and reverse-proxy
+// deployments that need a network listener must opt in with API_HOST.
+const HOST = process.env.API_HOST ?? '127.0.0.1';
 const NATS_URL = process.env.NATS_URL ?? 'nats://localhost:4222';
 
 import { VoiceStreamRegistry, authorizeVoiceApiKey, parseVoiceStreamParams, transcodeAudioFrame } from './ws/voice';

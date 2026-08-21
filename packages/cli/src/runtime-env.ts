@@ -46,6 +46,7 @@ import { resolveOmniEnforcedCredentials, resolveOmniScopedCredentials } from './
  * (and onward to the managed omni-api process).
  */
 export type RuntimeEnv = {
+  API_HOST: string;
   API_PORT: string;
   DATABASE_URL: string;
   // PGHOST / PGPORT: libpq-standard env vars consumed by postgres.js when
@@ -245,6 +246,10 @@ export function buildRuntimeEnv(serverConfig: ServerConfig, cliConfig: Config = 
   const scopedCreds =
     process.env.OMNI_DB_ENFORCEMENT === 'on' ? resolveOmniEnforcedCredentials() : resolveOmniScopedCredentials();
   return {
+    // A CLI-managed Omni runtime is a local transport bridge. Operators that
+    // intentionally expose the API must make that boundary explicit outside
+    // this installer (reverse proxy/TLS or an explicit API_HOST override).
+    API_HOST: '127.0.0.1',
     API_PORT: String(serverConfig.port),
     DATABASE_URL: applyScopedCredentials(resolveDatabaseUrl(serverConfig), scopedCreds),
     PGHOST: pgHost,

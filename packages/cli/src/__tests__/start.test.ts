@@ -163,7 +163,7 @@ describe('buildPm2StartArgs — nats launch', () => {
     kind: 'nats',
     script: '/tmp/nats-server',
     name: PM2_PROCESSES.nats,
-    scriptArgs: ['-js', '-sd', '/tmp/nats-data'],
+    scriptArgs: ['-a', '127.0.0.1', '-js', '-sd', '/tmp/nats-data'],
   });
 
   test('includes --max-memory-restart 1G for nats kind', () => {
@@ -191,7 +191,7 @@ describe('buildPm2StartArgs — nats launch', () => {
   test('forwards scriptArgs after a "--" separator', () => {
     const dashIdx = natsArgs.indexOf('--');
     expect(dashIdx).toBeGreaterThan(-1);
-    expect(natsArgs.slice(dashIdx + 1)).toEqual(['-js', '-sd', '/tmp/nats-data']);
+    expect(natsArgs.slice(dashIdx + 1)).toEqual(['-a', '127.0.0.1', '-js', '-sd', '/tmp/nats-data']);
   });
 
   test('does not include --interpreter when not provided', () => {

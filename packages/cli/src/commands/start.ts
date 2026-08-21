@@ -104,7 +104,9 @@ async function runStart(): Promise<void> {
       kind: 'nats',
       script: natsPath,
       name: PM2_PROCESSES.nats,
-      scriptArgs: ['-js', '-sd', natsDataDir],
+      // NATS is an internal event bus for the local Omni runtime. Never
+      // make it remotely reachable as a side effect of `omni start`.
+      scriptArgs: ['-a', '127.0.0.1', '-js', '-sd', natsDataDir],
     });
     const natsCode = await runPm2(natsArgs);
     if (natsCode !== 0) {
