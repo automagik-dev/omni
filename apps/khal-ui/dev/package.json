@@ -10,8 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@khal-os/sdk": "^2.0.111",
-    "@khal-os/ui": "^2.0.111",
+    "@khal-os/sdk": "2.0.111",
+    "@khal-os/ui": "2.0.111",
     "@omni/khal-ui-pack": "workspace:*",
     "next-themes": "^0.4.6",
     "react": "^19.2.7",

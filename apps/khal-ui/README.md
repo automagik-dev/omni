@@ -31,6 +31,59 @@ apps/khal-ui/
 
 ## Setup
 
+### Distribution and credential boundary
+
+The canonical UI uses **prebuilt-artifact distribution** (model (c) in
+`.genie/wishes/canonical-ui-consolidation/DECISION-khalos.md`). The source pack
+imports private, Elastic-2.0-licensed `@khal-os/*` packages from
+`git.namastex.io`; building that pack therefore requires Namastex registry
+credentials. An OSS user does not build the pack. They consume the prebuilt SPA
+from the `@automagik/omni` package or the `omni-admin-ui` GHCR image. The
+artifact contains compiled UI output, not a dependency on the private registry.
+
+The current tree is still the pre-consolidation shape. `apps/khal-ui` is a
+nested workspace and is excluded from the root workspace, so a root
+`bun install` does **not** install or prove the UI source graph. Source builders
+must install the nested workspace separately:
+
+```bash
+# Public/root graph; must never resolve @khal-os/*.
+bun install
+
+# Private source-build graph; needs registry credentials.
+cd apps/khal-ui
+bun install --frozen-lockfile
+```
+
+The exact `@khal-os/*` source-build pins are `@khal-os/sdk@2.0.111`,
+`@khal-os/ui@2.0.111`, and `@khal-os/types@2.2.63`. Keep credentials in the
+user-level npm configuration or CI secret mount; never commit an auth token.
+
+When the nested workspace is dissolved, the boundary is intentionally this:
+
+- `apps/ui/server` and a `@khal-os/*`-free `apps/ui/dev` join the root workspace.
+- `apps/ui/app` remains outside the root workspace as the token-gated build
+  island, with its own minimal lockfile and registry mapping.
+- `apps/ui/package.json` is an umbrella only and has no `workspaces` field.
+- The token-holding build job produces the SPA artifact. If the prospective
+  `wish/omni-appkit-gap` SDK-dependent BFF lands, that job also bundles the BFF
+  to a single consumer artifact; consumer installs never resolve its SDK.
+- Artifact packaging preserves the published KHAL OS Elastic-2.0 notices and
+  third-party notices, including Paper Design's PolyForm Shield 1.0.0 notice.
+
+The existing `.github/workflows/image-publish.yml` exercises the private build
+leg only when `KHAL_NPM_TOKEN` is present. The public boundary has this static
+manual gate from the repository root:
+
+```bash
+bun -e 'const p=await Bun.file("package.json").json(); const forbidden=["apps/khal-ui","apps/ui/app","apps/ui/*","apps/*"]; if((p.workspaces??[]).some((x)=>forbidden.includes(x))) throw new Error("private UI app entered the root workspace")'
+bun -e 'const lock=await Bun.file("bun.lock").text(); if(lock.includes("@khal-os/")||lock.includes("git.namastex.io/api/packages/khal/npm")) throw new Error("private UI dependency entered the root lock")'
+```
+
+After consolidation, Group 2 must also prove the meaningful boundary with a
+fresh tokenless clone plus `bun install`; the current excluded-workspace pass is
+not represented as that proof.
+
 The BFF needs the Omni API key. **Never commit it** — `.env` is git-ignored.
 
 ```bash
@@ -46,9 +99,6 @@ or the frontend bundle.
 ## Run
 
 ```bash
-# From the repo root (bun-only):
-bun install
-
 # Dev: BFF (127.0.0.1:8899) + Vite harness (localhost:5174) together
 cd apps/khal-ui && bun run dev
 # open http://localhost:5174  → renders MainView with a LIVE instance list

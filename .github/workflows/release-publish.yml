@@ -1,289 +1,419 @@
 name: Release Publish
 
-# Group 3 of v3-prerelease-trust-loop G2 (mirror of genie pattern) — attaches
-# the signed tarballs + cosign bundles + SLSA attestations produced by
-# sign-attest.yml to the v<version> GitHub Release, and (for stable, non-draft
-# tag pushes) writes .well-known/latest.json into the repo so install scripts
-# can resolve the latest version per channel without a CDN.
-#
-# Trigger chain:
-#   tag push v* → Build Tarballs → Sign + Attest Tarballs → THIS workflow
-#                                  (via release.yml orchestrator)
-#
-# workflow_dispatch is the manual override for re-publishing or promoting
-# a draft release; it requires the upstream sign-attest run-id so the
-# 12 signed assets (4 platforms × {tarball, bundle, intoto.jsonl}) can
-# be downloaded from that run.
-#
-# Verification by consumers:
-#   gh release download v<version> --repo automagik-dev/omni --pattern '*.tar.gz'
-#   gh attestation verify omni-<version>-<platform>.tar.gz --owner automagik-dev
-#   # OR via cosign:
-#   cosign verify-blob \
-#     --bundle omni-<version>-<platform>.tar.gz.bundle \
-#     --certificate-identity-regexp "^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@" \
-#     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-#     omni-<version>-<platform>.tar.gz
+# Publishes immutable dev assets once, or advances stable pointers to those
+# exact assets. Existing bytes are compared and preserved; `--clobber` is
+# intentionally forbidden.
 
 on:
   workflow_call:
     inputs:
       version:
-        description: 'Version to publish (must match upstream artifact version)'
         required: true
         type: string
       channel:
-        description: 'Release channel (stable / beta / canary)'
-        required: false
-        type: string
-        default: stable
-      draft:
-        description: 'Create as draft (require manual promotion)?'
-        required: false
-        type: boolean
-        default: false
-  # Manual-recovery escape hatch — operators can re-publish from a stranded
-  # sign-attest run by passing version + run_id explicitly. draft defaults
-  # to true here so a replay never auto-promotes by accident.
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to publish (must match upstream artifact version)'
         required: true
         type: string
-      run_id:
-        description: 'sign-attest.yml run ID to download signed artifacts from'
+      source_tag:
         required: true
         type: string
-      channel:
-        description: 'Release channel (stable = no --prerelease; beta/canary = --prerelease)'
+      source_sha:
         required: true
-        type: choice
-        default: stable
-        # Canonical channel taxonomy (release taxonomy 2026-05-12,
-        # unified across pgserve/omni/genie). beta + canary retired.
-        options:
-          - stable
-          - homolog
-          - dev
-      draft:
-        description: 'Create as draft (require manual promotion)?'
+        type: string
+      authorization_event:
         required: true
-        type: boolean
-        default: true
+        type: string
+      authorization_sha:
+        required: true
+        type: string
+      mode:
+        required: true
+        type: string
+      metadata_json:
+        description: 'Compact aggregate metadata validated by release.yml'
+        required: true
+        type: string
 
 concurrency:
-  group: release-publish-${{ github.ref }}-${{ inputs.version || github.sha }}
-  cancel-in-progress: false   # never cancel an in-flight publish
+  group: release-publish-${{ inputs.channel }}
+  cancel-in-progress: false
 
 permissions:
-  contents: write              # gh release create/upload + push latest.json commit
+  contents: write
 
 jobs:
   publish:
-    name: Publish to GitHub Releases
+    name: Publish or promote verified release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-
-      - name: Resolve upstream sign-attest run-id
-        id: src
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${{ inputs.run_id }}" ]]; then
-            RUN_ID="${{ inputs.run_id }}"
-          else
-            RUN_ID="${{ github.run_id }}"
-          fi
-          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-          echo "Upstream sign-attest run-id: ${RUN_ID}"
-
-      - name: Download all signed artifacts (sign-attest.yml)
-        uses: actions/download-artifact@v4
         with:
-          pattern: omni-*-signed
-          merge-multiple: true
-          path: dist
-          run-id: ${{ steps.src.outputs.run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.VERSION_BUMP_PAT || github.token }}
 
-      - name: Resolve version + channel + asset inventory
-        id: meta
-        shell: bash
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-          INPUT_CHANNEL: ${{ inputs.channel }}
-        run: |
-          set -euo pipefail
-          cd dist
-          shopt -s nullglob
-          TARBALLS=( omni-*.tar.gz )
-          if [[ ${#TARBALLS[@]} -eq 0 ]]; then
-            echo "::error::no signed tarballs downloaded from upstream run"
-            ls -la
-            exit 1
-          fi
-          FIRST="${TARBALLS[0]}"
-          PARSED=$(echo "${FIRST}" | sed -E 's/^omni-(.+)-(linux-x64-glibc|linux-x64-musl|linux-arm64|darwin-arm64)\.tar\.gz$/\1/')
-          if [[ -z "${PARSED}" || "${PARSED}" == "${FIRST}" ]]; then
-            echo "::error::could not parse VERSION from filename '${FIRST}'"
-            exit 1
-          fi
-          VERSION="${PARSED}"
-          if [[ -n "${INPUT_VERSION:-}" && "${INPUT_VERSION}" != "${VERSION}" ]]; then
-            echo "::error::workflow_dispatch input version='${INPUT_VERSION}' does not match upstream artifact version='${VERSION}'"
-            exit 1
-          fi
-          CHANNEL="${INPUT_CHANNEL:-}"
-          if [[ -z "${CHANNEL}" ]]; then
-            CHANNEL="stable"
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
-          echo "Resolved: VERSION=${VERSION} CHANNEL=${CHANNEL}"
-          echo "Tarballs: ${#TARBALLS[@]}"
-          echo "=== dist/ inventory (expect 12 files: 4× tarball + 4× bundle + 4× intoto.jsonl) ==="
-          ls -la
-
-      - name: Create or update GitHub Release with all 12 signed assets
+      - name: Validate publish boundary
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          CHANNEL: ${{ steps.meta.outputs.channel }}
-          DRAFT_FLAG: ${{ inputs.draft && '--draft' || '' }}
-        shell: bash
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          AUTHORIZATION_SHA: ${{ inputs.authorization_sha }}
+          MODE: ${{ inputs.mode }}
+          METADATA_JSON: ${{ inputs.metadata_json }}
         run: |
           set -euo pipefail
-          PRERELEASE_FLAG=""
-          if [[ "${CHANNEL}" != "stable" ]]; then
-            PRERELEASE_FLAG="--prerelease"
-          fi
-
-          if ! gh release view "v${VERSION}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            # shellcheck disable=SC2086 # intentional word-split on optional flags
-            gh release create "v${VERSION}" \
-              --repo "${{ github.repository }}" \
-              --title "v${VERSION}" \
-              --notes "Release v${VERSION} (channel: ${CHANNEL})" \
-              ${DRAFT_FLAG} ${PRERELEASE_FLAG}
-          fi
-
-          if [[ -d dist && -n "$(ls -A dist 2>/dev/null)" ]]; then
-            gh release upload "v${VERSION}" \
-              --repo "${{ github.repository }}" \
-              --clobber \
-              dist/*
-          else
-            echo "::error::dist/ is empty — nothing to upload"
-            exit 1
-          fi
-
-          ASSET_COUNT=$(gh release view "v${VERSION}" --repo "${{ github.repository }}" --json assets --jq '.assets | length')
-          echo "v${VERSION} now lists ${ASSET_COUNT} assets"
-          if [[ "${ASSET_COUNT}" -lt 12 ]]; then
-            echo "::warning::expected 12 assets, found ${ASSET_COUNT}"
-          fi
-
-      # ---------------------------------------------------------------------
-      # Per-channel manifest pointers — committed to main so install.sh +
-      # CLI update path can resolve the current version for each channel via:
-      #   curl -fsSL https://raw.githubusercontent.com/automagik-dev/omni/main/.well-known/<channel>.json
-      #
-      # Filename map (mirrors genie wish release-channel-dev, PR #2419):
-      #   stable → latest.json     (kept for back-compat with v1 manifest layout)
-      #   dev    → dev.json        (development channel — prerelease)
-      #   beta   → beta.json
-      #   canary → canary.json
-      #
-      # A stable release ALSO advances dev (single-pipeline reality: today
-      # every release is the latest of both channels). When a dev-only
-      # pipeline lands later, channel=dev writes ONLY dev.json and
-      # latest.json stays at the prior stable.
-      # ---------------------------------------------------------------------
-      - name: Update channel manifests (.well-known/*.json — non-draft only)
-        if: ${{ !inputs.draft }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          CHANNEL: ${{ steps.meta.outputs.channel }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin main
-          git checkout main
-          git pull --ff-only origin main
-
-          # stable keeps the historical filename `latest.json`; every other
-          # channel uses its own name. install.sh + CLI update consume the
-          # same convention. A stable release advances BOTH latest.json and
-          # dev.json (single-pipeline reality). channel=dev only advances
-          # dev.json — latest.json stays at the prior stable.
-          # Canonical taxonomy: stable / homolog / dev.
-          # - stable advances latest.json + homolog.json + dev.json
-          #   (a stable release IS also the latest of every channel; the
-          #   reverse-flow promotion dev→homolog→main means stable
-          #   subsumes both downstream channels)
-          # - homolog advances homolog.json + dev.json (it's downstream
-          #   of stable but upstream of dev; promoting to homolog also
-          #   refreshes dev)
-          # - dev advances only dev.json
-          declare -A MANIFEST_FILES=()
-          case "$CHANNEL" in
-            stable)
-              MANIFEST_FILES[stable]="latest.json"
-              MANIFEST_FILES[homolog]="homolog.json"
-              MANIFEST_FILES[dev]="dev.json"
-              ;;
-            homolog)
-              MANIFEST_FILES[homolog]="homolog.json"
-              MANIFEST_FILES[dev]="dev.json"
-              ;;
-            dev)
-              MANIFEST_FILES[dev]="dev.json"
-              ;;
-            *)
-              echo "::error::unknown channel: $CHANNEL (valid: stable, homolog, dev)"
-              exit 1
-              ;;
+          [[ "${SOURCE_TAG}" == "v${VERSION}" ]]
+          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${AUTHORIZATION_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --force origin "refs/tags/${SOURCE_TAG}:refs/tags/${SOURCE_TAG}"
+          [[ "$(git rev-parse "${SOURCE_TAG}^{commit}")" == "${SOURCE_SHA}" ]]
+          jq -e \
+            --arg version "${VERSION}" \
+            --arg tag "${SOURCE_TAG}" \
+            --arg sha "${SOURCE_SHA}" \
+            '.version == $version and .source_tag == $tag and
+             .source_sha == $sha and .tag_commit_sha == $sha' \
+            <<<"${METADATA_JSON}" >/dev/null
+          case "${MODE}:${CHANNEL}" in
+            build:dev|promote:stable) ;;
+            *) exit 1 ;;
           esac
 
-          mkdir -p .well-known
-          for manifest_channel in "${!MANIFEST_FILES[@]}"; do
-            FILE="${MANIFEST_FILES[$manifest_channel]}"
-            cat > ".well-known/${FILE}" <<EOF
-          {
-            "schema_version": 1,
-            "channel": "${manifest_channel}",
-            "version": "${VERSION}",
-            "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "tarball_base": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}",
-            "platforms": ["linux-x64-glibc", "linux-x64-musl", "linux-arm64", "darwin-arm64"]
-          }
-          EOF
-          done
+      - name: Download immutable build outputs
+        if: inputs.mode == 'build'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: omni-${{ inputs.version }}-*
+          merge-multiple: true
+          path: dist
 
-          git config user.name "release-bot"
-          git config user.email "release-bot@example.com"
-          # Stage first, then compare against HEAD. `git diff --quiet <path>`
-          # returns 0 (no diff) for *untracked* files because they aren't in
-          # the index — staging registers the path; then
-          # `git diff --cached --quiet HEAD --` correctly reports "differs
-          # from HEAD" for both new and modified files. Mirrors the bootstrap
-          # fix genie PR #2419 incorporates.
-          MANIFEST_PATHS=()
-          for f in "${MANIFEST_FILES[@]}"; do
-            MANIFEST_PATHS+=(".well-known/${f}")
+      - name: Download signed release metadata
+        if: inputs.mode == 'build'
+        uses: actions/download-artifact@v4
+        with:
+          name: release-metadata-${{ inputs.version }}
+          path: dist
+
+      - name: Install metadata verifier
+        if: inputs.mode == 'build'
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Stage and validate candidate inventory
+        if: inputs.mode == 'build'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          METADATA_JSON: ${{ inputs.metadata_json }}
+          EXPECTED_PLATFORMS: 'linux-x64-glibc linux-x64-musl linux-arm64 darwin-arm64'
+        run: |
+          set -euo pipefail
+          [[ -s dist/release-metadata.json ]]
+          printf '%s\n' "${METADATA_JSON}" | jq -cS . > /tmp/input-metadata.json
+          jq -cS . dist/release-metadata.json > /tmp/artifact-metadata.json
+          cmp -s /tmp/input-metadata.json /tmp/artifact-metadata.json || {
+            echo "::error::metadata workflow output differs from signed metadata artifact"
+            exit 1
+          }
+          [[ -s dist/release-metadata.json.bundle ]]
+          cosign verify-blob \
+            --bundle dist/release-metadata.json.bundle \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/v${VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            dist/release-metadata.json
+          gh attestation verify dist/release-metadata.json \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
+            --source-ref "refs/tags/v${VERSION}"
+          for platform in ${EXPECTED_PLATFORMS}; do
+            base="dist/omni-${VERSION}-${platform}.tar.gz"
+            for file in "${base}" "${base}.bundle" "${base}.intoto.jsonl"; do
+              [[ -s "${file}" ]] || {
+                echo "::error::missing required signed asset ${file}"
+                exit 1
+              }
+            done
           done
-          git add "${MANIFEST_PATHS[@]}"
-          if git diff --cached --quiet HEAD -- "${MANIFEST_PATHS[@]}"; then
-            echo "manifests unchanged — nothing to commit"
+          HELM="$(find dist -maxdepth 1 -type f -name 'omni-*.tgz' -print -quit)"
+          [[ -s "${HELM}" ]]
+          RECORDED_AGGREGATE="$(jq -r .aggregate_digest <<<"${METADATA_JSON}")"
+          COMPUTED_AGGREGATE="sha256:$(jq -cS 'del(.aggregate_digest)' <<<"${METADATA_JSON}" | sha256sum | cut -d' ' -f1)"
+          [[ "${RECORDED_AGGREGATE}" == "${COMPUTED_AGGREGATE}" ]]
+          jq -r '.immutable_digests.archives | to_entries[] | "\(.value)  dist/\(.key)"' \
+            <<<"${METADATA_JSON}" | sed 's/^sha256://' | sha256sum --check --strict
+          [[ "$(basename "${HELM}")" == "$(jq -r .immutable_digests.helm.name <<<"${METADATA_JSON}")" ]]
+          HELM_DIGEST="$(jq -r .immutable_digests.helm.digest <<<"${METADATA_JSON}" | sed 's/^sha256://')"
+          printf '%s  %s\n' "${HELM_DIGEST}" "${HELM}" | sha256sum --check --strict
+          CHART_YAML="$(tar -xOzf "${HELM}" omni/Chart.yaml)"
+          [[ "$(yq -r .version <<<"${CHART_YAML}")" == "${VERSION}" ]]
+          [[ "$(yq -r .appVersion <<<"${CHART_YAML}")" == "${VERSION}" ]]
+          [[ "$(yq -r '.sources[]' <<<"${CHART_YAML}")" == "https://github.com/${GITHUB_REPOSITORY}" ]]
+
+      - name: Create dev prerelease or verify existing provenance
+        if: inputs.mode == 'build'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "${SOURCE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            mkdir -p /tmp/existing-release
+            if gh release download "${SOURCE_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --pattern 'release-metadata.json*' \
+                --dir /tmp/existing-release 2>/dev/null; then
+              [[ -s /tmp/existing-release/release-metadata.json.bundle ]] || {
+                echo "::error::partial draft has metadata without its trusted signature; quarantine and investigate"
+                exit 1
+              }
+              cosign verify-blob \
+                --bundle /tmp/existing-release/release-metadata.json.bundle \
+                --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${SOURCE_TAG}" \
+                --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                /tmp/existing-release/release-metadata.json
+              gh attestation verify /tmp/existing-release/release-metadata.json \
+                --repo "${GITHUB_REPOSITORY}" \
+                --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
+                --source-ref "refs/tags/${SOURCE_TAG}"
+              jq -S . /tmp/existing-release/release-metadata.json > /tmp/existing.sorted
+              jq -S . dist/release-metadata.json > /tmp/proposed.sorted
+              cmp -s /tmp/existing.sorted /tmp/proposed.sorted || {
+                echo "::error::Refusing provenance-changing overwrite for ${SOURCE_TAG}"
+                exit 1
+              }
+            else
+              ASSET_COUNT="$(gh release view "${SOURCE_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --json assets --jq '.assets | length')"
+              [[ "${ASSET_COUNT}" -eq 0 ]] || {
+                echo "::error::partial draft contains candidate bytes without valid trusted metadata; quarantine and investigate"
+                exit 1
+              }
+            fi
+          else
+            gh release create "${SOURCE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --draft \
+              --prerelease \
+              --title "${SOURCE_TAG}" \
+              --notes "Immutable Omni ${VERSION} dev candidates"
+          fi
+
+      - name: Upload trusted metadata before candidate bytes
+        if: inputs.mode == 'build'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -euo pipefail
+          EXISTING="$(gh release view "${SOURCE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json assets --jq '.assets[].name')"
+          for asset in dist/release-metadata.json dist/release-metadata.json.bundle; do
+            name="$(basename "${asset}")"
+            if ! grep -Fxq "${name}" <<<"${EXISTING}"; then
+              gh release upload "${SOURCE_TAG}" --repo "${GITHUB_REPOSITORY}" "${asset}"
+            fi
+          done
+          gh release view "${SOURCE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --json assets --jq '[.assets[].name] |
+              contains(["release-metadata.json","release-metadata.json.bundle"])' |
+            grep -Fx true
+
+      - name: Upload only missing candidate bytes; compare recorded digests
+        if: inputs.mode == 'build'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          METADATA_JSON: ${{ inputs.metadata_json }}
+        run: |
+          set -euo pipefail
+          EXISTING="$(gh release view "${SOURCE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json assets --jq '.assets[].name')"
+          shopt -s nullglob
+          ASSETS=(dist/*.tar.gz dist/*.tar.gz.bundle dist/*.intoto.jsonl dist/*.tgz)
+          [[ "${#ASSETS[@]}" -eq 13 ]] || {
+            echo "::error::expected 13 candidate assets, found ${#ASSETS[@]}"
+            exit 1
+          }
+          for asset in "${ASSETS[@]}"; do
+            name="$(basename "${asset}")"
+            if grep -Fxq "${name}" <<<"${EXISTING}"; then
+              tmp="$(mktemp -d)"
+              gh release download "${SOURCE_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --pattern "${name}" \
+                --dir "${tmp}"
+              cmp -s "${asset}" "${tmp}/${name}" || {
+                echo "::error::Refusing provenance-changing overwrite of ${name}"
+                exit 1
+              }
+              echo "Verified existing immutable asset ${name}"
+            else
+              gh release upload "${SOURCE_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                "${asset}"
+            fi
+          done
+          FINAL_COUNT="$(gh release view "${SOURCE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json assets --jq '.assets | length')"
+          [[ "${FINAL_COUNT}" -eq 15 ]] || {
+            echo "::error::draft has ${FINAL_COUNT}/15 required assets"
+            exit 1
+          }
+
+      - name: Publish verified dev release before exposing pointers
+        if: inputs.mode == 'build'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -euo pipefail
+          gh release edit "${SOURCE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft=false \
+            --prerelease=true
+          gh release view "${SOURCE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json isDraft,isPrerelease \
+            --jq 'select(.isDraft == false and .isPrerelease == true)' >/dev/null
+
+      - name: Advance verified dev manifest on main
+        if: inputs.mode == 'build'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          SOURCE_MANIFEST="${GITHUB_WORKSPACE}/.well-known/dev.json"
+          [[ -s "${SOURCE_MANIFEST}" ]]
+          [[ "$(jq -r .version "${SOURCE_MANIFEST}")" == "${VERSION}" ]]
+
+          git fetch --force origin main
+          MAIN_OLD="$(git rev-parse origin/main)"
+          ROOT="$(mktemp -d)"
+          git worktree add --detach "${ROOT}/main" "${MAIN_OLD}"
+          CURRENT_MANIFEST="${ROOT}/main/.well-known/dev.json"
+          CURRENT_VERSION="$(jq -r '.version // empty' "${CURRENT_MANIFEST}" 2>/dev/null || true)"
+          if [[ -n "${CURRENT_VERSION}" && "${CURRENT_VERSION}" != "${VERSION}" ]]; then
+            HIGHEST="$(printf '%s\n%s\n' "${CURRENT_VERSION}" "${VERSION}" | sort -V | tail -1)"
+            [[ "${HIGHEST}" == "${VERSION}" ]] || {
+              echo "::error::refusing to move dev manifest backwards from ${CURRENT_VERSION} to ${VERSION}"
+              exit 1
+            }
+          fi
+          if [[ "${CURRENT_VERSION}" == "${VERSION}" ]]; then
+            jq -cS . "${SOURCE_MANIFEST}" > "${ROOT}/source-manifest.json"
+            jq -cS . "${CURRENT_MANIFEST}" > "${ROOT}/current-manifest.json"
+            cmp -s "${ROOT}/source-manifest.json" "${ROOT}/current-manifest.json" || {
+              echo "::error::Refusing provenance-changing overwrite of dev.json for ${VERSION}"
+              exit 1
+            }
+            echo "dev manifest already points at verified ${VERSION}"
             exit 0
           fi
-          MANIFEST_LIST=$(IFS=','; echo "${!MANIFEST_FILES[*]}")
-          git commit -m "chore(release): update manifests (${MANIFEST_LIST}) → v${VERSION}"
-          git push origin main || {
-            echo "::warning::push to main failed (likely branch protection); update ${MANIFEST_PATHS[*]} manually"
-            exit 0
+
+          cp "${SOURCE_MANIFEST}" "${CURRENT_MANIFEST}"
+          git config user.name "release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          git -C "${ROOT}/main" add .well-known/dev.json
+          TREE="$(git -C "${ROOT}/main" write-tree)"
+          MAIN_NEW="$(printf '%s\n' "chore(release): advance dev to v${VERSION}" |
+            git -C "${ROOT}/main" commit-tree "${TREE}" -p "${MAIN_OLD}")"
+          git push origin \
+            --force-with-lease="refs/heads/main:${MAIN_OLD}" \
+            "${MAIN_NEW}:refs/heads/main"
+
+      - name: Advance GitHub stable pointer without new artifacts
+        if: inputs.mode == 'promote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -euo pipefail
+          ASSET_COUNT="$(gh release view "${SOURCE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json assets --jq '.assets | length')"
+          [[ "${ASSET_COUNT}" -eq 15 ]] || {
+            echo "::error::stable promotion requires all 15 existing assets"
+            exit 1
           }
+          gh release edit "${SOURCE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --prerelease=false \
+            --draft=false
+
+      - name: Atomically synchronize stable manifest across main and dev
+        if: inputs.mode == 'promote'
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin main dev
+          MAIN_OLD="$(git rev-parse origin/main)"
+          DEV_OLD="$(git rev-parse origin/dev)"
+          git config user.name "release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          RELEASED_AT="$(git show -s --format=%cI "${SOURCE_SHA}")"
+          TARBALL_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}"
+          ROOT="$(mktemp -d)"
+
+          update_branch() {
+            branch="$1"
+            old="$2"
+            dir="${ROOT}/${branch}"
+            git worktree add --detach "${dir}" "${old}"
+            DESIRED="${ROOT}/${branch}-latest.json"
+            jq -n \
+              --arg version "${VERSION}" \
+              --arg released_at "${RELEASED_AT}" \
+              --arg base "${TARBALL_BASE}" \
+              '{
+                schema_version: 1,
+                channel: "stable",
+                version: $version,
+                released_at: $released_at,
+                tarball_base: $base,
+                platforms: ["linux-x64-glibc", "linux-x64-musl", "linux-arm64", "darwin-arm64"]
+              }' > "${DESIRED}"
+            CURRENT_VERSION="$(jq -r '.version // empty' "${dir}/.well-known/latest.json" 2>/dev/null || true)"
+            if [[ -n "${CURRENT_VERSION}" && "${CURRENT_VERSION}" != "${VERSION}" ]]; then
+              HIGHEST="$(printf '%s\n%s\n' "${CURRENT_VERSION}" "${VERSION}" | sort -V | tail -1)"
+              [[ "${HIGHEST}" == "${VERSION}" ]] || {
+                echo "::error::refusing to move stable manifest backwards from ${CURRENT_VERSION} to ${VERSION} on ${branch}"
+                return 1
+              }
+            fi
+            if [[ "${CURRENT_VERSION}" == "${VERSION}" ]]; then
+              jq -cS . "${DESIRED}" > "${ROOT}/${branch}-desired.canonical.json"
+              jq -cS . "${dir}/.well-known/latest.json" > "${ROOT}/${branch}-current.canonical.json"
+              cmp -s "${ROOT}/${branch}-desired.canonical.json" "${ROOT}/${branch}-current.canonical.json" || {
+                echo "::error::Refusing provenance-changing overwrite of latest.json for ${VERSION} on ${branch}"
+                return 1
+              }
+              printf '%s\n' "${old}"
+              return
+            fi
+            cp "${DESIRED}" "${dir}/.well-known/latest.json"
+            git -C "${dir}" add .well-known/latest.json
+            tree="$(git -C "${dir}" write-tree)"
+            printf '%s\n' "chore(release): advance stable to v${VERSION}" |
+              git -C "${dir}" commit-tree "${tree}" -p "${old}"
+          }
+
+          MAIN_NEW="$(update_branch main "${MAIN_OLD}")"
+          DEV_NEW="$(update_branch dev "${DEV_OLD}")"
+          [[ "${MAIN_NEW}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${DEV_NEW}" =~ ^[0-9a-f]{40}$ ]]
+          git push --atomic origin \
+            --force-with-lease="refs/heads/main:${MAIN_OLD}" \
+            --force-with-lease="refs/heads/dev:${DEV_OLD}" \
+            "${MAIN_NEW}:refs/heads/main" \
+            "${DEV_NEW}:refs/heads/dev"

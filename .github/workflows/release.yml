@@ -1,114 +1,1085 @@
 name: Release
 
-# v3-prerelease-trust-loop G2 — orchestrator that chains the signed-tarball
-# pipeline (build → sign-attest → publish) AND preserves the legacy npm OIDC
-# Trusted Publishing path. Single workflow run, sequenced jobs via
-# workflow_call. No workflow_run chaining (anti-recursion guard).
-#
-# Trigger contract — refs/tags/v* push (or operator-invoked workflow_dispatch).
-#
-# The cosign keyless OIDC SAN URI binds to .github/workflows/sign-attest.yml@<ref>
-# because the cosign step physically lives inside sign-attest.yml. pgserve's
-# trust-list (src/cosign/trust-list.js) anchors `pgserve verify --slug omni`
-# on this filename literally — renaming or relocating sign-attest.yml breaks
-# the consumer trust loop.
-#
-# Job topology:
-#   1. build           — workflow_call into build-tarballs.yml (matrix × 4 platforms)
-#   2. sign-attest     — workflow_call into sign-attest.yml (cosign keyless + SLSA L3)
-#   3. publish         — workflow_call into release-publish.yml (GH release + assets)
-#   4. release-notes   — git-cliff changelog appended to the GH release body.
-#
-# npm publishing happens in version.yml inline (branch-derived dist-tag:
-# main → @latest, dev → @next). Single source of truth — no duplicate
-# publish step here. Codex P1 on PR #633 caught the gap when a previous
-# revision of this file ran an unconditional `npm publish --tag latest`
-# alongside version.yml's @next publish, promoting dev cuts to @latest.
+# The tag commit is the only artifact source. A dev tag builds candidates once;
+# a stable call verifies and promotes those candidates without rebuilding.
+# Manual dispatch is recovery-only and is protected by `release-recovery`.
 
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
+  workflow_call:
     inputs:
       version:
-        description: 'Version (e.g. 2.260512.1 — no v prefix)'
         required: true
         type: string
       channel:
-        description: 'Release channel — stable publishes to @latest, dev/beta/canary are prereleases with their own .well-known/<channel>.json pointer'
-        required: false
+        required: true
+        type: string
+      source_tag:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      authorization_event:
+        required: true
+        type: string
+      authorization_sha:
+        required: true
+        type: string
+      mode:
+        required: true
+        type: string
+      recovery:
+        required: true
+        type: boolean
+    outputs:
+      release_metadata_json:
+        description: 'Aggregate immutable release metadata'
+        value: ${{ jobs.result.outputs.release_metadata_json }}
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Exact version (without v prefix)'
+        required: true
+        type: string
+      channel:
+        description: 'Recovery channel; must agree with mode'
+        required: true
         type: choice
-        default: stable
-        # Canonical channel taxonomy (release taxonomy 2026-05-12,
-        # unified across pgserve/omni/genie):
-        #   stable  → main branch  → .well-known/latest.json
-        #   homolog → homolog branch → .well-known/homolog.json
-        #   dev     → dev branch   → .well-known/dev.json
-        # beta + canary have been retired.
         options:
-          - stable
-          - homolog
           - dev
+          - stable
+      source_tag:
+        description: 'Exact immutable v<version> tag (also select this tag under Run workflow)'
+        required: true
+        type: string
+      source_sha:
+        description: 'Full 40-character commit SHA resolved by source_tag'
+        required: true
+        type: string
+      authorization_event:
+        description: 'Original authorization event (pull_request or tag_push)'
+        required: true
+        type: choice
+        options:
+          - pull_request
+          - tag_push
+      authorization_sha:
+        description: 'Full 40-character SHA of the original authorization event'
+        required: true
+        type: string
+      mode:
+        description: 'build=repair dev candidates; promote=re-advance verified stable pointers'
+        required: true
+        type: choice
+        options:
+          - build
+          - promote
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  # Serialize pointer movement per supported channel. Per-tag groups allow an
+  # older, slower run to move `next`/`dev` backwards after a newer run.
+  group: release-channel-${{ inputs.channel || 'dev' }}
   cancel-in-progress: false
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Signed-tarball pipeline (mirror of genie pattern)
-  # ---------------------------------------------------------------------------
+  tag-context:
+    name: Resolve annotated dev tag
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.tuple.outputs.version }}
+      channel: ${{ steps.tuple.outputs.channel }}
+      source_tag: ${{ steps.tuple.outputs.source_tag }}
+      source_sha: ${{ steps.tuple.outputs.source_sha }}
+      authorization_event: ${{ steps.tuple.outputs.authorization_event }}
+      authorization_sha: ${{ steps.tuple.outputs.authorization_sha }}
+      mode: ${{ steps.tuple.outputs.mode }}
+      recovery: ${{ steps.tuple.outputs.recovery }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Resolve explicit tuple from annotated tag
+        id: tuple
+        env:
+          SOURCE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${SOURCE_TAG#v}"
+          [[ "${SOURCE_TAG}" == "v${VERSION}" ]]
+          SOURCE_SHA="$(git rev-parse "${SOURCE_TAG}^{commit}")"
+          TAG_TYPE="$(git cat-file -t "${SOURCE_TAG}")"
+          [[ "${TAG_TYPE}" == "tag" ]] || {
+            echo "::error::release tags must be annotated with authorization metadata"
+            exit 1
+          }
+          TAG_MESSAGE="$(git for-each-ref --format='%(contents)' "refs/tags/${SOURCE_TAG}")"
+          AUTHORIZATION_EVENT="$(sed -n 's/^authorization_event=//p' <<<"${TAG_MESSAGE}" | tail -1)"
+          AUTHORIZATION_SHA="$(sed -n 's/^authorization_sha=//p' <<<"${TAG_MESSAGE}" | tail -1)"
+          [[ "${AUTHORIZATION_EVENT}" == "pull_request" ]]
+          [[ "${AUTHORIZATION_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          {
+            echo "version=${VERSION}"
+            echo "channel=dev"
+            echo "source_tag=${SOURCE_TAG}"
+            echo "source_sha=${SOURCE_SHA}"
+            echo "authorization_event=${AUTHORIZATION_EVENT}"
+            echo "authorization_sha=${AUTHORIZATION_SHA}"
+            echo "mode=build"
+            echo "recovery=false"
+          } >> "$GITHUB_OUTPUT"
+
+  call-context:
+    name: Accept structured automatic call
+    if: github.event_name == 'workflow_call' && inputs.recovery == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      version: ${{ steps.tuple.outputs.version }}
+      channel: ${{ steps.tuple.outputs.channel }}
+      source_tag: ${{ steps.tuple.outputs.source_tag }}
+      source_sha: ${{ steps.tuple.outputs.source_sha }}
+      authorization_event: ${{ steps.tuple.outputs.authorization_event }}
+      authorization_sha: ${{ steps.tuple.outputs.authorization_sha }}
+      mode: ${{ steps.tuple.outputs.mode }}
+      recovery: ${{ steps.tuple.outputs.recovery }}
+    steps:
+      - id: tuple
+        env:
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          AUTHORIZATION_EVENT: ${{ inputs.authorization_event }}
+          AUTHORIZATION_SHA: ${{ inputs.authorization_sha }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          {
+            echo "version=${VERSION}"
+            echo "channel=${CHANNEL}"
+            echo "source_tag=${SOURCE_TAG}"
+            echo "source_sha=${SOURCE_SHA}"
+            echo "authorization_event=${AUTHORIZATION_EVENT}"
+            echo "authorization_sha=${AUTHORIZATION_SHA}"
+            echo "mode=${MODE}"
+            echo "recovery=false"
+          } >> "$GITHUB_OUTPUT"
+
+  recovery-context:
+    name: Authorize protected manual recovery
+    needs: recovery-policy
+    if: github.event_name == 'workflow_dispatch' || inputs.recovery == true
+    environment: release-recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.tuple.outputs.version }}
+      channel: ${{ steps.tuple.outputs.channel }}
+      source_tag: ${{ steps.tuple.outputs.source_tag }}
+      source_sha: ${{ steps.tuple.outputs.source_sha }}
+      authorization_event: ${{ steps.tuple.outputs.authorization_event }}
+      authorization_sha: ${{ steps.tuple.outputs.authorization_sha }}
+      mode: ${{ steps.tuple.outputs.mode }}
+      recovery: ${{ steps.tuple.outputs.recovery }}
+    steps:
+      - name: Require tag-bound recovery workflow
+        id: tuple
+        env:
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          AUTHORIZATION_EVENT: ${{ inputs.authorization_event }}
+          AUTHORIZATION_SHA: ${{ inputs.authorization_sha }}
+          MODE: ${{ inputs.mode }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          [[ "${WORKFLOW_REF}" == "refs/tags/${SOURCE_TAG}" ]] || {
+            echo "::error::manual recovery must run the workflow definition from ${SOURCE_TAG}"
+            exit 1
+          }
+          {
+            echo "version=${VERSION}"
+            echo "channel=${CHANNEL}"
+            echo "source_tag=${SOURCE_TAG}"
+            echo "source_sha=${SOURCE_SHA}"
+            echo "authorization_event=${AUTHORIZATION_EVENT}"
+            echo "authorization_sha=${AUTHORIZATION_SHA}"
+            echo "mode=${MODE}"
+            echo "recovery=true"
+          } >> "$GITHUB_OUTPUT"
+
+  recovery-policy:
+    name: Verify recovery environment policy exists
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_call' && inputs.recovery == true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Fail closed unless release-recovery is protected
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -euo pipefail
+          ENVIRONMENT="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/environments/release-recovery")" || {
+            echo "::error::release-recovery must be configured before recovery; refusing GitHub's implicit unprotected environment creation"
+            exit 1
+          }
+          jq -e '
+            .name == "release-recovery" and
+            (.protection_rules | any(
+              .type == "required_reviewers" and
+              (.reviewers | type == "array" and length > 0) and
+              .prevent_self_review == true
+            )) and
+            .deployment_branch_policy.custom_branch_policies == true
+          ' <<<"${ENVIRONMENT}" >/dev/null || {
+            echo "::error::release-recovery requires reviewers and an explicit custom ref policy"
+            exit 1
+          }
+          POLICIES="$(gh api --paginate \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/environments/release-recovery/deployment-branch-policies")"
+          jq -e --arg tag "${SOURCE_TAG}" '
+            [.branch_policies[] |
+              select(.type == "tag" and (.name == $tag or .name == "v*"))] | length >= 1
+          ' <<<"${POLICIES}" >/dev/null || {
+            echo "::error::release-recovery must explicitly authorize immutable v* tags or ${SOURCE_TAG}"
+            exit 1
+          }
+
+  context:
+    name: Normalize authorized release tuple
+    needs: [tag-context, call-context, recovery-context, recovery-policy]
+    if: >-
+      always() &&
+      (needs.tag-context.result == 'success' ||
+       needs.call-context.result == 'success' ||
+       needs.recovery-context.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      version: ${{ steps.select.outputs.version }}
+      channel: ${{ steps.select.outputs.channel }}
+      source_tag: ${{ steps.select.outputs.source_tag }}
+      source_sha: ${{ steps.select.outputs.source_sha }}
+      authorization_event: ${{ steps.select.outputs.authorization_event }}
+      authorization_sha: ${{ steps.select.outputs.authorization_sha }}
+      mode: ${{ steps.select.outputs.mode }}
+      recovery: ${{ steps.select.outputs.recovery }}
+    steps:
+      - id: select
+        env:
+          TAG_JSON: ${{ toJSON(needs.tag-context.outputs) }}
+          CALL_JSON: ${{ toJSON(needs.call-context.outputs) }}
+          RECOVERY_JSON: ${{ toJSON(needs.recovery-context.outputs) }}
+        run: |
+          set -euo pipefail
+          SELECTED="$(jq -c 'select(.source_sha != null and .source_sha != "")' <<<"${TAG_JSON}" || true)"
+          if [[ -z "${SELECTED}" ]]; then
+            SELECTED="$(jq -c 'select(.source_sha != null and .source_sha != "")' <<<"${CALL_JSON}" || true)"
+          fi
+          if [[ -z "${SELECTED}" ]]; then
+            SELECTED="$(jq -c 'select(.source_sha != null and .source_sha != "")' <<<"${RECOVERY_JSON}" || true)"
+          fi
+          [[ -n "${SELECTED}" ]]
+          jq -r 'to_entries[] | "\(.key)=\(.value)"' <<<"${SELECTED}" >> "$GITHUB_OUTPUT"
+
+  repository-policy:
+    name: Verify immutable release tag policy
+    needs: context
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Fail closed unless active v-tag ruleset blocks mutation
+        env:
+          # Requires repository Administration:read so bypass_actors is never
+          # silently omitted from the ruleset detail response.
+          GH_TOKEN: ${{ secrets.RELEASE_POLICY_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${GH_TOKEN}" ]] || {
+            echo "::error::RELEASE_POLICY_READ_TOKEN with repository Administration:read is required"
+            exit 1
+          }
+          RULESETS="$(gh api --paginate \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/rulesets")"
+          MATCHES="$(jq -r '
+            .[] |
+            select(
+              .target == "tag" and
+              .enforcement == "active"
+            ) | .id
+          ' <<<"${RULESETS}")"
+          [[ -n "${MATCHES}" ]] || {
+            echo "::error::an active tag ruleset covering refs/tags/v* is required"
+            exit 1
+          }
+          VERIFIED=false
+          while read -r id; do
+            [[ -n "${id}" ]] || continue
+            DETAIL="$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/${GITHUB_REPOSITORY}/rulesets/${id}")"
+            if jq -e '
+              .target == "tag" and
+              .enforcement == "active" and
+              (.conditions.ref_name.include | type == "array" and any(. == "refs/tags/v*")) and
+              (.conditions.ref_name.exclude | type == "array" and
+                all(. != "refs/tags/v*" and . != "refs/tags/**" and . != "~ALL")) and
+              (.rules | type == "array") and
+              ([.rules[].type] | index("deletion") != null and index("update") != null) and
+              (has("bypass_actors") and (.bypass_actors | type == "array")) and
+              ([.bypass_actors[] |
+                select(.actor_type != "OrganizationAdmin" or
+                       .actor_id != 1 or
+                       .bypass_mode != "always")] | length == 0) and
+              ([.bypass_actors[] |
+                select(.actor_type == "OrganizationAdmin" and
+                       .actor_id == 1 and
+                       .bypass_mode == "always")] | length == 1)
+            ' <<<"${DETAIL}" >/dev/null; then
+              VERIFIED=true
+              break
+            fi
+          done <<<"${MATCHES}"
+          [[ "${VERIFIED}" == "true" ]] || {
+            echo "::error::v* tags must deny update/deletion; only documented organization-admin break-glass is permitted"
+            exit 1
+          }
+
+  verify:
+    name: Verify immutable source and prior metadata
+    needs: [context, repository-policy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      existing_metadata_json: ${{ steps.metadata.outputs.json }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.context.outputs.authorization_sha }}
+          fetch-depth: 0
+
+      - name: Install candidate provenance verifiers
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - uses: slsa-framework/slsa-verifier/actions/installer@v2.7.1
+
+      - name: Validate tag, SHA, channel, version, and tree
+        env:
+          VERSION: ${{ needs.context.outputs.version }}
+          CHANNEL: ${{ needs.context.outputs.channel }}
+          SOURCE_TAG: ${{ needs.context.outputs.source_tag }}
+          SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
+          AUTHORIZATION_SHA: ${{ needs.context.outputs.authorization_sha }}
+          MODE: ${{ needs.context.outputs.mode }}
+        run: |
+          set -euo pipefail
+          [[ "${VERSION}" =~ ^2\.[0-9]{6}\.[1-9][0-9]*$ ]]
+          [[ "${SOURCE_TAG}" == "v${VERSION}" ]]
+          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${AUTHORIZATION_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          case "${MODE}:${CHANNEL}" in
+            build:dev|promote:stable) ;;
+            *)
+              echo "::error::unsupported release transition ${MODE}:${CHANNEL}"
+              exit 1
+              ;;
+          esac
+          git fetch --force origin \
+            "refs/tags/${SOURCE_TAG}:refs/tags/${SOURCE_TAG}"
+          TAG_COMMIT_SHA="$(git rev-parse "${SOURCE_TAG}^{commit}")"
+          [[ "${TAG_COMMIT_SHA}" == "${SOURCE_SHA}" ]] || {
+            echo "::error::${SOURCE_TAG} resolved to ${TAG_COMMIT_SHA}, recorded source is ${SOURCE_SHA}"
+            exit 1
+          }
+          PACKAGE_VERSION="$(git show "${SOURCE_SHA}:packages/cli/package.json" | jq -r .version)"
+          [[ "${PACKAGE_VERSION}" == "${VERSION}" ]]
+          if [[ "${MODE}" == "promote" ]]; then
+            SOURCE_TREE="$(git rev-parse "${SOURCE_SHA}^{tree}")"
+            AUTHORIZATION_TREE="$(git rev-parse "${AUTHORIZATION_SHA}^{tree}")"
+            [[ "${SOURCE_TREE}" == "${AUTHORIZATION_TREE}" ]] || {
+              echo "::error::stable authorization tree ${AUTHORIZATION_TREE} differs from source ${SOURCE_TREE}"
+              exit 1
+            }
+          fi
+
+      - name: Load and validate immutable release metadata
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.context.outputs.version }}
+          SOURCE_TAG: ${{ needs.context.outputs.source_tag }}
+          SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
+          MODE: ${{ needs.context.outputs.mode }}
+        run: |
+          set -euo pipefail
+          mkdir -p prior
+          if gh release download "${SOURCE_TAG}" \
+              --pattern 'release-metadata.json*' \
+              --dir prior \
+              --repo "${GITHUB_REPOSITORY}" 2>/dev/null; then
+            [[ -s prior/release-metadata.json && -s prior/release-metadata.json.bundle ]] || {
+              echo "::error::trusted metadata requires both JSON and its Sigstore bundle"
+              exit 1
+            }
+            cosign verify-blob \
+              --bundle prior/release-metadata.json.bundle \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${SOURCE_TAG}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              prior/release-metadata.json
+            gh attestation verify prior/release-metadata.json \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
+              --source-ref "refs/tags/${SOURCE_TAG}"
+            JSON="$(jq -c . prior/release-metadata.json)"
+            jq -e \
+              --arg version "${VERSION}" \
+              --arg tag "${SOURCE_TAG}" \
+              --arg sha "${SOURCE_SHA}" \
+              '.version == $version and
+               .schema_version == 1 and
+               .source_tag == $tag and
+               .tag_commit_sha == $sha and
+               .source_sha == $sha and
+               .expected_components == [
+                 "npm:@automagik/omni",
+                 "helm:omni",
+                 "archive:linux-x64-glibc",
+                 "archive:linux-x64-musl",
+                 "archive:linux-arm64",
+                 "archive:darwin-arm64",
+                 "oci:omni-api",
+                 "oci:autopg",
+                 "oci:omni-admin-ui"
+               ] and
+               (.aggregate_digest | test("^sha256:[0-9a-f]{64}$"))' <<<"${JSON}" >/dev/null || {
+              echo "::error::Refusing provenance-changing overwrite for ${SOURCE_TAG}"
+              exit 1
+            }
+            RECORDED_DIGEST="$(jq -r .aggregate_digest <<<"${JSON}")"
+            COMPUTED_DIGEST="sha256:$(jq -cS 'del(.aggregate_digest)' <<<"${JSON}" | sha256sum | cut -d' ' -f1)"
+            [[ "${RECORDED_DIGEST}" == "${COMPUTED_DIGEST}" ]] || {
+              echo "::error::release metadata aggregate digest is invalid"
+              exit 1
+            }
+            if [[ "${MODE}" == "promote" ]]; then
+              EXPECTED_ARCHIVES="$(jq -cn --arg version "${VERSION}" '[
+                "omni-\($version)-linux-x64-glibc.tar.gz",
+                "omni-\($version)-linux-x64-glibc.tar.gz.bundle",
+                "omni-\($version)-linux-x64-glibc.tar.gz.intoto.jsonl",
+                "omni-\($version)-linux-x64-musl.tar.gz",
+                "omni-\($version)-linux-x64-musl.tar.gz.bundle",
+                "omni-\($version)-linux-x64-musl.tar.gz.intoto.jsonl",
+                "omni-\($version)-linux-arm64.tar.gz",
+                "omni-\($version)-linux-arm64.tar.gz.bundle",
+                "omni-\($version)-linux-arm64.tar.gz.intoto.jsonl",
+                "omni-\($version)-darwin-arm64.tar.gz",
+                "omni-\($version)-darwin-arm64.tar.gz.bundle",
+                "omni-\($version)-darwin-arm64.tar.gz.intoto.jsonl"
+              ] | sort')"
+              jq -e \
+                --argjson expected "${EXPECTED_ARCHIVES}" \
+                --arg version "${VERSION}" \
+                --arg tag "${SOURCE_TAG}" \
+                --arg sha "${SOURCE_SHA}" '
+                (.immutable_digests.archives | keys | sort) == $expected and
+                ([.immutable_digests.archives[] |
+                  test("^sha256:[0-9a-f]{64}$")] | all) and
+                (.immutable_digests.npm |
+                  .name == "@automagik/omni" and
+                  .version == $version and
+                  .source_sha == $sha and
+                  (.integrity | test("^sha512-")) and
+                  (.provenance_url | startswith("https://search.sigstore.dev/"))) and
+                (.immutable_digests.helm |
+                  .name == ("omni-" + $version + ".tgz") and
+                  .version == $version and
+                  .source_sha == $sha and
+                  (.digest | test("^sha256:[0-9a-f]{64}$"))) and
+                (.immutable_digests.images.components | keys | sort) ==
+                  ["autopg","omni-admin-ui","omni-api"] and
+                ([.immutable_digests.images.components[] |
+                  (.identity | type == "string" and length > 0) and
+                  (.digest | test("^sha256:[0-9a-f]{64}$")) and
+                  (.attestation.digest == .digest) and
+                  (.attestation.source_sha == $sha) and
+                  (.attestation.workflow ==
+                    ("https://github.com/" + env.GITHUB_REPOSITORY +
+                     "/.github/workflows/image-publish.yml@refs/tags/" + $tag))
+                ] | all)
+              ' <<<"${JSON}" >/dev/null || {
+                echo "::error::stable promotion metadata inventory/schema is incomplete"
+                exit 1
+              }
+              for component in omni-api autopg omni-admin-ui; do
+                IDENTITY="$(jq -r --arg component "${component}" \
+                  '.immutable_digests.images.components[$component].identity' <<<"${JSON}")"
+                DIGEST="$(jq -r --arg component "${component}" \
+                  '.immutable_digests.images.components[$component].digest' <<<"${JSON}")"
+                [[ "${IDENTITY}" == "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${component}" ]]
+                cosign verify-attestation \
+                  --type slsaprovenance \
+                  --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/image-publish.yml@refs/tags/${SOURCE_TAG}" \
+                  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                  "${IDENTITY}@${DIGEST}" > /tmp/image-attestation.json
+                jq -e \
+                  --arg sha "${SOURCE_SHA}" \
+                  --arg ref "refs/tags/${SOURCE_TAG}" \
+                  '([.. | strings] | any(contains($sha))) and
+                   ([.. | strings] | any(contains($ref)))' \
+                  /tmp/image-attestation.json >/dev/null || {
+                  echo "::error::${component} attestation is not bound to ${SOURCE_TAG}@${SOURCE_SHA}"
+                  exit 1
+                }
+                gh attestation verify "oci://${IDENTITY}@${DIGEST}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-publish.yml" \
+                  --source-ref "refs/tags/${SOURCE_TAG}"
+              done
+              mkdir -p prior/assets
+              gh release download "${SOURCE_TAG}" \
+                --dir prior/assets \
+                --repo "${GITHUB_REPOSITORY}"
+              EXPECTED_ASSETS="$(jq -cn \
+                --argjson archives "${EXPECTED_ARCHIVES}" \
+                --arg helm "$(jq -r .immutable_digests.helm.name <<<"${JSON}")" \
+                '$archives + [$helm, "release-metadata.json", "release-metadata.json.bundle"] | sort')"
+              ACTUAL_ASSETS="$(find prior/assets -maxdepth 1 -type f -printf '%f\n' | jq -Rsc 'split("\n") | map(select(length > 0)) | sort')"
+              [[ "${ACTUAL_ASSETS}" == "${EXPECTED_ASSETS}" ]] || {
+                echo "::error::GitHub release asset inventory is not exact"
+                exit 1
+              }
+              jq -r '.immutable_digests.archives | to_entries[] | "\(.value)  prior/assets/\(.key)"' \
+                <<<"${JSON}" | sed 's/^sha256://' | sha256sum --check --strict
+              for platform in linux-x64-glibc linux-x64-musl linux-arm64 darwin-arm64; do
+                ARCHIVE="prior/assets/omni-${VERSION}-${platform}.tar.gz"
+                cosign verify-blob \
+                  --bundle "${ARCHIVE}.bundle" \
+                  --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml@refs/tags/${SOURCE_TAG}" \
+                  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                  "${ARCHIVE}"
+                slsa-verifier verify-artifact "${ARCHIVE}" \
+                  --provenance-path "${ARCHIVE}.intoto.jsonl" \
+                  --source-uri "github.com/${GITHUB_REPOSITORY}" \
+                  --source-tag "${SOURCE_TAG}"
+                jq -r .payload "${ARCHIVE}.intoto.jsonl" | base64 -d > /tmp/archive-provenance.json
+                jq -e \
+                  --arg repo "https://github.com/${GITHUB_REPOSITORY}" \
+                  --arg ref "refs/tags/${SOURCE_TAG}" \
+                  --arg sha "${SOURCE_SHA}" \
+                  '([.. | strings] | any(contains($repo))) and
+                   ([.. | strings] | any(contains($ref))) and
+                   ([.. | strings] | any(contains($sha)))' \
+                  /tmp/archive-provenance.json >/dev/null || {
+                  echo "::error::archive provenance does not record the exact repository, tag, and source SHA"
+                  exit 1
+                }
+                gh attestation verify "${ARCHIVE}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml" \
+                  --source-ref "refs/tags/${SOURCE_TAG}"
+              done
+              HELM_NAME="$(jq -r .immutable_digests.helm.name <<<"${JSON}")"
+              HELM_DIGEST="$(jq -r .immutable_digests.helm.digest <<<"${JSON}" | sed 's/^sha256://')"
+              printf '%s  %s\n' "${HELM_DIGEST}" "prior/assets/${HELM_NAME}" | sha256sum --check --strict
+              CHART_YAML="$(tar -xOzf "prior/assets/${HELM_NAME}" omni/Chart.yaml)"
+              [[ "$(yq -r .version <<<"${CHART_YAML}")" == "${VERSION}" ]]
+              [[ "$(yq -r .appVersion <<<"${CHART_YAML}")" == "${VERSION}" ]]
+              [[ "$(yq -r '.sources[]' <<<"${CHART_YAML}")" == "https://github.com/${GITHUB_REPOSITORY}" ]]
+              REMOTE_INTEGRITY="$(npm view "@automagik/omni@${VERSION}" dist.integrity)"
+              REMOTE_PROVENANCE="$(npm view "@automagik/omni@${VERSION}" dist.attestations.provenance.url)"
+              [[ "${REMOTE_INTEGRITY}" == "$(jq -r .immutable_digests.npm.integrity <<<"${JSON}")" ]]
+              [[ "${REMOTE_PROVENANCE}" == "$(jq -r .immutable_digests.npm.provenance_url <<<"${JSON}")" ]]
+              NPM_CHECK="$(mktemp -d)"
+              npm install --package-lock-only --ignore-scripts \
+                --prefix "${NPM_CHECK}" "@automagik/omni@${VERSION}"
+              npm audit signatures --prefix "${NPM_CHECK}"
+              curl --fail --silent --show-error "${REMOTE_PROVENANCE}" > "${NPM_CHECK}/provenance.json"
+              jq -e \
+                --arg repo "https://github.com/${GITHUB_REPOSITORY}" \
+                --arg ref "refs/tags/${SOURCE_TAG}" \
+                --arg sha "${SOURCE_SHA}" \
+                '([.. | strings] | any(contains($repo))) and
+                 ([.. | strings] | any(contains($ref))) and
+                 ([.. | strings] | any(contains($sha)))' \
+                "${NPM_CHECK}/provenance.json" >/dev/null || {
+                echo "::error::npm provenance is not bound to the expected repository, tag, and source SHA"
+                exit 1
+              }
+            fi
+            echo "json=${JSON}" >> "$GITHUB_OUTPUT"
+          elif [[ "${MODE}" == "promote" ]]; then
+            echo "::error::stable promotion requires existing immutable release metadata"
+            exit 1
+          else
+            echo "json=" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    name: Build immutable archives
+    needs: [context, verify]
+    if: needs.context.outputs.mode == 'build'
     uses: ./.github/workflows/build-tarballs.yml
     permissions:
       contents: read
     secrets: inherit
+    with:
+      version: ${{ needs.context.outputs.version }}
+      source_tag: ${{ needs.context.outputs.source_tag }}
+      source_sha: ${{ needs.context.outputs.source_sha }}
+      recovery: ${{ needs.context.outputs.recovery == 'true' }}
 
   sign-attest:
-    needs: build
+    name: Sign immutable archives
+    needs: [context, verify, build]
+    if: needs.context.outputs.mode == 'build'
     uses: ./.github/workflows/sign-attest.yml
     permissions:
-      contents: write       # SLSA reusable nested upload-assets static check
-      id-token: write       # cosign keyless + attest-build-provenance OIDC
-      attestations: write   # GitHub Attestations API registration
-      actions: read         # cross-run artifact metadata
-    secrets: inherit
-
-  publish:
-    needs: sign-attest
-    uses: ./.github/workflows/release-publish.yml
-    permissions:
-      contents: write       # gh release create/upload + push latest.json
-      id-token: write       # reserved for any OIDC-using publish-time verifiers
+      contents: write
+      id-token: write
+      attestations: write
+      actions: read
     secrets: inherit
     with:
-      version: ${{ needs.sign-attest.outputs.version }}
-      # workflow_dispatch supplies the channel (version.yml passes 'dev' for
-      # dev-branch dispatches, 'stable' for main-branch dispatches). Bare
-      # tag pushes fall through to stable. Mirrors genie wish
-      # release-channel-dev (PR #2419).
-      channel: ${{ inputs.channel || 'stable' }}
-      draft: false
+      version: ${{ needs.context.outputs.version }}
+      source_tag: ${{ needs.context.outputs.source_tag }}
+      source_sha: ${{ needs.context.outputs.source_sha }}
+      recovery: ${{ needs.context.outputs.recovery == 'true' }}
 
-  # ---------------------------------------------------------------------------
-  # Release notes (git-cliff) — runs after publish so the GH release exists.
-  # Updates the release body with the generated changelog.
-  #
-  # NOTE: npm publish is NOT performed by this workflow. version.yml runs
-  # `npm publish --tag <next|latest>` inline using a branch-derived dist-tag
-  # (main → @latest, dev → @next). A duplicate publish step here would race
-  # version.yml's inline path AND, before this drop, the missing channel
-  # gate meant dev dispatches were attempting `npm publish --tag latest`
-  # against a version version.yml had already pushed as @next — promoting
-  # dev cuts to the @latest dist-tag. Codex P1 on PR #633 surfaced this;
-  # the publish-npm job has been removed to keep a single source of truth.
-  # ---------------------------------------------------------------------------
+  npm-candidate:
+    name: Publish immutable npm candidate
+    needs: [context, verify]
+    if: needs.context.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      metadata_json: ${{ steps.package.outputs.metadata_json }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.context.outputs.source_sha }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - run: bun install --frozen-lockfile
+      - run: bunx turbo run build --filter=@automagik/omni
+
+      - name: Publish once or verify the existing immutable package
+        id: package
+        env:
+          VERSION: ${{ needs.context.outputs.version }}
+          SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
+          HUSKY: '0'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/npm-candidate
+          PACK_JSON="$(cd packages/cli && npm pack --json --pack-destination /tmp/npm-candidate)"
+          LOCAL_INTEGRITY="$(jq -r '.[0].integrity' <<<"${PACK_JSON}")"
+          REMOTE_INTEGRITY="$(npm view "@automagik/omni@${VERSION}" dist.integrity 2>/dev/null || true)"
+          if [[ -n "${REMOTE_INTEGRITY}" ]]; then
+            [[ "${REMOTE_INTEGRITY}" == "${LOCAL_INTEGRITY}" ]] || {
+              echo "::error::Refusing provenance-changing overwrite of npm @automagik/omni@${VERSION}"
+              exit 1
+            }
+          else
+            (cd packages/cli && npm publish --access public --tag "candidate-${VERSION}" --provenance)
+            REMOTE_INTEGRITY="$(npm view "@automagik/omni@${VERSION}" dist.integrity)"
+            [[ "${REMOTE_INTEGRITY}" == "${LOCAL_INTEGRITY}" ]]
+          fi
+          PROVENANCE_URL="$(npm view "@automagik/omni@${VERSION}" dist.attestations.provenance.url 2>/dev/null || true)"
+          [[ "${PROVENANCE_URL}" == https://search.sigstore.dev/* ]] || {
+            echo "::error::npm candidate is missing registry provenance"
+            exit 1
+          }
+          JSON="$(jq -cn \
+            --arg name '@automagik/omni' \
+            --arg version "${VERSION}" \
+            --arg integrity "${LOCAL_INTEGRITY}" \
+            --arg source_sha "${SOURCE_SHA}" \
+            --arg candidate_tag "candidate-${VERSION}" \
+            --arg provenance_url "${PROVENANCE_URL}" \
+            '{name:$name, version:$version, integrity:$integrity, source_sha:$source_sha,
+              dist_tag:$candidate_tag, provenance_url:$provenance_url}')"
+          echo "metadata_json=${JSON}" >> "$GITHUB_OUTPUT"
+
+  npm-promote:
+    name: Advance npm stable pointer
+    needs: [context, verify]
+    if: needs.context.outputs.mode == 'promote'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Point latest at the verified existing package
+        env:
+          VERSION: ${{ needs.context.outputs.version }}
+          # Trusted Publishing authorizes `npm publish`; registry metadata
+          # mutations such as dist-tag changes use the existing scoped token.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${NODE_AUTH_TOKEN}" ]] || {
+            echo "::error::NPM_TOKEN is required to advance the stable dist-tag"
+            exit 1
+          }
+          [[ "$(npm view "@automagik/omni@${VERSION}" version)" == "${VERSION}" ]]
+          CURRENT_LATEST="$(npm view @automagik/omni dist-tags.latest 2>/dev/null || true)"
+          if [[ -n "${CURRENT_LATEST}" && "${CURRENT_LATEST}" != "${VERSION}" ]]; then
+            HIGHEST="$(printf '%s\n%s\n' "${CURRENT_LATEST}" "${VERSION}" | sort -V | tail -1)"
+            [[ "${HIGHEST}" == "${VERSION}" ]] || {
+              echo "::error::refusing to move latest backwards from ${CURRENT_LATEST} to ${VERSION}"
+              exit 1
+            }
+          fi
+          npm dist-tag add "@automagik/omni@${VERSION}" latest
+          [[ "$(npm view @automagik/omni dist-tags.latest)" == "${VERSION}" ]]
+
+  helm-candidate:
+    name: Build immutable Helm candidate
+    needs: [context, verify]
+    if: needs.context.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      metadata_json: ${{ steps.package.outputs.metadata_json }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.context.outputs.source_sha }}
+          fetch-depth: 0
+      - uses: azure/setup-helm@v4
+      - name: Package chart and record digest
+        id: package
+        env:
+          VERSION: ${{ needs.context.outputs.version }}
+          SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          APP_VERSION="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' deploy/helm/omni/Chart.yaml)"
+          [[ "${APP_VERSION}" == "${VERSION}" ]]
+          mkdir -p dist
+          helm package deploy/helm/omni \
+            --version "${VERSION}" \
+            --app-version "${VERSION}" \
+            --destination dist
+          CHART="$(find dist -maxdepth 1 -type f -name 'omni-*.tgz' -print -quit)"
+          [[ -s "${CHART}" ]]
+          [[ "$(basename "${CHART}")" == "omni-${VERSION}.tgz" ]]
+          CHART_YAML="$(tar -xOzf "${CHART}" omni/Chart.yaml)"
+          [[ "$(yq -r .version <<<"${CHART_YAML}")" == "${VERSION}" ]]
+          [[ "$(yq -r .appVersion <<<"${CHART_YAML}")" == "${VERSION}" ]]
+          [[ "$(yq -r '.sources[]' <<<"${CHART_YAML}")" == "https://github.com/${GITHUB_REPOSITORY}" ]]
+          DIGEST="sha256:$(sha256sum "${CHART}" | cut -d' ' -f1)"
+          JSON="$(jq -cn \
+            --arg name "$(basename "${CHART}")" \
+            --arg version "${VERSION}" \
+            --arg digest "${DIGEST}" \
+            --arg source_sha "${SOURCE_SHA}" \
+            '{name:$name, version:$version, digest:$digest, source_sha:$source_sha}')"
+          echo "metadata_json=${JSON}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omni-${{ needs.context.outputs.version }}-helm
+          path: dist/omni-*.tgz
+          if-no-files-found: error
+          retention-days: 30
+
+  images-build:
+    name: Build immutable OCI candidates
+    needs: [context, verify]
+    if: needs.context.outputs.mode == 'build'
+    uses: ./.github/workflows/image-publish.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    secrets: inherit
+    with:
+      version: ${{ needs.context.outputs.version }}
+      channel: ${{ needs.context.outputs.channel }}
+      source_tag: ${{ needs.context.outputs.source_tag }}
+      source_sha: ${{ needs.context.outputs.source_sha }}
+      mode: build
+
+  images-promote-stable:
+    name: Advance verified OCI stable pointers
+    needs: [context, verify]
+    if: needs.context.outputs.mode == 'promote'
+    uses: ./.github/workflows/image-publish.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    secrets: inherit
+    with:
+      version: ${{ needs.context.outputs.version }}
+      channel: ${{ needs.context.outputs.channel }}
+      source_tag: ${{ needs.context.outputs.source_tag }}
+      source_sha: ${{ needs.context.outputs.source_sha }}
+      mode: promote
+
+  metadata:
+    name: Aggregate immutable release metadata
+    needs: [context, verify, sign-attest, npm-candidate, helm-candidate, images-build]
+    if: needs.context.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      metadata_json: ${{ steps.aggregate.outputs.metadata_json }}
+    steps:
+      - name: Validate component interfaces and aggregate
+        id: aggregate
+        env:
+          VERSION: ${{ needs.context.outputs.version }}
+          CHANNEL: ${{ needs.context.outputs.channel }}
+          SOURCE_TAG: ${{ needs.context.outputs.source_tag }}
+          SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
+          AUTHORIZATION_EVENT: ${{ needs.context.outputs.authorization_event }}
+          AUTHORIZATION_SHA: ${{ needs.context.outputs.authorization_sha }}
+          ARCHIVE_JSON: ${{ needs.sign-attest.outputs.artifact_digests_json }}
+          NPM_JSON: ${{ needs.npm-candidate.outputs.metadata_json }}
+          HELM_JSON: ${{ needs.helm-candidate.outputs.metadata_json }}
+          IMAGE_JSON: ${{ needs.images-build.outputs.image_metadata_json }}
+        run: |
+          set -euo pipefail
+          for component in omni-api autopg omni-admin-ui; do
+            jq -e \
+              --arg component "${component}" \
+              --arg sha "${SOURCE_SHA}" \
+              --arg identity "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${component}" \
+              --arg workflow "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/image-publish.yml@refs/tags/${SOURCE_TAG}" \
+              '.components[$component] |
+               .identity == $identity and
+               (.digest | type == "string" and startswith("sha256:")) and
+               .attestation.digest == .digest and
+               .attestation.source_sha == $sha and
+               .attestation.workflow == $workflow' <<<"${IMAGE_JSON}" >/dev/null || {
+              echo "::error::missing immutable image metadata for ${component}"
+              exit 1
+            }
+          done
+          jq -e \
+            --arg version "${VERSION}" \
+            --arg channel "${CHANNEL}" \
+            --arg tag "${SOURCE_TAG}" \
+            --arg sha "${SOURCE_SHA}" \
+            '.version == $version and .channel == $channel and
+             .source_tag == $tag and .source_sha == $sha and .mode == "build"' \
+            <<<"${IMAGE_JSON}" >/dev/null
+
+          EXPECTED_COMPONENTS='[
+            "npm:@automagik/omni",
+            "helm:omni",
+            "archive:linux-x64-glibc",
+            "archive:linux-x64-musl",
+            "archive:linux-arm64",
+            "archive:darwin-arm64",
+            "oci:omni-api",
+            "oci:autopg",
+            "oci:omni-admin-ui"
+          ]'
+          PAYLOAD="$(jq -cn \
+            --arg version "${VERSION}" \
+            --arg channel "${CHANNEL}" \
+            --arg source_tag "${SOURCE_TAG}" \
+            --arg source_sha "${SOURCE_SHA}" \
+            --arg tag_commit_sha "${SOURCE_SHA}" \
+            --arg authorization_event "${AUTHORIZATION_EVENT}" \
+            --arg authorization_sha "${AUTHORIZATION_SHA}" \
+            --argjson expected_components "${EXPECTED_COMPONENTS}" \
+            --argjson archives "${ARCHIVE_JSON}" \
+            --argjson npm "${NPM_JSON}" \
+            --argjson helm "${HELM_JSON}" \
+            --argjson images "${IMAGE_JSON}" \
+            '{
+              schema_version: 1,
+              version: $version,
+              channel: $channel,
+              source_tag: $source_tag,
+              source_sha: $source_sha,
+              tag_commit_sha: $tag_commit_sha,
+              authorization: {event:$authorization_event, sha:$authorization_sha},
+              expected_components: $expected_components,
+              immutable_digests: {
+                archives:$archives,
+                npm:$npm,
+                helm:$helm,
+                images:$images
+              }
+            }')"
+          AGGREGATE_DIGEST="sha256:$(jq -cS . <<<"${PAYLOAD}" | sha256sum | cut -d' ' -f1)"
+          METADATA="$(jq -cn \
+            --argjson payload "${PAYLOAD}" \
+            --arg aggregate_digest "${AGGREGATE_DIGEST}" \
+            '$payload + {aggregate_digest:$aggregate_digest}')"
+          echo "metadata_json=${METADATA}" >> "$GITHUB_OUTPUT"
+          jq . <<<"${METADATA}" > release-metadata.json
+      - name: Install cosign for metadata trust root
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+      - name: Sign immutable release metadata
+        env:
+          COSIGN_YES: 'true'
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle release-metadata.json.bundle \
+            release-metadata.json
+          [[ -s release-metadata.json.bundle ]]
+      - name: Attest immutable release metadata
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: release-metadata.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata-${{ needs.context.outputs.version }}
+          path: |
+            release-metadata.json
+            release-metadata.json.bundle
+          if-no-files-found: error
+          retention-days: 90
+
+  npm-advance-dev:
+    name: Advance npm dev pointer after aggregate verification
+    needs: [context, metadata, publish-build]
+    if: needs.context.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Point next at the verified candidate
+        env:
+          VERSION: ${{ needs.context.outputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${NODE_AUTH_TOKEN}" ]]
+          CANDIDATE="$(npm view "@automagik/omni" "dist-tags.candidate-${VERSION}" 2>/dev/null || true)"
+          if [[ -n "${CANDIDATE}" && "${CANDIDATE}" != "${VERSION}" ]]; then
+            echo "::error::candidate-${VERSION} unexpectedly points at ${CANDIDATE}"
+            exit 1
+          fi
+          if [[ -z "${CANDIDATE}" ]]; then
+            npm dist-tag add "@automagik/omni@${VERSION}" "candidate-${VERSION}"
+          fi
+          CURRENT_NEXT="$(npm view @automagik/omni dist-tags.next 2>/dev/null || true)"
+          if [[ -n "${CURRENT_NEXT}" && "${CURRENT_NEXT}" != "${VERSION}" ]]; then
+            HIGHEST="$(printf '%s\n%s\n' "${CURRENT_NEXT}" "${VERSION}" | sort -V | tail -1)"
+            [[ "${HIGHEST}" == "${VERSION}" ]] || {
+              echo "::error::refusing to move next backwards from ${CURRENT_NEXT} to ${VERSION}"
+              exit 1
+            }
+          fi
+          npm dist-tag add "@automagik/omni@${VERSION}" next
+          [[ "$(npm view @automagik/omni dist-tags.next)" == "${VERSION}" ]]
+
+  images-promote-dev:
+    name: Advance OCI dev pointers after aggregate verification
+    needs: [context, metadata, publish-build]
+    if: needs.context.outputs.mode == 'build'
+    uses: ./.github/workflows/image-publish.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    secrets: inherit
+    with:
+      version: ${{ needs.context.outputs.version }}
+      channel: dev
+      source_tag: ${{ needs.context.outputs.source_tag }}
+      source_sha: ${{ needs.context.outputs.source_sha }}
+      mode: promote
+
+  publish-build:
+    name: Publish immutable dev candidates
+    needs: [context, verify, sign-attest, helm-candidate, metadata]
+    if: needs.context.outputs.mode == 'build'
+    uses: ./.github/workflows/release-publish.yml
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      version: ${{ needs.context.outputs.version }}
+      channel: ${{ needs.context.outputs.channel }}
+      source_tag: ${{ needs.context.outputs.source_tag }}
+      source_sha: ${{ needs.context.outputs.source_sha }}
+      authorization_event: ${{ needs.context.outputs.authorization_event }}
+      authorization_sha: ${{ needs.context.outputs.authorization_sha }}
+      mode: ${{ needs.context.outputs.mode }}
+      metadata_json: ${{ needs.metadata.outputs.metadata_json }}
+
+  publish-promote:
+    name: Advance stable release pointers
+    needs: [context, verify, npm-promote, images-promote-stable]
+    if: needs.context.outputs.mode == 'promote'
+    uses: ./.github/workflows/release-publish.yml
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      version: ${{ needs.context.outputs.version }}
+      channel: ${{ needs.context.outputs.channel }}
+      source_tag: ${{ needs.context.outputs.source_tag }}
+      source_sha: ${{ needs.context.outputs.source_sha }}
+      authorization_event: ${{ needs.context.outputs.authorization_event }}
+      authorization_sha: ${{ needs.context.outputs.authorization_sha }}
+      mode: ${{ needs.context.outputs.mode }}
+      metadata_json: ${{ needs.verify.outputs.existing_metadata_json }}
+
   release-notes:
-    needs: publish
-    name: Generate release notes
+    name: Generate release notes for dev candidate
+    needs: [context, publish-build]
+    if: needs.context.outputs.mode == 'build'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -116,57 +1087,62 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.context.outputs.source_sha }}
           fetch-depth: 0
-
-      - name: Resolve release tag
-        id: pkg
-        env:
-          REF_NAME: ${{ github.ref_name }}
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          git fetch --tags --force
-          if [[ -n "${INPUT_VERSION}" ]]; then
-            TAG="v${INPUT_VERSION}"
-          else
-            TAG="${REF_NAME}"
-          fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-
       - name: Find previous release tag
         id: prev
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          SOURCE_TAG: ${{ needs.context.outputs.source_tag }}
         run: |
-          TAG="${{ steps.pkg.outputs.tag }}"
-          PREV=$(gh release list --limit 50 --json tagName -q '.[].tagName' | grep -v "^${TAG}$" | head -1)
+          PREV="$(gh release list --limit 50 --json tagName -q '.[].tagName' | grep -v "^${SOURCE_TAG}$" | head -1)"
           echo "tag=${PREV:-}" >> "$GITHUB_OUTPUT"
-          echo "Previous release tag: ${PREV:-none}"
-
       - name: Generate changelog
-        # git-cliff-action can fail after writing the requested file when the
-        # generated multi-line changelog trips GitHub output delimiter parsing
-        # ("Invalid value. Matching delimiter not found 'EOF'"). The release
-        # artifact should not go red for that wrapper-output bug; the next step
-        # uses /tmp/release-notes.md if it exists and otherwise leaves the
-        # generated release body in place.
         continue-on-error: true
         uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
         with:
           config: cliff.toml
           args: >-
-            ${{ steps.prev.outputs.tag && format('{0}..{1}', steps.prev.outputs.tag, steps.pkg.outputs.tag) || '' }}
+            ${{ steps.prev.outputs.tag && format('{0}..{1}', steps.prev.outputs.tag, needs.context.outputs.source_tag) || '' }}
             --output /tmp/release-notes.md
-        env:
-          GITHUB_REPO: ${{ github.repository }}
-
-      - name: Update release body with changelog
+      - name: Update release body
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          SOURCE_TAG: ${{ needs.context.outputs.source_tag }}
         run: |
-          TAG="${{ steps.pkg.outputs.tag }}"
           if [[ -s /tmp/release-notes.md ]]; then
-            gh release edit "${TAG}" --notes-file /tmp/release-notes.md
-            echo "Updated release body for ${TAG}"
+            gh release edit "${SOURCE_TAG}" --notes-file /tmp/release-notes.md
+          fi
+
+  result:
+    name: Export release metadata
+    needs: [context, verify, metadata, publish-build, publish-promote, npm-advance-dev, images-promote-dev]
+    if: >-
+      always() &&
+      (needs.publish-build.result == 'success' || needs.publish-promote.result == 'success')
+    runs-on: ubuntu-latest
+    outputs:
+      release_metadata_json: ${{ steps.result.outputs.release_metadata_json }}
+    steps:
+      - id: result
+        env:
+          BUILD_METADATA: ${{ needs.metadata.outputs.metadata_json }}
+          EXISTING_METADATA: ${{ needs.verify.outputs.existing_metadata_json }}
+          CHANNEL: ${{ needs.context.outputs.channel }}
+          AUTHORIZATION_EVENT: ${{ needs.context.outputs.authorization_event }}
+          AUTHORIZATION_SHA: ${{ needs.context.outputs.authorization_sha }}
+        run: |
+          if [[ -n "${BUILD_METADATA}" ]]; then
+            echo "release_metadata_json=${BUILD_METADATA}" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::git-cliff produced empty notes; leaving auto-generated body in place"
+            PROMOTED="$(jq -cn \
+              --argjson metadata "${EXISTING_METADATA}" \
+              --arg channel "${CHANNEL}" \
+              --arg event "${AUTHORIZATION_EVENT}" \
+              --arg sha "${AUTHORIZATION_SHA}" \
+              '$metadata + {
+                channel:$channel,
+                promotion_authorization:{event:$event, sha:$sha}
+              }')"
+            echo "release_metadata_json=${PROMOTED}" >> "$GITHUB_OUTPUT"
           fi

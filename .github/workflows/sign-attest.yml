@@ -10,9 +10,9 @@ name: Sign + Attest Tarballs
 # `omni-${VERSION}-<platform>-signed` artifacts are uploaded for Group 3
 # (release-publish) to consume.
 #
-# Trigger: orchestrated from release.yml via workflow_call on tag push
-# (refs/tags/v*); also dispatchable manually via workflow_dispatch with the
-# upstream build-tarballs run-id.
+# Trigger: orchestrated from release.yml via workflow_call at the immutable
+# source tag. Recovery also enters through release.yml so the complete source
+# tuple and protected environment are validated before signing starts.
 #
 # Signing model is cosign KEYLESS — the OIDC identity is bound to this
 # workflow file path + ref (Fulcio SAN URI). There is no long-lived key.
@@ -36,28 +36,31 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Version (derivable from artifact filenames if omitted)'
-        required: false
+        description: 'Exact package version (without v prefix)'
+        required: true
         type: string
+      source_tag:
+        description: 'Immutable v<version> source tag'
+        required: true
+        type: string
+      source_sha:
+        description: 'Full commit SHA resolved by source_tag'
+        required: true
+        type: string
+      recovery:
+        description: 'Protected recovery mode; signatures and provenance are regenerated locally'
+        required: true
+        type: boolean
     outputs:
       version:
         description: 'Resolved version (parsed from upstream tarball filenames)'
         value: ${{ jobs.prepare.outputs.version }}
-  # Manual-recovery escape hatch — operators can re-sign tarballs from a
-  # stranded build-tarballs run by passing version + run_id explicitly.
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to sign (must match upstream build artifacts)'
-        required: true
-        type: string
-      run_id:
-        description: 'build-tarballs.yml run ID to download artifacts from'
-        required: true
-        type: string
+      artifact_digests_json:
+        description: 'Immutable SHA-256 map for every signed archive asset'
+        value: ${{ jobs.collect.outputs.artifact_digests_json }}
 
 concurrency:
-  group: sign-attest-${{ github.ref }}-${{ inputs.version || github.sha }}
+  group: sign-attest-${{ inputs.source_sha }}
   cancel-in-progress: false
 
 permissions:
@@ -74,54 +77,41 @@ jobs:
     timeout-minutes: 10
     outputs:
       version: ${{ steps.hash.outputs.version }}
-      run_id:  ${{ steps.runid.outputs.run_id }}
+      run_id:  ${{ github.run_id }}
       hashes:  ${{ steps.hash.outputs.hashes }}
     steps:
-      - name: Resolve upstream run-id
-        id: runid
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${{ inputs.run_id }}" ]]; then
-            RUN_ID="${{ inputs.run_id }}"
-          else
-            RUN_ID="${{ github.run_id }}"
-          fi
-          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-          echo "Upstream run-id: ${RUN_ID}"
-
       - name: Download all tarball artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: omni-*-tarball
           merge-multiple: true
           path: dist
-          run-id: ${{ steps.runid.outputs.run_id }}
+          run-id: ${{ github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Resolve version + compute base64 subjects
         id: hash
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          EXPECTED_PLATFORMS: 'linux-x64-glibc linux-x64-musl linux-arm64 darwin-arm64'
         run: |
           set -euo pipefail
           cd dist
           shopt -s nullglob
           TARBALLS=( omni-*.tar.gz )
-          if [[ ${#TARBALLS[@]} -eq 0 ]]; then
-            echo "::error::no omni-*.tar.gz tarballs downloaded from upstream run-id ${{ steps.runid.outputs.run_id }}"
+          if [[ ${#TARBALLS[@]} -ne 4 ]]; then
+            echo "::error::expected exactly 4 tarballs, found ${#TARBALLS[@]}"
             ls -la
             exit 1
           fi
-          FIRST="${TARBALLS[0]}"
-          VERSION=$(echo "${FIRST}" | sed -E 's/^omni-(.+)-(linux-x64-glibc|linux-x64-musl|linux-arm64|darwin-arm64)\.tar\.gz$/\1/')
-          if [[ -z "${VERSION}" || "${VERSION}" == "${FIRST}" ]]; then
-            echo "::error::could not parse VERSION from filename '${FIRST}'"
-            exit 1
-          fi
-          if [[ -n "${{ inputs.version }}" && "${{ inputs.version }}" != "${VERSION}" ]]; then
-            echo "::error::workflow_dispatch input version='${{ inputs.version }}' does not match upstream artifact version='${VERSION}'"
-            exit 1
-          fi
+          VERSION="${INPUT_VERSION}"
+          for platform in ${EXPECTED_PLATFORMS}; do
+            [[ -s "omni-${VERSION}-${platform}.tar.gz" ]] || {
+              echo "::error::missing expected archive for ${platform}"
+              exit 1
+            }
+          done
           echo "Resolved version: ${VERSION}"
           echo "Tarballs to sign: ${#TARBALLS[@]}"
           printf '  %s\n' "${TARBALLS[@]}"
@@ -174,6 +164,22 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+
+      - name: Validate signing source
+        shell: bash
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "${SOURCE_TAG}" == "v${VERSION}" ]]
+          git fetch --force origin "refs/tags/${SOURCE_TAG}:refs/tags/${SOURCE_TAG}"
+          [[ "$(git rev-parse "${SOURCE_TAG}^{commit}")" == "${SOURCE_SHA}" ]]
+          [[ "$(git rev-parse HEAD)" == "${SOURCE_SHA}" ]]
 
       - name: Download tarball artifact (${{ matrix.platform }})
         uses: actions/download-artifact@v4
@@ -349,3 +355,46 @@ jobs:
             dist/omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.tar.gz.intoto.jsonl
           retention-days: 30
           if-no-files-found: error
+
+  collect:
+    name: Collect immutable archive digests
+    needs: [prepare, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      artifact_digests_json: ${{ steps.digests.outputs.json }}
+    steps:
+      - name: Download every signed archive
+        uses: actions/download-artifact@v4
+        with:
+          pattern: omni-${{ inputs.version }}-*-signed
+          merge-multiple: true
+          path: dist
+
+      - name: Validate inventory and emit digest map
+        id: digests
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          EXPECTED_PLATFORMS: 'linux-x64-glibc linux-x64-musl linux-arm64 darwin-arm64'
+        run: |
+          set -euo pipefail
+          declare -a FILES=()
+          for platform in ${EXPECTED_PLATFORMS}; do
+            base="dist/omni-${VERSION}-${platform}.tar.gz"
+            for file in "${base}" "${base}.bundle" "${base}.intoto.jsonl"; do
+              [[ -s "${file}" ]] || {
+                echo "::error::missing signed archive asset ${file}"
+                exit 1
+              }
+              FILES+=("${file}")
+            done
+          done
+          [[ "${#FILES[@]}" -eq 12 ]]
+          JSON='{}'
+          for file in "${FILES[@]}"; do
+            name="${file#dist/}"
+            digest="sha256:$(sha256sum "${file}" | cut -d' ' -f1)"
+            JSON="$(jq -cn --argjson old "${JSON}" --arg name "${name}" --arg digest "${digest}" '$old + {($name): $digest}')"
+          done
+          echo "json=${JSON}" >> "$GITHUB_OUTPUT"

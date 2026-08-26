@@ -19,29 +19,28 @@ name: Build Tarballs
 # 2022; Intel-Mac users run via Rosetta or the linux-x64 path under Docker.
 
 on:
-  # No `push: tags: ['v*']` — release.yml is the only tag entry-point. A
-  # tag-push would otherwise fire BOTH release.yml (orchestrator) and this
-  # workflow standalone, causing duplicate artifact uploads with the same
-  # name and wasted runner minutes. Tag-triggered execution flows
-  # exclusively through release.yml's workflow_call invocation below.
-  workflow_dispatch:
+  workflow_call:
     inputs:
       version:
-        description: 'Version override (default: packages/cli/package.json)'
-        required: false
+        description: 'Exact package version (without v prefix)'
+        required: true
         type: string
-  # Reusable from release.yml orchestrator. No inputs/outputs — version
-  # derives from packages/cli/package.json at build time; artifacts pass
-  # via the run-shared store.
-  workflow_call: {}
-  pull_request:
-    paths:
-      - 'scripts/build-binary.sh'
-      - '.github/workflows/build-tarballs.yml'
+      source_tag:
+        description: 'Immutable v<version> source tag'
+        required: true
+        type: string
+      source_sha:
+        description: 'Full commit SHA resolved by source_tag'
+        required: true
+        type: string
+      recovery:
+        description: 'Protected recovery mode; candidates are still rebuilt locally'
+        required: true
+        type: boolean
 
 concurrency:
-  group: build-tarballs-${{ github.ref }}
-  cancel-in-progress: true
+  group: build-tarballs-${{ inputs.source_sha }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -66,6 +65,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -81,19 +83,27 @@ jobs:
         shell: bash
         run: bun install --frozen-lockfile
 
-      - name: Resolve version
+      - name: Validate immutable source tuple
         id: ver
         shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
-          if [[ -n "${{ inputs.version }}" ]]; then
-            VERSION="${{ inputs.version }}"
-          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            VERSION=$(node -p "require('./packages/cli/package.json').version")
-          fi
+          set -euo pipefail
+          [[ "${VERSION}" =~ ^2\.[0-9]{6}\.[1-9][0-9]*$ ]]
+          [[ "${SOURCE_TAG}" == "v${VERSION}" ]]
+          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --force origin "refs/tags/${SOURCE_TAG}:refs/tags/${SOURCE_TAG}"
+          [[ "$(git rev-parse "${SOURCE_TAG}^{commit}")" == "${SOURCE_SHA}" ]] || {
+            echo "::error::${SOURCE_TAG} does not resolve to recorded ${SOURCE_SHA}"
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "${SOURCE_SHA}" ]]
+          [[ "$(node -p "require('./packages/cli/package.json').version")" == "${VERSION}" ]]
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version: ${VERSION}"
+          echo "Validated ${SOURCE_TAG}@${SOURCE_SHA}"
 
       - name: Build workspace dependencies
         # `bun build --compile` in build-binary.sh resolves @omni/sdk +

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | APPROVED |
+| **Status** | IN_PROGRESS |
 | **Slug** | `canonical-ui-consolidation` |
 | **Date** | 2026-08-12 |
 | **Author** | Felipe Rosa |
