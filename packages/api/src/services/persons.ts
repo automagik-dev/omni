@@ -17,6 +17,7 @@ import {
 } from '@omni/db';
 import { and, desc, eq, isNotNull, ne, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
+import { canonicalizeHandle } from '../utils/canonical-handle';
 
 export interface PersonWithIdentities extends Person {
   identities: PlatformIdentity[];
@@ -32,6 +33,40 @@ export interface PersonPresence {
     lastSeenAt: Date | null;
     firstSeenAt: Date | null;
   };
+}
+
+type IdentityData = Omit<NewPlatformIdentity, 'id' | 'personId' | 'createdAt' | 'updatedAt'> & { personId?: string };
+interface IdentityLinkOptions {
+  matchByPhone?: string;
+  matchByEmail?: string;
+  matchByPlatformUserId?: string;
+  matchByChannel?: ChannelType;
+  createPerson?: boolean;
+  displayName?: string;
+}
+
+/**
+ * Canonicalize an identity's natural key (and the cross-instance match key in
+ * lockstep) so bare / suffixed / device-suffixed WhatsApp handles resolve to one
+ * identity. Extracted from `findOrCreateIdentity` to keep it under the cognitive
+ * complexity limit; pure and idempotent.
+ */
+function canonicalizeIdentityInput(
+  rawData: IdentityData,
+  rawLinkOptions?: IdentityLinkOptions,
+): { data: IdentityData; linkOptions?: IdentityLinkOptions } {
+  const data: IdentityData = {
+    ...rawData,
+    platformUserId: canonicalizeHandle(rawData.channel, rawData.platformUserId).platformUserId,
+  };
+  if (rawLinkOptions?.matchByPlatformUserId === undefined) {
+    return { data, linkOptions: rawLinkOptions };
+  }
+  const linkOptions: IdentityLinkOptions = {
+    ...rawLinkOptions,
+    matchByPlatformUserId: canonicalizeHandle(rawData.channel, rawLinkOptions.matchByPlatformUserId).platformUserId,
+  };
+  return { data, linkOptions };
 }
 
 export class PersonService {
@@ -434,22 +469,19 @@ export class PersonService {
    * @returns The created/updated identity and whether it's new
    */
   async findOrCreateIdentity(
-    data: Omit<NewPlatformIdentity, 'id' | 'personId' | 'createdAt' | 'updatedAt'> & {
-      personId?: string;
-    },
-    linkOptions?: {
-      matchByPhone?: string;
-      matchByEmail?: string;
-      matchByPlatformUserId?: string;
-      matchByChannel?: ChannelType;
-      createPerson?: boolean;
-      displayName?: string;
-    },
+    rawData: IdentityData,
+    rawLinkOptions?: IdentityLinkOptions,
   ): Promise<{ identity: PlatformIdentity; person: Person | null; isNew: boolean; wasLinked: boolean }> {
-    const instanceId = data.instanceId;
+    const instanceId = rawData.instanceId;
     if (!instanceId) {
       throw new Error('instanceId is required');
     }
+
+    // Canonicalize the natural key BEFORE any lookup or insert so that bare,
+    // suffixed and device-suffixed spellings of the same WhatsApp number resolve
+    // to ONE identity (anti-fragmentation). Idempotent, so callers that already
+    // pass a canonical value are unaffected.
+    const { data, linkOptions } = canonicalizeIdentityInput(rawData, rawLinkOptions);
 
     // Check if identity already exists
     const existing = await this.db
@@ -628,6 +660,9 @@ export class PersonService {
     instanceId: string,
     platformUserId: string,
   ): Promise<PlatformIdentity | null> {
+    // Canonicalize the lookup key so it matches the canonical form used at write
+    // time — a raw bare/suffixed/device-suffixed handle still resolves the row.
+    const canonicalUserId = canonicalizeHandle(channel, platformUserId).platformUserId;
     const [identity] = await this.db
       .select()
       .from(platformIdentities)
@@ -635,7 +670,7 @@ export class PersonService {
         and(
           eq(platformIdentities.channel, channel),
           eq(platformIdentities.instanceId, instanceId),
-          eq(platformIdentities.platformUserId, platformUserId),
+          eq(platformIdentities.platformUserId, canonicalUserId),
         ),
       )
       .limit(1);
