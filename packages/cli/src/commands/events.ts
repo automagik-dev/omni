@@ -381,8 +381,13 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
       await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
     }
   } finally {
-    process.off('SIGINT', shutdown);
-    process.off('SIGTERM', shutdown);
+    // @types/bun narrows process.off/removeListener to its Bun-only
+    // 'memoryPressure' event, so passing a NodeJS signal name fails typecheck
+    // (process.on still accepts it). Cast to the standard EventEmitter shape to
+    // detach the handlers we attached above.
+    const proc = process as unknown as { off(event: string, listener: () => void): void };
+    proc.off('SIGINT', shutdown);
+    proc.off('SIGTERM', shutdown);
     await output.flushStdout();
   }
 }
