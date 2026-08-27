@@ -237,7 +237,9 @@ async function startServices(
       kind: 'nats',
       script: NATS_BINARY_PATH,
       name: PM2_PROCESSES.nats,
-      scriptArgs: ['-js', '-sd', natsDataDir],
+      // NATS is an internal event bus for the local Omni runtime. Never
+      // make it remotely reachable as a side effect of `omni install`.
+      scriptArgs: ['-a', '127.0.0.1', '-js', '-sd', natsDataDir],
     });
     const natsCode = await runPm2(natsArgs);
     if (natsCode !== 0) natsSpinner.warn(`${PM2_PROCESSES.nats} failed to start — check NATS binary`);
