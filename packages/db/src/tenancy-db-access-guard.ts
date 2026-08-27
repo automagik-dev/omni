@@ -722,6 +722,55 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
   },
   {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: '*',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'chat_id_mappings',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'chat_participants',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'messages',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'omni_events',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'persons',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'platform_identities',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
     file: 'packages/api/src/index.ts',
     table: '*',
     class: 'control-plane',
