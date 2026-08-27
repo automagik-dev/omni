@@ -134,9 +134,10 @@ postgresDescribe('reconciliation script dry-run mutates nothing (real PostgreSQL
     expect(personsAfter.length).toBe(personsBefore.length);
 
     // The phone-less persons are still phone-less; the survivor still bare/suffixed.
-    const phones = personsAfter.map((p) => p.primaryPhone).sort();
-    expect(phones).toEqual([null, null, '+5511777770000']);
+    const phones = personsAfter.map((p) => p.primaryPhone);
+    expect(phones.filter((p): p is string => p !== null).sort()).toEqual(['+5511777770000']);
+    expect(phones.filter((p) => p === null).length).toBe(2);
     const userIds = identitiesAfter.map((i) => i.platformUserId).sort();
-    expect(userIds).toEqual(['5511777770000', '5511777770000@s.whatsapp.net', '54958418317348@lid']);
+    expect(userIds).toEqual(['5511777770000', '5511777770000@s.whatsapp.net', '54958418317348@lid'].sort());
   }, 60_000);
 });
