@@ -7,6 +7,7 @@
  * omni events timeline <person-id>
  */
 
+import type { EventEmitter } from 'node:events';
 import type { Event, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
@@ -368,8 +369,11 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
   const shutdown = (): void => {
     stopped = true;
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  // Bun narrows Process.off() to Bun-only events, while signal listeners use
+  // the standard EventEmitter contract shared by Node and Bun.
+  const processEvents: EventEmitter = process;
+  processEvents.on('SIGINT', shutdown);
+  processEvents.on('SIGTERM', shutdown);
 
   if (!ndjson) output.dim(`Streaming events (poll=${pollMs}ms). Ctrl+C to stop.`);
 
@@ -381,13 +385,8 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
       await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
     }
   } finally {
-    // @types/bun narrows process.off/removeListener to its Bun-only
-    // 'memoryPressure' event, so passing a NodeJS signal name fails typecheck
-    // (process.on still accepts it). Cast to the standard EventEmitter shape to
-    // detach the handlers we attached above.
-    const proc = process as unknown as { off(event: string, listener: () => void): void };
-    proc.off('SIGINT', shutdown);
-    proc.off('SIGTERM', shutdown);
+    processEvents.off('SIGINT', shutdown);
+    processEvents.off('SIGTERM', shutdown);
     await output.flushStdout();
   }
 }
