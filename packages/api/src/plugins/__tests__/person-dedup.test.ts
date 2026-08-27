@@ -109,23 +109,25 @@ function mockPersonInsert(opts: MockDbOpts) {
 }
 
 function mockIdentityInsert() {
+  const buildRows = (data: Record<string, unknown>) => [
+    makeIdentity({
+      id: `new-identity-${Date.now()}`,
+      personId: data.personId as string | undefined,
+      channel: data.channel as PlatformIdentity['channel'],
+      instanceId: data.instanceId as string,
+      platformUserId: data.platformUserId as string,
+      platformUsername: data.platformUsername as string | null,
+      linkedBy: data.linkedBy as string | null,
+      confidence: (data.confidence as number) ?? 100,
+      linkReason: data.linkReason as string | null,
+    }),
+  ];
   return {
+    // findOrCreateIdentity secures the identity with onConflictDoNothing (idempotent
+    // upsert). The mock models the winning insert: it always returns a row.
     values: mock((data: Record<string, unknown>) => ({
-      returning: mock(() =>
-        Promise.resolve([
-          makeIdentity({
-            id: `new-identity-${Date.now()}`,
-            personId: data.personId as string | undefined,
-            channel: data.channel as PlatformIdentity['channel'],
-            instanceId: data.instanceId as string,
-            platformUserId: data.platformUserId as string,
-            platformUsername: data.platformUsername as string | null,
-            linkedBy: data.linkedBy as string | null,
-            confidence: (data.confidence as number) ?? 100,
-            linkReason: data.linkReason as string | null,
-          }),
-        ]),
-      ),
+      onConflictDoNothing: mock(() => ({ returning: mock(() => Promise.resolve(buildRows(data))) })),
+      returning: mock(() => Promise.resolve(buildRows(data))),
     })),
   };
 }
@@ -161,6 +163,10 @@ function createMockDb(opts: MockDbOpts) {
       })),
     })),
   };
+
+  // findOrCreateIdentity now secures the identity + defers person creation inside
+  // a single transaction. The mock runs the callback against the same handle.
+  (db as { transaction?: unknown }).transaction = mock((cb: (tx: unknown) => unknown) => cb(db));
 
   return db as unknown as Database;
 }

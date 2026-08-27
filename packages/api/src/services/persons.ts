@@ -164,8 +164,8 @@ export class PersonService {
   /**
    * Get person by ID
    */
-  async getById(id: string): Promise<Person> {
-    const [result] = await this.db.select().from(persons).where(eq(persons.id, id)).limit(1);
+  async getById(id: string, handle: Database = this.db): Promise<Person> {
+    const [result] = await handle.select().from(persons).where(eq(persons.id, id)).limit(1);
 
     if (!result) {
       throw new NotFoundError('Person', id);
@@ -289,8 +289,11 @@ export class PersonService {
   /**
    * Find existing person by phone (used for conflict resolution)
    */
-  private async findPersonByPhone(phone: string): Promise<{ personId: string; wasLinked: true } | null> {
-    const [existing] = await this.db.select().from(persons).where(eq(persons.primaryPhone, phone)).limit(1);
+  private async findPersonByPhone(
+    phone: string,
+    handle: Database = this.db,
+  ): Promise<{ personId: string; wasLinked: true } | null> {
+    const [existing] = await handle.select().from(persons).where(eq(persons.primaryPhone, phone)).limit(1);
     return existing ? { personId: existing.id, wasLinked: true } : null;
   }
 
@@ -354,13 +357,16 @@ export class PersonService {
    * Create a person with conflict handling for the UNIQUE phone constraint.
    * If insert conflicts (phone already exists), find and return the existing person.
    */
-  private async createPersonWithConflictHandling(linkOptions: {
-    matchByPhone?: string;
-    matchByEmail?: string;
-    displayName?: string;
-  }): Promise<{ personId?: string; wasLinked: boolean }> {
+  private async createPersonWithConflictHandling(
+    linkOptions: {
+      matchByPhone?: string;
+      matchByEmail?: string;
+      displayName?: string;
+    },
+    handle: Database = this.db,
+  ): Promise<{ personId?: string; wasLinked: boolean }> {
     try {
-      const [newPerson] = await this.db
+      const [newPerson] = await handle
         .insert(persons)
         .values({
           displayName: linkOptions.displayName,
@@ -374,12 +380,12 @@ export class PersonService {
 
       // Insert was skipped due to conflict — find and return existing person by phone
       if (linkOptions.matchByPhone) {
-        return (await this.findPersonByPhone(linkOptions.matchByPhone)) ?? { wasLinked: false };
+        return (await this.findPersonByPhone(linkOptions.matchByPhone, handle)) ?? { wasLinked: false };
       }
     } catch {
       // Fallback: re-query on any insert error (race condition safety)
       if (linkOptions.matchByPhone) {
-        return (await this.findPersonByPhone(linkOptions.matchByPhone)) ?? { wasLinked: false };
+        return (await this.findPersonByPhone(linkOptions.matchByPhone, handle)) ?? { wasLinked: false };
       }
     }
 
@@ -392,8 +398,9 @@ export class PersonService {
   private async updateExistingIdentity(
     existing: PlatformIdentity,
     data: Omit<NewPlatformIdentity, 'id' | 'personId' | 'createdAt' | 'updatedAt'>,
+    handle: Database = this.db,
   ): Promise<{ identity: PlatformIdentity; person: Person | null; isNew: boolean; wasLinked: boolean }> {
-    const [updated] = await this.db
+    const [updated] = await handle
       .update(platformIdentities)
       .set({
         platformUsername: data.platformUsername ?? existing.platformUsername,
@@ -411,7 +418,7 @@ export class PersonService {
 
     let person: Person | null = null;
     if (updated.personId) {
-      person = await this.getById(updated.personId);
+      person = await this.getById(updated.personId, handle);
     }
 
     return { identity: updated, person, isNew: false, wasLinked: false };
@@ -461,14 +468,16 @@ export class PersonService {
       return this.updateExistingIdentity(existing[0], data);
     }
 
-    // Try to find a person to link to
+    // Try to find an EXISTING person to link to. Person *creation* is deferred
+    // into secureIdentity() below, gated on winning the identity insert, so a
+    // lost first-contact race can never leave an orphan phone-less person.
     let personId: string | undefined = data.personId;
     let wasLinked = false;
+    let resolvedLinkOptions = linkOptions;
 
     if (!personId && linkOptions) {
       // Smart @lid→phone resolution: if this is a @lid identity with no phone match,
       // check chatIdMappings for a known phone JID and use it for person matching
-      let resolvedLinkOptions = linkOptions;
       if (!linkOptions.matchByPhone && data.platformUserId.endsWith('@lid') && instanceId) {
         const phoneFromLid = await this.resolvePhoneFromLid(instanceId, data.platformUserId);
         if (phoneFromLid) {
@@ -478,37 +487,137 @@ export class PersonService {
         }
       }
 
-      const linkResult = await this.findPersonToLink({ ...resolvedLinkOptions, instanceId });
+      // createPerson: false — only resolve an already-existing person here.
+      const linkResult = await this.findPersonToLink({ ...resolvedLinkOptions, instanceId, createPerson: false });
       personId = linkResult.personId;
       wasLinked = linkResult.wasLinked;
     }
 
-    // Create the identity
+    // Preserve the pre-existing linkedBy/confidence semantics of the create path.
+    // NOTE: matchType intentionally reads the caller's original linkOptions (not
+    // the @lid-resolved ones), exactly as before this change.
     const matchType = linkOptions?.matchByPhone ? 'phone' : linkOptions?.matchByEmail ? 'email' : 'platform_id';
     const linkedBy = wasLinked ? `${matchType}_match` : personId ? 'initial' : undefined;
     const linkReason = wasLinked ? `Matched by ${matchType}` : undefined;
 
-    const [created] = await this.db
-      .insert(platformIdentities)
-      .values({
-        ...data,
-        personId,
-        linkedBy,
-        confidence: wasLinked ? 90 : 100,
-        linkReason,
-      })
-      .returning();
+    // A new person may only be created when there is no existing person to link
+    // AND the caller asked for one; the resolved (possibly @lid-derived) phone is
+    // what the person is created with, matching the prior behaviour.
+    const createPersonOptions =
+      !personId && resolvedLinkOptions?.createPerson
+        ? {
+            matchByPhone: resolvedLinkOptions.matchByPhone,
+            matchByEmail: resolvedLinkOptions.matchByEmail,
+            displayName: resolvedLinkOptions.displayName,
+          }
+        : undefined;
 
-    if (!created) {
-      throw new Error('Failed to create identity');
-    }
+    return this.secureIdentity({
+      data,
+      personId,
+      wasLinked,
+      linkedBy,
+      linkReason,
+      confidence: wasLinked ? 90 : 100,
+      createPersonOptions,
+    });
+  }
 
-    let person: Person | null = null;
-    if (personId) {
-      person = await this.getById(personId);
-    }
+  /**
+   * Idempotently secure the `platform_identities` row for a first-contact sender
+   * and, only if this call actually inserted it, create the person it needs.
+   *
+   * Concurrency contract (why this is a transaction):
+   *   Two first-contact messages from the same new (channel, instanceId,
+   *   platformUserId) can both miss the SELECT above and race to INSERT. The
+   *   unique index `platform_identities_channel_user_idx` lets exactly one win.
+   *   `onConflictDoNothing` turns the loser's INSERT from an unhandled
+   *   unique-violation into a no-op that BLOCKS until the winner's transaction
+   *   commits, then returns no row. Because the winner creates and links its
+   *   person inside this same transaction, by the time the loser re-reads the
+   *   row the person link is already there — so the loser reuses it instead of
+   *   creating a duplicate. Result: exactly one identity, exactly one person, no
+   *   throw, and every caller gets the same rows.
+   *
+   * The non-racing path is behaviourally identical to the previous bare INSERT:
+   * the winner inserts, optionally creates its person, and returns isNew: true.
+   */
+  private async secureIdentity(params: {
+    data: Omit<NewPlatformIdentity, 'id' | 'personId' | 'createdAt' | 'updatedAt'> & { personId?: string };
+    personId?: string;
+    wasLinked: boolean;
+    linkedBy?: string;
+    linkReason?: string;
+    confidence: number;
+    createPersonOptions?: { matchByPhone?: string; matchByEmail?: string; displayName?: string };
+  }): Promise<{ identity: PlatformIdentity; person: Person | null; isNew: boolean; wasLinked: boolean }> {
+    const { data, personId, wasLinked, linkedBy, linkReason, confidence, createPersonOptions } = params;
+    const { instanceId, channel, platformUserId } = data;
 
-    return { identity: created, person, isNew: true, wasLinked };
+    return this.db.transaction(async (tx) => {
+      // The transaction handle runs the same query builder as the pooled handle;
+      // treat it as a `Database` (mirrors `scopedHandle`) so the identity insert,
+      // person creation, and person link all share one atomic transaction.
+      const txDb = tx as unknown as Database;
+
+      const [inserted] = await txDb
+        .insert(platformIdentities)
+        .values({
+          ...data,
+          personId,
+          linkedBy,
+          confidence,
+          linkReason,
+        })
+        .onConflictDoNothing()
+        .returning();
+
+      // Lost the race: the winning writer's transaction has committed (our
+      // onConflictDoNothing waited on it), so its identity — and any person it
+      // linked — is now visible. Re-read and refresh benign fields, exactly like
+      // the "identity already exists" fast path.
+      if (!inserted) {
+        const [existing] = await txDb
+          .select()
+          .from(platformIdentities)
+          .where(
+            and(
+              eq(platformIdentities.channel, channel),
+              eq(platformIdentities.instanceId, instanceId ?? ''),
+              eq(platformIdentities.platformUserId, platformUserId),
+            ),
+          )
+          .limit(1);
+
+        if (!existing) {
+          throw new Error('Failed to resolve identity after conflict');
+        }
+
+        return this.updateExistingIdentity(existing, data, txDb);
+      }
+
+      // We won the insert. If it already has a person (an existing match or an
+      // explicit personId), we are done. Otherwise create the person now — this
+      // only ever runs for the race winner, so no orphan can be produced.
+      if (inserted.personId || !createPersonOptions) {
+        const person = inserted.personId ? await this.getById(inserted.personId, txDb) : null;
+        return { identity: inserted, person, isNew: true, wasLinked };
+      }
+
+      const created = await this.createPersonWithConflictHandling(createPersonOptions, txDb);
+      if (!created.personId) {
+        return { identity: inserted, person: null, isNew: true, wasLinked };
+      }
+
+      const [linked] = await txDb
+        .update(platformIdentities)
+        .set({ personId: created.personId, linkedBy: 'initial', confidence: 100, updatedAt: new Date() })
+        .where(eq(platformIdentities.id, inserted.id))
+        .returning();
+
+      const person = await this.getById(created.personId, txDb);
+      return { identity: linked ?? inserted, person, isNew: true, wasLinked: created.wasLinked };
+    });
   }
 
   /**
