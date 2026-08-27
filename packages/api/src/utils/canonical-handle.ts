@@ -38,7 +38,7 @@ import { isValidE164Phone } from './phone';
  * WhatsApp-family channels whose phone handles share the `@s.whatsapp.net`
  * canonical JID and support `+E164` phone derivation.
  */
-export const WHATSAPP_FAMILY_CHANNELS: ReadonlySet<ChannelType> = new Set<ChannelType>([
+const WHATSAPP_FAMILY_CHANNELS: ReadonlySet<ChannelType> = new Set<ChannelType>([
   'whatsapp-baileys',
   'whatsapp-business',
   'twilio-whatsapp',
@@ -53,7 +53,7 @@ export const WHATSAPP_FAMILY_CHANNELS: ReadonlySet<ChannelType> = new Set<Channe
  *   - `a2a` keys on an agent subject / `a2a:<contextId>`; its customer context is
  *     resolved from the execution context by the dispatcher, not from a person.
  */
-export const PERSONLESS_CHANNELS: ReadonlySet<ChannelType> = new Set<ChannelType>(['internal', 'a2a']);
+const PERSONLESS_CHANNELS: ReadonlySet<ChannelType> = new Set<ChannelType>(['internal', 'a2a']);
 
 export interface CanonicalHandle {
   /** The canonical `platform_user_id` to use as the identity natural key. */
