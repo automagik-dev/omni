@@ -314,6 +314,30 @@ export function createApp(
     return plugin.handleWebhook(c.req.raw);
   });
 
+  // Public ASC Brazil (ASCWhats GW) webhook endpoint — auth-exempt.
+  // ASC documents no payload signature: authenticity rests on the per-instance
+  // path (unguessable instance UUID) plus an optional verify token (`chave`)
+  // checked by the handler when configured on the instance.
+  // - GET: Meta-style verification challenge (hub.challenge echo).
+  // - POST: Meta Cloud API-format event delivery.
+  // Must be mounted before protectedApp so ASC's servers can reach it.
+  const handleAscWebhook = async (c: Context<{ Variables: AppVariables }>) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('asc');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'ASC plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  };
+  app.post('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
+  app.get('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
+
   // Public WhatsApp Business API (Meta) webhook endpoint — auth-exempt, signed by Meta with HMAC-SHA256.
   // Unlike Gupshup/Twilio, the URL is GLOBAL (no :instanceId in path): instance resolution
   // happens inside the plugin via `metadata.phone_number_id` from the payload.

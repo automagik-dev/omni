@@ -22,6 +22,7 @@ import { BaseChannelPlugin } from '../base/BaseChannelPlugin';
 import type { ChannelCapabilities } from '../types/capabilities';
 
 import { ChannelError } from '@omni/core';
+import { ASC_CAPABILITIES, AscApiError, AscErrorCode, AscPlugin } from '../../../channel-asc/src/index';
 import {
   DISCORD_CAPABILITIES,
   DiscordError,
@@ -126,6 +127,16 @@ const channels: ChannelDescriptor[] = [
     errorSourcePath: channelPath('slack', 'types.ts'),
   },
   {
+    name: 'asc',
+    packageName: '@omni/channel-asc',
+    pluginClass: AscPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: AscApiError,
+    capabilities: ASC_CAPABILITIES,
+    pluginSourcePath: channelPath('asc', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('asc', 'handlers', 'webhook.ts')],
+    errorSourcePath: channelPath('asc', 'utils', 'errors.ts'),
+  },
+  {
     name: 'hermes',
     packageName: '@omni/channel-hermes',
     pluginClass: HermesPlugin as unknown as typeof BaseChannelPlugin,
@@ -221,14 +232,16 @@ const errorConstructorArgs: Record<string, unknown[]> = {
   'twilio-whatsapp': [TwilioWhatsAppErrorCode.SEND_FAILED, 'compliance test'],
   'whatsapp-business': [MetaErrorCode.INVALID_REQUEST, 'compliance test'],
   hermes: [HermesErrorCode.INVALID_REQUEST, 'compliance test'],
+  asc: [AscErrorCode.INVALID_REQUEST, 'compliance test'],
 };
 
 // Group 1: Infrastructure
 
 describe('SDK compliance test infrastructure', () => {
-  it('has descriptors for all 7 channels', () => {
+  it('has descriptors for all 8 channels', () => {
     const names = channels.map((c) => c.name).sort();
     expect(names).toEqual([
+      'asc',
       'discord',
       'hermes',
       'slack',

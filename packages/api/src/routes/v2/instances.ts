@@ -189,6 +189,13 @@ const createInstanceSchema = z.object({
   hermesPassword: z.string().optional().nullable().describe('Hermes account password'),
   hermesMediaId: z.string().optional().nullable().describe('Hermes line UUID (media_id) — required on every send'),
   hermesTemplateNamespace: z.string().optional().nullable().describe('Meta template namespace for HSM sends'),
+  ascBaseUrl: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('ASC gateway base URL (default https://apigw.ascbrazil.com.br)'),
+  ascToken: z.string().optional().nullable().describe('ASC access token (asc-token header)'),
+  ascOriginador: z.string().optional().nullable().describe('WABA phone number, digits-only E.164 (originador header)'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
     .default('on')
@@ -436,6 +443,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'webhookVerifyToken',
   'twilioAuthToken',
   'hermesPassword',
+  'ascToken',
 ] as const;
 
 /** Strip secret tokens from an instance before returning it in API responses */
@@ -544,6 +552,9 @@ type InstanceConnectionOptionsInput = {
   hermesPassword?: string | null;
   hermesMediaId?: string | null;
   hermesTemplateNamespace?: string | null;
+  ascBaseUrl?: string | null;
+  ascToken?: string | null;
+  ascOriginador?: string | null;
 };
 
 function applyTelegramConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
@@ -603,6 +614,21 @@ function applyHermesConnectionOptions(
   if (input.hermesTemplateNamespace) options.hermesTemplateNamespace = input.hermesTemplateNamespace;
 }
 
+function applyAscConnectionOptions(
+  options: Record<string, unknown>,
+  input: {
+    ascBaseUrl?: string | null;
+    ascToken?: string | null;
+    ascOriginador?: string | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (input.ascBaseUrl) options.ascBaseUrl = input.ascBaseUrl;
+  if (input.ascToken) options.ascToken = input.ascToken;
+  if (input.ascOriginador) options.ascOriginador = input.ascOriginador;
+  if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
+}
+
 function applyChannelSpecificConnectionOptions(
   options: Record<string, unknown>,
   input: InstanceConnectionOptionsInput,
@@ -622,6 +648,9 @@ function applyChannelSpecificConnectionOptions(
       return;
     case 'hermes':
       applyHermesConnectionOptions(options, input);
+      return;
+    case 'asc':
+      applyAscConnectionOptions(options, input);
       return;
   }
 }
@@ -861,6 +890,9 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     hermesPassword: instance.hermesPassword,
     hermesMediaId: instance.hermesMediaId,
     hermesTemplateNamespace: instance.hermesTemplateNamespace,
+    ascBaseUrl: instance.ascBaseUrl,
+    ascToken: instance.ascToken,
+    ascOriginador: instance.ascOriginador,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -1302,6 +1334,9 @@ const connectInstanceSchema = z.object({
   hermesPassword: z.string().optional().describe('Hermes account password'),
   hermesMediaId: z.string().optional().describe('Hermes line UUID (media_id)'),
   hermesTemplateNamespace: z.string().optional().describe('Meta template namespace for HSM sends'),
+  ascBaseUrl: z.string().optional().describe('ASC gateway base URL'),
+  ascToken: z.string().optional().describe('ASC access token (asc-token header)'),
+  ascOriginador: z.string().optional().describe('WABA phone number, digits-only E.164 (originador header)'),
   whatsapp: z
     .object({
       syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
@@ -1346,6 +1381,9 @@ function buildConnectConnectionOptions(
     hermesPassword: body.hermesPassword ?? instance.hermesPassword,
     hermesMediaId: body.hermesMediaId ?? instance.hermesMediaId,
     hermesTemplateNamespace: body.hermesTemplateNamespace ?? instance.hermesTemplateNamespace,
+    ascBaseUrl: body.ascBaseUrl ?? instance.ascBaseUrl,
+    ascToken: body.ascToken ?? instance.ascToken,
+    ascOriginador: body.ascOriginador ?? instance.ascOriginador,
   });
 }
 
@@ -1399,6 +1437,15 @@ function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInsta
       hermesPassword: body.hermesPassword ?? instance.hermesPassword,
       hermesMediaId: body.hermesMediaId ?? instance.hermesMediaId,
       hermesTemplateNamespace: body.hermesTemplateNamespace ?? instance.hermesTemplateNamespace,
+    };
+  }
+
+  if (instance.channel === 'asc') {
+    return {
+      ...updates,
+      ascBaseUrl: body.ascBaseUrl ?? instance.ascBaseUrl,
+      ascToken: body.ascToken ?? instance.ascToken,
+      ascOriginador: body.ascOriginador ?? instance.ascOriginador,
     };
   }
 
@@ -1550,6 +1597,9 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     if (instance.channel === 'hermes') {
       applyHermesConnectionOptions(restartOptions, instance);
+    }
+    if (instance.channel === 'asc') {
+      applyAscConnectionOptions(restartOptions, instance);
     }
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {

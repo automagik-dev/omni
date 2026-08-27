@@ -51,6 +51,7 @@ describe('channelHasMessagingWindow', () => {
   test('WhatsApp BSP channels have a 24h window', () => {
     expect(channelHasMessagingWindow('whatsapp-business')).toBe(true);
     expect(channelHasMessagingWindow('hermes')).toBe(true);
+    expect(channelHasMessagingWindow('asc')).toBe(true);
     expect(channelHasMessagingWindow('twilio-whatsapp')).toBe(true);
     expect(channelHasMessagingWindow('whatsapp-baileys')).toBe(false);
     expect(channelHasMessagingWindow('discord')).toBe(false);
@@ -72,6 +73,8 @@ describe('channelSupportsTypingIndicator', () => {
     ['whatsapp-business', true],
     // hermes: gateway HTTP puro — a API não expõe typing/presence.
     ['hermes', false],
+    // asc: typing via sendTypingIndicator (newest inbound wamid), like whatsapp-business.
+    ['asc', true],
     ['twilio-whatsapp', true],
     ['discord', true],
     ['telegram', true],

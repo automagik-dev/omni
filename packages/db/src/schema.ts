@@ -45,6 +45,7 @@ export const channelTypes = [
   'a2a',
   'gupshup',
   'hermes',
+  'asc',
   'twilio-whatsapp',
   'internal',
 ] as const;
@@ -775,6 +776,19 @@ export const instances = pgTable(
     hermesMediaId: varchar('hermes_media_id', { length: 64 }),
     /** Meta template namespace required by Hermes template sends. */
     hermesTemplateNamespace: varchar('hermes_template_namespace', { length: 128 }),
+
+    // ---- ASC Brazil (ASCWhats GW) Configuration ----
+    // Per-instance credentials for the ASC BSP gateway (Cloud API proxy).
+    // ascToken is stored plain text for parity with the other channel
+    // credentials above — same cross-channel encryption-at-rest tech debt.
+    // The optional webhook verify token (`chave`) reuses the shared
+    // webhook_verify_token column above (Gupshup precedent).
+    /** Gateway base URL — null means the ASC production host. */
+    ascBaseUrl: text('asc_base_url'),
+    /** ASC access token — the `asc-token` header. */
+    ascToken: text('asc_token'),
+    /** WABA phone number (digits-only E.164) — the `originador` header. */
+    ascOriginador: varchar('asc_originador', { length: 32 }),
 
     // ---- Agent Reference ----
     /** FK to agents table (phase 3: replaces legacy agentProviderId + agentId varchar). */

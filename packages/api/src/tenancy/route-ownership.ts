@@ -276,6 +276,26 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'fixed 200 acks with no row data.',
   },
   {
+    route: 'POST /api/v2/channels/asc/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      "ASC Brazil (ASCWhats GW) gateway callback. Auth-exempt for ASC's servers, which send no credential — " +
+      'the ASC API documents no HMAC/signature mechanism. Authenticity rests on the per-instance path (an ' +
+      'unguessable instance UUID, the Gupshup precedent) plus an optional verify token (the `chave` registered ' +
+      'via ASC setWebhook) that the handler compares when configured on the instance. The tenant comes from the ' +
+      'server-side instance record addressed by the path, never from a body or header claim. Responses are ' +
+      'fixed 200 acks with no row data.',
+  },
+  {
+    route: 'GET /api/v2/channels/asc/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      'ASC webhook verification challenge (Meta-style). Auth-exempt because the gateway sends no credential; ' +
+      'the handler compares hub.verify_token against the instance-held webhook verify token (when configured) ' +
+      'and echoes back the hub.challenge nonce the caller itself supplied. It reveals only whether the token ' +
+      'matched — a configuration fact, not tenant data.',
+  },
+  {
     route: 'GET /api/v2/channels/whatsapp-business/webhook',
     class: 'public-by-contract',
     justification:
