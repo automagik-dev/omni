@@ -9,79 +9,16 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import type { OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { findOrCreateAgent, findOrCreateProvider } from './_setup-helpers.js';
 
 interface GenieDirectoryEntry {
   name: string;
   dir: string;
   promptMode?: string;
   model?: string;
-}
-
-/** Find or create a provider, returning its ID */
-async function findOrCreateProvider(
-  client: OmniClient,
-  agentName: string,
-  agentEntry: GenieDirectoryEntry,
-  natsUrl: string,
-): Promise<string | null> {
-  try {
-    const provider = await client.providers.create({
-      name: `nats-genie-${agentName}`,
-      schema: 'nats-genie',
-      baseUrl: `nats://${natsUrl}`,
-      schemaConfig: { agentName: agentEntry.name, agentDir: agentEntry.dir, natsUrl },
-    });
-    return provider.id;
-  } catch {
-    // Provider may already exist — try to find it
-    try {
-      const providers = await client.providers.list();
-      const existing = providers.find((p) => p.name === `nats-genie-${agentName}` && p.schema === 'nats-genie');
-      if (existing) {
-        output.info(`Using existing provider: ${existing.id}`);
-        return existing.id;
-      }
-    } catch {
-      // fall through
-    }
-    output.error('Failed to create provider. Check API connection.');
-    return null;
-  }
-}
-
-/** Find or create an agent record, returning its ID */
-async function findOrCreateAgent(client: OmniClient, agentName: string, providerId: string): Promise<string | null> {
-  try {
-    const agent = await client.agents.create({
-      name: agentName,
-      agentProviderId: providerId,
-      agentType: 'assistant',
-      provider: 'custom',
-      capabilities: [],
-      isInternal: false,
-      isActive: true,
-    });
-    return agent.id;
-  } catch {
-    try {
-      const { items } = await client.agents.list();
-      const existing = items.find(
-        (a) => a.name === agentName && (a as Record<string, unknown>).agentProviderId === providerId,
-      );
-      if (existing) {
-        output.info(`Using existing agent: ${existing.id}`);
-        return existing.id;
-      }
-    } catch {
-      // fall through
-    }
-    output.error('Failed to create agent record. Check API connection.');
-    return null;
-  }
 }
 
 interface ConnectOptions {
@@ -131,12 +68,21 @@ export function createConnectCommand(): Command {
 
       // 3. Create or find provider
       output.info('Creating NATS Genie provider...');
-      const providerId = await findOrCreateProvider(client, agentName, agentEntry, options.natsUrl);
+      const providerId = await findOrCreateProvider(client, {
+        name: `nats-genie-${agentName}`,
+        schema: 'nats-genie',
+        baseUrl: `nats://${options.natsUrl}`,
+        schemaConfig: { agentName: agentEntry.name, agentDir: agentEntry.dir, natsUrl: options.natsUrl },
+      });
       if (!providerId) return;
 
       // 4. Create or find agent record
       output.info('Creating agent record...');
-      const agentId = await findOrCreateAgent(client, agentName, providerId);
+      const agentId = await findOrCreateAgent(client, {
+        name: agentName,
+        providerId,
+        agentProvider: 'custom',
+      });
       if (!agentId) return;
 
       // 5. Resolve trigger mode

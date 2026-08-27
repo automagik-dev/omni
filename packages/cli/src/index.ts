@@ -56,6 +56,7 @@ import { createSeeCommand } from './commands/see.js';
 import { createSendCommand } from './commands/send.js';
 import { createServerCommand } from './commands/server.js';
 import { createSettingsCommand } from './commands/settings.js';
+import { createTopLevelSetupCommand } from './commands/setup.js';
 import { createSlackCommand } from './commands/slack.js';
 import { createSpeakCommand } from './commands/speak.js';
 import { createStartCommand } from './commands/start.js';
@@ -337,6 +338,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Management',
     helpDescription: 'Connect instance to genie agent via NATS',
+  },
+  {
+    create: createTopLevelSetupCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'Compound setup (agent → provider → instance, any schema)',
   },
   {
     create: createRoutesCommand,
