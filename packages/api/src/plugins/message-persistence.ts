@@ -66,6 +66,7 @@ import {
   runConsumerInTenantContext,
   runTenantWorkDb,
 } from '../tenancy/worker-tenant-context';
+import { canonicalizeHandle, isPersonlessChannel } from '../utils/canonical-handle';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
 import { getPlugin } from './loader';
 
@@ -314,31 +315,6 @@ function buildSentChatPreview(payload: MessageSentPayload): string {
   return badge ? (text ? `${badge} ${text}` : badge) : text;
 }
 
-/**
- * Extract and validate phone from sender ID.
- * Returns E.164 phone (+digits) or undefined for non-phone IDs.
- *
- * Filters out:
- * - Group IDs (contain dashes, e.g. "120363123-1234567@g.us")
- * - LID references (numeric but not phone numbers)
- * - Meta IDs (non-numeric platform identifiers)
- * - IDs that are too short (<7 digits) or too long (>15 digits)
- */
-function extractPhoneFromSender(senderId: string, channel: string): string | undefined {
-  if (!channel.startsWith('whatsapp')) return undefined;
-
-  // Strip @suffix if still present (defensive)
-  const bare = senderId.split('@')[0] || senderId;
-
-  // Must be only digits (filters out group IDs with dashes, meta IDs, LIDs with letters)
-  if (!/^\d+$/.test(bare)) return undefined;
-
-  // E.164 validation: 7-15 digits
-  if (bare.length < 7 || bare.length > 15) return undefined;
-
-  return `+${bare}`;
-}
-
 // ============================================================================
 // Identity Processing
 // ============================================================================
@@ -367,19 +343,30 @@ async function processSenderIdentity(
     return { personId: metadata.personId, platformIdentityId: undefined };
   }
 
+  // System/agent channels are excluded from the human person graph. `internal`
+  // emits `from = sourceInstanceId` (an instance UUID); `a2a` keys on an agent
+  // subject and its customer context is resolved from the execution context by
+  // the dispatcher — neither is a human. The message still persists (sender
+  // identity FKs are nullable); we simply mint no person here.
+  if (isPersonlessChannel(channel)) {
+    return { personId: metadata.personId, platformIdentityId: metadata.platformIdentityId };
+  }
+
   const displayName = truncate(payload.senderName ?? (payload.rawPayload?.pushName as string | undefined), 255);
-  const platformUserId = truncate(payload.from, 255) ?? payload.from;
+  // Canonicalize the sender handle ONCE before keying: bare `5511...`,
+  // `5511...@s.whatsapp.net` and device-suffixed `5511...:3@s.whatsapp.net` all
+  // collapse to one identity; Twilio's `whatsapp:+E164` and Gupshup/Hermes bare
+  // digits now yield a phone. (`findOrCreateIdentity` re-canonicalizes
+  // idempotently; doing it here also fixes `matchByPhone` for those channels.)
+  const canonical = canonicalizeHandle(channel, payload.from);
+  const platformUserId = truncate(canonical.platformUserId, 255) ?? canonical.platformUserId;
   // LID-addressed senders have numeric IDs that look like phones but are NOT E.164 numbers.
   // Skip phone extraction to prevent misidentifying LID IDs as phone numbers and linking to wrong people.
   // Check both: addressingMode (DM where the chat itself is @lid) and senderIsLid (group chats where
   // the chat is @g.us but individual participants can be @lid — addressingMode stays unset in that case).
   const isLidAddressed = payload.rawPayload?.addressingMode === 'lid' || payload.rawPayload?.senderIsLid === true;
   const resolvedPhone = isLidAddressed ? (payload.rawPayload?.resolvedSenderPhone as string | undefined) : undefined;
-  const phoneNumber = isLidAddressed
-    ? resolvedPhone
-      ? `+${resolvedPhone}`
-      : undefined
-    : extractPhoneFromSender(platformUserId, channel);
+  const phoneNumber = isLidAddressed ? (resolvedPhone ? `+${resolvedPhone}` : undefined) : canonical.phone;
 
   const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
     { channel, instanceId: metadata.instanceId, platformUserId, platformUsername: displayName },
