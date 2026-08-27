@@ -38,7 +38,6 @@ const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 const here = dirname(fileURLToPath(import.meta.url));
 const drizzleDir = join(here, '..', '..', '..', '..', 'db', 'drizzle');
 
-const TENANT = '11111111-1111-4111-8111-1111111111ca';
 const INSTANCE_WA = '55555555-5555-4555-8555-5555555555c1';
 const INSTANCE_TWILIO = '55555555-5555-4555-8555-5555555555c2';
 const INSTANCE_INTERNAL = '55555555-5555-4555-8555-5555555555c3';
@@ -134,17 +133,20 @@ postgresDescribe('identity canonicalization + exclusion (real PostgreSQL)', () =
     const migrated = runSqlOn(dbUrl, migrations);
     if (migrated.exitCode !== 0) throw new Error(`migrations failed: ${migrated.stderr}`);
 
+    // Instances are seeded WITHOUT a tenant. This suite runs the legacy world
+    // (no RLS): a non-null instance tenant would make the derivation trigger
+    // stamp platform_identities.tenant_id while the handler-created persons row
+    // stays tenant-less, breaking the composite FK
+    // platform_identities_person_id_tenant_fk. Tenant isolation is not under
+    // test here — message-persistence-two-tenant-postgres.test.ts covers it.
     const seeded = runSqlOn(
       dbUrl,
       `
-      INSERT INTO tenants (id, slug, display_name, max_key_ttl_seconds, max_key_rate_limit, max_key_budget)
-        VALUES ('${TENANT}', 'tenant-p0', 'Tenant P0', 86400, 100, 100);
-
-      INSERT INTO instances (id, name, channel, tenant_id, created_at) VALUES
-        ('${INSTANCE_WA}',       'inst-wa',       'whatsapp-baileys', '${TENANT}', now()),
-        ('${INSTANCE_TWILIO}',   'inst-twilio',   'twilio-whatsapp',  '${TENANT}', now()),
-        ('${INSTANCE_INTERNAL}', 'inst-internal', 'internal',         '${TENANT}', now()),
-        ('${INSTANCE_A2A}',      'inst-a2a',      'a2a',              '${TENANT}', now());
+      INSERT INTO instances (id, name, channel, created_at) VALUES
+        ('${INSTANCE_WA}',       'inst-wa',       'whatsapp-baileys', now()),
+        ('${INSTANCE_TWILIO}',   'inst-twilio',   'twilio-whatsapp',  now()),
+        ('${INSTANCE_INTERNAL}', 'inst-internal', 'internal',         now()),
+        ('${INSTANCE_A2A}',      'inst-a2a',      'a2a',              now());
       `,
     );
     if (seeded.exitCode !== 0) throw new Error(`seed failed: ${seeded.stderr}`);

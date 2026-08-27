@@ -32,7 +32,6 @@ const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 const here = dirname(fileURLToPath(import.meta.url));
 const drizzleDir = join(here, '..', '..', '..', 'db', 'drizzle');
 
-const TENANT = '11111111-1111-4111-8111-1111111111ba';
 const INSTANCE = '55555555-5555-4555-8555-5555555555b1';
 const PERSON_BARE = '99999999-9999-4999-8999-9999999999b1';
 const PERSON_SUFFIXED = '99999999-9999-4999-8999-9999999999b2';
@@ -78,14 +77,15 @@ postgresDescribe('reconciliation script dry-run mutates nothing (real PostgreSQL
     if (migrated.exitCode !== 0) throw new Error(`migrations failed: ${migrated.stderr}`);
 
     // Seed: a fragmented number (bare + suffixed → two persons) and a phone-less
-    // @lid person whose phone is derivable from chat_id_mappings.
+    // @lid person whose phone is derivable from chat_id_mappings. The instance is
+    // tenant-less so the derivation trigger leaves the seeded identities'
+    // tenant_id NULL, matching the tenant-less persons (composite-FK safe); this
+    // suite tests reconciliation, not tenancy.
     const seeded = runSqlOn(
       dbUrl,
       `
-      INSERT INTO tenants (id, slug, display_name, max_key_ttl_seconds, max_key_rate_limit, max_key_budget)
-        VALUES ('${TENANT}', 'tenant-recon', 'Tenant Recon', 86400, 100, 100);
-      INSERT INTO instances (id, name, channel, tenant_id, created_at)
-        VALUES ('${INSTANCE}', 'inst-recon', 'whatsapp-baileys', '${TENANT}', now());
+      INSERT INTO instances (id, name, channel, created_at)
+        VALUES ('${INSTANCE}', 'inst-recon', 'whatsapp-baileys', now());
 
       INSERT INTO persons (id, primary_phone, created_at) VALUES
         ('${PERSON_BARE}',     '+5511777770000', '2026-01-01 00:00:00+00'),

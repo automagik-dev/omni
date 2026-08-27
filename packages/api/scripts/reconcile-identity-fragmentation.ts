@@ -44,8 +44,12 @@ import { and, asc, eq, inArray } from 'drizzle-orm';
 import { canonicalizeHandle, isWhatsAppFamily } from '../src/utils/canonical-handle';
 
 // ── Config ──────────────────────────────────────────────────────────────────
+//
+// NOTE: the database URL is resolved lazily inside `main()`, never at module
+// load — `getDefaultDatabaseUrl()` throws when DATABASE_URL is unset, and the
+// dry-run test imports `reconcile()` (which takes an explicit handle) without a
+// DATABASE_URL in the environment.
 
-const DATABASE_URL = process.env.DATABASE_URL ?? getDefaultDatabaseUrl();
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
 const dryRun = !apply;
@@ -341,13 +345,14 @@ export async function reconcile(db: Database): Promise<Stats> {
 }
 
 async function main(): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL ?? getDefaultDatabaseUrl();
   process.stdout.write(`${'='.repeat(60)}\n`);
   process.stdout.write('Reconcile Identity Fragmentation — Data Reconciliation\n');
   process.stdout.write(`${'='.repeat(60)}\n`);
   process.stdout.write(`Mode: ${dryRun ? 'DRY RUN (no changes)' : 'APPLY (LIVE)'}\n`);
-  process.stdout.write(`Database: ${DATABASE_URL.replace(/:[^:@]+@/, ':***@')}\n\n`);
+  process.stdout.write(`Database: ${databaseUrl.replace(/:[^:@]+@/, ':***@')}\n\n`);
 
-  const db = createDb({ url: DATABASE_URL });
+  const db = createDb({ url: databaseUrl });
   try {
     await reconcile(db);
     printReport();
