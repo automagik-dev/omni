@@ -256,6 +256,16 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'header tenant claim.',
   },
   {
+    route: 'POST /api/v2/channels/asc-flow/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      "ASC platform Flow callback — the flow's api_rest node calls Omni. Auth-exempt because the node sends no " +
+      'credential and the platform documents no HMAC/signature mechanism. Authenticity rests on the per-instance ' +
+      'path (an unguessable instance UUID, the Gupshup precedent) plus an optional verify token the handler ' +
+      'compares when one is configured on the instance. The tenant comes from the server-side instance record ' +
+      'addressed by the path, never from a body or header claim. Responses are fixed 200 acks with no row data.',
+  },
+  {
     route: 'POST /api/v2/channels/twilio-whatsapp/:instanceId/webhook',
     class: 'public-by-contract',
     justification:

@@ -45,6 +45,7 @@ export const channelTypes = [
   'a2a',
   'gupshup',
   'hermes',
+  'asc-flow',
   'twilio-whatsapp',
   'internal',
 ] as const;
@@ -775,6 +776,22 @@ export const instances = pgTable(
     hermesMediaId: varchar('hermes_media_id', { length: 64 }),
     /** Meta template namespace required by Hermes template sends. */
     hermesTemplateNamespace: varchar('hermes_template_namespace', { length: 128 }),
+
+    // ---- ASC platform Flow Configuration ----
+    // Per-instance credentials for the ASC platform REST API (/rest/v2), the
+    // Flow integration model. Distinct from the `asc` channel (API Gateway).
+    // ascFlowChave is stored plain text for parity with the other channel
+    // credentials above — same cross-channel encryption-at-rest tech debt.
+    // The optional webhook verify token reuses the shared
+    // webhook_verify_token column above (Gupshup precedent).
+    /** Platform base URL — null means the tenant default. */
+    ascFlowBaseUrl: text('asc_flow_base_url'),
+    /** `/authuser` login. */
+    ascFlowLogin: text('asc_flow_login'),
+    /** `/authuser` chave — secret, redacted from API responses. */
+    ascFlowChave: text('asc_flow_chave'),
+    /** `cod_servico` handed to `/transferirHumano` (the handoff queue). */
+    ascFlowHandoffServico: integer('asc_flow_handoff_servico'),
 
     // ---- Agent Reference ----
     /** FK to agents table (phase 3: replaces legacy agentProviderId + agentId varchar). */

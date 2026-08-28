@@ -189,6 +189,19 @@ const createInstanceSchema = z.object({
   hermesPassword: z.string().optional().nullable().describe('Hermes account password'),
   hermesMediaId: z.string().optional().nullable().describe('Hermes line UUID (media_id) — required on every send'),
   hermesTemplateNamespace: z.string().optional().nullable().describe('Meta template namespace for HSM sends'),
+  ascFlowBaseUrl: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('ASC platform base URL (default https://sac-notredame.ascbrazil.com.br)'),
+  ascFlowLogin: z.string().optional().nullable().describe('ASC platform /authuser login'),
+  ascFlowChave: z.string().optional().nullable().describe('ASC platform /authuser chave (secret)'),
+  ascFlowHandoffServico: z
+    .number()
+    .int()
+    .optional()
+    .nullable()
+    .describe('cod_servico handed to /transferirHumano (the handoff queue)'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
     .default('on')
@@ -436,6 +449,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'webhookVerifyToken',
   'twilioAuthToken',
   'hermesPassword',
+  'ascFlowChave',
 ] as const;
 
 /** Strip secret tokens from an instance before returning it in API responses */
@@ -544,6 +558,10 @@ type InstanceConnectionOptionsInput = {
   hermesPassword?: string | null;
   hermesMediaId?: string | null;
   hermesTemplateNamespace?: string | null;
+  ascFlowBaseUrl?: string | null;
+  ascFlowLogin?: string | null;
+  ascFlowChave?: string | null;
+  ascFlowHandoffServico?: number | null;
 };
 
 function applyTelegramConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
@@ -603,6 +621,23 @@ function applyHermesConnectionOptions(
   if (input.hermesTemplateNamespace) options.hermesTemplateNamespace = input.hermesTemplateNamespace;
 }
 
+function applyAscFlowConnectionOptions(
+  options: Record<string, unknown>,
+  input: {
+    ascFlowBaseUrl?: string | null;
+    ascFlowLogin?: string | null;
+    ascFlowChave?: string | null;
+    ascFlowHandoffServico?: number | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (input.ascFlowBaseUrl) options.ascFlowBaseUrl = input.ascFlowBaseUrl;
+  if (input.ascFlowLogin) options.ascFlowLogin = input.ascFlowLogin;
+  if (input.ascFlowChave) options.ascFlowChave = input.ascFlowChave;
+  if (input.ascFlowHandoffServico != null) options.ascFlowHandoffServico = input.ascFlowHandoffServico;
+  if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
+}
+
 function applyChannelSpecificConnectionOptions(
   options: Record<string, unknown>,
   input: InstanceConnectionOptionsInput,
@@ -622,6 +657,9 @@ function applyChannelSpecificConnectionOptions(
       return;
     case 'hermes':
       applyHermesConnectionOptions(options, input);
+      return;
+    case 'asc-flow':
+      applyAscFlowConnectionOptions(options, input);
       return;
   }
 }
@@ -861,6 +899,10 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     hermesPassword: instance.hermesPassword,
     hermesMediaId: instance.hermesMediaId,
     hermesTemplateNamespace: instance.hermesTemplateNamespace,
+    ascFlowBaseUrl: instance.ascFlowBaseUrl,
+    ascFlowLogin: instance.ascFlowLogin,
+    ascFlowChave: instance.ascFlowChave,
+    ascFlowHandoffServico: instance.ascFlowHandoffServico,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -1302,6 +1344,10 @@ const connectInstanceSchema = z.object({
   hermesPassword: z.string().optional().describe('Hermes account password'),
   hermesMediaId: z.string().optional().describe('Hermes line UUID (media_id)'),
   hermesTemplateNamespace: z.string().optional().describe('Meta template namespace for HSM sends'),
+  ascFlowBaseUrl: z.string().optional().describe('ASC platform base URL'),
+  ascFlowLogin: z.string().optional().describe('ASC platform /authuser login'),
+  ascFlowChave: z.string().optional().describe('ASC platform /authuser chave (secret)'),
+  ascFlowHandoffServico: z.number().int().optional().describe('cod_servico handed to /transferirHumano'),
   whatsapp: z
     .object({
       syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
@@ -1312,6 +1358,19 @@ const connectInstanceSchema = z.object({
 
 type ConnectInstanceBody = z.infer<typeof connectInstanceSchema>;
 type InstanceRecord = Awaited<ReturnType<Services['instances']['getById']>>;
+
+/** asc-flow credentials, body-over-persisted. Extracted to keep the callers' complexity in budget. */
+function mergeAscFlowFields(
+  instance: Pick<InstanceRecord, 'ascFlowBaseUrl' | 'ascFlowLogin' | 'ascFlowChave' | 'ascFlowHandoffServico'>,
+  body: Pick<ConnectInstanceBody, 'ascFlowBaseUrl' | 'ascFlowLogin' | 'ascFlowChave' | 'ascFlowHandoffServico'>,
+) {
+  return {
+    ascFlowBaseUrl: body.ascFlowBaseUrl ?? instance.ascFlowBaseUrl,
+    ascFlowLogin: body.ascFlowLogin ?? instance.ascFlowLogin,
+    ascFlowChave: body.ascFlowChave ?? instance.ascFlowChave,
+    ascFlowHandoffServico: body.ascFlowHandoffServico ?? instance.ascFlowHandoffServico,
+  };
+}
 
 function buildConnectConnectionOptions(
   instance: InstanceRecord,
@@ -1346,6 +1405,7 @@ function buildConnectConnectionOptions(
     hermesPassword: body.hermesPassword ?? instance.hermesPassword,
     hermesMediaId: body.hermesMediaId ?? instance.hermesMediaId,
     hermesTemplateNamespace: body.hermesTemplateNamespace ?? instance.hermesTemplateNamespace,
+    ...mergeAscFlowFields(instance, body),
   });
 }
 
@@ -1400,6 +1460,10 @@ function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInsta
       hermesMediaId: body.hermesMediaId ?? instance.hermesMediaId,
       hermesTemplateNamespace: body.hermesTemplateNamespace ?? instance.hermesTemplateNamespace,
     };
+  }
+
+  if (instance.channel === 'asc-flow') {
+    return { ...updates, ...mergeAscFlowFields(instance, body) };
   }
 
   return updates;
@@ -1550,6 +1614,9 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     if (instance.channel === 'hermes') {
       applyHermesConnectionOptions(restartOptions, instance);
+    }
+    if (instance.channel === 'asc-flow') {
+      applyAscFlowConnectionOptions(restartOptions, instance);
     }
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
