@@ -8,7 +8,6 @@ across both plugins, classifying each as **match**, **degrade** (graceful fallba
 **blocked** (library/platform limitation), or **out-of-scope** (not applicable to the channel).
 
 **Related documents:**
-- [Full audit notes with file-level evidence](../../.genie/wishes/channel-parity-telegram-whatsapp/audit-notes.md)
 - [Follow-up wishes](#13-follow-up-wishes) (8 implementation tasks below)
 
 ---
@@ -264,14 +263,14 @@ slash commands (WA).
 
 | # | Slug | Complexity | Priority | Description |
 |---|------|------------|----------|-------------|
-| 1 | [parity-streaming](../../.genie/wishes/parity-streaming/wish.md) | L | 🔴 HIGH | WhatsApp StreamSender (progressive edits) — biggest UX gap |
-| 2 | [parity-reactions](../../.genie/wishes/parity-reactions/wish.md) | S | ✅ SHIPPED | Wire WhatsApp reaction send through plugin |
-| 3 | [parity-identity](../../.genie/wishes/parity-identity/wish.md) | S | ✅ SHIPPED | Wire Telegram contact/location/sticker/forward send |
-| 4 | [parity-media](../../.genie/wishes/parity-media/wish.md) | M | 🟡 READY | Telegram sticker send + media download to disk |
-| 5 | [parity-groups](../../.genie/wishes/parity-groups/wish.md) | M | 🟡 READY | Flip WhatsApp canHandleGroups + wire Telegram threads/broadcast |
-| 6 | [parity-interactive-ui](../../.genie/wishes/parity-interactive-ui/wish.md) | M | 🟡 READY | Telegram buttons/polls/slash commands |
-| 7 | [parity-receipts](../../.genie/wishes/parity-receipts/wish.md) | M | 🟢 BLOCKED | Canonical receipt events (mostly library-blocked) |
-| 8 | [baileys-resilience](../../.genie/wishes/baileys-resilience/wish.md) | L | 🟢 STRATEGIC | Version pinning + abstraction layer |
+| 1 | parity-streaming | L | 🔴 HIGH | WhatsApp StreamSender (progressive edits) — biggest UX gap |
+| 2 | parity-reactions | S | ✅ SHIPPED | Wire WhatsApp reaction send through plugin |
+| 3 | parity-identity | S | ✅ SHIPPED | Wire Telegram contact/location/sticker/forward send |
+| 4 | parity-media | M | 🟡 READY | Telegram sticker send + media download to disk |
+| 5 | parity-groups | M | 🟡 READY | Flip WhatsApp canHandleGroups + wire Telegram threads/broadcast |
+| 6 | parity-interactive-ui | M | 🟡 READY | Telegram buttons/polls/slash commands |
+| 7 | parity-receipts | M | 🟢 BLOCKED | Canonical receipt events (mostly library-blocked) |
+| 8 | baileys-resilience | L | 🟢 STRATEGIC | Version pinning + abstraction layer |
 
 ### Execution Recommendations
 
