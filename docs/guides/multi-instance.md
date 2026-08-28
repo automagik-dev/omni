@@ -11,7 +11,7 @@ Use separate Omni instances when you need **full isolation** between environment
 - Isolate client deployments on shared infrastructure
 - Test migrations or upgrades without affecting production
 
-**If you only need per-user config differences on the same number** (different agents, different debounce settings), consider route-level overrides instead — see `omni routes create --help` and the [Agent Routing Reference](../../.agents/skills/omni-orchestrator/references/AGENT_ROUTING.md).
+**If you only need per-user config differences on the same number** (different agents, different debounce settings), consider route-level overrides instead — see `omni routes create --help`.
 
 ## Architecture
 
