@@ -33,6 +33,10 @@ const post = (body: unknown, suffix = '', headers: Record<string, string> = {}) 
 
 const received = () => eventBus.published.filter((e) => e.type.includes('received'));
 
+/** The agent answering: this is what resumes the flow and closes the turn. */
+const answerTurn = (cod: string) =>
+  plugin.sendMessage(instanceId, { to: cod, content: { type: 'text', text: 'resposta' } as never });
+
 afterEach(async () => {
   await plugin?.destroy();
   restore?.();
@@ -80,10 +84,43 @@ describe('handleWebhook', () => {
     expect(received()).toHaveLength(1);
   });
 
-  it('keeps repeated text without a messageId — "1" twice is two real answers', async () => {
+  it('gives messageId precedence over the in-flight window', async () => {
+    await boot();
+    // Same cod and same text inside the window, but the flow says these are two
+    // distinct messages — the id wins and both are published.
+    await post({ codAtendimento: '42', chatInput: 'oi', messageId: 'm-1' });
+    await post({ codAtendimento: '42', chatInput: 'oi', messageId: 'm-2' });
+
+    expect(received()).toHaveLength(2);
+  });
+
+  it('collapses a burst of async re-polls into ONE message.received', async () => {
+    await boot();
+    // The flow's api_rest node re-calls every ~2s while it waits for
+    // callbackFlow — measured at ~22 calls for a single user message.
+    for (let i = 0; i < 20; i++) {
+      expect((await post({ codAtendimento: '42', chatInput: 'oi', phone: '5551999' })).status).toBe(200);
+    }
+
+    expect(received()).toHaveLength(1);
+  });
+
+  it('keeps repeated text once the turn was answered — "1" twice is two real answers', async () => {
     await boot();
     await post({ codAtendimento: '42', chatInput: '1' });
+    // The agent answers: sendMessage resumes the flow and closes the window.
+    await answerTurn('42');
     await post({ codAtendimento: '42', chatInput: '1' });
+
+    expect(received()).toHaveLength(2);
+  });
+
+  it('does not let one atendimento shadow another in the same burst', async () => {
+    await boot();
+    await post({ codAtendimento: '42', chatInput: 'oi' });
+    await post({ codAtendimento: '43', chatInput: 'oi' });
+    await post({ codAtendimento: '42', chatInput: 'oi' });
+    await post({ codAtendimento: '43', chatInput: 'oi' });
 
     expect(received()).toHaveLength(2);
   });

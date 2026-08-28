@@ -13,10 +13,14 @@
  * instance id in the path plus an OPTIONAL verify token when one is configured
  * on the instance.
  *
- * Dedupe: the platform assigns no per-turn message id. When the flow supplies
- * one (`messageId`) it feeds the SDK dedupe cache; without it every delivery is
- * treated as new. That is deliberate — synthesising an id from the text would
- * make a legitimately repeated answer ("1" twice in a two-step menu) vanish.
+ * Dedupe: the platform assigns no per-turn message id, and in async mode the
+ * `api_rest` node re-POSTs every ~2s until `callbackFlow` releases the step —
+ * one measured user message produced ~22 calls and three agent runs. So dedupe
+ * is ON by default: `messageId` when the flow supplies one (SDK cache),
+ * otherwise `codAtendimento` + exact text scoped to the in-flight window
+ * (`plugin.isRedeliveryOfTurnInFlight`). Scoping to the window — instead of a
+ * lasting hash of the text — is what keeps a legitimately repeated answer
+ * ("1" twice in a two-step menu) alive.
  *
  * Always answers 200 to a processable-shaped request: a permanent 4xx would
  * only make the flow re-deliver the same unprocessable payload.
@@ -122,7 +126,13 @@ export async function handleAscFlowWebhookRequest(
     return new Response('OK', { status: 200 });
   }
 
-  if (turn.messageId && dedupeCache.isDuplicate(instanceId, turn.messageId, 'asc-flow', logger)) {
+  // `messageId` wins when the flow supplies one (60s SDK cache). Otherwise fall
+  // back to the in-flight window, which is the REAL case: the flow body we
+  // author carries no message id.
+  const isRedelivery = turn.messageId
+    ? dedupeCache.isDuplicate(instanceId, turn.messageId, 'asc-flow', logger)
+    : plugin.isRedeliveryOfTurnInFlight(instanceId, turn);
+  if (isRedelivery) {
     return new Response('OK', { status: 200 });
   }
 

@@ -58,7 +58,17 @@ interface AscFlowInstanceState {
   client: AscFlowClient;
   config: AscFlowConfig;
   dedupeCache: DedupeCache;
+  /** `cod_atendimento` → the turn currently being answered. See `isRedeliveryOfTurnInFlight`. */
+  inFlight: Map<string, { text: string; at: number }>;
 }
+
+/**
+ * Safety valve for the in-flight window: if a turn never produces a
+ * `sendMessage` (agent crash, dispatcher drop), the entry would otherwise wedge
+ * that `cod_atendimento` forever. Far longer than any agent run, far shorter
+ * than a human's next answer to the same menu.
+ */
+const IN_FLIGHT_TTL_MS = 60_000;
 
 /** `cod_atendimento` is numeric on the wire; the chat id is its string form. */
 function toCodAtendimento(chatId: string): number {
@@ -140,6 +150,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       client,
       config: ascFlowConfig,
       dedupeCache: createInboundDedupeCache(),
+      inFlight: new Map(),
     });
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -268,6 +279,10 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       await this.emitMessageFailed({ instanceId, chatId: to, error: errorMessage, retryable });
 
       return { success: false, error: errorMessage, retryable, timestamp: Date.now() };
+    } finally {
+      // The turn is answered (or failed): close the in-flight window so the
+      // beneficiary's NEXT message is published even when it repeats the text.
+      state.inFlight.delete(to.trim());
     }
   }
 
@@ -378,6 +393,10 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     const sanitized = sanitizeMessage(turn.text, this.logger, { instanceId, messageId: turn.messageId });
     if (!sanitized.ok) return;
 
+    // Open the in-flight window BEFORE anything awaits: the flow re-POSTs every
+    // ~2s while it waits, and those re-POSTs must find the mark already set.
+    this.ascFlowInstances.get(instanceId)?.inFlight.set(turn.codAtendimento, { text: turn.text, at: Date.now() });
+
     // Raise "digitando…" as soon as the turn lands: the agent run is the slow
     // part, and the beneficiary is already waiting.
     await this.sendTyping(instanceId, turn.codAtendimento);
@@ -404,6 +423,39 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
   getLogger(): Logger {
     return this.logger;
+  }
+
+  /**
+   * True when this exact turn is the platform re-POSTing a delivery we are
+   * still answering.
+   *
+   * The flow's `api_rest` node in async mode re-calls the webhook every ~2s
+   * until `callbackFlow` releases the step — one measured user message produced
+   * ~22 POSTs, so the agent ran (and was billed) three times for one turn. The
+   * key is `codAtendimento` + the exact text, scoped to the window between the
+   * publish and the `sendMessage` that resumes the flow. That window is what
+   * keeps a legitimately repeated answer ("1" twice in a two-step menu) alive:
+   * the second "1" arrives after the first turn was answered, so the mark is
+   * already gone and it publishes normally.
+   */
+  isRedeliveryOfTurnInFlight(instanceId: string, turn: ParsedAscFlowTurn): boolean {
+    const state = this.ascFlowInstances.get(instanceId);
+    const entry = state?.inFlight.get(turn.codAtendimento);
+    if (!state || !entry) return false;
+
+    if (Date.now() - entry.at > IN_FLIGHT_TTL_MS) {
+      state.inFlight.delete(turn.codAtendimento);
+      return false;
+    }
+    if (entry.text !== turn.text) return false;
+
+    this.logger.debug('[asc-flow] dropping webhook re-delivery: turn still in flight', {
+      instanceId,
+      codAtendimento: turn.codAtendimento,
+      ageMs: Date.now() - entry.at,
+      reason: 'async api_rest re-poll',
+    });
+    return true;
   }
 
   // ─────────────────────────────────────────────────────────────

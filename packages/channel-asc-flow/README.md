@@ -44,10 +44,30 @@ POST /api/v2/channels/asc-flow/{instanceId}/webhook
 ```
 
 `cod_atendimento` / `message` / `telefone` are accepted as aliases. An optional
-`messageId` (alias `idMensagem`) enables inbound dedupe; without it every
-delivery is treated as new — deliberately, since deriving an id from the text
-would silently swallow a legitimately repeated answer ("1" twice in a two-step
-menu).
+`messageId` (alias `idMensagem`) is used for dedupe when the flow supplies one.
+
+### Dedupe is ON by default
+
+With `API Assíncrona = Sim`, the `api_rest` node **re-POSTs the same body every
+~2s** while it waits for `callbackFlow` to release the step. Measured live
+against the ASC emulator (flow #220): **one user message → ~22 POSTs**, each
+published as a fresh `message.received`, and the dispatcher fired the agent with
+`messageCount: 3` for a single turn. Every extra run is billed tokens and can
+duplicate the reply to the beneficiary.
+
+So the default is to deduplicate, in this order:
+
+1. `messageId`, when present → SDK inbound dedupe cache (60s TTL). Precedence.
+2. Otherwise `codAtendimento` + the exact `chatInput`, valid **only inside the
+   in-flight window** — from the publish until the `sendMessage` that resumes
+   the flow (safety expiry at 60s if a turn never gets answered).
+
+The window, not a lasting hash of the text, is what keeps a legitimately
+repeated answer alive: "1" twice in a two-step menu arrives *after* the first
+turn was answered, so the mark is gone and the second "1" publishes normally.
+Drops are logged at `debug` (`dropping webhook re-delivery: turn still in
+flight`). The webhook always answers `200` — a 4xx would only make the platform
+retry harder.
 
 The `codAtendimento` is the Omni **chat id**: it is the platform's conversation
 identity and the only handle every outbound endpoint accepts.
