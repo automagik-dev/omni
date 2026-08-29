@@ -65,6 +65,7 @@ const USER_SCOPES = [
   'channels:history',
   'channels:read',
   'chat:write',
+  'files:write',
   'groups:history',
   'groups:read',
   'im:history',
