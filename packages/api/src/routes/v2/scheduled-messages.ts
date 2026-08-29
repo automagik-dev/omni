@@ -73,13 +73,16 @@ scheduledMessagesRoutes.post('/', zValidator('json', scheduleSchema), async (c) 
 
     return c.json({ success: true, data: row }, 201);
   } catch (error) {
+    // Caller errors (past dates, over-the-limit lead times, malformed content)
+    // arrive as OmniError with the right code (VALIDATION/etc.) — pass them
+    // through untouched. Anything else is a server fault (plugin/native
+    // scheduling, network, DB) and must surface as a 5xx, not a caller 400.
     if (error instanceof OmniError) throw error;
-    // Past dates, over-the-limit lead times and malformed content are caller
-    // errors, not server faults — surface them as such.
     throw new OmniError({
-      code: ERROR_CODES.VALIDATION,
+      code: ERROR_CODES.UNKNOWN,
       message: error instanceof Error ? error.message : String(error),
       recoverable: false,
+      cause: error instanceof Error ? error : undefined,
     });
   }
 });
