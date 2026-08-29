@@ -210,7 +210,13 @@ export type DeliveryStatus = (typeof deliveryStatuses)[number];
 export const scheduledMessageDeliveryModes = ['platform', 'local'] as const;
 export type ScheduledMessageDeliveryMode = (typeof scheduledMessageDeliveryModes)[number];
 
-export const scheduledMessageStatuses = ['pending', 'sent', 'canceled', 'failed'] as const;
+// 'sending' is a transient CLAIMED state: the sweeper flips a due row to it
+// inside the same transaction that locks the row, so a second scheduler
+// process (prod runs replicaCount:2 with no leader election) cannot re-select
+// and re-deliver a row that is already being sent. A row is reset to 'pending'
+// on a retryable failure or to 'failed' when attempts are exhausted; a row
+// stranded in 'sending' by a crash is reclaimed after a lease window.
+export const scheduledMessageStatuses = ['pending', 'sending', 'sent', 'canceled', 'failed'] as const;
 export type ScheduledMessageStatus = (typeof scheduledMessageStatuses)[number];
 
 // ============================================================================
