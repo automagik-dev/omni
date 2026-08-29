@@ -266,6 +266,7 @@ const permalinkQuerySchema = z.object({
 messagesRoutes.get('/:id/permalink', zValidator('query', permalinkQuerySchema), async (c) => {
   const messageId = c.req.param('id');
   const { instanceId, channelId } = c.req.valid('query');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
   const services = c.get('services');
 
   const chat = await services.chats.getByExternalId(instanceId, channelId);
