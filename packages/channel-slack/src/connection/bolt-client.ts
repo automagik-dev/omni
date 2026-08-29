@@ -327,6 +327,17 @@ export async function startBoltConnection(connection: BoltConnection, logger: Lo
     });
   }
 
+  // User mode (#889) MUST NOT start without a resolved acting-user id. Self-
+  // filtering compares the human's own typing against actingUserId; when it is
+  // undefined the check in shouldSkipMessage silently no-ops and the agent
+  // answers the operator's OWN messages. Fail fast rather than start broken.
+  if (connection.userClient && !connection.actingUserId) {
+    throw new SlackError(
+      SlackErrorCode.CONNECTION_FAILED,
+      'User mode requires a resolved acting user id, but it could not be determined from the user token. Refusing to start.',
+    );
+  }
+
   if (connection.mode === 'http') {
     // HTTP mode: start Bolt's built-in HTTP server so inbound Slack events are received.
     // Bolt's HTTPReceiver listens on the given port and routes requests to registered handlers.
