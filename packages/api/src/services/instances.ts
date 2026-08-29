@@ -72,6 +72,7 @@ export interface ListInstancesOptions {
 const SEALED_CREDENTIAL_COLUMNS = [
   'discordBotToken',
   'slackBotToken',
+  'slackUserToken',
   'slackAppToken',
   'slackSigningSecret',
   'telegramBotToken',

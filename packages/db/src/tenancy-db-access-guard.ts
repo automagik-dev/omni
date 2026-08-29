@@ -722,6 +722,55 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
   },
   {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: '*',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'chat_id_mappings',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'chat_participants',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'messages',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'omni_events',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'persons',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'platform_identities',
+    class: 'migration-ddl',
+    justification:
+      'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
+  },
+  {
     file: 'packages/api/src/index.ts',
     table: '*',
     class: 'control-plane',
@@ -1390,6 +1439,24 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     // suspended tenant drops out of the enumeration at the next tick.
     file: 'packages/api/src/services/follow-up-sweeper.ts',
     table: 'chat_follow_up_state',
+    class: 'tenant-boundary',
+  },
+  {
+    // Scheduled outbound messages (#889): the channel lookup that resolves
+    // which plugin owns an instance, so the sweeper/route can reach
+    // sendMessage. `scheduled_messages` itself is NOT registered here — it
+    // carries no tenant_id (tenancy derives via instance_id, the
+    // whatsapp_flow_keys precedent), so it is not an RLS tenant table and the
+    // scanner does not track it.
+    //
+    // The 15s sweeper cron has no envelope and no credential, so it ENUMERATES
+    // rather than scans: flag-off runs the single ambient pass byte-identically;
+    // flag-on runs one scoped pass per ACTIVE tenant via
+    // enumerateActiveWorkTenants (ADR-0008, periodic-tenant-work.ts), reaching
+    // tenancy through the owning instance, so a suspended tenant stops having
+    // messages delivered at the next tick. Same shape as follow-up-sweeper.
+    file: 'packages/api/src/services/scheduled-messages.ts',
+    table: 'instances',
     class: 'tenant-boundary',
   },
   {

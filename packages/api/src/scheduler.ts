@@ -9,7 +9,7 @@
  * @see events-ops wish (DEC-9)
  */
 
-import type { ChannelRegistry } from '@omni/channel-sdk';
+import type { ChannelRegistry, ChannelType } from '@omni/channel-sdk';
 import {
   CronExpressions,
   createLogger,
@@ -22,6 +22,7 @@ import {
 import * as Sentry from '@sentry/bun';
 import { sentryEnabled } from './lib/sentry-scrub';
 import type { Services } from './services';
+import { ScheduledMessageService, createPluginResolver } from './services/scheduled-messages';
 import { runForEachActiveTenantRow } from './tenancy/periodic-tenant-work';
 
 const log = createLogger('scheduler:setup');
@@ -159,6 +160,32 @@ async function withCronMonitor(
   } else {
     await handler();
   }
+}
+
+/**
+ * Construct the scheduled-message sweeper with its auth-plane connection wired.
+ *
+ * Extracted so the wiring is unit-testable: unlike other sweepers this one is
+ * built HERE (it needs the channel registry, which only exists at scheduler
+ * setup) rather than in `services/index.ts`, so it is easy to forget the
+ * `setAuthPlane` call that every tenant-scoped sweep depends on. Without it,
+ * `sweep()` finds `authPlaneDb` undefined under multitenancy and silently
+ * skips every tenant's rows.
+ */
+export function createScheduledMessageSweeper(
+  services: Services,
+  channelRegistry: ChannelRegistry,
+): ScheduledMessageService {
+  const sweeper = new ScheduledMessageService(
+    services.db,
+    createPluginResolver(services.db, (channel) => channelRegistry.get(channel as ChannelType) ?? undefined),
+  );
+  // Every tenant-scoped sweep reads the active-tenant list through the
+  // auth-plane connection; without this the tenant world is skipped and
+  // tenant-scoped scheduled messages silently never send. Mirrors how
+  // followUpSweeper is wired in services/index.ts.
+  sweeper.setAuthPlane(services.authPlane.db);
+  return sweeper;
 }
 
 /**
@@ -315,6 +342,37 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
       });
     },
   });
+
+  // Scheduled-message sweeper — every 15 seconds (#889).
+  //
+  // Only local-mode rows are swept: platform-mode messages are held by the
+  // channel itself (Slack chat.scheduleMessage) and firing them here would
+  // double-post. Needs the registry to reach plugin.sendMessage, so it stays
+  // unregistered when there is none.
+  if (channelRegistry) {
+    const scheduledMessages = createScheduledMessageSweeper(services, channelRegistry);
+
+    scheduler.register({
+      name: 'scheduled-message-sweeper',
+      cron: '*/15 * * * * *',
+      runOnStart: false,
+      handler: async () => {
+        await withCronMonitor('scheduled-message-sweeper', '*/15 * * * * *', 1, 1, async () => {
+          const startTime = Date.now();
+          try {
+            const stats = await scheduledMessages.sweep();
+            recordScheduledJob('scheduled-message-sweeper', 'success', (Date.now() - startTime) / 1000);
+            if (stats.scanned > 0) {
+              log.debug('Scheduled-message sweep tick', { ...stats });
+            }
+          } catch (err) {
+            recordScheduledJob('scheduled-message-sweeper', 'failure', (Date.now() - startTime) / 1000);
+            throw err;
+          }
+        });
+      },
+    });
+  }
 
   // Unread count refresh — hourly
   // Re-emits cached unread counts from WhatsApp plugin to DB so stale counts get corrected.

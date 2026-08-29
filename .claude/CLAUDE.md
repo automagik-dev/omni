@@ -191,8 +191,7 @@ omni-v2/
 │   ├── channel-sdk/    # Plugin SDK for channel developers
 │   ├── channel-*/      # Official channel implementations
 │   ├── cli/            # LLM-optimized CLI
-│   ├── sdk/            # Auto-generated TypeScript SDK
-│   └── mcp/            # MCP Server for AI assistants
+│   └── sdk/            # Auto-generated TypeScript SDK
 ├── apps/
 │   └── ui/             # React dashboard
 ├── docs/               # Documentation

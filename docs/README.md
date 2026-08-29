@@ -81,9 +81,9 @@ docs/
 
 | Document | Description | Status |
 |----------|-------------|--------|
-| [[plan\|Migration Plan]] | v1 → v2 migration strategy (Strangler Fig) | ✅ current |
-| [[ui-reuse\|UI Reuse Strategy]] | Reusing v1 React dashboard with v2 API | ✅ current |
-| [[v1-features-analysis\|V1 Features Analysis]] | Feature parity analysis | ✅ current |
+| [[plan\|Migration Plan]] | v1 → v2 migration strategy (Strangler Fig) | 🗄️ historical |
+| [[ui-reuse\|UI Reuse Strategy]] | Reusing v1 React dashboard with v2 API | 🗄️ historical |
+| [[v1-features-analysis\|V1 Features Analysis]] | Feature parity analysis | 🗄️ historical |
 
 ### Performance
 

@@ -100,6 +100,13 @@ export interface MessageMetadata {
    */
   messageFormatMode?: 'convert' | 'passthrough';
 
+  /**
+   * Post into the thread AND surface it in the channel (Slack
+   * `reply_broadcast`). Only meaningful alongside `threadId` — this is the
+   * "quote in thread vs quote in channel" distinction (#889).
+   */
+  isThreadBroadcast?: boolean;
+
   /** Additional plugin-specific metadata */
   [key: string]: unknown;
 }

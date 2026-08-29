@@ -202,6 +202,23 @@ export type MessageStatus = (typeof messageStatuses)[number];
 export const deliveryStatuses = ['pending', 'sent', 'delivered', 'read', 'failed'] as const;
 export type DeliveryStatus = (typeof deliveryStatuses)[number];
 
+/**
+ * Who holds the timer for a scheduled message (#889).
+ * 'platform' = the channel schedules natively (Slack chat.scheduleMessage) and
+ * delivery survives omni downtime. 'local' = omni sends it at send_at.
+ */
+export const scheduledMessageDeliveryModes = ['platform', 'local'] as const;
+export type ScheduledMessageDeliveryMode = (typeof scheduledMessageDeliveryModes)[number];
+
+// 'sending' is a transient CLAIMED state: the sweeper flips a due row to it
+// inside the same transaction that locks the row, so a second scheduler
+// process (prod runs replicaCount:2 with no leader election) cannot re-select
+// and re-deliver a row that is already being sent. A row is reset to 'pending'
+// on a retryable failure or to 'failed' when attempts are exhausted; a row
+// stranded in 'sending' by a crash is reclaimed after a lease window.
+export const scheduledMessageStatuses = ['pending', 'sending', 'sent', 'canceled', 'failed'] as const;
+export type ScheduledMessageStatus = (typeof scheduledMessageStatuses)[number];
+
 // ============================================================================
 // UNIFIED MESSAGES JSONB TYPES
 // ============================================================================
@@ -704,6 +721,13 @@ export const instances = pgTable(
 
     // ---- Slack Configuration ----
     slackBotToken: text('slack_bot_token'),
+    /**
+     * User OAuth token (xoxp) for authMode 'user' (#889). Sealed like the
+     * other credential columns. Bound to a PERSON: it dies with their account.
+     */
+    slackUserToken: text('slack_user_token'),
+    /** 'bot' (default) or 'user' — identity outbound actions are taken as. */
+    slackAuthMode: varchar('slack_auth_mode', { length: 10 }),
     slackAppToken: text('slack_app_token'),
     slackSigningSecret: text('slack_signing_secret'),
 
@@ -1086,6 +1110,76 @@ export const whatsappFlowKeys = pgTable(
 
 export type WhatsappFlowKey = typeof whatsappFlowKeys.$inferSelect;
 export type NewWhatsappFlowKey = typeof whatsappFlowKeys.$inferInsert;
+
+/**
+ * Scheduled outbound messages (#889).
+ *
+ * Two delivery modes, chosen per channel by the `canScheduleMessage`
+ * capability:
+ *
+ * - `platform` — the channel schedules natively (Slack chat.scheduleMessage).
+ *   Delivery survives omni being down. `externalScheduledId` holds the
+ *   platform handle used to cancel.
+ * - `local` — omni holds the message and sends it at `sendAt` itself, for
+ *   channels with no native scheduling.
+ *
+ * This table exists even for `platform` mode, and that is deliberate: Slack's
+ * chat.scheduledMessages.list only returns what the SAME token scheduled, so
+ * the platform cannot be our source of truth for "what is pending". Anything
+ * scheduled through omni is recorded here; reconciliation against the platform
+ * is best-effort.
+ *
+ * Tenancy derives via `instance_id` (the whatsapp_templates / whatsapp_flow_keys
+ * precedent) — no denormalized tenant_id column, so the table stays outside the
+ * RLS tenant-table manifest by construction.
+ */
+export const scheduledMessages = pgTable(
+  'scheduled_messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => instances.id, { onDelete: 'cascade' }),
+    /** Platform chat/channel id (not the internal chats.id — the target may not be known to us yet). */
+    chatExternalId: varchar('chat_external_id', { length: 255 }).notNull(),
+    /** Post into this thread when set (Slack thread_ts). */
+    threadExternalId: varchar('thread_external_id', { length: 255 }),
+    /** Slack reply_broadcast: post in the thread AND surface in the channel. */
+    isThreadBroadcast: boolean('is_thread_broadcast').notNull().default(false),
+
+    /** Serialized OutgoingContent — mirrors what sendMessage would receive. */
+    content: jsonb('content').$type<Record<string, unknown>>().notNull(),
+
+    /** When it should go out. Always stored UTC-aware. */
+    sendAt: timestamp('send_at', { withTimezone: true }).notNull(),
+    deliveryMode: varchar('delivery_mode', { length: 20 }).notNull().$type<ScheduledMessageDeliveryMode>(),
+    status: varchar('status', { length: 20 }).notNull().default('pending').$type<ScheduledMessageStatus>(),
+
+    /** Platform handle for cancellation (Slack scheduled_message_id). */
+    externalScheduledId: varchar('external_scheduled_id', { length: 255 }),
+    /** externalId of the message once it actually went out. */
+    sentExternalId: varchar('sent_external_id', { length: 255 }),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    canceledAt: timestamp('canceled_at', { withTimezone: true }),
+    failedAt: timestamp('failed_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+
+    /** Agent that scheduled it, when it came from a dispatch rather than a human. */
+    createdByAgentId: uuid('created_by_agent_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    /** The sweeper's hot path: pending rows whose time has come. */
+    dueIdx: index('scheduled_messages_due_idx').on(t.status, t.sendAt),
+    instanceIdx: index('scheduled_messages_instance_idx').on(t.instanceId, t.status),
+    chatIdx: index('scheduled_messages_chat_idx').on(t.instanceId, t.chatExternalId),
+  }),
+);
+
+export type ScheduledMessage = typeof scheduledMessages.$inferSelect;
+export type NewScheduledMessage = typeof scheduledMessages.$inferInsert;
 
 // ============================================================================
 // PERSONS (Identity Graph Root)
@@ -1477,6 +1571,34 @@ export const messages = pgTable(
     quotedText: text('quoted_text'),
     quotedSenderName: varchar('quoted_sender_name', { length: 255 }),
 
+    // Thread (#889)
+    // Distinct from reply/quote: a reply points at ONE message, a thread is a
+    // sub-conversation every participant can post into. Slack models it with
+    // `thread_ts` (the root message ts), Discord with a real sub-channel,
+    // Telegram with forum `message_thread_id`. Before this, Slack collapsed
+    // thread into `replyToExternalId`, making a thread reply indistinguishable
+    // from a WhatsApp quote.
+    threadExternalId: varchar('thread_external_id', { length: 255 }),
+    threadRootMessageId: uuid('thread_root_message_id'),
+    // Slack `reply_broadcast`: posted in the thread AND surfaced in the channel.
+    // This is the "quote in thread vs quote in channel" distinction — it needs
+    // its own field because it is orthogonal to threadExternalId.
+    isThreadBroadcast: boolean('is_thread_broadcast').notNull().default(false),
+    // Denormalized thread stats, maintained on the ROOT message.
+    replyCount: integer('reply_count').notNull().default(0),
+    latestReplyAt: timestamp('latest_reply_at', { withTimezone: true }),
+
+    // Stable deep link to the message on the platform (Slack chat.getPermalink).
+    // Resolved lazily, not on ingest: a permalink costs an API call per message
+    // and almost none are ever linked to.
+    permalink: text('permalink'),
+
+    // Pin / star, per MESSAGE (#889). `ChatSettings.pinned` is a different
+    // thing entirely — it pins the CONVERSATION in the sidebar.
+    pinnedAt: timestamp('pinned_at', { withTimezone: true }),
+    pinnedBy: varchar('pinned_by', { length: 255 }),
+    starredAt: timestamp('starred_at', { withTimezone: true }),
+
     // Forward
     forwardedFromMessageId: uuid('forwarded_from_message_id'),
     forwardedFromExternalId: varchar('forwarded_from_external_id', { length: 255 }),
@@ -1545,6 +1667,13 @@ export const messages = pgTable(
       table.replyToExternalId,
       table.isFromMe,
     ),
+    // Fetch a whole thread in platform order (#889).
+    threadExternalIdx: index('messages_thread_external_idx').on(
+      table.chatId,
+      table.threadExternalId,
+      table.platformTimestamp,
+    ),
+    threadRootIdx: index('messages_thread_root_idx').on(table.threadRootMessageId),
     hasMediaIdx: index('messages_has_media_idx').on(table.hasMedia),
     originalEventIdx: index('messages_original_event_idx').on(table.originalEventId),
   }),

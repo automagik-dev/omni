@@ -34,7 +34,9 @@ import { payloadsRoutes } from './payloads';
 import { personsRoutes } from './persons';
 import { processedEventsRoutes } from './processed-events';
 import { providersRoutes } from './providers';
+import { scheduledMessagesRoutes } from './scheduled-messages';
 import { settingsRoutes } from './settings';
+import { slackRoutes } from './slack';
 import { templatesRoutes } from './templates';
 import { trustRoutes } from './trust';
 import { turnsRoutes } from './turns';
@@ -54,6 +56,8 @@ v2Routes.route('/auth', authRoutes);
 v2Routes.route('/instances', instancesRoutes);
 v2Routes.route('/logs', logsRoutes);
 v2Routes.route('/messages', messagesRoutes); // Message CRUD + send operations
+v2Routes.route('/scheduled-messages', scheduledMessagesRoutes); // Deferred sends (#889)
+v2Routes.route('/slack', slackRoutes); // Slack-only: DM open + search (#889)
 v2Routes.route('/events', eventsRoutes);
 v2Routes.route('/journeys', journeysRoutes); // Journey tracing endpoints
 v2Routes.route('/persons', personsRoutes);

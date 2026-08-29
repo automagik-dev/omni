@@ -13,6 +13,26 @@ import type { ConnectionStatus, InstanceConfig } from './instance';
 import type { OutgoingMessage, SendResult } from './messaging';
 import type { StreamSender } from './streaming';
 
+/** Kinds of presence indicator a channel may show (#889). */
+export type PresenceStatusType = 'typing' | 'recording' | 'paused';
+
+/**
+ * Outcome of a presence-status send.
+ *
+ * `delivered: false` with a `reason` is a normal result, not an error — Slack
+ * simply has no thread to attach the status to when the conversation has not
+ * started one yet.
+ */
+export interface PresenceStatusResult {
+  delivered?: boolean;
+  /** Platform API actually used, for observability. */
+  method?: string;
+  threadId?: string;
+  status?: string;
+  loadingMessages?: string[];
+  reason?: string;
+}
+
 export type GroupParticipantAction = 'add' | 'remove' | 'promote' | 'demote';
 export type GroupSetting = 'announcement' | 'not_announcement' | 'locked' | 'unlocked';
 
@@ -201,6 +221,48 @@ export interface ChannelPlugin {
    * @param duration - How long to show typing (ms), 0 to stop
    */
   sendTyping?(instanceId: string, chatId: string, duration?: number): Promise<void>;
+
+  /**
+   * Send a rich presence/status indicator (#889).
+   *
+   * A richer sibling of sendTyping for channels whose "someone is working on
+   * this" signal is not a plain typing bubble. Slack's is thread-scoped
+   * (`assistant.threads.setStatus`) and carries a status string — which is why
+   * Slack reports `canSendTyping: false` while still implementing this.
+   *
+   * Returns a report rather than void: not-delivered is a normal outcome
+   * (Slack has no thread context to attach to, say), and the caller needs to
+   * distinguish that from a failure. Declared here instead of being probed
+   * with `'sendPresenceStatus' in plugin` at the call site.
+   *
+   * @param instanceId - Instance to send from
+   * @param chatId - Chat to show the indicator in
+   * @param type - Indicator kind
+   * @param duration - How long to hold it (ms) before auto-clearing
+   * @param options - Channel extras (Slack: thread, status text, loading copy)
+   */
+  sendPresenceStatus?(
+    instanceId: string,
+    chatId: string,
+    type: PresenceStatusType,
+    duration?: number,
+    options?: { threadId?: string; status?: string; loadingMessages?: string[] },
+  ): Promise<PresenceStatusResult | undefined>;
+
+  /**
+   * Materialize inbound media bytes from a channel-native handle.
+   *
+   * Optional — implement for channels whose inbound webhooks defer the download
+   * and carry only a media reference (e.g. a Meta Cloud `media_id`) rather than
+   * a public `mediaUrl`. The realtime media pipeline invokes this when a
+   * `message.received` content has a `mediaId` but no `mediaUrl`/local path, so
+   * the bytes can be stored and processed (transcription, OCR, …).
+   *
+   * @param instanceId - Instance the media belongs to
+   * @param mediaRef - Channel-native media handle (as set on `content.mediaId`)
+   * @returns The downloaded bytes and their resolved MIME type
+   */
+  downloadInboundMedia?(instanceId: string, mediaRef: string): Promise<{ buffer: Buffer; mimeType: string }>;
 
   /**
    * Mark messages as read
@@ -455,4 +517,88 @@ export interface ChannelPlugin {
    * @param emoji - Emoji to remove
    */
   unreact?(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void>;
+
+  /**
+   * Edit a previously sent message.
+   *
+   * Declared here rather than probed with `'editMessage' in plugin` (#889).
+   * Duck-typing meant the contract said nothing about the shape, so each call
+   * site re-declared its own signature inline and drifted.
+   *
+   * Implement only when `canEditMessage` is true. Note some platforms only let
+   * you edit your OWN messages — Slack's chat.update with a user token does.
+   *
+   * @param instanceId - Instance that sent the message
+   * @param chatId - Channel/chat containing the message
+   * @param messageId - Platform message id
+   * @param newText - Replacement text
+   */
+  editMessage?(instanceId: string, chatId: string, messageId: string, newText: string): Promise<void>;
+
+  /**
+   * Delete a previously sent message. Implement only when `canDeleteMessage`.
+   *
+   * @param instanceId - Instance that sent the message
+   * @param chatId - Channel/chat containing the message
+   * @param messageId - Platform message id
+   * @param fromMe - Whether the target was sent by us (WhatsApp message key).
+   */
+  deleteMessage?(instanceId: string, chatId: string, messageId: string, fromMe?: boolean): Promise<void>;
+
+  /**
+   * Star / unstar (bookmark) a message, where the platform has the concept.
+   *
+   * @param instanceId - Instance to act as
+   * @param chatId - Channel/chat containing the message
+   * @param messageId - Platform message id
+   * @param starred - Desired state
+   * @param fromMe - Whether the target message was sent by us. WhatsApp needs
+   *   it to address the message key; defaults to true in that plugin.
+   */
+  starMessage?(
+    instanceId: string,
+    chatId: string,
+    messageId: string,
+    starred: boolean,
+    fromMe?: boolean,
+  ): Promise<void>;
+
+  /**
+   * Schedule a message for future delivery on the platform itself (#889).
+   *
+   * Only implement when the channel schedules natively, and declare
+   * `canScheduleMessage: true`. Channels without native support are handled by
+   * omni's local sweeper instead — do not fake it here.
+   *
+   * The returned handle is what cancelScheduledMessage() takes. It is NOT the
+   * eventual message id: the message does not exist until it is delivered.
+   *
+   * @param instanceId - Instance to schedule from
+   * @param message - Same shape sendMessage() accepts
+   * @param sendAt - Delivery time (platform limits apply; Slack allows ≤120 days)
+   * @returns Platform handle for later cancellation
+   */
+  scheduleMessage?(instanceId: string, message: OutgoingMessage, sendAt: Date): Promise<string>;
+
+  /**
+   * Cancel a message previously scheduled via scheduleMessage().
+   *
+   * @param instanceId - Instance that owns the scheduled message
+   * @param chatId - Channel/chat the message was scheduled to
+   * @param scheduledId - Handle returned by scheduleMessage()
+   */
+  cancelScheduledMessage?(instanceId: string, chatId: string, scheduledId: string): Promise<void>;
+
+  /**
+   * Resolve a stable deep link to a message (#889).
+   *
+   * Used to render quotes: Slack has no quote API — the client renders a card
+   * by unfurling a permalink — so a quote is built from this plus a blockquote
+   * fallback.
+   *
+   * @param instanceId - Instance to resolve from
+   * @param chatId - Channel/chat containing the message
+   * @param messageId - Platform message id
+   */
+  getPermalink?(instanceId: string, chatId: string, messageId: string): Promise<string | null>;
 }

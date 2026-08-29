@@ -3,7 +3,7 @@ title: "Migration Plan: v1 to v2"
 created: 2025-01-29
 updated: 2026-02-09
 tags: [migration, planning]
-status: current
+status: historical
 ---
 
 # Migration Plan: v1 to v2

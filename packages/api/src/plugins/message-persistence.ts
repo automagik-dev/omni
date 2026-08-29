@@ -66,6 +66,7 @@ import {
   runConsumerInTenantContext,
   runTenantWorkDb,
 } from '../tenancy/worker-tenant-context';
+import { canonicalizeHandle, isPersonlessChannel } from '../utils/canonical-handle';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
 import { getPlugin } from './loader';
 
@@ -314,31 +315,6 @@ function buildSentChatPreview(payload: MessageSentPayload): string {
   return badge ? (text ? `${badge} ${text}` : badge) : text;
 }
 
-/**
- * Extract and validate phone from sender ID.
- * Returns E.164 phone (+digits) or undefined for non-phone IDs.
- *
- * Filters out:
- * - Group IDs (contain dashes, e.g. "120363123-1234567@g.us")
- * - LID references (numeric but not phone numbers)
- * - Meta IDs (non-numeric platform identifiers)
- * - IDs that are too short (<7 digits) or too long (>15 digits)
- */
-function extractPhoneFromSender(senderId: string, channel: string): string | undefined {
-  if (!channel.startsWith('whatsapp')) return undefined;
-
-  // Strip @suffix if still present (defensive)
-  const bare = senderId.split('@')[0] || senderId;
-
-  // Must be only digits (filters out group IDs with dashes, meta IDs, LIDs with letters)
-  if (!/^\d+$/.test(bare)) return undefined;
-
-  // E.164 validation: 7-15 digits
-  if (bare.length < 7 || bare.length > 15) return undefined;
-
-  return `+${bare}`;
-}
-
 // ============================================================================
 // Identity Processing
 // ============================================================================
@@ -367,19 +343,30 @@ async function processSenderIdentity(
     return { personId: metadata.personId, platformIdentityId: undefined };
   }
 
+  // System/agent channels are excluded from the human person graph. `internal`
+  // emits `from = sourceInstanceId` (an instance UUID); `a2a` keys on an agent
+  // subject and its customer context is resolved from the execution context by
+  // the dispatcher — neither is a human. The message still persists (sender
+  // identity FKs are nullable); we simply mint no person here.
+  if (isPersonlessChannel(channel)) {
+    return { personId: metadata.personId, platformIdentityId: metadata.platformIdentityId };
+  }
+
   const displayName = truncate(payload.senderName ?? (payload.rawPayload?.pushName as string | undefined), 255);
-  const platformUserId = truncate(payload.from, 255) ?? payload.from;
+  // Canonicalize the sender handle ONCE before keying: bare `5511...`,
+  // `5511...@s.whatsapp.net` and device-suffixed `5511...:3@s.whatsapp.net` all
+  // collapse to one identity; Twilio's `whatsapp:+E164` and Gupshup/Hermes bare
+  // digits now yield a phone. (`findOrCreateIdentity` re-canonicalizes
+  // idempotently; doing it here also fixes `matchByPhone` for those channels.)
+  const canonical = canonicalizeHandle(channel, payload.from);
+  const platformUserId = truncate(canonical.platformUserId, 255) ?? canonical.platformUserId;
   // LID-addressed senders have numeric IDs that look like phones but are NOT E.164 numbers.
   // Skip phone extraction to prevent misidentifying LID IDs as phone numbers and linking to wrong people.
   // Check both: addressingMode (DM where the chat itself is @lid) and senderIsLid (group chats where
   // the chat is @g.us but individual participants can be @lid — addressingMode stays unset in that case).
   const isLidAddressed = payload.rawPayload?.addressingMode === 'lid' || payload.rawPayload?.senderIsLid === true;
   const resolvedPhone = isLidAddressed ? (payload.rawPayload?.resolvedSenderPhone as string | undefined) : undefined;
-  const phoneNumber = isLidAddressed
-    ? resolvedPhone
-      ? `+${resolvedPhone}`
-      : undefined
-    : extractPhoneFromSender(platformUserId, channel);
+  const phoneNumber = isLidAddressed ? (resolvedPhone ? `+${resolvedPhone}` : undefined) : canonical.phone;
 
   const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
     { channel, instanceId: metadata.instanceId, platformUserId, platformUsername: displayName },
@@ -761,6 +748,40 @@ async function resolveOrCreateChat(
 }
 
 /**
+ * Resolve a reply's target to our own row id (#889).
+ *
+ * `replyToMessageId` has existed on the schema since 0000 and was never once
+ * written: only the platform's `replyToExternalId` was stored, so nothing
+ * could join a reply to the message it answers without a second lookup by
+ * external id. Both helpers (resolveReplyToMessage, updateReplyToReference)
+ * already existed and had no callers.
+ *
+ * Best-effort: a reply can arrive before the message it answers (history sync
+ * out of order, or a quote of something older than our retention), and that
+ * must not fail the persist.
+ */
+async function linkReplyTarget(
+  services: Services,
+  chatId: string,
+  messageId: string,
+  replyToExternalId: string | undefined,
+): Promise<void> {
+  if (!replyToExternalId) return;
+  try {
+    const replyToMessageId = await services.messages.resolveReplyToMessage(chatId, replyToExternalId);
+    if (replyToMessageId) {
+      await services.messages.updateReplyToReference(messageId, replyToMessageId);
+    }
+  } catch (error) {
+    log.debug('Could not resolve reply target', {
+      chatId,
+      replyToExternalId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * Handle message.received event - main processing logic
  */
 async function handleMessageReceived(
@@ -874,6 +895,10 @@ async function handleMessageReceived(
     replyToExternalId: truncate(payload.replyToId, 255),
     quotedText: quotedMessage?.conversation as string | undefined,
     quotedSenderName: truncate(quotedMessage?.pushName as string | undefined, 255),
+    // Thread (#889) — previously dropped: threadId rode along in the payload
+    // for per_thread session routing and was never persisted.
+    threadExternalId: truncate(payload.threadId, 255),
+    isThreadBroadcast: rawPayload?.isThreadBroadcast === true,
     isForwarded: !!(rawPayload?.isForwarded || rawPayload?.forwardingScore),
     rawPayload,
   });
@@ -892,6 +917,8 @@ async function handleMessageReceived(
 
   if (created) {
     log.debug('Created message', { externalId: payload.externalId, chatId: chat.id });
+
+    await linkReplyTarget(services, chat.id, message.id, payload.replyToId);
   }
 
   // Step 6: Record participant activity
@@ -1072,6 +1099,9 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               rawPayload: sentContent.rawPayload,
               // Reply info - truncate varchar(255) fields
               replyToExternalId: truncate(payload.replyToId, 255),
+              // Thread (#889) — keep outbound symmetric with inbound, otherwise
+              // our own thread replies read back as top-level channel messages.
+              threadExternalId: truncate(payload.threadId, 255),
             });
 
             return { chat, message, created };

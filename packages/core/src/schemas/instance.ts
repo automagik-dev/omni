@@ -94,6 +94,8 @@ export const InstanceSchema = z.object({
 
   // Slack config
   slackBotToken: z.string().nullable(),
+  slackUserToken: z.string().nullable(),
+  slackAuthMode: z.string().nullable(),
   slackAppToken: z.string().nullable(),
   slackSigningSecret: z.string().nullable(),
 

@@ -248,6 +248,82 @@ type PluginCapability =
   | 'canSendTyping'
   | 'canReceiveReadReceipts';
 
+const permalinkQuerySchema = z.object({
+  instanceId: z.string().uuid(),
+  channelId: z.string().min(1).describe('Platform chat/channel id containing the message'),
+});
+
+/**
+ * GET /messages/:id/permalink — resolve a stable deep link (#889).
+ *
+ * Resolved lazily and cached on the row: a permalink costs one API call and
+ * almost no message is ever linked to, so paying it at ingest for every
+ * message would be wasteful.
+ *
+ * This is also the input a quote is built from — Slack has no quote API, its
+ * client renders the card by unfurling a permalink.
+ */
+messagesRoutes.get('/:id/permalink', zValidator('query', permalinkQuerySchema), async (c) => {
+  const messageId = c.req.param('id');
+  const { instanceId, channelId } = c.req.valid('query');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+  const services = c.get('services');
+
+  const chat = await services.chats.getByExternalId(instanceId, channelId);
+  const stored = chat ? await services.messages.getByExternalId(chat.id, messageId) : null;
+  if (stored?.permalink) {
+    return c.json({ data: { messageId, permalink: stored.permalink, cached: true } });
+  }
+
+  const { instance, plugin } = await getPluginForInstance(services, c.get('channelRegistry'), instanceId);
+
+  if (typeof plugin.getPermalink !== 'function') {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} cannot resolve permalinks`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
+  const permalink = await plugin.getPermalink(instanceId, channelId, messageId);
+  if (!permalink) {
+    throw new OmniError({
+      code: ERROR_CODES.NOT_FOUND,
+      message: `No permalink available for message ${messageId}`,
+      recoverable: false,
+    });
+  }
+
+  if (chat) {
+    // Cache best-effort; the caller already has its answer.
+    await services.messages.setPermalink(chat.id, messageId, permalink).catch(() => {});
+  }
+
+  return c.json({ data: { messageId, permalink, cached: false } });
+});
+
+/**
+ * Mirror a star/unstar into our own row (#889).
+ *
+ * Best-effort by design: the platform already accepted the change, so a
+ * bookkeeping failure must not turn a successful star into an error response.
+ */
+async function persistStarState(
+  services: Services,
+  instanceId: string,
+  channelExternalId: string,
+  messageExternalId: string,
+  starred: boolean,
+): Promise<void> {
+  try {
+    const chat = await services.chats.getByExternalId(instanceId, channelExternalId);
+    if (chat) await services.messages.setStarred(chat.id, messageExternalId, starred);
+  } catch {
+    // Intentionally swallowed — see the doc comment.
+  }
+}
+
 /**
  * Get validated plugin for an instance with capability check
  */
@@ -2090,7 +2166,7 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
   });
 
   // Show "recording" presence before sending (if plugin supports it)
-  if ('sendTyping' in plugin && typeof plugin.sendTyping === 'function') {
+  if (typeof plugin.sendTyping === 'function') {
     const presenceDuration = data.presenceDelay ?? Math.min(ttsResult.durationMs, 15000);
     try {
       await (plugin as { sendTyping: (id: string, chatId: string, duration?: number) => Promise<void> }).sendTyping(
@@ -2336,11 +2412,12 @@ type PresenceStatusSender = {
 };
 
 function hasPresenceStatusSender(plugin: unknown): plugin is PresenceStatusSender {
+  // sendPresenceStatus is on the ChannelPlugin contract since #889, but this
+  // guard also accepts a bare object, so the shape check stays.
   return (
     typeof plugin === 'object' &&
     plugin !== null &&
-    'sendPresenceStatus' in plugin &&
-    typeof (plugin as { sendPresenceStatus?: unknown }).sendPresenceStatus === 'function'
+    typeof (plugin as PresenceStatusSender).sendPresenceStatus === 'function'
   );
 }
 
@@ -2388,7 +2465,7 @@ messagesRoutes.post('/send/presence', zValidator('json', sendPresenceSchema), as
         loadingMessages,
       })
     : await (async (): Promise<PresenceStatusResult> => {
-        if (!('sendTyping' in plugin) || typeof plugin.sendTyping !== 'function') {
+        if (typeof plugin.sendTyping !== 'function') {
           throw new OmniError({
             code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
             message: `Channel ${instance.channel} plugin does not implement sendTyping`,
@@ -2468,7 +2545,7 @@ messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), asyn
   );
 
   // Check if plugin has markAsRead method
-  if (!('markAsRead' in plugin) || typeof plugin.markAsRead !== 'function') {
+  if (typeof plugin.markAsRead !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} plugin does not implement markAsRead`,
@@ -2524,7 +2601,7 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
   );
 
   // Check if plugin has markAsRead method
-  if (!('markAsRead' in plugin) || typeof plugin.markAsRead !== 'function') {
+  if (typeof plugin.markAsRead !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} plugin does not implement markAsRead`,
@@ -2898,7 +2975,7 @@ messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema
   }
 
   // Check if plugin has editMessage method
-  if (!('editMessage' in plugin) || typeof plugin.editMessage !== 'function') {
+  if (typeof plugin.editMessage !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} plugin does not implement editMessage`,
@@ -2911,11 +2988,7 @@ messagesRoutes.post('/edit-channel', zValidator('json', editMessageChannelSchema
 
   // Edit via channel plugin — catch and surface plugin errors
   try {
-    await (
-      plugin as {
-        editMessage: (instanceId: string, channelId: string, messageId: string, text: string) => Promise<void>;
-      }
-    ).editMessage(instanceId, channelId, resolvedMessageId, text);
+    await plugin.editMessage(instanceId, channelId, resolvedMessageId, text);
   } catch (error) {
     // Re-throw typed errors (WhatsAppError, OmniError) for the global error handler
     if (error instanceof OmniError) throw error;
@@ -2976,7 +3049,7 @@ messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSc
   }
 
   // Check if plugin has deleteMessage method
-  if (!('deleteMessage' in plugin) || typeof plugin.deleteMessage !== 'function') {
+  if (typeof plugin.deleteMessage !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} plugin does not implement deleteMessage`,
@@ -2988,11 +3061,7 @@ messagesRoutes.post('/delete-channel', zValidator('json', deleteMessageChannelSc
   const resolvedMessageId = await resolveChannelMessageId(services, messageId, instanceId);
 
   // Delete via channel plugin
-  await (
-    plugin as {
-      deleteMessage: (instanceId: string, channelId: string, messageId: string, fromMe?: boolean) => Promise<void>;
-    }
-  ).deleteMessage(instanceId, channelId, resolvedMessageId, fromMe);
+  await plugin.deleteMessage(instanceId, channelId, resolvedMessageId, fromMe);
 
   return c.json({
     success: true,
@@ -3040,7 +3109,7 @@ messagesRoutes.post('/:id/star', zValidator('json', starMessageSchema), async (c
     });
   }
 
-  if (!('starMessage' in plugin) || typeof plugin.starMessage !== 'function') {
+  if (typeof plugin.starMessage !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} does not support starring messages`,
@@ -3049,17 +3118,12 @@ messagesRoutes.post('/:id/star', zValidator('json', starMessageSchema), async (c
     });
   }
 
-  await (
-    plugin as {
-      starMessage: (
-        instanceId: string,
-        chatId: string,
-        messageId: string,
-        star: boolean,
-        fromMe?: boolean,
-      ) => Promise<void>;
-    }
-  ).starMessage(instanceId, channelId, messageId, true, fromMe);
+  await plugin.starMessage(instanceId, channelId, messageId, true, fromMe);
+
+  // Persist AFTER the channel accepted it, so the row reflects the platform
+  // rather than an intent that may have failed (#889). Best-effort: the star
+  // did happen, and failing the response would misreport that.
+  await persistStarState(services, instanceId, channelId, messageId, true);
 
   return c.json({
     success: true,
@@ -3097,7 +3161,7 @@ messagesRoutes.delete('/:id/star', zValidator('json', starMessageSchema), async 
     });
   }
 
-  if (!('starMessage' in plugin) || typeof plugin.starMessage !== 'function') {
+  if (typeof plugin.starMessage !== 'function') {
     throw new OmniError({
       code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
       message: `Channel ${instance.channel} does not support starring messages`,
@@ -3106,17 +3170,9 @@ messagesRoutes.delete('/:id/star', zValidator('json', starMessageSchema), async 
     });
   }
 
-  await (
-    plugin as {
-      starMessage: (
-        instanceId: string,
-        chatId: string,
-        messageId: string,
-        star: boolean,
-        fromMe?: boolean,
-      ) => Promise<void>;
-    }
-  ).starMessage(instanceId, channelId, messageId, false, fromMe);
+  await plugin.starMessage(instanceId, channelId, messageId, false, fromMe);
+
+  await persistStarState(services, instanceId, channelId, messageId, false);
 
   return c.json({
     success: true,
