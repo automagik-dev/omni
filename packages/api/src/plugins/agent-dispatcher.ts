@@ -4514,6 +4514,41 @@ export function invalidateProviderCache(providerId: string): void {
 }
 
 /**
+ * Invalidate cached IAgentProvider instances for a specific instance.
+ *
+ * Instance-level config (enableAutoSplit, agentType, agentTimeout,
+ * agentPrefixSenderName, the resolved agentId) is baked into the provider at
+ * construction time (see createAgnoProvider and friends), so an instance
+ * update must evict the cached entry or the change stays invisible until a
+ * process restart (omni#906). Cache keys are `${providerId}:${instanceId}`;
+ * matching on the `:instanceId` suffix lets callers invalidate without
+ * knowing which provider the instance resolves to.
+ *
+ * Unlike invalidateProviderCache, this leaves the shared OpenClaw client
+ * pool alone — that pool holds provider-level connection state, which an
+ * instance mutation cannot affect.
+ */
+export function invalidateProviderCacheForInstance(instanceId: string): void {
+  const suffix = `:${instanceId}`;
+  let removed = 0;
+
+  for (const [key, provider] of providerCache.entries()) {
+    if (!key.endsWith(suffix)) continue;
+    providerCache.delete(key);
+    removed++;
+    if (provider.dispose) {
+      provider.dispose().catch((err) => {
+        log.warn('Error disposing provider on instance cache invalidation', { key, error: String(err) });
+      });
+    }
+  }
+
+  if (removed > 0) {
+    log.debug('Provider cache invalidated for instance', { instanceId, removed });
+  }
+}
+
+/**
  * Look up provider from DB and resolve to IAgentProvider.
  * Accepts DispatchInstance which carries the transient agentProviderId stamped by applyAgentFkOverrides.
  */

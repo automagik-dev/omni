@@ -5,9 +5,25 @@
 import { NotFoundError } from '@omni/core';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
-import { type Agent, type NewAgent, agents } from '@omni/db';
+import { type Agent, type NewAgent, agentRoutes, agents, instances } from '@omni/db';
 import { and, eq, sql } from 'drizzle-orm';
+import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
 import { scopedHandle } from '../tenancy/tenant-scope';
+
+/**
+ * Agent columns whose values get baked into cached IAgentProvider instances by
+ * applyAgentFkOverrides + resolveProvider (agentType, the provider FK, and the
+ * provider-internal agent id resolved from metadata/configPath/name). An update
+ * touching any of these must evict the provider's cache entries or dispatch
+ * keeps the stale values until the process restarts (omni#906).
+ */
+const PROVIDER_BAKED_AGENT_COLUMNS = [
+  'name',
+  'agentProviderId',
+  'agentType',
+  'metadata',
+  'configPath',
+] as const satisfies readonly (keyof NewAgent)[];
 
 export interface ListAgentsOptions {
   limit?: number;
@@ -108,6 +124,23 @@ export class AgentService {
 
     if (!updated) {
       throw new NotFoundError('Agent', id);
+    }
+
+    // omni#906: evict cached providers built from the pre-update agent row —
+    // per-instance (not invalidateProviderCache) so the provider's shared
+    // OpenClaw WS clients, whose connection config an agent row can't affect,
+    // stay up.
+    if (PROVIDER_BAKED_AGENT_COLUMNS.some((column) => column in data)) {
+      // Both reference paths: the instance-level agentId FK and per-chat/user
+      // agent routes (mergeRouteOverrides stamps route agents onto the same
+      // `${providerId}:${instanceId}` cache entry).
+      const [direct, routed] = await Promise.all([
+        this.db.select({ id: instances.id }).from(instances).where(eq(instances.agentId, id)),
+        this.db.select({ id: agentRoutes.instanceId }).from(agentRoutes).where(eq(agentRoutes.agentId, id)),
+      ]);
+      for (const instanceId of new Set([...direct, ...routed].map((row) => row.id))) {
+        invalidateProviderCacheForInstance(instanceId);
+      }
     }
 
     return updated;
