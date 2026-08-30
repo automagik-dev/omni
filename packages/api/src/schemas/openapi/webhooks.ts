@@ -6,12 +6,26 @@ import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, SuccessSchema } from './common';
 
+// Signature verification contract (issue #928). The secret itself is
+// write-only — it never appears in any response schema.
+export const WebhookSignatureConfigSchema = z.object({
+  algorithm: z.enum(['hmac-sha256', 'hmac-sha1', 'token-match']).openapi({
+    description: 'How to verify: HMAC over the raw request body, or direct token match',
+  }),
+  header: z.string().openapi({ description: 'Header carrying the signature/token (e.g. X-Hub-Signature-256)' }),
+  prefix: z.string().optional().openapi({ description: 'Prefix before the hex digest (e.g. "sha256=")' }),
+});
+
 // Webhook source schema
 export const WebhookSourceSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Source UUID' }),
   name: z.string().openapi({ description: 'Source name' }),
   description: z.string().nullable().openapi({ description: 'Description' }),
   expectedHeaders: z.record(z.string(), z.boolean()).nullable().openapi({ description: 'Expected headers' }),
+  signatureConfig: WebhookSignatureConfigSchema.nullable().openapi({ description: 'Signature verification config' }),
+  hasSignatureSecret: z
+    .boolean()
+    .openapi({ description: 'Whether a signature secret is stored (secret is write-only)' }),
   enabled: z.boolean().openapi({ description: 'Whether enabled' }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
@@ -22,6 +36,12 @@ export const CreateWebhookSourceSchema = z.object({
   name: z.string().min(1).max(100).openapi({ description: 'Unique source name' }),
   description: z.string().optional().openapi({ description: 'Description' }),
   expectedHeaders: z.record(z.string(), z.boolean()).optional().openapi({ description: 'Headers to validate' }),
+  signatureConfig: WebhookSignatureConfigSchema.nullable().optional().openapi({
+    description: 'Signature verification config; required for the source to be reachable on the public ingress',
+  }),
+  signatureSecret: z.string().min(8).max(512).nullable().optional().openapi({
+    description: 'Shared secret used by signatureConfig (write-only, never returned)',
+  }),
   enabled: z.boolean().default(true).openapi({ description: 'Whether enabled' }),
 });
 
@@ -146,6 +166,30 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
         description: 'Webhook received',
         content: { 'application/json': { schema: WebhookReceiveResponseSchema } },
       },
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
+    path: '/webhooks/ingress/{source}',
+    operationId: 'receiveWebhookIngress',
+    tags: ['Webhooks'],
+    summary: 'Public webhook ingress',
+    description:
+      'Auth-exempt receiver for third-party webhook senders. Requires the source to have a signature ' +
+      'configuration; the request is verified against it (HMAC over the raw body, or token match) before any ' +
+      'event is published. Unknown, disabled, unconfigured, or badly signed requests all return the same 401.',
+    security: [],
+    request: {
+      params: z.object({ source: z.string().openapi({ description: 'Source name' }) }),
+      body: { content: { 'application/json': { schema: z.record(z.string(), z.unknown()) } } },
+    },
+    responses: {
+      200: {
+        description: 'Webhook received',
+        content: { 'application/json': { schema: WebhookReceiveResponseSchema } },
+      },
+      401: { description: 'Verification failed', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
 

@@ -96,6 +96,7 @@ export type {
   // Webhook types
   WebhookSource,
   ListWebhookSourcesParams,
+  WebhookSignatureConfigBody,
   CreateWebhookSourceBody,
   TriggerEventBody,
   // Payload types

@@ -42,9 +42,13 @@ const RATE_LIMITS = {
 } as const;
 
 /**
- * Create rate limiting middleware
+ * Create rate limiting middleware.
+ *
+ * `keyPrefix` isolates a limiter's counters from the default bucket so a
+ * surface with its own budget (e.g. the public webhook ingress) doesn't share
+ * windows with the general limiter for the same identifier.
  */
-function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general) {
+function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general, keyPrefix = 'ratelimit') {
   return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
     // Use API key ID as identifier, then only trusted infra-provided address data.
     // Do not trust client-supplied IP headers unless explicitly configured.
@@ -56,7 +60,7 @@ function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general) {
     const normalizedIp = rawIp?.split(',')[0]?.trim() || undefined;
     const identifier = apiKey?.id ? `api:${apiKey.id}` : normalizedIp ? `ip:${normalizedIp}` : 'anon';
 
-    const key = `ratelimit:${identifier}`;
+    const key = `${keyPrefix}:${identifier}`;
     const now = Date.now();
 
     let entry = rateLimitStore.get(key);
@@ -111,3 +115,9 @@ function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general) {
  * Default rate limiter for general endpoints
  */
 export const rateLimitMiddleware = createRateLimiter(RATE_LIMITS.general);
+
+/**
+ * Rate limiter for the auth-exempt generic webhook ingress (issue #928).
+ * Keyed by IP (no API key on that surface), same budget as channel events.
+ */
+export const webhookIngressRateLimitMiddleware = createRateLimiter(RATE_LIMITS.events, 'ratelimit:webhook-ingress');

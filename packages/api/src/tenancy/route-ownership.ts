@@ -276,6 +276,19 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'fixed 200 acks with no row data.',
   },
   {
+    route: 'POST /api/v2/webhooks/ingress/:source',
+    class: 'public-by-contract',
+    justification:
+      'Generic webhook ingress (issue #928). Auth-exempt because third-party senders (GitHub/Stripe-class) hold ' +
+      'no omni credential; authenticity is the per-source signature contract (HMAC over the raw body or token ' +
+      'match) verified against the server-held, per-tenant-sealed secret BEFORE anything is published. A source ' +
+      'is reachable here only after an administrative act configured its signature_config — sources are never ' +
+      'auto-created on this surface. All rejections (unknown source, disabled, unconfigured, bad signature) ' +
+      'collapse into a single 401 shape so the endpoint is not a source-name existence oracle, and the surface ' +
+      'is IP-rate-limited. The tenant, when one applies, comes from the server-side webhook_sources row, never ' +
+      'from a request claim. Responses carry only the generated event id and echo of the source name.',
+  },
+  {
     route: 'GET /api/v2/channels/whatsapp-business/webhook',
     class: 'public-by-contract',
     justification:

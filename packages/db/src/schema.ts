@@ -2634,6 +2634,30 @@ export type NewEventPayload = Omit<typeof eventPayloads.$inferInsert, 'tenantId'
 // WEBHOOK SOURCES (Events Ext)
 // ============================================================================
 
+/** Signature verification algorithms supported by the generic webhook ingress. */
+export const webhookSignatureAlgorithms = ['hmac-sha256', 'hmac-sha1', 'token-match'] as const;
+export type WebhookSignatureAlgorithm = (typeof webhookSignatureAlgorithms)[number];
+
+/**
+ * Per-source request verification for the generic webhook ingress.
+ *
+ * `hmac-sha256`/`hmac-sha1`: the header carries an HMAC of the raw request
+ * body computed with the source's secret (GitHub's X-Hub-Signature-256
+ * pattern; `prefix` covers the `sha256=` style the digest is wrapped in).
+ * `token-match`: the header carries the secret itself (Telegram's
+ * X-Telegram-Bot-Api-Secret-Token pattern).
+ *
+ * The secret lives in the sibling `signature_secret` column, not here, so it
+ * can be sealed per-tenant like other credential fields.
+ */
+export interface WebhookSignatureConfig {
+  algorithm: WebhookSignatureAlgorithm;
+  /** Header carrying the signature or token (e.g. 'X-Hub-Signature-256'). */
+  header: string;
+  /** Prefix the provider prepends to the hex digest (e.g. 'sha256='). */
+  prefix?: string;
+}
+
 /**
  * Webhook source configurations.
  * External systems can trigger events in Omni via webhooks.
@@ -2649,6 +2673,11 @@ export const webhookSources = pgTable(
 
     // Optional validation
     expectedHeaders: jsonb('expected_headers').$type<Record<string, boolean>>(), // { 'X-GitHub-Event': true }
+
+    // Signature verification (issue #928). Config holds algorithm/header;
+    // the secret is a separate column so it can be sealed per-tenant.
+    signatureConfig: jsonb('signature_config').$type<WebhookSignatureConfig>(),
+    signatureSecret: text('signature_secret'),
 
     // State
     enabled: boolean('enabled').notNull().default(true),
