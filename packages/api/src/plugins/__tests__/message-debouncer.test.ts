@@ -122,6 +122,50 @@ describe('MessageDebouncer', () => {
       expect(flushCount).toBe(2);
     });
 
+    it('notifies onQueuedBehindActiveRun for messages arriving during an in-flight flush (#920)', async () => {
+      const queued: { traceId?: string; queuePosition: number; blockingTraceId?: string }[] = [];
+      let resolveFirstFlush: (() => void) | null = null;
+
+      debouncer = new MessageDebouncer(
+        async () => {
+          await new Promise<void>((resolve) => {
+            resolveFirstFlush = resolve;
+          });
+        },
+        Date.now,
+        {
+          onQueuedBehindActiveRun: (info) => {
+            queued.push({
+              traceId: info.message.metadata.traceId,
+              queuePosition: info.queuePosition,
+              blockingTraceId: info.blockingTraceId,
+            });
+          },
+        },
+      );
+
+      // First message flushes and blocks in-flight
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), fixedConfig);
+      await wait(150);
+      // Buffering before/outside a flush must NOT notify
+      expect(queued.length).toBe(0);
+
+      // Two messages queue behind the active run
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('msg2'), fixedConfig);
+      debouncer.buffer('inst-1', 'chat-1', makeMessage('msg3'), fixedConfig);
+
+      expect(queued).toEqual([
+        { traceId: 'trace-msg2', queuePosition: 1, blockingTraceId: 'trace-msg1' },
+        { traceId: 'trace-msg3', queuePosition: 2, blockingTraceId: 'trace-msg1' },
+      ]);
+
+      resolveFirstFlush!();
+      // Release the re-flush of msg2/msg3 too so no flush is left dangling
+      await wait(200);
+      resolveFirstFlush!();
+      await wait(50);
+    });
+
     it('handles errors in onFlush without losing subsequent messages', async () => {
       const flushCalls: BufferedMessage[][] = [];
 

@@ -100,6 +100,7 @@ import {
   type DebounceConfig,
   type DispatchMetadata,
   MessageDebouncer,
+  type QueuedBehindActiveRunInfo,
 } from './message-debouncer';
 import { extractPlatformTimestamp } from './message-persistence';
 import { createSessionStorage } from './session-storage';
@@ -3717,6 +3718,36 @@ function buildAckConfig(instance: DispatchInstance): ReactionAckConfig {
   };
 }
 
+/**
+ * #920: Reaction-ack a message the moment it queues behind an active run.
+ * Without this the only ack fires in processAgentResponse — i.e. at dispatch —
+ * so a message waiting out a long agent run (15+ min on claude-code) shows no
+ * signal at all. Cosmetic and fire-and-forget: the dropped AckHandle means the
+ * ack is removed by its hard timeout, and the dispatch-time ack takes over when
+ * the run finally starts (a duplicate add is rejected by the platform and
+ * swallowed by startAck's catch).
+ */
+async function ackQueuedMessage(info: QueuedBehindActiveRunInfo): Promise<void> {
+  try {
+    const instance = info.message.metadata.resolvedInstance as DispatchInstance | undefined;
+    const messageId = info.message.payload.externalId;
+    if (!instance || !messageId) return;
+    const channel = (info.message.metadata.channelType ?? instance.channel) as ChannelType;
+    const plugin = (await getPlugin(channel)) ?? null;
+    startAck(
+      plugin,
+      createPluginAckProvider(plugin),
+      instance.id,
+      info.chatId,
+      messageId,
+      channel,
+      buildAckConfig(instance),
+    );
+  } catch (error) {
+    log.debug('Failed to ack queued message', { chatId: info.chatId, error: String(error) });
+  }
+}
+
 async function dispatchToAgent(
   services: Services,
   instance: DispatchInstance,
@@ -5707,7 +5738,7 @@ export async function setupAgentDispatcher(
   // Create debouncer for message events
   // (registered module-wide so dispatch paths can consult pending buffers
   //  for the stale-reply gate — see isReplySuperseded)
-  const debouncer = new MessageDebouncer(async (_chatKey, messages) => {
+  const onDebouncedFlush = async (_chatKey: string, messages: BufferedMessage[]) => {
     const firstMsg = messages[0];
     if (!firstMsg) return;
 
@@ -5761,6 +5792,11 @@ export async function setupAgentDispatcher(
     }
 
     await processAgentResponse(services, instance, messages, triggerType, db, eventBus);
+  };
+  const debouncer = new MessageDebouncer(onDebouncedFlush, Date.now, {
+    // #920: a message queued behind an active run can wait many minutes with
+    // no visible signal — ack it at enqueue so 👀 means "received", not "started".
+    onQueuedBehindActiveRun: (info) => void ackQueuedMessage(info),
   });
   activeMessageDebouncer = debouncer;
 
