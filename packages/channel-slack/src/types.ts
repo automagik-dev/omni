@@ -321,6 +321,17 @@ export interface SlackManifest {
       display_name: string;
       always_online: boolean;
     };
+    /**
+     * Agent messaging experience (#914). Replaces the deprecated
+     * `assistant_view` (gone February 2027); the switch is one-way per app.
+     */
+    agent_view?: {
+      agent_description: string;
+      suggested_prompts?: Array<{
+        title: string;
+        message: string;
+      }>;
+    };
     slash_commands?: Array<{
       command: string;
       description: string;

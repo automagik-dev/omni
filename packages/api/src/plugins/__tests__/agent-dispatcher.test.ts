@@ -35,6 +35,7 @@ import { instances } from '@omni/db';
 import {
   type DispatcherCleanup,
   __test__,
+  cancelActiveAgentRun,
   isFirstPartyInstanceSender,
   resolveQuotedMessage,
   setupAgentDispatcher,
@@ -382,7 +383,7 @@ describe('agent-dispatcher', () => {
   // setupAgentDispatcher — subscribes to correct NATS subjects
   // ======================================================================
   describe('setupAgentDispatcher', () => {
-    it('subscribes to message.received, reaction.received, reaction.removed, presence.typing, and media.processed', async () => {
+    it('subscribes to message.received, reaction.received, reaction.removed, presence.typing, media.processed, and agent.run.cancel_requested', async () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
@@ -392,7 +393,7 @@ describe('agent-dispatcher', () => {
         mockDb,
       );
 
-      expect(eventBus.subscribe).toHaveBeenCalledTimes(5);
+      expect(eventBus.subscribe).toHaveBeenCalledTimes(6);
 
       // Verify event types subscribed
       const subscribedTypes = eventBus.subscribe.mock.calls.map((call: unknown[]) => call[0]);
@@ -401,8 +402,13 @@ describe('agent-dispatcher', () => {
       expect(subscribedTypes).toContain('reaction.removed');
       expect(subscribedTypes).toContain('presence.typing');
       expect(subscribedTypes).toContain('media.processed');
+      expect(subscribedTypes).toContain('agent.run.cancel_requested');
 
       cleanup();
+    });
+
+    it('cancelActiveAgentRun resolves false when nothing is in flight (#914)', async () => {
+      await expect(cancelActiveAgentRun('inst-none', 'chat-none', 'user_stop')).resolves.toBe(false);
     });
 
     it('returns a cleanup function that can be called without error', async () => {

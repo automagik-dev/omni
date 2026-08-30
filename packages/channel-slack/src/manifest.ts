@@ -50,6 +50,10 @@ export const BOT_EVENTS = [
   'member_joined_channel',
   'member_left_channel',
   'channel_rename',
+  // Agent messaging experience (#914): fires when the user presses the native
+  // stop button; subscribing is also what makes Slack SHOW that button while a
+  // session is in `processing`.
+  'agent_session_stopped',
 ] as const;
 
 /**
@@ -113,6 +117,13 @@ export function buildSlackManifest(options?: {
   slashCommands?: SlackSlashCommand[];
   /** Request user-token scopes and user-scoped events too (authMode 'user'). */
   includeUserScopes?: boolean;
+  /**
+   * Description shown in the Agent messaging experience (max 300 chars).
+   * Defaults to `description`.
+   */
+  agentDescription?: string;
+  /** Suggested prompts shown at the top of the agent's Messages tab. */
+  suggestedPrompts?: Array<{ title: string; message: string }>;
 }): SlackManifest {
   const {
     appName = 'Omni Bot',
@@ -121,6 +132,8 @@ export function buildSlackManifest(options?: {
     backgroundColor = '#4A154B',
     slashCommands = [],
     includeUserScopes = false,
+    agentDescription,
+    suggestedPrompts,
   } = options ?? {};
 
   return {
@@ -133,6 +146,13 @@ export function buildSlackManifest(options?: {
       bot_user: {
         display_name: displayName,
         always_online: true,
+      },
+      // Agent messaging experience (#914). `assistant_view` is deprecated
+      // (removed February 2027) and new Slack apps can only use `agent_view`.
+      // Slack caps agent_description at 300 chars.
+      agent_view: {
+        agent_description: (agentDescription ?? description).slice(0, 300),
+        ...(suggestedPrompts?.length ? { suggested_prompts: suggestedPrompts } : {}),
       },
       slash_commands:
         slashCommands.length > 0

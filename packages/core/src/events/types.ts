@@ -66,6 +66,8 @@ export const CORE_EVENT_TYPES = [
   'batch-job.failed',
   // Agent state machine (ephemeral — NATS KV)
   'agent.state.changed',
+  // In-flight run cancellation (e.g. Slack's native stop button, #914)
+  'agent.run.cancel_requested',
   // Agent task lifecycle (persistent — omni-m7m)
   'agent.task.created',
   'agent.task.updated',
@@ -676,6 +678,28 @@ export interface AgentStateChangedPayload {
 }
 
 /**
+ * Request to cancel an in-flight agent run for a chat (#914).
+ *
+ * Published by channel plugins when the platform surfaces a native stop
+ * affordance (e.g. Slack's `agent_session_stopped`). The agent dispatcher
+ * aborts the matching run via the trigger's `abortSignal` and the active
+ * stream sender; runs already past the provider boundary have their reply
+ * discarded instead.
+ */
+export interface AgentRunCancelRequestedPayload {
+  /** Instance the run belongs to */
+  instanceId: string;
+  /** Chat whose in-flight run should be cancelled */
+  chatId: string;
+  /** Platform thread the stop originated from, when threaded */
+  threadId?: string;
+  /** Platform user who requested the stop */
+  requestedBy?: string;
+  /** What triggered the cancellation */
+  reason: 'user_stop';
+}
+
+/**
  * Agent task event payloads (omni-m7m)
  */
 export interface AgentTaskCreatedPayload {
@@ -1039,6 +1063,7 @@ export interface EventPayloadMap {
   'batch-job.cancelled': BatchJobCancelledPayload;
   'batch-job.failed': BatchJobFailedPayload;
   'agent.state.changed': AgentStateChangedPayload;
+  'agent.run.cancel_requested': AgentRunCancelRequestedPayload;
   'agent.task.created': AgentTaskCreatedPayload;
   'agent.task.updated': AgentTaskUpdatedPayload;
   'agent.task.completed': AgentTaskCompletedPayload;
