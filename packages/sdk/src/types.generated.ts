@@ -3038,6 +3038,11 @@ export interface components {
             };
             /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
             requestLocation?: boolean;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         TTSVoice: {
             /** @description ElevenLabs voice ID */
@@ -3121,6 +3126,11 @@ export interface components {
             caption?: string;
             /** @description Send audio as voice note */
             voiceNote?: boolean;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendReactionRequest: {
             /**
@@ -7726,6 +7736,11 @@ export interface operations {
                     };
                     /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
                     requestLocation?: boolean;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -7836,6 +7851,11 @@ export interface operations {
                     caption?: string;
                     /** @description Send audio as voice note */
                     voiceNote?: boolean;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };

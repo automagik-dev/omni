@@ -623,6 +623,12 @@ const sendTextSchema = z.object({
     .boolean()
     .optional()
     .describe('Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text)'),
+  sentBy: z
+    .enum(['agent', 'user'])
+    .optional()
+    .describe(
+      "Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered (#912). Default: unattributed.",
+    ),
 });
 
 // Send media schema
@@ -640,6 +646,12 @@ const sendMediaSchema = z.object({
     .describe('MIME type of the media (e.g. image/gif enables GIF playback for video type)'),
   voiceNote: z.boolean().optional().describe('Send audio as voice note'),
   threadId: z.string().optional().describe('Thread/topic ID (e.g. Telegram forum topic)'),
+  sentBy: z
+    .enum(['agent', 'user'])
+    .optional()
+    .describe(
+      "Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered (#912). Default: unattributed.",
+    ),
 });
 
 function normalizeSendMediaMimeType(data: z.infer<typeof sendMediaSchema>): string {
@@ -648,6 +660,19 @@ function normalizeSendMediaMimeType(data: z.infer<typeof sendMediaSchema>): stri
     return 'audio/ogg; codecs=opus';
   }
   return inferred;
+}
+
+/**
+ * Resolve `sentBy: 'agent'` to the instance's configured agent (#912).
+ * Server-side on purpose: `messages.sender_agent_id` is an FK, so
+ * caller-provided agent ids are not accepted.
+ */
+function resolveSentByAgentId(
+  sentBy: 'agent' | 'user' | undefined,
+  instance: { agentId?: string | null },
+): string | undefined {
+  if (sentBy !== 'agent') return undefined;
+  return instance.agentId ?? undefined;
 }
 
 function buildSendMediaMetadata(data: z.infer<typeof sendMediaSchema>): Record<string, unknown> {
@@ -1187,7 +1212,7 @@ messagesRoutes.post('/send', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', issues: parsed.error.issues } }, 400);
   }
 
-  const { instanceId, to, replyTo, threadId, mentions, buttons, list, requestLocation } = parsed.data;
+  const { instanceId, to, replyTo, threadId, mentions, buttons, list, requestLocation, sentBy } = parsed.data;
   // Strip internal routing headers and agent directives before sending (GH #300)
   const text = sanitizeOutboundText(parsed.data.text);
   if (!text) {
@@ -1214,6 +1239,8 @@ messagesRoutes.post('/send', async (c) => {
   // Get reply context if replying
   const replyContext = replyTo ? await getReplyContext(services, instanceId, resolvedTo, replyTo) : {};
 
+  const senderAgentId = resolveSentByAgentId(sentBy, instance);
+
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     threadId,
@@ -1224,7 +1251,7 @@ messagesRoutes.post('/send', async (c) => {
       ...(list ? { list } : {}),
     } as OutgoingContent,
     replyTo,
-    metadata: { ...(mentions ? { mentions } : {}), ...replyContext },
+    metadata: { ...(mentions ? { mentions } : {}), ...replyContext, ...(senderAgentId ? { senderAgentId } : {}) },
   };
 
   // T8: API processed the send request
@@ -1318,6 +1345,8 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
 
   const mediaMimeType = normalizeSendMediaMimeType(data);
 
+  const senderAgentId = resolveSentByAgentId(data.sentBy, instance);
+
   // Build outgoing message
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -1329,7 +1358,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
       filename: data.filename,
       mimeType: mediaMimeType,
     } as OutgoingContent,
-    metadata: buildSendMediaMetadata(data),
+    metadata: { ...buildSendMediaMetadata(data), ...(senderAgentId ? { senderAgentId } : {}) },
   };
 
   // T8: API processed the send request

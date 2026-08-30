@@ -56,6 +56,10 @@ export const SendTextSchema = z.object({
   requestLocation: z.boolean().optional().openapi({
     description: 'Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text)',
   }),
+  sentBy: z.enum(['agent', 'user']).optional().openapi({
+    description:
+      "Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. Default: unattributed.",
+  }),
 });
 
 // Send media request
@@ -68,6 +72,10 @@ export const SendMediaSchema = z.object({
   filename: z.string().optional().openapi({ description: 'Filename for documents' }),
   caption: z.string().optional().openapi({ description: 'Caption for media' }),
   voiceNote: z.boolean().optional().openapi({ description: 'Send audio as voice note' }),
+  sentBy: z.enum(['agent', 'user']).optional().openapi({
+    description:
+      "Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. Default: unattributed.",
+  }),
 });
 
 // Send reaction request
