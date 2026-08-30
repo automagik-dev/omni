@@ -12,6 +12,8 @@ import {
   type IAgentClient,
   ProviderError,
   type ProviderFile,
+  type ProviderSchema,
+  type SessionStorage,
   type StreamChunk,
   createProviderClient,
   isProviderSchemaSupported,
@@ -21,6 +23,7 @@ import type { AgentReplyFilter, AgentSessionStrategy, ChannelType, Instance } fr
 import type { Database } from '@omni/db';
 import { agentProviders, instances, persons } from '@omni/db';
 import { eq } from 'drizzle-orm';
+import { createSessionStorage } from '../plugins/session-storage';
 import { isSealedCredentialField, openCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 
@@ -315,6 +318,16 @@ async function* processStreamChunks(
 // Agent Runner Service
 // ============================================================================
 
+/**
+ * A provider client plus the schema it was built for. The schema drives
+ * dispatch behavior in run()/stream(): local schemas (claude-code) need
+ * provider-session mapping instead of passing the strategy key through.
+ */
+interface ResolvedProviderClient {
+  client: IAgentClient;
+  schema: ProviderSchema;
+}
+
 export class AgentRunnerService {
   /**
    * Provider clients, keyed `providerId::tenant`.
@@ -327,7 +340,7 @@ export class AgentRunnerService {
    * and its key — would be served to every later tenant. The scope-less legacy
    * path keys on `-`, so it still shares exactly one client per provider.
    */
-  private clientCache: Map<string, IAgentClient> = new Map();
+  private clientCache: Map<string, ResolvedProviderClient> = new Map();
 
   constructor(private db: Database) {}
 
@@ -337,9 +350,9 @@ export class AgentRunnerService {
   }
 
   /**
-   * Get or create an Agno client for a provider
+   * Get or create a provider client for a provider
    */
-  private async getClient(providerId: string): Promise<IAgentClient> {
+  private async getClient(providerId: string): Promise<ResolvedProviderClient> {
     // Check cache
     const cacheKey = this.clientCacheKey(providerId);
     const cached = this.clientCache.get(cacheKey);
@@ -374,27 +387,73 @@ export class AgentRunnerService {
     // fails CLOSED — a null never becomes a bearer token.
     const apiKey = openCredentialField(currentTenantScope()?.tenantId ?? null, provider.apiKey);
 
-    if (!apiKey) {
+    // A sealed credential that cannot be opened in this tenant context is an
+    // error for EVERY schema — the alternative is silently running under the
+    // wrong identity (or the host's ambient key).
+    if (!apiKey && isSealedCredentialField(provider.apiKey)) {
       throw new ProviderError(
-        isSealedCredentialField(provider.apiKey)
-          ? `Provider ${providerId} credential is not available in this tenant context`
-          : `Provider ${providerId} has no API key configured`,
+        `Provider ${providerId} credential is not available in this tenant context`,
         'AUTHENTICATION_FAILED',
         401,
       );
     }
 
+    // claude-code providers run in-process (`local://claude-code`): there is no
+    // HTTP endpoint and legitimately no API key (the SDK falls back to the
+    // host's ANTHROPIC_API_KEY). Build the client from schemaConfig instead of
+    // requiring a bearer credential — this is how `call_agent` automations reach
+    // the same providers that already answer chats via message routing (#929).
+    if (provider.schema === 'claude-code') {
+      const resolved: ResolvedProviderClient = {
+        client: createProviderClient({
+          schema: provider.schema,
+          baseUrl: provider.baseUrl,
+          apiKey: apiKey ?? '',
+          defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
+          schemaConfig: (provider.schemaConfig ?? {}) as Record<string, unknown>,
+        }),
+        schema: provider.schema,
+      };
+      this.clientCache.set(cacheKey, resolved);
+      return resolved;
+    }
+
+    if (!apiKey) {
+      throw new ProviderError(`Provider ${providerId} has no API key configured`, 'AUTHENTICATION_FAILED', 401);
+    }
+
     // Create client
-    const client = createProviderClient({
+    const resolved: ResolvedProviderClient = {
+      client: createProviderClient({
+        schema: provider.schema,
+        baseUrl: provider.baseUrl,
+        apiKey,
+        defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
+      }),
       schema: provider.schema,
-      baseUrl: provider.baseUrl,
-      apiKey,
-      defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
-    });
+    };
 
     // Cache it
-    this.clientCache.set(cacheKey, client);
-    return client;
+    this.clientCache.set(cacheKey, resolved);
+    return resolved;
+  }
+
+  /**
+   * Session store for a claude-code provider, per run.
+   *
+   * Claude Code resumes by its OWN session UUID, not the strategy-computed
+   * key. The mapping key → UUID lives in the same per-provider store the
+   * message-routing dispatcher uses (`ClaudeCodeAgentProvider` +
+   * `createSessionStorage`), and both paths compute the key with
+   * `computeSessionId` over the same inputs — so a `call_agent` automation
+   * resumes the very session the chat conversation runs in.
+   */
+  private claudeSessionStore(instance: RunInstance, providerId: string): SessionStorage {
+    return createSessionStorage(this.db, providerId, undefined, {
+      // Persisted ownership from the loaded instance row — same trusted
+      // derivation the dispatcher supplies (G5, ADR-0008).
+      resolveTenantId: () => instance.tenantId ?? null,
+    });
   }
 
   /**
@@ -477,7 +536,7 @@ export class AgentRunnerService {
       throw new ProviderError('No agent internal ID configured for instance', 'NOT_FOUND', 400);
     }
 
-    const client = await this.getClient(instance.agentProviderId);
+    const { client, schema } = await this.getClient(instance.agentProviderId);
 
     // Format messages with sender name prefix if enabled
     const prefixEnabled = instance.agentPrefixSenderName ?? true;
@@ -489,6 +548,14 @@ export class AgentRunnerService {
     // Compute session ID based on configured strategy
     const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
     const sessionId = computeSessionId(sessionStrategy, senderId, chatId);
+
+    // claude-code: resolve the strategy key to the provider's session UUID (or
+    // start a fresh session when none is stored). Other schemas take the key
+    // as-is, unchanged.
+    const sessionStore = schema === 'claude-code' ? this.claudeSessionStore(instance, instance.agentProviderId) : null;
+    const providerSessionId = sessionStore
+      ? (await sessionStore.getSession(instance.id, sessionId))?.sessionId
+      : sessionId;
 
     log.info('Running agent', {
       instanceId: instance.id,
@@ -506,7 +573,7 @@ export class AgentRunnerService {
       agentId: instance.agentInternalId,
       agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
       stream: false,
-      sessionId, // Computed based on session strategy
+      sessionId: providerSessionId,
       userId: personId || senderId, // ← Person UUID (internal identity)
       platform: {
         id: senderId,
@@ -527,9 +594,18 @@ export class AgentRunnerService {
       },
       timeoutMs: (instance.agentTimeout ?? 600) * 1000,
       files,
+      // Parity with the dispatcher's claude-code path: HTTP MCP servers get the
+      // conversation identifier appended to their URL.
+      ...(sessionStore && chatId ? { mcpUrlParams: { chat_id: chatId } } : {}),
     };
 
     const response = await client.run(request);
+
+    // Persist the provider session UUID under the strategy key so the next
+    // call — from either dispatch path — resumes this session.
+    if (sessionStore && response.sessionId) {
+      await sessionStore.upsertSession(instance.id, sessionId, response.sessionId, null);
+    }
 
     // Split response if enabled
     const parts = splitResponse(response.content, instance.enableAutoSplit ?? true);
@@ -612,7 +688,7 @@ export class AgentRunnerService {
       throw new ProviderError('No agent internal ID configured for instance', 'NOT_FOUND', 400);
     }
 
-    const client = await this.getClient(instance.agentProviderId);
+    const { client, schema } = await this.getClient(instance.agentProviderId);
 
     // Format messages with sender name prefix if enabled
     const prefixEnabled = instance.agentPrefixSenderName ?? true;
@@ -625,12 +701,18 @@ export class AgentRunnerService {
     const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
     const sessionId = computeSessionId(sessionStrategy, senderId, chatId);
 
+    // claude-code: strategy key → provider session UUID, as in run().
+    const sessionStore = schema === 'claude-code' ? this.claudeSessionStore(instance, instance.agentProviderId) : null;
+    const providerSessionId = sessionStore
+      ? (await sessionStore.getSession(instance.id, sessionId))?.sessionId
+      : sessionId;
+
     const request = {
       message: combinedMessage,
       agentId: instance.agentInternalId,
       agentType: (instance.agentType ?? 'agent') as 'agent' | 'team' | 'workflow',
       stream: true,
-      sessionId, // Computed based on session strategy
+      sessionId: providerSessionId,
       userId: personId || senderId, // ← Person UUID (internal identity)
       platform: {
         id: senderId,
@@ -650,10 +732,30 @@ export class AgentRunnerService {
         participantCount,
       },
       timeoutMs: (instance.agentTimeout ?? 600) * 1000,
+      ...(sessionStore && chatId ? { mcpUrlParams: { chat_id: chatId } } : {}),
     };
 
     // Client routes by agentType internally
-    yield* processStreamChunks(client.stream(request), enableSplit);
+    if (!sessionStore) {
+      yield* processStreamChunks(client.stream(request), enableSplit);
+      return;
+    }
+
+    // Capture the provider session UUID from the chunk stream so it can be
+    // persisted under the strategy key once the stream completes.
+    let providerSession: string | undefined;
+    const source = (async function* (): AsyncGenerator<StreamChunk> {
+      for await (const chunk of client.stream(request)) {
+        if (chunk.sessionId) providerSession = chunk.sessionId;
+        yield chunk;
+      }
+    })();
+
+    yield* processStreamChunks(source, enableSplit);
+
+    if (providerSession) {
+      await sessionStore.upsertSession(instance.id, sessionId, providerSession, null);
+    }
   }
 
   /**
