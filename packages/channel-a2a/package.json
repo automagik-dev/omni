@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-a2a",
-  "version": "2.260804.3",
+  "version": "2.260830.1",
   "description": "A2A protocol server channel for Omni",
   "type": "module",
   "main": "src/index.ts",
@@ -18,7 +18,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@types/bun": "latest",
+    "@types/bun": "1.3.14",
     "typescript": "^5.7.3"
   },
   "peerDependencies": {
