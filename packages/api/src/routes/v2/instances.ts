@@ -544,6 +544,14 @@ type InstanceConnectionOptionsInput = {
   hermesPassword?: string | null;
   hermesMediaId?: string | null;
   hermesTemplateNamespace?: string | null;
+  metaAccessToken?: string | null;
+  metaPhoneNumberId?: string | null;
+  metaWabaId?: string | null;
+  metaAppId?: string | null;
+  metaBusinessId?: string | null;
+  metaApiVersion?: string | null;
+  metaDisplayPhoneNumber?: string | null;
+  metaConnectionMethod?: string | null;
 };
 
 function applyTelegramConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
@@ -603,6 +611,36 @@ function applyHermesConnectionOptions(
   if (input.hermesTemplateNamespace) options.hermesTemplateNamespace = input.hermesTemplateNamespace;
 }
 
+/**
+ * whatsapp-business (Meta Cloud) persisted credentials — the plugin's
+ * `connect()` reads these from `config.options` (same keys as
+ * `config.credentials` in the whatsapp-cloud connect route). Input type is
+ * narrowed so the restart path can pass the instance row directly (GH #894 —
+ * same shape as the hermes fix in d6721c95/0d933a06).
+ */
+function applyWhatsAppBusinessConnectionOptions(
+  options: Record<string, unknown>,
+  input: {
+    metaAccessToken?: string | null;
+    metaPhoneNumberId?: string | null;
+    metaWabaId?: string | null;
+    metaAppId?: string | null;
+    metaBusinessId?: string | null;
+    metaApiVersion?: string | null;
+    metaDisplayPhoneNumber?: string | null;
+    metaConnectionMethod?: string | null;
+  },
+): void {
+  if (input.metaAccessToken) options.metaAccessToken = input.metaAccessToken;
+  if (input.metaPhoneNumberId) options.metaPhoneNumberId = input.metaPhoneNumberId;
+  if (input.metaWabaId) options.metaWabaId = input.metaWabaId;
+  if (input.metaAppId) options.metaAppId = input.metaAppId;
+  if (input.metaBusinessId) options.metaBusinessId = input.metaBusinessId;
+  if (input.metaApiVersion) options.metaApiVersion = input.metaApiVersion;
+  if (input.metaDisplayPhoneNumber) options.metaDisplayPhoneNumber = input.metaDisplayPhoneNumber;
+  if (input.metaConnectionMethod) options.metaConnectionMethod = input.metaConnectionMethod;
+}
+
 function applyChannelSpecificConnectionOptions(
   options: Record<string, unknown>,
   input: InstanceConnectionOptionsInput,
@@ -622,6 +660,9 @@ function applyChannelSpecificConnectionOptions(
       return;
     case 'hermes':
       applyHermesConnectionOptions(options, input);
+      return;
+    case 'whatsapp-business':
+      applyWhatsAppBusinessConnectionOptions(options, input);
       return;
   }
 }
@@ -861,6 +902,14 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     hermesPassword: instance.hermesPassword,
     hermesMediaId: instance.hermesMediaId,
     hermesTemplateNamespace: instance.hermesTemplateNamespace,
+    metaAccessToken: instance.metaAccessToken,
+    metaPhoneNumberId: instance.metaPhoneNumberId,
+    metaWabaId: instance.metaWabaId,
+    metaAppId: instance.metaAppId,
+    metaBusinessId: instance.metaBusinessId,
+    metaApiVersion: instance.metaApiVersion,
+    metaDisplayPhoneNumber: instance.metaDisplayPhoneNumber,
+    metaConnectionMethod: instance.metaConnectionMethod,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -1346,6 +1395,14 @@ function buildConnectConnectionOptions(
     hermesPassword: body.hermesPassword ?? instance.hermesPassword,
     hermesMediaId: body.hermesMediaId ?? instance.hermesMediaId,
     hermesTemplateNamespace: body.hermesTemplateNamespace ?? instance.hermesTemplateNamespace,
+    metaAccessToken: instance.metaAccessToken,
+    metaPhoneNumberId: instance.metaPhoneNumberId,
+    metaWabaId: instance.metaWabaId,
+    metaAppId: instance.metaAppId,
+    metaBusinessId: instance.metaBusinessId,
+    metaApiVersion: instance.metaApiVersion,
+    metaDisplayPhoneNumber: instance.metaDisplayPhoneNumber,
+    metaConnectionMethod: instance.metaConnectionMethod,
   });
 }
 
@@ -1550,6 +1607,11 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     if (instance.channel === 'hermes') {
       applyHermesConnectionOptions(restartOptions, instance);
+    }
+    if (instance.channel === 'whatsapp-business') {
+      // Persisted Meta credentials — without them plugin.connect() throws
+      // "metaAccessToken is required" and the restart bricks the instance (#894).
+      applyWhatsAppBusinessConnectionOptions(restartOptions, instance);
     }
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
