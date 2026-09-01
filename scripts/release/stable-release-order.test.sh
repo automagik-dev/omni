@@ -259,6 +259,20 @@ require(image, r"verify-oci-release\.sh[\s\S]{0,300}--source-dir\s+\"\$\{GITHUB_
 require(release, r"authorize:[\s\S]{0,200}timeout-minutes:", "release authorization network calls have no timeout")
 forbid(release, r"Bare tag pushes fall\s+through to stable", "release documentation still claims bare tags publish stable")
 forbid(version, r"Channel selector is dev/homolog", "version workflow keeps the orphaned channel-selector comment")
+require(
+    release,
+    r'Find previous release tag[\s\S]{0,300}TAG="\$\{RELEASE_TAG\}"[\s\S]{0,120}'
+    r'AVAILABLE_TAGS=\$\(gh release list[\s\S]{0,300}done <<< "\$\{AVAILABLE_TAGS\}"',
+    "previous release lookup does not keep the injected tag distinct from the available tag list",
+)
+require(
+    version,
+    r'Determine channel and npm tag[\s\S]{0,120}run: \|\n\s+\{\n'
+    r'\s+echo "npm_tag=next"\n\s+echo "release_channel=dev"\n'
+    r'\s+echo "checkout_ref=dev"\n\s+echo "push_ref=dev"\n'
+    r'\s+\} >> "\$GITHUB_OUTPUT"',
+    "version context outputs are not appended through one grouped redirect",
+)
 if version.endswith("\n\n"):
     errors.append("version workflow has a trailing blank line")
 

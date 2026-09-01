@@ -73,10 +73,12 @@ jobs:
       - name: Determine channel and npm tag
         id: context
         run: |
-          echo "npm_tag=next" >> "$GITHUB_OUTPUT"
-          echo "release_channel=dev" >> "$GITHUB_OUTPUT"
-          echo "checkout_ref=dev" >> "$GITHUB_OUTPUT"
-          echo "push_ref=dev" >> "$GITHUB_OUTPUT"
+          {
+            echo "npm_tag=next"
+            echo "release_channel=dev"
+            echo "checkout_ref=dev"
+            echo "push_ref=dev"
+          } >> "$GITHUB_OUTPUT"
           echo "Triggering branch: dev"
 
       - name: Require protected version writer credential

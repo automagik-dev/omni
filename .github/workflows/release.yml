@@ -213,14 +213,14 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${RELEASE_TAG}"
-          RELEASE_TAGS=$(gh release list --limit 50 --json tagName -q '.[].tagName')
+          AVAILABLE_TAGS=$(gh release list --limit 50 --json tagName -q '.[].tagName')
           PREV=""
           while IFS= read -r candidate; do
             [[ "${candidate}" == "${TAG}" ]] && continue
             [[ "${candidate}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
             PREV="${candidate}"
             break
-          done <<< "${RELEASE_TAGS}"
+          done <<< "${AVAILABLE_TAGS}"
           echo "tag=${PREV:-}" >> "$GITHUB_OUTPUT"
           echo "Previous release tag: ${PREV:-none}"
 
