@@ -1275,7 +1275,15 @@ messagesRoutes.post('/send', async (c) => {
       ...(list ? { list } : {}),
     } as OutgoingContent,
     replyTo,
-    metadata: { ...(mentions ? { mentions } : {}), ...replyContext, ...(senderAgentId ? { senderAgentId } : {}) },
+    metadata: {
+      ...(mentions ? { mentions } : {}),
+      ...replyContext,
+      ...(senderAgentId ? { senderAgentId } : {}),
+      // Instance-level markdown handling must govern direct API sends the same
+      // way it governs agent-dispatched replies — plugins default to 'convert'
+      // when the key is absent (#894).
+      ...(instance.messageFormatMode ? { messageFormatMode: instance.messageFormatMode } : {}),
+    },
   };
 
   // T8: API processed the send request
