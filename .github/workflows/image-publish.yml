@@ -52,31 +52,180 @@ on:
       - '.github/workflows/image-publish.yml'
   workflow_dispatch:
     inputs:
-      platforms:
-        description: 'Target platforms (comma-separated)'
-        default: 'linux/amd64,linux/arm64'
+      repair_release:
+        description: 'Repair an immutable release ref instead of publishing a branch build'
+        type: boolean
+        default: false
+      expected_version:
+        description: 'Repair only: exact version without the v prefix'
+        required: false
+        type: string
+      expected_sha:
+        description: 'Repair only: exact 40-character release source SHA'
+        required: false
+        type: string
+      expected_existing_digest:
+        description: 'Repair only: exact digest for an idempotent already-published tag'
+        required: false
+        type: string
 
 concurrency:
-  group: image-publish-${{ github.ref }}
-  cancel-in-progress: true
+  # Main publication and immutable repair share one lane so they cannot race
+  # the same v<version> alias or stable release state.
+  group: image-publish-${{ github.ref == 'refs/heads/homolog' && 'homolog' || 'stable' }}
+  # A release identity must finish once started. Branch pushes queue behind the
+  # active run instead of cancelling a build after it may have pushed one tag.
+  cancel-in-progress: false
 
 permissions:
   contents: read
-  packages: write
-  # GitHub-native build provenance for the published images — this is what
-  # makes the documented `gh attestation verify oci://…` command
-  # (deploy/README.md) actually pass. `id-token` signs via OIDC/Sigstore;
-  # `attestations` stores the provenance in the repo's Attestations API.
-  id-token: write
-  attestations: write
 
 jobs:
-  build-push:
+  classify-changes:
     runs-on: ubuntu-latest
+    outputs:
+      build_required: ${{ steps.classify.outputs.build_required }}
+      pin_only: ${{ steps.classify.outputs.pin_only }}
+      infra_only: ${{ steps.classify.outputs.infra_only }}
+      publish_required: ${{ steps.classify.outputs.publish_required }}
+      existing_digest: ${{ steps.classify.outputs.existing_digest }}
+      release_version: ${{ steps.classify.outputs.version }}
+      release_source_sha: ${{ steps.classify.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Keep the exact hardened control code that defined this workflow.
+          # Historical repair sources are checked out separately below and
+          # can never replace the verifier scripts being executed.
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Check out immutable historical repair source
+        if: ${{ inputs.repair_release }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.expected_sha }}
+          path: .release-source
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Classify immutable repair or changed paths
+        id: classify
+        env:
+          REPAIR_RELEASE: ${{ inputs.repair_release || false }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_EXISTING_DIGEST: ${{ inputs.expected_existing_digest }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          classification_out="${RUNNER_TEMP}/classification.out"
+          : > "${classification_out}"
+          emit() { printf '%s\n' "$@" >> "${classification_out}"; }
+          finish() { cat "${classification_out}" >> "$GITHUB_OUTPUT"; }
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${REPAIR_RELEASE}" != "true" ]]; then
+            echo "::error::manual dispatches must set repair_release=true and provide exact immutable expectations"
+            exit 1
+          fi
+          if [[ "${REPAIR_RELEASE}" == "true" ]]; then
+            args=(
+              --ref "refs/tags/v${EXPECTED_VERSION}"
+              --expected-version "${EXPECTED_VERSION}"
+              --expected-sha "${EXPECTED_SHA}"
+              --image "${IMAGE}"
+            )
+            if [[ -n "${EXPECTED_EXISTING_DIGEST}" ]]; then
+              args+=(--expected-existing-digest "${EXPECTED_EXISTING_DIGEST}")
+            fi
+            preflight="${RUNNER_TEMP}/release-preflight.out"
+            (
+              cd "${GITHUB_WORKSPACE}/.release-source"
+              GITHUB_OUTPUT="${preflight}" \
+                "${GITHUB_WORKSPACE}/scripts/release/verify-oci-release.sh" "${args[@]}"
+            )
+            while IFS= read -r line; do emit "${line}"; done < "${preflight}"
+            emit "pin_only=false" "infra_only=false"
+            publish_required=""
+            while IFS='=' read -r key value; do
+              [[ "${key}" == "publish_required" ]] && publish_required="${value}"
+            done < "${preflight}"
+            [[ -n "${publish_required}" ]]
+            if [[ "${publish_required}" == "true" && "${GITHUB_REF}" != "refs/tags/v${EXPECTED_VERSION}" ]]; then
+              echo "::error::a detached historical repair may only reuse an explicitly approved existing digest; rebuilding from main would mis-bind workflow provenance"
+              exit 1
+            fi
+            emit "build_required=${publish_required}"
+            finish
+            exit 0
+          fi
+
+          emit "publish_required=true"
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            range_state=$(scripts/release/classify-image-change.sh \
+              --before "${GITHUB_EVENT_BEFORE}" --after "${GITHUB_SHA}")
+            while IFS= read -r line; do emit "${line}"; done <<<"${range_state}"
+            if grep -qx 'build_required=false' <<<"${range_state}"; then
+              finish
+              exit 0
+            fi
+          else
+            emit "pin_only=false" "infra_only=false"
+          fi
+
+          # Every main application release must arrive with a version that has
+          # not already been published. Otherwise build-push-action would move
+          # the v<version> registry alias before provenance verification.
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            version=$(node -p "require('./packages/cli/package.json').version")
+            version_ref="${IMAGE}:v${version}"
+            if git rev-parse "refs/tags/v${version}^{commit}" >/dev/null 2>&1; then
+              echo "::error::Git tag v${version} already exists; a stable release PR must carry a fresh untagged version"
+              exit 1
+            fi
+            scripts/release/verify-remote-tag.sh \
+              --remote origin --version "${version}" --mode absent
+            inspect_error="${RUNNER_TEMP}/existing-version.err"
+            if docker buildx imagetools inspect "${version_ref}" >/dev/null 2>"${inspect_error}"; then
+              echo "::error::version tag ${version_ref} already published; bump the version in the release PR"
+              exit 1
+            fi
+            error_text=$(<"${inspect_error}")
+            case "${error_text,,}" in
+              *"not found"*|*"manifest unknown"*) ;;
+              *)
+                echo "::error::registry inspection failed without a not-found response"
+                exit 1
+                ;;
+            esac
+          fi
+          emit "build_required=true"
+          finish
+
+  build-push:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.build_required == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      version: ${{ steps.meta.outputs.version }}
+      source_sha: ${{ steps.source.outputs.sha }}
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # A repair that would rebuild is rejected during classification;
+          # builds therefore always use the workflow event source itself.
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Resolve image version
         id: meta
@@ -87,6 +236,25 @@ jobs:
             echo "sha_short=${GITHUB_SHA::12}"
             echo "ref_name=${GITHUB_REF_NAME}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Bind and re-check source identity before registry write
+        id: source
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          REPAIR_RELEASE: ${{ inputs.repair_release || false }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse "HEAD^{commit}")
+          echo "sha=${source_sha}" >> "$GITHUB_OUTPUT"
+          if [[ "${REPAIR_RELEASE}" == "true" ]]; then
+            [[ "${source_sha}" == "${EXPECTED_SHA}" ]]
+            scripts/release/verify-remote-tag.sh \
+              --remote origin --version "${VERSION}" --mode exact --expected-sha "${EXPECTED_SHA}"
+          elif [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            scripts/release/verify-remote-tag.sh \
+              --remote origin --version "${VERSION}" --mode absent
+          fi
 
       # LOW-23: arm64 is built under QEMU emulation (slow for the Bun
       # install/build stages). The repo is public, so native
@@ -114,7 +282,7 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile
-          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.IMAGE }}:${{ steps.meta.outputs.ref_name }}
@@ -125,8 +293,16 @@ jobs:
           provenance: true
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+
+      - name: Read back exact published version alias
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          EXPECTED_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          scripts/release/verify-oci-alias.sh \
+            --image "${IMAGE}" --version "${VERSION}" --expected-digest "${EXPECTED_DIGEST}"
 
       # GitHub-native provenance (Attestations API + registry referrer), so
       # `gh attestation verify oci://…` works as deploy/README.md documents.
@@ -144,7 +320,14 @@ jobs:
   # <branch> / <branch>-<sha> tags ride along so every omni promotion has a
   # matching autopg tag (contract C1').
   build-push-autopg:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.build_required == 'true' && inputs.repair_release != true
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/autopg
       # autopg release baked into deploy/autopg.Dockerfile. Bump together
@@ -184,7 +367,7 @@ jobs:
         with:
           context: deploy
           file: deploy/autopg.Dockerfile
-          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
+          platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
             AUTOPG_VERSION=${{ env.AUTOPG_VERSION }}
@@ -213,6 +396,8 @@ jobs:
   # KHAL_NPM_TOKEN presence as an output. build-push-ui skips cleanly (keeping
   # the promotion green) until the token is configured, then self-activates.
   check-ui-secret:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.build_required == 'true' && inputs.repair_release != true
     runs-on: ubuntu-latest
     outputs:
       has_token: ${{ steps.probe.outputs.has_token }}
@@ -229,8 +414,13 @@ jobs:
   # adminUi.image.tag "" → v<appVersion> always resolves.
   build-push-ui:
     runs-on: ubuntu-latest
-    needs: check-ui-secret
-    if: needs.check-ui-secret.outputs.has_token == 'true'
+    needs: [classify-changes, check-ui-secret]
+    if: needs.classify-changes.outputs.build_required == 'true' && needs.check-ui-secret.outputs.has_token == 'true'
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/omni-admin-ui
     steps:
@@ -277,7 +467,7 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile.admin-ui
-          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
+          platforms: linux/amd64,linux/arm64
           push: true
           secret-files: |
             npmrc=${{ runner.temp }}/khal.npmrc
@@ -300,3 +490,280 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+  # Main is the authorization boundary. Verify the immutable artifact first,
+  # then update exactly one Git-owned deployment-state file. Argo—not CI—is the
+  # only production cluster writer.
+  verify-and-pin:
+    needs: [classify-changes, build-push]
+    if: >-
+      always() &&
+      ((github.event_name == 'push' &&
+        github.ref == 'refs/heads/main' &&
+        needs.classify-changes.outputs.build_required == 'true' &&
+        needs.build-push.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' &&
+        inputs.repair_release == true &&
+        (needs.build-push.result == 'success' ||
+         (needs.build-push.result == 'skipped' &&
+          needs.classify-changes.outputs.publish_required == 'false'))))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+      attestations: read
+      actions: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
+      DIGEST: ${{ needs.build-push.outputs.digest || needs.classify-changes.outputs.existing_digest }}
+      VERSION: ${{ needs.build-push.outputs.version || needs.classify-changes.outputs.release_version }}
+      SOURCE_SHA: ${{ needs.build-push.outputs.source_sha || needs.classify-changes.outputs.release_source_sha }}
+    steps:
+      - name: Require protected release writer credential
+        env:
+          RELEASE_WRITER_TOKEN: ${{ secrets.VERSION_BUMP_PAT }}
+        run: |
+          [[ -n "${RELEASE_WRITER_TOKEN}" ]] || {
+            echo "::error::VERSION_BUMP_PAT is required so the production-pin push triggers protected CI"
+            exit 1
+          }
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.VERSION_BUMP_PAT }}
+
+      - name: Log in to GHCR for independent verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Buildx for independent index inspection
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Verify exact digest, platforms, and GitHub provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect "${IMAGE}@${DIGEST}" > "${RUNNER_TEMP}/image-index.txt"
+          python3 - "${RUNNER_TEMP}/image-index.txt" <<'PY'
+          import sys
+          text = open(sys.argv[1], encoding="utf-8").read()
+          required = ("MediaType: application/vnd.oci.image.index.v1+json", "Platform:    linux/amd64", "Platform:    linux/arm64")
+          missing = [item for item in required if item not in text]
+          if missing:
+              raise SystemExit(f"verified OCI index is missing: {missing}")
+          PY
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --source-digest "${SOURCE_SHA}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-publish.yml"
+
+      - name: Install cosign for existing release verification
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Install slsa-verifier for existing release verification
+        uses: slsa-framework/slsa-verifier/actions/installer@ea584f4502babc6f60d9bc799dbbb13c1caa9ee6 # v2.7.1
+
+      - name: Finalize stable Git tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPAIR_RELEASE: ${{ inputs.repair_release || false }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          source_args=(--source "${SOURCE_SHA}" --main origin/main)
+          [[ "${REPAIR_RELEASE}" != "true" ]] || \
+            source_args+=(--allow-detached-repair --expected-version "${VERSION}")
+          source_state=$(scripts/release/verify-release-source.sh "${source_args[@]}")
+          detached_repair="${source_state#detached_repair=}"
+          [[ "${detached_repair}" == "true" || "${detached_repair}" == "false" ]]
+          tag="v${VERSION}"
+          ref="refs/tags/v${VERSION}"
+          ruleset_ok=false
+          while IFS= read -r ruleset_id; do
+            [[ -n "${ruleset_id}" ]] || continue
+            gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" > "${RUNNER_TEMP}/tag-ruleset-${ruleset_id}.json"
+            if scripts/release/verify-tag-ruleset.py \
+              --ruleset-json "${RUNNER_TEMP}/tag-ruleset-${ruleset_id}.json" \
+              --tag "${ref}"; then
+              ruleset_ok=true
+              break
+            fi
+          done < <(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --paginate --jq '.[] | select(.target == "tag" and .enforcement == "active") | .id')
+          [[ "${ruleset_ok}" == "true" ]] || {
+            echo "::error::an active v* tag ruleset blocking update and deletion is required before stable finalization"
+            exit 1
+          }
+          if git show-ref --verify --quiet "${ref}"; then
+            existing_sha=$(git rev-parse "${ref}^{commit}")
+            if [[ "${existing_sha}" != "${SOURCE_SHA}" ]]; then
+              echo "::error::${ref} already points to ${existing_sha}, not verified source ${SOURCE_SHA}"
+              exit 1
+            fi
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="${ref}" \
+              -f sha="${SOURCE_SHA}" >/dev/null
+          fi
+          scripts/release/verify-remote-tag.sh \
+            --remote origin --version "${VERSION}" --mode exact --expected-sha "${SOURCE_SHA}"
+          echo "Verified remote tag target before publication"
+
+          release_exists=false
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" >/dev/null 2>&1; then
+            release_exists=true
+          fi
+          if [[ "${release_exists}" == "true" ]]; then
+            release_state=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq '[.draft,.prerelease] | @tsv')
+            [[ "${release_state}" == $'false\tfalse' ]] || {
+              echo "::error::existing stable release is not public stable"
+              exit 1
+            }
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > "${RUNNER_TEMP}/release.json"
+            verify_dir="${RUNNER_TEMP}/existing-release"
+            mkdir -p "${verify_dir}"
+            gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --dir "${verify_dir}"
+            scripts/release/verify-release-assets.py \
+              --version "${VERSION}" \
+              --release-json "${RUNNER_TEMP}/release.json" \
+              --dist "${verify_dir}"
+            for tarball in "${verify_dir}"/*.tar.gz; do
+              cosign verify-blob \
+                --bundle "${tarball}.bundle" \
+                --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml@refs/tags/v${VERSION}$" \
+                --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                "${tarball}"
+              slsa-verifier verify-artifact "${tarball}" \
+                --provenance-path "${tarball}.intoto.jsonl" \
+                --source-uri "github.com/${GITHUB_REPOSITORY}" \
+                --source-tag "v${VERSION}"
+              gh attestation verify "${tarball}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --source-digest "${SOURCE_SHA}" \
+                --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml"
+            done
+            echo "Existing public release assets already match immutable v${VERSION} identity"
+          else
+            [[ "${detached_repair}" == "false" ]] || {
+              echo "::error::a version-only detached repair may reuse a verified public release but cannot execute historical mutable release workflows"
+              exit 1
+            }
+            release_url=$(gh workflow run release.yml \
+              --repo "${GITHUB_REPOSITORY}" \
+              --ref "${tag}" \
+              --field version="${VERSION}" \
+              --field channel=stable \
+              --field expected_sha="${SOURCE_SHA}" \
+              --field expected_digest="${DIGEST}" \
+              --field orchestrator_run_id="${GITHUB_RUN_ID}")
+            release_run_id="${release_url##*/}"
+            [[ "${release_run_id}" =~ ^[0-9]+$ ]] || {
+              echo "::error::could not resolve dispatched release run from: ${release_url}"
+              exit 1
+            }
+            gh run watch "${release_run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status
+          fi
+
+          scripts/release/verify-remote-tag.sh \
+            --remote origin --version "${VERSION}" --mode exact --expected-sha "${SOURCE_SHA}"
+          echo "Verified remote tag target after publication"
+
+          # Always dispatch the hardened npm reconciler—even when version and
+          # latest already look correct—so existing package bytes, registry
+          # signatures, and available provenance attestations are reverified.
+          npm_url=$(gh workflow run version.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref main \
+            --field stable_publish_only=true \
+            --field expected_version="${VERSION}" \
+            --field expected_sha="${SOURCE_SHA}" \
+            --field expected_digest="${DIGEST}" \
+            --field orchestrator_run_id="${GITHUB_RUN_ID}" \
+            --field orchestrator_control_sha="${GITHUB_SHA}")
+          npm_run_id="${npm_url##*/}"
+          [[ "${npm_run_id}" =~ ^[0-9]+$ ]] || {
+            echo "::error::could not resolve dispatched stable npm run from: ${npm_url}"
+            exit 1
+          }
+          gh run watch "${npm_run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status
+
+      - name: Re-check version alias after release finalization
+        run: |
+          scripts/release/verify-oci-alias.sh \
+            --image "${IMAGE}" --version "${VERSION}" --expected-digest "${DIGEST}"
+
+      - name: Commit production pin with bounded CAS retry
+        id: pin
+        env:
+          REPAIR_RELEASE: ${{ inputs.repair_release || false }}
+        run: |
+          set -euo pipefail
+          git config user.name "release-bot"
+          git config user.email "release-bot@example.com"
+          success=false
+          for attempt in 1 2 3; do
+            echo "Pin attempt ${attempt}/3"
+            git fetch origin main
+            git reset --hard origin/main
+            source_args=(--source "${SOURCE_SHA}" --main origin/main)
+            [[ "${REPAIR_RELEASE}" != "true" ]] || \
+              source_args+=(--allow-detached-repair --expected-version "${VERSION}")
+            source_state=$(scripts/release/verify-release-source.sh "${source_args[@]}")
+            detached_repair="${source_state#detached_repair=}"
+            if [[ "${detached_repair}" == "false" ]]; then
+              current_version=$(node -p "require('./packages/cli/package.json').version")
+              [[ "${current_version}" == "${VERSION}" ]] || {
+                echo "::error::main advanced to version ${current_version}; refusing to overwrite with ${VERSION}"
+                exit 1
+              }
+            else
+              [[ "${detached_repair}" == "true" ]]
+            fi
+            expected_parent=$(git rev-parse HEAD)
+            pin_output="${RUNNER_TEMP}/pin-${attempt}.out"
+            GITHUB_OUTPUT="${pin_output}" scripts/release/pin-production-image.sh \
+              --version "${VERSION}" \
+              --digest "${DIGEST}" \
+              --source-sha "${SOURCE_SHA}" \
+              --expected-parent "${expected_parent}"
+            changed=""
+            while IFS='=' read -r key value; do
+              [[ "${key}" == "changed" ]] && changed="${value}"
+            done < "${pin_output}"
+            if [[ "${changed}" == "false" ]]; then
+              echo "pin_commit=${expected_parent}" >> "$GITHUB_OUTPUT"
+              success=true
+              break
+            fi
+            git add deploy/helm/omni/values-prod-gitops.yaml
+            git commit -m "chore(release): pin omni prod v${VERSION}"
+            if git push origin HEAD:main; then
+              echo "pin_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+              success=true
+              break
+            fi
+            echo "main advanced during pin attempt ${attempt}; retrying"
+          done
+          [[ "${success}" == "true" ]] || {
+            echo "::error::production pin CAS failed after three attempts"
+            exit 1
+          }
+
+      - name: Write redacted delivery receipt
+        run: |
+          {
+            echo "### Omni production pin"
+            echo "- source: \`${SOURCE_SHA}\`"
+            echo "- version: \`${VERSION}\`"
+            echo "- OCI digest: \`${DIGEST}\`"
+            echo "- pin commit: \`${{ steps.pin.outputs.pin_commit }}\`"
+            echo "- Argo CD is responsible for reconciliation; this workflow made no cluster call."
+          } >> "$GITHUB_STEP_SUMMARY"

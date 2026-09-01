@@ -16,6 +16,10 @@ fullnameOverride: ""
 image:
   repository: ghcr.io/automagik-dev/omni-api
   tag: ""
+  # Optional immutable OCI index digest. When set, omni-api renders as
+  # repository@digest and tag/appVersion are ignored. Only lowercase sha256
+  # digests are accepted so GitOps cannot silently deploy a mutable alias.
+  digest: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 

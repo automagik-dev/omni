@@ -1,27 +1,48 @@
 name: Version
 
 on:
-  # Fire when a PR merges to dev or homolog.
-  # homolog is the canonical image-build branch for controlled HML promotion,
-  # so homolog PR merges must bump the build number on homolog, not on dev.
+  # Fire directly when a PR merges to dev. Homolog has a single canonical
+  # entry point below, after its push CI succeeds, so one merge cannot publish
+  # twice through both pull_request and workflow_run.
   # Prior trigger (workflow_run CI on branch=dev) never fired because CI's
   # `on.push` only lists `[main, homolog]`, never `dev`; merges to dev thus
   # produced no push-event CI run for workflow_run to observe.
   pull_request:
     types: [closed]
-    branches: [dev, homolog]
-  # main-side promotion arrives via CI-on-push (main IS in CI's push
-  # branches). Keep this path so release-to-@latest continues to trigger
-  # automatically when the rolling PR dev→main merges. homolog branch
-  # added 2026-05-12 so promotions to homolog also
-  # auto-fire the version + release pipeline → .well-known/homolog.json
-  # advances. CI's push branches list must include `homolog` for this
-  # workflow_run trigger to fire from there.
+    branches: [dev]
+  # Homolog promotion arrives via CI-on-push. Stable main releases are NOT
+  # versioned here: the release PR must already contain its final version, and
+  # image-publish.yml finalizes the tag/release only after OCI verification.
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches: [main, homolog]
+    branches: [homolog]
   workflow_dispatch:
+    inputs:
+      stable_publish_only:
+        description: 'Publish one already verified stable tag to npm without creating a new version'
+        type: boolean
+        default: false
+      expected_version:
+        description: 'Stable-only: exact version without the v prefix'
+        required: false
+        type: string
+      expected_sha:
+        description: 'Stable-only: exact 40-character release source SHA'
+        required: false
+        type: string
+      expected_digest:
+        description: 'Stable-only: exact verified omni-api OCI digest'
+        required: false
+        type: string
+      orchestrator_run_id:
+        description: 'Stable-only: exact in-progress image-publish workflow run'
+        required: false
+        type: string
+      orchestrator_control_sha:
+        description: 'Stable-only: exact control revision executing image-publish'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -40,16 +61,10 @@ permissions:
   actions: write
 
 concurrency:
-  # Serialize per target branch so dev and homolog bumps cannot overwrite each other.
-  # KNOWN GAP (documented, not fixed here): the group key includes event_name,
-  # so a dev→homolog promotion PR can fire this job twice for one merge —
-  # once via pull_request-closed and again via workflow_run (the merge commit
-  # "Merge pull request … /dev" passes the guard below) — in SEPARATE groups
-  # that run concurrently. Worst case is a duplicate bump/publish, not a loop:
-  # the bump commit itself never re-triggers (it fails the startsWith
-  # 'Merge pull request' guard). A real dedupe needs a gate job or step-level
-  # skip plumbing; deferred to keep this workflow's shape stable.
-  group: version-${{ github.event_name }}-${{ github.event.workflow_run.head_branch || github.event.pull_request.base.ref || github.ref_name }}
+  # Serialize every equivalent entry event by target branch. Keeping event_name
+  # out of the key prevents a future trigger expansion from reintroducing
+  # concurrent duplicate publication for one branch.
+  group: version-${{ github.event.workflow_run.head_branch || github.event.pull_request.base.ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -64,15 +79,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: >-
-      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'workflow_dispatch' && inputs.stable_publish_only != true) ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.merged == true &&
+       github.event.pull_request.base.ref == 'dev' &&
        github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
-       (github.event.workflow_run.head_branch == 'main' ||
-        github.event.workflow_run.head_branch == 'homolog') &&
+       github.event.workflow_run.head_branch == 'homolog' &&
        !contains(github.event.workflow_run.head_commit.message, '[skip ci]') &&
        startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request') &&
        (contains(github.event.workflow_run.head_commit.message, '/dev') ||
@@ -83,9 +98,8 @@ jobs:
         id: context
         run: |
           # Branch semantics:
-          #   - workflow_run on main → promoted release → @latest, bump carried on dev
           #   - pull_request merged on dev → new dev build → @next, bump dev
-          #   - pull_request/workflow_run on homolog → canonical HML build → @homolog, bump homolog
+          #   - workflow_run on homolog → canonical HML build → @homolog, bump homolog
           #   - workflow_dispatch → defaults to dev/@next
           TRIGGER_BRANCH="dev"
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
@@ -95,12 +109,6 @@ jobs:
           fi
 
           case "${TRIGGER_BRANCH}" in
-            main)
-              echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
-              echo "release_channel=stable" >> "$GITHUB_OUTPUT"
-              echo "checkout_ref=dev" >> "$GITHUB_OUTPUT"
-              echo "push_ref=dev" >> "$GITHUB_OUTPUT"
-              ;;
             homolog)
               echo "npm_tag=homolog" >> "$GITHUB_OUTPUT"
               echo "release_channel=homolog" >> "$GITHUB_OUTPUT"
@@ -117,11 +125,19 @@ jobs:
           echo "trigger_branch=${TRIGGER_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "Triggering branch: ${TRIGGER_BRANCH}"
 
+      - name: Require protected version writer credential
+        env:
+          VERSION_WRITER_TOKEN: ${{ secrets.VERSION_BUMP_PAT }}
+        run: |
+          [[ -n "${VERSION_WRITER_TOKEN}" ]] || {
+            echo "::error::VERSION_BUMP_PAT is required so version branch pushes trigger their downstream workflows"
+            exit 1
+          }
+
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          # Bump the canonical target branch. main-triggered runs preserve the
-          # historical behavior of carrying the bump on dev; homolog-triggered
-          # runs bump homolog because HML images are built from homolog.
+          # Bump the canonical dev/homolog target branch. Stable main versions
+          # are fixed in their release PR and never created by this workflow.
           ref: ${{ steps.context.outputs.checkout_ref }}
           fetch-depth: 0
           # Machine-account PAT for the bump push (checkout persists this
@@ -131,9 +147,6 @@ jobs:
           # when the push actor is github-actions[bot], GitHub holds those
           # runs at `action_required`, wedging the PR until a human closes/
           # reopens it. Pushing as a machine account avoids the bot-actor hold.
-          # Fallback: while VERSION_BUMP_PAT is unset/empty this expression
-          # resolves to github.token — exactly the old behavior — so this is
-          # safe to merge before the secret exists.
           # Secret spec: fine-grained PAT on a machine account (e.g.
           # automagik-bot) scoped to automagik-dev/omni, Contents: read+write.
           # NOTE: unlike GITHUB_TOKEN, PAT pushes DO fire on:push workflows.
@@ -143,7 +156,7 @@ jobs:
           # MESSAGE, not the actor, and bump messages fail the startsWith
           # 'Merge pull request' check, so no re-fire loop. The v* TAG push
           # must NOT use the PAT: see "Commit and tag" below.
-          token: ${{ secrets.VERSION_BUMP_PAT || github.token }}
+          token: ${{ secrets.VERSION_BUMP_PAT }}
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
@@ -247,14 +260,13 @@ jobs:
       # guard); workflow_dispatch and repository_dispatch are the documented
       # exceptions, so this step kicks the orchestrator from version.yml.
       #
-      # Channel selector: main-branch builds publish to stable (the rolling
-      # PR dev→main promotion path), everything else publishes to dev.
-      # Mirrors genie wish release-channel-dev (PR #2419).
+      # Channel selector is dev/homolog only. Stable is finalized by the
+      # verified main image pipeline.
       - name: Build CLI
         run: bunx turbo run build --filter=@automagik/omni
 
       - name: Setup Node 24 (for npm OIDC publish)
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
@@ -296,4 +308,100 @@ jobs:
             echo "::error ::release-trigger.dispatch_failed release.yml dispatch failed for ${TAG} — investigate gh CLI auth or workflow availability before re-running manually"
             exit 1
           fi
+
+  publish-stable:
+    name: Publish verified stable npm package
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.stable_publish_only == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+      packages: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Authorize verified stable orchestration
+        env:
+          ACTOR: ${{ github.actor }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_DIGEST: ${{ inputs.expected_digest }}
+          ORCHESTRATOR_RUN_ID: ${{ inputs.orchestrator_run_id }}
+          ORCHESTRATOR_CONTROL_SHA: ${{ inputs.orchestrator_control_sha }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
+        run: |
+          set -euo pipefail
+          [[ "${ACTOR}" == "github-actions[bot]" ]]
+          [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EXPECTED_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${ORCHESTRATOR_RUN_ID}" =~ ^[0-9]+$ ]]
+          [[ "${ORCHESTRATOR_CONTROL_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ORCHESTRATOR_RUN_ID}" > "${RUNNER_TEMP}/orchestrator.json"
+          scripts/release/verify-orchestrator-run.py \
+            --run-json "${RUNNER_TEMP}/orchestrator.json" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --source-sha "${ORCHESTRATOR_CONTROL_SHA}"
+          gh attestation verify "oci://${IMAGE}@${EXPECTED_DIGEST}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --source-digest "${EXPECTED_SHA}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-publish.yml"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.expected_sha }}
+          path: .stable-source
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Verify immutable stable identity
+        working-directory: .stable-source
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse 'HEAD^{commit}')" == "${EXPECTED_SHA}" ]]
+          [[ "$(git rev-parse "refs/tags/v${EXPECTED_VERSION}^{commit}")" == "${EXPECTED_SHA}" ]]
+          [[ "$(node -p "require('./packages/cli/package.json').version")" == "${EXPECTED_VERSION}" ]]
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        working-directory: .stable-source
+        run: bun install --frozen-lockfile
+
+      - name: Build stable CLI
+        working-directory: .stable-source
+        run: bunx turbo run build --filter=@automagik/omni
+
+      - name: Setup Node 24 for npm trusted publishing
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish or verify existing stable npm package
+        working-directory: .stable-source
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          NPM_RECOVERY_TOKEN: ${{ secrets.NPM_TOKEN }}
+          HUSKY: "0"
+        run: |
+          set -euo pipefail
+          "${GITHUB_WORKSPACE}/scripts/release/reconcile-npm-stable.sh" \
+            --expected "${EXPECTED_VERSION}" \
+            --package-dir "${GITHUB_WORKSPACE}/.stable-source/packages/cli"
 

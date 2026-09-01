@@ -19,9 +19,9 @@ name: Release
 #   3. publish         — workflow_call into release-publish.yml (GH release + assets)
 #   4. release-notes   — git-cliff changelog appended to the GH release body.
 #
-# npm publishing happens in version.yml inline (branch-derived dist-tag:
-# main → @latest, dev → @next). Single source of truth — no duplicate
-# publish step here. Codex P1 on PR #633 caught the gap when a previous
+# npm publishing happens in version.yml inline (dev/homolog auto-versioning,
+# plus the verified stable-only entry point dispatched by image-publish.yml).
+# Single source of truth — no duplicate publish step here. Codex P1 on PR #633 caught the gap when a previous
 # revision of this file ran an unconditional `npm publish --tag latest`
 # alongside version.yml's @next publish, promoting dev cuts to @latest.
 
@@ -49,6 +49,18 @@ on:
           - stable
           - homolog
           - dev
+      expected_sha:
+        description: 'Stable only: exact verified release source SHA'
+        required: false
+        type: string
+      expected_digest:
+        description: 'Stable only: exact verified omni-api OCI digest'
+        required: false
+        type: string
+      orchestrator_run_id:
+        description: 'Stable only: exact in-progress image-publish workflow run'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -58,10 +70,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorize:
+    name: Authorize release channel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Reject unverified stable entry points
+        env:
+          CHANNEL: ${{ inputs.channel || 'stable' }}
+          ACTOR: ${{ github.actor }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_DIGEST: ${{ inputs.expected_digest }}
+          ORCHESTRATOR_RUN_ID: ${{ inputs.orchestrator_run_id }}
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
+        run: |
+          set -euo pipefail
+          if [[ "${CHANNEL}" == "stable" ]]; then
+            [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${ACTOR}" == "github-actions[bot]" ]]
+            [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]
+            [[ "${EXPECTED_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            [[ "${ORCHESTRATOR_RUN_ID}" =~ ^[0-9]+$ ]]
+            [[ "${GITHUB_REF}" == "refs/tags/v${INPUT_VERSION}" ]]
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ORCHESTRATOR_RUN_ID}" > "${RUNNER_TEMP}/orchestrator.json"
+            scripts/release/verify-orchestrator-run.py \
+              --run-json "${RUNNER_TEMP}/orchestrator.json" \
+              --repository "${GITHUB_REPOSITORY}" \
+              --source-sha "${EXPECTED_SHA}"
+            gh attestation verify "oci://${IMAGE}@${EXPECTED_DIGEST}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --source-digest "${EXPECTED_SHA}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-publish.yml"
+          fi
+
   # ---------------------------------------------------------------------------
   # Signed-tarball pipeline (mirror of genie pattern)
   # ---------------------------------------------------------------------------
   build:
+    needs: authorize
     uses: ./.github/workflows/build-tarballs.yml
     permissions:
       contents: read
@@ -82,24 +137,30 @@ jobs:
     uses: ./.github/workflows/release-publish.yml
     permissions:
       contents: write       # gh release create/upload + push latest.json
-      id-token: write       # reserved for any OIDC-using publish-time verifiers
+      actions: read
+      packages: read
+      attestations: read
     secrets: inherit
     with:
       version: ${{ needs.sign-attest.outputs.version }}
-      # workflow_dispatch supplies the channel (version.yml passes 'dev' for
-      # dev-branch dispatches, 'stable' for main-branch dispatches). Bare
-      # tag pushes fall through to stable. Mirrors genie wish
+      # workflow_dispatch supplies the channel (version.yml passes dev/homolog;
+      # the verified image pipeline passes stable). Bare tag pushes fall
+      # through to stable. Mirrors genie wish
       # release-channel-dev (PR #2419).
       channel: ${{ inputs.channel || 'stable' }}
       draft: false
+      expected_sha: ${{ inputs.expected_sha }}
+      expected_digest: ${{ inputs.expected_digest }}
+      orchestrator_run_id: ${{ inputs.orchestrator_run_id }}
+      orchestrated: true
 
   # ---------------------------------------------------------------------------
   # Release notes (git-cliff) — runs after publish so the GH release exists.
   # Updates the release body with the generated changelog.
   #
-  # NOTE: npm publish is NOT performed by this workflow. version.yml runs
-  # `npm publish --tag <next|latest>` inline using a branch-derived dist-tag
-  # (main → @latest, dev → @next). A duplicate publish step here would race
+  # NOTE: npm publish is NOT performed by this workflow. version.yml owns
+  # `npm publish` for dev/homolog and the verified stable-only dispatch. A
+  # duplicate publish step here would race
   # version.yml's inline path AND, before this drop, the missing channel
   # gate meant dev dispatches were attempting `npm publish --tag latest`
   # against a version version.yml had already pushed as @next — promoting
@@ -114,7 +175,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
 
@@ -135,7 +196,7 @@ jobs:
       - name: Find previous release tag
         id: prev
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.pkg.outputs.tag }}"
           PREV=$(gh release list --limit 50 --json tagName -q '.[].tagName' | grep -v "^${TAG}$" | head -1)
@@ -161,7 +222,7 @@ jobs:
 
       - name: Update release body with changelog
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.pkg.outputs.tag }}"
           if [[ -s /tmp/release-notes.md ]]; then
