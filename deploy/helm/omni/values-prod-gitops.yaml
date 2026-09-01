@@ -1,0 +1,15 @@
+# Immutable production deployment state consumed by Argo CD.
+#
+# This file intentionally owns only the omni-api artifact identity and its
+# human-readable provenance. Realm shape and AWS coordinates remain in
+# values-prod.yaml, values-prod-alb.yaml, and the central Argo Application.
+# CI may update this file after independently verifying the OCI index; it must
+# never call Helm or kubectl against production.
+image:
+  # Adoption pin: the image already running before Argo takes ownership.
+  # The verified v2.260830.2 pipeline replaces this digest only after adoption.
+  digest: sha256:c4ede7c3a0f8768a1307e5534c00f163b12eb89ba8d882e75a5cafaae16cd414
+
+gitopsRelease:
+  version: "2.260830.1"
+  sourceRevision: "01a1f26f206437d272c23035f1ae989f664aee72"
