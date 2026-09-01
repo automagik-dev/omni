@@ -1,8 +1,15 @@
 /**
  * ASC platform Flow channel capabilities.
  *
- * Text-only by design: the flow's `api_rest` node hands us `chatInput`, a
- * string. Media in either direction is out of scope for v1 (see the README).
+ * Outbound is text-only: the answer goes back through the api_rest poll body
+ * (`resposta`) and `/callbackFlowMsg`, both of which carry a string. Sending
+ * media is out of scope (see the README).
+ *
+ * Inbound DOES carry media. The flow hands us a file NAME in `chatInput` and
+ * the bytes are fetched off `/atendimento` (`utils/media.ts`), so audio, image,
+ * video and documents reach Omni's media pipeline. Hence `canSendMedia: false`
+ * next to a populated `supportedMediaTypes` — the list describes what the
+ * channel can RECEIVE.
  */
 
 import { DEFAULT_CAPABILITIES } from '@omni/channel-sdk';
@@ -34,6 +41,18 @@ export const ASC_FLOW_CAPABILITIES: ChannelCapabilities = {
   canHandleDMs: true,
   canStreamResponse: false,
   maxMessageLength: 4096,
-  maxFileSize: 0,
-  supportedMediaTypes: [],
+  /** Inbound only — the `createDownloadGuard` default the resolver enforces. */
+  maxFileSize: 50 * 1024 * 1024,
+  /**
+   * What the channel can RECEIVE (outbound media is not supported). The
+   * platform hands whatever WhatsApp delivered, so the families are open: the
+   * resolver types by `content-type` family and files anything else as a
+   * document.
+   */
+  supportedMediaTypes: [
+    { mimeType: 'image/*', maxSize: 50 * 1024 * 1024 },
+    { mimeType: 'audio/*', maxSize: 50 * 1024 * 1024 },
+    { mimeType: 'video/*', maxSize: 50 * 1024 * 1024 },
+    { mimeType: 'application/*', maxSize: 50 * 1024 * 1024 },
+  ],
 };

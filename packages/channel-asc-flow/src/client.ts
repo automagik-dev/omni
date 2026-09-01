@@ -121,16 +121,49 @@ export class AscFlowClient {
     );
   }
 
-  private async rawPost(path: string, payload: Record<string, unknown>, token?: string): Promise<AscFlowResponse> {
+  /**
+   * Authenticated GET. Same one-shot re-auth as `post`, and the same reason to
+   * gate it on the missing `cod_error`: a GET is idempotent, but a business 401
+   * is an answer, not an expired token.
+   *
+   * The only reader today is `/atendimento?codigo_atendimento=…`, which is how
+   * inbound media is resolved (the flow hands us a file NAME, the atendimento
+   * carries the bytes).
+   */
+  async get(path: string, query: Record<string, string | number> = {}): Promise<AscFlowResponse> {
+    let response = await this.rawRequest('GET', path, query, undefined, await this.getToken());
+
+    if (response.status === 401 && codErrorOf(response.body) === undefined) {
+      this.logger.info('[asc-flow] 401 without cod_error — re-authenticating and retrying', { path });
+      response = await this.rawRequest('GET', path, query, undefined, await this.getToken(true));
+    }
+
+    return response;
+  }
+
+  private rawPost(path: string, payload: Record<string, unknown>, token?: string): Promise<AscFlowResponse> {
+    return this.rawRequest('POST', path, {}, payload, token);
+  }
+
+  private async rawRequest(
+    method: 'GET' | 'POST',
+    path: string,
+    query: Record<string, string | number>,
+    payload: Record<string, unknown> | undefined,
+    token?: string,
+  ): Promise<AscFlowResponse> {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (token) headers.authorization = `Bearer ${token}`;
 
+    const url = new URL(`${this.baseUrl}${path}`);
+    for (const [key, value] of Object.entries(query)) url.searchParams.set(key, String(value));
+
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
-        method: 'POST',
+      response = await fetch(url.toString(), {
+        method,
         headers,
-        body: JSON.stringify(payload),
+        ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (err) {

@@ -88,7 +88,11 @@ const channels: ChannelDescriptor[] = [
     errorClass: AscFlowApiError,
     capabilities: ASC_FLOW_CAPABILITIES,
     pluginSourcePath: channelPath('asc-flow', 'plugin.ts'),
-    handlerSourcePaths: [channelPath('asc-flow', 'handlers', 'webhook.ts')],
+    handlerSourcePaths: [
+      channelPath('asc-flow', 'handlers', 'webhook.ts'),
+      // Inbound media resolution (the `/atendimento` base64 fetch) lives here.
+      channelPath('asc-flow', 'utils', 'media.ts'),
+    ],
     errorSourcePath: channelPath('asc-flow', 'utils', 'errors.ts'),
   },
   {
@@ -333,7 +337,7 @@ for (const channel of channels) {
 
       it('uses createDownloadGuard for media downloads', () => {
         // Text-only channels never download inbound bytes, so there is nothing
-        // to guard (asc-flow: the flow's api_rest node hands us a string).
+        // to guard.
         if (channel.capabilities.supportedMediaTypes.length === 0) return;
         const allPaths = [channel.pluginSourcePath, ...channel.handlerSourcePaths];
         expect(anySourceContainsCall(allPaths, 'createDownloadGuard')).toBe(true);

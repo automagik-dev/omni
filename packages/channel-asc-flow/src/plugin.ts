@@ -65,6 +65,7 @@ import type { AscFlowConfig } from './types';
 import { encodeAscEmoji } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
 import { buildUra, splitBubbles } from './utils/interactive';
+import { isAscMediaFilename, mediaFallbackText, resolveAscInboundMedia } from './utils/media';
 
 /** Platform default — the NotreDame tenant this channel was built against. */
 export const DEFAULT_ASC_FLOW_BASE_URL = 'https://sac-notredame.ascbrazil.com.br';
@@ -462,15 +463,45 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     // part, and the beneficiary is already waiting.
     await this.sendTyping(instanceId, turn.codAtendimento);
 
+    const externalId = turn.messageId ?? crypto.randomUUID();
+
+    // Media arrives as a FILE NAME in `chatInput`; the bytes live on the
+    // atendimento. Only a name-shaped input pays for that fetch — see
+    // `utils/media.ts`. A failed resolution degrades to a short text so the
+    // agent gets something it can answer instead of the raw file name.
+    const isMediaName = isAscMediaFilename(turn.text);
+    const client = this.ascFlowInstances.get(instanceId)?.client;
+    const media =
+      isMediaName && client
+        ? await resolveAscInboundMedia({
+            client,
+            instanceId,
+            codAtendimento: turn.codAtendimento,
+            filename: turn.text,
+            externalId,
+            logger: this.logger,
+          })
+        : null;
+
     const timings = this.captureInboundTimings(Date.now());
     const correlationId = await this.emitMessageReceived({
       instanceId,
-      externalId: turn.messageId ?? crypto.randomUUID(),
+      externalId,
       chatId: turn.codAtendimento,
       from: turn.phone || turn.codAtendimento,
-      content: { type: 'text' as import('@omni/core/types').ContentType, text: sanitized.text },
+      content: media
+        ? { type: media.type, mimeType: media.mimeType, localPath: media.localPath }
+        : {
+            type: 'text' as import('@omni/core/types').ContentType,
+            text: isMediaName ? mediaFallbackText(turn.text) : sanitized.text,
+          },
       rawPayload: {
-        ascFlow: { codAtendimento: turn.codAtendimento, hasPhone: Boolean(turn.phone) },
+        ascFlow: {
+          codAtendimento: turn.codAtendimento,
+          hasPhone: Boolean(turn.phone),
+          ...(isMediaName ? { mediaFilename: turn.text, mediaResolved: Boolean(media) } : {}),
+        },
+        ...(media ? { mediaLocalPath: media.localPath } : {}),
       },
       timings,
     });

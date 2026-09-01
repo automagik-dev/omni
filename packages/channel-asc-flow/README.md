@@ -51,6 +51,51 @@ POST /api/v2/channels/asc-flow/{instanceId}/webhook
 `cod_atendimento` / `message` / `telefone` are accepted as aliases. An optional
 `messageId` (alias `idMensagem`) is used for dedupe when the flow supplies one.
 
+### Inbound media
+
+`chatInput` is `{#MENSAGEM}`, a **string** — so when the beneficiary sends
+audio, an image or a document, the flow hands us the platform's **file name**,
+never the content:
+
+```
+1820260901wamid.HBgMNTU1MTk3Mjg1ODI5…FDQgA.ogg     audio
+1820260901wamid.HBgMNTU1MTk3Mjg1ODI5…RjNgA.jpg     image
+```
+
+Shape: `<cod_conta><YYYYMMDD>wamid.<id>.<ext>`. Published as text, the agent
+reads it as a sentence and answers nonsense (measured 01/09 on the live number).
+
+So an input matching that shape — and *only* that shape — triggers
+`GET /atendimento?codigo_atendimento={cod}`, whose `mensagens` carry the bytes
+inline:
+
+```json
+{ "tip_msg": "AUDIO", "boleano_entrante": "1",
+  "descricao_msg": "1820260901wamid.….ogg",
+  "content-type": "audio/ogg; codecs=opus",
+  "base64_arquivo": "T2dnUwACAAAA…",
+  "url_arquivo": "https://…/download-file/<uuid>" }
+```
+
+The most recent **inbound** message whose `descricao_msg` equals the name we
+were handed wins. Its base64 is preferred over `url_arquivo` (no second
+authenticated round trip), size-checked with `createDownloadGuard` (50 MB),
+stored through the SDK media backend, and emitted as a real media
+`message.received` — `content.type` (`audio` / `image` / `video` / `document`,
+from the `content-type` family), `content.mimeType`, and `content.localPath`,
+which persistence writes to `messages.mediaLocalPath` and the media processor
+consumes to transcribe / describe / extract.
+
+Two things this deliberately protects:
+
+- **Plain text pays nothing.** The atendimento body is large (63 KB measured on
+  a ticket with one audio and one image, because every base64 rides along), so
+  it is fetched only for a name-shaped `chatInput`.
+- **A failed resolution never wedges the turn.** Platform down, message not
+  there yet, oversized, empty base64 → a `warn` and a short PT-BR text
+  (`[o beneficiário enviou um áudio, mas não foi possível ler o conteúdo]`)
+  instead of the raw file name. The POLL contract is unchanged.
+
 ## Response contract (POLL)
 
 Always HTTP `200`, always JSON. Three states, keyed by `codAtendimento`:
@@ -166,7 +211,8 @@ called on top of the body's `hand_off:"sim"`.
 
 ## Out of scope (v1)
 
-Media in either direction (the `api_rest` node hands us a string), reactions,
+Media **outbound** (the poll body and `callbackFlowMsg` both carry a string —
+inbound media *is* supported, see above), reactions,
 edits, deletes, groups, read/delivery receipts, and history (the platform
 exposes no transcript API).
 
