@@ -45,7 +45,7 @@ candidate_version="$(git show "${candidate_sha}:packages/cli/package.json" | pyt
 [[ "${candidate_version}" == "${version}" ]] || \
   fail "candidate package version ${candidate_version} does not match ${version}"
 
-build_inputs=(deploy/Dockerfile package.json bun.lock packages apps)
+build_inputs=(deploy/Dockerfile deploy/Dockerfile.dockerignore package.json bun.lock packages apps)
 set +e
 git diff --quiet "${candidate_sha}" "${final_sha}" -- "${build_inputs[@]}"
 diff_status=$?

@@ -26,6 +26,7 @@ mkdir -p \
   git config user.name test
   git config user.email test@example.com
   printf 'FROM scratch\n' > deploy/Dockerfile
+  printf 'node_modules\n' > deploy/Dockerfile.dockerignore
   printf '{"name":"omni","version":"2.260830.2"}\n' > package.json
   printf 'lockfileVersion = 1\n' > bun.lock
   printf '{"name":"@automagik/omni","version":"2.260830.2"}\n' > packages/cli/package.json
@@ -98,5 +99,29 @@ if (
 ) >"${work}/digest.out" 2>"${work}/digest.err"; then
   fail "invalid candidate digest was accepted"
 fi
+
+# The root context has no .dockerignore; deploy/Dockerfile.dockerignore is the
+# Dockerfile-specific ignore file BuildKit honours for -f deploy/Dockerfile, so
+# it selects what enters the protected build context and must be drift-checked.
+(
+  cd "${repo}"
+  git checkout -q "${final}"
+  printf 'node_modules\n*.log\n' > deploy/Dockerfile.dockerignore
+  git add .
+  git commit -qm dockerignore-drift
+)
+ignore_drifted="$(git -C "${repo}" rev-parse HEAD)"
+if (
+  cd "${repo}"
+  "${SCRIPT}" \
+    --candidate-sha "${candidate}" \
+    --final-sha "${ignore_drifted}" \
+    --version 2.260830.2 \
+    --digest sha256:dba9b81cead5efacf9303ab75487a762fa100992dc2bb52741524a7a036b2da8
+) >"${work}/ignore.out" 2>"${work}/ignore.err"; then
+  fail "deploy/Dockerfile.dockerignore drift was accepted"
+fi
+grep -q 'image build-input drift' "${work}/ignore.err" || \
+  fail "dockerignore rejection did not identify the violated contract"
 
 printf 'PASS: immutable promotion candidate and final build-input identity contract\n'
