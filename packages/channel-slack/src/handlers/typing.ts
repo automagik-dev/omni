@@ -34,11 +34,22 @@ export interface SlackStatusResult {
 }
 
 /**
- * Error codes that mean the Agent Sessions API is not available for this
- * app/workspace (not yet rolled out, feature disabled, or method unknown to
- * the workspace). Any of these flips the client to the legacy fallback.
+ * Error codes after which retrying `agents.sessions.setStatus` with this
+ * client can never succeed — the API isn't rolled out / enabled
+ * (`unknown_method`, `feature_disabled`, `method_deprecated`), the app lacks
+ * the grant (`missing_scope`), or the token is the wrong kind
+ * (`not_allowed_token_type`: the method requires a granular bot token, which
+ * an `authMode: 'user'` acting client is not). These memoize the client onto
+ * the legacy path. Every OTHER error still falls through to the legacy API
+ * for that call — it just doesn't write the client off.
  */
-const AGENT_API_UNAVAILABLE_ERRORS = new Set(['unknown_method', 'feature_disabled', 'method_deprecated']);
+const AGENT_API_UNAVAILABLE_ERRORS = new Set([
+  'unknown_method',
+  'feature_disabled',
+  'method_deprecated',
+  'missing_scope',
+  'not_allowed_token_type',
+]);
 
 /**
  * Clients where `agents.sessions.setStatus` has failed with an
@@ -110,6 +121,9 @@ export async function setSlackThreadStatus(params: {
       });
       return { delivered: true, method: 'agents.sessions.setStatus' };
     } catch (err) {
+      // Any failure falls through to the legacy bridge below — a status that
+      // worked before this migration must keep working (#914 review). Only
+      // errors that can never succeed again memoize the client off this path.
       const code = slackErrorCode(err);
       if (code && AGENT_API_UNAVAILABLE_ERRORS.has(code)) {
         agentApiUnavailable.add(client);
@@ -119,8 +133,10 @@ export async function setSlackThreadStatus(params: {
           error: code,
         });
       } else {
-        logger.warn('agents.sessions.setStatus failed', { ...logContext, error: String(err) });
-        return { delivered: false, method: 'agents.sessions.setStatus' };
+        logger.warn('agents.sessions.setStatus failed, trying legacy fallback', {
+          ...logContext,
+          error: String(err),
+        });
       }
     }
   }

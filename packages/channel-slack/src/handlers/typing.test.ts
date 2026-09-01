@@ -172,7 +172,7 @@ describe('setSlackThreadStatus', () => {
     expect(apiCalls[2]?.method).toBe('assistant.threads.setStatus');
   });
 
-  it('does not fall back on transient agents.sessions.setStatus errors', async () => {
+  it('falls through to legacy on transient errors without writing the client off', async () => {
     const { client, apiCalls } = makeAgentApiFailingClient('channel_not_found');
     const logger = makeLogger();
 
@@ -184,14 +184,55 @@ describe('setSlackThreadStatus', () => {
       logger,
     });
 
-    expect(result).toEqual({ delivered: false, method: 'agents.sessions.setStatus' });
-    expect(apiCalls.length).toBe(1);
+    // The legacy bridge still gets its chance on ANY new-API failure —
+    // a status that worked pre-migration must keep working.
+    expect(result).toEqual({ delivered: true, method: 'assistant.threads.setStatus' });
+    expect(apiCalls.map((c) => c.method)).toEqual(['agents.sessions.setStatus', 'assistant.threads.setStatus']);
+
+    // Transient errors do NOT memoize: the next call attempts the new API again.
+    await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+    });
+    expect(apiCalls[2]?.method).toBe('agents.sessions.setStatus');
 
     // Failure is logged without leaking the raw status string
     const warnCalls = (logger.warn as ReturnType<typeof mock>).mock.calls;
     expect(warnCalls.length).toBeGreaterThan(0);
     expect(warnCalls[0]?.[1]).toMatchObject({ clearing: false, statusLength: 'is typing...'.length });
     expect(warnCalls[0]?.[1]).not.toHaveProperty('status');
+  });
+
+  it('memoizes onto the legacy path for auth-shaped errors (wrong token type / missing scope)', async () => {
+    const { client, apiCalls } = makeAgentApiFailingClient('not_allowed_token_type');
+    const logger = makeLogger();
+
+    const first = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+    });
+    expect(first).toEqual({ delivered: true, method: 'assistant.threads.setStatus' });
+
+    const second = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+    });
+    expect(second.method).toBe('assistant.threads.setStatus');
+    // Second call skips the doomed new-API attempt entirely
+    expect(apiCalls.map((c) => c.method)).toEqual([
+      'agents.sessions.setStatus',
+      'assistant.threads.setStatus',
+      'assistant.threads.setStatus',
+    ]);
   });
 
   it('uses typed assistant.threads.setStatus when there is no generic apiCall', async () => {

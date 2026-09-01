@@ -695,6 +695,12 @@ export interface AgentRunCancelRequestedPayload {
   threadId?: string;
   /** Platform user who requested the stop */
   requestedBy?: string;
+  /**
+   * Unix ms when the user pressed stop (platform event time). Consumers only
+   * abort runs that STARTED at or before this instant, so a late-delivered
+   * cancel cannot kill a newer run under the same chat key.
+   */
+  requestedAt?: number;
   /** What triggered the cancellation */
   reason: 'user_stop';
 }

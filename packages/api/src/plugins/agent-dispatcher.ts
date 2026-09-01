@@ -2040,41 +2040,93 @@ async function fetchChatMetadata(
 // ─── Per-chatId stream guard ──────────────────────────────
 const activeStreams = new Map<string, StreamSender>();
 
-// ─── Per-chatId run cancellation (#914) ───────────────────
+// ─── Per-run cancellation (#914) ──────────────────────────
 // Populated while a provider run is in flight; `agent.run.cancel_requested`
 // (e.g. Slack's native stop button) aborts the controller. Streaming providers
 // honor the signal end-to-end (claude-code aborts the SDK run); accumulate-mode
 // runs that ignore it have their reply discarded on completion instead.
-const activeRunAborts = new Map<string, AbortController>();
+
+interface ActiveRunEntry {
+  controller: AbortController;
+  /** Unix ms when the run registered — compared against a cancel's requestedAt */
+  startedAt: number;
+  /** Stream sender owned by this run (streaming dispatch only) */
+  sender?: StreamSender;
+}
+
+// Keyed by runAbortKey — thread-scoped, because two threads in one Slack
+// channel are two concurrent runs (the second goes down the accumulate path
+// past the per-chat streaming guard). A chat-scoped key would let a stop in
+// thread A abort thread B, and each run's cleanup would delete the other's.
+const activeRunAborts = new Map<string, ActiveRunEntry>();
+
+function runAbortKey(instanceId: string, chatId: string, threadId?: string): string {
+  return `${instanceId}:${chatId}:${threadId ?? ''}`;
+}
 
 /**
- * Abort the in-flight agent run and stream for a chat, if any.
+ * Abort the in-flight agent run (and its stream sender) for a chat/thread.
+ *
+ * Looks up the exact thread key first, then the threadless key — Slack's stop
+ * event always carries a thread_ts, but a run triggered by a top-level
+ * mention or DM registered without one. When `requestedAt` is provided, runs
+ * that STARTED after the stop press are left alone, so a late-delivered or
+ * redelivered cancel cannot kill the user's next turn.
+ *
  * Exported for tests.
  */
-export async function cancelActiveAgentRun(instanceId: string, chatId: string, reason: string): Promise<boolean> {
-  const key = `${instanceId}:${chatId}`;
-  const controller = activeRunAborts.get(key);
-  const sender = activeStreams.get(key);
+export async function cancelActiveAgentRun(
+  instanceId: string,
+  chatId: string,
+  reason: string,
+  opts?: { threadId?: string; requestedAt?: number },
+): Promise<boolean> {
+  let entry = activeRunAborts.get(runAbortKey(instanceId, chatId, opts?.threadId));
+  if (!entry && opts?.threadId) {
+    entry = activeRunAborts.get(runAbortKey(instanceId, chatId));
+  }
 
-  if (!controller && !sender) {
-    log.info('Agent run cancel requested but nothing in flight', { instanceId, chatId, reason });
+  if (!entry) {
+    log.info('Agent run cancel requested but nothing in flight', {
+      instanceId,
+      chatId,
+      threadId: opts?.threadId,
+      reason,
+    });
+    return false;
+  }
+
+  // startedAt is this server's clock, requestedAt the platform's; a legit
+  // stop press trails the run start by seconds-to-minutes, so ordinary NTP
+  // skew cannot flip this comparison.
+  if (opts?.requestedAt !== undefined && entry.startedAt > opts.requestedAt) {
+    log.info('Agent run cancel ignored — run started after the stop request', {
+      instanceId,
+      chatId,
+      threadId: opts?.threadId,
+      startedAt: entry.startedAt,
+      requestedAt: opts.requestedAt,
+      reason,
+    });
     return false;
   }
 
   log.info('Cancelling in-flight agent run', {
     instanceId,
     chatId,
+    threadId: opts?.threadId,
     reason,
-    hasAbortController: !!controller,
-    hasActiveStream: !!sender,
+    hasActiveStream: !!entry.sender,
   });
 
-  controller?.abort();
-  if (sender) {
+  entry.controller.abort();
+  if (entry.sender) {
     try {
-      await sender.abort();
+      // cancel() halts and KEEPS the partial output (Slack's stop semantics);
+      // abort() is only a fallback for senders without it.
+      await (entry.sender.cancel ? entry.sender.cancel() : entry.sender.abort());
     } catch (err) {
-      log.warn('Stream sender abort failed during run cancellation', { instanceId, chatId, error: String(err) });
+      log.warn('Stream sender cancel failed during run cancellation', { instanceId, chatId, error: String(err) });
     }
   }
   return true;
@@ -2473,9 +2525,11 @@ async function dispatchViaStreamingProvider(
   activeStreams.set(streamKey, sender);
 
   // Cancellable run (#914): agent.run.cancel_requested aborts this controller,
-  // which providers propagate into the underlying SDK run.
+  // which providers propagate into the underlying SDK run. The sender rides
+  // along so cancellation can halt-and-keep the partial stream output.
   const cancelController = new AbortController();
-  activeRunAborts.set(streamKey, cancelController);
+  const runKey = runAbortKey(instance.id, chatId, rawThreadId);
+  activeRunAborts.set(runKey, { controller: cancelController, startedAt: Date.now(), sender });
   trigger.abortSignal = cancelController.signal;
 
   const streamDispatchStart = Date.now();
@@ -2524,7 +2578,7 @@ async function dispatchViaStreamingProvider(
     return false;
   } finally {
     activeStreams.delete(streamKey);
-    activeRunAborts.delete(streamKey);
+    activeRunAborts.delete(runKey);
   }
 }
 
@@ -2889,8 +2943,8 @@ async function triggerProviderWithCancellation(
   traceId: string,
 ): Promise<{ result: Awaited<ReturnType<IAgentProvider['trigger']>>; cancelled: boolean } | null> {
   const cancelController = new AbortController();
-  const runKey = `${instanceId}:${chatId}`;
-  activeRunAborts.set(runKey, cancelController);
+  const runKey = runAbortKey(instanceId, chatId, trigger.source.threadId);
+  activeRunAborts.set(runKey, { controller: cancelController, startedAt: Date.now() });
 
   try {
     const result = await withLifecycleSpan('omni.dispatch_to_agno', spanAttributes, () =>
@@ -6229,24 +6283,29 @@ export async function setupAgentDispatcher(
     await eventBus.subscribe(
       'agent.run.cancel_requested',
       async (event) => {
-        // Idempotency guard (#411): a replayed cancel must not abort a NEW
-        // run that started for the same chat after the original one ended.
-        await withIdempotency(db, event.id, 'agent-dispatcher-cancel', async () => {
-          const payload = event.payload as AgentRunCancelRequestedPayload;
-          try {
-            await cancelActiveAgentRun(payload.instanceId, payload.chatId, payload.reason);
-          } catch (error) {
-            log.error('Error cancelling agent run', {
-              instanceId: payload.instanceId,
-              chatId: payload.chatId,
-              error: String(error),
-            });
-          }
-        });
+        const payload = event.payload as AgentRunCancelRequestedPayload;
+        try {
+          await cancelActiveAgentRun(payload.instanceId, payload.chatId, payload.reason, {
+            threadId: payload.threadId,
+            requestedAt: payload.requestedAt,
+          });
+        } catch (error) {
+          log.error('Error cancelling agent run', {
+            instanceId: payload.instanceId,
+            chatId: payload.chatId,
+            error: String(error),
+          });
+        }
       },
       {
-        durable: 'agent-dispatcher-cancel',
-        queue: 'agent-dispatcher-cancel',
+        // Broadcast, not queue-grouped: the abort registry is per-process, so
+        // EVERY replica must see the cancel and no-op when it isn't running
+        // the turn — a deliver_group would route ~1/replicaCount of stop
+        // presses to the wrong pod. No durable and no withIdempotency either:
+        // both would elect a single winner and defeat the fan-out. Each
+        // process gets an ephemeral consumer starting at 'new' (no replay on
+        // restart), and the requestedAt guard in cancelActiveAgentRun keeps a
+        // redelivered cancel from aborting a newer run.
         startFrom: 'new',
       },
     );
@@ -6336,6 +6395,10 @@ export const setupAgentResponder = setupAgentDispatcher;
 export const __test__ = {
   buildContextMessages,
   awaitMediaProcessing,
+  // #914 cancel plumbing — exposed so tests can stage in-flight runs and
+  // assert the thread-scoped lookup + requestedAt guard.
+  activeRunAborts,
+  runAbortKey,
   // Read helpers converted in the G5 read-path leg — exported so the
   // worker-scope probes can assert their threading contract directly.
   resolveQuotedMessage,

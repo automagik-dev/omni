@@ -411,6 +411,80 @@ describe('agent-dispatcher', () => {
       await expect(cancelActiveAgentRun('inst-none', 'chat-none', 'user_stop')).resolves.toBe(false);
     });
 
+    it('cancelActiveAgentRun aborts only the targeted thread (#914)', async () => {
+      const { activeRunAborts, runAbortKey } = __test__;
+      const runA = { controller: new AbortController(), startedAt: Date.now() - 5_000 };
+      const runB = { controller: new AbortController(), startedAt: Date.now() - 5_000 };
+      activeRunAborts.set(runAbortKey('inst-1', 'C1', 'thread-A'), runA);
+      activeRunAborts.set(runAbortKey('inst-1', 'C1', 'thread-B'), runB);
+
+      try {
+        await expect(cancelActiveAgentRun('inst-1', 'C1', 'user_stop', { threadId: 'thread-A' })).resolves.toBe(true);
+        expect(runA.controller.signal.aborted).toBe(true);
+        expect(runB.controller.signal.aborted).toBe(false);
+      } finally {
+        activeRunAborts.clear();
+      }
+    });
+
+    it('cancelActiveAgentRun falls back to the threadless run for the same chat (#914)', async () => {
+      const { activeRunAborts, runAbortKey } = __test__;
+      // Top-level mention / DM: the run registered without a threadId, but
+      // Slack's stop event carries the thread_ts of the reply thread.
+      const run = { controller: new AbortController(), startedAt: Date.now() - 5_000 };
+      activeRunAborts.set(runAbortKey('inst-1', 'C1'), run);
+
+      try {
+        await expect(cancelActiveAgentRun('inst-1', 'C1', 'user_stop', { threadId: '1234.5678' })).resolves.toBe(true);
+        expect(run.controller.signal.aborted).toBe(true);
+      } finally {
+        activeRunAborts.clear();
+      }
+    });
+
+    it('cancelActiveAgentRun ignores a run that started after the stop press (#914)', async () => {
+      const { activeRunAborts, runAbortKey } = __test__;
+      const stopPressedAt = Date.now() - 10_000;
+      const newerRun = { controller: new AbortController(), startedAt: Date.now() };
+      activeRunAborts.set(runAbortKey('inst-1', 'C1', 'thread-A'), newerRun);
+
+      try {
+        await expect(
+          cancelActiveAgentRun('inst-1', 'C1', 'user_stop', { threadId: 'thread-A', requestedAt: stopPressedAt }),
+        ).resolves.toBe(false);
+        expect(newerRun.controller.signal.aborted).toBe(false);
+      } finally {
+        activeRunAborts.clear();
+      }
+    });
+
+    it('cancelActiveAgentRun prefers sender.cancel (halt-and-keep) over abort (#914)', async () => {
+      const { activeRunAborts, runAbortKey } = __test__;
+      const cancelMock = mock(async () => {});
+      const abortMock = mock(async () => {});
+      const run = {
+        controller: new AbortController(),
+        startedAt: Date.now() - 5_000,
+        sender: {
+          onThinkingDelta: mock(async () => {}),
+          onContentDelta: mock(async () => {}),
+          onFinal: mock(async () => {}),
+          onError: mock(async () => {}),
+          abort: abortMock,
+          cancel: cancelMock,
+        },
+      };
+      activeRunAborts.set(runAbortKey('inst-1', 'C1', 'thread-A'), run);
+
+      try {
+        await expect(cancelActiveAgentRun('inst-1', 'C1', 'user_stop', { threadId: 'thread-A' })).resolves.toBe(true);
+        expect(cancelMock).toHaveBeenCalledTimes(1);
+        expect(abortMock).not.toHaveBeenCalled();
+      } finally {
+        activeRunAborts.clear();
+      }
+    });
+
     it('returns a cleanup function that can be called without error', async () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();

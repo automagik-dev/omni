@@ -21,6 +21,8 @@ export interface AgentSessionStoppedArgs {
   userId?: string;
   /** Timestamps of streaming messages Slack halted (empty if none) */
   streamingMessageTs: string[];
+  /** Slack timestamp of the stop press ("seconds.micro"), for run-scoping */
+  eventTs?: string;
 }
 
 export interface AgentSessionHandlerCallbacks {
@@ -46,11 +48,12 @@ export function setupAgentSessionHandlers(
 
     const threadTs = evt.thread_ts as string | undefined;
     const userId = evt.user as string | undefined;
+    const eventTs = evt.event_ts as string | undefined;
     const streamingMessageTs = Array.isArray(evt.streaming_message_ts) ? (evt.streaming_message_ts as string[]) : [];
 
-    logger.info('Agent session stopped by user', { instanceId, channelId, threadTs, userId });
+    logger.info('Agent session stopped by user', { instanceId, channelId, threadTs, userId, streamingMessageTs });
 
-    await callbacks.onSessionStopped(instanceId, { channelId, threadTs, userId, streamingMessageTs });
+    await callbacks.onSessionStopped(instanceId, { channelId, threadTs, userId, streamingMessageTs, eventTs });
   });
 
   logger.info('Agent session handlers registered', { instanceId });

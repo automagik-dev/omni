@@ -22,7 +22,9 @@ February 2027**; new Slack apps can only use `agent_view`, and the switch from
 - Omni subscribes to `agent_session_stopped`. Subscribing is what makes Slack
   show the **native stop button** while a session is `processing`; when a user
   presses it, Omni aborts the in-flight provider run (no more paying for a
-  long `claude-code` run nobody wants) and clears the session status.
+  long `claude-code` run nobody wants), clears the session status, and — per
+  Slack's halt-and-keep stop semantics — **keeps** whatever partial reply was
+  already streamed instead of deleting it.
 
 > **Important:** status and the stop button are **thread-scoped**. A
 > channel-level mention that has not opened a thread has no status surface;
@@ -71,10 +73,14 @@ app by hand instead, make sure it has:
 The full bot scope list lives in `REQUIRED_BOT_SCOPES`
 (`packages/channel-slack/src/manifest.ts`); the event list in `BOT_EVENTS`.
 
-> Existing apps still on `assistant_view`: switching the manifest to
-> `agent_view` renames `assistant_description` → `agent_description`, cannot
-> be reverted, and users may need a hard refresh of Slack to see the new
-> experience.
+> **Existing apps still on `assistant_view`:** applying a manifest containing
+> `agent_view` migrates the app permanently — Slack does not allow reverting
+> to `assistant_view` — and users may need a hard refresh of Slack to see the
+> new experience. If you are regenerating a manifest for such an app and are
+> not ready to migrate, pass `agentView: false` to `buildSlackManifest()` to
+> omit the block. (Manifests produced by this generator never contained
+> `assistant_view`, so regenerating one of its own manifests does not migrate
+> anything.)
 
 ### 2. Create the Omni instance
 

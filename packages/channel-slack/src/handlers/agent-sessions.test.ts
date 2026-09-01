@@ -69,6 +69,7 @@ describe('setupAgentSessionHandlers', () => {
           threadTs: '1782234671.392669',
           userId: 'U123ABC456',
           streamingMessageTs: ['1782234987.693923'],
+          eventTs: '1783536983.783769',
         },
       },
     ]);

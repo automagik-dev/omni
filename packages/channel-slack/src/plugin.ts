@@ -506,6 +506,11 @@ export class SlackPlugin extends BaseChannelPlugin {
         await base.abort();
         cleanup();
       },
+      async cancel() {
+        // User-requested stop (#914): keep the partial output
+        await (base.cancel ? base.cancel() : base.abort());
+        cleanup();
+      },
     };
   }
 
@@ -541,8 +546,14 @@ export class SlackPlugin extends BaseChannelPlugin {
     duration?: number,
     options?: { threadId?: string; status?: string; loadingMessages?: string[] },
   ): Promise<SlackPresenceStatusResult> {
+    // Nominal method on the bail paths below: no call is attempted, but
+    // callers key off `method` to distinguish Slack's session-status surface
+    // from a plain typing indicator, so it must not fall back to some other
+    // channel's default (#914 review).
+    const nominalMethod: SlackStatusMethod = 'agents.sessions.setStatus';
+
     const connection = this.connections.get(instanceId);
-    if (!connection) return { delivered: false, reason: 'not_connected' };
+    if (!connection) return { delivered: false, method: nominalMethod, reason: 'not_connected' };
 
     const threadTs = options?.threadId ?? this.activeThreads.get(`${instanceId}:${chatId}`);
     if (!threadTs) {
@@ -554,7 +565,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         type,
         reason: 'no_active_thread',
       });
-      return { delivered: false, reason: 'no_active_thread' };
+      return { delivered: false, method: nominalMethod, reason: 'no_active_thread' };
     }
 
     const shouldClear = type === 'paused';
@@ -580,6 +591,15 @@ export class SlackPlugin extends BaseChannelPlugin {
             instanceId,
           });
     const { delivered, method } = statusResult;
+
+    // Echo only what was actually applied (#914 review): the Agent Sessions
+    // API takes a lifecycle enum and accepts no loading messages, so the
+    // caller's freeform status/loading copy is only in effect when the legacy
+    // API delivered it. Failed calls echo the attempted values for diagnostics.
+    const usedLegacy = method === 'assistant.threads.setStatus';
+    const sessionStatus = shouldClear ? 'active' : 'processing';
+    const appliedStatus = !delivered || usedLegacy ? status : sessionStatus;
+    const appliedLoadingMessages = !delivered || usedLegacy ? options?.loadingMessages : undefined;
 
     if (delivered) {
       this.clearPresenceStatusTimer(timerKey);
@@ -608,13 +628,19 @@ export class SlackPlugin extends BaseChannelPlugin {
     }
 
     return delivered
-      ? { delivered: true, method, threadId: threadTs, status, loadingMessages: options?.loadingMessages }
-      : {
-          delivered: false,
+      ? {
+          delivered: true,
           method,
           threadId: threadTs,
-          status,
-          loadingMessages: options?.loadingMessages,
+          status: appliedStatus,
+          loadingMessages: appliedLoadingMessages,
+        }
+      : {
+          delivered: false,
+          method: method ?? nominalMethod,
+          threadId: threadTs,
+          status: appliedStatus,
+          loadingMessages: appliedLoadingMessages,
           reason: 'slack_status_failed',
         };
   }
@@ -1179,8 +1205,14 @@ export class SlackPlugin extends BaseChannelPlugin {
   private async handleAgentSessionStopped(
     instanceId: string,
     connection: BoltConnection,
-    args: { channelId: string; threadTs?: string; userId?: string },
+    args: { channelId: string; threadTs?: string; userId?: string; streamingMessageTs?: string[]; eventTs?: string },
   ): Promise<void> {
+    // Slack event_ts is "seconds.micro"; the dispatcher compares this against
+    // each run's start time so a late-delivered stop cannot abort a run that
+    // began after the user pressed the button.
+    const parsedEventTs = args.eventTs ? Number.parseFloat(args.eventTs) : Number.NaN;
+    const requestedAt = Number.isFinite(parsedEventTs) ? Math.round(parsedEventTs * 1000) : Date.now();
+
     try {
       await this.eventBus.publish(
         'agent.run.cancel_requested',
@@ -1189,6 +1221,7 @@ export class SlackPlugin extends BaseChannelPlugin {
           chatId: args.channelId,
           threadId: args.threadTs,
           requestedBy: args.userId,
+          requestedAt,
           reason: 'user_stop',
         },
         {
