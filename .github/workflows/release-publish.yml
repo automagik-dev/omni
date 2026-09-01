@@ -20,7 +20,7 @@ name: Release Publish
 #   # OR via cosign:
 #   cosign verify-blob \
 #     --bundle omni-<version>-<platform>.tar.gz.bundle \
-#     --certificate-identity-regexp "^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@" \
+#     --certificate-identity "https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@refs/tags/v<version>" \
 #     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
 #     omni-<version>-<platform>.tar.gz
 
@@ -191,6 +191,11 @@ jobs:
           run-id: ${{ steps.src.outputs.run_id }}
           github-token: ${{ github.token }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: 'v2.4.1'
+
       - name: Resolve version + channel + asset inventory
         id: meta
         shell: bash
@@ -222,15 +227,30 @@ jobs:
             echo "::error::workflow_dispatch input version='${INPUT_VERSION}' does not match upstream artifact version='${VERSION}'"
             exit 1
           fi
+          EXPECTED_ASSETS=()
           missing=()
           for platform in linux-x64-glibc linux-x64-musl linux-arm64 darwin-arm64; do
             for suffix in "" .bundle .intoto.jsonl; do
               asset="omni-${VERSION}-${platform}.tar.gz${suffix}"
+              EXPECTED_ASSETS+=("${asset}")
               [[ -f "${asset}" ]] || missing+=("${asset}")
             done
           done
-          if [[ ${#missing[@]} -ne 0 ]]; then
-            echo "::error::signed release inventory is incomplete: ${missing[*]}"
+          ASSETS=( * )
+          unexpected=()
+          for asset in "${ASSETS[@]}"; do
+            expected=false
+            for expected_asset in "${EXPECTED_ASSETS[@]}"; do
+              if [[ "${asset}" == "${expected_asset}" ]]; then
+                expected=true
+                break
+              fi
+            done
+            [[ "${expected}" == "true" ]] || unexpected+=("${asset}")
+          done
+          if [[ ${#missing[@]} -ne 0 || ${#unexpected[@]} -ne 0 || \
+                "${#ASSETS[@]}" -ne "${#EXPECTED_ASSETS[@]}" ]]; then
+            echo "::error::signed release inventory is not exact; missing=[${missing[*]}] unexpected=[${unexpected[*]}]"
             exit 1
           fi
           CHANNEL="${INPUT_CHANNEL:-}"
@@ -243,6 +263,33 @@ jobs:
           echo "Tarballs: ${#TARBALLS[@]}"
           echo "=== dist/ inventory (expect 12 files: 4× tarball + 4× bundle + 4× intoto.jsonl) ==="
           ls -la
+
+      - name: Verify release-tag cosign bundles
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          verified=0
+          for tarball in dist/omni-*.tar.gz; do
+            [[ -f "${tarball}" ]] || continue
+            bundle="${tarball}.bundle"
+            [[ -s "${tarball}" && -s "${bundle}" ]] || {
+              echo "::error::missing or empty cosign tarball/bundle pair for ${tarball}"
+              exit 1
+            }
+            cosign verify-blob \
+              --bundle "${bundle}" \
+              --certificate-identity "https://github.com/${REPOSITORY}/.github/workflows/sign-attest.yml@refs/tags/v${VERSION}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "${tarball}"
+            verified=$((verified + 1))
+          done
+          [[ "${verified}" -eq 4 ]] || {
+            echo "::error::expected to verify exactly 4 signed release tarballs, verified ${verified}"
+            exit 1
+          }
 
       - name: Create or update GitHub Release with all 12 signed assets
         env:

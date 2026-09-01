@@ -19,7 +19,7 @@ single-channel edit is rejected at PR-merge time by the
 ### Canonical Pin
 
 ```
-certificate-identity-regexp: ^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@
+certificate-identity-regexp: ^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$
 certificate-oidc-issuer:     https://token.actions.githubusercontent.com
 provenance source-uri:       github.com/automagik-dev/omni
 ```
@@ -37,7 +37,7 @@ provenance source-uri:       github.com/automagik-dev/omni
 # Sigstore bundle (cosign keyless)
 cosign verify-blob \
   --bundle omni-<version>-<platform>.tar.gz.bundle \
-  --certificate-identity-regexp '^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@' \
+  --certificate-identity 'https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@refs/tags/v<version>' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   omni-<version>-<platform>.tar.gz
 

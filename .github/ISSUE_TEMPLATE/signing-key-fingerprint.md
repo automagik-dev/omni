@@ -31,7 +31,7 @@ assignees: []
 ## Current Certificate-Identity Pin
 
 ```
-certificate-identity-regexp: ^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@
+certificate-identity-regexp: ^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$
 certificate-oidc-issuer:     https://token.actions.githubusercontent.com
 provenance source-uri:       github.com/automagik-dev/omni
 ```
@@ -65,7 +65,7 @@ If any channel diverges, treat the release as unsigned.
 # Sigstore bundle (cosign keyless — sole verification path)
 cosign verify-blob \
   --bundle omni-<version>-<platform>.tar.gz.bundle \
-  --certificate-identity-regexp "^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@" \
+  --certificate-identity "https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@refs/tags/v<version>" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   omni-<version>-<platform>.tar.gz
 

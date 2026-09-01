@@ -20,7 +20,7 @@ name: Sign + Attest Tarballs
 #
 # IMPORTANT — pgserve trust-list anchors on this filename literally:
 #   src/cosign/trust-list.js has:
-#     identityRegexp: '^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@refs/tags/v.*$'
+#     identityRegexp: '^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
 # Renaming or relocating this file breaks `pgserve verify --slug omni`.
 #
 # Outputs (per platform, uploaded as `omni-${VERSION}-<platform>-signed`):
@@ -81,6 +81,18 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+
+      - name: Authorize manual recovery release tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          scripts/release/verify-sign-attest-entry.sh \
+            --remote origin \
+            --version "${INPUT_VERSION}" \
+            --source-ref "${GITHUB_REF}" \
+            --source-sha "${GITHUB_SHA}"
 
       - name: Authorize manual recovery source run
         if: github.event_name == 'workflow_dispatch'
@@ -289,7 +301,7 @@ jobs:
           TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
           cosign verify-blob \
             --bundle "${TARBALL}.bundle" \
-            --certificate-identity-regexp "^https://github.com/${REPOSITORY}/.github/workflows/sign-attest.yml@" \
+            --certificate-identity "https://github.com/${REPOSITORY}/.github/workflows/sign-attest.yml@refs/tags/v${VERSION}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${TARBALL}"
 
@@ -348,7 +360,7 @@ jobs:
           echo "-> Expecting cosign verify-blob to REJECT mutated tarball"
           if cosign verify-blob \
               --bundle "${TARBALL}.bundle" \
-              --certificate-identity-regexp "^https://github.com/${REPOSITORY}/.github/workflows/sign-attest.yml@" \
+              --certificate-identity "https://github.com/${REPOSITORY}/.github/workflows/sign-attest.yml@refs/tags/v${VERSION}" \
               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
               "${MUTATED}" > /tmp/cosign-tamper.log 2>&1; then
             echo "::error::cosign verify-blob accepted a mutated tarball — signing contract broken"

@@ -48,7 +48,7 @@ cd "${REPO_ROOT}"
 # update this constant list in the same two-maintainer PR that updates the
 # witnesses.
 CANONICAL=(
-  "certificate-identity-regexp: ^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@"
+  "certificate-identity-regexp: ^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$"
   "certificate-oidc-issuer:     https://token.actions.githubusercontent.com"
   "provenance source-uri:       github.com/automagik-dev/omni"
 )

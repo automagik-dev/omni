@@ -15,8 +15,10 @@ version = workflows["version.yml"]
 image = workflows["image-publish.yml"]
 release = workflows["release.yml"]
 release_publish = workflows["release-publish.yml"]
+sign_attest = workflows["sign-attest.yml"]
 source_contract = (root / "scripts/release/verify-promotion-candidate.sh")
 source_text = source_contract.read_text(encoding="utf-8") if source_contract.exists() else ""
+security = (root / "SECURITY.md").read_text(encoding="utf-8")
 errors: list[str] = []
 
 
@@ -320,6 +322,110 @@ for name, workflow in workflows.items():
             continue
         if re.fullmatch(r"[^@]+@[0-9a-f]{40}", ref) is None:
             errors.append(f"{name} contains mutable action or reusable-workflow ref {ref}")
+
+sign_recovery_match = re.search(
+    r"- name: Authorize manual recovery release tag(?P<body>.*?)(?=^      - name: Authorize manual recovery source run)",
+    sign_attest,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if sign_recovery_match is None:
+    errors.append("signing recovery has no release-tag authorization before upstream run validation")
+else:
+    sign_recovery = sign_recovery_match.group("body")
+    for pattern, message in (
+        (r"if:\s*github\.event_name == 'workflow_dispatch'", "signing recovery tag authorization is not limited to manual dispatch"),
+        (r"INPUT_VERSION:\s*\$\{\{\s*inputs\.version\s*\}\}", "signing recovery does not validate its requested version"),
+        (r"verify-sign-attest-entry\.sh", "signing recovery does not use the fail-closed tag entry verifier"),
+        (r'--source-ref\s+"\$\{GITHUB_REF\}"', "signing recovery does not reject branch or wrong-tag refs"),
+        (r'--source-sha\s+"\$\{GITHUB_SHA\}"', "signing recovery does not bind the remote tag commit to GITHUB_SHA"),
+    ):
+        require(sign_recovery, pattern, message)
+
+sign_tag_guard = sign_attest.find("- name: Authorize manual recovery release tag")
+sign_run_guard = sign_attest.find("- name: Authorize manual recovery source run")
+sign_download = sign_attest.find("- name: Download all tarball artifacts")
+sign_operation = sign_attest.find("- name: cosign sign-blob")
+if min(sign_tag_guard, sign_run_guard, sign_download, sign_operation) < 0 or not (
+    sign_tag_guard < sign_run_guard < sign_download < sign_operation
+):
+    errors.append("manual signing recovery is not tag-authorized before download and signing")
+
+exact_sign_identity = (
+    '--certificate-identity "https://github.com/${REPOSITORY}/.github/workflows/'
+    'sign-attest.yml@refs/tags/v${VERSION}"'
+)
+if sign_attest.count(exact_sign_identity) < 2:
+    errors.append("signing self-check and tamper check do not require the exact release-tag identity")
+forbid(
+    sign_attest,
+    r'--certificate-identity-regexp\s+"\^https://github\.com/\$\{REPOSITORY\}/\.github/workflows/sign-attest\.yml@"',
+    "signing self-check still accepts branch identities",
+)
+
+require(
+    release_publish,
+    r"sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac[\s\S]{0,120}cosign-release:\s*'v2\.4\.1'",
+    "release publication does not install the reviewed immutable cosign verifier",
+)
+release_meta_match = re.search(
+    r"- name: Resolve version \+ channel \+ asset inventory(?P<body>.*?)(?=^      - name: Verify release-tag cosign bundles)",
+    release_publish,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if release_meta_match is None:
+    errors.append("release publication has no exact pre-verification asset inventory")
+else:
+    release_meta = release_meta_match.group("body")
+    for pattern, message in (
+        (r"EXPECTED_ASSETS=\(\)", "release publication does not construct the exact expected signed inventory"),
+        (r"unexpected=\(\)", "release publication does not reject unexpected downloaded assets"),
+        (r'"\$\{#ASSETS\[@\]\}"\s+-ne\s+"\$\{#EXPECTED_ASSETS\[@\]\}"', "release publication does not require exactly the expected 12 downloaded assets"),
+    ):
+        require(release_meta, pattern, message)
+release_cosign_match = re.search(
+    r"- name: Verify release-tag cosign bundles(?P<body>.*?)(?=^      - name: Create or update GitHub Release)",
+    release_publish,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if release_cosign_match is None:
+    errors.append("release publication has no pre-mutation cosign verification step")
+else:
+    release_cosign = release_cosign_match.group("body")
+    for pattern, message in (
+        (r"for tarball in dist/omni-\*\.tar\.gz", "release publication does not verify every downloaded tarball/bundle pair"),
+        (r"cosign verify-blob", "release publication does not cryptographically verify downloaded bundles"),
+        (r'--certificate-identity\s+"https://github\.com/\$\{REPOSITORY\}/\.github/workflows/sign-attest\.yml@refs/tags/v\$\{VERSION\}"', "release publication does not require the exact version-tag signer identity"),
+        (r'--certificate-oidc-issuer\s+"https://token\.actions\.githubusercontent\.com"', "release publication does not require the GitHub Actions OIDC issuer"),
+    ):
+        require(release_cosign, pattern, message)
+
+meta_position = release_publish.find("- name: Resolve version + channel + asset inventory")
+cosign_position = release_publish.find("- name: Verify release-tag cosign bundles")
+release_mutations = []
+for command in ("create", "upload", "edit"):
+    mutation = re.search(
+        rf"^\s+gh release {command}\b",
+        release_publish,
+        flags=re.MULTILINE,
+    )
+    release_mutations.append(-1 if mutation is None else mutation.start())
+if min(meta_position, cosign_position, *release_mutations) < 0 or not (
+    meta_position < cosign_position < min(release_mutations)
+):
+    errors.append("exact signer verification does not finish after version resolution and before the first release mutation")
+
+canonical_consumer_identity = (
+    "certificate-identity-regexp: ^https://github.com/automagik-dev/omni/"
+    ".github/workflows/sign-attest.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+)
+if canonical_consumer_identity not in security:
+    errors.append("SECURITY.md canonical consumer pin does not restrict signing to semantic-version release tags")
+exact_consumer_identity = (
+    "--certificate-identity 'https://github.com/automagik-dev/omni/.github/"
+    "workflows/sign-attest.yml@refs/tags/v<version>'"
+)
+if exact_consumer_identity not in security:
+    errors.append("SECURITY.md operator verification does not use the exact release-tag identity")
 
 require(release_publish, r"verify-release-assets\.py", "release recovery does not verify immutable asset identity")
 require(release_publish, r"--verify-tag", "release publication can create an implicit unverified tag")
