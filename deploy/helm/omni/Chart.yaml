@@ -8,7 +8,7 @@ version: 0.1.0
 # production authority supplies an independently verified immutable digest
 # outside this public repository. Do not edit by hand —
 # scripts/verify-versions.ts fails CI on drift.
-appVersion: "2.260830.2"
+appVersion: "2.260901.1"
 keywords:
   - omni
   - messaging
