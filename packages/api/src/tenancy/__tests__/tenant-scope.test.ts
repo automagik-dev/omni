@@ -10,7 +10,13 @@
 import { describe, expect, test } from 'bun:test';
 import type { Database } from '@omni/db';
 import type { AuthContext } from '../auth-context';
-import { currentTenantScope, requireTenantScope, runInTenantScope, scopedHandle } from '../tenant-scope';
+import {
+  currentTenantScope,
+  requireTenantScope,
+  runAfterTenantCommit,
+  runInTenantScope,
+  scopedHandle,
+} from '../tenant-scope';
 import { TenantContextError } from '../tenant-transaction';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
@@ -161,5 +167,55 @@ describe('tenant scope — fail closed', () => {
       // The outer identity must be intact after the refusal.
       expect(requireTenantScope().tenantId).toBe(TENANT_A);
     });
+  });
+});
+
+describe('runAfterTenantCommit — post-commit side effects (omni#906)', () => {
+  test('with no scope active, the callback runs immediately (ambient pool autocommits)', () => {
+    let ran = false;
+    runAfterTenantCommit(() => {
+      ran = true;
+    });
+    expect(ran).toBe(true);
+  });
+
+  test('inside a scope, the callback waits for commit instead of firing mid-transaction', async () => {
+    const { db } = fakeDb();
+    const order: string[] = [];
+    await runInTenantScope(db, tenantContext(TENANT_A), async () => {
+      runAfterTenantCommit(() => order.push('post-commit'));
+      order.push('in-transaction');
+    });
+    expect(order).toEqual(['in-transaction', 'post-commit']);
+  });
+
+  test('a rollback drops the queued callback — the side effect matches the write', async () => {
+    const { db } = fakeDb();
+    let ran = false;
+    await expect(
+      runInTenantScope(db, tenantContext(TENANT_A), async () => {
+        runAfterTenantCommit(() => {
+          ran = true;
+        });
+        throw new Error('handler failed → transaction rolls back');
+      }),
+    ).rejects.toThrow('rolls back');
+    expect(ran).toBe(false);
+  });
+
+  test('a throwing callback is best-effort: the committed result still reaches the caller', async () => {
+    const { db } = fakeDb();
+    let secondRan = false;
+    const result = await runInTenantScope(db, tenantContext(TENANT_A), async () => {
+      runAfterTenantCommit(() => {
+        throw new Error('cache eviction blew up');
+      });
+      runAfterTenantCommit(() => {
+        secondRan = true;
+      });
+      return 'committed';
+    });
+    expect(result).toBe('committed');
+    expect(secondRan).toBe(true);
   });
 });

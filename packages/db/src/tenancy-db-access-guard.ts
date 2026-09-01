@@ -1184,6 +1184,24 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   // as `tenant-boundary`, so retiring it LOWERS the converted count by one. That
   // direction matters: the scanner fix is a correction, not a way to make this
   // group's numbers look better, and it was allowed to cost a point.
+  //
+  // omni#906 later added REAL `instances` and `agent_routes` reads to this
+  // file: `update()`'s provider-cache eviction looks up which instances
+  // reference the updated agent (via the instance FK and agent routes) so
+  // their cached IAgentProviders can be rebuilt from fresh config. Both reads
+  // go through `scopedHandle`, and every `update()` caller is an HTTP route
+  // inside the request context — under a tenant scope the lookup sees only
+  // that tenant's instances, which is exactly the eviction set it may touch.
+  {
+    file: 'packages/api/src/services/agents.ts',
+    table: 'instances',
+    class: 'tenant-boundary',
+  },
+  {
+    file: 'packages/api/src/services/agents.ts',
+    table: 'agent_routes',
+    class: 'tenant-boundary',
+  },
   {
     file: 'packages/api/src/services/auth-bootstrap.ts',
     table: 'tenant_key_lineage',
