@@ -45,6 +45,9 @@ candidate="$(git -C "${repo}" rev-parse HEAD)"
 final="$(git -C "${repo}" rev-parse HEAD)"
 
 (
+  # GitHub Actions exports this for every step. This assertion reads the
+  # verifier's stdout contract, so do not let the runner redirect it.
+  unset GITHUB_OUTPUT
   cd "${repo}"
   "${SCRIPT}" \
     --candidate-sha "${candidate}" \
