@@ -114,7 +114,6 @@ jobs:
     uses: ./.github/workflows/build-tarballs.yml
     permissions:
       contents: read
-    secrets: inherit
 
   sign-attest:
     needs: build
@@ -124,7 +123,6 @@ jobs:
       id-token: write       # cosign keyless + attest-build-provenance OIDC
       attestations: write   # GitHub Attestations API registration
       actions: read         # cross-run artifact metadata
-    secrets: inherit
 
   publish:
     needs: sign-attest
@@ -134,7 +132,6 @@ jobs:
       actions: read
       packages: read
       attestations: read
-    secrets: inherit
     with:
       version: ${{ needs.sign-attest.outputs.version }}
       # workflow_dispatch supplies the channel. Stable publishing requires the
@@ -160,7 +157,7 @@ jobs:
   # the publish-npm job has been removed to keep a single source of truth.
   # ---------------------------------------------------------------------------
   release-notes:
-    needs: publish
+    needs: [sign-attest, publish]
     name: Generate release notes
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -170,28 +167,56 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve release tag
         id: pkg
         env:
+          PUBLISHED_VERSION: ${{ needs.sign-attest.outputs.version }}
           REF_NAME: ${{ github.ref_name }}
-          INPUT_VERSION: ${{ inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
+          set -euo pipefail
           git fetch --tags --force
-          if [[ -n "${INPUT_VERSION}" ]]; then
-            TAG="v${INPUT_VERSION}"
+          [[ "${PUBLISHED_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::signed artifact version is not a numeric dotted version"
+            exit 1
+          }
+          if [[ -n "${REQUESTED_VERSION}" ]]; then
+            [[ "${REQUESTED_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+              echo "::error::requested version is not a numeric dotted version"
+              exit 1
+            }
+            [[ "${REQUESTED_VERSION}" == "${PUBLISHED_VERSION}" ]] || {
+              echo "::error::requested version does not match the signed and published artifact version"
+              exit 1
+            }
+          elif [[ "${REF_TYPE}" == "tag" && "${REF_NAME}" == "v${PUBLISHED_VERSION}" ]]; then
+            :
           else
-            TAG="${REF_NAME}"
+            echo "::error::release source ref does not match the signed and published artifact version"
+            exit 1
           fi
+          TAG="v${PUBLISHED_VERSION}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Find previous release tag
         id: prev
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.pkg.outputs.tag }}
         run: |
-          TAG="${{ steps.pkg.outputs.tag }}"
-          PREV=$(gh release list --limit 50 --json tagName -q '.[].tagName' | grep -v "^${TAG}$" | head -1)
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          RELEASE_TAGS=$(gh release list --limit 50 --json tagName -q '.[].tagName')
+          PREV=""
+          while IFS= read -r candidate; do
+            [[ "${candidate}" == "${TAG}" ]] && continue
+            [[ "${candidate}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+            PREV="${candidate}"
+            break
+          done <<< "${RELEASE_TAGS}"
           echo "tag=${PREV:-}" >> "$GITHUB_OUTPUT"
           echo "Previous release tag: ${PREV:-none}"
 
@@ -215,8 +240,10 @@ jobs:
       - name: Update release body with changelog
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.pkg.outputs.tag }}
         run: |
-          TAG="${{ steps.pkg.outputs.tag }}"
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
           if [[ -s /tmp/release-notes.md ]]; then
             gh release edit "${TAG}" --notes-file /tmp/release-notes.md
             echo "Updated release body for ${TAG}"

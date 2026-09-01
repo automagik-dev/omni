@@ -122,20 +122,21 @@ jobs:
           merge-multiple: true
           path: dist
           run-id: ${{ steps.runid.outputs.run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
 
       - name: Resolve version + compute base64 subjects
         id: hash
         shell: bash
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          UPSTREAM_RUN_ID: ${{ steps.runid.outputs.run_id }}
         run: |
           set -euo pipefail
           cd dist
           shopt -s nullglob
           TARBALLS=( omni-*.tar.gz )
           if [[ ${#TARBALLS[@]} -eq 0 ]]; then
-            echo "::error::no omni-*.tar.gz tarballs downloaded from upstream run-id ${{ steps.runid.outputs.run_id }}"
+            echo "::error::no omni-*.tar.gz tarballs downloaded from upstream run-id ${UPSTREAM_RUN_ID}"
             ls -la
             exit 1
           fi
@@ -205,6 +206,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Download tarball artifact (${{ matrix.platform }})
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -212,7 +215,7 @@ jobs:
           name: omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}-tarball
           path: dist
           run-id: ${{ needs.prepare.outputs.run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
 
       - name: Download SLSA provenance artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -277,6 +280,7 @@ jobs:
       - name: Verify cosign bundle (self-check)
         shell: bash
         env:
+          REPOSITORY: ${{ github.repository }}
           VERSION:  ${{ needs.prepare.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
         run: |
@@ -284,13 +288,14 @@ jobs:
           TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
           cosign verify-blob \
             --bundle "${TARBALL}.bundle" \
-            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/sign-attest.yml@" \
+            --certificate-identity-regexp "^https://github.com/${REPOSITORY}/.github/workflows/sign-attest.yml@" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${TARBALL}"
 
       - name: Verify SLSA provenance (self-check)
         shell: bash
         env:
+          REPOSITORY: ${{ github.repository }}
           VERSION:  ${{ needs.prepare.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
         run: |
@@ -298,31 +303,32 @@ jobs:
           TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
           slsa-verifier verify-artifact "${TARBALL}" \
             --provenance-path "${TARBALL}.intoto.jsonl" \
-            --source-uri "github.com/${{ github.repository }}"
+            --source-uri "github.com/${REPOSITORY}"
 
       - name: Verify GitHub-native attestation (self-check)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
           VERSION:  ${{ needs.prepare.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
           TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
-          OWNER="${{ github.repository_owner }}"
           gh attestation verify "${TARBALL}" --owner "${OWNER}"
 
       - name: Tamper-detection self-test (all 3 verifiers must REJECT)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORY: ${{ github.repository }}
           VERSION:  ${{ needs.prepare.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
           TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
           MUTATED="dist/tampered-omni-${VERSION}-${PLATFORM}.tar.gz"
-          OWNER="${{ github.repository_owner }}"
           cp "${TARBALL}" "${MUTATED}"
 
           # Flip the last byte. Any single-byte mutation invalidates the
@@ -341,7 +347,7 @@ jobs:
           echo "-> Expecting cosign verify-blob to REJECT mutated tarball"
           if cosign verify-blob \
               --bundle "${TARBALL}.bundle" \
-              --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/sign-attest.yml@" \
+              --certificate-identity-regexp "^https://github.com/${REPOSITORY}/.github/workflows/sign-attest.yml@" \
               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
               "${MUTATED}" > /tmp/cosign-tamper.log 2>&1; then
             echo "::error::cosign verify-blob accepted a mutated tarball — signing contract broken"
@@ -353,7 +359,7 @@ jobs:
           echo "-> Expecting slsa-verifier verify-artifact to REJECT mutated tarball"
           if slsa-verifier verify-artifact "${MUTATED}" \
               --provenance-path "${TARBALL}.intoto.jsonl" \
-              --source-uri "github.com/${{ github.repository }}" > /tmp/slsa-tamper.log 2>&1; then
+              --source-uri "github.com/${REPOSITORY}" > /tmp/slsa-tamper.log 2>&1; then
             echo "::error::slsa-verifier accepted a mutated tarball — provenance contract broken"
             cat /tmp/slsa-tamper.log >&2 || true
             exit 1

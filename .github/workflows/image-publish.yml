@@ -36,6 +36,15 @@ jobs:
           fetch-tags: true
           persist-credentials: false
 
+      - name: Checkout immutable candidate source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          path: release-candidate
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
       - name: Bind final main tree to the immutable candidate
         env:
           FINAL_SHA: ${{ github.sha }}
@@ -68,6 +77,7 @@ jobs:
           set -euo pipefail
           preflight="${RUNNER_TEMP}/release-preflight.out"
           GITHUB_OUTPUT="${preflight}" scripts/release/verify-oci-release.sh \
+            --source-dir "${GITHUB_WORKSPACE}/release-candidate" \
             --ref "refs/tags/v${CANDIDATE_VERSION}" \
             --expected-version "${CANDIDATE_VERSION}" \
             --expected-sha "${CANDIDATE_SHA}" \

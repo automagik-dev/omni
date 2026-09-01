@@ -43,6 +43,8 @@ for exact in (
         errors.append(f"promotion workflow does not pin existing candidate identity {exact}")
 require(image, r"verify-promotion-candidate\.sh", "final image build inputs are not compared to the candidate")
 require(image, r"verify-oci-release\.sh", "existing immutable OCI alias is not checked")
+require(image, r"name:\s*Checkout immutable candidate source[\s\S]{0,500}path:\s*release-candidate", "immutable OCI verification has no separate candidate checkout")
+require(image, r"--source-dir\s+\"\$\{GITHUB_WORKSPACE\}/release-candidate\"", "immutable OCI verification does not use the candidate checkout")
 require(image, r"gh attestation verify\s+\"oci://\$\{IMAGE\}@\$\{CANDIDATE_DIGEST\}\"", "exact OCI digest provenance is not verified")
 require(image, r"--source-digest\s+\"\$\{CANDIDATE_SHA\}\"", "OCI provenance is not bound to b8c1bf20")
 require(image, r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-publish\.yml\"", "OCI signer workflow identity is not constrained")

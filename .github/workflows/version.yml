@@ -34,21 +34,7 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: write
-  # OIDC token issuance for npm Trusted Publishing — pairs with the
-  # "Publish to npm via OIDC" step below. Without this, the publish step
-  # gets an empty placeholder token and the registry returns a misleading
-  # 404 instead of the real auth failure.
-  id-token: write
-  # Workflow-write for the "Dispatch release pipeline" step below: `gh workflow
-  # run release.yml` hits the workflow_dispatch API, which requires actions:write.
-  # workflow_dispatch is one of the two events GITHUB_TOKEN IS allowed to trigger
-  # (with repository_dispatch), so this is sufficient — no PAT needed. Without it
-  # the dispatch returns HTTP 403 "Resource not accessible by integration" and the
-  # GitHub Release never fires (npm @latest publishes, but the tagged Release does
-  # not), forcing a manual `gh workflow run release.yml` after every promotion.
-  actions: write
+permissions: {}
 
 concurrency:
   # Serialize every equivalent entry event by target branch. Keeping event_name
@@ -68,6 +54,14 @@ jobs:
     # /usr/local. (Trade-off: slower job startup vs. publish reliability.)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
+      # OIDC token issuance for npm Trusted Publishing — pairs with the
+      # "Publish to npm via OIDC" step below.
+      id-token: write
+      # `gh workflow run release.yml` requires actions:write. Keeping this on
+      # the only dispatching job prevents the stable read-only job inheriting it.
+      actions: write
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.stable_publish_only != true) ||
       (github.event_name == 'pull_request' &&
@@ -100,8 +94,8 @@ jobs:
           # are fixed in their release PR and never created by this workflow.
           ref: ${{ steps.context.outputs.checkout_ref }}
           fetch-depth: 0
-          # Machine-account PAT for the bump push (checkout persists this
-          # credential, so the branch push in "Commit and tag" inherits it).
+          # The bump push uses a machine-account PAT explicitly in "Commit and
+          # tag"; checkout credentials are never persisted in the worktree.
           # Why: bump commits no longer carry the skip-ci token (D8), so each
           # bump push to dev re-fires any OPEN rolling PR's pull_request runs;
           # when the push actor is github-actions[bot], GitHub holds those
@@ -113,7 +107,7 @@ jobs:
           # The branch push must use the machine identity so in-repository PRs
           # do not become action_required on a github-actions[bot] update. The
           # v* tag push must NOT use the PAT: see "Commit and tag" below.
-          token: ${{ secrets.VERSION_BUMP_PAT }}
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
@@ -144,7 +138,9 @@ jobs:
           OMNI_BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
 
       - name: Sync versions (package.json + chart appVersion)
-        run: bun scripts/sync-versions.ts ${{ steps.version.outputs.version }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bun scripts/sync-versions.ts "${VERSION}"
 
       - name: Format versioned JSON (Biome)
         run: |
@@ -164,11 +160,14 @@ jobs:
 
       - name: Commit and tag
         env:
-          # For the tag push below ONLY — the branch push rides the
-          # checkout-persisted credential (VERSION_BUMP_PAT when configured).
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The branch and tag pushes deliberately use different credentials.
+          GITHUB_TOKEN: ${{ github.token }}
+          PUSH_REF: ${{ steps.context.outputs.push_ref }}
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_WRITER_TOKEN: ${{ secrets.VERSION_BUMP_PAT }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          set -euo pipefail
+          [[ "${PUSH_REF}" == "dev" ]]
 
           # Chart.yaml is listed explicitly: the '*.json' pathspec would
           # silently drop the appVersion stamp sync-versions.ts just wrote,
@@ -185,10 +184,11 @@ jobs:
           git tag "v${VERSION}"
 
           # Split push (was --atomic): the two refs need DIFFERENT credentials.
-          # Branch push uses the checkout-persisted credential (machine PAT
-          # when VERSION_BUMP_PAT is set) so the push actor is not
+          # Branch push uses the machine PAT explicitly so the push actor is not
           # github-actions[bot] — see the checkout step for why.
-          git push origin HEAD:refs/heads/${{ steps.context.outputs.push_ref }}
+          git -c http.https://github.com/.extraheader= \
+            push "https://x-access-token:${VERSION_WRITER_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${PUSH_REF}"
 
           # Tag push stays on GITHUB_TOKEN DELIBERATELY: GITHUB_TOKEN pushes
           # never fire on:push workflows (GitHub anti-recursion), so
@@ -197,8 +197,8 @@ jobs:
           # release.yml's push:tags path, where channel falls through to
           # 'stable' — duplicating the release pipeline AND promoting a
           # dev cut to the stable channel. The -c flag blanks the
-          # checkout-persisted auth header for this one invocation so the
-          # URL-embedded GITHUB_TOKEN wins. Losing --atomic is safe with
+          # default auth header for this one invocation so the URL-embedded
+          # GITHUB_TOKEN wins. Losing --atomic is safe with
           # branch-first ordering: a tag-push failure self-heals on re-run
           # (same derived version → no version-file diff → re-tag HEAD →
           # no-op branch push → tag push retries).
@@ -223,11 +223,12 @@ jobs:
 
       - name: Publish to npm via OIDC (@${{ steps.context.outputs.npm_tag }})
         env:
+          DIST_TAG: ${{ steps.context.outputs.npm_tag }}
           HUSKY: "0"
           NPM_CONFIG_PROVENANCE: "false"
         run: |
           cd packages/cli
-          npm publish --access public --tag ${{ steps.context.outputs.npm_tag }}
+          npm publish --access public --tag "${DIST_TAG}"
 
       # Dispatch the signed-tarball release pipeline (build → sign-attest →
       # publish) via release.yml's workflow_dispatch entry. GITHUB_TOKEN-
@@ -237,8 +238,8 @@ jobs:
       #
       # NOTE: this step runs LAST so a dispatch failure never short-circuits
       # the npm publish step. The historical HTTP 403 (GITHUB_TOKEN lacking
-      # workflow-write) is now fixed by `actions: write` in the top-level
-      # permissions block, so this normally succeeds and the GitHub Release
+      # workflow-write) is now fixed by `actions: write` on this job, so this
+      # normally succeeds and the GitHub Release
       # fires automatically. `continue-on-error: true` is kept as a safety net:
       # any residual dispatch failure becomes a workflow annotation and the
       # operator can manually re-dispatch via `gh workflow run release.yml ...`.
@@ -248,11 +249,12 @@ jobs:
       - name: Dispatch release pipeline for the new tag
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ steps.context.outputs.release_channel }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          set -euo pipefail
           TAG="refs/tags/v${VERSION}"
-          CHANNEL="${{ steps.context.outputs.release_channel }}"
           echo "Dispatching release pipeline against ${TAG} (channel=${CHANNEL})..."
           if ! gh workflow run release.yml --repo "${GITHUB_REPOSITORY}" --ref "${TAG}" --field version="${VERSION}" --field channel="${CHANNEL}"; then
             echo "::error ::release-trigger.dispatch_failed release.yml dispatch failed for ${TAG} — investigate gh CLI auth or workflow availability before re-running manually"

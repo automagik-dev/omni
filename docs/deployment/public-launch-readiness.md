@@ -57,6 +57,57 @@ final head was `b4dd27cb0e4513017de0ad69ece2a4ab03449f22`.
 All changed regression tests were first run against the merged PR baseline and
 failed for the intended missing contract before the implementation was applied.
 
+## FIX-FIRST supply-chain remediation
+
+The independent final-head review of `0db5804e93b97afc67be570a40a37b631d71ee8b`
+identified four additional blockers. They are closed as follows:
+
+- The final `main` checkout remains the root control tree, while
+  `image-publish.yml` creates a second `release-candidate` checkout pinned to
+  `b8c1bf20cd42b1e30974fc8d67f2b7d0fb620031`. The root-owned OCI verifier now
+  requires an explicit source directory and changes into that historical
+  checkout before checking `HEAD`, the immutable tag, package/chart versions,
+  and the registry alias. Its integration fixture executes final control code
+  from a different Git checkout and failed with usage status 2 before the new
+  source-context contract was implemented.
+- Release notes now derive their tag exclusively from the version emitted by
+  the signing workflow after publication completes. A dispatch-supplied version
+  must be numeric and exactly equal that signed/published version. No GitHub
+  expression is interpolated into shell source anywhere in the workflow set;
+  values cross the shell boundary only through step environments. The policy
+  fixture covers inline, literal, folded, chomping, direct-input, step-output,
+  and job-output expressions.
+- Every action and reusable-workflow reference in every `.yml` or `.yaml`
+  workflow is audited for a 40-character commit pin. Commitlint now uses
+  [`actions/checkout` v4.3.1 at `34e1148…`](https://github.com/actions/checkout/commit/34e114876b0b11c390a56381ad16ebd13914f8d5)
+  and the peeled
+  [`wagoid/commitlint-github-action` v6.2.1 commit `b948419…`](https://github.com/wagoid/commitlint-github-action/commit/b948419dd99f3fd78a6548d48f94e3df7f6bf3ed).
+- Every workflow declares explicit top-level permissions; write grants are
+  job-local. Checkout credentials are not persisted. The three reusable calls
+  no longer use `secrets: inherit`, and called workflows use the scoped
+  `github.token` for artifact access instead of requesting inherited secrets.
+
+The TDD policy and integration changes were run before workflow implementation:
+the candidate-context fixture failed because `--source-dir` was absent, the
+workflow contract failed because no candidate checkout existed, and the
+repository-wide policy rejected the transitive release output, both mutable
+Commitlint refs, missing permissions, inherited secrets, and every other shell
+expression exposed by expanding the audit to all workflows.
+
+### Zizmor classification
+
+Zizmor `1.29.0` reports zero high, medium, or low findings. Its sole remaining
+result is the informational `use-trusted-publishing` recommendation for the
+manual SDK publish. The workflow documents that the SDK package does not yet
+have an npm trusted-publisher entry and therefore keeps its existing narrowly
+scoped `NPM_TOKEN` path; npm's
+[`Trusted publishing` documentation](https://docs.npmjs.com/trusted-publishers/)
+confirms that an npm-side workflow trust relationship must be configured before
+OIDC publication can authenticate. Creating that external setting is outside
+this repository-only, no-settings run, so the informational migration note is
+classified as a future operational hardening item rather than an unresolved
+repository finding.
+
 ## Validation evidence
 
 The final worktree passed the following local, non-mutating gates:
@@ -67,6 +118,8 @@ The final worktree passed the following local, non-mutating gates:
 - `scripts/ci/test-helm-image-digest.sh` with Helm `v3.16.4` pinned to the
   repository's CI checksum
 - actionlint `1.7.7` against every `.github/workflows/*.yml`
+- zizmor `1.29.0` against the complete workflow directory (one informational
+  SDK trusted-publishing migration note; zero low/medium/high findings)
 - `bun run typecheck`
 - `bunx biome check .`
 - `bunx knip`

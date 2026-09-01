@@ -3,8 +3,9 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: verify-oci-release.sh --ref refs/tags/vVERSION --expected-version VERSION \
-  --expected-sha FULL_SHA --image REGISTRY/IMAGE [--expected-existing-digest sha256:...]
+Usage: verify-oci-release.sh --source-dir CANDIDATE_CHECKOUT \
+  --ref refs/tags/vVERSION --expected-version VERSION --expected-sha FULL_SHA \
+  --image REGISTRY/IMAGE [--expected-existing-digest sha256:...]
 EOF
   exit 2
 }
@@ -19,8 +20,10 @@ expected_version=""
 expected_sha=""
 image=""
 expected_existing_digest=""
+source_dir=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --source-dir) source_dir="${2:-}"; shift 2 ;;
     --ref) release_ref="${2:-}"; shift 2 ;;
     --expected-version) expected_version="${2:-}"; shift 2 ;;
     --expected-sha) expected_sha="${2:-}"; shift 2 ;;
@@ -30,13 +33,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "${release_ref}" && -n "${expected_version}" && -n "${expected_sha}" && -n "${image}" ]] || usage
+[[ -n "${source_dir}" && -n "${release_ref}" && -n "${expected_version}" && -n "${expected_sha}" && -n "${image}" ]] || usage
 [[ "${expected_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "expected version is not a numeric dotted version"
 [[ "${expected_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "expected SHA must be 40 lowercase hexadecimal characters"
 [[ "${release_ref}" == "refs/tags/v${expected_version}" ]] || fail "release ref must be refs/tags/v${expected_version}"
 if [[ -n "${expected_existing_digest}" && ! "${expected_existing_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   fail "expected existing digest is invalid"
 fi
+
+[[ -d "${source_dir}" ]] || fail "candidate source directory does not exist"
+source_dir="$(cd "${source_dir}" && pwd -P)" || fail "candidate source directory cannot be resolved"
+[[ "$(git -C "${source_dir}" rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || \
+  fail "candidate source directory is not a Git checkout"
+cd "${source_dir}"
 
 head_sha="$(git rev-parse HEAD^{commit})"
 [[ "${head_sha}" == "${expected_sha}" ]] || fail "HEAD ${head_sha} does not match expected source ${expected_sha}"

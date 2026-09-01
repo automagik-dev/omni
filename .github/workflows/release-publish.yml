@@ -89,17 +89,18 @@ concurrency:
   group: release-publish-${{ github.ref }}-${{ inputs.version || github.sha }}
   cancel-in-progress: false   # never cancel an in-flight publish
 
-permissions:
-  contents: write              # gh release create/upload/edit only
-  actions: read
-  packages: read
-  attestations: read
+permissions: {}
 
 jobs:
   publish:
     name: Publish to GitHub Releases
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write              # gh release create/upload/edit only
+      actions: read                 # cross-run signed artifact download
+      packages: read                # OCI verification
+      attestations: read            # GitHub attestation verification
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -174,7 +175,7 @@ jobs:
           merge-multiple: true
           path: dist
           run-id: ${{ steps.src.outputs.run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
 
       - name: Resolve version + channel + asset inventory
         id: meta
