@@ -117,10 +117,16 @@ function sessionDb(
 }
 
 /** `getClient` is private; the run path reaches it, and so does this. */
-function getClient(service: AgentRunnerService, providerId: string): Promise<{ client: IAgentClient; schema: string }> {
+function getClient(
+  service: AgentRunnerService,
+  providerId: string,
+  openedForTenantId?: string | null,
+): Promise<{ client: IAgentClient; schema: string }> {
   return (
-    service as unknown as { getClient: (id: string) => Promise<{ client: IAgentClient; schema: string }> }
-  ).getClient(providerId);
+    service as unknown as {
+      getClient: (id: string, openedForTenantId?: string | null) => Promise<{ client: IAgentClient; schema: string }>;
+    }
+  ).getClient(providerId, openedForTenantId);
 }
 
 /** Stub the private client resolution so run()/stream() exercise only the session flow. */
@@ -132,13 +138,13 @@ function stubClient(service: AgentRunnerService, client: IAgentClient): void {
     });
 }
 
-function runContext(): AgentRunContext {
+function runContext(overrides: Partial<AgentRunContext> = {}, sessionStrategy = 'per_chat'): AgentRunContext {
   const instance = {
     id: 'inst-1',
     tenantId: null,
     agentProviderId: PROVIDER_ID,
     agentInternalId: 'claude-code',
-    agentSessionStrategy: 'per_chat',
+    agentSessionStrategy: sessionStrategy,
   } as unknown as RunInstance;
   return {
     instance,
@@ -146,6 +152,7 @@ function runContext(): AgentRunContext {
     senderId: '5511999999999@s.whatsapp.net',
     chatType: 'dm',
     messages: ['pong'],
+    ...overrides,
   };
 }
 
@@ -179,6 +186,23 @@ describe('agent-runner — claude-code providers dispatch without an API key (#9
         runInTenantScope(db, buildWorkerTenantContext(TENANT_B), () => getClient(service, PROVIDER_ID)),
       ).rejects.toThrow(/not available/i);
       expect(factoryCalls).toHaveLength(0);
+    } finally {
+      setTenantSecretMasterKey(null);
+    }
+  });
+
+  test("a sealed credential OPENS under the instance's persisted tenant with NO scope active", async () => {
+    // The call_agent automation path deliberately runs the agent call outside
+    // every tenant scope, so run()/stream() thread instance.tenantId into
+    // getClient — otherwise a keyed claude-code provider would still fail
+    // with "credential is not available" on that path (#929, keyed case).
+    setTenantSecretMasterKey(Buffer.alloc(32, 7));
+    try {
+      const sealed = sealCredentialField(TENANT_A, 'sk-ant-test');
+      const service = new AgentRunnerService(providerDb(sealed));
+      const resolved = await getClient(service, PROVIDER_ID, TENANT_A);
+      expect(resolved.schema).toBe('claude-code');
+      expect(factoryCalls[0]?.apiKey).toBe('sk-ant-test');
     } finally {
       setTenantSecretMasterKey(null);
     }
@@ -254,6 +278,68 @@ describe('agent-runner — claude-code session continuity with the dispatch path
     const parts: string[] = [];
     for await (const part of service.stream(runContext())) {
       parts.push(part);
+    }
+
+    expect(upserts).toEqual([
+      {
+        instanceId: 'inst-1',
+        sessionKey: `provider:${PROVIDER_ID}:session:5511999999999@s.whatsapp.net`,
+        sessionId: CLAUDE_SESSION_UUID,
+      },
+    ]);
+  });
+
+  test('per_thread: the session key carries the threadId, matching the dispatcher', async () => {
+    const upserts: Array<{ instanceId: string; sessionKey: string; sessionId: unknown }> = [];
+    const service = new AgentRunnerService(sessionDb(null, upserts));
+    stubClient(service, {
+      run: async () =>
+        ({ content: 'pong', runId: 'run-3', sessionId: CLAUDE_SESSION_UUID, status: 'completed' }) as ProviderResponse,
+    } as unknown as IAgentClient);
+
+    await service.run(runContext({ threadId: 'T42' }, 'per_thread'));
+
+    // Without the threadId this collapses to thread:<chatId>:<chatId> and every
+    // thread of the chat shares one Claude session.
+    expect(upserts[0]?.sessionKey).toBe(`provider:${PROVIDER_ID}:session:thread:5511999999999@s.whatsapp.net:T42`);
+  });
+
+  test('a failed session-store write never discards the reply the agent produced', async () => {
+    const failingDb: Record<string, unknown> = {
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+      insert: () => ({
+        values: () => ({
+          onConflictDoUpdate: async () => {
+            throw new Error('db blip');
+          },
+        }),
+      }),
+    };
+    const service = new AgentRunnerService(failingDb as unknown as Database);
+    stubClient(service, {
+      run: async () =>
+        ({ content: 'pong', runId: 'run-4', sessionId: CLAUDE_SESSION_UUID, status: 'completed' }) as ProviderResponse,
+    } as unknown as IAgentClient);
+
+    // The write is continuity bookkeeping — the reply must survive its failure.
+    const result = await service.run(runContext());
+    expect(result.parts).toEqual(['pong']);
+  });
+
+  test('stream(): a consumer breaking out early still persists the captured session', async () => {
+    const upserts: Array<{ instanceId: string; sessionKey: string; sessionId: unknown }> = [];
+    const service = new AgentRunnerService(sessionDb(null, upserts));
+    stubClient(service, {
+      stream: async function* (): AsyncGenerator<StreamChunk> {
+        yield { event: 'RunStarted', isComplete: false, sessionId: CLAUDE_SESSION_UUID };
+        yield { event: 'RunResponse', content: 'part-1\n\npart-2 begins', isComplete: false };
+        yield { event: 'RunCompleted', isComplete: true };
+      },
+    } as unknown as IAgentClient);
+
+    for await (const part of service.stream(runContext())) {
+      expect(part).toBe('part-1');
+      break; // early exit — the finally block must still persist the session
     }
 
     expect(upserts).toEqual([

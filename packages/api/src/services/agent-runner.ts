@@ -51,6 +51,9 @@ export interface AgentRunContext {
   /** Chat ID for session continuity */
   chatId: string;
 
+  /** Thread/topic identifier (e.g. Telegram forum topic) — drives per_thread session keys */
+  threadId?: string;
+
   /** Person UUID (internal identity) — falls back to senderId if unresolved */
   personId?: string;
 
@@ -344,17 +347,26 @@ export class AgentRunnerService {
 
   constructor(private db: Database) {}
 
-  /** The cache key for `providerId` under the tenant scope active right now. */
-  private clientCacheKey(providerId: string): string {
-    return `${providerId}::${currentTenantScope()?.tenantId ?? '-'}`;
-  }
-
   /**
-   * Get or create a provider client for a provider
+   * Get or create a provider client for a provider.
+   *
+   * `openedForTenantId` is the tenant the provider's credential is opened (and
+   * the client cached) under, when the caller threads one — the same
+   * threaded-over-ambient rule the dispatcher's `openclawPoolKey` applies.
+   * run()/stream() thread the instance's persisted `tenantId` because the
+   * `call_agent` automation path deliberately runs the agent call OUTSIDE every
+   * tenant scope (see `plugins/automation-actions.ts`): with only the ambient
+   * scope a sealed `agent_providers.api_key` could never be opened there. A
+   * null/absent value falls back to the ambient scope, so direct callers and
+   * the legacy world behave exactly as before.
    */
-  private async getClient(providerId: string): Promise<ResolvedProviderClient> {
+  private async getClient(providerId: string, openedForTenantId?: string | null): Promise<ResolvedProviderClient> {
+    // Credential open and cache key MUST use the same tenant — the cache stores
+    // a credential (see the clientCache doc above).
+    const tenantId = openedForTenantId ?? currentTenantScope()?.tenantId ?? null;
+
     // Check cache
-    const cacheKey = this.clientCacheKey(providerId);
+    const cacheKey = `${providerId}::${tenantId ?? '-'}`;
     const cached = this.clientCache.get(cacheKey);
     if (cached) return cached;
 
@@ -385,7 +397,7 @@ export class AgentRunnerService {
     // a flag-off/key-absent deployment hands `createProviderClient` exactly the
     // bytes it handed it before (g). Only a sealed value is decided here, and it
     // fails CLOSED — a null never becomes a bearer token.
-    const apiKey = openCredentialField(currentTenantScope()?.tenantId ?? null, provider.apiKey);
+    const apiKey = openCredentialField(tenantId, provider.apiKey);
 
     // A sealed credential that cannot be opened in this tenant context is an
     // error for EVERY schema — the alternative is silently running under the
@@ -444,9 +456,20 @@ export class AgentRunnerService {
    * Claude Code resumes by its OWN session UUID, not the strategy-computed
    * key. The mapping key → UUID lives in the same per-provider store the
    * message-routing dispatcher uses (`ClaudeCodeAgentProvider` +
-   * `createSessionStorage`), and both paths compute the key with
-   * `computeSessionId` over the same inputs — so a `call_agent` automation
-   * resumes the very session the chat conversation runs in.
+   * `createSessionStorage`). This path computes the legacy strategy key
+   * (`computeSessionId(strategy, senderId, chatId, threadId)`) — the same key
+   * the dispatcher's `resolveKhalSessionId` produces for claude-code, EXCEPT
+   * when a message's rawPayload carries an explicit khal session id: that id
+   * never reaches automation payloads, so such sessions keep their
+   * dispatcher-side key and an automation computes the legacy key instead.
+   *
+   * Concurrency: the automation engine consumer is independent of the
+   * dispatcher's per-chat dispatch queue, so an automation (e.g. a
+   * chat.idle_timeout `call_agent`) can resume the same session UUID while a
+   * chat message is mid-dispatch. Both then upsert the same mapping row
+   * (last-write-wins on an identical UUID, so the row converges). If
+   * interleaved resumes prove problematic in practice, reuse the dispatcher's
+   * per-chat serialisation here.
    */
   private claudeSessionStore(instance: RunInstance, providerId: string): SessionStorage {
     return createSessionStorage(this.db, providerId, undefined, {
@@ -454,6 +477,42 @@ export class AgentRunnerService {
       // derivation the dispatcher supplies (G5, ADR-0008).
       resolveTenantId: () => instance.tenantId ?? null,
     });
+  }
+
+  /**
+   * The session id to hand the provider client: claude-code maps the strategy
+   * key through the session store (undefined = start a fresh session); every
+   * other schema takes the key as-is, unchanged.
+   */
+  private async resolveProviderSessionId(
+    sessionStore: SessionStorage | null,
+    instanceId: string,
+    sessionKey: string,
+  ): Promise<string | undefined> {
+    if (!sessionStore) return sessionKey;
+    return (await sessionStore.getSession(instanceId, sessionKey))?.sessionId;
+  }
+
+  /**
+   * Best-effort persist of the claude-code session mapping — never throws.
+   * Continuity bookkeeping only: a failed write must not discard a reply the
+   * agent already produced (the next call just starts a fresh session).
+   */
+  private async persistProviderSession(
+    sessionStore: SessionStorage,
+    instanceId: string,
+    sessionKey: string,
+    providerSessionId: string,
+  ): Promise<void> {
+    try {
+      await sessionStore.upsertSession(instanceId, sessionKey, providerSessionId, null);
+    } catch (error) {
+      log.warn('Failed to persist claude-code session mapping', {
+        instanceId,
+        sessionKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -516,6 +575,7 @@ export class AgentRunnerService {
     const {
       instance,
       chatId,
+      threadId,
       personId,
       senderId,
       senderName,
@@ -536,7 +596,7 @@ export class AgentRunnerService {
       throw new ProviderError('No agent internal ID configured for instance', 'NOT_FOUND', 400);
     }
 
-    const { client, schema } = await this.getClient(instance.agentProviderId);
+    const { client, schema } = await this.getClient(instance.agentProviderId, instance.tenantId);
 
     // Format messages with sender name prefix if enabled
     const prefixEnabled = instance.agentPrefixSenderName ?? true;
@@ -547,15 +607,10 @@ export class AgentRunnerService {
 
     // Compute session ID based on configured strategy
     const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
-    const sessionId = computeSessionId(sessionStrategy, senderId, chatId);
+    const sessionId = computeSessionId(sessionStrategy, senderId, chatId, threadId);
 
-    // claude-code: resolve the strategy key to the provider's session UUID (or
-    // start a fresh session when none is stored). Other schemas take the key
-    // as-is, unchanged.
     const sessionStore = schema === 'claude-code' ? this.claudeSessionStore(instance, instance.agentProviderId) : null;
-    const providerSessionId = sessionStore
-      ? (await sessionStore.getSession(instance.id, sessionId))?.sessionId
-      : sessionId;
+    const providerSessionId = await this.resolveProviderSessionId(sessionStore, instance.id, sessionId);
 
     log.info('Running agent', {
       instanceId: instance.id,
@@ -604,7 +659,7 @@ export class AgentRunnerService {
     // Persist the provider session UUID under the strategy key so the next
     // call — from either dispatch path — resumes this session.
     if (sessionStore && response.sessionId) {
-      await sessionStore.upsertSession(instance.id, sessionId, response.sessionId, null);
+      await this.persistProviderSession(sessionStore, instance.id, sessionId, response.sessionId);
     }
 
     // Split response if enabled
@@ -649,7 +704,7 @@ export class AgentRunnerService {
     }
 
     const sessionStrategy = context.instance.agentSessionStrategy ?? 'per_chat';
-    const sessionId = computeSessionId(sessionStrategy, context.senderId, context.chatId);
+    const sessionId = computeSessionId(sessionStrategy, context.senderId, context.chatId, context.threadId);
 
     return {
       parts,
@@ -669,6 +724,7 @@ export class AgentRunnerService {
     const {
       instance,
       chatId,
+      threadId,
       personId,
       senderId,
       senderName,
@@ -688,7 +744,7 @@ export class AgentRunnerService {
       throw new ProviderError('No agent internal ID configured for instance', 'NOT_FOUND', 400);
     }
 
-    const { client, schema } = await this.getClient(instance.agentProviderId);
+    const { client, schema } = await this.getClient(instance.agentProviderId, instance.tenantId);
 
     // Format messages with sender name prefix if enabled
     const prefixEnabled = instance.agentPrefixSenderName ?? true;
@@ -699,13 +755,11 @@ export class AgentRunnerService {
 
     // Compute session ID based on configured strategy
     const sessionStrategy = instance.agentSessionStrategy ?? 'per_chat';
-    const sessionId = computeSessionId(sessionStrategy, senderId, chatId);
+    const sessionId = computeSessionId(sessionStrategy, senderId, chatId, threadId);
 
     // claude-code: strategy key → provider session UUID, as in run().
     const sessionStore = schema === 'claude-code' ? this.claudeSessionStore(instance, instance.agentProviderId) : null;
-    const providerSessionId = sessionStore
-      ? (await sessionStore.getSession(instance.id, sessionId))?.sessionId
-      : sessionId;
+    const providerSessionId = await this.resolveProviderSessionId(sessionStore, instance.id, sessionId);
 
     const request = {
       message: combinedMessage,
@@ -742,7 +796,10 @@ export class AgentRunnerService {
     }
 
     // Capture the provider session UUID from the chunk stream so it can be
-    // persisted under the strategy key once the stream completes.
+    // persisted under the strategy key once the stream ends. The persist sits
+    // in a finally — mirroring ClaudeCodeAgentProvider.triggerStream — so a
+    // consumer breaking out early (or a throw mid-stream) does not orphan the
+    // session the provider just created.
     let providerSession: string | undefined;
     const source = (async function* (): AsyncGenerator<StreamChunk> {
       for await (const chunk of client.stream(request)) {
@@ -751,10 +808,12 @@ export class AgentRunnerService {
       }
     })();
 
-    yield* processStreamChunks(source, enableSplit);
-
-    if (providerSession) {
-      await sessionStore.upsertSession(instance.id, sessionId, providerSession, null);
+    try {
+      yield* processStreamChunks(source, enableSplit);
+    } finally {
+      if (providerSession) {
+        await this.persistProviderSession(sessionStore, instance.id, sessionId, providerSession);
+      }
     }
   }
 
