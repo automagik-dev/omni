@@ -4,8 +4,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CHART="${ROOT}/deploy/helm/omni"
 HELM_BIN="${HELM_BIN:-helm}"
-PIN_VALUES="${CHART}/values-prod-gitops.yaml"
-VALID_DIGEST="sha256:c4ede7c3a0f8768a1307e5534c00f163b12eb89ba8d882e75a5cafaae16cd414"
+VALID_DIGEST="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+APP_VERSION="$(python3 - "${CHART}/Chart.yaml" <<'PY'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+match = re.search(r'^appVersion:\s*"([^"\n]+)"\s*$', text, flags=re.MULTILINE)
+if match is None:
+    raise SystemExit("Chart.appVersion is missing")
+print(match.group(1))
+PY
+)"
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -28,13 +36,14 @@ PY
   [[ "${actual}" == "${expected}" ]] || fail "expected ${expected} matches for ${pattern}, found ${actual}"
 }
 
-[[ -f "${PIN_VALUES}" ]] || fail "missing ${PIN_VALUES}"
+[[ ! -e "${CHART}/values-prod-gitops.yaml" ]] || \
+  fail "public chart still carries a canonical production digest pin"
 
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 
 render >"${work}/default.yaml"
-assert_count 1 'image: "ghcr\.io/automagik-dev/omni-api:v2\.260830\.1"' "${work}/default.yaml"
+assert_count 1 "image: \"ghcr\\.io/automagik-dev/omni-api:v${APP_VERSION}\"" "${work}/default.yaml"
 
 render --set-string "image.digest=${VALID_DIGEST}" >"${work}/digest.yaml"
 assert_count 1 "image: \"ghcr\\.io/automagik-dev/omni-api@${VALID_DIGEST}\"" "${work}/digest.yaml"
@@ -58,7 +67,7 @@ done
 render \
   -f "${CHART}/values-prod.yaml" \
   -f "${CHART}/values-prod-alb.yaml" \
-  -f "${PIN_VALUES}" \
+  --set-string "image.digest=${VALID_DIGEST}" \
   --set-string ingress.host=omni.khal.ai \
   --set-string 'ingress.annotations.alb\.ingress\.kubernetes\.io/certificate-arn=arn:aws:acm:sa-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000' \
   --set-string 'serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::000000000000:role/omni-media' \
@@ -81,4 +90,4 @@ assert_count 1 '^  volumeClaimTemplates:$' "${work}/prod.yaml"
 assert_count 1 '^        storageClassName: "gp3"$' "${work}/prod.yaml"
 assert_count 1 '^            storage: "8Gi"$' "${work}/prod.yaml"
 
-printf 'PASS: Helm digest and production GitOps render contract\n'
+printf 'PASS: generic Helm digest rendering contract\n'

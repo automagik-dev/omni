@@ -52,7 +52,12 @@ fi
 [[ "${allow_detached}" == "true" ]] || fail "source is not reachable from main"
 [[ "${expected_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
   fail "detached repair requires an exact expected version"
-parent="$(git rev-parse "${source_sha}^")"
+lineage="$(git rev-list --parents -n 1 "${source_sha}")" || \
+  fail "could not inspect detached source parents"
+read -r -a source_lineage <<<"${lineage}"
+[[ ${#source_lineage[@]} -eq 2 ]] || \
+  fail "detached repair source must be a single-parent non-root commit"
+parent="${source_lineage[1]}"
 git merge-base --is-ancestor "${parent}" "${main_ref}" || fail "detached source parent is not reachable from main"
 self_verifier="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify-version-only-diff.py"
 "${self_verifier}" --parent "${parent}" --source "${source_sha}" \

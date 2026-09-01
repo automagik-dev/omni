@@ -43,10 +43,26 @@ PY
 fi
 case "${1:-} ${2:-} ${3:-}" in
   "view @automagik/omni@2.260830.2 version")
+    if [[ -f "${state}/published-stale" ]]; then
+      remaining="$(cat "${state}/published-stale")"
+      if (( remaining > 0 )); then
+        printf '%s\n' "$((remaining - 1))" > "${state}/published-stale"
+        echo 'E404 404 Not Found' >&2
+        exit 1
+      fi
+    fi
     [[ -f "${state}/published" ]] || { echo 'E404 404 Not Found' >&2; exit 1; }
     cat "${state}/published"
     ;;
   "view @automagik/omni dist-tags")
+    if [[ -f "${state}/latest-stale" ]]; then
+      remaining="$(cat "${state}/latest-stale")"
+      if (( remaining > 0 )); then
+        printf '%s\n' "$((remaining - 1))" > "${state}/latest-stale"
+        echo 'E404 404 Not Found' >&2
+        exit 1
+      fi
+    fi
     latest="$(cat "${state}/latest" 2>/dev/null || true)"
     printf '{"latest":"%s"}\n' "${latest}"
     ;;
@@ -89,6 +105,10 @@ PY
     if [[ "${MOCK_NO_CONVERGE:-false}" != "true" ]]; then
       printf '2.260830.2\n' > "${state}/latest"
     fi
+    if (( ${MOCK_STALE_READS:-0} > 0 )); then
+      printf '%s\n' "${MOCK_STALE_READS}" > "${state}/published-stale"
+      printf '%s\n' "${MOCK_STALE_READS}" > "${state}/latest-stale"
+    fi
     ;;
   "dist-tag add @automagik/omni@2.260830.2")
     [[ -n "${NODE_AUTH_TOKEN:-}" ]] || exit 91
@@ -107,21 +127,44 @@ chmod +x "${work}/bin/npm"
 cat > "${work}/bin/curl" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "${1:-}" == "-fsSLo" && -n "${2:-}" ]]
-if [[ "${3:-}" == "https://registry.npmjs.org/-/npm/v1/keys" ]]; then
-  python3 - "${MOCK_PUBLIC_KEY}" "${MOCK_KEY_ID}" "$2" <<'PY'
+args=" $* "
+[[ "${args}" == *" --connect-timeout 10 "* ]]
+[[ "${args}" == *" --max-time "* ]]
+[[ "${args}" == *" --retry 3 "* ]]
+[[ "${args}" == *" --retry-connrefused "* ]]
+output=""
+url=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) output="${2:-}"; shift 2 ;;
+    --connect-timeout|--max-time|--retry) shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+[[ -n "${output}" && -n "${url}" ]]
+if [[ "${url}" == "https://registry.npmjs.org/-/npm/v1/keys" ]]; then
+  python3 - "${MOCK_PUBLIC_KEY}" "${MOCK_KEY_ID}" "${output}" <<'PY'
 import base64, json, pathlib, sys
 public = pathlib.Path(sys.argv[1]).read_bytes()
 pathlib.Path(sys.argv[3]).write_text(json.dumps({'keys': [{
     'keyid': sys.argv[2], 'keytype': 'ecdsa-sha2-nistp256',
-    'scheme': 'ecdsa-sha2-nistp256', 'key': base64.b64encode(public).decode(),
+    'scheme': 'ecdsa-sha2-nistp256', 'key': base64.b64encode(public).decode(), 'expires': None,
 }]}))
 PY
+elif [[ "${url}" == "https://registry.npmjs.org/@automagik%2fomni" ]]; then
+  printf '{"time":{"2.260830.2":"2026-08-30T21:45:27Z"}}\n' > "${output}"
 else
-  cp "${MOCK_STATE_DIR}/expected.tgz" "$2"
+  cp "${MOCK_STATE_DIR}/expected.tgz" "${output}"
 fi
 SH
 chmod +x "${work}/bin/curl"
+cat > "${work}/bin/sleep" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "${1:-}" >> "${MOCK_STATE_DIR}/sleeps"
+SH
+chmod +x "${work}/bin/sleep"
 
 run_case() {
   local state="$1"
@@ -166,6 +209,11 @@ if MOCK_NO_CONVERGE=true run_case "${no_converge}" >"${work}/no-converge.out" 2>
   fail "publish succeeded without exact post-mutation readback convergence"
 fi
 
+eventual="${work}/eventual"
+out="$(MOCK_STALE_READS=2 run_case "${eventual}")"
+grep -q '^npm_action=publish$' <<<"${out}" || fail "eventually consistent publish did not converge"
+[[ -s "${eventual}/sleeps" ]] || fail "post-publish stale reads were not retried with backoff"
+
 wrong_artifact="${work}/wrong-artifact"
 mkdir -p "${wrong_artifact}"
 printf '2.260830.2\n' > "${wrong_artifact}/published"
@@ -185,6 +233,24 @@ fi
 no_provenance="${work}/no-provenance"
 if MOCK_NO_ATTESTATIONS=true run_case "${no_provenance}" >"${work}/no-provenance.out" 2>"${work}/no-provenance.err"; then
   fail "new trusted publication without verified SLSA provenance was accepted"
+fi
+
+exact_no_provenance="${work}/exact-no-provenance"
+mkdir -p "${exact_no_provenance}"
+printf '2.260830.2\n' > "${exact_no_provenance}/published"
+printf '2.260830.2\n' > "${exact_no_provenance}/latest"
+if MOCK_NO_ATTESTATIONS=true run_case "${exact_no_provenance}" \
+  >"${work}/exact-no-provenance.out" 2>"${work}/exact-no-provenance.err"; then
+  fail "existing stable package bypassed verified SLSA provenance"
+fi
+
+repair_no_provenance="${work}/repair-no-provenance"
+mkdir -p "${repair_no_provenance}"
+printf '2.260830.2\n' > "${repair_no_provenance}/published"
+printf '2.260830.1\n' > "${repair_no_provenance}/latest"
+if MOCK_NO_ATTESTATIONS=true NPM_RECOVERY_TOKEN=token run_case "${repair_no_provenance}" \
+  >"${work}/repair-no-provenance.out" 2>"${work}/repair-no-provenance.err"; then
+  fail "latest repair bypassed verified SLSA provenance"
 fi
 
 printf 'PASS: token-isolated npm publish, latest repair, and exact signed artifact readback contract\n'

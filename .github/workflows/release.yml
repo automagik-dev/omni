@@ -19,8 +19,7 @@ name: Release
 #   3. publish         — workflow_call into release-publish.yml (GH release + assets)
 #   4. release-notes   — git-cliff changelog appended to the GH release body.
 #
-# npm publishing happens in version.yml inline (dev/homolog auto-versioning,
-# plus the verified stable-only entry point dispatched by image-publish.yml).
+# npm publishing happens in version.yml inline for dev auto-versioning.
 # Single source of truth — no duplicate publish step here. Codex P1 on PR #633 caught the gap when a previous
 # revision of this file ran an unconditional `npm publish --tag latest`
 # alongside version.yml's @next publish, promoting dev cuts to @latest.
@@ -35,19 +34,13 @@ on:
         required: true
         type: string
       channel:
-        description: 'Release channel — stable publishes to @latest, dev/beta/canary are prereleases with their own .well-known/<channel>.json pointer'
+        description: 'Release channel — stable is authorized orchestration; dev is a prerelease'
         required: false
         type: choice
         default: stable
-        # Canonical channel taxonomy (release taxonomy 2026-05-12,
-        # unified across pgserve/omni/genie):
-        #   stable  → main branch  → .well-known/latest.json
-        #   homolog → homolog branch → .well-known/homolog.json
-        #   dev     → dev branch   → .well-known/dev.json
-        # beta + canary have been retired.
+        # Omni has exactly two active branches/channels: dev and stable main.
         options:
           - stable
-          - homolog
           - dev
       expected_sha:
         description: 'Stable only: exact verified release source SHA'
@@ -73,6 +66,7 @@ jobs:
   authorize:
     name: Authorize release channel
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read
@@ -143,10 +137,8 @@ jobs:
     secrets: inherit
     with:
       version: ${{ needs.sign-attest.outputs.version }}
-      # workflow_dispatch supplies the channel (version.yml passes dev/homolog;
-      # the verified image pipeline passes stable). Bare tag pushes fall
-      # through to stable. Mirrors genie wish
-      # release-channel-dev (PR #2419).
+      # workflow_dispatch supplies the channel. Stable publishing requires the
+      # authorized workflow_dispatch path; bare tag pushes do not release.
       channel: ${{ inputs.channel || 'stable' }}
       draft: false
       expected_sha: ${{ inputs.expected_sha }}
@@ -159,7 +151,7 @@ jobs:
   # Updates the release body with the generated changelog.
   #
   # NOTE: npm publish is NOT performed by this workflow. version.yml owns
-  # `npm publish` for dev/homolog and the verified stable-only dispatch. A
+  # `npm publish` for dev. A
   # duplicate publish step here would race
   # version.yml's inline path AND, before this drop, the missing channel
   # gate meant dev dispatches were attempting `npm publish --tag latest`

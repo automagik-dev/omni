@@ -1,22 +1,12 @@
 name: Version
 
 on:
-  # Fire directly when a PR merges to dev. Homolog has a single canonical
-  # entry point below, after its push CI succeeds, so one merge cannot publish
-  # twice through both pull_request and workflow_run.
-  # Prior trigger (workflow_run CI on branch=dev) never fired because CI's
-  # `on.push` only lists `[main, homolog]`, never `dev`; merges to dev thus
-  # produced no push-event CI run for workflow_run to observe.
+  # Fire directly when an in-repository PR merges to dev. Stable main versions
+  # are fixed in their reviewed dev-to-main promotion and are never bumped
+  # after merge.
   pull_request:
     types: [closed]
     branches: [dev]
-  # Homolog promotion arrives via CI-on-push. Stable main releases are NOT
-  # versioned here: the release PR must already contain its final version, and
-  # image-publish.yml finalizes the tag/release only after OCI verification.
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [homolog]
   workflow_dispatch:
     inputs:
       stable_publish_only:
@@ -64,7 +54,7 @@ concurrency:
   # Serialize every equivalent entry event by target branch. Keeping event_name
   # out of the key prevents a future trigger expansion from reintroducing
   # concurrent duplicate publication for one branch.
-  group: version-${{ github.event.workflow_run.head_branch || github.event.pull_request.base.ref || github.ref_name }}
+  group: version-${{ github.event.pull_request.base.ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -83,47 +73,17 @@ jobs:
       (github.event_name == 'pull_request' &&
        github.event.pull_request.merged == true &&
        github.event.pull_request.base.ref == 'dev' &&
-       github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'homolog' &&
-       !contains(github.event.workflow_run.head_commit.message, '[skip ci]') &&
-       startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request') &&
-       (contains(github.event.workflow_run.head_commit.message, '/dev') ||
-        contains(github.event.workflow_run.head_commit.message, '/homolog')))
+       github.event.pull_request.head.repo.full_name == github.repository)
 
     steps:
       - name: Determine channel and npm tag
         id: context
         run: |
-          # Branch semantics:
-          #   - pull_request merged on dev → new dev build → @next, bump dev
-          #   - workflow_run on homolog → canonical HML build → @homolog, bump homolog
-          #   - workflow_dispatch → defaults to dev/@next
-          TRIGGER_BRANCH="dev"
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            TRIGGER_BRANCH="${{ github.event.workflow_run.head_branch }}"
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            TRIGGER_BRANCH="${{ github.event.pull_request.base.ref }}"
-          fi
-
-          case "${TRIGGER_BRANCH}" in
-            homolog)
-              echo "npm_tag=homolog" >> "$GITHUB_OUTPUT"
-              echo "release_channel=homolog" >> "$GITHUB_OUTPUT"
-              echo "checkout_ref=homolog" >> "$GITHUB_OUTPUT"
-              echo "push_ref=homolog" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "npm_tag=next" >> "$GITHUB_OUTPUT"
-              echo "release_channel=dev" >> "$GITHUB_OUTPUT"
-              echo "checkout_ref=dev" >> "$GITHUB_OUTPUT"
-              echo "push_ref=dev" >> "$GITHUB_OUTPUT"
-              ;;
-          esac
-          echo "trigger_branch=${TRIGGER_BRANCH}" >> "$GITHUB_OUTPUT"
-          echo "Triggering branch: ${TRIGGER_BRANCH}"
+          echo "npm_tag=next" >> "$GITHUB_OUTPUT"
+          echo "release_channel=dev" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=dev" >> "$GITHUB_OUTPUT"
+          echo "push_ref=dev" >> "$GITHUB_OUTPUT"
+          echo "Triggering branch: dev"
 
       - name: Require protected version writer credential
         env:
@@ -136,7 +96,7 @@ jobs:
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          # Bump the canonical dev/homolog target branch. Stable main versions
+          # Bump the canonical dev target branch. Stable main versions
           # are fixed in their release PR and never created by this workflow.
           ref: ${{ steps.context.outputs.checkout_ref }}
           fetch-depth: 0
@@ -150,12 +110,9 @@ jobs:
           # Secret spec: fine-grained PAT on a machine account (e.g.
           # automagik-bot) scoped to automagik-dev/omni, Contents: read+write.
           # NOTE: unlike GITHUB_TOKEN, PAT pushes DO fire on:push workflows.
-          # Branch push: desired on homolog (image-publish builds the bump
-          # commit's image, per D8); CI on the homolog bump is a harmless
-          # extra run — Version's workflow_run guard keys on the head-commit
-          # MESSAGE, not the actor, and bump messages fail the startsWith
-          # 'Merge pull request' check, so no re-fire loop. The v* TAG push
-          # must NOT use the PAT: see "Commit and tag" below.
+          # The branch push must use the machine identity so in-repository PRs
+          # do not become action_required on a github-actions[bot] update. The
+          # v* tag push must NOT use the PAT: see "Commit and tag" below.
           token: ${{ secrets.VERSION_BUMP_PAT }}
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
@@ -220,13 +177,8 @@ jobs:
           if git diff --cached --quiet; then
             echo "No version file changes to commit"
           else
-            # No [skip ci] (D8): homolog bumps MUST trigger image-publish so
-            # the stamped appVersion gets a matching image built from the
-            # bump commit. Blanket removal is safe on the dev path too — no
-            # workflow push-triggers on dev for these paths (CI/image-publish
-            # push branches are [main, homolog] only). Loop-safe: this
-            # commit's message fails version.yml's own startsWith
-            # 'Merge pull request' workflow_run guard.
+            # No [skip ci]: the reviewed dev branch must receive ordinary CI
+            # on every version bump.
             git commit -m "chore(version): bump to ${VERSION}"
           fi
 
@@ -244,7 +196,7 @@ jobs:
           # passes the correct channel. A PAT-pushed v* tag would ALSO fire
           # release.yml's push:tags path, where channel falls through to
           # 'stable' — duplicating the release pipeline AND promoting a
-          # dev/homolog cut to the stable channel. The -c flag blanks the
+          # dev cut to the stable channel. The -c flag blanks the
           # checkout-persisted auth header for this one invocation so the
           # URL-embedded GITHUB_TOKEN wins. Losing --atomic is safe with
           # branch-first ordering: a tag-push failure self-heals on re-run
@@ -260,8 +212,6 @@ jobs:
       # guard); workflow_dispatch and repository_dispatch are the documented
       # exceptions, so this step kicks the orchestrator from version.yml.
       #
-      # Channel selector is dev/homolog only. Stable is finalized by the
-      # verified main image pipeline.
       - name: Build CLI
         run: bunx turbo run build --filter=@automagik/omni
 
@@ -404,4 +354,3 @@ jobs:
           "${GITHUB_WORKSPACE}/scripts/release/reconcile-npm-stable.sh" \
             --expected "${EXPECTED_VERSION}" \
             --package-dir "${GITHUB_WORKSPACE}/.stable-source/packages/cli"
-

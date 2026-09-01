@@ -8,7 +8,7 @@ def fail(message: str) -> None:
 
 
 parser = argparse.ArgumentParser(description="Classify reusable orchestration versus direct recovery")
-parser.add_argument("--channel", required=True, choices=("stable", "homolog", "dev"))
+parser.add_argument("--channel", required=True, choices=("stable", "dev"))
 parser.add_argument("--orchestrated", required=True, choices=("true", "false"))
 parser.add_argument("--recovery-run-id", default="")
 args = parser.parse_args()

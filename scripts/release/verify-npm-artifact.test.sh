@@ -21,15 +21,15 @@ PY
 openssl ecparam -name prime256v1 -genkey -noout -out "${work}/private.pem"
 openssl pkey -in "${work}/private.pem" -pubout -outform DER -out "${work}/public.der"
 python3 - "${work}/registry.tgz" "${work}/dist.json" "${work}/keys.json" \
-  "${work}/private.pem" "${work}/public.der" <<'PY'
+  "${work}/packument.json" "${work}/private.pem" "${work}/public.der" <<'PY'
 import base64, hashlib, json, pathlib, subprocess, sys
 raw = pathlib.Path(sys.argv[1]).read_bytes()
 integrity = 'sha512-' + base64.b64encode(hashlib.sha512(raw).digest()).decode()
-public = pathlib.Path(sys.argv[5]).read_bytes()
+public = pathlib.Path(sys.argv[6]).read_bytes()
 keyid = 'SHA256:' + base64.b64encode(hashlib.sha256(public).digest()).decode()
 payload = f'@automagik/omni@2.260830.2:{integrity}'.encode()
 signature = subprocess.run(
-    ['openssl', 'dgst', '-sha256', '-sign', sys.argv[4]],
+    ['openssl', 'dgst', '-sha256', '-sign', sys.argv[5]],
     input=payload, check=True, capture_output=True,
 ).stdout
 pathlib.Path(sys.argv[2]).write_text(json.dumps({
@@ -40,13 +40,44 @@ pathlib.Path(sys.argv[2]).write_text(json.dumps({
 }))
 pathlib.Path(sys.argv[3]).write_text(json.dumps({'keys': [{
     'keyid': keyid, 'keytype': 'ecdsa-sha2-nistp256',
-    'scheme': 'ecdsa-sha2-nistp256', 'key': base64.b64encode(public).decode(),
+    'scheme': 'ecdsa-sha2-nistp256', 'key': base64.b64encode(public).decode(), 'expires': None,
 }]}))
+pathlib.Path(sys.argv[4]).write_text(json.dumps({
+    'time': {'2.260830.2': '2026-08-30T21:45:27Z'},
+}))
 PY
 "${SCRIPT}" --expected-tarball "${work}/expected.tgz" \
   --registry-tarball "${work}/registry.tgz" --dist-json "${work}/dist.json" \
-  --keys-json "${work}/keys.json" --package @automagik/omni --version 2.260830.2 \
+  --keys-json "${work}/keys.json" --packument-json "${work}/packument.json" \
+  --package @automagik/omni --version 2.260830.2 \
   | grep -qx 'npm_artifact_verified=true' || fail "exact signed artifact was rejected"
+python3 - "${work}/keys.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+document = json.loads(path.read_text())
+document['keys'][0]['expires'] = '2026-08-30T21:45:26Z'
+path.write_text(json.dumps(document))
+PY
+if "${SCRIPT}" --expected-tarball "${work}/expected.tgz" \
+  --registry-tarball "${work}/registry.tgz" --dist-json "${work}/dist.json" \
+  --keys-json "${work}/keys.json" --packument-json "${work}/packument.json" \
+  --package @automagik/omni --version 2.260830.2 >/dev/null 2>"${work}/expired.err"; then
+  fail "signature from a key expired before publication was accepted"
+fi
+grep -q 'expired before package publication' "${work}/expired.err" || \
+  fail "expired-key rejection did not identify publication-time ordering"
+python3 - "${work}/keys.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+document = json.loads(path.read_text())
+document['keys'][0]['expires'] = '2026-08-30T21:45:28Z'
+path.write_text(json.dumps(document))
+PY
+"${SCRIPT}" --expected-tarball "${work}/expected.tgz" \
+  --registry-tarball "${work}/registry.tgz" --dist-json "${work}/dist.json" \
+  --keys-json "${work}/keys.json" --packument-json "${work}/packument.json" \
+  --package @automagik/omni --version 2.260830.2 >/dev/null || \
+  fail "key valid at publication time was rejected after later expiry"
 python3 - "${work}/expected.tgz" <<'PY'
 import io, tarfile, sys
 with tarfile.open(sys.argv[1], 'w:gz') as archive:
@@ -57,7 +88,8 @@ with tarfile.open(sys.argv[1], 'w:gz') as archive:
 PY
 if "${SCRIPT}" --expected-tarball "${work}/expected.tgz" \
   --registry-tarball "${work}/registry.tgz" --dist-json "${work}/dist.json" \
-  --keys-json "${work}/keys.json" --package @automagik/omni --version 2.260830.2 >/dev/null 2>&1; then
+  --keys-json "${work}/keys.json" --packument-json "${work}/packument.json" \
+  --package @automagik/omni --version 2.260830.2 >/dev/null 2>&1; then
   fail "wrong package bytes were accepted"
 fi
 python3 - "${work}/dist.json" <<'PY'
@@ -69,7 +101,8 @@ p.write_text(json.dumps(data))
 PY
 if "${SCRIPT}" --expected-tarball "${work}/registry.tgz" \
   --registry-tarball "${work}/registry.tgz" --dist-json "${work}/dist.json" \
-  --keys-json "${work}/keys.json" --package @automagik/omni --version 2.260830.2 >/dev/null 2>&1; then
+  --keys-json "${work}/keys.json" --packument-json "${work}/packument.json" \
+  --package @automagik/omni --version 2.260830.2 >/dev/null 2>&1; then
   fail "unsigned registry metadata was accepted"
 fi
 printf 'PASS: exact signed npm artifact identity contract\n'
