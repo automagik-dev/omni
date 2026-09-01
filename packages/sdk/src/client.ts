@@ -710,12 +710,27 @@ export interface ListWebhookSourcesParams {
 }
 
 /**
+ * Signature verification contract for a webhook source (issue #928)
+ */
+export interface WebhookSignatureConfigBody {
+  algorithm: 'hmac-sha256' | 'hmac-sha1' | 'token-match';
+  /** Header carrying the signature/token (e.g. 'X-Hub-Signature-256') */
+  header: string;
+  /** Prefix before the hex digest (e.g. 'sha256=') */
+  prefix?: string;
+}
+
+/**
  * Body for creating a webhook source
  */
 export interface CreateWebhookSourceBody {
   name: string;
   description?: string;
   expectedHeaders?: Record<string, boolean>;
+  /** Required for the source to be reachable on the public ingress route */
+  signatureConfig?: WebhookSignatureConfigBody | null;
+  /** Shared secret used by signatureConfig (write-only, never returned) */
+  signatureSecret?: string | null;
   enabled?: boolean;
 }
 

@@ -2,19 +2,39 @@
  * Webhook service - manages webhook sources and receives webhooks
  */
 
-import { NotFoundError } from '@omni/core';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { ERROR_CODES, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
 import type { CustomEventType, EventBus } from '@omni/core';
 import { generateId } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type NewWebhookSource, type WebhookSource, webhookSources } from '@omni/db';
 import { eq, sql } from 'drizzle-orm';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
+import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+
+const log = createLogger('api:webhooks');
 
 export interface WebhookReceiveResult {
   received: boolean;
   eventId: string;
   source: string;
   eventType: string;
+}
+
+export interface WebhookReceiveOptions {
+  /** Create the source on first receive. Administrative creation is the norm; this is a dev convenience. */
+  autoCreate?: boolean;
+  /** Raw request body bytes as received — HMAC verification must run over these, not a re-serialization. */
+  rawBody?: string;
+  /** Reject sources without a signature config (the auth-exempt public ingress sets this). */
+  requireSignature?: boolean;
+}
+
+/** Constant-time string comparison; a length mismatch short-circuits, which leaks only the length. */
+function timingSafeEqualStrings(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
 }
 
 export class WebhookService {
@@ -28,6 +48,11 @@ export class WebhookService {
    */
   private get db(): Database {
     return scopedHandle(this.pool);
+  }
+
+  /** Tenant of the active request scope; seals/opens the signature secret (providers.ts precedent). */
+  private get tenantId(): string | null {
+    return currentTenantScope()?.tenantId ?? null;
   }
 
   constructor(
@@ -73,7 +98,17 @@ export class WebhookService {
    * Create a new webhook source
    */
   async create(data: NewWebhookSource): Promise<WebhookSource> {
-    const [created] = await this.db.insert(webhookSources).values(data).returning();
+    if (data.signatureConfig && !data.signatureSecret) {
+      throw new ValidationError('signatureSecret is required when signatureConfig is set');
+    }
+    if (data.signatureSecret && !data.signatureConfig) {
+      throw new ValidationError('signatureSecret cannot be set without a signatureConfig');
+    }
+
+    const values = data.signatureSecret
+      ? { ...data, signatureSecret: sealCredentialField(this.tenantId, data.signatureSecret) }
+      : data;
+    const [created] = await this.db.insert(webhookSources).values(values).returning();
 
     if (!created) {
       throw new Error('Failed to create webhook source');
@@ -86,9 +121,36 @@ export class WebhookService {
    * Update a webhook source
    */
   async update(id: string, data: Partial<NewWebhookSource>): Promise<WebhookSource> {
+    const patch: Partial<NewWebhookSource> = { ...data };
+
+    if (typeof data.signatureSecret === 'string') {
+      patch.signatureSecret = sealCredentialField(this.tenantId, data.signatureSecret);
+    }
+
+    // Invariant across every partial-update combination: a signature config
+    // always has a secret, and a secret never outlives its config. `undefined`
+    // means "untouched" and inherits the stored value; `null` is an explicit
+    // clear.
+    if (data.signatureConfig !== undefined || data.signatureSecret !== undefined) {
+      const existing = await this.getById(id);
+      const nextConfig = data.signatureConfig === undefined ? existing.signatureConfig : data.signatureConfig;
+      const nextSecret = data.signatureSecret === undefined ? existing.signatureSecret : patch.signatureSecret;
+
+      if (nextConfig && !nextSecret) {
+        throw new ValidationError('signatureSecret is required when signatureConfig is set');
+      }
+      if (!nextConfig) {
+        if (typeof data.signatureSecret === 'string') {
+          throw new ValidationError('signatureSecret cannot be set without a signatureConfig');
+        }
+        // Clearing the config would orphan the stored secret — clear it too.
+        patch.signatureSecret = null;
+      }
+    }
+
     const [updated] = await this.db
       .update(webhookSources)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...patch, updatedAt: new Date() })
       .where(eq(webhookSources.id, id))
       .returning();
 
@@ -111,16 +173,21 @@ export class WebhookService {
   }
 
   /**
-   * Receive a webhook and publish as event
-   * If source doesn't exist and autoCreate is true, creates it
+   * Receive a webhook and publish as event.
+   *
+   * Sources are created by administrative act; `autoCreate` (default OFF,
+   * issue #928) is a dev-environment convenience only. When the source
+   * carries a `signatureConfig`, the request is verified against it BEFORE
+   * anything is published or counted — verification failure means nothing
+   * enters the journal.
    */
   async receive(
     sourceName: string,
     payload: Record<string, unknown>,
     headers: Record<string, string>,
-    options: { autoCreate?: boolean } = {},
+    options: WebhookReceiveOptions = {},
   ): Promise<WebhookReceiveResult> {
-    const { autoCreate = true } = options;
+    const { autoCreate = false, rawBody, requireSignature = false } = options;
 
     // Get or create source
     let source = await this.getByName(sourceName);
@@ -137,14 +204,33 @@ export class WebhookService {
     }
 
     if (!source.enabled) {
-      throw new Error(`Webhook source '${sourceName}' is disabled`);
+      throw new OmniError({
+        code: ERROR_CODES.FORBIDDEN,
+        message: `Webhook source '${sourceName}' is disabled`,
+        context: { sourceName },
+      });
     }
 
-    // Validate expected headers if configured
+    // The public ingress carries no API key: a source is reachable there only
+    // once an admin has configured its signature contract.
+    if (requireSignature && !source.signatureConfig) {
+      throw new OmniError({
+        code: ERROR_CODES.UNAUTHORIZED,
+        message: `Webhook source '${sourceName}' has no signature configuration`,
+        context: { sourceName },
+      });
+    }
+
+    if (source.signatureConfig) {
+      this.verifySignature(source, rawBody, headers);
+    }
+
+    // Validate expected headers if configured (presence only — the signature
+    // check above is the authenticity gate)
     if (source.expectedHeaders) {
       for (const headerName of Object.keys(source.expectedHeaders)) {
         if (!headers[headerName.toLowerCase()]) {
-          throw new Error(`Missing required header: ${headerName}`);
+          throw new ValidationError(`Missing required header: ${headerName}`);
         }
       }
     }
@@ -184,6 +270,46 @@ export class WebhookService {
       source: sourceName,
       eventType,
     };
+  }
+
+  /**
+   * Verify a request against the source's signature config. Throws
+   * UNAUTHORIZED (→ 401) on any failure; callers reach the publish path only
+   * when this returns.
+   */
+  private verifySignature(source: WebhookSource, rawBody: string | undefined, headers: Record<string, string>): void {
+    const config = source.signatureConfig;
+    if (!config) return;
+
+    const sourceName = source.name;
+    const unauthorized = (message: string) =>
+      new OmniError({ code: ERROR_CODES.UNAUTHORIZED, message, context: { sourceName } });
+
+    const provided = headers[config.header.toLowerCase()];
+    if (!provided) {
+      throw unauthorized(`Missing signature header: ${config.header}`);
+    }
+
+    const secret = openCredentialField(source.tenantId ?? this.tenantId, source.signatureSecret);
+    if (!secret) {
+      log.warn('Webhook source has a signature config but no usable secret', { sourceName });
+      throw unauthorized('Webhook signature verification unavailable for this source');
+    }
+
+    let expected: string;
+    if (config.algorithm === 'token-match') {
+      expected = secret;
+    } else {
+      if (rawBody === undefined) {
+        throw unauthorized('Webhook signature verification requires the raw request body');
+      }
+      const hmac = createHmac(config.algorithm === 'hmac-sha256' ? 'sha256' : 'sha1', secret);
+      expected = `${config.prefix ?? ''}${hmac.update(rawBody).digest('hex')}`;
+    }
+
+    if (!timingSafeEqualStrings(provided, expected)) {
+      throw unauthorized('Invalid webhook signature');
+    }
   }
 
   /**

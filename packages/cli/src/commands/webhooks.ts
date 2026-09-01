@@ -9,10 +9,34 @@
  * omni webhooks trigger --type <event-type> --payload <json> [--instance <id>]
  */
 
+import type { WebhookSignatureConfigBody } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveWebhookId } from '../resolve.js';
+
+const SIGNATURE_ALGORITHMS = ['hmac-sha256', 'hmac-sha1', 'token-match'] as const;
+
+/** Assemble a signatureConfig from the --signature-* flags, or undefined when none given. */
+function buildSignatureConfig(options: {
+  signatureAlgorithm?: string;
+  signatureHeader?: string;
+  signaturePrefix?: string;
+}): WebhookSignatureConfigBody | undefined {
+  const { signatureAlgorithm, signatureHeader, signaturePrefix } = options;
+  if (!signatureAlgorithm && !signatureHeader && !signaturePrefix) return undefined;
+  if (!signatureAlgorithm || !signatureHeader) {
+    output.error('--signature-algorithm and --signature-header must be provided together');
+  }
+  const algorithm = SIGNATURE_ALGORITHMS.find((a) => a === signatureAlgorithm);
+  if (!algorithm) {
+    output.error(`Invalid --signature-algorithm; expected one of: ${SIGNATURE_ALGORITHMS.join(', ')}`);
+  }
+  if (algorithm === 'token-match' && signaturePrefix) {
+    output.error('--signature-prefix is not applicable to token-match (the header carries the secret verbatim)');
+  }
+  return { algorithm, header: signatureHeader, prefix: signaturePrefix };
+}
 
 export function createWebhooksCommand(): Command {
   const webhooks = new Command('webhooks').description('Manage webhook sources');
@@ -74,36 +98,60 @@ export function createWebhooksCommand(): Command {
     .option('--description <desc>', 'Description')
     .option('--disabled', 'Create in disabled state')
     .option('--headers <json>', 'Expected headers as JSON (e.g., \'{"X-Secret": true}\')')
-    .action(async (options: { name: string; description?: string; disabled?: boolean; headers?: string }) => {
-      const client = getClient();
+    .option('--signature-algorithm <alg>', 'Signature verification: hmac-sha256, hmac-sha1, or token-match')
+    .option('--signature-header <name>', 'Header carrying the signature/token (e.g., X-Hub-Signature-256)')
+    .option('--signature-prefix <prefix>', "Prefix before the hex digest (e.g., 'sha256=')")
+    .option('--signature-secret <secret>', 'Shared secret for signature verification (write-only)')
+    .action(
+      async (options: {
+        name: string;
+        description?: string;
+        disabled?: boolean;
+        headers?: string;
+        signatureAlgorithm?: string;
+        signatureHeader?: string;
+        signaturePrefix?: string;
+        signatureSecret?: string;
+      }) => {
+        const client = getClient();
 
-      try {
-        let expectedHeaders: Record<string, boolean> | undefined;
-        if (options.headers) {
-          try {
-            expectedHeaders = JSON.parse(options.headers);
-          } catch {
-            output.error('Invalid JSON for --headers');
+        try {
+          let expectedHeaders: Record<string, boolean> | undefined;
+          if (options.headers) {
+            try {
+              expectedHeaders = JSON.parse(options.headers);
+            } catch {
+              output.error('Invalid JSON for --headers');
+            }
           }
+
+          const signatureConfig = buildSignatureConfig(options);
+
+          const source = await client.webhooks.createSource({
+            name: options.name,
+            description: options.description,
+            enabled: !options.disabled,
+            expectedHeaders,
+            signatureConfig,
+            signatureSecret: options.signatureSecret,
+          });
+
+          const details: Record<string, unknown> = {
+            id: source.id,
+            name: source.name,
+            // Both receivers key on the source NAME, not the id
+            url: `POST /api/v2/webhooks/${source.name}`,
+          };
+          if (signatureConfig) {
+            details.publicUrl = `POST /api/v2/webhooks/ingress/${source.name}`;
+          }
+          output.success(`Webhook source created: ${source.id}`, details);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to create webhook source: ${message}`);
         }
-
-        const source = await client.webhooks.createSource({
-          name: options.name,
-          description: options.description,
-          enabled: !options.disabled,
-          expectedHeaders,
-        });
-
-        output.success(`Webhook source created: ${source.id}`, {
-          id: source.id,
-          name: source.name,
-          url: `POST /api/v2/webhooks/${source.id}`,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to create webhook source: ${message}`);
-      }
-    });
+      },
+    );
 
   // omni webhooks update <id>
   webhooks
@@ -113,17 +161,48 @@ export function createWebhooksCommand(): Command {
     .option('--description <desc>', 'New description')
     .option('--enable', 'Enable the webhook')
     .option('--disable', 'Disable the webhook')
+    .option('--signature-algorithm <alg>', 'Signature verification: hmac-sha256, hmac-sha1, or token-match')
+    .option('--signature-header <name>', 'Header carrying the signature/token (e.g., X-Hub-Signature-256)')
+    .option('--signature-prefix <prefix>', "Prefix before the hex digest (e.g., 'sha256=')")
+    .option('--signature-secret <secret>', 'Shared secret for signature verification (write-only)')
+    .option('--clear-signature', 'Remove the signature config and stored secret')
     .action(
-      async (id: string, options: { name?: string; description?: string; enable?: boolean; disable?: boolean }) => {
+      async (
+        id: string,
+        options: {
+          name?: string;
+          description?: string;
+          enable?: boolean;
+          disable?: boolean;
+          signatureAlgorithm?: string;
+          signatureHeader?: string;
+          signaturePrefix?: string;
+          signatureSecret?: string;
+          clearSignature?: boolean;
+        },
+      ) => {
         const resolvedId = await resolveWebhookId(id);
         const client = getClient();
 
         try {
-          const updates: { name?: string; description?: string; enabled?: boolean } = {};
+          const updates: {
+            name?: string;
+            description?: string;
+            enabled?: boolean;
+            signatureConfig?: WebhookSignatureConfigBody | null;
+            signatureSecret?: string;
+          } = {};
           if (options.name) updates.name = options.name;
           if (options.description) updates.description = options.description;
           if (options.enable) updates.enabled = true;
           if (options.disable) updates.enabled = false;
+          if (options.clearSignature) {
+            updates.signatureConfig = null;
+          } else {
+            const signatureConfig = buildSignatureConfig(options);
+            if (signatureConfig) updates.signatureConfig = signatureConfig;
+            if (options.signatureSecret) updates.signatureSecret = options.signatureSecret;
+          }
 
           const source = await client.webhooks.updateSource(resolvedId, updates);
           output.success(`Webhook source updated: ${source.id}`, {

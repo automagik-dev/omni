@@ -42,21 +42,32 @@ const RATE_LIMITS = {
 } as const;
 
 /**
- * Create rate limiting middleware
+ * Create rate limiting middleware.
+ *
+ * `keyPrefix` isolates a limiter's counters from the default bucket so a
+ * surface with its own budget (e.g. the public webhook ingress) doesn't share
+ * windows with the general limiter for the same identifier.
  */
-function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general) {
+function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general, keyPrefix = 'ratelimit') {
   return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
     // Use API key ID as identifier, then only trusted infra-provided address data.
     // Do not trust client-supplied IP headers unless explicitly configured.
     const apiKey = c.get('apiKey');
     const trustedProxyHeader = process.env.TRUSTED_PROXY_HEADER?.toLowerCase();
     const trustedProxyIp = trustedProxyHeader ? c.req.header(trustedProxyHeader) : undefined;
-    const remoteAddr = (c.env as { remoteAddr?: string } | undefined)?.remoteAddr;
+    // Under Bun.serve, Hono's env is the Bun Server, which exposes the peer
+    // address via requestIP() — there is no `remoteAddr` field. Without this,
+    // unauthenticated surfaces (the public webhook ingress) would all share
+    // one 'anon' bucket instead of being limited per IP.
+    const server = c.env as
+      | { remoteAddr?: string; requestIP?: (req: Request) => { address?: string } | null }
+      | undefined;
+    const remoteAddr = server?.remoteAddr ?? server?.requestIP?.(c.req.raw)?.address;
     const rawIp = trustedProxyIp ?? remoteAddr;
     const normalizedIp = rawIp?.split(',')[0]?.trim() || undefined;
     const identifier = apiKey?.id ? `api:${apiKey.id}` : normalizedIp ? `ip:${normalizedIp}` : 'anon';
 
-    const key = `ratelimit:${identifier}`;
+    const key = `${keyPrefix}:${identifier}`;
     const now = Date.now();
 
     let entry = rateLimitStore.get(key);
@@ -111,3 +122,9 @@ function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general) {
  * Default rate limiter for general endpoints
  */
 export const rateLimitMiddleware = createRateLimiter(RATE_LIMITS.general);
+
+/**
+ * Rate limiter for the auth-exempt generic webhook ingress (issue #928).
+ * Keyed by IP (no API key on that surface), same budget as channel events.
+ */
+export const webhookIngressRateLimitMiddleware = createRateLimiter(RATE_LIMITS.events, 'ratelimit:webhook-ingress');
