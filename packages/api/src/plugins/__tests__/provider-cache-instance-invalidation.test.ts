@@ -96,6 +96,55 @@ describe('invalidateProviderCacheForInstance', () => {
   });
 });
 
+describe('openclaw eviction — the shared pooled WS client must survive', () => {
+  class MockOpenClawClient {
+    static stopCalls = 0;
+    static instances: MockOpenClawClient[] = [];
+    connected = true;
+    state = 'open';
+    constructor(readonly config: Record<string, unknown>) {
+      MockOpenClawClient.instances.push(this);
+    }
+    start(): void {}
+    stop(): void {
+      MockOpenClawClient.stopCalls++;
+    }
+  }
+
+  function fakeOpenClawProvider(): ResolveProviderParams[0] {
+    return fakeAgnoProvider({
+      id: 'provider-openclaw-1',
+      schema: 'openclaw',
+      schemaConfig: { defaultAgentId: 'test-agent' },
+    });
+  }
+
+  it('evicts the provider wrapper without stopping the pooled client, and the rebuild reuses it', () => {
+    MockOpenClawClient.stopCalls = 0;
+    MockOpenClawClient.instances = [];
+    __test__.OpenClawClientClass = MockOpenClawClient as any;
+    try {
+      const provider = fakeOpenClawProvider();
+      const cached = resolveProvider(provider, fakeInstance('inst-oc-a'), db);
+      expect(cached).not.toBeNull();
+      expect(MockOpenClawClient.instances).toHaveLength(1);
+
+      // The regression this pins: dispose() on an evicted OpenClaw provider
+      // would stop the SHARED pooled client for every sibling instance, and
+      // nothing on the instance-eviction path restarts or replaces it.
+      invalidateProviderCacheForInstance('inst-oc-a');
+      expect(MockOpenClawClient.stopCalls).toBe(0);
+
+      const rebuilt = resolveProvider(provider, fakeInstance('inst-oc-a'), db);
+      expect(rebuilt).not.toBe(cached);
+      expect(MockOpenClawClient.instances).toHaveLength(1);
+      expect(__test__.openclawPoolKeys()).toEqual(['provider-openclaw-1::-']);
+    } finally {
+      __test__.resetOpenClawClientClass();
+    }
+  });
+});
+
 describe('touchesProviderBakedConfig', () => {
   it('fires for every provider-baked column, including explicit nulls', () => {
     expect(touchesProviderBakedConfig({ enableAutoSplit: false })).toBe(true);

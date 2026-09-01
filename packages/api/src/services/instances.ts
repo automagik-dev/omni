@@ -47,7 +47,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
 import { forgetInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { credentialSealingEngages, openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
-import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { currentTenantScope, runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
 
 export interface ListInstancesOptions {
   channel?: ChannelType[];
@@ -375,9 +375,12 @@ export class InstanceService {
     // construction, so the dispatcher would keep serving the old values until
     // a process restart unless the cache entry is evicted here. Guarded by
     // field presence so unrelated updates (profileName, isActive, presence…)
-    // don't churn providers that hold live NATS/WS subscriptions.
+    // don't churn providers that hold live NATS/WS subscriptions. Deferred to
+    // commit: inside the request transaction a concurrent dispatch still reads
+    // the OLD row and would re-cache a stale provider right after an immediate
+    // eviction — and a rollback must not have disposed a live provider.
     if (touchesProviderBakedConfig(data)) {
-      invalidateProviderCacheForInstance(id);
+      runAfterTenantCommit(() => invalidateProviderCacheForInstance(id));
     }
 
     rememberInstanceOwners([updated]);
@@ -431,8 +434,10 @@ export class InstanceService {
     forgetInstanceOwner(id);
 
     // Dispose the cached agent provider (and its NATS/WS subscriptions) —
-    // nothing can dispatch for this instance anymore (omni#906).
-    invalidateProviderCacheForInstance(id);
+    // nothing can dispatch for this instance anymore (omni#906). After commit,
+    // so a concurrent dispatch can't rebuild a provider for a row whose DELETE
+    // is still uncommitted (and a rollback keeps the provider alive).
+    runAfterTenantCommit(() => invalidateProviderCacheForInstance(id));
 
     if (this.eventBus) {
       await this.eventBus.publish('instance.disconnected', {

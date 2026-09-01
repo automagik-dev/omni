@@ -8,7 +8,7 @@ import type { Database } from '@omni/db';
 import { type Agent, type NewAgent, agentRoutes, agents, instances } from '@omni/db';
 import { and, eq, sql } from 'drizzle-orm';
 import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import { runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
 
 /**
  * Agent columns whose values get baked into cached IAgentProvider instances by
@@ -133,14 +133,19 @@ export class AgentService {
     if (PROVIDER_BAKED_AGENT_COLUMNS.some((column) => column in data)) {
       // Both reference paths: the instance-level agentId FK and per-chat/user
       // agent routes (mergeRouteOverrides stamps route agents onto the same
-      // `${providerId}:${instanceId}` cache entry).
+      // `${providerId}:${instanceId}` cache entry). The lookup runs in the
+      // transaction; the eviction waits for commit so a concurrent dispatch
+      // can't refill the cache from the pre-commit agent row.
       const [direct, routed] = await Promise.all([
         this.db.select({ id: instances.id }).from(instances).where(eq(instances.agentId, id)),
         this.db.select({ id: agentRoutes.instanceId }).from(agentRoutes).where(eq(agentRoutes.agentId, id)),
       ]);
-      for (const instanceId of new Set([...direct, ...routed].map((row) => row.id))) {
-        invalidateProviderCacheForInstance(instanceId);
-      }
+      const affected = new Set([...direct, ...routed].map((row) => row.id));
+      runAfterTenantCommit(() => {
+        for (const instanceId of affected) {
+          invalidateProviderCacheForInstance(instanceId);
+        }
+      });
     }
 
     return updated;
