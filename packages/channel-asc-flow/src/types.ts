@@ -12,6 +12,13 @@ export interface AscFlowConfig {
   ascFlowChave: string;
   /** `cod_servico` handed to `/transferirHumano` — the queue that receives handoffs. */
   ascFlowHandoffServico: number;
+  /**
+   * Deliver an interactive turn through `POST /mensagem` (real buttons/list in
+   * the running atendimento) instead of leaving the options to a URA node in
+   * the flow. Default true; set false to fall back to the numbered text in
+   * `resposta` if a tenant's flow renders the bubble itself.
+   */
+  ascFlowInteractiveViaMensagem: boolean;
   /** Optional shared secret the flow's api_rest node echoes on each call. */
   webhookVerifyToken?: string;
 }

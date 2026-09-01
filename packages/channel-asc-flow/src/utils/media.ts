@@ -52,7 +52,7 @@ const downloadGuard = createDownloadGuard();
  * the process env is fully settled (and the test suite relies on that).
  */
 let mediaBackend: MediaStorageBackend | null = null;
-function getMediaBackend(): MediaStorageBackend {
+export function getMediaBackend(): MediaStorageBackend {
   if (!mediaBackend) mediaBackend = createMediaBackend(process.env.MEDIA_STORAGE_PATH || './data/media');
   return mediaBackend;
 }

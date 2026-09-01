@@ -36,6 +36,7 @@ Both can exist side by side; they share no code and no configuration.
 | `ascFlowLogin` | yes | `/authuser` login |
 | `ascFlowChave` | yes | `/authuser` chave — **secret**, redacted from API responses |
 | `ascFlowHandoffServico` | no | `cod_servico` for `/transferirHumano` (the destination queue) |
+| `ascFlowInteractiveViaMensagem` | no | default `true` — deliver interactive turns through `POST /mensagem` (real buttons/list); `false` keeps the numbered text in `resposta` |
 | `webhookVerifyToken` | no | shared secret the flow may echo as `?token=` or `x-webhook-token` |
 
 ## Inbound contract
@@ -155,7 +156,8 @@ identity and the only handle every outbound endpoint accepts.
 | Endpoint | When |
 |---|---|
 | `POST /sendIndicador` | typing, on inbound arrival and after each pushed bubble |
-| `POST /callbackFlowMsg` | every bubble EXCEPT the last one |
+| `POST /callbackFlowMsg` | every bubble EXCEPT the last one (plain text turns) |
+| `POST /mensagem` | media, location, contact card, and the interactive last bubble |
 | `POST /transferirHumano` | `metadata.isHandoff === true` |
 
 One `sendMessage` is one flow turn. Blank-line-separated paragraphs become
@@ -164,6 +166,32 @@ typing between them, which is what gives the turn its rhythm); the **last** one
 rides back in `resposta`, the single slot the flow's `message` node renders. A
 refused push degrades to `resposta` rather than costing the beneficiary the
 answer.
+
+### Rich content — `POST /mensagem`
+
+The poll body and `callbackFlowMsg` carry a **string**, so anything that is not
+text leaves through `POST /mensagem`, the one endpoint that injects content into
+a *running* atendimento. One call per message, `entrante: 0`, `bolFlow: true`.
+
+| `content.type` | Fields sent |
+|---|---|
+| `image` / `audio` / `video` / `document` | `url_arquivo` when `content.mediaUrl` is a public `http(s)` URL, otherwise `base64_arquivo` + `nome_arquivo` + `mime_type` — from `metadata.base64` / `metadata.audioBuffer` (what `POST /api/v2/messages/send/media` hands over) or, failing that, from `content.localPath` through the SDK media backend |
+| `location` | `localizacao: {latitude, longitude, endereco}` — `endereco` is `name - address` |
+| `contact` | `cartao_contato: {nome, telefone, email}` |
+| any, with `message.replyTo` | `id_mensagem_resposta`, but **only** when the id is numeric (Omni's own UUIDs mean nothing to the platform and are ignored) |
+
+The caption (`content.caption` / `content.text`) goes in `mensagem`, through the
+same `markdownToWhatsApp` + emoji-marker encoding as any other text.
+
+Ceiling: **16 MB** outbound (Meta's, since the platform is a BSP on top of it;
+base64 inflates by a third). Anything bigger, unreadable, or refused by the
+platform is a `warn` and a **degrade to text** — the turn always resolves, or
+the flow's `api_rest` node would poll until it times out. A file with no caption
+degrades to `[não foi possível enviar o arquivo]` rather than to silence.
+
+`cartao_contato.cod_contato` (a platform-side contact id) has no Omni
+equivalent and is never sent. Stickers and reactions are still out of scope: the
+platform exposes no endpoint for either.
 
 ### Interactive (URA)
 
@@ -180,11 +208,15 @@ The mapping degrades to plain numbered text — never dropping content — when:
   a collision would book the wrong appointment).
 
 The numbered text the agent wrote is the canonical path; the URA is only a tap
-affordance layered on top of it. In the poll model the `ura_opcoes` /
-`forcar_botoes` fields ride in the response body, so they render as a real
-component only once the flow has a URA node consuming them — until then the
-options are the numbered text inside `resposta`. Same ceiling the Python
-adapter ships with, and no code change here when that node exists.
+affordance layered on top of it.
+
+The fields ride in the poll body **and** the last bubble goes out through
+`POST /mensagem` with them, which is what makes the buttons/list render without
+a URA node in the flow. When that push succeeds, `resposta` comes back **empty**
+so the flow's message node does not repeat the bubble — `bolhas` still carries
+the full turn. Set `ascFlowInteractiveViaMensagem: false` on the instance to go
+back to the numbered text in `resposta` (the previous behavior) if a tenant's
+flow renders that bubble itself.
 
 ### Handoff
 
@@ -209,17 +241,17 @@ called on top of the body's `hand_off:"sim"`.
 - **The token lasts one hour.** Cached per instance, refreshed under five
   minutes remaining.
 
-## Out of scope (v1)
+## Out of scope
 
-Media **outbound** (the poll body and `callbackFlowMsg` both carry a string —
-inbound media *is* supported, see above), reactions,
-edits, deletes, groups, read/delivery receipts, and history (the platform
-exposes no transcript API).
+Reactions, stickers, edits, deletes, groups, read/delivery receipts, and history
+(the platform exposes no transcript API).
 
 ## Validated
 
 Ported from a Python adapter that ran the full conversational loop against the
 ASC emulator (auth + token cache, the 401 gotcha, bubble sequencing, URA
 button/list selection and every degradation, `transferirHumano`), including the
-same synchronous "leading bubbles pushed, last one in `resposta`" strategy. **Not yet exercised against a real atendimento** — that
-needs a live number, which is blocked with the client.
+same synchronous "leading bubbles pushed, last one in `resposta`" strategy. Text, inbound media and the turn machinery were exercised
+on the live number 01/09; the `/mensagem` paths (media, location, contact,
+interactive) are covered by tests against a doubled `fetch` and still need one
+live pass on a real `cod_atendimento`.

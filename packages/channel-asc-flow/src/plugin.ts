@@ -13,6 +13,11 @@
  *     back in the HTTP BODY of the api_rest poll → transferirHumano when the
  *     turn hands off
  *
+ * Rich content (media, location, contact card, real buttons/list) cannot ride
+ * a string slot, so it goes through `POST /mensagem` instead — see
+ * `utils/outbound.ts`. When that call delivers the last bubble, `resposta`
+ * comes back EMPTY so the flow does not render the same bubble twice.
+ *
  * POLL contract. The `api_rest` node consumes the HTTP RESPONSE BODY and maps it
  * into flow variables through its `store`; in async mode it re-calls this
  * endpoint until `async_condition` over that body is true. So the turn is a
@@ -51,6 +56,7 @@ import type {
   FetchHistoryOptions,
   FetchHistoryResult,
   InstanceConfig,
+  InteractiveListOptions,
   OutgoingMessage,
   PluginContext,
   SendResult,
@@ -61,11 +67,12 @@ import type { ChannelType } from '@omni/core/types';
 import { ASC_FLOW_CAPABILITIES } from './capabilities';
 import { AscFlowClient } from './client';
 import { type ParsedAscFlowTurn, handleAscFlowWebhookRequest } from './handlers/webhook';
-import type { AscFlowConfig } from './types';
+import type { AscFlowConfig, AscFlowUra } from './types';
 import { encodeAscEmoji } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
 import { buildUra, splitBubbles } from './utils/interactive';
 import { isAscMediaFilename, mediaFallbackText, resolveAscInboundMedia } from './utils/media';
+import { OUTBOUND_MEDIA_FALLBACK_TEXT, buildReplyField, buildRichFields, isRichContent } from './utils/outbound';
 
 /** Platform default — the NotreDame tenant this channel was built against. */
 export const DEFAULT_ASC_FLOW_BASE_URL = 'https://sac-notredame.ascbrazil.com.br';
@@ -130,6 +137,14 @@ function resolveOutboundText(message: OutgoingMessage): string {
   // confirmation). Encoding is the mirror of the inbound decode and runs even
   // in passthrough: it is transport, not formatting.
   return encodeAscEmoji(formatted);
+}
+
+/** The list presentation hints `buildUra` accepts, when the caller set any. */
+function listOptionsOf(content: OutgoingMessage['content']): InteractiveListOptions {
+  return {
+    ...(content.list?.sectionTitle !== undefined ? { sectionTitle: content.list.sectionTitle } : {}),
+    ...(content.list?.forceList !== undefined ? { forceList: content.list.forceList } : {}),
+  };
 }
 
 /** `cod_atendimento` is numeric on the wire; the chat id is its string form. */
@@ -205,6 +220,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       ascFlowLogin: login,
       ascFlowChave: chave,
       ascFlowHandoffServico: Number.isFinite(handoffServico) ? handoffServico : 0,
+      ascFlowInteractiveViaMensagem: pick('ascFlowInteractiveViaMensagem') !== false,
       webhookVerifyToken,
     };
 
@@ -278,30 +294,17 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
     try {
       const cod = toCodAtendimento(to);
-      const bubbles = splitBubbles(text);
-      if (bubbles.length === 0) {
-        throw new AscFlowApiError(AscFlowErrorCode.INVALID_REQUEST, 'refusing to send an empty turn');
-      }
+
+      const { rich, bubbles } = await this.prepareTurn(message, text);
 
       // The URA rides on the LAST bubble — the options attach to the last thing
       // the beneficiary read, and that bubble is the one that goes back in
-      // `resposta`.
-      // ponytail: the api_rest node's return only becomes flow VARIABLES, so
-      // these fields render as an interactive component only once the flow has
-      // a URA node that consumes them; until then the options are the numbered
-      // text the agent already writes into the bubble. Same ceiling the adapter
-      // ships with. Upgrade path: a URA node in the flow, no code change here.
-      const lastBubble = bubbles[bubbles.length - 1] as string;
-      const ura = buildUra(lastBubble, content.buttons, {
-        ...(content.list?.sectionTitle !== undefined ? { sectionTitle: content.list.sectionTitle } : {}),
-        ...(content.list?.forceList !== undefined ? { forceList: content.list.forceList } : {}),
-      });
-
-      // Everything except the last bubble is PUSHED now, so the handset shows
-      // the turn with rhythm while the flow is still polling. Best-effort: a
-      // refused push must not cost the beneficiary the answer, which is the
-      // canonical one in `resposta`.
-      await this.pushLeadingBubbles(state, cod, bubbles);
+      // `resposta`. The fields go BOTH ways: in the poll body (for a flow with
+      // a URA node) and on the `/mensagem` that delivers that bubble (which is
+      // what actually renders buttons today).
+      const lastBubble = bubbles[bubbles.length - 1] ?? '';
+      const ura = rich ? null : buildUra(lastBubble, content.buttons, listOptionsOf(content));
+      const { delivered } = await this.deliver(state, cod, { text, bubbles, lastBubble, rich, ura, message });
 
       const isHandoff = meta.isHandoff === true;
 
@@ -316,7 +319,9 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
       this.resolveTurn(state, to, {
         pronto: 1,
-        resposta: lastBubble,
+        // A refused `/mensagem` with no caption would leave the turn silent —
+        // say so instead, so the beneficiary is not left staring at nothing.
+        resposta: delivered ? '' : lastBubble || OUTBOUND_MEDIA_FALLBACK_TEXT,
         hand_off: isHandoff ? 'sim' : 'nao',
         bolhas: bubbles,
         ...this.buildHandoffFields(isHandoff, meta),
@@ -344,6 +349,8 @@ export class AscFlowPlugin extends BaseChannelPlugin {
             bubbles: bubbles.length,
             interactive: ura ? (ura.forcar_botoes ? 'buttons' : 'list') : 'text',
             uraOptions: ura ? Object.keys(ura.ura_opcoes).length : 0,
+            /** Rich content left through `/mensagem` rather than the poll body. */
+            viaMensagem: delivered,
             handoff: isHandoff,
           },
         },
@@ -397,6 +404,101 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       ...(typeof fila === 'string' || typeof fila === 'number' ? { fila_vq: String(fila) } : {}),
       ...(typeof motivo === 'string' && motivo.trim() ? { motivo_transf_vq: motivo.trim() } : {}),
     };
+  }
+
+  /**
+   * Split the turn into bubbles and resolve whatever rich fields it carries.
+   *
+   * Media, location and contact cannot ride the poll body (it carries a
+   * string), so they leave through `/mensagem`; a failure to build their
+   * fields degrades to text, and a file with no caption degrades to a line
+   * saying so rather than to a silent turn.
+   */
+  private async prepareTurn(
+    message: OutgoingMessage,
+    text: string,
+  ): Promise<{ rich: Record<string, unknown> | null; bubbles: string[] }> {
+    const isRich = isRichContent(message.content);
+    const rich = isRich ? await buildRichFields(message, this.logger) : null;
+    const bubbles = splitBubbles(text);
+
+    if (bubbles.length > 0) return { rich, bubbles };
+    if (isRich && !rich) return { rich, bubbles: [OUTBOUND_MEDIA_FALLBACK_TEXT] };
+    if (rich) return { rich, bubbles };
+    throw new AscFlowApiError(AscFlowErrorCode.INVALID_REQUEST, 'refusing to send an empty turn');
+  }
+
+  /**
+   * Put the turn on the handset and report whether the LAST bubble already
+   * went out through `/mensagem`. When it did, `resposta` must go back empty:
+   * the flow's message node renders it, and a non-empty one would show the
+   * same bubble twice.
+   */
+  private async deliver(
+    state: AscFlowInstanceState,
+    cod: number,
+    turn: {
+      text: string;
+      bubbles: string[];
+      lastBubble: string;
+      rich: Record<string, unknown> | null;
+      ura: AscFlowUra | null;
+      message: OutgoingMessage;
+    },
+  ): Promise<{ delivered: boolean }> {
+    const reply = buildReplyField(turn.message.replyTo);
+
+    // One `/mensagem` carries the file/pin/card plus its caption.
+    if (turn.rich) {
+      return { delivered: await this.sendMensagem(state, cod, turn.text, { ...turn.rich, ...reply }) };
+    }
+
+    // Everything except the last bubble is PUSHED now, so the handset shows the
+    // turn with rhythm while the flow is still polling. Best-effort: a refused
+    // push must not cost the beneficiary the answer, which is the canonical one
+    // in `resposta`.
+    await this.pushLeadingBubbles(state, cod, turn.bubbles);
+
+    // The URA rides in the poll body too, but that only renders once the flow
+    // has a URA node consuming it. `/mensagem` is the endpoint that injects
+    // real buttons/list into the running atendimento, so the last bubble goes
+    // out there as well — the numbered text it carries stays the canonical
+    // fallback either way.
+    if (turn.ura && state.config.ascFlowInteractiveViaMensagem) {
+      return { delivered: await this.sendMensagem(state, cod, turn.lastBubble, { ...turn.ura, ...reply }) };
+    }
+    return { delivered: false };
+  }
+
+  /**
+   * `POST /mensagem` — the only endpoint that injects rich content (file, pin,
+   * contact card, URA) into a running atendimento. Best-effort like the leading
+   * bubbles: `false` means the caller must fall back to `resposta`, never that
+   * the turn fails.
+   */
+  private async sendMensagem(
+    state: AscFlowInstanceState,
+    cod: number,
+    text: string,
+    extra: Record<string, unknown>,
+  ): Promise<boolean> {
+    try {
+      await state.client.call('/mensagem', {
+        cod,
+        mensagem: text,
+        entrante: 0,
+        bolFlow: true,
+        ...extra,
+      });
+      return true;
+    } catch (err) {
+      this.logger.warn('[asc-flow] /mensagem refused — degrading to the text turn', {
+        cod,
+        fields: Object.keys(extra),
+        err: String(err),
+      });
+      return false;
+    }
   }
 
   /**
