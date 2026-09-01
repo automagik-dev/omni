@@ -551,6 +551,7 @@ async function sendTextMessage(
   replyTo?: string,
   correlationId?: string,
   senderAgentId?: string,
+  systemNotice?: boolean,
 ): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
@@ -563,7 +564,7 @@ async function sendTextMessage(
     to: chatId,
     content: { type: 'text', text: sanitized },
     replyTo,
-    metadata: { messageFormatMode, correlationId, senderAgentId },
+    metadata: { messageFormatMode, correlationId, senderAgentId, systemNotice },
   });
 }
 
@@ -614,7 +615,9 @@ async function sendErrorFeedback(
 ): Promise<void> {
   const errorMsg = error instanceof Error ? error.message : String(error);
   log.error('agent_dispatch_error', { channel, instanceId, chatId, error: errorMsg });
-  await sendTextMessage(channel, instanceId, chatId, message);
+  // systemNotice: the dispatch FAILED — this apology must not count as "the
+  // turn was answered" or replay-on-reconnect would never retry it (#912)
+  await sendTextMessage(channel, instanceId, chatId, message, 'convert', undefined, undefined, undefined, true);
 }
 
 /**
@@ -4032,7 +4035,19 @@ async function processAgentResponse(
       await sendTypingPresence(channel, instance.id, chatId, 'composing');
       try {
         if (agentAckMessage) {
-          sendTextMessage(channel, instance.id, chatId, agentAckMessage).catch((err) => {
+          // systemNotice: the ack precedes the real reply — it must not count
+          // as "the turn was answered" for agent replay (#912 review)
+          sendTextMessage(
+            channel,
+            instance.id,
+            chatId,
+            agentAckMessage,
+            'convert',
+            undefined,
+            undefined,
+            undefined,
+            true,
+          ).catch((err) => {
             log.warn('Failed to send agent ack message', { instanceId: instance.id, chatId, error: String(err) });
           });
         }
