@@ -241,4 +241,29 @@ describe('outbound turn', () => {
     expect(result.success).toBe(false);
     expect(calls).toHaveLength(0);
   });
+
+  // The far end is WhatsApp: `**bold**` reaches the handset raw and WhatsApp
+  // pairs the asterisks wrong. Measured on the live number 01/09.
+  it('converts markdown to WhatsApp syntax before delivering', async () => {
+    await boot();
+    await plugin.sendMessage(instanceId, {
+      to: '42',
+      content: { type: 'text', text: 'Bom dia, **Rogerio**. Informe seu **CPF**.' } as never,
+    });
+
+    expect(ready('42')).toMatchObject({
+      resposta: 'Bom dia, *Rogerio*. Informe seu *CPF*.',
+    });
+  });
+
+  it('honors passthrough for callers that already formatted the text', async () => {
+    await boot();
+    await plugin.sendMessage(instanceId, {
+      to: '42',
+      content: { type: 'text', text: '**cru**' } as never,
+      metadata: { messageFormatMode: 'passthrough' },
+    });
+
+    expect(ready('42')).toMatchObject({ resposta: '**cru**' });
+  });
 });

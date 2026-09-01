@@ -55,7 +55,7 @@ import type {
   PluginContext,
   SendResult,
 } from '@omni/channel-sdk';
-import type { Logger } from '@omni/core';
+import { type Logger, markdownToWhatsApp } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 
 import { ASC_FLOW_CAPABILITIES } from './capabilities';
@@ -111,6 +111,19 @@ interface AscFlowInstanceState {
  * same menu.
  */
 const IN_FLIGHT_TTL_MS = 60_000;
+
+/**
+ * Markdown → WhatsApp syntax, honoring the instance's `messageFormatMode`
+ * (same contract as hermes/whatsapp-business/baileys). The far end of this
+ * channel IS WhatsApp — the ASC flow delivers to the handset — so without this
+ * the agent's `**bold**` arrives raw and WhatsApp pairs the asterisks wrong.
+ * Measured on the live number 01/09.
+ */
+function resolveOutboundText(message: OutgoingMessage): string {
+  const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+  const text = message.content.text ?? message.content.caption ?? '';
+  return formatMode === 'passthrough' ? text : markdownToWhatsApp(text);
+}
 
 /** `cod_atendimento` is numeric on the wire; the chat id is its string form. */
 function toCodAtendimento(chatId: string): number {
@@ -251,7 +264,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
     const { content, to } = message;
     const meta = message.metadata ?? {};
-    const text = content.text ?? content.caption ?? '';
+    const text = resolveOutboundText(message);
 
     const correlationId = meta.correlationId as string | undefined;
     if (correlationId) this.captureT10(correlationId);
