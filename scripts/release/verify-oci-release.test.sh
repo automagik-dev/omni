@@ -53,6 +53,10 @@ chmod +x "${work}/bin/docker"
 
 run_verify() {
   (
+    # The script writes step outputs when GitHub Actions exports GITHUB_OUTPUT.
+    # This fixture intentionally captures stdout, so isolate that contract from
+    # the runner-provided environment.
+    unset GITHUB_OUTPUT
     cd "${repo}"
     PATH="${work}/bin:${PATH}" "${SCRIPT}" \
       --ref "refs/tags/v${VERSION}" \

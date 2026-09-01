@@ -38,6 +38,10 @@ PARENT="$(git -C "${repo}" rev-parse HEAD)"
 
 run_pin() {
   (
+    # GitHub Actions exports this for every step. The fixture asserts the
+    # command's stdout contract, so do not let the runner redirect it to the
+    # workflow output file while this unit test is capturing stdout.
+    unset GITHUB_OUTPUT
     cd "${repo}"
     "${SCRIPT}" \
       --version 2.260830.2 \
