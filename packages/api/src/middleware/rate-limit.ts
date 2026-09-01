@@ -55,7 +55,14 @@ function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general, keyPre
     const apiKey = c.get('apiKey');
     const trustedProxyHeader = process.env.TRUSTED_PROXY_HEADER?.toLowerCase();
     const trustedProxyIp = trustedProxyHeader ? c.req.header(trustedProxyHeader) : undefined;
-    const remoteAddr = (c.env as { remoteAddr?: string } | undefined)?.remoteAddr;
+    // Under Bun.serve, Hono's env is the Bun Server, which exposes the peer
+    // address via requestIP() — there is no `remoteAddr` field. Without this,
+    // unauthenticated surfaces (the public webhook ingress) would all share
+    // one 'anon' bucket instead of being limited per IP.
+    const server = c.env as
+      | { remoteAddr?: string; requestIP?: (req: Request) => { address?: string } | null }
+      | undefined;
+    const remoteAddr = server?.remoteAddr ?? server?.requestIP?.(c.req.raw)?.address;
     const rawIp = trustedProxyIp ?? remoteAddr;
     const normalizedIp = rawIp?.split(',')[0]?.trim() || undefined;
     const identifier = apiKey?.id ? `api:${apiKey.id}` : normalizedIp ? `ip:${normalizedIp}` : 'anon';

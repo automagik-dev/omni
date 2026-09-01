@@ -122,6 +122,26 @@ describe('public webhook ingress', () => {
     expect(res.status).toBe(401);
   });
 
+  test('a signed non-JSON body is rejected with 400, not silently emptied', async () => {
+    const app = buildApp([makeSource()]);
+    const body = 'a=1&b=2';
+
+    const res = await post(app, '/api/v2/webhooks/ingress/github', body, { 'X-Hub-Signature-256': sign(body) });
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json.error.code).toBe('VALIDATION');
+  });
+
+  test('a signed request missing an expected header is a 400, not a 500', async () => {
+    const app = buildApp([makeSource({ expectedHeaders: { 'X-GitHub-Event': true } })]);
+    const body = JSON.stringify({ action: 'push' });
+
+    const res = await post(app, '/api/v2/webhooks/ingress/github', body, { 'X-Hub-Signature-256': sign(body) });
+
+    expect(res.status).toBe(400);
+  });
+
   test('the authenticated receiver route still requires an API key', async () => {
     const app = buildApp([makeSource()]);
 

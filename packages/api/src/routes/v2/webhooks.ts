@@ -18,11 +18,16 @@ const webhooksRoutes = new Hono<{ Variables: AppVariables }>();
 // ============================================================================
 
 // Signature verification contract for the source (issue #928)
-const signatureConfigSchema = z.object({
-  algorithm: z.enum(webhookSignatureAlgorithms).describe('How to verify: HMAC over the raw body, or token match'),
-  header: z.string().min(1).max(200).describe('Header carrying the signature/token (e.g. X-Hub-Signature-256)'),
-  prefix: z.string().max(50).optional().describe('Prefix before the hex digest (e.g. "sha256=")'),
-});
+const signatureConfigSchema = z
+  .object({
+    algorithm: z.enum(webhookSignatureAlgorithms).describe('How to verify: HMAC over the raw body, or token match'),
+    header: z.string().min(1).max(200).describe('Header carrying the signature/token (e.g. X-Hub-Signature-256)'),
+    prefix: z.string().max(50).optional().describe('Prefix before the hex digest (HMAC algorithms only)'),
+  })
+  .refine((config) => config.algorithm !== 'token-match' || config.prefix === undefined, {
+    message: "prefix is not applicable to algorithm 'token-match'",
+    path: ['prefix'],
+  });
 
 // Create webhook source schema
 const createWebhookSourceSchema = z.object({

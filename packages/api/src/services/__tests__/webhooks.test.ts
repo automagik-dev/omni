@@ -617,6 +617,12 @@ describe('WebhookService', () => {
       ).rejects.toThrow('signatureSecret is required');
     });
 
+    test('create() rejects a secret without a signatureConfig', async () => {
+      await expect(service.create({ name: 'github', signatureSecret: 'orphan-secret' })).rejects.toThrow(
+        'signatureSecret cannot be set without a signatureConfig',
+      );
+    });
+
     test('update() clearing the config also clears the stored secret', async () => {
       const source = createMockSource({ id: 'test-123', signatureSecret: 'stored' });
       mockDb = createMockDatabase([source]);
@@ -625,6 +631,36 @@ describe('WebhookService', () => {
       await service.update('test-123', { signatureConfig: null });
 
       expect(mockDb._calls.update[0]).toMatchObject({ signatureConfig: null, signatureSecret: null });
+    });
+
+    test('update() rejects nulling the secret while the config stays set', async () => {
+      const source = createMockSource({
+        id: 'test-123',
+        signatureConfig: { algorithm: 'hmac-sha256', header: 'X-Hub-Signature-256' },
+        signatureSecret: 'stored',
+      });
+      mockDb = createMockDatabase([source]);
+      service = new WebhookService(mockDb, mockEventBus);
+
+      await expect(service.update('test-123', { signatureSecret: null })).rejects.toThrow(
+        'signatureSecret is required when signatureConfig is set',
+      );
+      expect(mockDb._calls.update).toHaveLength(0);
+    });
+
+    test('update() rejects a new secret alongside clearing the config', async () => {
+      const source = createMockSource({
+        id: 'test-123',
+        signatureConfig: { algorithm: 'hmac-sha256', header: 'X-Hub-Signature-256' },
+        signatureSecret: 'stored',
+      });
+      mockDb = createMockDatabase([source]);
+      service = new WebhookService(mockDb, mockEventBus);
+
+      await expect(service.update('test-123', { signatureConfig: null, signatureSecret: 'fresh-one' })).rejects.toThrow(
+        'signatureSecret cannot be set without a signatureConfig',
+      );
+      expect(mockDb._calls.update).toHaveLength(0);
     });
   });
 

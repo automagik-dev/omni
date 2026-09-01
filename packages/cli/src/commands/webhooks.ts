@@ -32,6 +32,9 @@ function buildSignatureConfig(options: {
   if (!algorithm) {
     output.error(`Invalid --signature-algorithm; expected one of: ${SIGNATURE_ALGORITHMS.join(', ')}`);
   }
+  if (algorithm === 'token-match' && signaturePrefix) {
+    output.error('--signature-prefix is not applicable to token-match (the header carries the secret verbatim)');
+  }
   return { algorithm, header: signatureHeader, prefix: signaturePrefix };
 }
 
@@ -133,11 +136,16 @@ export function createWebhooksCommand(): Command {
             signatureSecret: options.signatureSecret,
           });
 
-          output.success(`Webhook source created: ${source.id}`, {
+          const details: Record<string, unknown> = {
             id: source.id,
             name: source.name,
-            url: `POST /api/v2/webhooks/${source.id}`,
-          });
+            // Both receivers key on the source NAME, not the id
+            url: `POST /api/v2/webhooks/${source.name}`,
+          };
+          if (signatureConfig) {
+            details.publicUrl = `POST /api/v2/webhooks/ingress/${source.name}`;
+          }
+          output.success(`Webhook source created: ${source.id}`, details);
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
           output.error(`Failed to create webhook source: ${message}`);

@@ -443,17 +443,26 @@ export function createApp(
   // unconfigured, bad signature) collapse into one 401 shape so the public
   // endpoint is not a source-name existence oracle; the real reason is logged.
   // The authenticated POST /api/v2/webhooks/:source route remains for internal
-  // callers. Must be mounted before protectedApp.
+  // callers. A non-empty body that is not a JSON object is a 400 — silently
+  // publishing an empty payload would fire automations on a hollow event.
+  // Must be mounted before protectedApp.
   app.post('/api/v2/webhooks/ingress/:source', webhookIngressRateLimitMiddleware, async (c) => {
     const sourceName = c.req.param('source');
     const services = c.get('services');
 
     const rawBody = await c.req.text();
-    let payload: Record<string, unknown>;
-    try {
-      payload = rawBody ? JSON.parse(rawBody) : {};
-    } catch {
-      payload = {};
+    let payload: Record<string, unknown> = {};
+    if (rawBody) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawBody);
+      } catch {
+        parsed = undefined;
+      }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        return c.json({ error: { code: 'VALIDATION', message: 'Request body must be a JSON object' } }, 400);
+      }
+      payload = parsed as Record<string, unknown>;
     }
 
     const headers: Record<string, string> = {};

@@ -286,7 +286,10 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'auto-created on this surface. All rejections (unknown source, disabled, unconfigured, bad signature) ' +
       'collapse into a single 401 shape so the endpoint is not a source-name existence oracle, and the surface ' +
       'is IP-rate-limited. The tenant, when one applies, comes from the server-side webhook_sources row, never ' +
-      'from a request claim. Responses carry only the generated event id and echo of the source name.',
+      'from a request claim. Responses carry only the generated event id and echo of the source name. ' +
+      'ACCEPTED LIMITATION: the signature covers the body only — no timestamp tolerance or delivery-id dedupe — ' +
+      'so a captured signed request can be replayed within the rate limit; consumers of custom.webhook.* events ' +
+      'must treat deliveries as at-least-once, exactly as they already must for provider-side webhook retries.',
   },
   {
     route: 'GET /api/v2/channels/whatsapp-business/webhook',

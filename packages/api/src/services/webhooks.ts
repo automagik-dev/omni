@@ -101,6 +101,9 @@ export class WebhookService {
     if (data.signatureConfig && !data.signatureSecret) {
       throw new ValidationError('signatureSecret is required when signatureConfig is set');
     }
+    if (data.signatureSecret && !data.signatureConfig) {
+      throw new ValidationError('signatureSecret cannot be set without a signatureConfig');
+    }
 
     const values = data.signatureSecret
       ? { ...data, signatureSecret: sealCredentialField(this.tenantId, data.signatureSecret) }
@@ -120,22 +123,28 @@ export class WebhookService {
   async update(id: string, data: Partial<NewWebhookSource>): Promise<WebhookSource> {
     const patch: Partial<NewWebhookSource> = { ...data };
 
-    if (data.signatureSecret != null) {
+    if (typeof data.signatureSecret === 'string') {
       patch.signatureSecret = sealCredentialField(this.tenantId, data.signatureSecret);
-    } else if (data.signatureConfig === null && data.signatureSecret === undefined) {
-      // Clearing the config would orphan the stored secret — clear it too.
-      patch.signatureSecret = null;
     }
 
-    if (data.signatureConfig) {
-      if (data.signatureSecret === null) {
+    // Invariant across every partial-update combination: a signature config
+    // always has a secret, and a secret never outlives its config. `undefined`
+    // means "untouched" and inherits the stored value; `null` is an explicit
+    // clear.
+    if (data.signatureConfig !== undefined || data.signatureSecret !== undefined) {
+      const existing = await this.getById(id);
+      const nextConfig = data.signatureConfig === undefined ? existing.signatureConfig : data.signatureConfig;
+      const nextSecret = data.signatureSecret === undefined ? existing.signatureSecret : patch.signatureSecret;
+
+      if (nextConfig && !nextSecret) {
         throw new ValidationError('signatureSecret is required when signatureConfig is set');
       }
-      if (data.signatureSecret === undefined) {
-        const existing = await this.getById(id);
-        if (!existing.signatureSecret) {
-          throw new ValidationError('signatureSecret is required when signatureConfig is set');
+      if (!nextConfig) {
+        if (typeof data.signatureSecret === 'string') {
+          throw new ValidationError('signatureSecret cannot be set without a signatureConfig');
         }
+        // Clearing the config would orphan the stored secret — clear it too.
+        patch.signatureSecret = null;
       }
     }
 
@@ -221,7 +230,7 @@ export class WebhookService {
     if (source.expectedHeaders) {
       for (const headerName of Object.keys(source.expectedHeaders)) {
         if (!headers[headerName.toLowerCase()]) {
-          throw new Error(`Missing required header: ${headerName}`);
+          throw new ValidationError(`Missing required header: ${headerName}`);
         }
       }
     }

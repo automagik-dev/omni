@@ -13,7 +13,9 @@ export const WebhookSignatureConfigSchema = z.object({
     description: 'How to verify: HMAC over the raw request body, or direct token match',
   }),
   header: z.string().openapi({ description: 'Header carrying the signature/token (e.g. X-Hub-Signature-256)' }),
-  prefix: z.string().optional().openapi({ description: 'Prefix before the hex digest (e.g. "sha256=")' }),
+  prefix: z.string().optional().openapi({
+    description: 'Prefix before the hex digest (e.g. "sha256="). HMAC algorithms only — rejected with token-match',
+  }),
 });
 
 // Webhook source schema
