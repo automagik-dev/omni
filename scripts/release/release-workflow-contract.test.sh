@@ -19,6 +19,8 @@ release = workflows["release.yml"]
 release_publish = workflows["release-publish.yml"]
 ci = workflows["ci.yml"]
 all_workflows = "\n".join(workflows.values())
+deploy_readme = (root / "deploy/README.md").read_text(encoding="utf-8")
+claude_reference = (root / ".claude/CLAUDE.md").read_text(encoding="utf-8")
 errors: list[str] = []
 
 
@@ -80,6 +82,29 @@ if (root / "deploy/helm/omni/values-prod-gitops.yaml").exists():
 if (root / "scripts/release/pin-production-image.sh").exists():
     errors.append("obsolete production-pin writer helper still exists")
 
+for name, document in (
+    ("deploy/README.md", deploy_readme),
+    (".claude/CLAUDE.md", claude_reference),
+):
+    require(document, r"direct `dev` → `main`", f"{name} does not state the direct dev-to-main public topology")
+    require(document, r"`main`[^\n]*verification-only", f"{name} does not identify main as verification-only")
+    require(document, r"HML[\s\S]{0,160}legacy/reference-only", f"{name} does not identify HML as legacy/reference-only")
+    require(document, r"Production\s+authority[\s\S]{0,160}separate/private", f"{name} does not identify separate/private production authority")
+
+for pattern, message in (
+    (r"\bhomolog branch\b", "documentation still describes a homolog branch"),
+    (r"`:homolog` tag", "documentation still describes a homolog image tag"),
+    (r"\btwo-hop\b", "documentation still describes a two-hop promotion"),
+    (r"\bdormant\b[^\n]*\bworkflows?\b", "documentation still describes dormant workflow plumbing"),
+    (r"v-tags published on merge to `main`", "documentation still says main publishes version tags"),
+    (r"`main` is production", "documentation still identifies main as production authority"),
+    (r"`main` merge triggers release-please", "documentation still says main merge publishes a release"),
+):
+    forbid(f"{deploy_readme}\n{claude_reference}", pattern, message)
+
+forbid(deploy_readme, r"make -C deploy deploy REALM=homolog", "deployment guide still instructs an HML deployment")
+forbid(deploy_readme, r"helm upgrade --install omni[^`]*values-homolog", "deployment guide still instructs an HML co-tenant deployment")
+
 require(release, r"authorize:[\s\S]{0,200}timeout-minutes:\s*[0-9]+", "release authorization has no finite timeout")
 require(release, r"bare tag pushes do not release", "release workflow still misstates bare-tag authorization")
 
@@ -124,5 +149,5 @@ if errors:
     for error in errors:
         print(f"FAIL: {error}", file=sys.stderr)
     raise SystemExit(1)
-print("PASS: read-only public promotion and PR-owned metadata contract")
+print("PASS: read-only public promotion, docs topology, and PR-owned metadata contract")
 PY

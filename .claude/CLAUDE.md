@@ -347,37 +347,33 @@ make migrate-messages      # Live migration
 
 ---
 
-## Git Workflow — AI-First with Rolling Promotion
+## Git Workflow — AI-First with Public Verification
 
 ### The Simple Rule
 
 > **New work = PR to dev. Fixes = direct commit to dev.**
 
 ```
-main <── dev <── feature PRs (auto-merge)
-  ▲       |
-promote   └── direct commits (fixes/hotfixes)
-(human)
+main (public verification) <── dev <── feature PRs (auto-merge)
+              ▲               |
+          human PR             └── direct commits (fixes/hotfixes)
 ```
 
-Promotion is a **single carry-exact hop**: `dev → main`. `dev` is integration;
-`main` is production. The hop is a PR a human merges — the version carries
-exactly (bump on `dev` only, never re-bumped on promotion).
+Promotion is a carry-exact, direct `dev` → `main` PR that a human merges. `dev`
+is the integration branch; `main` is the protected public verification branch,
+and the version is never re-bumped during promotion.
 
-The `homolog` branch and its two-hop flow were retired on 2026-07-29: every
-promotion had been going `dev → main` directly anyway, leaving `homolog` 83
-commits stale, and the extra gate cost more than it caught at omni's current
-maturity. Its release-channel plumbing (`homolog` npm dist-tag,
-`.well-known/homolog.json`, HML image builds) is left dormant in the workflows
-rather than deleted, so restoring the gate later is re-creating one branch.
-The `omni-hml` Kubernetes namespace and `values-homolog.yaml` are the *staging
-environment* and are unaffected — they were never the same thing as the branch.
+The `main` workflow is verification-only and checks the already-published
+immutable candidate without building, publishing, retagging, or changing a
+runtime. HML runtime and configuration files are legacy/reference-only; they do
+not represent an active public branch, tag, channel, or gate. Production
+authority is separate/private and lives outside this public repository.
 
 ### Branch Roles
 
 | Branch | Purpose | Who commits | Protection |
 |--------|---------|-------------|------------|
-| `main` | Production | Human merges `dev → main` promotion PR | PR-only, all checks required |
+| `main` | Read-only verification of the reviewed public candidate | Human merges `dev → main` promotion PR | PR-only, all checks required |
 | `dev` | Integration | Agent + PRs | Direct commits OK, PRs need checks |
 | `feat/*` | New features | Worktrees, PR to `dev` | Auto-merge when green |
 | `fix/*` | Bug fixes | Direct on `dev` or worktree | — |
@@ -385,7 +381,8 @@ environment* and are unaffected — they were never the same thing as the branch
 ### Promotion (dev → main)
 
 Open when `dev` is ahead of `main` and green. Carry-exact (no version re-bump).
-A human merges after CI passes; the `main` merge triggers release-please.
+A human merges after CI passes; the protected `main` path then verifies the
+fixed candidate and existing public artifacts without publishing anything.
 
 ### Conventional Commits (Required)
 
@@ -424,17 +421,21 @@ ci(rolling-pr): update workflow permissions
 3. **Resolve conflicts** — `git merge origin/main` (merge commits, not rebase)
 4. **Notify human** — label + channel message when rolling PR is green
 
-### Automated Releases
+### Public Release Boundary
 
-- **release-please** runs on main merge
-- Single repo-wide version (all packages together)
-- CHANGELOG.md auto-updated
+- Integration versioning happens on `dev`.
+- The reviewed version carries unchanged into `main`.
+- The public `main` path only verifies existing immutable artifacts.
+- Production release and runtime decisions belong to the separate/private
+  authority.
 
 ---
 
 ## Technical Never Do
 
-- **Don't code on main** — main is production, rolling PR only. Use `dev` for development, `feat/*` for features. If `git branch --show-current` returns `main`, STOP immediately.
+- **Don't code on main** — it is the protected public verification branch,
+  rolling PR only. Use `dev` for development, `feat/*` for features. If
+  `git branch --show-current` returns `main`, STOP immediately.
 - Don't use non-conventional commit messages (all commits must be `type(scope): description`)
 - Don't create nightly branches (deprecated — use feature PR to dev flow)
 - Don't use npm/yarn/pnpm (use Bun exclusively)

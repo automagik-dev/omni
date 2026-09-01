@@ -30,6 +30,81 @@ def forbid(text: str, pattern: str, message: str) -> None:
         errors.append(message)
 
 
+def indentation(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def permissions_at(lines: list[str], indent: int) -> dict[str, str] | None:
+    prefix = " " * indent
+    for index, line in enumerate(lines):
+        if not line.startswith(f"{prefix}permissions:") or indentation(line) != indent:
+            continue
+        value = line.split(":", 1)[1].split("#", 1)[0].strip()
+        if value == "{}":
+            return {}
+        if value in ("read-all", "write-all"):
+            return {"*": value.removesuffix("-all")}
+        permissions: dict[str, str] = {}
+        for nested in lines[index + 1 :]:
+            if not nested.strip() or nested.lstrip().startswith("#"):
+                continue
+            nested_indent = indentation(nested)
+            if nested_indent <= indent:
+                break
+            match = re.match(r"^\s*([a-z-]+):\s*(read|write|none)(?:\s+#.*)?$", nested)
+            if nested_indent == indent + 2 and match:
+                permissions[match.group(1)] = match.group(2)
+        return permissions
+    return None
+
+
+def job_blocks(text: str) -> dict[str, list[str]]:
+    lines = text.splitlines()
+    jobs_index = next(
+        (index for index, line in enumerate(lines) if line == "jobs:"),
+        None,
+    )
+    if jobs_index is None:
+        return {}
+    blocks: dict[str, list[str]] = {}
+    current_name: str | None = None
+    current_lines: list[str] = []
+    for line in lines[jobs_index + 1 :]:
+        if line.strip() and not line.lstrip().startswith("#") and indentation(line) == 0:
+            break
+        header = re.match(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$", line)
+        if header:
+            if current_name is not None:
+                blocks[current_name] = current_lines
+            current_name = header.group(1)
+            current_lines = [line]
+        elif current_name is not None:
+            current_lines.append(line)
+    if current_name is not None:
+        blocks[current_name] = current_lines
+    return blocks
+
+
+def effective_job_permissions(text: str) -> dict[str, dict[str, str]]:
+    lines = text.splitlines()
+    workflow_permissions = permissions_at(lines, 0)
+    if workflow_permissions is None:
+        workflow_permissions = {}
+    effective: dict[str, dict[str, str]] = {}
+    for job_name, block in job_blocks(text).items():
+        job_permissions = permissions_at(block, 4)
+        effective[job_name] = (
+            workflow_permissions.copy()
+            if job_permissions is None
+            else job_permissions
+        )
+    return effective
+
+
+def permission_level(permissions: dict[str, str], scope: str) -> str:
+    return permissions.get(scope, permissions.get("*", "none"))
+
+
 def expressions_in_run(text: str) -> list[int]:
     findings: list[int] = []
     block_indent: int | None = None
@@ -75,6 +150,24 @@ matcher_fixture = """steps:
 """
 if len(expressions_in_run(matcher_fixture)) != 8:
     errors.append("run-expression matcher does not cover direct or transitive expressions in every YAML scalar form")
+
+permission_fixture = """permissions:
+  actions: read
+  contents: read
+jobs:
+  inherits:
+    runs-on: ubuntu-latest
+  overrides:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+"""
+fixture_permissions = effective_job_permissions(permission_fixture)
+if permission_level(fixture_permissions["inherits"], "actions") != "read":
+    errors.append("effective-permission matcher does not inherit workflow permissions")
+if permission_level(fixture_permissions["overrides"], "actions") != "none":
+    errors.append("effective-permission matcher does not model job maps as full overrides")
+
 for name, workflow in workflows.items():
     for line in expressions_in_run(workflow):
         errors.append(f"{name}:{line} interpolates a GitHub expression directly inside a shell run value")
@@ -85,6 +178,28 @@ for name, workflow in workflows.items():
         errors.append(f"{name} unconditionally inherits repository secrets")
     if "secrets.GITHUB_TOKEN" in workflow:
         errors.append(f"{name} uses secrets.GITHUB_TOKEN instead of the scoped github.token")
+
+    effective_permissions = effective_job_permissions(workflow)
+    for job_name, block in job_blocks(workflow).items():
+        job = "\n".join(block)
+        api_backed_download = (
+            "actions/download-artifact@" in job
+            and re.search(r"^\s*run-id:\s*", job, flags=re.MULTILINE)
+            and re.search(
+                r"^\s*github-token:\s*\$\{\{\s*github\.token\s*\}\}",
+                job,
+                flags=re.MULTILINE,
+            )
+        )
+        if not api_backed_download:
+            continue
+        effective = effective_permissions[job_name]
+        actions = permission_level(effective, "actions")
+        if actions != "read":
+            errors.append(
+                f"{name}:{job_name} uses an API-backed artifact download "
+                f"without effective actions: read (got {actions})"
+            )
 
 candidate_check = image.find("verify-promotion-candidate.sh")
 oci_check = image.find("verify-oci-release.sh")
@@ -137,5 +252,5 @@ if errors:
     for error in errors:
         print(f"FAIL: {error}", file=sys.stderr)
     raise SystemExit(1)
-print("PASS: promotion-only verification ordering contract")
+print("PASS: workflow pins, effective permissions, shell-expression boundaries, and promotion ordering")
 PY

@@ -193,6 +193,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      actions: read        # cross-run tarball artifact download
       id-token: write       # OIDC for cosign keyless + attest-build-provenance
       attestations: write   # actions/attest-build-provenance@v1 registration
     strategy:
