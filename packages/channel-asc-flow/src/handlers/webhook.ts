@@ -67,12 +67,32 @@ export interface ParsedAscFlowTurn {
 }
 
 /**
+ * The platform ships emoji transcoded as `##<codepoint>[-<codepoint>…]##`
+ * instead of the character — a 🗑️ arrives as `##1f5d1-fe0f##` (measured on the
+ * live number 01/09). Left raw it defeats every downstream text rule that
+ * matches on the real character; the session cleaner's trash-emoji reset was
+ * the first casualty, and the agent would have read the marker as prose.
+ */
+const ASC_EMOJI_MARKER = /##([0-9a-f]{2,6}(?:-[0-9a-f]{2,6})*)##/gi;
+
+export function decodeAscEmoji(text: string): string {
+  return text.replace(ASC_EMOJI_MARKER, (marker, codepoints: string) => {
+    try {
+      return String.fromCodePoint(...codepoints.split('-').map((c) => Number.parseInt(c, 16)));
+    } catch {
+      // Not a valid codepoint sequence — keep the marker rather than lose text.
+      return marker;
+    }
+  });
+}
+
+/**
  * Normalise the flow node's body into a turn, or `null` when the mandatory
  * pair (`codAtendimento` + `chatInput`) is missing.
  */
 export function parseInboundTurn(body: AscFlowInboundBody): ParsedAscFlowTurn | null {
   const codAtendimento = firstString(body.codAtendimento, body.cod_atendimento);
-  const text = firstString(body.chatInput, body.message);
+  const text = decodeAscEmoji(firstString(body.chatInput, body.message));
   if (!codAtendimento || !text) return null;
 
   const messageId = firstString(body.messageId, body.idMensagem);

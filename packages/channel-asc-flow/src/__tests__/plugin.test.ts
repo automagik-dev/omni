@@ -66,6 +66,20 @@ describe('parseInboundTurn', () => {
     expect(parseInboundTurn({ cod_atendimento: '42', message: 'oi', telefone: '5551' })?.codAtendimento).toBe('42');
   });
 
+  // The platform transcodes emoji: a 🗑️ arrives as `##1f5d1-fe0f##`. Left raw
+  // it defeated the session cleaner's trash reset (measured on the live number
+  // 01/09) and the agent read the marker as prose.
+  it('decodes the platform emoji markers back to characters', () => {
+    expect(parseInboundTurn({ codAtendimento: '1', chatInput: '##1f5d1-fe0f##' })?.text).toBe('🗑️');
+    expect(parseInboundTurn({ codAtendimento: '1', chatInput: '##1f44d##' })?.text).toBe('👍');
+    expect(parseInboundTurn({ codAtendimento: '1', chatInput: 'oi ##1f44d## tudo bem' })?.text).toBe('oi 👍 tudo bem');
+  });
+
+  it('keeps text that only looks like a marker', () => {
+    expect(parseInboundTurn({ codAtendimento: '1', chatInput: 'preço ## 10 ##' })?.text).toBe('preço ## 10 ##');
+    expect(parseInboundTurn({ codAtendimento: '1', chatInput: '##zzzz##' })?.text).toBe('##zzzz##');
+  });
+
   it('carries a messageId when the flow supplies one', () => {
     expect(parseInboundTurn({ codAtendimento: '1', chatInput: 'x', messageId: 'm1' })?.messageId).toBe('m1');
     expect(parseInboundTurn({ codAtendimento: '1', chatInput: 'x' })?.messageId).toBeUndefined();
