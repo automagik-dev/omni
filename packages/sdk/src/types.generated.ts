@@ -3000,6 +3000,11 @@ export interface components {
             to?: string;
             /** @description Media type if applicable */
             mediaType?: string;
+            /**
+             * Format: uuid
+             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+             */
+            senderAgentId?: string | null;
         };
         SendTextRequest: {
             /**
@@ -3038,6 +3043,11 @@ export interface components {
             };
             /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
             requestLocation?: boolean;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         TTSVoice: {
             /** @description ElevenLabs voice ID */
@@ -3075,6 +3085,11 @@ export interface components {
             similarityBoost?: number;
             /** @description Recording presence duration in ms */
             presenceDelay?: number;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         TtsResponse: {
             /** @description Internal message ID */
@@ -3121,6 +3136,11 @@ export interface components {
             caption?: string;
             /** @description Send audio as voice note */
             voiceNote?: boolean;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendReactionRequest: {
             /**
@@ -3150,6 +3170,11 @@ export interface components {
             url?: string;
             /** @description Base64 encoded sticker */
             base64?: string;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendContactRequest: {
             /**
@@ -3172,6 +3197,11 @@ export interface components {
                 /** @description Organization */
                 organization?: string;
             };
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendLocationRequest: {
             /**
@@ -3189,6 +3219,11 @@ export interface components {
             name?: string;
             /** @description Address */
             address?: string;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendPresenceRequest: {
             /**
@@ -7726,6 +7761,11 @@ export interface operations {
                     };
                     /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
                     requestLocation?: boolean;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -7753,6 +7793,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -7836,6 +7881,11 @@ export interface operations {
                     caption?: string;
                     /** @description Send audio as voice note */
                     voiceNote?: boolean;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -7863,6 +7913,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8018,6 +8073,11 @@ export interface operations {
                     url?: string;
                     /** @description Base64 encoded sticker */
                     base64?: string;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -8045,6 +8105,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8123,6 +8188,11 @@ export interface operations {
                         /** @description Organization */
                         organization?: string;
                     };
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -8150,6 +8220,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8223,6 +8298,11 @@ export interface operations {
                     name?: string;
                     /** @description Address */
                     address?: string;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -8250,6 +8330,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8776,6 +8861,11 @@ export interface operations {
                     similarityBoost?: number;
                     /** @description Recording presence duration in ms */
                     presenceDelay?: number;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };

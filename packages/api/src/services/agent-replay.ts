@@ -210,12 +210,21 @@ export class AgentReplayService {
               sql`${messages.senderAgentId} IS NULL`,
               // Only active messages
               sql`${messages.deletedAt} IS NULL`,
-              // Skip messages that already have an agent reply after them in the same chat
-              // — means the agent already handled this message before the restart
+              // Skip messages with ANY substantive outbound reply after them in
+              // the same chat — the turn was answered, regardless of who sent
+              // the answer. Provenance-agnostic on purpose (#912): answers sent
+              // out-of-band through POST /api/v2/messages/send land with
+              // sender_agent_id = NULL, and a guard keyed on that column
+              // re-dispatched every such turn on every reconnect.
+              // Procedural courtesy sends (pre-dispatch auto-ack, dispatch-error
+              // feedback) are excluded via the omniSystemNotice marker: they
+              // precede or replace the real reply, so counting them would
+              // permanently drop turns whose dispatch died mid-flight.
               sql`NOT EXISTS (
               SELECT 1 FROM ${messages} AS reply
               WHERE reply.chat_id = ${messages.chatId}
-                AND reply.sender_agent_id IS NOT NULL
+                AND reply.is_from_me = true
+                AND COALESCE((reply.raw_payload ->> 'omniSystemNotice')::boolean, false) = false
                 AND reply.platform_timestamp > ${messages.platformTimestamp}
                 AND reply.deleted_at IS NULL
             )`,

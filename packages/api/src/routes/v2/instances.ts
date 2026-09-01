@@ -13,6 +13,7 @@ import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { agentKeyName } from '../../lib/agent-key-name';
 import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-business-connection';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
+import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
 import { getQrCode } from '../../plugins/qr-store';
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
@@ -1545,6 +1546,11 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
   if (!plugin) {
     return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
   }
+
+  // omni#906: operators expect restart to re-read config, but disconnect/connect
+  // only recycles the channel connection — the dispatcher's cached agent
+  // provider lives independently of the channel lifecycle, so evict it here.
+  invalidateProviderCacheForInstance(id);
 
   try {
     await plugin.disconnect(id);

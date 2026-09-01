@@ -270,6 +270,12 @@ export interface MessageSentPayload {
   rawPayload?: Record<string, unknown>;
   /** agents.id UUID — set by agent-dispatcher when agent sends */
   senderAgentId?: string;
+  /**
+   * Procedural courtesy send (pre-dispatch auto-ack, dispatch-error feedback)
+   * rather than a substantive reply. Agent replay must not treat these as
+   * evidence that a turn was answered (#912 review).
+   */
+  systemNotice?: boolean;
 }
 
 export interface MessageDeliveredPayload {

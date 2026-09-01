@@ -1,0 +1,554 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+python3 - "${ROOT}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+workflow_dir = root / ".github/workflows"
+workflow_paths = sorted({*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")})
+workflows = {path.name: path.read_text(encoding="utf-8") for path in workflow_paths}
+version = workflows["version.yml"]
+image = workflows["image-publish.yml"]
+release = workflows["release.yml"]
+release_publish = workflows["release-publish.yml"]
+sign_attest = workflows["sign-attest.yml"]
+source_contract = (root / "scripts/release/verify-promotion-candidate.sh")
+source_text = source_contract.read_text(encoding="utf-8") if source_contract.exists() else ""
+security = (root / "SECURITY.md").read_text(encoding="utf-8")
+errors: list[str] = []
+
+
+def require(text: str, pattern: str, message: str) -> None:
+    if re.search(pattern, text, flags=re.MULTILINE | re.DOTALL) is None:
+        errors.append(message)
+
+
+def forbid(text: str, pattern: str, message: str) -> None:
+    if re.search(pattern, text, flags=re.MULTILINE | re.DOTALL) is not None:
+        errors.append(message)
+
+
+def indentation(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def permissions_at(lines: list[str], indent: int) -> dict[str, str] | None:
+    prefix = " " * indent
+    for index, line in enumerate(lines):
+        if not line.startswith(f"{prefix}permissions:") or indentation(line) != indent:
+            continue
+        value = line.split(":", 1)[1].split("#", 1)[0].strip()
+        if value == "{}":
+            return {}
+        if value in ("read-all", "write-all"):
+            return {"*": value.removesuffix("-all")}
+        permissions: dict[str, str] = {}
+        for nested in lines[index + 1 :]:
+            if not nested.strip() or nested.lstrip().startswith("#"):
+                continue
+            nested_indent = indentation(nested)
+            if nested_indent <= indent:
+                break
+            match = re.match(r"^\s*([a-z-]+):\s*(read|write|none)(?:\s+#.*)?$", nested)
+            if nested_indent == indent + 2 and match:
+                permissions[match.group(1)] = match.group(2)
+        return permissions
+    return None
+
+
+def job_blocks(text: str) -> dict[str, list[str]]:
+    lines = text.splitlines()
+    jobs_index = next(
+        (index for index, line in enumerate(lines) if line == "jobs:"),
+        None,
+    )
+    if jobs_index is None:
+        return {}
+    blocks: dict[str, list[str]] = {}
+    current_name: str | None = None
+    current_lines: list[str] = []
+    for line in lines[jobs_index + 1 :]:
+        if line.strip() and not line.lstrip().startswith("#") and indentation(line) == 0:
+            break
+        header = re.match(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$", line)
+        if header:
+            if current_name is not None:
+                blocks[current_name] = current_lines
+            current_name = header.group(1)
+            current_lines = [line]
+        elif current_name is not None:
+            current_lines.append(line)
+    if current_name is not None:
+        blocks[current_name] = current_lines
+    return blocks
+
+
+def effective_job_permissions(text: str) -> dict[str, dict[str, str]]:
+    lines = text.splitlines()
+    workflow_permissions = permissions_at(lines, 0)
+    if workflow_permissions is None:
+        workflow_permissions = {}
+    effective: dict[str, dict[str, str]] = {}
+    for job_name, block in job_blocks(text).items():
+        job_permissions = permissions_at(block, 4)
+        effective[job_name] = (
+            workflow_permissions.copy()
+            if job_permissions is None
+            else job_permissions
+        )
+    return effective
+
+
+def permission_level(permissions: dict[str, str], scope: str) -> str:
+    return permissions.get(scope, permissions.get("*", "none"))
+
+
+def expressions_in_run(text: str) -> list[int]:
+    findings: list[int] = []
+    block_indent: int | None = None
+    for number, line in enumerate(text.splitlines(), start=1):
+        header = re.match(r"^(\s*)(?:-\s*)?run:\s*(.*)$", line)
+        if header:
+            indent = len(header.group(1))
+            value = header.group(2)
+            # A YAML block scalar header may carry a trailing comment
+            # (`run: | # keep literal`) and trailing whitespace. Strip both
+            # before matching the header: otherwise the step is misread as an
+            # inline scalar, block tracking stops, and every expression in the
+            # block body escapes this gate.
+            block_header = re.sub(r"\s+#.*$", "", value).rstrip()
+            if re.fullmatch(r"[|>](?:[+-][1-9]?|[1-9][+-]?)?", block_header):
+                block_indent = indent
+            else:
+                block_indent = None
+                if "${{" in value:
+                    findings.append(number)
+            continue
+        if block_indent is None:
+            continue
+        indent = len(line) - len(line.lstrip())
+        if line.strip() and indent <= block_indent:
+            block_indent = None
+            continue
+        if "${{" in line:
+            findings.append(number)
+    return findings
+
+
+matcher_fixture = """steps:
+  - run: echo ${{ inputs.inline }}
+  - run: |-
+      echo ${{ inputs.literal_strip }}
+  - run: >
+      echo ${{ inputs.folded }}
+  - run: >-
+      echo ${{ inputs.folded_strip }}
+  - run: |+
+      echo ${{ inputs.literal_keep }}
+  - run: |2-
+      echo ${{ inputs.indented_strip }}
+  - run: |
+      echo ${{ steps.pkg.outputs.tag }}
+  - run: >
+      echo ${{ needs.publish.outputs.version }}
+  - run: | # keep literal
+      echo ${{ inputs.commented_literal }}
+  - run: >- # fold and strip
+      echo ${{ inputs.commented_folded_strip }}
+  - run: |  
+      echo ${{ inputs.trailing_space_literal }}
+"""
+if len(expressions_in_run(matcher_fixture)) != 11:
+    errors.append("run-expression matcher does not cover direct or transitive expressions in every YAML scalar form")
+
+permission_fixture = """permissions:
+  actions: read
+  contents: read
+jobs:
+  inherits:
+    runs-on: ubuntu-latest
+  overrides:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+"""
+fixture_permissions = effective_job_permissions(permission_fixture)
+if permission_level(fixture_permissions["inherits"], "actions") != "read":
+    errors.append("effective-permission matcher does not inherit workflow permissions")
+if permission_level(fixture_permissions["overrides"], "actions") != "none":
+    errors.append("effective-permission matcher does not model job maps as full overrides")
+
+concurrency_match = re.search(
+    r"^concurrency:\n  group:\s*(?P<group>[^\n]+)",
+    release_publish,
+    flags=re.MULTILINE,
+)
+if concurrency_match is None:
+    errors.append("release publication has no concurrency group")
+else:
+    concurrency_template = concurrency_match.group("group").strip()
+    expected_template = "release-publish-${{ inputs.version }}"
+    if concurrency_template != expected_template:
+        errors.append("release publication concurrency is not keyed only by semantic version")
+    else:
+        def render_group(version_value: str, ref_value: str) -> str:
+            return concurrency_template.replace(
+                "${{ inputs.version }}", version_value
+            ).replace("${{ github.ref }}", ref_value)
+
+        tag_group = render_group("2.260830.2", "refs/tags/v2.260830.2")
+        branch_group = render_group("2.260830.2", "refs/heads/dev")
+        next_group = render_group("2.260830.3", "refs/tags/v2.260830.3")
+        if tag_group != branch_group:
+            errors.append("same-version stable and recovery publications do not serialize across refs")
+        if tag_group == next_group:
+            errors.append("different release versions share a concurrency group")
+
+for name, workflow in workflows.items():
+    for line in expressions_in_run(workflow):
+        errors.append(f"{name}:{line} interpolates a GitHub expression directly inside a shell run value")
+
+    if re.search(r"^permissions:\s*(?:\{\s*\})?\s*$", workflow, flags=re.MULTILINE) is None:
+        errors.append(f"{name} does not declare explicit top-level token permissions")
+    if re.search(r"^\s*secrets:\s*inherit\s*$", workflow, flags=re.MULTILINE):
+        errors.append(f"{name} unconditionally inherits repository secrets")
+    if "secrets.GITHUB_TOKEN" in workflow:
+        errors.append(f"{name} uses secrets.GITHUB_TOKEN instead of the scoped github.token")
+
+    effective_permissions = effective_job_permissions(workflow)
+    for job_name, block in job_blocks(workflow).items():
+        job = "\n".join(block)
+        api_backed_download = (
+            "actions/download-artifact@" in job
+            and re.search(r"^\s*run-id:\s*", job, flags=re.MULTILINE)
+            and re.search(
+                r"^\s*github-token:\s*\$\{\{\s*github\.token\s*\}\}",
+                job,
+                flags=re.MULTILINE,
+            )
+        )
+        if not api_backed_download:
+            continue
+        effective = effective_permissions[job_name]
+        actions = permission_level(effective, "actions")
+        if actions != "read":
+            errors.append(
+                f"{name}:{job_name} uses an API-backed artifact download "
+                f"without effective actions: read (got {actions})"
+            )
+
+candidate_check = image.find("verify-promotion-candidate.sh")
+oci_check = image.find("verify-oci-release.sh")
+provenance_check = image.find("gh attestation verify")
+asset_check = image.find("verify-release-assets.py")
+if min(candidate_check, oci_check, provenance_check, asset_check) < 0:
+    errors.append("promotion verification stages are incomplete")
+elif not candidate_check < oci_check < provenance_check < asset_check:
+    errors.append("promotion does not verify final build inputs, OCI identity, provenance, then release assets in order")
+
+for token, message in (
+    ("docker/build-push-action", "promotion rebuilds an image"),
+    ("gh workflow run", "promotion dispatches a publisher"),
+    ("gh run watch", "promotion waits on a mutating downstream publisher"),
+    ("pin-production-image.sh", "promotion writes a public production pin"),
+    ("git push", "promotion moves a Git ref"),
+):
+    if token in image:
+        errors.append(message)
+
+for path in ("deploy/Dockerfile", "package.json", "bun.lock", "packages", "apps"):
+    if path not in source_text:
+        errors.append(f"candidate verifier does not protect {path}")
+require(source_text, r"git merge-base --is-ancestor", "candidate source is not required to be an ancestor of the final main tree")
+require(source_text, r"refs/tags/v\$\{version\}\^\{commit\}", "candidate verifier does not bind the immutable version tag")
+require(image, r"name:\s*Checkout immutable candidate source[\s\S]{0,500}ref:\s*\$\{\{\s*env\.CANDIDATE_SHA\s*\}\}[\s\S]{0,200}path:\s*release-candidate", "promotion does not create a separate immutable candidate checkout")
+require(image, r"verify-oci-release\.sh[\s\S]{0,300}--source-dir\s+\"\$\{GITHUB_WORKSPACE\}/release-candidate\"", "OCI verifier does not run against the separate candidate checkout")
+
+require(release, r"authorize:[\s\S]{0,200}timeout-minutes:", "release authorization network calls have no timeout")
+forbid(release, r"Bare tag pushes fall\s+through to stable", "release documentation still claims bare tags publish stable")
+forbid(version, r"Channel selector is dev/homolog", "version workflow keeps the orphaned channel-selector comment")
+require(
+    release,
+    r'Find previous release tag[\s\S]{0,300}TAG="\$\{RELEASE_TAG\}"[\s\S]{0,120}'
+    r'AVAILABLE_TAGS=\$\(gh release list[\s\S]{0,300}done <<< "\$\{AVAILABLE_TAGS\}"',
+    "previous release lookup does not keep the injected tag distinct from the available tag list",
+)
+require(
+    version,
+    r'Determine channel and npm tag[\s\S]{0,120}run: \|\n\s+\{\n'
+    r'\s+echo "npm_tag=next"\n\s+echo "release_channel=dev"\n'
+    r'\s+echo "checkout_ref=dev"\n\s+echo "push_ref=dev"\n'
+    r'\s+\} >> "\$GITHUB_OUTPUT"',
+    "version context outputs are not appended through one grouped redirect",
+)
+if version.endswith("\n\n"):
+    errors.append("version workflow has a trailing blank line")
+
+release_dispatch_match = re.search(
+    r"^  workflow_dispatch:\n(?P<body>.*?)(?=^permissions:)",
+    release,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if release_dispatch_match is None:
+    errors.append("release orchestration has no workflow_dispatch contract")
+else:
+    require(
+        release_dispatch_match.group("body"),
+        r"^      expected_sha:\n        description:[^\n]*\n        required:\s*true\n        type:\s*string$",
+        "release workflow_dispatch does not require an exact expected source SHA",
+    )
+
+release_authorization_match = re.search(
+    r"- name: Reject unverified stable entry points(?P<body>.*?)(?=^  build:)",
+    release,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if release_authorization_match is None:
+    errors.append("release orchestration has no pre-build source authorization step")
+else:
+    release_authorization = release_authorization_match.group("body")
+    for token, message in (
+        ('[[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]', "release orchestration accepts non-dispatch entry before build"),
+        ('[[ "${INPUT_VERSION}" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]', "release orchestration does not validate semantic version before build"),
+        ('[[ "${GITHUB_REF}" == "refs/tags/v${INPUT_VERSION}" ]]', "release orchestration is not bound to the exact version tag before build"),
+        ('[[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]', "release orchestration does not validate the trigger SHA before build"),
+        ('[[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]', "release orchestration does not require the expected SHA before build"),
+        ('[[ "${GITHUB_SHA}" == "${EXPECTED_SHA}" ]]', "release orchestration does not bind trigger and expected SHAs before build"),
+    ):
+        if token not in release_authorization:
+            errors.append(message)
+
+version_dispatch_match = re.search(
+    r"- name: Dispatch release pipeline for the new tag(?P<body>.*?)(?=^  publish-stable:)",
+    version,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if version_dispatch_match is None:
+    errors.append("version workflow has no release dispatch step")
+else:
+    version_dispatch = version_dispatch_match.group("body")
+    tag_ref = version_dispatch.find('TAG="refs/tags/v${VERSION}"')
+    tag_sha = version_dispatch.find('TAG_SHA=$(git rev-parse "${TAG}^{commit}")')
+    sha_guard = version_dispatch.find('[[ "${TAG_SHA}" =~ ^[0-9a-f]{40}$ ]]')
+    expected_field = version_dispatch.find('--field expected_sha="${TAG_SHA}"')
+    dispatch = version_dispatch.find("gh workflow run release.yml")
+    if min(tag_ref, tag_sha, sha_guard, expected_field, dispatch) < 0 or not (
+        tag_ref < tag_sha < sha_guard < dispatch < expected_field
+    ):
+        errors.append("version workflow does not dispatch the exact locally derived tag target SHA")
+
+for name, workflow in workflows.items():
+    for match in re.finditer(r"^\s*-?\s*uses:\s*([^\s#]+)", workflow, flags=re.MULTILINE):
+        ref = match.group(1)
+        if ref.startswith("./"):
+            continue
+        if re.fullmatch(r"[^@]+@[0-9a-f]{40}", ref) is None:
+            errors.append(f"{name} contains mutable action or reusable-workflow ref {ref}")
+
+sign_recovery_match = re.search(
+    r"- name: Authorize manual recovery release tag(?P<body>.*?)(?=^      - name: Authorize manual recovery source run)",
+    sign_attest,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if sign_recovery_match is None:
+    errors.append("signing recovery has no release-tag authorization before upstream run validation")
+else:
+    sign_recovery = sign_recovery_match.group("body")
+    for pattern, message in (
+        (r"if:\s*github\.event_name == 'workflow_dispatch'", "signing recovery tag authorization is not limited to manual dispatch"),
+        (r"INPUT_VERSION:\s*\$\{\{\s*inputs\.version\s*\}\}", "signing recovery does not validate its requested version"),
+        (r"verify-sign-attest-entry\.sh", "signing recovery does not use the fail-closed tag entry verifier"),
+        (r'--source-ref\s+"\$\{GITHUB_REF\}"', "signing recovery does not reject branch or wrong-tag refs"),
+        (r'--source-sha\s+"\$\{GITHUB_SHA\}"', "signing recovery does not bind the remote tag commit to GITHUB_SHA"),
+    ):
+        require(sign_recovery, pattern, message)
+
+sign_tag_guard = sign_attest.find("- name: Authorize manual recovery release tag")
+sign_run_guard = sign_attest.find("- name: Authorize manual recovery source run")
+sign_download = sign_attest.find("- name: Download all tarball artifacts")
+sign_operation = sign_attest.find("- name: cosign sign-blob")
+if min(sign_tag_guard, sign_run_guard, sign_download, sign_operation) < 0 or not (
+    sign_tag_guard < sign_run_guard < sign_download < sign_operation
+):
+    errors.append("manual signing recovery is not tag-authorized before download and signing")
+
+exact_sign_identity = (
+    '--certificate-identity "https://github.com/${REPOSITORY}/.github/workflows/'
+    'sign-attest.yml@refs/tags/v${VERSION}"'
+)
+if sign_attest.count(exact_sign_identity) < 2:
+    errors.append("signing self-check and tamper check do not require the exact release-tag identity")
+forbid(
+    sign_attest,
+    r'--certificate-identity-regexp\s+"\^https://github\.com/\$\{REPOSITORY\}/\.github/workflows/sign-attest\.yml@"',
+    "signing self-check still accepts branch identities",
+)
+
+require(
+    release_publish,
+    r"sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac[\s\S]{0,120}cosign-release:\s*'v2\.4\.1'",
+    "release publication does not install the reviewed immutable cosign verifier",
+)
+release_meta_match = re.search(
+    r"- name: Resolve version \+ channel \+ asset inventory(?P<body>.*?)(?=^      - name: Verify release-tag cosign bundles)",
+    release_publish,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if release_meta_match is None:
+    errors.append("release publication has no exact pre-verification asset inventory")
+else:
+    release_meta = release_meta_match.group("body")
+    for pattern, message in (
+        (r"EXPECTED_ASSETS=\(\)", "release publication does not construct the exact expected signed inventory"),
+        (r"unexpected=\(\)", "release publication does not reject unexpected downloaded assets"),
+        (r'"\$\{#ASSETS\[@\]\}"\s+-ne\s+"\$\{#EXPECTED_ASSETS\[@\]\}"', "release publication does not require exactly the expected 12 downloaded assets"),
+    ):
+        require(release_meta, pattern, message)
+release_cosign_match = re.search(
+    r"- name: Verify release-tag cosign bundles(?P<body>.*?)(?=^      - name: Create or update GitHub Release)",
+    release_publish,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if release_cosign_match is None:
+    errors.append("release publication has no pre-mutation cosign verification step")
+else:
+    release_cosign = release_cosign_match.group("body")
+    for pattern, message in (
+        (r"for tarball in dist/omni-\*\.tar\.gz", "release publication does not verify every downloaded tarball/bundle pair"),
+        (r"cosign verify-blob", "release publication does not cryptographically verify downloaded bundles"),
+        (r'--certificate-identity\s+"https://github\.com/\$\{REPOSITORY\}/\.github/workflows/sign-attest\.yml@refs/tags/v\$\{VERSION\}"', "release publication does not require the exact version-tag signer identity"),
+        (r'--certificate-oidc-issuer\s+"https://token\.actions\.githubusercontent\.com"', "release publication does not require the GitHub Actions OIDC issuer"),
+    ):
+        require(release_cosign, pattern, message)
+
+meta_position = release_publish.find("- name: Resolve version + channel + asset inventory")
+cosign_position = release_publish.find("- name: Verify release-tag cosign bundles")
+release_mutations = []
+for command in ("create", "upload", "edit"):
+    mutation = re.search(
+        rf"^\s+gh release {command}\b",
+        release_publish,
+        flags=re.MULTILINE,
+    )
+    release_mutations.append(-1 if mutation is None else mutation.start())
+if min(meta_position, cosign_position, *release_mutations) < 0 or not (
+    meta_position < cosign_position < min(release_mutations)
+):
+    errors.append("exact signer verification does not finish after version resolution and before the first release mutation")
+
+canonical_consumer_identity = (
+    "certificate-identity-regexp: ^https://github.com/automagik-dev/omni/"
+    ".github/workflows/sign-attest.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+)
+if canonical_consumer_identity not in security:
+    errors.append("SECURITY.md canonical consumer pin does not restrict signing to semantic-version release tags")
+exact_consumer_identity = (
+    "--certificate-identity 'https://github.com/automagik-dev/omni/.github/"
+    "workflows/sign-attest.yml@refs/tags/v<version>'"
+)
+if exact_consumer_identity not in security:
+    errors.append("SECURITY.md operator verification does not use the exact release-tag identity")
+
+require(release_publish, r"verify-release-assets\.py", "release recovery does not verify immutable asset identity")
+require(release_publish, r"--verify-tag", "release publication can create an implicit unverified tag")
+forbid(release_publish, r"\.well-known/|git push origin HEAD:main", "release publication mutates PR-owned public metadata")
+
+dispatch_match = re.search(
+    r"^  workflow_dispatch:\n(?P<body>.*?)(?=^concurrency:)",
+    release_publish,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if dispatch_match is None:
+    errors.append("release publication has no recovery dispatch contract")
+else:
+    require(
+        dispatch_match.group("body"),
+        r"^      expected_sha:\n        description:[^\n]*\n        required:\s*true\n        type:\s*string$",
+        "recovery dispatch does not require an explicit expected source SHA",
+    )
+
+entry_authorization_match = re.search(
+    r"- name: Reject unverified stable publish(?P<body>.*?)(?=^      - name: Resolve upstream)",
+    release_publish,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if entry_authorization_match is None:
+    errors.append("release publication has no entry authorization step")
+else:
+    entry_authorization = entry_authorization_match.group("body")
+    common_entry_args_match = re.search(
+        r"entry_args=\((?P<args>.*?)\)\n\s*if \[\[ -n \"\$\{RECOVERY_RUN_ID\}\" \]\]",
+        entry_authorization,
+        flags=re.DOTALL,
+    )
+    if common_entry_args_match is None:
+        errors.append("release publication does not build common entry authorization arguments")
+    else:
+        common_entry_args = common_entry_args_match.group("args")
+        for pattern, message in (
+            (r'--version\s+"\$\{VERSION\}"', "orchestrated publication is not bound to the requested version"),
+            (r'--source-ref\s+"\$\{GITHUB_REF\}"', "orchestrated publication is not bound to the trigger ref"),
+            (r'--source-sha\s+"\$\{GITHUB_SHA\}"', "orchestrated publication is not bound to the trigger SHA"),
+            (r'--expected-sha\s+"\$\{EXPECTED_SHA\}"', "orchestrated publication does not require the caller-approved SHA"),
+        ):
+            require(common_entry_args, pattern, message)
+
+forbid(
+    release_publish,
+    r'EXPECTED_SHA\s*=\s*"?\$\{tag_sha\}"?',
+    "release publication substitutes a remote tag for an empty expected SHA",
+)
+publish_step_match = re.search(
+    r"- name: Create or update GitHub Release with all 12 signed assets(?P<body>.*)$",
+    release_publish,
+    flags=re.DOTALL,
+)
+if publish_step_match is None:
+    errors.append("release publication asset step is missing")
+else:
+    publish_step = publish_step_match.group("body")
+    tag_read = publish_step.find('tag_sha=$(git rev-parse "refs/tags/v${VERSION}^{commit}")')
+    source_tag_binding = publish_step.find('[[ "${tag_sha}" == "${GITHUB_SHA}" ]]')
+    expected_tag_binding = publish_step.find('[[ "${tag_sha}" == "${EXPECTED_SHA}" ]]')
+    publication_start = publish_step.find("upload_assets=true")
+    prepublication = publish_step[:publication_start] if publication_start >= 0 else publish_step
+    if 'if [[ -n "${RECOVERY_RUN_ID}" ]]; then' in prepublication:
+        errors.append("remote tag source binding remains conditional on direct recovery mode")
+    if min(
+        tag_read,
+        source_tag_binding,
+        expected_tag_binding,
+        publication_start,
+    ) < 0 or not (
+        tag_read
+        < source_tag_binding
+        < expected_tag_binding
+        < publication_start
+    ):
+        errors.append("release publication does not bind the exact remote tag target to both verified source SHAs before publication")
+
+    draft_read = publish_step.find(
+        'PRE_CLOBBER_DRAFT=$(gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" '
+        "--json isDraft --jq '.isDraft')"
+    )
+    draft_guard = publish_step.find('[[ "${PRE_CLOBBER_DRAFT}" == "true" ]]')
+    upload = publish_step.find('gh release upload "v${VERSION}"')
+    clobber = publish_step.find("--clobber", upload)
+    if min(draft_read, draft_guard, upload, clobber) < 0 or not (
+        draft_read < draft_guard < upload < clobber
+    ):
+        errors.append("mutable draft assets are not re-read and fail-closed immediately before clobber")
+
+require(release, r"PUBLISHED_VERSION:\s*\$\{\{\s*needs\.sign-attest\.outputs\.version\s*\}\}", "release notes are not bound to the signed artifact version")
+require(release, r"\[\[\s+\"\$\{REQUESTED_VERSION\}\"\s+==\s+\"\$\{PUBLISHED_VERSION\}\"\s+\]\]", "requested release version is not compared with the signed artifact version")
+
+if errors:
+    for error in errors:
+        print(f"FAIL: {error}", file=sys.stderr)
+    raise SystemExit(1)
+print("PASS: workflow pins, effective permissions, shell-expression boundaries, and promotion ordering")
+PY

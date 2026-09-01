@@ -44,9 +44,10 @@ import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type ChannelType, type Instance, type NewInstance, instances } from '@omni/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
 import { forgetInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { credentialSealingEngages, openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
-import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { currentTenantScope, runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
 
 export interface ListInstancesOptions {
   channel?: ChannelType[];
@@ -130,6 +131,25 @@ function openInstanceCredentials<T extends { tenantId?: string | null }>(row: T)
 /** Open a batch of loaded rows. Identity when nothing in the batch is sealed. */
 function openInstanceCredentialsAll<T extends { tenantId?: string | null }>(rows: T[]): T[] {
   return rows.map(openInstanceCredentials);
+}
+
+/**
+ * The `instances` columns that get baked into a cached IAgentProvider at
+ * construction time (see resolveProvider / createAgnoProvider and friends in
+ * agent-dispatcher). An update touching any of these must evict the instance's
+ * provider-cache entry or the running dispatcher keeps the stale values until
+ * the process restarts (omni#906).
+ */
+const PROVIDER_BAKED_COLUMNS = [
+  'agentId',
+  'agentTimeout',
+  'enableAutoSplit',
+  'agentPrefixSenderName',
+] as const satisfies readonly (keyof NewInstance)[];
+
+/** Presence check, not value diff: `null` is a meaningful new value here. */
+export function touchesProviderBakedConfig(data: Partial<NewInstance>): boolean {
+  return PROVIDER_BAKED_COLUMNS.some((column) => column in data);
 }
 
 export class InstanceService {
@@ -351,6 +371,18 @@ export class InstanceService {
       throw new NotFoundError('Instance', id);
     }
 
+    // omni#906: these fields are baked into the cached IAgentProvider at
+    // construction, so the dispatcher would keep serving the old values until
+    // a process restart unless the cache entry is evicted here. Guarded by
+    // field presence so unrelated updates (profileName, isActive, presence…)
+    // don't churn providers that hold live NATS/WS subscriptions. Deferred to
+    // commit: inside the request transaction a concurrent dispatch still reads
+    // the OLD row and would re-cache a stale provider right after an immediate
+    // eviction — and a rollback must not have disposed a live provider.
+    if (touchesProviderBakedConfig(data)) {
+      runAfterTenantCommit(() => invalidateProviderCacheForInstance(id));
+    }
+
     rememberInstanceOwners([updated]);
     return openInstanceCredentials(updated);
   }
@@ -400,6 +432,12 @@ export class InstanceService {
     // The instance is gone; drop its ownership entry so the registry stays
     // bounded by what actually exists.
     forgetInstanceOwner(id);
+
+    // Dispose the cached agent provider (and its NATS/WS subscriptions) —
+    // nothing can dispatch for this instance anymore (omni#906). After commit,
+    // so a concurrent dispatch can't rebuild a provider for a row whose DELETE
+    // is still uncommitted (and a rollback keeps the provider alive).
+    runAfterTenantCommit(() => invalidateProviderCacheForInstance(id));
 
     if (this.eventBus) {
       await this.eventBus.publish('instance.disconnected', {
