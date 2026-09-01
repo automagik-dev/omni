@@ -9,13 +9,29 @@
  * hence a separate package and a separate `ChannelType`.
  *
  *   WhatsApp → ASC (Flow) → api_rest node → Omni → agent
- *   → callbackFlowMsg / mensagem (the bubbles) → callbackFlow (variables, and
- *     the flow resumes) → transferirHumano when the turn hands off
+ *   → callbackFlowMsg (the bubbles BEFORE the last one) → the last bubble comes
+ *     back in the HTTP BODY of the api_rest poll → transferirHumano when the
+ *     turn hands off
  *
- * Turn boundary. One `sendMessage` is one flow turn: the bubbles go out, then
- * ONE `callbackFlow` resumes the flow. A turn's paragraphs (blank-line
- * separated) become separate bubbles, which is how the scheduling agent writes
- * and what the adapter proved against the ASC emulator.
+ * POLL contract. The `api_rest` node consumes the HTTP RESPONSE BODY and maps it
+ * into flow variables through its `store`; in async mode it re-calls this
+ * endpoint until `async_condition` over that body is true. So the turn is a
+ * STATE here, not a push:
+ *
+ *   1st call for a `cod_atendimento` → publish `message.received`, answer `{"pronto":0}`
+ *   re-calls while the agent runs   → no republish (dedupe), answer `{"pronto":0}`
+ *   agent answered (`sendMessage`)  → next call answers
+ *       `{"pronto":1,"resposta":…,"hand_off":"sim|nao","bolhas":[…]}` and clears the turn
+ *
+ * Always HTTP 200. The flow is configured with `async = 1` and
+ * `async_condition = {#BODY.pronto} = 1`.
+ *
+ * Turn boundary. One `sendMessage` is one flow turn. A turn's paragraphs
+ * (blank-line separated) become separate bubbles, which is how the scheduling
+ * agent writes and what the adapter proved against the ASC emulator. The
+ * bubbles before the last one are PUSHED through `callbackFlowMsg` (with typing
+ * between them, for rhythm); the LAST one rides back in `resposta`, which is
+ * the single slot the flow's `message` node renders.
  * ponytail: if an agent ever emits two `sendMessage` calls for one user turn,
  * the flow advances twice. Upgrade path is a per-`cod` turn buffer flushed on
  * an end-of-turn signal — not built until a dispatcher actually does that.
@@ -24,8 +40,8 @@
  * sniffing the agent's prose: the adapter only regex-matched the invitation
  * because it called the agent itself and had no metadata channel. Two of the
  * Genesys component's fourteen userdata fields are ours to fill — `fila_vq`
- * (destination queue) and `motivo_transf_vq` (reason) — and they travel as
- * flow variables on `callbackFlow`, per HANDOFF-GENESYS.md.
+ * (destination queue) and `motivo_transf_vq` (reason) — and they ride in the
+ * same response body, per HANDOFF-GENESYS.md.
  */
 
 import { BaseChannelPlugin, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
@@ -45,7 +61,7 @@ import type { ChannelType } from '@omni/core/types';
 import { ASC_FLOW_CAPABILITIES } from './capabilities';
 import { AscFlowClient } from './client';
 import { type ParsedAscFlowTurn, handleAscFlowWebhookRequest } from './handlers/webhook';
-import type { AscFlowConfig, AscFlowUra } from './types';
+import type { AscFlowConfig } from './types';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
 import { buildUra, splitBubbles } from './utils/interactive';
 
@@ -54,19 +70,45 @@ export const DEFAULT_ASC_FLOW_BASE_URL = 'https://sac-notredame.ascbrazil.com.br
 /** The REST prefix every endpoint sits under. */
 const REST_PREFIX = '/rest/v2';
 
+/**
+ * The body the `api_rest` node reads once the agent has answered. Field names
+ * are the flow's variable names, so they stay snake_case/pt-BR.
+ */
+export interface AscFlowTurnReady {
+  pronto: 1;
+  resposta: string;
+  hand_off: 'sim' | 'nao';
+  bolhas: string[];
+  fila_vq?: string;
+  motivo_transf_vq?: string;
+  ura_opcoes?: Record<string, string>;
+  forcar_botoes?: boolean;
+}
+
+/** The body every call gets while the agent is still running. */
+export const TURN_PENDING = { pronto: 0 } as const;
+
+interface AscFlowTurnState {
+  text: string;
+  at: number;
+  /** Set by `sendMessage`; the next poll takes it and the turn is over. */
+  ready?: AscFlowTurnReady;
+}
+
 interface AscFlowInstanceState {
   client: AscFlowClient;
   config: AscFlowConfig;
   dedupeCache: DedupeCache;
-  /** `cod_atendimento` → the turn currently being answered. See `isRedeliveryOfTurnInFlight`. */
-  inFlight: Map<string, { text: string; at: number }>;
+  /** `cod_atendimento` → the turn being answered. See `isRedeliveryOfTurnInFlight`. */
+  inFlight: Map<string, AscFlowTurnState>;
 }
 
 /**
- * Safety valve for the in-flight window: if a turn never produces a
- * `sendMessage` (agent crash, dispatcher drop), the entry would otherwise wedge
- * that `cod_atendimento` forever. Far longer than any agent run, far shorter
- * than a human's next answer to the same menu.
+ * Safety valve for the turn window: if a turn never produces a `sendMessage`
+ * (agent crash, dispatcher drop), or the flow stops polling before it collects
+ * the answer, the entry would otherwise wedge that `cod_atendimento` forever.
+ * Far longer than any agent run, far shorter than a human's next answer to the
+ * same menu.
  */
 const IN_FLIGHT_TTL_MS = 60_000;
 
@@ -221,19 +263,27 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         throw new AscFlowApiError(AscFlowErrorCode.INVALID_REQUEST, 'refusing to send an empty turn');
       }
 
-      // The URA rides on the LAST bubble — the options attach to the last
-      // thing the beneficiary read. `/mensagem` is the only endpoint that can
-      // inject options into an atendimento that already exists.
+      // The URA rides on the LAST bubble — the options attach to the last thing
+      // the beneficiary read, and that bubble is the one that goes back in
+      // `resposta`.
+      // ponytail: the api_rest node's return only becomes flow VARIABLES, so
+      // these fields render as an interactive component only once the flow has
+      // a URA node that consumes them; until then the options are the numbered
+      // text the agent already writes into the bubble. Same ceiling the adapter
+      // ships with. Upgrade path: a URA node in the flow, no code change here.
       const lastBubble = bubbles[bubbles.length - 1] as string;
       const ura = buildUra(lastBubble, content.buttons, {
         ...(content.list?.sectionTitle !== undefined ? { sectionTitle: content.list.sectionTitle } : {}),
         ...(content.list?.forceList !== undefined ? { forceList: content.list.forceList } : {}),
       });
 
-      await this.deliverTurn(state, cod, bubbles, ura);
+      // Everything except the last bubble is PUSHED now, so the handset shows
+      // the turn with rhythm while the flow is still polling. Best-effort: a
+      // refused push must not cost the beneficiary the answer, which is the
+      // canonical one in `resposta`.
+      await this.pushLeadingBubbles(state, cod, bubbles);
 
       const isHandoff = meta.isHandoff === true;
-      await this.resumeFlow(state, cod, this.buildFlowVariables(text, isHandoff, meta));
 
       if (isHandoff) {
         await state.client.call('/transferirHumano', {
@@ -243,6 +293,15 @@ export class AscFlowPlugin extends BaseChannelPlugin {
           msgTransferencia: false,
         });
       }
+
+      this.resolveTurn(state, to, {
+        pronto: 1,
+        resposta: lastBubble,
+        hand_off: isHandoff ? 'sim' : 'nao',
+        bolhas: bubbles,
+        ...this.buildHandoffFields(isHandoff, meta),
+        ...(ura ?? {}),
+      });
 
       if (correlationId) this.captureT11(correlationId);
 
@@ -278,92 +337,75 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
       await this.emitMessageFailed({ instanceId, chatId: to, error: errorMessage, retryable });
 
-      return { success: false, error: errorMessage, retryable, timestamp: Date.now() };
-    } finally {
-      // The turn is answered (or failed): close the in-flight window so the
+      // No answer will ever be collected for this turn: drop the window so the
       // beneficiary's NEXT message is published even when it repeats the text.
       state.inFlight.delete(to.trim());
+
+      return { success: false, error: errorMessage, retryable, timestamp: Date.now() };
     }
   }
 
   /**
-   * Bubbles in order, typing between them (never before the first — the
-   * inbound path already raised it), the last one carrying the URA when there
-   * is one.
+   * Park the answer on the turn. The next `api_rest` poll takes it, which is
+   * what makes `{#BODY.pronto} = 1` fire and the flow advance.
    */
-  private async deliverTurn(
-    state: AscFlowInstanceState,
-    cod: number,
-    bubbles: string[],
-    ura: AscFlowUra | null,
-  ): Promise<void> {
-    for (let i = 0; i < bubbles.length; i++) {
-      if (i > 0) {
-        await state.client.call('/sendIndicador', { cod, tipo: 1 });
-      }
-      const isLast = i === bubbles.length - 1;
-      if (ura && isLast) {
-        await state.client.call('/mensagem', {
-          cod,
-          mensagem: bubbles[i],
-          entrante: 0,
-          bolFlow: true,
-          ...ura,
-        });
-      } else {
+  private resolveTurn(state: AscFlowInstanceState, chatId: string, ready: AscFlowTurnReady): void {
+    const cod = chatId.trim();
+    const entry = state.inFlight.get(cod);
+    if (entry) {
+      entry.ready = ready;
+      entry.at = Date.now();
+      return;
+    }
+    // An outbound with no inbound turn in flight (a proactive send): still park
+    // it, so a poll that arrives for this cod collects it.
+    state.inFlight.set(cod, { text: '', at: Date.now(), ready });
+  }
+
+  /**
+   * The two Genesys userdata fields the agent owns (HANDOFF-GENESYS.md). Only
+   * set when the turn actually hands off.
+   */
+  private buildHandoffFields(
+    isHandoff: boolean,
+    meta: Record<string, unknown>,
+  ): Pick<AscFlowTurnReady, 'fila_vq' | 'motivo_transf_vq'> {
+    if (!isHandoff) return {};
+    const fila = meta.handoffQueue;
+    const motivo = meta.handoffReason;
+    return {
+      ...(typeof fila === 'string' || typeof fila === 'number' ? { fila_vq: String(fila) } : {}),
+      ...(typeof motivo === 'string' && motivo.trim() ? { motivo_transf_vq: motivo.trim() } : {}),
+    };
+  }
+
+  /**
+   * Every bubble EXCEPT the last one, in order, with typing after each so the
+   * next one lands with a beat (the first typing was raised on the inbound
+   * path). The last bubble is not pushed — it goes back in `resposta`.
+   *
+   * Best-effort: a push refused by the platform must not cost the beneficiary
+   * the answer, which the flow will render from `resposta` anyway. Stop at the
+   * first failure — the remaining bubbles would arrive out of order.
+   */
+  private async pushLeadingBubbles(state: AscFlowInstanceState, cod: number, bubbles: string[]): Promise<void> {
+    for (const bubble of bubbles.slice(0, -1)) {
+      try {
         await state.client.call('/callbackFlowMsg', {
           cod_atendimento: cod,
           sendMsg: 1,
-          msg_usuario: bubbles[i],
+          msg_usuario: bubble,
           entrante: 0,
         });
+        await state.client.call('/sendIndicador', { cod, tipo: 1 });
+      } catch (err) {
+        this.logger.warn('[asc-flow] leading bubble push failed — degrading to resposta', {
+          cod,
+          err: String(err),
+        });
+        return;
       }
     }
-  }
-
-  /**
-   * `POST /callbackFlow` — writes the variables and lets the flow advance.
-   *
-   * The swagger is self-contradictory about `flow_variaveis`: the
-   * `variaveis_flow` schema describes an object (`{var_1..var_4}`) while the
-   * endpoint's own example sends `[]`. We send the object and, if the platform
-   * refuses it, repeat as `[{nome, valor}]`. Retrying here is safe in a way it
-   * is not for `/mensagem`: `callbackFlow` writes variables, it does not
-   * deliver a bubble, so a rejected first attempt reached no handset.
-   */
-  private async resumeFlow(state: AscFlowInstanceState, cod: number, variables: Record<string, string>): Promise<void> {
-    try {
-      await state.client.call('/callbackFlow', { cod_atendimento: cod, flow_variaveis: variables });
-    } catch (err) {
-      this.logger.warn('[asc-flow] callbackFlow rejected the object form — retrying as a list', {
-        cod,
-        err: String(err),
-      });
-      await state.client.call('/callbackFlow', {
-        cod_atendimento: cod,
-        flow_variaveis: Object.entries(variables).map(([nome, valor]) => ({ nome, valor })),
-      });
-    }
-  }
-
-  /**
-   * Flow variables set on `callbackFlow`. `resposta` and `hand_off` are the
-   * flow's own branching inputs; `fila_vq` / `motivo_transf_vq` are the two
-   * Genesys userdata fields the agent owns (HANDOFF-GENESYS.md) and are only
-   * set when the turn actually hands off.
-   */
-  private buildFlowVariables(text: string, isHandoff: boolean, meta: Record<string, unknown>): Record<string, string> {
-    const variables: Record<string, string> = {
-      resposta: text,
-      hand_off: isHandoff ? 'sim' : 'nao',
-    };
-    if (isHandoff) {
-      const fila = meta.handoffQueue;
-      const motivo = meta.handoffReason;
-      if (typeof fila === 'string' || typeof fila === 'number') variables.fila_vq = String(fila);
-      if (typeof motivo === 'string' && motivo.trim()) variables.motivo_transf_vq = motivo.trim();
-    }
-    return variables;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -423,6 +465,28 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
   getLogger(): Logger {
     return this.logger;
+  }
+
+  /**
+   * The answer parked by `sendMessage`, if the agent already produced one for
+   * this `cod_atendimento`. Taking it CLOSES the turn: the next call with the
+   * same text is a genuinely new one.
+   */
+  takeReadyTurn(instanceId: string, codAtendimento: string): AscFlowTurnReady | null {
+    const state = this.ascFlowInstances.get(instanceId);
+    const entry = state?.inFlight.get(codAtendimento);
+    if (!state || !entry?.ready) return null;
+
+    state.inFlight.delete(codAtendimento);
+    if (Date.now() - entry.at > IN_FLIGHT_TTL_MS) {
+      this.logger.warn('[asc-flow] discarding a turn answer the flow never collected', {
+        instanceId,
+        codAtendimento,
+        ageMs: Date.now() - entry.at,
+      });
+      return null;
+    }
+    return entry.ready;
   }
 
   /**

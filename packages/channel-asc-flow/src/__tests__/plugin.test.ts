@@ -26,6 +26,8 @@ let restore: () => void;
 /** Platform calls in order, `/authuser` filtered out. */
 const sequence = (): string[] => calls.filter((c) => c.path !== '/authuser').map((c) => c.path);
 const of = (path: string) => calls.filter((c) => c.path === path);
+/** The body the next `api_rest` poll would receive. */
+const ready = (cod: string) => plugin.takeReadyTurn(instanceId, cod);
 
 async function boot(overrides: Record<string, () => Response> = {}): Promise<void> {
   const stub = stubPlatform(overrides);
@@ -125,24 +127,18 @@ describe('outbound turn', () => {
   const send = (content: Record<string, unknown>, metadata: Record<string, unknown> = {}) =>
     plugin.sendMessage(instanceId, { to: '42', content: content as never, metadata });
 
-  it('splits paragraphs into bubbles with typing between them, then resumes the flow', async () => {
+  it('pushes every bubble but the last, with typing between them', async () => {
     await boot();
     const result = await send({ type: 'text', text: 'um\n\ndois\n\ntres' });
 
     expect(result.success).toBe(true);
-    expect(sequence()).toEqual([
-      '/callbackFlowMsg',
-      '/sendIndicador',
-      '/callbackFlowMsg',
-      '/sendIndicador',
-      '/callbackFlowMsg',
-      '/callbackFlow',
-    ]);
-    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois', 'tres']);
-    expect(of('/callbackFlow')[0]?.body.flow_variaveis).toMatchObject({ hand_off: 'nao' });
+    // The last bubble is NOT pushed — it rides back in `resposta`.
+    expect(sequence()).toEqual(['/callbackFlowMsg', '/sendIndicador', '/callbackFlowMsg', '/sendIndicador']);
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois']);
+    expect(ready('42')).toMatchObject({ pronto: 1, resposta: 'tres', hand_off: 'nao', bolhas: ['um', 'dois', 'tres'] });
   });
 
-  it('sends the LAST bubble through /mensagem when the turn carries options', async () => {
+  it('carries the URA of the last bubble in the response body', async () => {
     await boot();
     await send({
       type: 'text',
@@ -150,19 +146,13 @@ describe('outbound turn', () => {
       buttons: [{ text: 'seg 01/09 08:30' }, { text: 'seg 01/09 09:00' }],
     });
 
-    expect(sequence()).toEqual(['/callbackFlowMsg', '/sendIndicador', '/mensagem', '/callbackFlow']);
-    const mensagem = of('/mensagem')[0]?.body;
-    expect(mensagem).toMatchObject({
-      cod: 42,
-      entrante: 0,
-      bolFlow: true,
+    expect(ready('42')).toMatchObject({
       forcar_botoes: true,
       ura_opcoes: { '1': 'seg 01/09 08:30', '2': 'seg 01/09 09:00' },
     });
-    expect(mensagem?.mensagem).toContain('1. seg 01/09 08:30');
   });
 
-  it('degrades to plain bubbles when the options do not fit the component', async () => {
+  it('omits the URA when the options do not fit the component', async () => {
     await boot();
     await send({
       type: 'text',
@@ -170,18 +160,18 @@ describe('outbound turn', () => {
       buttons: Array.from({ length: 11 }, (_, i) => ({ text: `Opção ${i + 1}` })),
     });
 
-    expect(sequence()).toEqual(['/callbackFlowMsg', '/callbackFlow']);
+    expect(ready('42')?.ura_opcoes).toBeUndefined();
   });
 
-  it('transfers to the configured queue LAST when the turn hands off', async () => {
+  it('transfers to the configured queue and reports the handoff in the body', async () => {
     await boot();
     await send(
       { type: 'text', text: 'Vou te transferir.' },
       { isHandoff: true, handoffQueue: 'VQ_AGENDAMENTO', handoffReason: 'fora do escopo' },
     );
 
-    expect(sequence()).toEqual(['/callbackFlowMsg', '/callbackFlow', '/transferirHumano']);
-    expect(of('/callbackFlow')[0]?.body.flow_variaveis).toMatchObject({
+    expect(sequence()).toEqual(['/transferirHumano']);
+    expect(ready('42')).toMatchObject({
       hand_off: 'sim',
       fila_vq: 'VQ_AGENDAMENTO',
       motivo_transf_vq: 'fora do escopo',
@@ -198,27 +188,19 @@ describe('outbound turn', () => {
     await boot();
     await send({ type: 'text', text: 'ok' }, { handoffQueue: 'VQ_X' });
 
-    expect(of('/callbackFlow')[0]?.body.flow_variaveis).toEqual({ resposta: 'ok', hand_off: 'nao' });
+    expect(ready('42')).toEqual({ pronto: 1, resposta: 'ok', hand_off: 'nao', bolhas: ['ok'] });
     expect(of('/transferirHumano')).toHaveLength(0);
   });
 
-  it('retries callbackFlow as a list when the platform refuses the object form', async () => {
-    let attempts = 0;
+  it('still resolves the turn when a leading bubble is refused', async () => {
     await boot({
-      '/callbackFlow': () => {
-        attempts += 1;
-        return attempts === 1
-          ? jsonResponse({ cod_error: 3, msg: 'formato inválido' })
-          : jsonResponse({ cod_error: 0 });
-      },
+      '/callbackFlowMsg': () => jsonResponse({ cod_error: 10, msg: 'Atendimento já finalizado!' }, 401),
     });
-    await send({ type: 'text', text: 'ok' });
+    const result = await send({ type: 'text', text: 'um\n\ndois' });
 
-    expect(of('/callbackFlow')).toHaveLength(2);
-    expect(of('/callbackFlow')[1]?.body.flow_variaveis).toEqual([
-      { nome: 'resposta', valor: 'ok' },
-      { nome: 'hand_off', valor: 'nao' },
-    ]);
+    // The push is best-effort; `resposta` is the canonical delivery path.
+    expect(result.success).toBe(true);
+    expect(ready('42')).toMatchObject({ resposta: 'dois' });
   });
 
   it('fails without sending when the chat id is not a cod_atendimento', async () => {
@@ -233,18 +215,20 @@ describe('outbound turn', () => {
     expect(eventBus.published.some((e) => e.type.includes('failed'))).toBe(true);
   });
 
-  it('reports failure when the platform refuses a bubble on business grounds', async () => {
+  it('reports failure when the platform refuses the handoff on business grounds', async () => {
     await boot({
-      '/callbackFlowMsg': () => jsonResponse({ cod_error: 10, msg: 'Atendimento já finalizado!' }, 401),
+      '/transferirHumano': () => jsonResponse({ cod_error: 10, msg: 'Atendimento já finalizado!' }, 401),
     });
     const result = await plugin.sendMessage(instanceId, {
       to: '42',
       content: { type: 'text', text: 'oi' } as never,
+      metadata: { isHandoff: true },
     });
 
     expect(result).toMatchObject({ success: false, retryable: false });
-    // The flow must NOT be resumed after a refused bubble.
-    expect(of('/callbackFlow')).toHaveLength(0);
+    // A failed turn parks no answer — the flow times the node out instead of
+    // advancing on a half-delivered turn.
+    expect(plugin.takeReadyTurn(instanceId, '42')).toBeNull();
   });
 
   it('refuses an empty turn instead of sending a blank bubble', async () => {

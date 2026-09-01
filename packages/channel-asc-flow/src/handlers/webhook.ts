@@ -14,25 +14,42 @@
  * on the instance.
  *
  * Dedupe: the platform assigns no per-turn message id, and in async mode the
- * `api_rest` node re-POSTs every ~2s until `callbackFlow` releases the step —
- * one measured user message produced ~22 calls and three agent runs. So dedupe
+ * `api_rest` node re-POSTs every ~2s until `async_condition` holds — one
+ * measured user message produced ~22 calls and three agent runs. So dedupe
  * is ON by default: `messageId` when the flow supplies one (SDK cache),
  * otherwise `codAtendimento` + exact text scoped to the in-flight window
  * (`plugin.isRedeliveryOfTurnInFlight`). Scoping to the window — instead of a
  * lasting hash of the text — is what keeps a legitimately repeated answer
  * ("1" twice in a two-step menu) alive.
  *
- * Always answers 200 to a processable-shaped request: a permanent 4xx would
- * only make the flow re-deliver the same unprocessable payload.
+ * Response contract (POLL). The `api_rest` node maps the RESPONSE BODY into
+ * flow variables through its `store`, and in async mode re-calls until
+ * `async_condition` over that body holds. So every call answers JSON:
+ *
+ *   `{"pronto":0}`  — turn accepted / still running / body unprocessable
+ *   `{"pronto":1,"resposta":"…","hand_off":"sim|nao","bolhas":["…"]}`
+ *                   — the agent answered; the turn is cleared by this call
+ *
+ * Always HTTP 200 for a processable-shaped request: a permanent 4xx would only
+ * make the flow re-deliver the same unprocessable payload, and a non-200 in
+ * async mode stalls the node instead of letting it poll again.
  */
 
 import type { DedupeCache } from '@omni/channel-sdk';
 
-import type { AscFlowPlugin } from '../plugin';
+import { type AscFlowPlugin, TURN_PENDING } from '../plugin';
 import type { AscFlowInboundBody } from '../types';
 
 /** The flow node posts a small JSON object; 64 KB is generous headroom. */
 const MAX_BODY_BYTES = 64 * 1024;
+
+/** Every answer the flow can consume is JSON with a `pronto` field. */
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+}
+
+/** Nothing to hand back yet — keep polling. */
+const pending = () => json(TURN_PENDING);
 
 function firstString(...values: Array<string | number | undefined>): string {
   for (const value of values) {
@@ -99,12 +116,12 @@ export async function handleAscFlowWebhookRequest(
     raw = await request.text();
   } catch (err) {
     logger.warn('[asc-flow] failed to read webhook body', { instanceId, err: String(err) });
-    return new Response('OK', { status: 200 });
+    return pending();
   }
 
   if (raw.length > MAX_BODY_BYTES) {
     logger.warn('[asc-flow] oversized webhook body rejected', { instanceId, size: raw.length });
-    return new Response('OK', { status: 200 });
+    return pending();
   }
 
   let parsedJson: unknown;
@@ -112,18 +129,26 @@ export async function handleAscFlowWebhookRequest(
     parsedJson = JSON.parse(raw);
   } catch {
     logger.warn('[asc-flow] webhook body is not valid JSON', { instanceId });
-    return new Response('OK', { status: 200 });
+    return pending();
   }
 
   if (typeof parsedJson !== 'object' || parsedJson === null || Array.isArray(parsedJson)) {
     logger.warn('[asc-flow] webhook body is not a JSON object', { instanceId });
-    return new Response('OK', { status: 200 });
+    return pending();
   }
 
   const turn = parseInboundTurn(parsedJson as AscFlowInboundBody);
   if (!turn) {
     logger.warn('[asc-flow] webhook missing codAtendimento or chatInput', { instanceId });
-    return new Response('OK', { status: 200 });
+    return pending();
+  }
+
+  // The agent may already have answered a turn for this atendimento. That
+  // answer is what the flow is polling FOR, so it is checked before anything
+  // else — and taking it closes the turn.
+  const ready = plugin.takeReadyTurn(instanceId, turn.codAtendimento);
+  if (ready) {
+    return json(ready);
   }
 
   // `messageId` wins when the flow supplies one (60s SDK cache). Otherwise fall
@@ -133,9 +158,9 @@ export async function handleAscFlowWebhookRequest(
     ? dedupeCache.isDuplicate(instanceId, turn.messageId, 'asc-flow', logger)
     : plugin.isRedeliveryOfTurnInFlight(instanceId, turn);
   if (isRedelivery) {
-    return new Response('OK', { status: 200 });
+    return pending();
   }
 
   await plugin.handleInboundTurn(instanceId, turn);
-  return new Response('OK', { status: 200 });
+  return pending();
 }

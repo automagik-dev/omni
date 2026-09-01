@@ -6,10 +6,15 @@ platform: the flow calls Omni, and Omni answers through the platform's REST API
 
 ```
 WhatsApp → ASC (Flow) → api_rest node → Omni → agent
-         → callbackFlowMsg / mensagem (bubbles)
-         → callbackFlow (variables; the flow resumes)
+         → callbackFlowMsg (the bubbles BEFORE the last one, pushed)
+         → the last bubble comes back in the api_rest RESPONSE BODY
          → transferirHumano (when the turn hands off)
 ```
+
+The `api_rest` node consumes the **HTTP response body** and maps it into flow
+variables through its `store`. In async mode it re-calls this endpoint until
+`async_condition` over that body holds. So the channel is a **poll**, not a
+push: the turn is state here, and each call answers JSON.
 
 ## Not `@omni/channel-asc`
 
@@ -18,7 +23,7 @@ WhatsApp → ASC (Flow) → api_rest node → Omni → agent
 | Talks to | `apigw.ascbrazil.com.br` (API Gateway) | the platform (`/rest/v2`) |
 | Model | BSP direct — a WhatsApp Cloud API mirror | integration via the platform's Flow |
 | Inbound | Meta-format webhooks | the flow's `api_rest` node calls us |
-| Outbound | `POST /api/v1/messages` (Graph shape) | `callbackFlowMsg` / `mensagem` / `callbackFlow` |
+| Outbound | `POST /api/v1/messages` (Graph shape) | the poll response body + `callbackFlowMsg` |
 | `ChannelType` | `asc` | `asc-flow` |
 
 Both can exist side by side; they share no code and no configuration.
@@ -46,10 +51,39 @@ POST /api/v2/channels/asc-flow/{instanceId}/webhook
 `cod_atendimento` / `message` / `telefone` are accepted as aliases. An optional
 `messageId` (alias `idMensagem`) is used for dedupe when the flow supplies one.
 
+## Response contract (POLL)
+
+Always HTTP `200`, always JSON. Three states, keyed by `codAtendimento`:
+
+| State | Body |
+|---|---|
+| 1st call for a turn (published to the agent) | `{"pronto":0}` |
+| re-call while the agent is running | `{"pronto":0}` |
+| body unprocessable (no `chatInput`, bad JSON, oversized) | `{"pronto":0}` |
+| the agent answered | `{"pronto":1,"resposta":"…","hand_off":"nao","bolhas":["…"]}` |
+
+The `pronto:1` body may also carry `fila_vq` / `motivo_transf_vq` (handoff only)
+and `ura_opcoes` / `forcar_botoes` (when the last bubble has options). Reading
+the answer **clears the turn**: the same text on the next call is a new turn.
+
+### What to configure on the `api_rest` node
+
+| Field | Value |
+|---|---|
+| URL | `POST {omniBaseUrl}/api/v2/channels/asc-flow/{instanceId}/webhook` |
+| Body | `{"codAtendimento":"{#cod_atendimento}","chatInput":"{#chatInput}","phone":"{#telefone}"}` |
+| API Assíncrona | `Sim` |
+| `async_condition` | `{#BODY.pronto} = 1` |
+| Timeout | `180` (the dropdown's ceiling) |
+| `store` | `resposta` ← `{#BODY.resposta}`, `hand_off` ← `{#BODY.hand_off}` |
+
+A non-200 would stall the node instead of letting it poll again, which is why
+even an unprocessable body answers `200` with `{"pronto":0}`.
+
 ### Dedupe is ON by default
 
 With `API Assíncrona = Sim`, the `api_rest` node **re-POSTs the same body every
-~2s** while it waits for `callbackFlow` to release the step. Measured live
+~2s** while it waits for `async_condition` to hold. Measured live
 against the ASC emulator (flow #220): **one user message → ~22 POSTs**, each
 published as a fresh `message.received`, and the dispatcher fired the agent with
 `messageCount: 3` for a single turn. Every extra run is billed tokens and can
@@ -59,15 +93,14 @@ So the default is to deduplicate, in this order:
 
 1. `messageId`, when present → SDK inbound dedupe cache (60s TTL). Precedence.
 2. Otherwise `codAtendimento` + the exact `chatInput`, valid **only inside the
-   in-flight window** — from the publish until the `sendMessage` that resumes
-   the flow (safety expiry at 60s if a turn never gets answered).
+   in-flight window** — from the publish until the poll that collects the
+   agent's answer (safety expiry at 60s if a turn never gets answered).
 
 The window, not a lasting hash of the text, is what keeps a legitimately
 repeated answer alive: "1" twice in a two-step menu arrives *after* the first
-turn was answered, so the mark is gone and the second "1" publishes normally.
+turn was collected, so the mark is gone and the second "1" publishes normally.
 Drops are logged at `debug` (`dropping webhook re-delivery: turn still in
-flight`). The webhook always answers `200` — a 4xx would only make the platform
-retry harder.
+flight`) and still answer `{"pronto":0}`.
 
 The `codAtendimento` is the Omni **chat id**: it is the platform's conversation
 identity and the only handle every outbound endpoint accepts.
@@ -76,14 +109,16 @@ identity and the only handle every outbound endpoint accepts.
 
 | Endpoint | When |
 |---|---|
-| `POST /sendIndicador` | typing, on inbound arrival and between bubbles |
-| `POST /callbackFlowMsg` | a plain text bubble inside the flow |
-| `POST /mensagem` | the last bubble when it carries URA options |
-| `POST /callbackFlow` | writes the flow variables and resumes the flow |
+| `POST /sendIndicador` | typing, on inbound arrival and after each pushed bubble |
+| `POST /callbackFlowMsg` | every bubble EXCEPT the last one |
 | `POST /transferirHumano` | `metadata.isHandoff === true` |
 
 One `sendMessage` is one flow turn. Blank-line-separated paragraphs become
-separate bubbles.
+separate bubbles. The bubbles before the last are **pushed** (best-effort, with
+typing between them, which is what gives the turn its rhythm); the **last** one
+rides back in `resposta`, the single slot the flow's `message` node renders. A
+refused push degrades to `resposta` rather than costing the beneficiary the
+answer.
 
 ### Interactive (URA)
 
@@ -100,15 +135,20 @@ The mapping degrades to plain numbered text — never dropping content — when:
   a collision would book the wrong appointment).
 
 The numbered text the agent wrote is the canonical path; the URA is only a tap
-affordance layered on top of it.
+affordance layered on top of it. In the poll model the `ura_opcoes` /
+`forcar_botoes` fields ride in the response body, so they render as a real
+component only once the flow has a URA node consuming them — until then the
+options are the numbered text inside `resposta`. Same ceiling the Python
+adapter ships with, and no code change here when that node exists.
 
 ### Handoff
 
 `metadata.isHandoff` drives it. Of the fourteen Genesys userdata fields the ASC
 component forwards, exactly two are the agent's: `fila_vq` and
-`motivo_transf_vq`. They travel as flow variables on `callbackFlow`, from
+`motivo_transf_vq`. They ride in the `pronto:1` body, from
 `metadata.handoffQueue` and `metadata.handoffReason`; `metadata.handoffServico`
-overrides the instance's default queue for `transferirHumano`.
+overrides the instance's default queue for `transferirHumano`, which is still
+called on top of the body's `hand_off:"sim"`.
 
 ## Gotchas
 
@@ -119,10 +159,8 @@ overrides the instance's default queue for `transferirHumano`.
   beneficiary's handset.
 - **HTTP 200 is not success.** The platform reports refusals in-band through
   `cod_error` / `sucesso`; `isPlatformOk` checks both.
-- **`flow_variaveis` has two shapes.** The swagger schema says object, the
-  endpoint's own example says list. We send the object and retry as
-  `[{nome, valor}]` if it is refused. Safe to retry: it writes variables, it
-  does not deliver a bubble.
+- **The emulator's `cod_atendimento` is a ghost (`1`)** and the write endpoints
+  refuse it. Expected — do not work around it.
 - **The token lasts one hour.** Cached per instance, refreshed under five
   minutes remaining.
 
@@ -136,6 +174,6 @@ exposes no transcript API).
 
 Ported from a Python adapter that ran the full conversational loop against the
 ASC emulator (auth + token cache, the 401 gotcha, bubble sequencing, URA
-button/list selection and every degradation, `callbackFlow` shape tolerance,
-`transferirHumano`). **Not yet exercised against a real atendimento** — that
+button/list selection and every degradation, `transferirHumano`), including the
+same synchronous "leading bubbles pushed, last one in `resposta`" strategy. **Not yet exercised against a real atendimento** — that
 needs a live number, which is blocked with the client.

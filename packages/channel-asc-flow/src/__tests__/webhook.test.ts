@@ -33,6 +33,9 @@ const post = (body: unknown, suffix = '', headers: Record<string, string> = {}) 
 
 const received = () => eventBus.published.filter((e) => e.type.includes('received'));
 
+const body = async (response: Response): Promise<Record<string, unknown>> =>
+  (await response.json()) as Record<string, unknown>;
+
 /** The agent answering: this is what resumes the flow and closes the turn. */
 const answerTurn = (cod: string) =>
   plugin.sendMessage(instanceId, { to: cod, content: { type: 'text', text: 'resposta' } as never });
@@ -43,12 +46,71 @@ afterEach(async () => {
 });
 
 describe('handleWebhook', () => {
-  it('accepts a turn and publishes it', async () => {
+  it('accepts a turn, publishes it, and answers pronto:0', async () => {
     await boot();
     const response = await post({ codAtendimento: '42', chatInput: 'oi', phone: '5551999' });
 
     expect(response.status).toBe(200);
+    expect(await body(response)).toEqual({ pronto: 0 });
     expect(received()).toHaveLength(1);
+  });
+
+  it('hands the agent answer back on the NEXT poll, then treats the turn as over', async () => {
+    await boot();
+    expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toEqual({ pronto: 0 });
+
+    await answerTurn('42');
+
+    expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toEqual({
+      pronto: 1,
+      resposta: 'resposta',
+      hand_off: 'nao',
+      bolhas: ['resposta'],
+    });
+    // Answer collected: the same text now opens a brand-new turn.
+    expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toEqual({ pronto: 0 });
+    expect(received()).toHaveLength(2);
+  });
+
+  it('returns hand_off:sim in the body when the turn hands off', async () => {
+    await boot();
+    await post({ codAtendimento: '42', chatInput: 'oi' });
+    await plugin.sendMessage(instanceId, {
+      to: '42',
+      content: { type: 'text', text: 'Vou te transferir.' } as never,
+      metadata: { isHandoff: true, handoffQueue: 'VQ_AGENDAMENTO', handoffReason: 'fora do escopo' },
+    });
+
+    expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toMatchObject({
+      pronto: 1,
+      hand_off: 'sim',
+      fila_vq: 'VQ_AGENDAMENTO',
+      motivo_transf_vq: 'fora do escopo',
+    });
+  });
+
+  it('pushes every bubble but the last, and returns the last one in resposta', async () => {
+    const stub = stubPlatform();
+    restore = stub.restore;
+    eventBus = new MockEventBus();
+    plugin = new AscFlowPlugin();
+    await plugin.initialize(createContext(eventBus));
+    await connectPlugin(plugin);
+
+    await post({ codAtendimento: '42', chatInput: 'oi' });
+    await plugin.sendMessage(instanceId, {
+      to: '42',
+      content: { type: 'text', text: 'um\n\ndois\n\ntres' } as never,
+    });
+
+    expect(stub.calls.filter((c) => c.path === '/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([
+      'um',
+      'dois',
+    ]);
+    expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toMatchObject({
+      resposta: 'tres',
+      bolhas: ['um', 'dois', 'tres'],
+    });
   });
 
   it('404s for an unknown instance', async () => {
@@ -61,8 +123,10 @@ describe('handleWebhook', () => {
 
   it('acks unprocessable bodies with 200 so the flow does not re-deliver them', async () => {
     await boot();
-    for (const body of ['not json', '[]', '{}', { codAtendimento: '42' }]) {
-      expect((await post(body)).status).toBe(200);
+    for (const payload of ['not json', '[]', '{}', { codAtendimento: '42' }]) {
+      const response = await post(payload);
+      expect(response.status).toBe(200);
+      expect(await body(response)).toEqual({ pronto: 0 });
     }
     expect(received()).toHaveLength(0);
   });
@@ -99,7 +163,9 @@ describe('handleWebhook', () => {
     // The flow's api_rest node re-calls every ~2s while it waits for
     // callbackFlow — measured at ~22 calls for a single user message.
     for (let i = 0; i < 20; i++) {
-      expect((await post({ codAtendimento: '42', chatInput: 'oi', phone: '5551999' })).status).toBe(200);
+      const response = await post({ codAtendimento: '42', chatInput: 'oi', phone: '5551999' });
+      expect(response.status).toBe(200);
+      expect(await body(response)).toEqual({ pronto: 0 });
     }
 
     expect(received()).toHaveLength(1);
@@ -108,8 +174,9 @@ describe('handleWebhook', () => {
   it('keeps repeated text once the turn was answered — "1" twice is two real answers', async () => {
     await boot();
     await post({ codAtendimento: '42', chatInput: '1' });
-    // The agent answers: sendMessage resumes the flow and closes the window.
+    // The agent answers; the next poll collects it and closes the window.
     await answerTurn('42');
+    await post({ codAtendimento: '42', chatInput: '1' });
     await post({ codAtendimento: '42', chatInput: '1' });
 
     expect(received()).toHaveLength(2);
