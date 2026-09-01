@@ -5,14 +5,40 @@ SCRIPT="${ROOT}/scripts/release/authorize-release-entry.py"
 VERSION=2.260830.2
 SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 OTHER_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+BOUND_ARGS=(
+  --version "${VERSION}"
+  --source-ref "refs/tags/v${VERSION}"
+  --source-sha "${SHA}"
+  --expected-sha "${SHA}"
+)
 if "${SCRIPT}" --channel stable --orchestrated false --recovery-run-id 123; then
   echo 'FAIL: direct stable dispatch was accepted' >&2; exit 1
 fi
-[[ "$("${SCRIPT}" --channel stable --orchestrated true)" == 'mode=orchestrated' ]]
-if "${SCRIPT}" --channel stable --orchestrated true --recovery-run-id 123; then
+[[ "$("${SCRIPT}" --channel stable --orchestrated true "${BOUND_ARGS[@]}")" == 'mode=orchestrated' ]]
+if "${SCRIPT}" --channel stable --orchestrated true --recovery-run-id 123 "${BOUND_ARGS[@]}"; then
   echo 'FAIL: orchestrated run accepted a foreign recovery run id' >&2; exit 1
 fi
-[[ "$("${SCRIPT}" --channel dev --orchestrated true)" == 'mode=orchestrated' ]]
+[[ "$("${SCRIPT}" --channel dev --orchestrated true "${BOUND_ARGS[@]}")" == 'mode=orchestrated' ]]
+if "${SCRIPT}" --channel dev --orchestrated true \
+  --version "${VERSION}" --source-ref refs/heads/dev \
+  --source-sha "${SHA}" --expected-sha "${SHA}"; then
+  echo 'FAIL: orchestrated dev branch was accepted' >&2; exit 1
+fi
+if "${SCRIPT}" --channel dev --orchestrated true \
+  --version "${VERSION}" --source-ref "refs/tags/v${VERSION}" \
+  --source-sha "${SHA}" --expected-sha ''; then
+  echo 'FAIL: orchestrated dev publish with an empty expected SHA was accepted' >&2; exit 1
+fi
+if "${SCRIPT}" --channel dev --orchestrated true \
+  --version "${VERSION}" --source-ref "refs/tags/v${VERSION}" \
+  --source-sha "${SHA}" --expected-sha "${OTHER_SHA}"; then
+  echo 'FAIL: orchestrated dev publish with a mismatched expected SHA was accepted' >&2; exit 1
+fi
+if "${SCRIPT}" --channel dev --orchestrated true \
+  --version "${VERSION}" --source-ref refs/tags/v2.260830.3 \
+  --source-sha "${SHA}" --expected-sha "${SHA}"; then
+  echo 'FAIL: orchestrated dev publish from the wrong version tag was accepted' >&2; exit 1
+fi
 RECOVERY_ARGS=(
   --channel dev
   --orchestrated false

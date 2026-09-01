@@ -260,6 +260,59 @@ forbid(version, r"Channel selector is dev/homolog", "version workflow keeps the 
 if version.endswith("\n\n"):
     errors.append("version workflow has a trailing blank line")
 
+release_dispatch_match = re.search(
+    r"^  workflow_dispatch:\n(?P<body>.*?)(?=^permissions:)",
+    release,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if release_dispatch_match is None:
+    errors.append("release orchestration has no workflow_dispatch contract")
+else:
+    require(
+        release_dispatch_match.group("body"),
+        r"^      expected_sha:\n        description:[^\n]*\n        required:\s*true\n        type:\s*string$",
+        "release workflow_dispatch does not require an exact expected source SHA",
+    )
+
+release_authorization_match = re.search(
+    r"- name: Reject unverified stable entry points(?P<body>.*?)(?=^  build:)",
+    release,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if release_authorization_match is None:
+    errors.append("release orchestration has no pre-build source authorization step")
+else:
+    release_authorization = release_authorization_match.group("body")
+    for token, message in (
+        ('[[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]', "release orchestration accepts non-dispatch entry before build"),
+        ('[[ "${INPUT_VERSION}" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]', "release orchestration does not validate semantic version before build"),
+        ('[[ "${GITHUB_REF}" == "refs/tags/v${INPUT_VERSION}" ]]', "release orchestration is not bound to the exact version tag before build"),
+        ('[[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]', "release orchestration does not validate the trigger SHA before build"),
+        ('[[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]', "release orchestration does not require the expected SHA before build"),
+        ('[[ "${GITHUB_SHA}" == "${EXPECTED_SHA}" ]]', "release orchestration does not bind trigger and expected SHAs before build"),
+    ):
+        if token not in release_authorization:
+            errors.append(message)
+
+version_dispatch_match = re.search(
+    r"- name: Dispatch release pipeline for the new tag(?P<body>.*?)(?=^  publish-stable:)",
+    version,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if version_dispatch_match is None:
+    errors.append("version workflow has no release dispatch step")
+else:
+    version_dispatch = version_dispatch_match.group("body")
+    tag_ref = version_dispatch.find('TAG="refs/tags/v${VERSION}"')
+    tag_sha = version_dispatch.find('TAG_SHA=$(git rev-parse "${TAG}^{commit}")')
+    sha_guard = version_dispatch.find('[[ "${TAG_SHA}" =~ ^[0-9a-f]{40}$ ]]')
+    expected_field = version_dispatch.find('--field expected_sha="${TAG_SHA}"')
+    dispatch = version_dispatch.find("gh workflow run release.yml")
+    if min(tag_ref, tag_sha, sha_guard, expected_field, dispatch) < 0 or not (
+        tag_ref < tag_sha < sha_guard < dispatch < expected_field
+    ):
+        errors.append("version workflow does not dispatch the exact locally derived tag target SHA")
+
 for name, workflow in workflows.items():
     for match in re.finditer(r"^\s*-?\s*uses:\s*([^\s#]+)", workflow, flags=re.MULTILINE):
         ref = match.group(1)
@@ -295,13 +348,22 @@ if entry_authorization_match is None:
     errors.append("release publication has no entry authorization step")
 else:
     entry_authorization = entry_authorization_match.group("body")
-    for pattern, message in (
-        (r'--version\s+"\$\{VERSION\}"', "recovery authorization is not bound to the requested version"),
-        (r'--source-ref\s+"\$\{GITHUB_REF\}"', "recovery authorization is not bound to the trigger ref"),
-        (r'--source-sha\s+"\$\{GITHUB_SHA\}"', "recovery authorization is not bound to the trigger SHA"),
-        (r'--expected-sha\s+"\$\{EXPECTED_SHA\}"', "recovery authorization does not require the operator-approved SHA"),
-    ):
-        require(entry_authorization, pattern, message)
+    common_entry_args_match = re.search(
+        r"entry_args=\((?P<args>.*?)\)\n\s*if \[\[ -n \"\$\{RECOVERY_RUN_ID\}\" \]\]",
+        entry_authorization,
+        flags=re.DOTALL,
+    )
+    if common_entry_args_match is None:
+        errors.append("release publication does not build common entry authorization arguments")
+    else:
+        common_entry_args = common_entry_args_match.group("args")
+        for pattern, message in (
+            (r'--version\s+"\$\{VERSION\}"', "orchestrated publication is not bound to the requested version"),
+            (r'--source-ref\s+"\$\{GITHUB_REF\}"', "orchestrated publication is not bound to the trigger ref"),
+            (r'--source-sha\s+"\$\{GITHUB_SHA\}"', "orchestrated publication is not bound to the trigger SHA"),
+            (r'--expected-sha\s+"\$\{EXPECTED_SHA\}"', "orchestrated publication does not require the caller-approved SHA"),
+        ):
+            require(common_entry_args, pattern, message)
 
 forbid(
     release_publish,
@@ -318,24 +380,24 @@ if publish_step_match is None:
 else:
     publish_step = publish_step_match.group("body")
     tag_read = publish_step.find('tag_sha=$(git rev-parse "refs/tags/v${VERSION}^{commit}")')
-    recovery_guard = publish_step.find('if [[ -n "${RECOVERY_RUN_ID}" ]]; then')
-    recovery_tag_binding = publish_step.find('[[ "${tag_sha}" == "${GITHUB_SHA}" ]]')
-    recovery_expected_binding = publish_step.find('[[ "${tag_sha}" == "${EXPECTED_SHA}" ]]')
-    orchestrated_guard = publish_step.find('elif [[ -n "${EXPECTED_SHA}" ]]; then')
+    source_tag_binding = publish_step.find('[[ "${tag_sha}" == "${GITHUB_SHA}" ]]')
+    expected_tag_binding = publish_step.find('[[ "${tag_sha}" == "${EXPECTED_SHA}" ]]')
+    publication_start = publish_step.find("upload_assets=true")
+    prepublication = publish_step[:publication_start] if publication_start >= 0 else publish_step
+    if 'if [[ -n "${RECOVERY_RUN_ID}" ]]; then' in prepublication:
+        errors.append("remote tag source binding remains conditional on direct recovery mode")
     if min(
         tag_read,
-        recovery_guard,
-        recovery_tag_binding,
-        recovery_expected_binding,
-        orchestrated_guard,
+        source_tag_binding,
+        expected_tag_binding,
+        publication_start,
     ) < 0 or not (
         tag_read
-        < recovery_guard
-        < recovery_tag_binding
-        < recovery_expected_binding
-        < orchestrated_guard
+        < source_tag_binding
+        < expected_tag_binding
+        < publication_start
     ):
-        errors.append("recovery publication does not bind the exact remote tag target to both verified source SHAs")
+        errors.append("release publication does not bind the exact remote tag target to both verified source SHAs before publication")
 
     draft_read = publish_step.find(
         'PRE_CLOBBER_DRAFT=$(gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" '

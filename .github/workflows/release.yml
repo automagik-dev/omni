@@ -43,8 +43,8 @@ on:
           - stable
           - dev
       expected_sha:
-        description: 'Stable only: exact verified release source SHA'
-        required: false
+        description: 'Exact verified release source SHA'
+        required: true
         type: string
       expected_digest:
         description: 'Stable only: exact verified omni-api OCI digest'
@@ -89,12 +89,16 @@ jobs:
           IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
         run: |
           set -euo pipefail
+          [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]
+          [[ "${INPUT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "${GITHUB_REF}" == "refs/tags/v${INPUT_VERSION}" ]]
+          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${GITHUB_SHA}" == "${EXPECTED_SHA}" ]]
           if [[ "${CHANNEL}" == "stable" ]]; then
-            [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${ACTOR}" == "github-actions[bot]" ]]
-            [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]
+            [[ "${ACTOR}" == "github-actions[bot]" ]]
             [[ "${EXPECTED_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
             [[ "${ORCHESTRATOR_RUN_ID}" =~ ^[0-9]+$ ]]
-            [[ "${GITHUB_REF}" == "refs/tags/v${INPUT_VERSION}" ]]
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ORCHESTRATOR_RUN_ID}" > "${RUNNER_TEMP}/orchestrator.json"
             scripts/release/verify-orchestrator-run.py \
               --run-json "${RUNNER_TEMP}/orchestrator.json" \

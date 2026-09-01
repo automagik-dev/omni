@@ -255,8 +255,15 @@ jobs:
         run: |
           set -euo pipefail
           TAG="refs/tags/v${VERSION}"
+          TAG_SHA=$(git rev-parse "${TAG}^{commit}")
+          [[ "${TAG_SHA}" =~ ^[0-9a-f]{40}$ ]]
           echo "Dispatching release pipeline against ${TAG} (channel=${CHANNEL})..."
-          if ! gh workflow run release.yml --repo "${GITHUB_REPOSITORY}" --ref "${TAG}" --field version="${VERSION}" --field channel="${CHANNEL}"; then
+          if ! gh workflow run release.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "${TAG}" \
+            --field version="${VERSION}" \
+            --field channel="${CHANNEL}" \
+            --field expected_sha="${TAG_SHA}"; then
             echo "::error ::release-trigger.dispatch_failed release.yml dispatch failed for ${TAG} — investigate gh CLI auth or workflow availability before re-running manually"
             exit 1
           fi

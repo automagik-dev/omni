@@ -42,8 +42,8 @@ on:
         type: boolean
         default: false
       expected_sha:
-        description: 'Stable only: exact verified release source SHA'
-        required: false
+        description: 'Exact verified release source SHA'
+        required: true
         type: string
       expected_digest:
         description: 'Stable only: exact verified omni-api OCI digest'
@@ -126,15 +126,16 @@ jobs:
           IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
         run: |
           set -euo pipefail
-          entry_args=(--channel "${CHANNEL}" --orchestrated "${ORCHESTRATED}")
+          entry_args=(
+            --channel "${CHANNEL}"
+            --orchestrated "${ORCHESTRATED}"
+            --version "${VERSION}"
+            --source-ref "${GITHUB_REF}"
+            --source-sha "${GITHUB_SHA}"
+            --expected-sha "${EXPECTED_SHA}"
+          )
           if [[ -n "${RECOVERY_RUN_ID}" ]]; then
-            entry_args+=(
-              --recovery-run-id "${RECOVERY_RUN_ID}"
-              --version "${VERSION}"
-              --source-ref "${GITHUB_REF}"
-              --source-sha "${GITHUB_SHA}"
-              --expected-sha "${EXPECTED_SHA}"
-            )
+            entry_args+=(--recovery-run-id "${RECOVERY_RUN_ID}")
           fi
           entry_state=$(scripts/release/authorize-release-entry.py "${entry_args[@]}")
           entry_mode="${entry_state#mode=}"
@@ -251,7 +252,6 @@ jobs:
           DRAFT_FLAG: ${{ inputs.draft && '--draft' || '' }}
           REQUESTED_DRAFT: ${{ inputs.draft || false }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
-          RECOVERY_RUN_ID: ${{ inputs.run_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -262,21 +262,14 @@ jobs:
 
           git fetch origin "+refs/tags/v${VERSION}:refs/tags/v${VERSION}"
           tag_sha=$(git rev-parse "refs/tags/v${VERSION}^{commit}")
-          if [[ -n "${RECOVERY_RUN_ID}" ]]; then
-            [[ "${tag_sha}" == "${GITHUB_SHA}" ]] || {
-              echo "::error::remote recovery tag target is ${tag_sha}, verified recovery source is ${GITHUB_SHA}"
-              exit 1
-            }
-            [[ "${tag_sha}" == "${EXPECTED_SHA}" ]] || {
-              echo "::error::remote tag target before publication is ${tag_sha}, expected ${EXPECTED_SHA}"
-              exit 1
-            }
-          elif [[ -n "${EXPECTED_SHA}" ]]; then
-            [[ "${tag_sha}" == "${EXPECTED_SHA}" ]] || {
-              echo "::error::remote tag target before publication is ${tag_sha}, expected ${EXPECTED_SHA}"
-              exit 1
-            }
-          fi
+          [[ "${tag_sha}" == "${GITHUB_SHA}" ]] || {
+            echo "::error::remote tag target is ${tag_sha}, verified release source is ${GITHUB_SHA}"
+            exit 1
+          }
+          [[ "${tag_sha}" == "${EXPECTED_SHA}" ]] || {
+            echo "::error::remote tag target before publication is ${tag_sha}, expected ${EXPECTED_SHA}"
+            exit 1
+          }
 
           upload_assets=true
           if gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
@@ -360,14 +353,7 @@ jobs:
 
           git fetch origin "+refs/tags/v${VERSION}:refs/tags/v${VERSION}"
           final_tag_sha=$(git rev-parse "refs/tags/v${VERSION}^{commit}")
-          if [[ -n "${EXPECTED_SHA}" ]]; then
-            [[ "${final_tag_sha}" == "${EXPECTED_SHA}" ]] || {
-              echo "::error::remote tag target after publication is ${final_tag_sha}, expected ${EXPECTED_SHA}"
-              exit 1
-            }
-          else
-            [[ "${final_tag_sha}" == "${tag_sha}" ]] || {
-              echo "::error::remote tag target moved during publication from ${tag_sha} to ${final_tag_sha}"
-              exit 1
-            }
-          fi
+          [[ "${final_tag_sha}" == "${EXPECTED_SHA}" ]] || {
+            echo "::error::remote tag target after publication is ${final_tag_sha}, expected ${EXPECTED_SHA}"
+            exit 1
+          }
