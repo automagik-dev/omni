@@ -490,7 +490,19 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       chatId: turn.codAtendimento,
       from: turn.phone || turn.codAtendimento,
       content: media
-        ? { type: media.type, mimeType: media.mimeType, localPath: media.localPath }
+        ? {
+            type: media.type,
+            mimeType: media.mimeType,
+            localPath: media.localPath,
+            // `mediaUrl` is what the dispatcher filters on to decide a message
+            // is media worth waiting for (`collectProcessedMedia`, gated by the
+            // instance's `agentWaitForMedia`). With only `localPath` the file
+            // persisted and was transcribed/described fine, but the agent was
+            // called BEFORE that finished and skipped the turn as "no text or
+            // media content" — measured on the live number 01/09. The bytes are
+            // already local, so the path doubles as the URL.
+            mediaUrl: media.localPath,
+          }
         : {
             type: 'text' as import('@omni/core/types').ContentType,
             text: isMediaName ? mediaFallbackText(turn.text) : sanitized.text,

@@ -135,6 +135,19 @@ describe('inbound media', () => {
     expect(String(content.localPath)).toEndWith('.jpg');
   });
 
+  // `collectProcessedMedia` filters on `mediaUrl` to decide a message is media
+  // worth waiting for. Without it the dispatcher called the agent BEFORE the
+  // description existed and dropped the turn as "no text or media content"
+  // (measured on the live number 01/09) — so this is load-bearing, not cosmetic.
+  it('publishes mediaUrl so the dispatcher waits for the transcription', async () => {
+    await boot();
+    await post(IMAGE_NAME);
+
+    const content = receivedContent();
+    expect(content.mediaUrl).toBeDefined();
+    expect(content.mediaUrl).toBe(content.localPath);
+  });
+
   it('never touches /atendimento for ordinary text', async () => {
     await boot();
     await post('quero remarcar minha consulta');
