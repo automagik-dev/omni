@@ -100,6 +100,7 @@ import {
   type DebounceConfig,
   type DispatchMetadata,
   MessageDebouncer,
+  type QueuedBehindActiveRunInfo,
 } from './message-debouncer';
 import { extractPlatformTimestamp } from './message-persistence';
 import { createSessionStorage } from './session-storage';
@@ -3720,6 +3721,63 @@ function buildAckConfig(instance: DispatchInstance): ReactionAckConfig {
   };
 }
 
+/**
+ * #920: Enqueue-time reaction acks, keyed by the debouncer chatKey
+ * (`${instanceId}:${chatId}`). At most ONE live entry per chat — i.e. per
+ * blocking run — so a burst of queued messages costs one ack rate-limit token
+ * (the limiter allows 10/min per instance, shared across all chats), not one
+ * per message. The flush path takes the handle: release() when the batch
+ * dispatches (the dispatch-time ack takes over the same reaction), remove()
+ * when a flush-time gate skips the batch. `at` lets a stale entry (flush never
+ * came — e.g. debouncer cleared on shutdown) expire instead of blocking the
+ * chat's queue acks forever.
+ */
+const queuedMessageAcks = new Map<string, { handle?: AckHandle; at: number }>();
+
+/** #920: max ack lifetime — mirrors channel-sdk's DEC-8 hard cap (startAck clamps to it). */
+const QUEUED_ACK_TIMEOUT_MS = 120_000;
+
+function takeQueuedAck(chatKey: string): AckHandle | undefined {
+  const entry = queuedMessageAcks.get(chatKey);
+  queuedMessageAcks.delete(chatKey);
+  return entry?.handle;
+}
+
+/**
+ * #920: Reaction-ack a message the moment it queues behind an active run.
+ * Without this the only ack fires in processAgentResponse — i.e. at dispatch —
+ * so a message waiting out a long agent run (15+ min on claude-code) shows no
+ * signal at all. Cosmetic and fire-and-forget. The handle is kept in
+ * queuedMessageAcks so the flush path can hand the reaction over to the
+ * dispatch-time ack (release) or clean it up when the batch is skipped
+ * (remove); see onDebouncedFlush. The ack lifetime uses the SDK's 120s cap
+ * rather than the instance ackTimeoutMs (default 30s): this ack means
+ * "received, waiting" and should survive as long as the SDK allows.
+ */
+async function ackQueuedMessage(info: QueuedBehindActiveRunInfo): Promise<void> {
+  const chatKey = `${info.instanceId}:${info.chatId}`;
+  try {
+    const existing = queuedMessageAcks.get(chatKey);
+    if (existing && Date.now() - existing.at < QUEUED_ACK_TIMEOUT_MS) return;
+    const instance = info.message.metadata.resolvedInstance as DispatchInstance | undefined;
+    const messageId = info.message.payload.externalId;
+    if (!instance || !messageId) return;
+    // Reserve the slot synchronously (before the first await) so concurrent
+    // enqueues for the same chat can't both pass the gate and double-ack.
+    const entry: { handle?: AckHandle; at: number } = { at: Date.now() };
+    queuedMessageAcks.set(chatKey, entry);
+    const channel = (info.message.metadata.channelType ?? instance.channel) as ChannelType;
+    const plugin = (await getPlugin(channel)) ?? null;
+    entry.handle = startAck(plugin, createPluginAckProvider(plugin), instance.id, info.chatId, messageId, channel, {
+      ...buildAckConfig(instance),
+      ackTimeoutMs: QUEUED_ACK_TIMEOUT_MS,
+    });
+  } catch (error) {
+    queuedMessageAcks.delete(chatKey);
+    log.debug('Failed to ack queued message', { chatId: info.chatId, error: String(error) });
+  }
+}
+
 async function dispatchToAgent(
   services: Services,
   instance: DispatchInstance,
@@ -5772,9 +5830,18 @@ export async function setupAgentDispatcher(
   // Create debouncer for message events
   // (registered module-wide so dispatch paths can consult pending buffers
   //  for the stale-reply gate — see isReplySuperseded)
-  const debouncer = new MessageDebouncer(async (_chatKey, messages) => {
+  const onDebouncedFlush = async (chatKey: string, messages: BufferedMessage[]) => {
+    // #920: the enqueue-time ack for this chat, if any. Settled on every exit:
+    // release() when the batch reaches dispatch (processAgentResponse's own ack
+    // takes over the reaction — its skip branches and finally-block remove it),
+    // remove() when a flush-time gate drops the batch. An exception mid-flush
+    // leaves it to the handle's own hard-timeout backstop.
+    const queuedAck = takeQueuedAck(chatKey);
     const firstMsg = messages[0];
-    if (!firstMsg) return;
+    if (!firstMsg) {
+      queuedAck?.remove();
+      return;
+    }
 
     const instanceId = firstMsg.metadata.instanceId;
 
@@ -5792,6 +5859,7 @@ export async function setupAgentDispatcher(
       );
       if (!baseInstance) {
         log.warn('Instance not found for debounced messages', { instanceId });
+        queuedAck?.remove();
         return;
       }
       const externalChatId = firstMsg.payload.chatId;
@@ -5812,7 +5880,11 @@ export async function setupAgentDispatcher(
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);
 
-    if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) return;
+    if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) {
+      // The agent deliberately won't answer this batch — drop its queue ack too.
+      queuedAck?.remove();
+      return;
+    }
 
     // #384: No inbound rate limiter. The debouncer already collapses conversational
     // bursts into a single trigger — capping inbound volume on top of that silently
@@ -5825,7 +5897,17 @@ export async function setupAgentDispatcher(
       tracker.recordCheckpoint(firstMsg.metadata.correlationId, 'T5', JOURNEY_STAGES.T5);
     }
 
+    // Disarm the enqueue ack's timer WITHOUT removing the reaction: the
+    // dispatch-time ack in processAgentResponse re-adds the same
+    // (instance, chat, message, emoji) tuple and owns removal from here on. An
+    // orphan timer would otherwise strip that live reaction mid-run.
+    queuedAck?.release();
     await processAgentResponse(services, instance, messages, triggerType, db, eventBus);
+  };
+  const debouncer = new MessageDebouncer(onDebouncedFlush, Date.now, {
+    // #920: a message queued behind an active run can wait many minutes with
+    // no visible signal — ack it at enqueue so 👀 means "received", not "started".
+    onQueuedBehindActiveRun: (info) => void ackQueuedMessage(info),
   });
   activeMessageDebouncer = debouncer;
 

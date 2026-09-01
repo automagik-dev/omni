@@ -60,6 +60,31 @@ export interface DebounceConfig {
   maxWaitMs: number | null;
 }
 
+/**
+ * Emitted when a message is buffered behind an in-flight flush (#920): the
+ * whole agent run happens inside onFlush, so with a long-running provider the
+ * message can wait many minutes here — invisible to the dispatch limiter,
+ * whose queueDepth stays 0.
+ */
+export interface QueuedBehindActiveRunInfo {
+  instanceId: string;
+  chatId: string;
+  message: BufferedMessage;
+  /** 1-based position among messages waiting for the active run to finish. */
+  queuePosition: number;
+  /** traceId of the first message of the batch whose run is blocking this one. */
+  blockingTraceId?: string;
+}
+
+export interface MessageDebouncerOptions {
+  /**
+   * Fired (fire-and-forget) when a message queues behind an active run, so the
+   * dispatcher can give the sender an immediate signal (e.g. reaction ack)
+   * instead of 15 minutes of silence (#920).
+   */
+  onQueuedBehindActiveRun?: (info: QueuedBehindActiveRunInfo) => void;
+}
+
 // ============================================================================
 // MessageDebouncer
 // ============================================================================
@@ -67,7 +92,8 @@ export interface DebounceConfig {
 export class MessageDebouncer {
   private buffers: Map<string, BufferedMessage[]> = new Map();
   private timers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-  private inFlight: Set<string> = new Set();
+  /** Chats with a flush in flight, mapped to the traceId of the batch being run. */
+  private inFlight: Map<string, string | undefined> = new Map();
   /** Timestamp of the first buffered message per chat — anchors the maxWaitMs cap. */
   private firstBufferedAt: Map<string, number> = new Map();
   /**
@@ -79,10 +105,16 @@ export class MessageDebouncer {
   private onFlush: (chatKey: string, messages: BufferedMessage[]) => Promise<void>;
   /** Injectable clock — defaults to Date.now; overridable for deterministic tests. */
   private now: () => number;
+  private options: MessageDebouncerOptions;
 
-  constructor(onFlush: (chatKey: string, messages: BufferedMessage[]) => Promise<void>, now: () => number = Date.now) {
+  constructor(
+    onFlush: (chatKey: string, messages: BufferedMessage[]) => Promise<void>,
+    now: () => number = Date.now,
+    options: MessageDebouncerOptions = {},
+  ) {
     this.onFlush = onFlush;
     this.now = now;
+    this.options = options;
   }
 
   private getChatKey(instanceId: string, chatId: string): string {
@@ -102,7 +134,23 @@ export class MessageDebouncer {
 
     // If this chat is currently being processed, just accumulate — don't start
     // a new timer. The flush completion handler will pick up these messages.
-    if (this.inFlight.has(chatKey)) return;
+    // With a long-running provider this wait can be many minutes, so it MUST
+    // be observable (#920): the dispatch limiter never sees these messages
+    // (its queueDepth stays 0) and the reply-filter/dispatch logs only fire at
+    // flush — without this line the wait is indistinguishable from a drop.
+    if (this.inFlight.has(chatKey)) {
+      const blockingTraceId = this.inFlight.get(chatKey);
+      const queuePosition = buffer.length;
+      log.info('agent_dispatch_queued', {
+        instanceId,
+        chatId,
+        traceId: message.metadata.traceId,
+        queuePosition,
+        blockingTraceId,
+      });
+      this.options.onQueuedBehindActiveRun?.({ instanceId, chatId, message, queuePosition, blockingTraceId });
+      return;
+    }
 
     this.restartTimer(chatKey, config);
   }
@@ -190,7 +238,7 @@ export class MessageDebouncer {
 
     if (!messages?.length) return;
 
-    this.inFlight.add(chatKey);
+    this.inFlight.set(chatKey, messages[0]?.metadata.traceId);
     try {
       await this.onFlush(chatKey, messages);
     } catch (error) {
