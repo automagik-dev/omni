@@ -273,3 +273,63 @@ describe('call_agent — promptOverride', () => {
     expect(receivedContext.messages).toEqual(['fallback message']);
   });
 });
+
+describe('extractAgentCallContext — threadId (per_thread session keys)', () => {
+  test('payload.threadId reaches the agent call context', async () => {
+    const callAgent = mock(async (_ctx: AgentCallContext, _cfg: CallAgentActionConfig) => makeAgentResult());
+    const context = makeContext({
+      payload: {
+        instanceId: 'wa-001',
+        from: { id: 'user-1', name: 'Alice' },
+        chatId: 'chat-1',
+        threadId: 'T42',
+        content: 'in a thread',
+      },
+    });
+
+    const result = await executeAction({ type: 'call_agent', config: agentConfig }, context, {
+      eventBus: null,
+      callAgent,
+    });
+
+    expect(result.status).toBe('success');
+    const receivedContext = callAgent.mock.calls[0]![0] as AgentCallContext;
+    expect(receivedContext.threadId).toBe('T42');
+  });
+
+  test('falls back to rawPayload.threadId when the payload has none at top level', async () => {
+    const callAgent = mock(async (_ctx: AgentCallContext, _cfg: CallAgentActionConfig) => makeAgentResult());
+    const context = makeContext({
+      payload: {
+        instanceId: 'wa-001',
+        from: { id: 'user-1', name: 'Alice' },
+        chatId: 'chat-1',
+        rawPayload: { threadId: 'T77' },
+        content: 'in a thread',
+      },
+    });
+
+    const result = await executeAction({ type: 'call_agent', config: agentConfig }, context, {
+      eventBus: null,
+      callAgent,
+    });
+
+    expect(result.status).toBe('success');
+    const receivedContext = callAgent.mock.calls[0]![0] as AgentCallContext;
+    expect(receivedContext.threadId).toBe('T77');
+  });
+
+  test('stays undefined for threadless events', async () => {
+    const callAgent = mock(async (_ctx: AgentCallContext, _cfg: CallAgentActionConfig) => makeAgentResult());
+    const context = makeContext();
+
+    const result = await executeAction({ type: 'call_agent', config: agentConfig }, context, {
+      eventBus: null,
+      callAgent,
+    });
+
+    expect(result.status).toBe('success');
+    const receivedContext = callAgent.mock.calls[0]![0] as AgentCallContext;
+    expect(receivedContext.threadId).toBeUndefined();
+  });
+});
