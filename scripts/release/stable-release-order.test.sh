@@ -159,8 +159,10 @@ matcher_fixture = """steps:
       echo ${{ inputs.commented_literal }}
   - run: >- # fold and strip
       echo ${{ inputs.commented_folded_strip }}
+  - run: |  
+      echo ${{ inputs.trailing_space_literal }}
 """
-if len(expressions_in_run(matcher_fixture)) != 10:
+if len(expressions_in_run(matcher_fixture)) != 11:
     errors.append("run-expression matcher does not cover direct or transitive expressions in every YAML scalar form")
 
 permission_fixture = """permissions:

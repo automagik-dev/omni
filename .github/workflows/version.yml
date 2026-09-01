@@ -50,6 +50,12 @@ jobs:
     # in `github.ref_name` and leaves `github.event.pull_request.base.ref`
     # empty, so a ref-keyed group lets such a run bump and tag `dev` concurrently
     # with a merged-PR run.
+    #
+    # Consequence of the shared group: with `cancel-in-progress: false` a third
+    # run joining the group cancels the pending one. That coalescing is the
+    # intended outcome, not a loss — the surviving run checks `dev` out fresh
+    # and re-derives its version from `git tag --list`, so it absorbs the
+    # displaced bump and still dispatches release.yml for its own tag.
     concurrency:
       group: version-dev
       cancel-in-progress: false

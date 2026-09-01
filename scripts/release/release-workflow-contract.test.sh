@@ -154,7 +154,9 @@ require(
 )
 require(
     version_workflow,
-    r"^  publish-stable:\n(?:[^\n]*\n)*?"
+    # Only 4-space-indented or blank lines, so this cannot reach past
+    # publish-stable into a job appended after it.
+    r"^  publish-stable:\n(?:(?:    [^\n]*)?\n)*?"
     r"    concurrency:\n      group: version-stable-publish-\$\{\{ inputs\.expected_version \}\}\n",
     "the read-only stable publisher shares the dev writer's concurrency group",
 )
