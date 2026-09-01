@@ -39,6 +39,7 @@ import type { DedupeCache } from '@omni/channel-sdk';
 
 import { type AscFlowPlugin, TURN_PENDING } from '../plugin';
 import type { AscFlowInboundBody } from '../types';
+import { decodeAscEmoji } from '../utils/emoji';
 
 /** The flow node posts a small JSON object; 64 KB is generous headroom. */
 const MAX_BODY_BYTES = 64 * 1024;
@@ -64,26 +65,6 @@ export interface ParsedAscFlowTurn {
   text: string;
   phone: string;
   messageId?: string;
-}
-
-/**
- * The platform ships emoji transcoded as `##<codepoint>[-<codepoint>…]##`
- * instead of the character — a 🗑️ arrives as `##1f5d1-fe0f##` (measured on the
- * live number 01/09). Left raw it defeats every downstream text rule that
- * matches on the real character; the session cleaner's trash-emoji reset was
- * the first casualty, and the agent would have read the marker as prose.
- */
-const ASC_EMOJI_MARKER = /##([0-9a-f]{2,6}(?:-[0-9a-f]{2,6})*)##/gi;
-
-export function decodeAscEmoji(text: string): string {
-  return text.replace(ASC_EMOJI_MARKER, (marker, codepoints: string) => {
-    try {
-      return String.fromCodePoint(...codepoints.split('-').map((c) => Number.parseInt(c, 16)));
-    } catch {
-      // Not a valid codepoint sequence — keep the marker rather than lose text.
-      return marker;
-    }
-  });
 }
 
 /**

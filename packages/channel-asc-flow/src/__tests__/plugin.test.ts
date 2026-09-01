@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { parseInboundTurn } from '../handlers/webhook';
 import { AscFlowPlugin, normalizeBaseUrl } from '../plugin';
+import { decodeAscEmoji, encodeAscEmoji } from '../utils/emoji';
 import {
   BASE_URL,
   HANDOFF_SERVICO,
@@ -279,5 +280,40 @@ describe('outbound turn', () => {
     });
 
     expect(ready('42')).toMatchObject({ resposta: '**cru**' });
+  });
+
+  // The platform carries emoji only as markers; a raw `✅` reached the handset
+  // as `?` (measured 01/09 on the session-cleared confirmation).
+  it('encodes emoji as platform markers on the way out', async () => {
+    await boot();
+    await plugin.sendMessage(instanceId, {
+      to: '42',
+      content: { type: 'text', text: '✅ Conversa limpa!' } as never,
+    });
+
+    expect(ready('42')).toMatchObject({ resposta: '##2705## Conversa limpa!' });
+  });
+
+  it('leaves accented text alone — only emoji are transcoded', async () => {
+    await boot();
+    await plugin.sendMessage(instanceId, {
+      to: '42',
+      content: { type: 'text', text: 'Sua sessão foi resetada, coração' } as never,
+    });
+
+    expect(ready('42')).toMatchObject({ resposta: 'Sua sessão foi resetada, coração' });
+  });
+});
+
+describe('emoji codec', () => {
+  it('round-trips what the platform actually sends', () => {
+    for (const emoji of ['🗑️', '✅', '👋', '⚠️', '😊']) {
+      expect(decodeAscEmoji(encodeAscEmoji(emoji))).toBe(emoji);
+    }
+  });
+
+  it('matches the marker the client production flow writes', () => {
+    // flow #215 (NDS PPO) ships `Olá! ##1f44b## Seja bem-vindo(a)`.
+    expect(encodeAscEmoji('Olá! 👋 Seja bem-vindo(a)')).toBe('Olá! ##1f44b## Seja bem-vindo(a)');
   });
 });

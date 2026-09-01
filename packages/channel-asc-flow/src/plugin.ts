@@ -62,6 +62,7 @@ import { ASC_FLOW_CAPABILITIES } from './capabilities';
 import { AscFlowClient } from './client';
 import { type ParsedAscFlowTurn, handleAscFlowWebhookRequest } from './handlers/webhook';
 import type { AscFlowConfig } from './types';
+import { encodeAscEmoji } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
 import { buildUra, splitBubbles } from './utils/interactive';
 
@@ -122,7 +123,12 @@ const IN_FLIGHT_TTL_MS = 60_000;
 function resolveOutboundText(message: OutgoingMessage): string {
   const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const text = message.content.text ?? message.content.caption ?? '';
-  return formatMode === 'passthrough' ? text : markdownToWhatsApp(text);
+  const formatted = formatMode === 'passthrough' ? text : markdownToWhatsApp(text);
+  // The platform carries emoji only as `##codepoint##` markers — a raw `✅`
+  // reached the handset as `?` (measured 01/09 on the session-cleared
+  // confirmation). Encoding is the mirror of the inbound decode and runs even
+  // in passthrough: it is transport, not formatting.
+  return encodeAscEmoji(formatted);
 }
 
 /** `cod_atendimento` is numeric on the wire; the chat id is its string form. */
