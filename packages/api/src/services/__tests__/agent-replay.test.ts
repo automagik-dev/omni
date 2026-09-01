@@ -431,6 +431,11 @@ describe('AgentReplayService', () => {
       const guard = rendered.slice(notExistsIdx);
       expect(guard).toContain('reply.is_from_me = true');
       expect(guard).not.toContain('reply.sender_agent_id');
+      // Procedural courtesy sends (auto-ack, dispatch-error feedback) are
+      // persisted with rawPayload.omniSystemNotice=true and must NOT count as
+      // an answer — otherwise a crash between the ack and the real reply
+      // permanently drops the turn (#912 review).
+      expect(guard).toContain("COALESCE((reply.raw_payload ->> 'omniSystemNotice')::boolean, false) = false");
     });
 
     test('uses cutoff when since is undefined', async () => {

@@ -6,6 +6,12 @@ import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, SuccessSchema } from './common';
 
+// Shared authorship marker for send requests (#912)
+const SentByField = z.enum(['agent', 'user']).optional().openapi({
+  description:
+    "Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.",
+});
+
 // Message response schema
 export const MessageResponseSchema = z.object({
   messageId: z.string().openapi({ description: 'Internal message ID' }),
@@ -14,6 +20,10 @@ export const MessageResponseSchema = z.object({
   instanceId: z.string().uuid().optional().openapi({ description: 'Instance UUID' }),
   to: z.string().optional().openapi({ description: 'Recipient' }),
   mediaType: z.string().optional().openapi({ description: 'Media type if applicable' }),
+  senderAgentId: z.string().uuid().nullable().optional().openapi({
+    description:
+      "Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)",
+  }),
 });
 
 // Send text request
@@ -56,10 +66,7 @@ export const SendTextSchema = z.object({
   requestLocation: z.boolean().optional().openapi({
     description: 'Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text)',
   }),
-  sentBy: z.enum(['agent', 'user']).optional().openapi({
-    description:
-      "Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. Default: unattributed.",
-  }),
+  sentBy: SentByField,
 });
 
 // Send media request
@@ -72,10 +79,7 @@ export const SendMediaSchema = z.object({
   filename: z.string().optional().openapi({ description: 'Filename for documents' }),
   caption: z.string().optional().openapi({ description: 'Caption for media' }),
   voiceNote: z.boolean().optional().openapi({ description: 'Send audio as voice note' }),
-  sentBy: z.enum(['agent', 'user']).optional().openapi({
-    description:
-      "Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. Default: unattributed.",
-  }),
+  sentBy: SentByField,
 });
 
 // Send reaction request
@@ -92,6 +96,7 @@ export const SendStickerSchema = z.object({
   to: z.string().min(1).openapi({ description: 'Recipient' }),
   url: z.string().url().optional().openapi({ description: 'Sticker URL' }),
   base64: z.string().optional().openapi({ description: 'Base64 encoded sticker' }),
+  sentBy: SentByField,
 });
 
 // Send contact request
@@ -104,6 +109,7 @@ export const SendContactSchema = z.object({
     email: z.string().email().optional().openapi({ description: 'Email address' }),
     organization: z.string().optional().openapi({ description: 'Organization' }),
   }),
+  sentBy: SentByField,
 });
 
 // Send location request
@@ -114,6 +120,7 @@ export const SendLocationSchema = z.object({
   longitude: z.number().openapi({ description: 'Longitude' }),
   name: z.string().optional().openapi({ description: 'Location name' }),
   address: z.string().optional().openapi({ description: 'Address' }),
+  sentBy: SentByField,
 });
 
 // Send presence request
@@ -214,6 +221,7 @@ export const SendTtsSchema = z.object({
     .max(30000)
     .optional()
     .openapi({ description: 'Recording presence duration in ms' }),
+  sentBy: SentByField,
 });
 
 // TTS response

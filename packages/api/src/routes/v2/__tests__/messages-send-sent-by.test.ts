@@ -52,7 +52,14 @@ function mountMessagesRoutes(options: MountOptions = {}): {
     } as never);
     c.set('channelRegistry', {
       get: mock(() => ({
-        capabilities: { canSendText: true, canSendMedia: true },
+        capabilities: {
+          canSendText: true,
+          canSendMedia: true,
+          canSendSticker: true,
+          canSendContact: true,
+          canSendLocation: true,
+          canSendPoll: true,
+        },
         sendMessage,
       })),
     } as never);
@@ -92,6 +99,9 @@ describe('POST /messages/send with sentBy', () => {
 
     expect(res.status).toBe(201);
     expect(sentMetadata(sendMessage).senderAgentId).toBe(AGENT_ID);
+    // Response echoes the resolved attribution so callers can verify it
+    const body = (await res.json()) as { data: { senderAgentId?: string | null } };
+    expect(body.data.senderAgentId).toBe(AGENT_ID);
   });
 
   test('omitted sentBy leaves metadata unattributed', async () => {
@@ -112,13 +122,26 @@ describe('POST /messages/send with sentBy', () => {
     expect('senderAgentId' in sentMetadata(sendMessage)).toBe(false);
   });
 
-  test("sentBy: 'agent' on an instance without an agent stays unattributed", async () => {
+  test("sentBy: 'agent' on an instance without an agent stays unattributed — response reports null", async () => {
     const { app, sendMessage } = mountMessagesRoutes({ agentId: null });
 
     const res = await postJson(app, '/messages/send', { ...textBody, sentBy: 'agent' });
 
     expect(res.status).toBe(201);
     expect('senderAgentId' in sentMetadata(sendMessage)).toBe(false);
+    // The caller can detect that attribution did not happen (#912 review)
+    const body = (await res.json()) as { data: { senderAgentId?: string | null } };
+    expect(body.data.senderAgentId).toBeNull();
+  });
+
+  test('response omits senderAgentId entirely when sentBy was not requested', async () => {
+    const { app } = mountMessagesRoutes();
+
+    const res = await postJson(app, '/messages/send', textBody);
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { data: Record<string, unknown> };
+    expect('senderAgentId' in body.data).toBe(false);
   });
 
   test('rejects an unknown sentBy value', async () => {
@@ -156,4 +179,31 @@ describe('POST /messages/send/media with sentBy', () => {
     expect(res.status).toBe(201);
     expect('senderAgentId' in sentMetadata(sendMessage)).toBe(false);
   });
+});
+
+describe('sentBy on the remaining send routes (#912 review)', () => {
+  const base = { instanceId: INSTANCE_ID, to: '5511999998888', sentBy: 'agent' };
+
+  const cases: Array<{ path: string; body: Record<string, unknown> }> = [
+    { path: '/messages/send/sticker', body: { ...base, url: 'https://example.com/sticker.webp' } },
+    { path: '/messages/send/contact', body: { ...base, contact: { name: 'Ada Lovelace' } } },
+    { path: '/messages/send/location', body: { ...base, latitude: -23.55, longitude: -46.63 } },
+    {
+      path: '/messages/send/poll',
+      body: { ...base, question: 'Best slot?', answers: ['10:00', '11:00'] },
+    },
+  ];
+
+  for (const { path, body } of cases) {
+    test(`${path} threads senderAgentId and echoes it in the response`, async () => {
+      const { app, sendMessage } = mountMessagesRoutes();
+
+      const res = await postJson(app, path, body);
+
+      expect(res.status).toBe(201);
+      expect(sentMetadata(sendMessage).senderAgentId).toBe(AGENT_ID);
+      const parsed = (await res.json()) as { data: { senderAgentId?: string | null } };
+      expect(parsed.data.senderAgentId).toBe(AGENT_ID);
+    });
+  }
 });

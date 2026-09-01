@@ -247,6 +247,7 @@ export class GupshupPlugin extends BaseChannelPlugin {
           gupshupProviderAliases: providerAliases,
         },
         senderAgentId: message.metadata?.senderAgentId as string | undefined,
+        systemNotice: message.metadata?.systemNotice as boolean | undefined,
       });
 
       return { success: true, messageId, timestamp: Date.now() };

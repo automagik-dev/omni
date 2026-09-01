@@ -105,6 +105,13 @@ export interface EmitMessageSentParams {
 
   /** agents.id UUID — set by agent-dispatcher when agent sends */
   senderAgentId?: string;
+
+  /**
+   * Procedural courtesy send (pre-dispatch auto-ack, dispatch-error feedback)
+   * rather than a substantive reply. Echo `metadata?.systemNotice` here so
+   * agent replay does not treat the row as evidence a turn was answered.
+   */
+  systemNotice?: boolean;
 }
 
 /**
