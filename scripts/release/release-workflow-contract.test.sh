@@ -135,6 +135,30 @@ forbid(
     "upgrade runbook still prescribes the pre-image.digest repository/tag workaround",
 )
 
+version_workflow = workflows["version.yml"]
+forbid(
+    version_workflow,
+    r"^concurrency:",
+    "the version workflow still takes one workflow-level concurrency group for both its writer and its read-only publisher",
+)
+forbid(
+    version_workflow,
+    r"^\s*group:[^\n]*(?:github\.ref_name|github\.event\.pull_request\.base\.ref)",
+    "version concurrency is keyed by the trigger ref instead of the branch the job writes",
+)
+require(
+    version_workflow,
+    r"^  auto-version:\n    name: Auto Version\n(?:    #[^\n]*\n)*"
+    r"    concurrency:\n      group: version-dev\n      cancel-in-progress: false\n",
+    "the dev version writer does not serialize every trigger under one constant version-dev group",
+)
+require(
+    version_workflow,
+    r"^  publish-stable:\n(?:[^\n]*\n)*?"
+    r"    concurrency:\n      group: version-stable-publish-\$\{\{ inputs\.expected_version \}\}\n",
+    "the read-only stable publisher shares the dev writer's concurrency group",
+)
+
 require(release, r"authorize:[\s\S]{0,200}timeout-minutes:\s*[0-9]+", "release authorization has no finite timeout")
 require(release, r"bare tag pushes do not release", "release workflow still misstates bare-tag authorization")
 

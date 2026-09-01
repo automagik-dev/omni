@@ -36,16 +36,23 @@ on:
 
 permissions: {}
 
-concurrency:
-  # Serialize every equivalent entry event by target branch. Keeping event_name
-  # out of the key prevents a future trigger expansion from reintroducing
-  # concurrent duplicate publication for one branch.
-  group: version-${{ github.event.pull_request.base.ref || github.ref_name }}
-  cancel-in-progress: false
+# Concurrency is declared per job, not workflow-wide: the two jobs have
+# different write targets, so one shared key cannot be correct for both.
 
 jobs:
   auto-version:
     name: Auto Version
+    # Serialize every writer to `dev` under one constant group. This job is the
+    # only branch writer here and always targets `dev` (checkout_ref/push_ref
+    # are hardcoded), on a merged `pull_request` and on `workflow_dispatch`
+    # alike. The key therefore must not be derived from the trigger ref: a
+    # dispatch started from `main`, a tag, or a feature branch reports that ref
+    # in `github.ref_name` and leaves `github.event.pull_request.base.ref`
+    # empty, so a ref-keyed group lets such a run bump and tag `dev` concurrently
+    # with a merged-PR run.
+    concurrency:
+      group: version-dev
+      cancel-in-progress: false
     # GitHub-hosted runner (not Blacksmith). The "Upgrade npm for OIDC
     # trusted publishing" step runs `npm install -g npm@latest` which
     # writes to /usr/local — omni's Blacksmith pool image rejects this
@@ -272,6 +279,13 @@ jobs:
 
   publish-stable:
     name: Publish verified stable npm package
+    # Read-only: republishes one already-verified stable version and never
+    # writes a branch or tag, so it must not queue behind (or displace) a `dev`
+    # bump. Keyed per version so repeat dispatches for the same version still
+    # serialize against each other.
+    concurrency:
+      group: version-stable-publish-${{ inputs.expected_version }}
+      cancel-in-progress: false
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.stable_publish_only == true

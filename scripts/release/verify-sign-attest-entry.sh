@@ -26,7 +26,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "${remote}" ]] || usage
-[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
+# SemVer 2.0.0 forbids leading zeroes in numeric identifiers: `01.02.003` names
+# the same release as `1.2.3` under a different string. Reject the non-canonical
+# spelling here rather than carrying it into the remote tag lookup.
+[[ "${version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || \
   fail "version must be an exact semantic version"
 [[ "${source_ref}" == "refs/tags/v${version}" ]] || \
   fail "source ref must be refs/tags/v${version}"

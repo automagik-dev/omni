@@ -63,6 +63,20 @@ git clone -q --depth=1 --no-tags "file://${work}/remote.git" "${work}/shallow"
       --source-sha 0000000000000000000000000000000000000000; then
     fail "sign recovery accepted a remote tag at a different commit"
   fi
+  # SemVer 2.0.0 forbids leading zeroes in numeric identifiers. The message is
+  # asserted because an unrecognised version also fails later in the remote tag
+  # lookup, which would let this negative case pass for the wrong reason.
+  for noncanonical in 01.02.003 2.260830.02 02.260830.2; do
+    if "${ENTRY_SCRIPT}" \
+        --remote origin \
+        --version "${noncanonical}" \
+        --source-ref "refs/tags/v${noncanonical}" \
+        --source-sha "${SHA}" 2>"${work}/noncanonical.err"; then
+      fail "non-canonical sign recovery version ${noncanonical} was accepted"
+    fi
+    grep -q 'version must be an exact semantic version' "${work}/noncanonical.err" || \
+      fail "${noncanonical} rejection was not attributable to the version format"
+  done
   "${SCRIPT}" --remote origin --version 2.260830.3 --mode absent
   if "${SCRIPT}" --remote origin --version 2.260830.2 --mode absent; then
     fail "remote tag hidden by shallow no-tags clone was accepted as absent"

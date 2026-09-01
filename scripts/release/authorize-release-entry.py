@@ -3,6 +3,13 @@ import argparse
 import re
 
 
+# SemVer 2.0.0: numeric identifiers carry no leading zeroes, so `01.02.003` is
+# a distinct string naming the same release as `1.2.3`. Accepting both spellings
+# at the entry boundary would let a caller authorize a release under a version
+# that no downstream identity check ever produces.
+CANONICAL_SEMVER = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+
+
 def fail(message: str) -> None:
     raise SystemExit(f"release entry authorization failed: {message}")
 
@@ -27,7 +34,7 @@ else:
     if re.fullmatch(r"[0-9]+", args.recovery_run_id) is None:
         fail("direct recovery requires an exact numeric sign-attest run ID")
 
-if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version) is None:
+if re.fullmatch(CANONICAL_SEMVER, args.version) is None:
     fail("publication requires an exact semantic version")
 if args.source_ref != f"refs/tags/v{args.version}":
     fail("publication must run from the exact version tag")

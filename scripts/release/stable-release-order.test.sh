@@ -115,7 +115,13 @@ def expressions_in_run(text: str) -> list[int]:
         if header:
             indent = len(header.group(1))
             value = header.group(2)
-            if re.fullmatch(r"[|>](?:[+-][1-9]?|[1-9][+-]?)?", value):
+            # A YAML block scalar header may carry a trailing comment
+            # (`run: | # keep literal`) and trailing whitespace. Strip both
+            # before matching the header: otherwise the step is misread as an
+            # inline scalar, block tracking stops, and every expression in the
+            # block body escapes this gate.
+            block_header = re.sub(r"\s+#.*$", "", value).rstrip()
+            if re.fullmatch(r"[|>](?:[+-][1-9]?|[1-9][+-]?)?", block_header):
                 block_indent = indent
             else:
                 block_indent = None
@@ -149,8 +155,12 @@ matcher_fixture = """steps:
       echo ${{ steps.pkg.outputs.tag }}
   - run: >
       echo ${{ needs.publish.outputs.version }}
+  - run: | # keep literal
+      echo ${{ inputs.commented_literal }}
+  - run: >- # fold and strip
+      echo ${{ inputs.commented_folded_strip }}
 """
-if len(expressions_in_run(matcher_fixture)) != 8:
+if len(expressions_in_run(matcher_fixture)) != 10:
     errors.append("run-expression matcher does not cover direct or transitive expressions in every YAML scalar form")
 
 permission_fixture = """permissions:
