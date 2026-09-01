@@ -21,6 +21,7 @@ ci = workflows["ci.yml"]
 all_workflows = "\n".join(workflows.values())
 deploy_readme = (root / "deploy/README.md").read_text(encoding="utf-8")
 claude_reference = (root / ".claude/CLAUDE.md").read_text(encoding="utf-8")
+upgrade_runbook = (root / "docs/deployment/upgrade-2.260718.1-to-2.260830.2.md").read_text(encoding="utf-8")
 errors: list[str] = []
 
 
@@ -89,6 +90,8 @@ for name, document in (
     require(document, r"direct `dev` → `main`", f"{name} does not state the direct dev-to-main public topology")
     require(document, r"`main`[^\n]*verification-only", f"{name} does not identify main as verification-only")
     require(document, r"HML[\s\S]{0,160}legacy/reference-only", f"{name} does not identify HML as legacy/reference-only")
+    require(document, r"`hml\.omni\.khal\.ai` is the legacy HML endpoint", f"{name} does not name the literal legacy HML endpoint")
+    require(document, r"This change neither mutates nor cleans it up", f"{name} does not preserve the legacy HML endpoint verbatim")
     require(document, r"Production\s+authority[\s\S]{0,160}separate/private", f"{name} does not identify separate/private production authority")
 
 for pattern, message in (
@@ -104,6 +107,33 @@ for pattern, message in (
 
 forbid(deploy_readme, r"make -C deploy deploy REALM=homolog", "deployment guide still instructs an HML deployment")
 forbid(deploy_readme, r"helm upgrade --install omni[^`]*values-homolog", "deployment guide still instructs an HML co-tenant deployment")
+
+require(
+    upgrade_runbook,
+    r"--set-string 'image\.digest=sha256:<64-lowercase-hex>'",
+    "upgrade runbook does not prescribe the chart's supported image.digest field",
+)
+require(
+    upgrade_runbook,
+    r"image\.digest must be a lowercase sha256 digest \(sha256 followed by 64 hexadecimal characters\)",
+    "upgrade runbook does not quote the exact invalid-digest renderer failure",
+)
+require(
+    upgrade_runbook,
+    r"Refuse the render unless[\s\S]{0,100}exactly[\s\S]{0,100}"
+    r"`ghcr\.io/automagik-dev/omni-api@sha256:<64-lowercase-hex>`[\s\S]{0,100}tag-only API image",
+    "upgrade runbook does not state the exact rendered-digest refusal contract",
+)
+require(
+    upgrade_runbook,
+    r"does not pin a public production digest or grant public production deployment authority",
+    "upgrade runbook claims or omits the boundary around public production authority",
+)
+forbid(
+    upgrade_runbook,
+    r"set the repository to\s*`ghcr\.io/automagik-dev/omni-api@sha256`[^\n]*tag to the bare 64-hex digest",
+    "upgrade runbook still prescribes the pre-image.digest repository/tag workaround",
+)
 
 require(release, r"authorize:[\s\S]{0,200}timeout-minutes:\s*[0-9]+", "release authorization has no finite timeout")
 require(release, r"bare tag pushes do not release", "release workflow still misstates bare-tag authorization")

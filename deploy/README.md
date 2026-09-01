@@ -11,10 +11,12 @@ by a human. The `main` workflow is verification-only: it checks the already
 published immutable candidate and cannot build, publish, retag, or change a
 runtime.
 
-HML runtime and configuration files are legacy/reference-only; they are not an
-active public branch, image tag, release channel, or promotion gate. Production
-authority is separate/private and is not defined by this repository's branches,
-workflows, or legacy overlays.
+`hml.omni.khal.ai` is the legacy HML endpoint.
+This change neither mutates nor cleans it up. The endpoint and its HML runtime
+and configuration files remain legacy/reference-only, not an active public
+branch, image tag, release channel, or promotion gate. Production authority is
+separate/private and is not defined by this repository's branches, workflows,
+or legacy overlays.
 
 ## Supported public realm
 

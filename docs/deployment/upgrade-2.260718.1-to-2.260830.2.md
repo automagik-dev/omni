@@ -32,13 +32,30 @@ on Git tags being available in CI. The OCI digests are deliberately not filled
 in here: they must come from the registry/attestation and the actually deployed
 pod receipt, never from a guessed or mutable tag.
 
-The current Helm template renders `image.repository:image.tag`. To render a
-digest without changing the chart, set the repository to
-`ghcr.io/automagik-dev/omni-api@sha256` and the tag to the bare 64-hex digest;
-inspect the rendered Deployment and refuse it unless the resulting image is
-exactly `ghcr.io/automagik-dev/omni-api@sha256:<digest>`. Apply the same rule to
-the rollback image. Verify its provenance before deployment, for example with
+The generic Helm chart supports the `image.digest` field. Supply the repository
+and the operator-approved digest separately:
+
+```bash
+helm template omni deploy/helm/omni \
+  --set-string image.repository=ghcr.io/automagik-dev/omni-api \
+  --set-string 'image.digest=sha256:<64-lowercase-hex>'
+```
+
+When `image.digest` is non-empty, it wins over `image.tag` and the chart
+`appVersion`; the Deployment renders `image.repository@image.digest`. A malformed
+value fails Helm rendering with exactly:
+
+`image.digest must be a lowercase sha256 digest (sha256 followed by 64 hexadecimal characters)`
+
+Refuse the render unless its API image is exactly
+`ghcr.io/automagik-dev/omni-api@sha256:<64-lowercase-hex>` and it contains no
+tag-only API image. Apply the same rule to the rollback image, and verify its
+provenance before deployment, for example with
 `gh attestation verify oci://<digest-reference> -R automagik-dev/omni`.
+
+This runbook does not pin a public production digest or grant public production deployment authority.
+Each approved digest comes from the operator's registry,
+attestation, and running-pod receipts rather than this public repository.
 
 The rehearsal and this runbook are deliberately outside the Dockerfile's
 `packages/**` and `apps/**` build inputs. Preserve the target candidate with:

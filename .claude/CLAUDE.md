@@ -365,9 +365,11 @@ and the version is never re-bumped during promotion.
 
 The `main` workflow is verification-only and checks the already-published
 immutable candidate without building, publishing, retagging, or changing a
-runtime. HML runtime and configuration files are legacy/reference-only; they do
-not represent an active public branch, tag, channel, or gate. Production
-authority is separate/private and lives outside this public repository.
+runtime. `hml.omni.khal.ai` is the legacy HML endpoint.
+This change neither mutates nor cleans it up. The endpoint and its HML runtime
+and configuration files remain legacy/reference-only, not an active public
+branch, tag, channel, or gate. Production authority is separate/private and
+lives outside this public repository.
 
 ### Branch Roles
 
