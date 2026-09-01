@@ -117,6 +117,25 @@ describe('POST /instances/:id/connect — persisted Meta credentials reach the p
     expect(captured.connectOptions?.metaConnectionMethod).toBe('manual');
   });
 
+  test('META_GRAPH_API_VERSION env beats the persisted provisioning snapshot', async () => {
+    // The column is a snapshot ("Runtime uses META_GRAPH_API_VERSION env");
+    // after Meta sunsets a version, a reconnect must not re-pin the dead one.
+    const captured: Captured = {};
+    const app = mount(captured);
+
+    const prev = process.env.META_GRAPH_API_VERSION;
+    process.env.META_GRAPH_API_VERSION = 'v26.0';
+    try {
+      await app.request(`/${INSTANCE_ID}/connect`, post({}));
+    } finally {
+      // Not `= undefined` — process.env coerces that to the string "undefined".
+      if (prev === undefined) Reflect.deleteProperty(process.env, 'META_GRAPH_API_VERSION');
+      else process.env.META_GRAPH_API_VERSION = prev;
+    }
+
+    expect(captured.connectOptions?.metaApiVersion).toBe('v26.0');
+  });
+
   test('omits meta keys entirely when the row has none persisted', async () => {
     const captured: Captured = {};
     const app = mount(captured, {
