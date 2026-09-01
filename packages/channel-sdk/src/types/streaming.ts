@@ -31,4 +31,13 @@ export interface StreamSender {
 
   /** Abort mid-stream — clean up any sent messages */
   abort(): Promise<void>;
+
+  /**
+   * User-requested stop (#914): halt the stream but KEEP what was already
+   * shown, finalizing the partial output. Distinct from abort(), whose
+   * delete-the-placeholder semantics exist for the error-fallback path where
+   * another message will replace it. Callers should fall back to abort()
+   * when a sender does not implement this.
+   */
+  cancel?(): Promise<void>;
 }

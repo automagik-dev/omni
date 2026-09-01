@@ -33,6 +33,7 @@ import type { StreamSender } from '@omni/channel-sdk';
 import {
   A2AAgentProvider,
   AgUiAgentProvider,
+  type AgentRunCancelRequestedPayload,
   type AgentTrigger,
   type AgentTriggerType,
   AgnoAgentProvider,
@@ -2043,6 +2044,98 @@ async function fetchChatMetadata(
 // ─── Per-chatId stream guard ──────────────────────────────
 const activeStreams = new Map<string, StreamSender>();
 
+// ─── Per-run cancellation (#914) ──────────────────────────
+// Populated while a provider run is in flight; `agent.run.cancel_requested`
+// (e.g. Slack's native stop button) aborts the controller. Streaming providers
+// honor the signal end-to-end (claude-code aborts the SDK run); accumulate-mode
+// runs that ignore it have their reply discarded on completion instead.
+
+interface ActiveRunEntry {
+  controller: AbortController;
+  /** Unix ms when the run registered — compared against a cancel's requestedAt */
+  startedAt: number;
+  /** Stream sender owned by this run (streaming dispatch only) */
+  sender?: StreamSender;
+}
+
+// Keyed by runAbortKey — thread-scoped, because two threads in one Slack
+// channel are two concurrent runs (the second goes down the accumulate path
+// past the per-chat streaming guard). A chat-scoped key would let a stop in
+// thread A abort thread B, and each run's cleanup would delete the other's.
+const activeRunAborts = new Map<string, ActiveRunEntry>();
+
+function runAbortKey(instanceId: string, chatId: string, threadId?: string): string {
+  return `${instanceId}:${chatId}:${threadId ?? ''}`;
+}
+
+/**
+ * Abort the in-flight agent run (and its stream sender) for a chat/thread.
+ *
+ * Looks up the exact thread key first, then the threadless key — Slack's stop
+ * event always carries a thread_ts, but a run triggered by a top-level
+ * mention or DM registered without one. When `requestedAt` is provided, runs
+ * that STARTED after the stop press are left alone, so a late-delivered or
+ * redelivered cancel cannot kill the user's next turn.
+ *
+ * Exported for tests.
+ */
+export async function cancelActiveAgentRun(
+  instanceId: string,
+  chatId: string,
+  reason: string,
+  opts?: { threadId?: string; requestedAt?: number },
+): Promise<boolean> {
+  let entry = activeRunAborts.get(runAbortKey(instanceId, chatId, opts?.threadId));
+  if (!entry && opts?.threadId) {
+    entry = activeRunAborts.get(runAbortKey(instanceId, chatId));
+  }
+
+  if (!entry) {
+    log.info('Agent run cancel requested but nothing in flight', {
+      instanceId,
+      chatId,
+      threadId: opts?.threadId,
+      reason,
+    });
+    return false;
+  }
+
+  // startedAt is this server's clock, requestedAt the platform's; a legit
+  // stop press trails the run start by seconds-to-minutes, so ordinary NTP
+  // skew cannot flip this comparison.
+  if (opts?.requestedAt !== undefined && entry.startedAt > opts.requestedAt) {
+    log.info('Agent run cancel ignored — run started after the stop request', {
+      instanceId,
+      chatId,
+      threadId: opts?.threadId,
+      startedAt: entry.startedAt,
+      requestedAt: opts.requestedAt,
+      reason,
+    });
+    return false;
+  }
+
+  log.info('Cancelling in-flight agent run', {
+    instanceId,
+    chatId,
+    threadId: opts?.threadId,
+    reason,
+    hasActiveStream: !!entry.sender,
+  });
+
+  entry.controller.abort();
+  if (entry.sender) {
+    try {
+      // cancel() halts and KEEPS the partial output (Slack's stop semantics);
+      // abort() is only a fallback for senders without it.
+      await (entry.sender.cancel ? entry.sender.cancel() : entry.sender.abort());
+    } catch (err) {
+      log.warn('Stream sender cancel failed during run cancellation', { instanceId, chatId, error: String(err) });
+    }
+  }
+  return true;
+}
+
 /** Route a single StreamDelta to the appropriate StreamSender method. */
 async function routeStreamDelta(sender: StreamSender, delta: StreamDelta): Promise<void> {
   switch (delta.phase) {
@@ -2435,6 +2528,14 @@ async function dispatchViaStreamingProvider(
   const streamKey = `${instance.id}:${chatId}`;
   activeStreams.set(streamKey, sender);
 
+  // Cancellable run (#914): agent.run.cancel_requested aborts this controller,
+  // which providers propagate into the underlying SDK run. The sender rides
+  // along so cancellation can halt-and-keep the partial stream output.
+  const cancelController = new AbortController();
+  const runKey = runAbortKey(instance.id, chatId, rawThreadId);
+  activeRunAborts.set(runKey, { controller: cancelController, startedAt: Date.now(), sender });
+  trigger.abortSignal = cancelController.signal;
+
   const streamDispatchStart = Date.now();
   try {
     const generator = resolved.provider.triggerStream(trigger);
@@ -2456,8 +2557,17 @@ async function dispatchViaStreamingProvider(
       });
     }
 
-    return streamResult;
+    // A cancelled run counts as handled even when the stream ended in an
+    // error delta — falling back would re-run the turn the user stopped.
+    return cancelController.signal.aborted ? true : streamResult;
   } catch (err) {
+    // A user-requested cancellation surfaces as an abort error from the
+    // provider — that's a handled outcome (#914), never a fallback: falling
+    // back to the accumulate path would re-run the turn the user just stopped.
+    if (cancelController.signal.aborted) {
+      log.info('Streaming dispatch cancelled by user', { instanceId: instance.id, chatId, traceId });
+      return true;
+    }
     log.error('Streaming dispatch failed, falling back', {
       instanceId: instance.id,
       chatId,
@@ -2472,6 +2582,7 @@ async function dispatchViaStreamingProvider(
     return false;
   } finally {
     activeStreams.delete(streamKey);
+    activeRunAborts.delete(runKey);
   }
 }
 
@@ -2803,6 +2914,63 @@ async function dispatchViaTurnBasedProvider(
 }
 
 /**
+ * Why an accumulate-mode reply is withheld instead of sent.
+ * Precedence mirrors the original inline checks: a handoff announcement
+ * always wins over discard reasons.
+ */
+function resolveReplySuppression(flags: {
+  handoffTriggered: boolean;
+  errorHandoffDone: boolean;
+  supersededByNewerInbound: boolean;
+  runCancelled: boolean;
+}): 'handoff_triggered' | 'error_handoff' | 'superseded_by_newer_inbound' | 'run_cancelled_by_user' | null {
+  if (flags.handoffTriggered) return 'handoff_triggered';
+  if (flags.errorHandoffDone) return 'error_handoff';
+  if (flags.supersededByNewerInbound) return 'superseded_by_newer_inbound';
+  if (flags.runCancelled) return 'run_cancelled_by_user';
+  return null;
+}
+
+/**
+ * Run provider.trigger() with cancellation registered in activeRunAborts (#914).
+ *
+ * Returns null when the run was cancelled AND the provider surfaced the abort
+ * as a throw — the turn is over, nothing to send. Otherwise returns the result
+ * plus whether a cancel arrived mid-run (callers discard the reply then).
+ */
+async function triggerProviderWithCancellation(
+  provider: IAgentProvider,
+  trigger: AgentTrigger,
+  spanAttributes: Parameters<typeof withLifecycleSpan>[1],
+  instanceId: string,
+  chatId: string,
+  traceId: string,
+): Promise<{ result: Awaited<ReturnType<IAgentProvider['trigger']>>; cancelled: boolean } | null> {
+  const cancelController = new AbortController();
+  const runKey = runAbortKey(instanceId, chatId, trigger.source.threadId);
+  activeRunAborts.set(runKey, { controller: cancelController, startedAt: Date.now() });
+
+  try {
+    const result = await withLifecycleSpan('omni.dispatch_to_agno', spanAttributes, () =>
+      provider.trigger({
+        ...trigger,
+        abortSignal: cancelController.signal,
+        traceContext: activeProviderTraceContext() ?? trigger.traceContext,
+      }),
+    );
+    return { result, cancelled: cancelController.signal.aborted };
+  } catch (err) {
+    if (cancelController.signal.aborted) {
+      log.info('Agent run cancelled by user during dispatch', { instanceId, chatId, traceId });
+      return null;
+    }
+    throw err;
+  } finally {
+    activeRunAborts.delete(runKey);
+  }
+}
+
+/**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
  */
@@ -2947,15 +3115,23 @@ async function dispatchViaProvider(
       // ── Standard (round-trip / fire-and-forget) dispatch ──
       const correlationId = messages[0]?.metadata.correlationId;
       const dispatchStart = Date.now();
-      const result = await withLifecycleSpan(
-        'omni.dispatch_to_agno',
+
+      // Cancellable run (#914): providers that honor abortSignal stop mid-run;
+      // for the rest, the cancelled flag discards the reply after completion.
+      const triggerOutcome = await triggerProviderWithCancellation(
+        provider,
+        trigger,
         buildLifecycleSpanAttributes({
           ...lifecycleBase,
           stage: 'dispatch_to_agno',
           extra: { trigger_type: triggerType, provider_id: provider.id, provider_schema: provider.schema },
         }),
-        () => provider.trigger({ ...trigger, traceContext: activeProviderTraceContext() ?? trigger.traceContext }),
+        instance.id,
+        chatId,
+        traceId,
       );
+      if (!triggerOutcome) return true;
+      const { result, cancelled: runCancelled } = triggerOutcome;
       const dispatchDurationMs = Date.now() - dispatchStart;
 
       // Sentry metrics: agent dispatch count and latency
@@ -2996,7 +3172,14 @@ async function dispatchViaProvider(
         messages[0]?.metadata.trustedTenantId,
       );
 
-      if (result && result.parts.length > 0 && !handoffTriggered && !errorHandoffDone && !supersededByNewerInbound) {
+      const suppressReason = resolveReplySuppression({
+        handoffTriggered,
+        errorHandoffDone,
+        supersededByNewerInbound,
+        runCancelled,
+      });
+
+      if (result && result.parts.length > 0 && !suppressReason) {
         const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
         const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
         // Apply before_message_write hooks to each response part before sending
@@ -3036,13 +3219,9 @@ async function dispatchViaProvider(
 
         // T10: Agent chaining — forward response to chained instance if configured
         await forwardToChainedInstance(instance, parts, correlationId, messages);
-      } else if (handoffTriggered) {
-        log.info('Agent response suppressed — handoff triggered during run', {
-          instanceId: instance.id,
-          chatId,
-        });
-      } else if (supersededByNewerInbound) {
-        log.info('Agent response discarded — superseded by newer inbound', {
+      } else if (suppressReason) {
+        log.info('Agent response suppressed', {
+          reason: suppressReason,
           instanceId: instance.id,
           chatId,
           parts: result?.parts.length ?? 0,
@@ -6245,7 +6424,40 @@ export async function setupAgentDispatcher(
       },
     );
 
-    log.info('Agent dispatcher initialized (message + reaction + reaction-removed + media triggers)');
+    // ========================================
+    // Subscribe to agent.run.cancel_requested (#914)
+    // ========================================
+    await eventBus.subscribe(
+      'agent.run.cancel_requested',
+      async (event) => {
+        const payload = event.payload as AgentRunCancelRequestedPayload;
+        try {
+          await cancelActiveAgentRun(payload.instanceId, payload.chatId, payload.reason, {
+            threadId: payload.threadId,
+            requestedAt: payload.requestedAt,
+          });
+        } catch (error) {
+          log.error('Error cancelling agent run', {
+            instanceId: payload.instanceId,
+            chatId: payload.chatId,
+            error: String(error),
+          });
+        }
+      },
+      {
+        // Broadcast, not queue-grouped: the abort registry is per-process, so
+        // EVERY replica must see the cancel and no-op when it isn't running
+        // the turn — a deliver_group would route ~1/replicaCount of stop
+        // presses to the wrong pod. No durable and no withIdempotency either:
+        // both would elect a single winner and defeat the fan-out. Each
+        // process gets an ephemeral consumer starting at 'new' (no replay on
+        // restart), and the requestedAt guard in cancelActiveAgentRun keeps a
+        // redelivered cancel from aborting a newer run.
+        startFrom: 'new',
+      },
+    );
+
+    log.info('Agent dispatcher initialized (message + reaction + reaction-removed + media + cancel triggers)');
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
     clearInterval(mediaCleanupInterval);
@@ -6330,6 +6542,10 @@ export const setupAgentResponder = setupAgentDispatcher;
 export const __test__ = {
   buildContextMessages,
   awaitMediaProcessing,
+  // #914 cancel plumbing — exposed so tests can stage in-flight runs and
+  // assert the thread-scoped lookup + requestedAt guard.
+  activeRunAborts,
+  runAbortKey,
   // Read helpers converted in the G5 read-path leg — exported so the
   // worker-scope probes can assert their threading contract directly.
   resolveQuotedMessage,

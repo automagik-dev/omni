@@ -2504,7 +2504,8 @@ function hasPresenceStatusSender(plugin: unknown): plugin is PresenceStatusSende
  * Shows typing/recording indicator in a chat. Auto-pauses after duration.
  * - WhatsApp: supports typing, recording, paused
  * - Discord: supports typing only (recording/paused treated as typing)
- * - Slack: supports AI Assistant thread status via assistant.threads.setStatus
+ * - Slack: supports agent thread status via agents.sessions.setStatus (legacy
+ *   assistant.threads.setStatus fallback, #914)
  */
 messagesRoutes.post('/send/presence', zValidator('json', sendPresenceSchema), async (c) => {
   const { instanceId, to, type, duration, threadId, status, loadingMessages } = c.req.valid('json');

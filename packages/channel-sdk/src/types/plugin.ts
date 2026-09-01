@@ -227,8 +227,9 @@ export interface ChannelPlugin {
    *
    * A richer sibling of sendTyping for channels whose "someone is working on
    * this" signal is not a plain typing bubble. Slack's is thread-scoped
-   * (`assistant.threads.setStatus`) and carries a status string — which is why
-   * Slack reports `canSendTyping: false` while still implementing this.
+   * (`agents.sessions.setStatus`, with the deprecated
+   * `assistant.threads.setStatus` as fallback, #914) — which is why Slack
+   * reports `canSendTyping: false` while still implementing this.
    *
    * Returns a report rather than void: not-delivered is a normal outcome
    * (Slack has no thread context to attach to, say), and the caller needs to

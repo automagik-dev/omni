@@ -146,6 +146,11 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): St
     async onContentDelta(delta: StreamDelta & { phase: 'content' }) {
       if (fallback) return fallback.onContentDelta(delta);
 
+      // A stopped stream stays stopped: a provider that ignored the abort
+      // signal keeps yielding, and appending after chat.stopStream only
+      // produces an API error per delta (#914).
+      if (stopped) return;
+
       const content = delta.content;
       if (!content) return;
 
@@ -176,6 +181,14 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): St
 
     async abort() {
       if (fallback) return fallback.abort();
+
+      await stopStream();
+    },
+
+    async cancel() {
+      // Native streaming already halts-and-keeps: chat.stopStream leaves the
+      // streamed content in place. Only the fallback needs distinct handling.
+      if (fallback) return fallback.cancel ? fallback.cancel() : fallback.abort();
 
       await stopStream();
     },
