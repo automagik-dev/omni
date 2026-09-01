@@ -11,6 +11,10 @@ parser = argparse.ArgumentParser(description="Classify reusable orchestration ve
 parser.add_argument("--channel", required=True, choices=("stable", "dev"))
 parser.add_argument("--orchestrated", required=True, choices=("true", "false"))
 parser.add_argument("--recovery-run-id", default="")
+parser.add_argument("--version", default="")
+parser.add_argument("--source-ref", default="")
+parser.add_argument("--source-sha", default="")
+parser.add_argument("--expected-sha", default="")
 args = parser.parse_args()
 
 orchestrated = args.orchestrated == "true"
@@ -23,4 +27,14 @@ if orchestrated:
 else:
     if re.fullmatch(r"[0-9]+", args.recovery_run_id) is None:
         fail("direct recovery requires an exact numeric sign-attest run ID")
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version) is None:
+        fail("direct recovery requires an exact semantic version")
+    if args.source_ref != f"refs/tags/v{args.version}":
+        fail("direct recovery must run from the exact version tag")
+    if re.fullmatch(r"[0-9a-f]{40}", args.source_sha) is None:
+        fail("direct recovery source SHA is invalid")
+    if re.fullmatch(r"[0-9a-f]{40}", args.expected_sha) is None:
+        fail("direct recovery requires an exact expected source SHA")
+    if args.expected_sha != args.source_sha:
+        fail("direct recovery expected SHA does not match the verified source SHA")
     print("mode=recovery")

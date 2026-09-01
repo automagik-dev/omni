@@ -168,6 +168,32 @@ if permission_level(fixture_permissions["inherits"], "actions") != "read":
 if permission_level(fixture_permissions["overrides"], "actions") != "none":
     errors.append("effective-permission matcher does not model job maps as full overrides")
 
+concurrency_match = re.search(
+    r"^concurrency:\n  group:\s*(?P<group>[^\n]+)",
+    release_publish,
+    flags=re.MULTILINE,
+)
+if concurrency_match is None:
+    errors.append("release publication has no concurrency group")
+else:
+    concurrency_template = concurrency_match.group("group").strip()
+    expected_template = "release-publish-${{ inputs.version }}"
+    if concurrency_template != expected_template:
+        errors.append("release publication concurrency is not keyed only by semantic version")
+    else:
+        def render_group(version_value: str, ref_value: str) -> str:
+            return concurrency_template.replace(
+                "${{ inputs.version }}", version_value
+            ).replace("${{ github.ref }}", ref_value)
+
+        tag_group = render_group("2.260830.2", "refs/tags/v2.260830.2")
+        branch_group = render_group("2.260830.2", "refs/heads/dev")
+        next_group = render_group("2.260830.3", "refs/tags/v2.260830.3")
+        if tag_group != branch_group:
+            errors.append("same-version stable and recovery publications do not serialize across refs")
+        if tag_group == next_group:
+            errors.append("different release versions share a concurrency group")
+
 for name, workflow in workflows.items():
     for line in expressions_in_run(workflow):
         errors.append(f"{name}:{line} interpolates a GitHub expression directly inside a shell run value")
@@ -245,6 +271,84 @@ for name, workflow in workflows.items():
 require(release_publish, r"verify-release-assets\.py", "release recovery does not verify immutable asset identity")
 require(release_publish, r"--verify-tag", "release publication can create an implicit unverified tag")
 forbid(release_publish, r"\.well-known/|git push origin HEAD:main", "release publication mutates PR-owned public metadata")
+
+dispatch_match = re.search(
+    r"^  workflow_dispatch:\n(?P<body>.*?)(?=^concurrency:)",
+    release_publish,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if dispatch_match is None:
+    errors.append("release publication has no recovery dispatch contract")
+else:
+    require(
+        dispatch_match.group("body"),
+        r"^      expected_sha:\n        description:[^\n]*\n        required:\s*true\n        type:\s*string$",
+        "recovery dispatch does not require an explicit expected source SHA",
+    )
+
+entry_authorization_match = re.search(
+    r"- name: Reject unverified stable publish(?P<body>.*?)(?=^      - name: Resolve upstream)",
+    release_publish,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if entry_authorization_match is None:
+    errors.append("release publication has no entry authorization step")
+else:
+    entry_authorization = entry_authorization_match.group("body")
+    for pattern, message in (
+        (r'--version\s+"\$\{VERSION\}"', "recovery authorization is not bound to the requested version"),
+        (r'--source-ref\s+"\$\{GITHUB_REF\}"', "recovery authorization is not bound to the trigger ref"),
+        (r'--source-sha\s+"\$\{GITHUB_SHA\}"', "recovery authorization is not bound to the trigger SHA"),
+        (r'--expected-sha\s+"\$\{EXPECTED_SHA\}"', "recovery authorization does not require the operator-approved SHA"),
+    ):
+        require(entry_authorization, pattern, message)
+
+forbid(
+    release_publish,
+    r'EXPECTED_SHA\s*=\s*"?\$\{tag_sha\}"?',
+    "release publication substitutes a remote tag for an empty expected SHA",
+)
+publish_step_match = re.search(
+    r"- name: Create or update GitHub Release with all 12 signed assets(?P<body>.*)$",
+    release_publish,
+    flags=re.DOTALL,
+)
+if publish_step_match is None:
+    errors.append("release publication asset step is missing")
+else:
+    publish_step = publish_step_match.group("body")
+    tag_read = publish_step.find('tag_sha=$(git rev-parse "refs/tags/v${VERSION}^{commit}")')
+    recovery_guard = publish_step.find('if [[ -n "${RECOVERY_RUN_ID}" ]]; then')
+    recovery_tag_binding = publish_step.find('[[ "${tag_sha}" == "${GITHUB_SHA}" ]]')
+    recovery_expected_binding = publish_step.find('[[ "${tag_sha}" == "${EXPECTED_SHA}" ]]')
+    orchestrated_guard = publish_step.find('elif [[ -n "${EXPECTED_SHA}" ]]; then')
+    if min(
+        tag_read,
+        recovery_guard,
+        recovery_tag_binding,
+        recovery_expected_binding,
+        orchestrated_guard,
+    ) < 0 or not (
+        tag_read
+        < recovery_guard
+        < recovery_tag_binding
+        < recovery_expected_binding
+        < orchestrated_guard
+    ):
+        errors.append("recovery publication does not bind the exact remote tag target to both verified source SHAs")
+
+    draft_read = publish_step.find(
+        'PRE_CLOBBER_DRAFT=$(gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" '
+        "--json isDraft --jq '.isDraft')"
+    )
+    draft_guard = publish_step.find('[[ "${PRE_CLOBBER_DRAFT}" == "true" ]]')
+    upload = publish_step.find('gh release upload "v${VERSION}"')
+    clobber = publish_step.find("--clobber", upload)
+    if min(draft_read, draft_guard, upload, clobber) < 0 or not (
+        draft_read < draft_guard < upload < clobber
+    ):
+        errors.append("mutable draft assets are not re-read and fail-closed immediately before clobber")
+
 require(release, r"PUBLISHED_VERSION:\s*\$\{\{\s*needs\.sign-attest\.outputs\.version\s*\}\}", "release notes are not bound to the signed artifact version")
 require(release, r"\[\[\s+\"\$\{REQUESTED_VERSION\}\"\s+==\s+\"\$\{PUBLISHED_VERSION\}\"\s+\]\]", "requested release version is not compared with the signed artifact version")
 

@@ -70,6 +70,10 @@ on:
         description: 'sign-attest.yml run ID to download signed artifacts from'
         required: true
         type: string
+      expected_sha:
+        description: 'Exact source SHA signed by the recovery run'
+        required: true
+        type: string
       channel:
         description: 'Release channel (stable = public; dev = prerelease)'
         required: true
@@ -86,7 +90,7 @@ on:
         default: true
 
 concurrency:
-  group: release-publish-${{ github.ref }}-${{ inputs.version || github.sha }}
+  group: release-publish-${{ inputs.version }}
   cancel-in-progress: false   # never cancel an in-flight publish
 
 permissions: {}
@@ -116,13 +120,22 @@ jobs:
           EXPECTED_DIGEST: ${{ inputs.expected_digest }}
           ORCHESTRATOR_RUN_ID: ${{ inputs.orchestrator_run_id }}
           RECOVERY_RUN_ID: ${{ inputs.run_id }}
+          VERSION: ${{ inputs.version }}
           ORCHESTRATED: ${{ inputs.orchestrated || false }}
           GH_TOKEN: ${{ github.token }}
           IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
         run: |
           set -euo pipefail
           entry_args=(--channel "${CHANNEL}" --orchestrated "${ORCHESTRATED}")
-          [[ -z "${RECOVERY_RUN_ID}" ]] || entry_args+=(--recovery-run-id "${RECOVERY_RUN_ID}")
+          if [[ -n "${RECOVERY_RUN_ID}" ]]; then
+            entry_args+=(
+              --recovery-run-id "${RECOVERY_RUN_ID}"
+              --version "${VERSION}"
+              --source-ref "${GITHUB_REF}"
+              --source-sha "${GITHUB_SHA}"
+              --expected-sha "${EXPECTED_SHA}"
+            )
+          fi
           entry_state=$(scripts/release/authorize-release-entry.py "${entry_args[@]}")
           entry_mode="${entry_state#mode=}"
           if [[ "${CHANNEL}" == "stable" ]]; then
@@ -238,6 +251,7 @@ jobs:
           DRAFT_FLAG: ${{ inputs.draft && '--draft' || '' }}
           REQUESTED_DRAFT: ${{ inputs.draft || false }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RECOVERY_RUN_ID: ${{ inputs.run_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -248,13 +262,20 @@ jobs:
 
           git fetch origin "+refs/tags/v${VERSION}:refs/tags/v${VERSION}"
           tag_sha=$(git rev-parse "refs/tags/v${VERSION}^{commit}")
-          if [[ -n "${EXPECTED_SHA}" ]]; then
+          if [[ -n "${RECOVERY_RUN_ID}" ]]; then
+            [[ "${tag_sha}" == "${GITHUB_SHA}" ]] || {
+              echo "::error::remote recovery tag target is ${tag_sha}, verified recovery source is ${GITHUB_SHA}"
+              exit 1
+            }
             [[ "${tag_sha}" == "${EXPECTED_SHA}" ]] || {
               echo "::error::remote tag target before publication is ${tag_sha}, expected ${EXPECTED_SHA}"
               exit 1
             }
-          else
-            EXPECTED_SHA="${tag_sha}"
+          elif [[ -n "${EXPECTED_SHA}" ]]; then
+            [[ "${tag_sha}" == "${EXPECTED_SHA}" ]] || {
+              echo "::error::remote tag target before publication is ${tag_sha}, expected ${EXPECTED_SHA}"
+              exit 1
+            }
           fi
 
           upload_assets=true
@@ -287,6 +308,11 @@ jobs:
           fi
 
           if [[ "${upload_assets}" == "true" && -d dist && -n "$(ls -A dist 2>/dev/null)" ]]; then
+            PRE_CLOBBER_DRAFT=$(gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft')
+            [[ "${PRE_CLOBBER_DRAFT}" == "true" ]] || {
+              echo "::error::release v${VERSION} is no longer a draft; refusing to clobber public assets"
+              exit 1
+            }
             gh release upload "v${VERSION}" \
               --repo "${GITHUB_REPOSITORY}" \
               --clobber \
@@ -334,7 +360,14 @@ jobs:
 
           git fetch origin "+refs/tags/v${VERSION}:refs/tags/v${VERSION}"
           final_tag_sha=$(git rev-parse "refs/tags/v${VERSION}^{commit}")
-          [[ "${final_tag_sha}" == "${EXPECTED_SHA}" ]] || {
-            echo "::error::remote tag target after publication is ${final_tag_sha}, expected ${EXPECTED_SHA}"
-            exit 1
-          }
+          if [[ -n "${EXPECTED_SHA}" ]]; then
+            [[ "${final_tag_sha}" == "${EXPECTED_SHA}" ]] || {
+              echo "::error::remote tag target after publication is ${final_tag_sha}, expected ${EXPECTED_SHA}"
+              exit 1
+            }
+          else
+            [[ "${final_tag_sha}" == "${tag_sha}" ]] || {
+              echo "::error::remote tag target moved during publication from ${tag_sha} to ${final_tag_sha}"
+              exit 1
+            }
+          fi
