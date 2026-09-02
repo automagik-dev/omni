@@ -383,7 +383,15 @@ jobs:
           # Read back GitHub's authoritative names and SHA-256 digests before
           # any draft can become public. This also closes an upload/race gap:
           # a count of 12 alone does not prove that the intended bytes landed.
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v${VERSION}" \
+          # A draft release is not addressable by tag (GET /releases/tags/{tag}
+          # returns 404 until it is published), so resolve the release id first.
+          release_id=$(gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" \
+            --json databaseId --jq '.databaseId')
+          [[ "${release_id}" =~ ^[0-9]+$ ]] || {
+            echo "::error::could not resolve the release id for v${VERSION}"
+            exit 1
+          }
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
             > "${RUNNER_TEMP}/uploaded-release.json"
           scripts/release/verify-release-assets.py \
             --version "${VERSION}" \
