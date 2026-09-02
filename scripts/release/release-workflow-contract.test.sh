@@ -238,6 +238,91 @@ else:
         require(workflows[other], r"verify-orchestrator-run\.py[\s\S]{0,300}--expected-workflow \.github/workflows/image-build\.yml\s*\\\n\s+--allowed-event workflow_dispatch", f"{other} does not require an in-progress dispatch-only image-build orchestrator run")
     forbid(all_workflows, r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-publish\.yml\"", "a workflow still treats the read-only promotion verifier as the OCI signer")
 
+# image-dev.yml is the dev image channel: it builds and attests the dev head
+# on every push to dev that changes a protected build input, pushes only the
+# `dev-<sha12>` and floating `dev` aliases, and is never a candidate path. It
+# must not be able to create a tag, a `v<version>` alias, a release, an npm
+# publication, or public channel metadata, and it runs in no environment.
+image_dev = workflows.get("image-dev.yml")
+if image_dev is None:
+    errors.append("dev image channel workflow image-dev.yml is missing")
+else:
+    dev_trigger_match = re.search(
+        r"^on:\n  push:\n    branches: \[dev\]\n(?:    #[^\n]*\n)*    paths:\n(?P<paths>(?:      - [^\n]+\n)+)(?:  #[^\n]*\n)*  workflow_dispatch:\n(?P<dispatch>(?:    [^\n]*\n)*)",
+        image_dev,
+        flags=re.MULTILINE,
+    )
+    if dev_trigger_match is None:
+        errors.append("dev image channel is not triggered by push to dev with a paths filter plus a bare workflow_dispatch")
+    else:
+        dev_paths = {
+            line.strip()[2:].strip().strip("'\"")
+            for line in dev_trigger_match.group("paths").splitlines()
+        }
+        candidate_inputs_match = re.search(r"build_inputs=\((?P<inputs>[^)]*)\)", (root / "scripts/release/verify-promotion-candidate.sh").read_text(encoding="utf-8"))
+        if candidate_inputs_match is None:
+            errors.append("candidate verifier build_inputs list could not be read for the dev image path filter")
+        else:
+            for build_input in candidate_inputs_match.group("inputs").split():
+                expected_path = f"{build_input}/**" if (root / build_input).is_dir() else build_input
+                if expected_path not in dev_paths:
+                    errors.append(f"dev image channel does not rebuild when protected build input {expected_path} changes")
+        if ".github/workflows/image-dev.yml" not in dev_paths:
+            errors.append("dev image channel does not rebuild when its own workflow changes")
+        if dev_trigger_match.group("dispatch").strip():
+            errors.append("dev image channel workflow_dispatch takes inputs; it must rebuild only the current dev head")
+    forbid(image_dev, r"^    tags:", "dev image channel can run on a tag push")
+    forbid(image_dev, r"^  push:\n(?:    [^\n]*\n)*    branches: \[[^\]]*\bmain\b", "dev image channel can run on a push to main")
+    forbid(image_dev, r"pull_request", "dev image channel can run on a pull request event")
+    forbid(image_dev, r"refs/tags", "dev image channel names a tag ref")
+    forbid(image_dev, r"\bv\$\{", "dev image channel can push or name a v<version> alias")
+    require(image_dev, r"^permissions:\s*\{\s*\}\s*$", "dev image channel does not clear top-level token permissions")
+    require(image_dev, r"^    concurrency:\n      group: image-dev-\$\{\{ github\.ref \}\}\n      cancel-in-progress: true", "dev image channel does not cancel superseded builds per ref")
+    require(image_dev, r"timeout-minutes:\s*[0-9]+", "dev image channel has no finite job timeout")
+    require(image_dev, r"\[\[ \"\$\{GITHUB_REF\}\" == \"refs/heads/dev\" \]\]", "dev image channel is not bound to the dev branch head")
+    require(image_dev, r"echo \"sha12=\$\{GITHUB_SHA:0:12\}\" >> \"\$GITHUB_OUTPUT\"", "dev image channel does not derive the immutable alias from the dev head SHA")
+    require(image_dev, r"actions/checkout@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+ref: \$\{\{ github\.sha \}\}\n\s+persist-credentials: false", "dev image channel does not check out the exact dev head without persisted credentials")
+    require(image_dev, r"docker/build-push-action@[0-9a-f]{40}", "dev image channel does not build with the pinned build-push action")
+    require(image_dev, r"platforms:\s*linux/amd64,linux/arm64", "dev image channel does not build both supported platforms")
+    require(image_dev, r"^\s+push: true\n(?:\s+#[^\n]*\n)*\s+tags: \|\n\s+\$\{\{ env\.IMAGE \}\}:dev-\$\{\{ steps\.guard\.outputs\.sha12 \}\}\n\s+\$\{\{ env\.IMAGE \}\}:dev\n", "dev image channel does not push exactly the dev-<sha12> and floating dev aliases")
+    require(image_dev, r"org\.opencontainers\.image\.revision=\$\{\{ github\.sha \}\}\n\s+org\.opencontainers\.image\.version=dev-\$\{\{ steps\.guard\.outputs\.sha12 \}\}", "dev image channel does not label the image with the dev head identity")
+    require(image_dev, r"verify-oci-alias\.sh \\\n\s+--image \"\$\{IMAGE\}\" --tag \"dev-\$\{SHA12\}\" --expected-digest \"\$\{EXPECTED_DIGEST\}\"", "dev image channel does not read back the immutable dev alias digest")
+    require(image_dev, r"verify-oci-alias\.sh \\\n\s+--image \"\$\{IMAGE\}\" --tag dev --expected-digest \"\$\{EXPECTED_DIGEST\}\"", "dev image channel does not read back the floating dev alias digest")
+    require(image_dev, r"actions/attest-build-provenance@[0-9a-f]{40}[\s\S]{0,300}push-to-registry:\s*true", "dev image channel does not register GitHub provenance in the registry")
+    require(image_dev, r"echo \"DEV_IMAGE_DIGEST=\$\{DIGEST\}\"", "dev image channel does not print the digest the GitOps pin consumes")
+    for pattern, message in (
+        (r"\bgh\s+workflow\s+run\b", "dev image channel dispatches a publisher"),
+        (r"\bgh\s+release\b", "dev image channel touches a GitHub release"),
+        (r"\bnpm\s+(?:publish|dist-tag)\b", "dev image channel can publish or move an npm alias"),
+        (r"\bgit\s+(?:push|tag)\b", "dev image channel can move or create a Git ref"),
+        (r"\bgh\s+api\b[^\n]*(?:--method|-X)\s+(?:POST|PATCH|PUT|DELETE)", "dev image channel performs a mutating API call"),
+        (r"secrets\.", "dev image channel reads a repository secret instead of github.token"),
+        (r"secrets:\s*inherit", "dev image channel inherits repository secrets"),
+        (r"^\s+environment:", "dev image channel runs in a protected environment; dev is not gated"),
+        (r"contents:\s*write", "dev image channel grants a Git-writing token"),
+        (r"actions:\s*write", "dev image channel grants a dispatching token"),
+        (r"\.well-known", "dev image channel touches public channel metadata"),
+        (r"imagetools\s+create", "dev image channel can retag an OCI manifest"),
+        (r"persist-credentials:\s*true", "dev image channel persists checkout credentials"),
+        (r"\b(?:kubectl|helm\s+(?:upgrade|install)|docker\s+service\s+update|aws\s+)", "dev image channel can mutate infrastructure"),
+        (r"^\s+(?:[A-Z_]+=\S+\s+)?scripts/release/verify-(?:promotion-candidate|oci-release)\.sh\b", "dev image channel runs a promotion candidate verifier"),
+    ):
+        forbid(image_dev, pattern, message)
+    expected_image_dev_permissions = {
+        "build-push-dev": {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"},
+    }
+    image_dev_permissions = effective_job_permissions(image_dev)
+    if set(image_dev_permissions) != set(expected_image_dev_permissions):
+        errors.append(f"dev image channel job set changed: {sorted(image_dev_permissions)}")
+    for job_name, expected in expected_image_dev_permissions.items():
+        actual = image_dev_permissions.get(job_name)
+        if actual != expected:
+            errors.append(f"dev image channel job {job_name} permissions are {actual}, expected exactly {expected}")
+    # Only the candidate minter may sign OCI provenance that the stable
+    # publishers accept; nothing may name image-dev.yml as a signer.
+    forbid(all_workflows, r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-dev\.yml\"", "a workflow treats the dev image channel as the candidate OCI signer")
+
+
 # Tarball provenance is GitHub-native and produced in-repo. The repository
 # requires every action to be pinned to a full-length commit SHA; the SLSA
 # generator reusable workflow references its own helper actions by tag, so it

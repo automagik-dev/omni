@@ -87,6 +87,28 @@ on a tag ref). The active `v*` tag ruleset must keep its `update` and
 environment is protected, any write collaborator who can dispatch the
 workflow can publish a stable release and move npm `latest`.
 
+## Dev image channel
+
+`.github/workflows/image-dev.yml` ("Publish dev image") is the only producer
+of the dev image channel. Every push to `dev` that changes a protected image
+build input (the same list as `scripts/release/verify-promotion-candidate.sh`,
+plus the workflow file itself; a `workflow_dispatch` rebuilds the current
+`dev` head) builds the `linux/amd64` + `linux/arm64` OCI index, pushes the
+immutable `ghcr.io/automagik-dev/omni-api:dev-<sha12>` alias and the floating
+`:dev` alias, and registers GitHub-native provenance for the index digest
+(`DEV_IMAGE_DIGEST=` in the run log and step summary). It uses only
+`github.token` with `contents: read, packages: write, id-token: write,
+attestations: write`, runs in no environment, and never creates a tag ref, a
+`v<version>` alias, a release, an npm publication, or public channel metadata.
+
+`dev` and `dev-<sha12>` are never promotable: candidates are minted only by
+`image-build.yml` at an exact `v<version>` tag, `image-publish.yml` verifies
+only those, and `verify-promotion-candidate.sh` is unaffected by this channel
+(a dev image is not a candidate and has no version tag to bind). The HML
+instance tracks the channel through the private GitOps repository
+(`git.namastex.io/khal/deploy`), which pins the `dev-<sha12>` alias by digest;
+the `dev` → `main` promotion never carries a dev image.
+
 ## Public repository ownership
 
 The generic Helm `image.digest` renderer remains available, but the public
