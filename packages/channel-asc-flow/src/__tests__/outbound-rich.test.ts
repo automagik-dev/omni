@@ -81,16 +81,31 @@ describe('outbound media', () => {
     expect(ready('42')).toMatchObject({ pronto: 1, resposta: '' });
   });
 
-  it('prefers a public URL over shipping the bytes', async () => {
+  // The platform refuses a `url_arquivo` from a domain it does not own: an
+  // upload.wikimedia.org image came back `HTTP 400, cod_error 9` on the live
+  // number 02/09, while the same image as base64 went through. So a public URL
+  // is fetched HERE and forwarded as bytes.
+  it('fetches a public URL and ships the bytes, never url_arquivo', async () => {
+    const pdf = Buffer.from([0x25, 0x50, 0x44, 0x46]);
     await boot();
-    await send({ type: 'document', mediaUrl: 'https://cdn.test/guia.pdf', mimeType: 'application/pdf' });
+    // Wrap AFTER boot so the platform stub stays underneath: only the CDN url
+    // is intercepted, every ASC call still lands in `calls`.
+    const stubbedFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+      String(input) === 'https://cdn.test/guia.pdf' ? new Response(pdf) : stubbedFetch(input, init)) as typeof fetch;
 
-    expect(of('/mensagem')[0]?.body).toMatchObject({
-      url_arquivo: 'https://cdn.test/guia.pdf',
-      nome_arquivo: 'guia.pdf',
-      mime_type: 'application/pdf',
-    });
-    expect(of('/mensagem')[0]?.body.base64_arquivo).toBeUndefined();
+    try {
+      await send({ type: 'document', mediaUrl: 'https://cdn.test/guia.pdf', mimeType: 'application/pdf' });
+
+      expect(of('/mensagem')[0]?.body).toMatchObject({
+        nome_arquivo: 'guia.pdf',
+        mime_type: 'application/pdf',
+        base64_arquivo: pdf.toString('base64'),
+      });
+      expect(of('/mensagem')[0]?.body.url_arquivo).toBeUndefined();
+    } finally {
+      globalThis.fetch = stubbedFetch;
+    }
   });
 
   it('sends audio through the same single call', async () => {

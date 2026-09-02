@@ -44,6 +44,13 @@ export function isRichContent(content: OutgoingContent): boolean {
 
 /** Read stored bytes: a media-backend reference first, a plain path second. */
 async function readMediaBytes(reference: string): Promise<Buffer> {
+  // A public URL is fetched HERE and forwarded as bytes — the platform refuses
+  // a foreign `url_arquivo` (see `buildMediaFields`).
+  if (/^https?:\/\//i.test(reference)) {
+    const response = await fetch(reference);
+    if (!response.ok) throw new Error(`fetch ${reference} failed: HTTP ${response.status}`);
+    return Buffer.from(await response.arrayBuffer());
+  }
   try {
     return await getMediaBackend().read(reference);
   } catch {
@@ -53,19 +60,19 @@ async function readMediaBytes(reference: string): Promise<Buffer> {
 }
 
 /**
- * The file fields for a media send. A public `mediaUrl` is preferred — the
- * platform fetches it and no bytes cross this process — otherwise the stored
- * bytes go inline as base64.
+ * The file fields for a media send: the bytes go inline as base64.
+ *
+ * `url_arquivo` is NOT used for a public URL. The platform refuses one from a
+ * domain it does not own — measured 02/09 on the live number, an
+ * upload.wikimedia.org image came back `HTTP 400, cod_error 9`, while the same
+ * image as base64 went through. So the URL is only a place to READ bytes from,
+ * never something to hand the platform.
  */
 async function buildMediaFields(message: OutgoingMessage, logger: Logger): Promise<Record<string, unknown> | null> {
   const { content } = message;
   const url = content.mediaUrl;
   const name = content.filename || basename(content.localPath || url || '') || 'arquivo';
   const mimeType = content.mimeType || Bun.file(name).type || 'application/octet-stream';
-
-  if (url && /^https?:\/\//i.test(url)) {
-    return { url_arquivo: url, nome_arquivo: name, mime_type: mimeType };
-  }
 
   // `POST /api/v2/messages/send/media` with a `base64` (or a voice note's
   // `audioBuffer`) hands the bytes on the METADATA, not on the content.
