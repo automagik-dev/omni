@@ -240,7 +240,14 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
+      # A candidate cut publishes nothing to npm: npm trusted publishing (OIDC)
+      # can only `npm publish`, never move a dist-tag, so if the candidate
+      # version were already on npm under `next`, the stable `latest` alias
+      # could only be set with a classic token. Leaving the version unpublished
+      # lets image-build.yml's stable publish run `npm publish --tag latest`
+      # through OIDC.
       - name: Publish to npm via OIDC (@${{ steps.context.outputs.npm_tag }})
+        if: inputs.candidate != true
         env:
           DIST_TAG: ${{ steps.context.outputs.npm_tag }}
           HUSKY: "0"
@@ -271,7 +278,7 @@ jobs:
       # otherwise pin the tag's channel classification to dev forever
       # (verify-release-state.py: "channel classification is immutable"), so
       # image-build.yml could never publish the stable release at that tag.
-      # The npm `next` publish above still happens for a candidate cut.
+      # The npm `next` publish above is also skipped for a candidate cut.
       - name: Dispatch release pipeline for the new tag
         continue-on-error: true
         env:
