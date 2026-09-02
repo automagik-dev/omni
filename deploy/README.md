@@ -55,13 +55,16 @@ make -C deploy health
 ```
 
 To skip local builds entirely, point the dev-shape install at the public
-registry images instead:
+registry images instead. Use the pinned public candidate — the `version` in
+`.well-known/latest.json`, which is also the chart's default `image.tag` in
+`deploy/helm/omni/values.yaml`. `Chart.appVersion` tracks every dev bump and
+is not guaranteed to have a published image, so do not derive the tag from it:
 
 ```bash
 helm upgrade --install omni deploy/helm/omni -n omni --create-namespace \
   -f deploy/helm/omni/values-dev.yaml \
   --set image.repository=ghcr.io/automagik-dev/omni-api \
-  --set image.tag=v<version> --set image.pullPolicy=IfNotPresent \
+  --set image.tag="v$(jq -r .version .well-known/latest.json)" --set image.pullPolicy=IfNotPresent \
   --set autopg.image.repository=ghcr.io/automagik-dev/autopg \
   --set autopg.image.tag=v3.0.7 --set autopg.image.pullPolicy=IfNotPresent
 ```
@@ -81,7 +84,9 @@ verification-only `main` workflow checks the existing SLSA and GitHub-native
 attestations; it does not create them:
 
 ```bash
-gh attestation verify oci://ghcr.io/automagik-dev/omni-api:v<version> -R automagik-dev/omni
+# The verifiable tag is the pinned public candidate: `.well-known/latest.json`
+# "version" (= the chart's default image.tag), not Chart.appVersion.
+gh attestation verify "oci://ghcr.io/automagik-dev/omni-api:v$(jq -r .version .well-known/latest.json)" -R automagik-dev/omni
 ```
 
 Only images published after attestation support landed (July 2026) carry

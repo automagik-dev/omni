@@ -4,10 +4,12 @@ description: Omni — multi-channel messaging API (Bun/Hono) with Postgres (auto
 type: application
 version: 0.1.0
 # appVersion is stamped by version.yml → scripts/sync-versions.ts in lockstep
-# with every package.json. It remains the chart's generic default image tag;
-# production authority supplies an independently verified immutable digest
-# outside this public repository. Do not edit by hand —
-# scripts/verify-versions.ts fails CI on drift.
+# with every package.json on every dev bump. It is NOT the default image tag:
+# values.yaml pins image.tag to the last verified public candidate
+# (.well-known/latest.json) because no public workflow builds images, so
+# v<appVersion> is not guaranteed to exist. Production authority supplies an
+# independently verified immutable digest outside this public repository.
+# Do not edit by hand — scripts/verify-versions.ts fails CI on drift.
 appVersion: "2.260901.3"
 keywords:
   - omni
