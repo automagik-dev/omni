@@ -9,17 +9,34 @@
 # attestation signed by this workflow file.
 #
 # Flow:
-#   version.yml cuts v<version> on dev (merged PR or manual dispatch)
+#   gh workflow run version.yml --ref dev -f candidate=true
+#     cuts v<version> on dev and publishes npm `next` WITHOUT dispatching the
+#     dev prerelease. Only such a candidate cut is mintable: a merged-PR bump
+#     (or a dispatch without candidate=true) publishes a dev prerelease at the
+#     tag, and a tag's channel classification is immutable, so finalize refuses
+#     it — cut a fresh candidate instead.
 #   → gh workflow run image-build.yml --ref refs/tags/v<version> -f version=<version>
 #   → build-push: bind the tag/package/chart identity, refuse an existing
 #     v<version> alias, build the linux/amd64 + linux/arm64 OCI index, push
 #     ONLY ghcr.io/<owner>/omni-api:v<version>, attest it
 #   → finalize: independently re-verify the digest, index, platforms, and
-#     provenance; require the active v* tag ruleset; dispatch release.yml
-#     (channel=stable) and version.yml (stable_publish_only=true) at the same
-#     tag and wait for both; print the CANDIDATE_* values that the reviewed
-#     promotion pins (image-publish.yml, .well-known/*.json, Helm values,
-#     contract tests, upgrade runbook) are updated to.
+#     provenance; require the active v* tag ruleset; wait for any running
+#     release.yml run at the tag, refuse a dev prerelease at the tag; dispatch
+#     release.yml (channel=stable) and version.yml (stable_publish_only=true)
+#     at the same tag and wait for both; print the CANDIDATE_* values that the
+#     reviewed promotion pins (image-publish.yml, .well-known/*.json, Helm
+#     values, contract tests, upgrade runbook) are updated to.
+#
+# Recovery: if finalize fails after build-push succeeded (ruleset check,
+# run-resolution timeout, concurrent dispatch, a failed release.yml run), a
+# fresh dispatch is refused by design — the v<version> alias now exists. Use
+# "Re-run failed jobs" on the SAME run: it keeps GITHUB_RUN_ID (the
+# orchestrator_run_id the stable publishers re-verify), the build-push outputs,
+# and the in_progress state those publishers require.
+#
+# Both jobs run in the `release` environment. Configure it with required
+# reviewers (repository settings; this file cannot create it) so that a write
+# collaborator cannot publish a stable release or move npm `latest` alone.
 #
 # The main-branch promotion (image-publish.yml) stays read-only: it verifies
 # the candidate this workflow minted and never builds, tags, or publishes.
@@ -55,6 +72,7 @@ jobs:
     name: Build and attest omni-api candidate
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    environment: release
     permissions:
       contents: read
       packages: write
@@ -196,6 +214,7 @@ jobs:
     needs: build-push
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    environment: release
     permissions:
       contents: read
       packages: read
@@ -339,12 +358,44 @@ jobs:
             }
           }
 
+          # A release.yml run still in flight at this tag (a dev prerelease
+          # cut without candidate=true, or a stable run from a re-run of this
+          # job) must settle before the release state is read, or "no
+          # release yet" is misread and a second publisher is dispatched.
+          active_release_runs() {
+            gh run list --repo "${GITHUB_REPOSITORY}" \
+              --workflow release.yml --branch "${tag}" \
+              --limit 50 --json databaseId,status \
+              --jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested")] | length'
+          }
+          release_runs_settled=false
+          for attempt in $(seq 1 60); do
+            active=$(active_release_runs)
+            if [[ "${active}" == "0" ]]; then
+              release_runs_settled=true
+              break
+            fi
+            echo "waiting for ${active} queued/in_progress release.yml run(s) at ${tag} (attempt ${attempt}/60)"
+            sleep 30
+          done
+          [[ "${release_runs_settled}" == "true" ]] || {
+            echo "::error::a release.yml run for ${tag} is still queued or in progress; re-run this job once it settles"
+            exit 1
+          }
+
           release_exists=false
           if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > "${RUNNER_TEMP}/release.json" 2>/dev/null; then
             release_exists=true
           fi
           if [[ "${release_exists}" == "true" ]]; then
             release_state=$(jq -r '[.draft,.prerelease] | @tsv' "${RUNNER_TEMP}/release.json")
+            # A public dev prerelease pins the tag's channel classification
+            # forever (release-publish.yml verify-release-state.py --phase
+            # existing); no stable release can ever be published at this tag.
+            [[ "${release_state}" != $'false\ttrue' ]] || {
+              echo "::error::a dev prerelease already exists at v${VERSION}; this tag cannot become stable — cut a fresh candidate with \`gh workflow run version.yml --ref dev -f candidate=true\`"
+              exit 1
+            }
             [[ "${release_state}" == $'false\tfalse' ]] || {
               echo "::error::existing stable release is not public stable"
               exit 1

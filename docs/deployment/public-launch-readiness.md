@@ -33,8 +33,16 @@ stable npm publisher (`version.yml` `publish-stable`) require: each of them
 verifies an in-progress `image-build.yml` run bound to the candidate SHA and an
 OCI attestation signed by `image-build.yml`.
 
-1. `version.yml` (a merged PR to `dev`, or a manual dispatch) bumps the
-   version, cuts `vX` on `dev`, and publishes npm `next`.
+1. An operator cuts a candidate tag:
+   `gh workflow run version.yml --ref dev -f candidate=true`. This bumps the
+   version, cuts `vX` on `dev`, and publishes npm `next`, but skips the
+   `release.yml` dev-prerelease dispatch so the tag stays reserved for
+   `image-build.yml`. Merged-PR bumps (and dispatches without
+   `candidate=true`) publish a dev prerelease at their tag and are never
+   mintable: a tag's channel classification is immutable
+   (`verify-release-state.py --phase existing`), so `finalize` refuses a tag
+   that already carries a public prerelease with
+   `a dev prerelease already exists at vX; this tag cannot become stable`.
 2. An operator dispatches the mint at that exact tag:
    `gh workflow run image-build.yml --ref refs/tags/vX -f version=X`.
    `build-push` refuses any non-dispatch entry, a ref other than
@@ -44,9 +52,11 @@ OCI attestation signed by `image-build.yml`.
    `linux/amd64,linux/arm64` OCI index, pushes only the `vX` alias, and
    registers GitHub provenance. `finalize` independently re-verifies the digest,
    platforms, and signer identity, requires the active immutable `v*` tag
-   ruleset, dispatches `release.yml` (`channel=stable`) and `version.yml`
-   (`stable_publish_only=true`) at the same tag, and waits for both. It never
-   creates or moves a tag, pushes a branch, or writes a production pin.
+   ruleset, waits until no `release.yml` run at the tag is queued or in
+   progress, refuses a dev prerelease at the tag, dispatches `release.yml`
+   (`channel=stable`) and `version.yml` (`stable_publish_only=true`) at the
+   same tag, and waits for both. It never creates or moves a tag, pushes a
+   branch, or writes a production pin.
 3. The run prints `CANDIDATE_VERSION=`, `CANDIDATE_SHA=`, `CANDIDATE_DIGEST=`,
    and `RELEASE_PUBLISHED_AT=`. A reviewed commit copies those values into
    `image-publish.yml`, `.well-known/latest.json` and `.well-known/dev.json`,
@@ -55,6 +65,20 @@ OCI attestation signed by `image-build.yml`.
    runbook/rehearsal.
 4. The `dev` → `main` promotion PR carries that commit; on merge,
    `image-publish.yml` verifies the pinned candidate read-only.
+
+Stranded mint recovery: if `finalize` fails after `build-push` succeeded (the
+ruleset check, a run-resolution timeout, a concurrent dispatch, or a failed
+`release.yml` run), a fresh `image-build.yml` dispatch is refused by design
+because the `vX` alias now exists. Recover with "Re-run failed jobs" on the
+SAME run: it keeps `GITHUB_RUN_ID` (the `orchestrator_run_id` the stable
+publishers re-verify), the `build-push` outputs, and the `in_progress` state
+those publishers require.
+
+Both `image-build.yml` jobs run in the `release` environment. The `release`
+environment must be configured with required reviewers (and the `v*` tag
+ruleset with a `creation` rule) before the first mint; until then the
+environment is unprotected and any write collaborator who can dispatch the
+workflow can publish a stable release and move npm `latest`.
 
 ## Public repository ownership
 

@@ -206,9 +206,10 @@ extraVolumeMounts: []
 # The Omni Admin UI (apps/khal-ui, app id "omni-admin") as a single-container
 # pod: one Bun process serves the built SPA AND proxies /omni/* to omni-api,
 # injecting the omni_sk_ key server-side so the browser never sees it. Image is
-# ghcr.io/automagik-dev/omni-admin-ui (built by image-publish.yml's
-# build-push-ui job). OFF by default and in the generic AWS overlays; the dev
-# overlay turns it on. On the shared khal.ai realms it stays OFF until a real
+# ghcr.io/automagik-dev/omni-admin-ui. No public workflow builds or pushes it
+# today (image-publish.yml is verification-only and image-build.yml mints only
+# omni-api); an operator supplies it. OFF by default and in the generic AWS
+# overlays; the dev overlay turns it on. On the shared khal.ai realms it stays OFF until a real
 # auth layer fronts it — the harness shell mocks a full-admin user, so an open
 # ingress would hand anyone reaching the host full control of the omni backend.
 adminUi:

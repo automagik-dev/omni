@@ -35,6 +35,77 @@ def forbid(text: str, pattern: str, message: str) -> None:
         errors.append(message)
 
 
+def indentation(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def permissions_at(lines: list[str], indent: int) -> dict[str, str] | None:
+    prefix = " " * indent
+    for index, line in enumerate(lines):
+        if not line.startswith(f"{prefix}permissions:") or indentation(line) != indent:
+            continue
+        value = line.split(":", 1)[1].split("#", 1)[0].strip()
+        if value == "{}":
+            return {}
+        if value in ("read-all", "write-all"):
+            return {"*": value.removesuffix("-all")}
+        permissions: dict[str, str] = {}
+        for nested in lines[index + 1 :]:
+            if not nested.strip() or nested.lstrip().startswith("#"):
+                continue
+            nested_indent = indentation(nested)
+            if nested_indent <= indent:
+                break
+            match = re.match(r"^\s*([a-z-]+):\s*(read|write|none)(?:\s+#.*)?$", nested)
+            if nested_indent == indent + 2 and match:
+                permissions[match.group(1)] = match.group(2)
+        return permissions
+    return None
+
+
+def job_blocks(text: str) -> dict[str, list[str]]:
+    lines = text.splitlines()
+    jobs_index = next(
+        (index for index, line in enumerate(lines) if line == "jobs:"),
+        None,
+    )
+    if jobs_index is None:
+        return {}
+    blocks: dict[str, list[str]] = {}
+    current_name: str | None = None
+    current_lines: list[str] = []
+    for line in lines[jobs_index + 1 :]:
+        if line.strip() and not line.lstrip().startswith("#") and indentation(line) == 0:
+            break
+        header = re.match(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$", line)
+        if header:
+            if current_name is not None:
+                blocks[current_name] = current_lines
+            current_name = header.group(1)
+            current_lines = [line]
+        elif current_name is not None:
+            current_lines.append(line)
+    if current_name is not None:
+        blocks[current_name] = current_lines
+    return blocks
+
+
+def effective_job_permissions(text: str) -> dict[str, dict[str, str]]:
+    lines = text.splitlines()
+    workflow_permissions = permissions_at(lines, 0)
+    if workflow_permissions is None:
+        workflow_permissions = {}
+    effective: dict[str, dict[str, str]] = {}
+    for job_name, block in job_blocks(text).items():
+        job_permissions = permissions_at(block, 4)
+        effective[job_name] = (
+            workflow_permissions.copy()
+            if job_permissions is None
+            else job_permissions
+        )
+    return effective
+
+
 require(image, r"branches:\s*\[main\]", "promotion verification is not bound to main")
 require(image, r"timeout-minutes:\s*[0-9]+", "promotion verification has no finite job timeout")
 for exact in (
@@ -112,8 +183,42 @@ else:
         (r"imagetools\s+create", "candidate minting can retag an OCI manifest"),
         (r"\b(?:kubectl|helm\s+(?:upgrade|install)|docker\s+service\s+update|aws\s+)", "candidate minting can mutate production infrastructure"),
         (r"ref:\s*main\b", "candidate minting checks out main instead of the dispatched tag source"),
+        (r"contents:\s*write", "candidate minting grants a Git-writing token"),
+        (r"secrets\.", "candidate minting reads a repository secret instead of github.token"),
+        (r"persist-credentials:\s*true", "candidate minting persists checkout credentials"),
     ):
         forbid(image_build, pattern, message)
+    # Exact per-job grants: the builder may write packages and attestations
+    # under OIDC; the orchestrator may only dispatch. Nothing else, ever.
+    expected_image_build_permissions = {
+        "build-push": {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"},
+        "finalize": {"contents": "read", "packages": "read", "attestations": "read", "actions": "write"},
+    }
+    image_build_permissions = effective_job_permissions(image_build)
+    if set(image_build_permissions) != set(expected_image_build_permissions):
+        errors.append(f"candidate minting job set changed: {sorted(image_build_permissions)}")
+    for job_name, expected in expected_image_build_permissions.items():
+        actual = image_build_permissions.get(job_name)
+        if actual != expected:
+            errors.append(f"candidate minting job {job_name} permissions are {actual}, expected exactly {expected}")
+    image_build_jobs = job_blocks(image_build)
+    for job_name in expected_image_build_permissions:
+        block = "\n".join(image_build_jobs.get(job_name, []))
+        require(block, r"^    environment:\s*release\s*$", f"candidate minting job {job_name} does not run in the release environment")
+    # A dev prerelease at the tag pins its channel classification forever;
+    # finalize must wait for any in-flight release.yml run before reading the
+    # release state, then refuse the prerelease with the recovery command.
+    require(
+        image_build,
+        r"gh run list[^\n]*\\\n\s+--workflow release\.yml --branch \"\$\{tag\}\"[\s\S]{0,400}"
+        r"select\(\.status == \"queued\" or \.status == \"in_progress\"[\s\S]{0,600}sleep 30",
+        "candidate minting does not wait for queued or in-progress release.yml runs at the tag before reading the release state",
+    )
+    require(
+        image_build,
+        r"a dev prerelease already exists at v\$\{VERSION\}; this tag cannot become stable — cut a fresh candidate with \\`gh workflow run version\.yml --ref dev -f candidate=true\\`",
+        "candidate minting does not refuse a tag that already carries a public dev prerelease",
+    )
     for other in ("release.yml", "release-publish.yml", "version.yml"):
         require(workflows[other], r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", f"{other} does not bind the OCI signer to the candidate minter")
         require(workflows[other], r"verify-orchestrator-run\.py[\s\S]{0,300}--expected-workflow \.github/workflows/image-build\.yml\s*\\\n\s+--allowed-event workflow_dispatch", f"{other} does not require an in-progress dispatch-only image-build orchestrator run")
@@ -210,6 +315,20 @@ require(
     r"^  publish-stable:\n(?:(?:    [^\n]*)?\n)*?"
     r"    concurrency:\n      group: version-stable-publish-\$\{\{ inputs\.expected_version \}\}\n",
     "the read-only stable publisher shares the dev writer's concurrency group",
+)
+
+# A candidate cut must not publish the dev prerelease that would make its tag
+# unmintable; the merged-PR path never sets the flag and stays a dev cut.
+require(
+    version_workflow,
+    r"^  workflow_dispatch:\n    inputs:\n      candidate:\n        description: '[^\n]*'\n        type: boolean\n        default: false\n",
+    "the version workflow has no boolean candidate dispatch input",
+)
+require(
+    version_workflow,
+    r"- name: Dispatch release pipeline for the new tag\n(?:        [^\n]*\n)*?          CANDIDATE: \$\{\{ inputs\.candidate \}\}\n[\s\S]{0,600}"
+    r"if \[\[ \"\$\{CANDIDATE\}\" == \"true\" \]\]; then\n\s+echo \"[^\n]*image-build\.yml[^\n]*\"\n\s+exit 0\n\s+fi\n[\s\S]{0,200}gh workflow run release\.yml",
+    "the version workflow dispatches the dev prerelease even for a candidate cut",
 )
 
 require(release, r"authorize:[\s\S]{0,200}timeout-minutes:\s*[0-9]+", "release authorization has no finite timeout")

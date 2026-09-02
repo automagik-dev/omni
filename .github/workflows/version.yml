@@ -9,6 +9,10 @@ on:
     branches: [dev]
   workflow_dispatch:
     inputs:
+      candidate:
+        description: 'Cut a stable candidate tag: skip the dev prerelease so image-build.yml can publish the stable release'
+        type: boolean
+        default: false
       stable_publish_only:
         description: 'Publish one already verified stable tag to npm without creating a new version'
         type: boolean
@@ -261,9 +265,17 @@ jobs:
       # Pre-fix history: when dispatch ran BEFORE npm publish + Build CLI,
       # the 403 cascaded and skipped npm publish entirely (v2.260520.1 / .2
       # / .3 never made it to @next).
+      #
+      # `candidate=true` (workflow_dispatch only; a merged PR never sets it)
+      # skips this dispatch entirely. A dev prerelease at v<version> would
+      # otherwise pin the tag's channel classification to dev forever
+      # (verify-release-state.py: "channel classification is immutable"), so
+      # image-build.yml could never publish the stable release at that tag.
+      # The npm `next` publish above still happens for a candidate cut.
       - name: Dispatch release pipeline for the new tag
         continue-on-error: true
         env:
+          CANDIDATE: ${{ inputs.candidate }}
           CHANNEL: ${{ steps.context.outputs.release_channel }}
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -272,6 +284,10 @@ jobs:
           TAG="refs/tags/v${VERSION}"
           TAG_SHA=$(git rev-parse "${TAG}^{commit}")
           [[ "${TAG_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "${CANDIDATE}" == "true" ]]; then
+            echo "candidate=true: skipping the dev prerelease dispatch; ${TAG} is reserved for image-build.yml (gh workflow run image-build.yml --ref ${TAG} -f version=${VERSION})"
+            exit 0
+          fi
           echo "Dispatching release pipeline against ${TAG} (channel=${CHANNEL})..."
           if ! gh workflow run release.yml \
             --repo "${GITHUB_REPOSITORY}" \
