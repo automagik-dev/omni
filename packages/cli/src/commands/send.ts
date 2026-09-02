@@ -12,6 +12,7 @@ import { basename, extname } from 'node:path';
 import { OmniApiError, type OmniClient } from '@omni/sdk';
 import chalk, { Chalk, type ChalkInstance } from 'chalk';
 import { Command } from 'commander';
+import { z } from 'zod';
 import { getClient } from '../client.js';
 import { loadConfig } from '../config.js';
 import { resolveContext } from '../context.js';
@@ -89,17 +90,18 @@ interface SendOptions {
   sentBy?: string;
 }
 
-const SENT_BY_VALUES = ['agent', 'user'] as const;
-type SentBy = (typeof SENT_BY_VALUES)[number];
+/** Mirrors the API's SentByField (schemas/openapi/messages.ts); the SDK exports only the type. */
+const sentBySchema = z.enum(['agent', 'user']);
+type SentBy = z.infer<typeof sentBySchema>;
 
 /** Validate --sent-by; undefined when not given (unattributed). Exits on an invalid value. */
 function resolveSentBy(value: string | undefined): SentBy | undefined {
   if (value === undefined) return undefined;
-  const sentBy = SENT_BY_VALUES.find((v) => v === value);
-  if (!sentBy) {
-    output.error(`Invalid --sent-by: ${value}`, { validValues: SENT_BY_VALUES });
+  const parsed = sentBySchema.safeParse(value);
+  if (!parsed.success) {
+    output.error(`Invalid --sent-by: ${value}`, { validValues: sentBySchema.options });
   }
-  return sentBy;
+  return parsed.data;
 }
 
 /** Message sender handlers - each validates required fields before use */
@@ -585,3 +587,6 @@ export function createSendCommand(): Command {
 
   return send;
 }
+
+/** Test-only surface — not part of the CLI contract. */
+export const __testables = { sentBySchema };

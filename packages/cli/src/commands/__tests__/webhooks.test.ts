@@ -6,15 +6,25 @@
  * API's bounds before any request is sent.
  */
 
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { __testables } from '../webhooks';
 
-const { resolveSignatureSecret } = __testables;
+const { resolveSignatureSecret, assertPairedSignatureOnCreate } = __testables;
 
 const ENV_VAR = 'OMNI_TEST_WEBHOOK_SECRET';
 
-afterEach(() => {
-  delete process.env[ENV_VAR];
+// resolveSignatureSecret reads process.env at call time. Clear the variable
+// before EVERY test (so the unset-variable case cannot read a host-provided
+// value, even when run alone) and hand the host's value back after the suite.
+const hostValue = process.env[ENV_VAR];
+
+beforeEach(() => {
+  Reflect.deleteProperty(process.env, ENV_VAR);
+});
+
+afterAll(() => {
+  if (hostValue === undefined) Reflect.deleteProperty(process.env, ENV_VAR);
+  else process.env[ENV_VAR] = hostValue;
 });
 
 describe('resolveSignatureSecret', () => {
@@ -72,6 +82,25 @@ describe('resolveSignatureSecret', () => {
     await expect(resolveSignatureSecret({ signatureSecretEnv: ENV_VAR })).rejects.toThrow('at most 512 characters');
     await expect(resolveSignatureSecret({ signatureSecretStdin: true }, async () => 'tiny\n')).rejects.toThrow(
       'at least 8 characters',
+    );
+  });
+});
+
+describe('assertPairedSignatureOnCreate', () => {
+  const config = { algorithm: 'hmac-sha256', header: 'X-Hub-Signature-256' } as const;
+
+  test('neither or both is fine', () => {
+    expect(() => assertPairedSignatureOnCreate(undefined, undefined)).not.toThrow();
+    expect(() => assertPairedSignatureOnCreate(config, 'long-enough-secret')).not.toThrow();
+  });
+
+  test('a config without a secret fails before any request is sent', () => {
+    expect(() => assertPairedSignatureOnCreate(config, undefined)).toThrow('require a signature secret');
+  });
+
+  test('a secret without a config fails before any request is sent', () => {
+    expect(() => assertPairedSignatureOnCreate(undefined, 'long-enough-secret')).toThrow(
+      'requires --signature-algorithm and --signature-header',
     );
   });
 });

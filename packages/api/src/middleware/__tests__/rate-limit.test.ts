@@ -33,6 +33,20 @@ describe('resolveClientIp', () => {
     expect(resolveClientIp('', undefined)).toBeUndefined();
     expect(resolveClientIp(',', undefined)).toBeUndefined();
   });
+
+  test('a hop that is not an IP literal yields no identifier instead of an attacker-shaped key', () => {
+    // A port suffix would otherwise give every connection its own bucket.
+    expect(resolveClientIp('1.1.1.1, 203.0.113.7:5678', '10.0.0.1')).toBeUndefined();
+    expect(resolveClientIp('[::1]:8080', '10.0.0.1')).toBeUndefined();
+    expect(resolveClientIp('not-an-address', '10.0.0.1')).toBeUndefined();
+    expect(resolveClientIp('999.1.1.1', '10.0.0.1')).toBeUndefined();
+    expect(resolveClientIp(undefined, 'garbage')).toBeUndefined();
+  });
+
+  test('IPv6 and IPv4-mapped IPv6 peers (what Bun reports on dual-stack sockets) are accepted', () => {
+    expect(resolveClientIp(undefined, '::ffff:127.0.0.1')).toBe('::ffff:127.0.0.1');
+    expect(resolveClientIp('2001:db8::1', undefined)).toBe('2001:db8::1');
+  });
 });
 
 describe('rateLimitMiddleware behind a trusted proxy', () => {

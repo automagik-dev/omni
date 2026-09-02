@@ -114,6 +114,25 @@ function buildSignatureConfig(options: {
   return { algorithm, header: signatureHeader, prefix: signaturePrefix };
 }
 
+/**
+ * Create-only pairing: the API rejects a `signatureConfig` without a secret
+ * and a secret without a config (CreateWebhookSourceSchema). Fail here, before
+ * the request, the same way the secret bounds do. Update is deliberately not
+ * covered — a secret-only update rotates the secret against the stored config.
+ */
+function assertPairedSignatureOnCreate(
+  signatureConfig: WebhookSignatureConfigBody | undefined,
+  signatureSecret: string | undefined,
+): void {
+  if ((signatureConfig === undefined) === (signatureSecret === undefined)) return;
+  if (signatureConfig === undefined) {
+    throw new Error(
+      `a signature secret (${SECRET_SOURCE_FLAGS}) requires --signature-algorithm and --signature-header`,
+    );
+  }
+  throw new Error(`--signature-algorithm and --signature-header require a signature secret (${SECRET_SOURCE_FLAGS})`);
+}
+
 export function createWebhooksCommand(): Command {
   const webhooks = new Command('webhooks').description('Manage webhook sources');
 
@@ -210,6 +229,7 @@ export function createWebhooksCommand(): Command {
 
           const signatureConfig = buildSignatureConfig(options);
           const signatureSecret = await resolveSignatureSecret(options);
+          assertPairedSignatureOnCreate(signatureConfig, signatureSecret);
 
           const source = await client.webhooks.createSource({
             name: options.name,
@@ -367,4 +387,4 @@ export function createWebhooksCommand(): Command {
 }
 
 /** Test-only surface — not part of the CLI contract. */
-export const __testables = { resolveSignatureSecret, buildSignatureConfig };
+export const __testables = { resolveSignatureSecret, buildSignatureConfig, assertPairedSignatureOnCreate };

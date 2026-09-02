@@ -185,7 +185,9 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
     operationId: 'receiveWebhook',
     tags: ['Webhooks'],
     summary: 'Receive webhook',
-    description: 'Receive webhook from external system. Creates a custom event.',
+    description:
+      'Receive webhook from external system. Creates a custom event. An empty body is accepted as an empty ' +
+      'payload; a non-empty body that is not a JSON object (malformed, array, scalar) is rejected.',
     request: {
       params: z.object({ source: z.string().openapi({ description: 'Source name' }) }),
       body: { content: { 'application/json': { schema: z.record(z.string(), z.unknown()) } } },
@@ -195,6 +197,7 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
         description: 'Webhook received',
         content: { 'application/json': { schema: WebhookReceiveResponseSchema } },
       },
+      400: { description: 'Body is not a JSON object', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
 
@@ -207,7 +210,8 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
     description:
       'Auth-exempt receiver for third-party webhook senders. Requires the source to have a signature ' +
       'configuration; the request is verified against it (HMAC over the raw body, or token match) before any ' +
-      'event is published. Unknown, disabled, unconfigured, or badly signed requests all return the same 401.',
+      'event is published. Unknown, disabled, unconfigured, or badly signed requests all return the same 401. ' +
+      'A non-empty body that is not a JSON object (malformed, array, scalar) is rejected with 400.',
     security: [],
     request: {
       params: z.object({ source: z.string().openapi({ description: 'Source name' }) }),
@@ -218,6 +222,7 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
         description: 'Webhook received',
         content: { 'application/json': { schema: WebhookReceiveResponseSchema } },
       },
+      400: { description: 'Body is not a JSON object', content: { 'application/json': { schema: ErrorSchema } } },
       401: { description: 'Verification failed', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });

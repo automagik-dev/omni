@@ -971,7 +971,7 @@ export interface paths {
         put?: never;
         /**
          * Receive webhook
-         * @description Receive webhook from external system. Creates a custom event.
+         * @description Receive webhook from external system. Creates a custom event. An empty body is accepted as an empty payload; a non-empty body that is not a JSON object (malformed, array, scalar) is rejected.
          */
         post: operations["receiveWebhook"];
         delete?: never;
@@ -991,7 +991,7 @@ export interface paths {
         put?: never;
         /**
          * Public webhook ingress
-         * @description Auth-exempt receiver for third-party webhook senders. Requires the source to have a signature configuration; the request is verified against it (HMAC over the raw body, or token match) before any event is published. Unknown, disabled, unconfigured, or badly signed requests all return the same 401.
+         * @description Auth-exempt receiver for third-party webhook senders. Requires the source to have a signature configuration; the request is verified against it (HMAC over the raw body, or token match) before any event is published. Unknown, disabled, unconfigured, or badly signed requests all return the same 401. A non-empty body that is not a JSON object (malformed, array, scalar) is rejected with 400.
          */
         post: operations["receiveWebhookIngress"];
         delete?: never;
@@ -10654,6 +10654,27 @@ export interface operations {
                     };
                 };
             };
+            /** @description Body is not a JSON object */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
         };
     };
     receiveWebhookIngress: {
@@ -10689,6 +10710,27 @@ export interface operations {
                         source: string;
                         /** @description Event type */
                         eventType: string;
+                    };
+                };
+            };
+            /** @description Body is not a JSON object */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
                     };
                 };
             };

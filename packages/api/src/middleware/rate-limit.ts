@@ -5,6 +5,7 @@
  */
 
 import { createMiddleware } from 'hono/factory';
+import { z } from 'zod';
 import type { AppVariables } from '../types';
 
 interface RateLimitConfig {
@@ -42,6 +43,15 @@ const RATE_LIMITS = {
 } as const;
 
 /**
+ * A bare IPv4/IPv6 literal — the only shape a trusted proxy hop or the socket
+ * peer may take before it becomes part of a rate-limit key. A port suffix
+ * (`1.2.3.4:5678`), brackets, or arbitrary text is not an address: keyed as-is
+ * it would hand every connection its own bucket (ephemeral ports) or let the
+ * header author shape the key.
+ */
+const clientIpSchema = z.string().ip();
+
+/**
  * Pick the client IP for the per-IP bucket.
  *
  * `TRUSTED_PROXY_HEADER` names a header the deployment's OWN reverse proxy
@@ -57,6 +67,10 @@ const RATE_LIMITS = {
  *
  * Without the env var the header is ignored entirely and the socket peer
  * address is used, so a forged header can never influence the bucket.
+ *
+ * The selected hop must validate as an IP literal; otherwise no IP is
+ * resolved and the request lands in the shared anonymous bucket rather than
+ * under a key shaped by whoever wrote the value.
  */
 export function resolveClientIp(
   trustedProxyHeaderValue: string | undefined,
@@ -68,7 +82,8 @@ export function resolveClientIp(
     .split(',')
     .map((hop) => hop.trim())
     .filter(Boolean);
-  return hops.at(-1);
+  const parsed = clientIpSchema.safeParse(hops.at(-1));
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**
