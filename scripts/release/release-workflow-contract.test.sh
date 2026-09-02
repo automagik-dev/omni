@@ -158,7 +158,11 @@ else:
     require(image_build, r"verify-oci-release\.sh[\s\S]{0,200}--source-dir\s+\"\$\{GITHUB_WORKSPACE\}\"", "candidate minting does not run the immutable identity preflight on the checked-out source")
     require(image_build, r"grep -qx 'publish_required=true'", "candidate minting can rebuild an already published version alias")
     require(image_build, r"docker/build-push-action@[0-9a-f]{40}", "candidate minting does not build with the pinned build-push action")
-    require(image_build, r"^\s+tags: \|\n\s+\$\{\{ env\.IMAGE \}\}:v\$\{\{ inputs\.version \}\}\n\s+cache-from:", "candidate minting pushes a tag other than the exact v<version> alias")
+    require(image_build, r"^\s+tags: \|\n\s+\$\{\{ env\.IMAGE \}\}:v\$\{\{ inputs\.version \}\}\n(?:\s+#[^\n]*\n)*\s+provenance: true", "candidate minting pushes a tag other than the exact v<version> alias")
+    # The GHA BuildKit cache is mutable and shared by scope; layers imported
+    # from it would shape an immutable candidate outside its attested source.
+    forbid(image_build, r"cache-(?:from|to):|type=gha", "candidate minting imports or exports a mutable BuildKit cache")
+    require(image_build, r"docker buildx imagetools inspect --raw \"\$\{IMAGE\}@\$\{DIGEST\}\"[\s\S]{0,300}json\.load\([\s\S]{0,400}application/vnd\.oci\.image\.index\.v1\+json[\s\S]{0,600}\{\"linux/amd64\", \"linux/arm64\"\}", "candidate minting does not verify the raw OCI index media type and platforms as JSON")
     require(image_build, r"platforms:\s*linux/amd64,linux/arm64", "candidate minting does not build both supported platforms")
     require(image_build, r"actions/attest-build-provenance@[0-9a-f]{40}[\s\S]{0,300}push-to-registry:\s*true", "candidate minting does not register GitHub provenance in the registry")
     require(image_build, r"verify-oci-alias\.sh", "candidate minting does not read back the published alias digest")

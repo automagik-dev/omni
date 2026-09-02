@@ -177,8 +177,12 @@ jobs:
           # candidate identity is the version tag plus the index digest.
           tags: |
             ${{ env.IMAGE }}:v${{ inputs.version }}
-          cache-from: type=gha,scope=omni-api
-          cache-to: type=gha,mode=max,scope=omni-api
+          # No BuildKit cache import or export. An immutable candidate is built
+          # from its source alone: the GHA cache is mutable and shared with
+          # whatever else writes the scope (any branch's build, an earlier
+          # candidate), and layers pulled from it would shape the published
+          # image without appearing in the attested source. A cold two-platform
+          # build is the price of that.
           provenance: true
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -254,19 +258,28 @@ jobs:
           [[ "${GITHUB_REF}" == "refs/tags/v${VERSION}" ]]
           scripts/release/verify-oci-alias.sh \
             --image "${IMAGE}" --version "${VERSION}" --expected-digest "${DIGEST}"
-          docker buildx imagetools inspect "${IMAGE}@${DIGEST}" > "${RUNNER_TEMP}/image-index.txt"
-          python3 - "${RUNNER_TEMP}/image-index.txt" <<'PY'
+          # --raw returns the index exactly as the registry stores it; the
+          # default rendering is human-oriented and not a stable contract.
+          docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}" > "${RUNNER_TEMP}/image-index.json"
+          python3 - "${RUNNER_TEMP}/image-index.json" <<'PY'
+          import json
           import sys
 
-          text = open(sys.argv[1], encoding="utf-8").read()
-          required = (
-              "MediaType: application/vnd.oci.image.index.v1+json",
-              "Platform:    linux/amd64",
-              "Platform:    linux/arm64",
-          )
-          missing = [value for value in required if value not in text]
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              index = json.load(handle)
+          if not isinstance(index, dict):
+              raise SystemExit("verified artifact is not a JSON object")
+          media_type = index.get("mediaType")
+          if media_type != "application/vnd.oci.image.index.v1+json":
+              raise SystemExit(f"verified artifact is not an OCI image index: {media_type!r}")
+          platforms = set()
+          for manifest in index.get("manifests", []):
+              platform = manifest.get("platform") if isinstance(manifest, dict) else None
+              if isinstance(platform, dict):
+                  platforms.add(f"{platform.get('os')}/{platform.get('architecture')}")
+          missing = sorted({"linux/amd64", "linux/arm64"} - platforms)
           if missing:
-              raise SystemExit(f"verified OCI index is missing: {missing}")
+              raise SystemExit(f"verified OCI index is missing platforms: {missing}")
           PY
           gh attestation verify "oci://${IMAGE}@${DIGEST}" \
             --repo "${GITHUB_REPOSITORY}" \
