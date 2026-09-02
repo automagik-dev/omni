@@ -7,15 +7,88 @@
  * omni webhooks update <id> [--name <name>] [--enabled]
  * omni webhooks delete <id>
  * omni webhooks trigger --type <event-type> --payload <json> [--instance <id>]
+ *
+ * The signature secret can come from argv (`--signature-secret`, visible in
+ * shell history and `ps`), an environment variable (`--signature-secret-env`),
+ * or stdin (`--signature-secret-stdin`, for `pass show ... | omni webhooks ...`).
  */
 
 import type { WebhookSignatureConfigBody } from '@omni/sdk';
 import { Command } from 'commander';
+import { z } from 'zod';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveWebhookId } from '../resolve.js';
 
 const SIGNATURE_ALGORITHMS = ['hmac-sha256', 'hmac-sha1', 'token-match'] as const;
+
+/** Same bounds the API enforces on `signatureSecret` (schemas/openapi/webhooks.ts). */
+const signatureSecretSchema = z.string().min(8, 'at least 8 characters').max(512, 'at most 512 characters');
+
+const SECRET_SOURCE_FLAGS = '--signature-secret, --signature-secret-env, --signature-secret-stdin';
+
+interface SignatureSecretOptions {
+  signatureSecret?: string;
+  signatureSecretEnv?: string;
+  signatureSecretStdin?: boolean;
+}
+
+/** Read all of stdin as UTF-8 (raw; the caller strips the trailing newline). */
+async function readSecretFromStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString('utf-8');
+}
+
+/**
+ * Resolve the signature secret from exactly one of the three sources, or
+ * undefined when none is given. Throws (caught by the command's error path)
+ * on conflicting flags, a missing/empty env var, empty stdin, or a value
+ * outside the API's bounds — the CLI fails before any request is sent.
+ */
+async function resolveSignatureSecret(
+  options: SignatureSecretOptions,
+  readStdin: () => Promise<string> = readSecretFromStdin,
+): Promise<string | undefined> {
+  const sources = [
+    options.signatureSecret !== undefined,
+    options.signatureSecretEnv !== undefined,
+    options.signatureSecretStdin === true,
+  ].filter(Boolean).length;
+  if (sources === 0) return undefined;
+  if (sources > 1) {
+    throw new Error(`Use only one of ${SECRET_SOURCE_FLAGS}`);
+  }
+
+  let raw: string | undefined;
+  let origin: string;
+  if (options.signatureSecretEnv !== undefined) {
+    const name = options.signatureSecretEnv;
+    if (!name) throw new Error('--signature-secret-env requires a variable name');
+    raw = process.env[name];
+    origin = `environment variable ${name}`;
+    if (raw === undefined || raw === '') {
+      throw new Error(`${origin} is not set or empty`);
+    }
+  } else if (options.signatureSecretStdin) {
+    // Strip exactly one trailing line break — `echo`/`pass show` append one.
+    raw = (await readStdin()).replace(/\r?\n$/, '');
+    origin = 'stdin';
+    if (!raw) throw new Error('no secret received on stdin');
+  } else {
+    raw = options.signatureSecret;
+    origin = '--signature-secret';
+  }
+
+  const parsed = signatureSecretSchema.safeParse(raw);
+  if (!parsed.success) {
+    const reason = parsed.error.issues.map((issue) => issue.message).join('; ');
+    throw new Error(`Invalid signature secret from ${origin}: ${reason}`);
+  }
+  return parsed.data;
+}
 
 /** Assemble a signatureConfig from the --signature-* flags, or undefined when none given. */
 function buildSignatureConfig(options: {
@@ -101,7 +174,12 @@ export function createWebhooksCommand(): Command {
     .option('--signature-algorithm <alg>', 'Signature verification: hmac-sha256, hmac-sha1, or token-match')
     .option('--signature-header <name>', 'Header carrying the signature/token (e.g., X-Hub-Signature-256)')
     .option('--signature-prefix <prefix>', "Prefix before the hex digest (e.g., 'sha256=')")
-    .option('--signature-secret <secret>', 'Shared secret for signature verification (write-only)')
+    .option(
+      '--signature-secret <secret>',
+      'Shared secret for signature verification (write-only). Visible in shell history and process lists — prefer --signature-secret-env or --signature-secret-stdin',
+    )
+    .option('--signature-secret-env <VAR>', 'Read the shared secret from environment variable VAR')
+    .option('--signature-secret-stdin', 'Read the shared secret from stdin (trailing newline stripped)')
     .action(
       async (options: {
         name: string;
@@ -112,6 +190,8 @@ export function createWebhooksCommand(): Command {
         signatureHeader?: string;
         signaturePrefix?: string;
         signatureSecret?: string;
+        signatureSecretEnv?: string;
+        signatureSecretStdin?: boolean;
       }) => {
         const client = getClient();
 
@@ -126,6 +206,7 @@ export function createWebhooksCommand(): Command {
           }
 
           const signatureConfig = buildSignatureConfig(options);
+          const signatureSecret = await resolveSignatureSecret(options);
 
           const source = await client.webhooks.createSource({
             name: options.name,
@@ -133,7 +214,7 @@ export function createWebhooksCommand(): Command {
             enabled: !options.disabled,
             expectedHeaders,
             signatureConfig,
-            signatureSecret: options.signatureSecret,
+            signatureSecret,
           });
 
           const details: Record<string, unknown> = {
@@ -164,7 +245,12 @@ export function createWebhooksCommand(): Command {
     .option('--signature-algorithm <alg>', 'Signature verification: hmac-sha256, hmac-sha1, or token-match')
     .option('--signature-header <name>', 'Header carrying the signature/token (e.g., X-Hub-Signature-256)')
     .option('--signature-prefix <prefix>', "Prefix before the hex digest (e.g., 'sha256=')")
-    .option('--signature-secret <secret>', 'Shared secret for signature verification (write-only)')
+    .option(
+      '--signature-secret <secret>',
+      'Shared secret for signature verification (write-only). Visible in shell history and process lists — prefer --signature-secret-env or --signature-secret-stdin',
+    )
+    .option('--signature-secret-env <VAR>', 'Read the shared secret from environment variable VAR')
+    .option('--signature-secret-stdin', 'Read the shared secret from stdin (trailing newline stripped)')
     .option('--clear-signature', 'Remove the signature config and stored secret')
     .action(
       async (
@@ -178,6 +264,8 @@ export function createWebhooksCommand(): Command {
           signatureHeader?: string;
           signaturePrefix?: string;
           signatureSecret?: string;
+          signatureSecretEnv?: string;
+          signatureSecretStdin?: boolean;
           clearSignature?: boolean;
         },
       ) => {
@@ -201,7 +289,8 @@ export function createWebhooksCommand(): Command {
           } else {
             const signatureConfig = buildSignatureConfig(options);
             if (signatureConfig) updates.signatureConfig = signatureConfig;
-            if (options.signatureSecret) updates.signatureSecret = options.signatureSecret;
+            const signatureSecret = await resolveSignatureSecret(options);
+            if (signatureSecret) updates.signatureSecret = signatureSecret;
           }
 
           const source = await client.webhooks.updateSource(resolvedId, updates);
@@ -273,3 +362,6 @@ export function createWebhooksCommand(): Command {
 
   return webhooks;
 }
+
+/** Test-only surface — not part of the CLI contract. */
+export const __testables = { resolveSignatureSecret, buildSignatureConfig };
