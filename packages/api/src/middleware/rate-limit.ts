@@ -4,9 +4,13 @@
  * Simple in-memory rate limiter. For production, use Redis-based solution.
  */
 
+import { createLogger } from '@omni/core';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
 import type { AppVariables } from '../types';
+
+const log = createLogger('api:rate-limit');
+let warnedUnparseableProxyHop = false;
 
 interface RateLimitConfig {
   windowMs: number; // Time window in milliseconds
@@ -111,6 +115,14 @@ function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general, keyPre
       | undefined;
     const remoteAddr = server?.remoteAddr ?? server?.requestIP?.(c.req.raw)?.address;
     const normalizedIp = resolveClientIp(trustedProxyIp, remoteAddr);
+    if (trustedProxyIp !== undefined && normalizedIp === undefined && !warnedUnparseableProxyHop) {
+      // Fail closed (shared anonymous bucket) but say so once, otherwise a
+      // proxy that writes `ip:port` silently throttles every client together.
+      warnedUnparseableProxyHop = true;
+      log.warn('TRUSTED_PROXY_HEADER hop is not a bare IP literal; requests share the anonymous rate-limit bucket', {
+        header: trustedProxyHeader,
+      });
+    }
     const identifier = apiKey?.id ? `api:${apiKey.id}` : normalizedIp ? `ip:${normalizedIp}` : 'anon';
 
     const key = `${keyPrefix}:${identifier}`;

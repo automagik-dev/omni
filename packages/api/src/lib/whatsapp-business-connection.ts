@@ -40,7 +40,7 @@ export interface WhatsAppBusinessConnectionSource {
  * time (not module load) so tests can mutate process.env. An absent, empty,
  * or malformed env value is ignored and the persisted snapshot is kept.
  */
-function resolveMetaApiVersion(persisted: string | null | undefined): string | undefined {
+export function resolveMetaApiVersion(persisted: string | null | undefined): string | undefined {
   const fromEnv = metaGraphApiVersionSchema.safeParse(process.env.META_GRAPH_API_VERSION);
   if (fromEnv.success) return fromEnv.data;
   return persisted ?? undefined;
