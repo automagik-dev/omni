@@ -22,7 +22,7 @@ ci = workflows["ci.yml"]
 all_workflows = "\n".join(workflows.values())
 deploy_readme = (root / "deploy/README.md").read_text(encoding="utf-8")
 claude_reference = (root / ".claude/CLAUDE.md").read_text(encoding="utf-8")
-upgrade_runbook = (root / "docs/deployment/upgrade-2.260718.1-to-2.260830.2.md").read_text(encoding="utf-8")
+upgrade_runbook = (root / "docs/deployment/upgrade-2.260830.2-to-2.260902.5.md").read_text(encoding="utf-8")
 errors: list[str] = []
 
 
@@ -110,9 +110,9 @@ def effective_job_permissions(text: str) -> dict[str, dict[str, str]]:
 require(image, r"branches:\s*\[main\]", "promotion verification is not bound to main")
 require(image, r"timeout-minutes:\s*[0-9]+", "promotion verification has no finite job timeout")
 for exact in (
-    "2.260830.2",
-    "b8c1bf20cd42b1e30974fc8d67f2b7d0fb620031",
-    "sha256:dba9b81cead5efacf9303ab75487a762fa100992dc2bb52741524a7a036b2da8",
+    "2.260902.5",
+    "ac415b97fe2a5657f7d3203bb0394eb365a97274",
+    "sha256:aafa65b3f0f96381365a955444dd7f815ab461f09c5ce1fb1f735a1be85e565d",
 ):
     if exact not in image:
         errors.append(f"promotion workflow does not pin existing candidate identity {exact}")
@@ -121,7 +121,7 @@ require(image, r"verify-oci-release\.sh", "existing immutable OCI alias is not c
 require(image, r"name:\s*Checkout immutable candidate source[\s\S]{0,500}path:\s*release-candidate", "immutable OCI verification has no separate candidate checkout")
 require(image, r"--source-dir\s+\"\$\{GITHUB_WORKSPACE\}/release-candidate\"", "immutable OCI verification does not use the candidate checkout")
 require(image, r"gh attestation verify\s+\"oci://\$\{IMAGE\}@\$\{CANDIDATE_DIGEST\}\"", "exact OCI digest provenance is not verified")
-require(image, r"--source-digest\s+\"\$\{CANDIDATE_SHA\}\"", "OCI provenance is not bound to b8c1bf20")
+require(image, r"--source-digest\s+\"\$\{CANDIDATE_SHA\}\"", "OCI provenance is not bound to ac415b97")
 require(image, r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", "OCI signer workflow identity is not constrained to the candidate minter")
 require(image, r"verify-release-assets\.py", "existing public release asset inventory is not verified read-only")
 require(image, r"cosign verify-blob", "existing release bundle signatures are not verified")
@@ -409,11 +409,11 @@ dev = json.loads((root / ".well-known/dev.json").read_text(encoding="utf-8"))
 for channel, document in (("stable", latest), ("dev", dev)):
     if document.get("channel") != channel:
         errors.append(f"{channel} public manifest has the wrong channel")
-    if document.get("version") != "2.260830.2":
-        errors.append(f"{channel} public manifest is not reconciled to v2.260830.2")
-    if document.get("released_at") != "2026-08-30T21:45:27Z":
+    if document.get("version") != "2.260902.5":
+        errors.append(f"{channel} public manifest is not reconciled to v2.260902.5")
+    if document.get("released_at") != "2026-09-02T21:48:41Z":
         errors.append(f"{channel} public manifest does not use the authoritative release timestamp")
-    if not str(document.get("tarball_base", "")).endswith("/releases/download/v2.260830.2"):
+    if not str(document.get("tarball_base", "")).endswith("/releases/download/v2.260902.5"):
         errors.append(f"{channel} public manifest has the wrong immutable tarball base")
 if (root / ".well-known/homolog.json").exists():
     errors.append("retired homolog public channel metadata still exists")
