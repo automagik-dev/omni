@@ -35,11 +35,14 @@ OCI attestation signed by `image-build.yml`.
 
 1. An operator cuts a candidate tag:
    `gh workflow run version.yml --ref dev -f candidate=true`. This bumps the
-   version, cuts `vX` on `dev`, and publishes npm `next`, but skips the
-   `release.yml` dev-prerelease dispatch so the tag stays reserved for
-   `image-build.yml`. Merged-PR bumps (and dispatches without
-   `candidate=true`) publish a dev prerelease at their tag and are never
-   mintable: a tag's channel classification is immutable
+   version and cuts `vX` on `dev`, but skips both the npm `next` publish and
+   the `release.yml` dev-prerelease dispatch so the tag stays reserved for
+   `image-build.yml`. npm trusted publishing (OIDC) can only `npm publish`,
+   never move a dist-tag, so the version must stay unpublished until the
+   mint's stable step runs `npm publish --tag latest` through OIDC.
+   Merged-PR bumps (and dispatches without `candidate=true`) publish npm
+   `next` and a dev prerelease at their tag and are never mintable: a tag's
+   channel classification is immutable
    (`verify-release-state.py --phase existing`), so `finalize` refuses a tag
    that already carries a public prerelease with
    `a dev prerelease already exists at vX; this tag cannot become stable`.

@@ -361,6 +361,7 @@ forbid(
 )
 
 version_workflow = workflows["version.yml"]
+require(version_workflow, r"name:\s*Publish to npm via OIDC[^\n]*\n\s*if:\s*inputs\.candidate != true", "a candidate cut still publishes the version to npm next, which blocks the OIDC-only stable publish")
 forbid(
     version_workflow,
     r"^concurrency:",
