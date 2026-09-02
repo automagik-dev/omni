@@ -43,7 +43,7 @@ import { type SlackDebouncedArgs, setupMessageHandlers } from './handlers/messag
 import { setupReactionHandlers } from './handlers/reactions';
 import { type SlackStatusMethod, clearTypingStatus, setSlackThreadStatus } from './handlers/typing';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
-import { createNativeStreamSender } from './senders/native-stream';
+import { type NativeStreamSender, createNativeStreamSender } from './senders/native-stream';
 import { createSlackStreamSender } from './senders/stream';
 import {
   cancelScheduledSlackMessage,
@@ -187,6 +187,13 @@ export class SlackPlugin extends BaseChannelPlugin {
   private pendingAckReactions = new Map<string, string>();
 
   /**
+   * Live native-mode stream senders keyed by `${instanceId}:${channelId}`.
+   * `agent_session_stopped` lists the streams Slack already halted; these are
+   * told so the cancel path skips chat.stopStream on them (#914).
+   */
+  private activeNativeStreams = new Map<string, Set<NativeStreamSender>>();
+
+  /**
    * Plugin-specific initialization
    */
   protected override async onInitialize(_context: PluginContext): Promise<void> {
@@ -225,6 +232,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     this.presenceStatusTimers.clear();
     this.activeThreads.clear();
     this.pendingAckReactions.clear();
+    this.activeNativeStreams.clear();
   }
 
   /**
@@ -366,6 +374,9 @@ export class SlackPlugin extends BaseChannelPlugin {
       clearTimeout(timer);
       this.presenceStatusTimers.delete(key);
     }
+    for (const key of this.activeNativeStreams.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.activeNativeStreams.delete(key);
+    }
     for (const key of this.pendingAckReactions.keys()) {
       if (key.startsWith(`${instanceId}:`)) this.pendingAckReactions.delete(key);
     }
@@ -458,36 +469,43 @@ export class SlackPlugin extends BaseChannelPlugin {
     const streamMode = resolveStreamMode(slackConfig.streamMode);
     const throttleMs = resolveStreamThrottle(slackConfig.streamThrottleMs);
 
-    const base =
-      streamMode === 'native'
-        ? createNativeStreamSender({
-            client: connection.actingClient,
-            channelId: chatId,
-            threadTs,
-            throttleMs,
-            username: slackConfig.defaultUsername,
-            iconUrl: slackConfig.defaultIconUrl,
-            iconEmoji: slackConfig.defaultIconEmoji,
-            formatMode: options?.formatMode ?? 'convert',
-            logger: this.logger,
-          })
-        : createSlackStreamSender({
-            client: connection.actingClient,
-            channelId: chatId,
-            threadTs,
-            streamMode,
-            throttleMs,
-            username: slackConfig.defaultUsername,
-            iconUrl: slackConfig.defaultIconUrl,
-            iconEmoji: slackConfig.defaultIconEmoji,
-            formatMode: options?.formatMode ?? 'convert',
-            logger: this.logger,
-          });
+    const streamKey = `${instanceId}:${chatId}`;
+    let native: NativeStreamSender | undefined;
+    let base: StreamSender;
+    if (streamMode === 'native') {
+      native = createNativeStreamSender({
+        client: connection.actingClient,
+        channelId: chatId,
+        threadTs,
+        throttleMs,
+        username: slackConfig.defaultUsername,
+        iconUrl: slackConfig.defaultIconUrl,
+        iconEmoji: slackConfig.defaultIconEmoji,
+        formatMode: options?.formatMode ?? 'convert',
+        logger: this.logger,
+      });
+      base = native;
+      this.trackNativeStream(streamKey, native);
+    } else {
+      base = createSlackStreamSender({
+        client: connection.actingClient,
+        channelId: chatId,
+        threadTs,
+        streamMode,
+        throttleMs,
+        username: slackConfig.defaultUsername,
+        iconUrl: slackConfig.defaultIconUrl,
+        iconEmoji: slackConfig.defaultIconEmoji,
+        formatMode: options?.formatMode ?? 'convert',
+        logger: this.logger,
+      });
+    }
 
     // Wrap to clean up ack reactions and typing on stream completion.
     // sendMessage handles cleanup for non-streamed replies, but streamed replies
     // bypass sendMessage entirely — reactions accumulate indefinitely without this.
     const cleanup = () => {
+      if (native) this.untrackNativeStream(streamKey, native);
       this.removeAckReaction(instanceId, chatId, connection, replyToMessageId, threadTs);
       this.clearActiveTyping(instanceId, chatId, connection, threadTs).catch(() => {});
     };
@@ -513,6 +531,36 @@ export class SlackPlugin extends BaseChannelPlugin {
         cleanup();
       },
     };
+  }
+
+  private trackNativeStream(streamKey: string, sender: NativeStreamSender): void {
+    let set = this.activeNativeStreams.get(streamKey);
+    if (!set) {
+      set = new Set();
+      this.activeNativeStreams.set(streamKey, set);
+    }
+    set.add(sender);
+  }
+
+  private untrackNativeStream(streamKey: string, sender: NativeStreamSender): void {
+    const set = this.activeNativeStreams.get(streamKey);
+    if (!set) return;
+    set.delete(sender);
+    if (set.size === 0) this.activeNativeStreams.delete(streamKey);
+  }
+
+  /**
+   * Tell the live native streams in a channel which of them Slack already
+   * halted (`agent_session_stopped.streaming_message_ts`), so the dispatcher's
+   * subsequent cancel does not call chat.stopStream on a finished stream.
+   */
+  private markStreamsStoppedByPlatform(instanceId: string, channelId: string, stoppedTs: readonly string[]): void {
+    if (stoppedTs.length === 0) return;
+    const senders = this.activeNativeStreams.get(`${instanceId}:${channelId}`);
+    if (!senders) return;
+    for (const sender of senders) {
+      sender.markStoppedByPlatform(stoppedTs);
+    }
   }
 
   /**
@@ -1213,6 +1261,10 @@ export class SlackPlugin extends BaseChannelPlugin {
     // began after the user pressed the button.
     const parsedEventTs = args.eventTs ? Number.parseFloat(args.eventTs) : Number.NaN;
     const requestedAt = Number.isFinite(parsedEventTs) ? Math.round(parsedEventTs * 1000) : Date.now();
+
+    // Slack already halted these streams; flag them BEFORE the cancel fans
+    // out so the sender's stop becomes a no-op instead of an API error.
+    this.markStreamsStoppedByPlatform(instanceId, args.channelId, args.streamingMessageTs ?? []);
 
     try {
       await this.eventBus.publish(

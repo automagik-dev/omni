@@ -154,6 +154,12 @@ function buildRawPayload(
     threadTs: meta.threadTs,
     // threadId: included for per_thread session strategy in agent-dispatcher
     threadId: !meta.isDm && meta.threadTs ? meta.threadTs : undefined,
+    // cancelThreadId: the raw Slack thread REGARDLESS of DM-ness. threadId is
+    // dropped for DMs on purpose (one session per DM), but Slack's stop button
+    // (agent_session_stopped, #914) is thread-scoped, so the dispatcher keys
+    // its per-run abort registry on this instead — otherwise every DM-thread
+    // run shares one threadless key and a stop in thread B aborts thread A.
+    cancelThreadId: meta.threadTs,
     channelType: meta.channelType,
     teamId: meta.teamId,
     isDm: meta.isDm,

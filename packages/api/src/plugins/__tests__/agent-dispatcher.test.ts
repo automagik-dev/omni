@@ -485,6 +485,117 @@ describe('agent-dispatcher', () => {
       }
     });
 
+    it('extractCancelThreadId prefers rawPayload.cancelThreadId over the session threadId (#914 M2)', () => {
+      const { extractCancelThreadId } = __test__;
+      const withBoth = [{ payload: { rawPayload: { threadId: 'session-thread', cancelThreadId: '1700.0001' } } }];
+      const dmOnly = [{ payload: { rawPayload: { threadId: undefined, cancelThreadId: '1700.0002' } } }];
+      const legacy = [{ payload: { rawPayload: { threadId: 'session-thread' } } }];
+      const malformed = [{ payload: { rawPayload: { threadId: 'session-thread', cancelThreadId: 42 } } }];
+      type Buffered = Parameters<typeof extractCancelThreadId>[0];
+
+      expect(extractCancelThreadId(withBoth as unknown as Buffered)).toBe('1700.0001');
+      expect(extractCancelThreadId(dmOnly as unknown as Buffered)).toBe('1700.0002');
+      expect(extractCancelThreadId(legacy as unknown as Buffered)).toBe('session-thread');
+      expect(extractCancelThreadId(malformed as unknown as Buffered)).toBe('session-thread');
+      expect(extractCancelThreadId([] as unknown as Buffered)).toBeUndefined();
+    });
+
+    /**
+     * Stage a provider whose trigger() stays in flight until the test resolves
+     * it, and honours abortSignal the way the real providers do.
+     */
+    function makeInFlightProvider() {
+      let finish: ((value: { runId: string }) => void) | undefined;
+      const provider = {
+        id: 'prov-1',
+        name: 'in-flight',
+        schema: 'agno',
+        mode: 'round-trip',
+        trigger: mock(
+          (t: { abortSignal?: AbortSignal }) =>
+            new Promise<{ runId: string }>((resolve, reject) => {
+              finish = resolve;
+              t.abortSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+            }),
+        ),
+      };
+      return {
+        provider: provider as unknown as Parameters<typeof __test__.triggerProviderWithCancellation>[0],
+        finish: (runId: string) => finish?.({ runId }),
+      };
+    }
+
+    function runWithCancellation(
+      provider: Parameters<typeof __test__.triggerProviderWithCancellation>[0],
+      chatId: string,
+      cancelThreadId: string | undefined,
+    ) {
+      const trigger = {
+        traceId: 'trace',
+        type: 'message',
+        source: { channelType: 'slack', instanceId: 'inst-dm', chatId, messageId: 'm', threadId: undefined },
+        content: { text: 'hi' },
+      } as unknown as Parameters<typeof __test__.triggerProviderWithCancellation>[1];
+      return __test__.triggerProviderWithCancellation(
+        provider,
+        trigger,
+        {},
+        'inst-dm',
+        chatId,
+        'trace',
+        cancelThreadId,
+      );
+    }
+
+    it('a stop in DM thread B does not abort the concurrent DM thread A run (#914 M2)', async () => {
+      const { activeRunAborts } = __test__;
+      const a = makeInFlightProvider();
+      const b = makeInFlightProvider();
+      // Both runs are Slack DMs: session threadId is undefined for both, but
+      // the raw thread_ts (cancelThreadId) differs — that is what keys them.
+      const runA = runWithCancellation(a.provider, 'D1', '1700.000A');
+      const runB = runWithCancellation(b.provider, 'D1', '1700.000B');
+      await Promise.resolve();
+
+      try {
+        expect(activeRunAborts.size).toBe(2);
+        await expect(cancelActiveAgentRun('inst-dm', 'D1', 'user_stop', { threadId: '1700.000B' })).resolves.toBe(true);
+        await expect(runB).resolves.toBeNull();
+
+        // Thread A is still in flight and still cancellable.
+        expect(activeRunAborts.size).toBe(1);
+        a.finish('run-a');
+        await expect(runA).resolves.toMatchObject({ result: { runId: 'run-a' }, cancelled: false });
+        expect(activeRunAborts.size).toBe(0);
+      } finally {
+        activeRunAborts.clear();
+      }
+    });
+
+    it('a stop after the first run finished still finds the overlapping second run (#914 M2 / LOW)', async () => {
+      const { activeRunAborts, runAbortKey } = __test__;
+      const first = makeInFlightProvider();
+      const second = makeInFlightProvider();
+      // Same abort key twice (overlapping runs on one thread): the second
+      // registration replaces the first, and the first's cleanup must NOT
+      // delete the second's entry.
+      const run1 = runWithCancellation(first.provider, 'D2', '1700.0001');
+      const run2 = runWithCancellation(second.provider, 'D2', '1700.0001');
+      await Promise.resolve();
+
+      try {
+        first.finish('run-1');
+        await expect(run1).resolves.toMatchObject({ result: { runId: 'run-1' }, cancelled: false });
+        expect(activeRunAborts.has(runAbortKey('inst-dm', 'D2', '1700.0001'))).toBe(true);
+
+        await expect(cancelActiveAgentRun('inst-dm', 'D2', 'user_stop', { threadId: '1700.0001' })).resolves.toBe(true);
+        await expect(run2).resolves.toBeNull();
+        expect(activeRunAborts.size).toBe(0);
+      } finally {
+        activeRunAborts.clear();
+      }
+    });
+
     it('returns a cleanup function that can be called without error', async () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();

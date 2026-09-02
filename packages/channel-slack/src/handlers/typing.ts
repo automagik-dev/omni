@@ -54,6 +54,15 @@ const AGENT_API_UNAVAILABLE_ERRORS = new Set([
 /**
  * Clients where `agents.sessions.setStatus` has failed with an
  * availability error — skip straight to the legacy API for these.
+ *
+ * The memo is keyed on the WebClient object itself and never cleared, so it
+ * sticks for the lifetime of that client — i.e. until the instance
+ * reconnects and a fresh client is built (a WeakSet lets the old one be
+ * collected). That is acceptable because every memoized error is a property
+ * of the app/token, not of the moment: an unknown method, a disabled
+ * feature, a missing scope, or the wrong token type only change when the
+ * Slack app is re-installed or re-authorized, which produces a new client
+ * anyway. Re-probing per call would just cost a failing round-trip each time.
  */
 const agentApiUnavailable = new WeakSet<object>();
 

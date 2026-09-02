@@ -17,6 +17,21 @@ import type { WebClient } from '@slack/web-api';
 import { createSlackStreamSender } from './stream';
 import type { StreamSenderOptions } from './stream';
 
+/**
+ * Native sender surface beyond StreamSender: lets the plugin tell a stream
+ * that Slack already halted it (agent_session_stopped.streaming_message_ts,
+ * #914) so the cancel path does not call chat.stopStream on a finished stream.
+ */
+export interface NativeStreamSender extends StreamSender {
+  /**
+   * Mark this stream as already stopped by Slack when its message `ts` is in
+   * `stoppedTs`. Returns true when the stream matched and further stop calls
+   * become no-ops; false when the ts is unknown, not listed, or this sender
+   * is running on the replace-mode fallback.
+   */
+  markStoppedByPlatform(stoppedTs: readonly string[]): boolean;
+}
+
 export interface NativeStreamSenderOptions {
   client: WebClient;
   channelId: string;
@@ -35,7 +50,7 @@ export interface NativeStreamSenderOptions {
  * If chat.startStream is unavailable (API throws on first append),
  * falls back silently to replace-mode sender and logs a warning once.
  */
-export function createNativeStreamSender(options: NativeStreamSenderOptions): StreamSender {
+export function createNativeStreamSender(options: NativeStreamSenderOptions): NativeStreamSender {
   const {
     client,
     channelId,
@@ -51,12 +66,18 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): St
   // ChatStreamer instance — created lazily on first content delta
   let streamer:
     | {
-        append: (args: { markdown_text: string }) => Promise<void>;
-        stop: (args?: { markdown_text?: string }) => Promise<void>;
+        append: (args: { markdown_text: string }) => Promise<unknown>;
+        stop: (args?: { markdown_text?: string }) => Promise<unknown>;
       }
     | undefined;
   /** Content accumulated so far — used to compute append deltas */
   let lastSentContent = '';
+  /**
+   * Slack `ts` of the streamed message, once chat.startStream has run. The
+   * SDK's ChatStreamer buffers appends (256 chars by default), so the ts is
+   * only known after the first flush — read lazily from the streamer.
+   */
+  let streamTs: string | undefined;
   /** True once stop() has been called */
   let stopped = false;
   /** Fallback sender — used if chatStream() is not available */
@@ -92,8 +113,8 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): St
         channel: string;
         thread_ts?: string;
       }) => {
-        append: (a: { markdown_text: string }) => Promise<void>;
-        stop: (a?: { markdown_text?: string }) => Promise<void>;
+        append: (a: { markdown_text: string }) => Promise<unknown>;
+        stop: (a?: { markdown_text?: string }) => Promise<unknown>;
       };
 
       streamer = chatStream.call(client, {
@@ -101,7 +122,7 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): St
         ...(threadTs ? { thread_ts: threadTs } : {}),
       });
 
-      await streamer.append({ markdown_text: firstChunk });
+      noteStreamTs(await streamer.append({ markdown_text: firstChunk }));
       lastSentContent = firstChunk;
     } catch (err) {
       logger.warn('native-stream: chat.startStream failed, falling back to replace mode', {
@@ -112,11 +133,26 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): St
     }
   }
 
+  /** Capture the message ts from a chat.startStream response, when one flushed. */
+  function noteStreamTs(response: unknown): void {
+    if (streamTs || typeof response !== 'object' || response === null) return;
+    const ts = (response as { ts?: unknown }).ts;
+    if (typeof ts === 'string' && ts.length > 0) streamTs = ts;
+  }
+
+  /** Message ts of this stream — from a flushed response or the streamer's own state. */
+  function resolveStreamTs(): string | undefined {
+    if (streamTs) return streamTs;
+    const fromStreamer = (streamer as { streamTs?: unknown } | undefined)?.streamTs;
+    if (typeof fromStreamer === 'string' && fromStreamer.length > 0) streamTs = fromStreamer;
+    return streamTs;
+  }
+
   async function appendDelta(newContent: string): Promise<void> {
     const delta = newContent.slice(lastSentContent.length);
     if (!delta) return;
     try {
-      await streamer?.append({ markdown_text: delta });
+      noteStreamTs(await streamer?.append({ markdown_text: delta }));
       lastSentContent = newContent;
     } catch (err) {
       logger.warn('native-stream: append failed', { error: String(err) });
@@ -191,6 +227,17 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): St
       if (fallback) return fallback.cancel ? fallback.cancel() : fallback.abort();
 
       await stopStream();
+    },
+
+    markStoppedByPlatform(stoppedTs) {
+      if (fallback || stopped || !streamer) return false;
+      const ts = resolveStreamTs();
+      if (!ts || !stoppedTs.includes(ts)) return false;
+      // Slack halted this stream itself; a chat.stopStream on it would only
+      // return an error. The stopped guard makes every later stop a no-op.
+      stopped = true;
+      logger.debug('native-stream: stream already halted by Slack, skipping chat.stopStream', { channelId, ts });
+      return true;
     },
   };
 }

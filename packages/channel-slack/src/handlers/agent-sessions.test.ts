@@ -78,11 +78,62 @@ describe('setupAgentSessionHandlers', () => {
   it('ignores events without a channel', async () => {
     const { app, listeners } = makeApp();
     const onSessionStopped = mock(async () => {});
-    setupAgentSessionHandlers(app, 'inst-1', { onSessionStopped }, makeLogger());
+    const logger = makeLogger();
+    setupAgentSessionHandlers(app, 'inst-1', { onSessionStopped }, logger);
 
     await listeners.get('agent_session_stopped')?.({ event: { type: 'agent_session_stopped' } });
 
     expect(onSessionStopped).not.toHaveBeenCalled();
+    // Quiet bail — a stop with no channel is not routable, not malformed.
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed payload with a warn and never invokes the callback', async () => {
+    const { app, listeners } = makeApp();
+    const onSessionStopped = mock(async () => {});
+    const logger = makeLogger();
+    setupAgentSessionHandlers(app, 'inst-1', { onSessionStopped }, logger);
+
+    await listeners.get('agent_session_stopped')?.({
+      event: {
+        type: 'agent_session_stopped',
+        channel: 'C0123ABC456',
+        thread_ts: 1782234671.392669,
+        streaming_message_ts: 'not-an-array',
+      },
+    });
+
+    expect(onSessionStopped).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const [message, context] = (logger.warn as ReturnType<typeof mock>).mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(message).toContain('malformed');
+    expect(context.channelId).toBe('C0123ABC456');
+    expect(context.issues).toEqual(expect.arrayContaining([expect.stringContaining('thread_ts')]));
+  });
+
+  it('passes unknown fields through without rejecting the event', async () => {
+    const { app, listeners } = makeApp();
+    const stops: AgentSessionStoppedArgs[] = [];
+    setupAgentSessionHandlers(
+      app,
+      'inst-1',
+      {
+        onSessionStopped: async (_instanceId, args) => {
+          stops.push(args);
+        },
+      },
+      makeLogger(),
+    );
+
+    await listeners.get('agent_session_stopped')?.({
+      event: { type: 'agent_session_stopped', channel: 'C0123ABC456', some_future_field: { nested: true } },
+    });
+
+    expect(stops).toHaveLength(1);
+    expect(stops[0]?.channelId).toBe('C0123ABC456');
   });
 
   it('tolerates a missing streaming_message_ts array', async () => {

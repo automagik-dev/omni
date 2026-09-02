@@ -74,6 +74,7 @@ import { createMediaProcessingService } from '@omni/media-processing';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import * as Sentry from '@sentry/bun';
 import { and, eq } from 'drizzle-orm';
+import { z } from 'zod';
 import { agentKeyNameCandidates } from '../lib/agent-key-name';
 import { withIdempotency } from '../lib/idempotency';
 import { sentryEnabled } from '../lib/sentry-scrub';
@@ -2265,6 +2266,26 @@ function extractThreadId(messages: BufferedMessage[]): string | undefined {
   return ((messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>).threadId as string | undefined;
 }
 
+/**
+ * rawPayload fields that scope the per-run abort registry (#914). A channel
+ * may deliberately drop `threadId` for session purposes (Slack DMs share one
+ * session across threads) while its stop affordance is still thread-scoped;
+ * `cancelThreadId` carries the raw platform thread so the abort key matches
+ * what `agent.run.cancel_requested` will later send.
+ */
+const CancelThreadPayloadSchema = z.object({ cancelThreadId: z.string().min(1).optional() });
+
+/**
+ * Thread key for activeRunAborts: the channel's explicit `cancelThreadId` when
+ * present, else the session `threadId`. Two DM-thread runs keyed only by the
+ * session thread would collapse onto one threadless entry — a stop in thread
+ * B would abort thread A, and B's cleanup would delete A's registration.
+ */
+function extractCancelThreadId(messages: BufferedMessage[]): string | undefined {
+  const parsed = CancelThreadPayloadSchema.safeParse(messages[0]?.payload.rawPayload ?? {});
+  return (parsed.success ? parsed.data.cancelThreadId : undefined) ?? extractThreadId(messages);
+}
+
 function extractKhalSessionId(messages: BufferedMessage[]): string | undefined {
   for (const message of messages) {
     const rawPayload = (message.payload.rawPayload ?? {}) as Record<string, unknown>;
@@ -2532,8 +2553,9 @@ async function dispatchViaStreamingProvider(
   // which providers propagate into the underlying SDK run. The sender rides
   // along so cancellation can halt-and-keep the partial stream output.
   const cancelController = new AbortController();
-  const runKey = runAbortKey(instance.id, chatId, rawThreadId);
-  activeRunAborts.set(runKey, { controller: cancelController, startedAt: Date.now(), sender });
+  const runKey = runAbortKey(instance.id, chatId, extractCancelThreadId(messages));
+  const runEntry: ActiveRunEntry = { controller: cancelController, startedAt: Date.now(), sender };
+  activeRunAborts.set(runKey, runEntry);
   trigger.abortSignal = cancelController.signal;
 
   const streamDispatchStart = Date.now();
@@ -2582,7 +2604,9 @@ async function dispatchViaStreamingProvider(
     return false;
   } finally {
     activeStreams.delete(streamKey);
-    activeRunAborts.delete(runKey);
+    // Only drop OUR registration: an overlapping run under the same key may
+    // have replaced it, and deleting blindly would leave that run uncancellable.
+    if (activeRunAborts.get(runKey) === runEntry) activeRunAborts.delete(runKey);
   }
 }
 
@@ -2945,10 +2969,12 @@ async function triggerProviderWithCancellation(
   instanceId: string,
   chatId: string,
   traceId: string,
+  cancelThreadId: string | undefined = trigger.source.threadId,
 ): Promise<{ result: Awaited<ReturnType<IAgentProvider['trigger']>>; cancelled: boolean } | null> {
   const cancelController = new AbortController();
-  const runKey = runAbortKey(instanceId, chatId, trigger.source.threadId);
-  activeRunAborts.set(runKey, { controller: cancelController, startedAt: Date.now() });
+  const runKey = runAbortKey(instanceId, chatId, cancelThreadId);
+  const runEntry: ActiveRunEntry = { controller: cancelController, startedAt: Date.now() };
+  activeRunAborts.set(runKey, runEntry);
 
   try {
     const result = await withLifecycleSpan('omni.dispatch_to_agno', spanAttributes, () =>
@@ -2966,7 +2992,8 @@ async function triggerProviderWithCancellation(
     }
     throw err;
   } finally {
-    activeRunAborts.delete(runKey);
+    // See dispatchViaStreamingProvider: only our own registration is ours to drop.
+    if (activeRunAborts.get(runKey) === runEntry) activeRunAborts.delete(runKey);
   }
 }
 
@@ -3129,6 +3156,7 @@ async function dispatchViaProvider(
         instance.id,
         chatId,
         traceId,
+        extractCancelThreadId(messages),
       );
       if (!triggerOutcome) return true;
       const { result, cancelled: runCancelled } = triggerOutcome;
@@ -3935,6 +3963,7 @@ function takeQueuedAck(chatKey: string): AckHandle | undefined {
  */
 async function ackQueuedMessage(info: QueuedBehindActiveRunInfo): Promise<void> {
   const chatKey = `${info.instanceId}:${info.chatId}`;
+  let entry: { handle?: AckHandle; at: number } | undefined;
   try {
     const existing = queuedMessageAcks.get(chatKey);
     if (existing && Date.now() - existing.at < QUEUED_ACK_TIMEOUT_MS) return;
@@ -3943,16 +3972,25 @@ async function ackQueuedMessage(info: QueuedBehindActiveRunInfo): Promise<void> 
     if (!instance || !messageId) return;
     // Reserve the slot synchronously (before the first await) so concurrent
     // enqueues for the same chat can't both pass the gate and double-ack.
-    const entry: { handle?: AckHandle; at: number } = { at: Date.now() };
+    entry = { at: Date.now() };
     queuedMessageAcks.set(chatKey, entry);
     const channel = (info.message.metadata.channelType ?? instance.channel) as ChannelType;
     const plugin = (await getPlugin(channel)) ?? null;
-    entry.handle = startAck(plugin, createPluginAckProvider(plugin), instance.id, info.chatId, messageId, channel, {
+    const handle = startAck(plugin, createPluginAckProvider(plugin), instance.id, info.chatId, messageId, channel, {
       ...buildAckConfig(instance),
       ackTimeoutMs: QUEUED_ACK_TIMEOUT_MS,
     });
+    // The flush may have taken (or a newer enqueue replaced) our slot during
+    // the getPlugin await. Nobody will ever release a handle that is not in
+    // the map, so disarm it now rather than leaving its 120s timer to strip
+    // the successor's reaction.
+    if (queuedMessageAcks.get(chatKey) !== entry) {
+      handle.release();
+      return;
+    }
+    entry.handle = handle;
   } catch (error) {
-    queuedMessageAcks.delete(chatKey);
+    if (entry && queuedMessageAcks.get(chatKey) === entry) queuedMessageAcks.delete(chatKey);
     log.debug('Failed to ack queued message', { chatId: info.chatId, error: String(error) });
   }
 }
@@ -6546,6 +6584,11 @@ export const __test__ = {
   // assert the thread-scoped lookup + requestedAt guard.
   activeRunAborts,
   runAbortKey,
+  extractCancelThreadId,
+  triggerProviderWithCancellation,
+  ackQueuedMessage,
+  takeQueuedAck,
+  queuedMessageAcks,
   // Read helpers converted in the G5 read-path leg — exported so the
   // worker-scope probes can assert their threading contract directly.
   resolveQuotedMessage,
