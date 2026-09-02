@@ -396,10 +396,23 @@ jobs:
             exit 1
           }
 
+          # Fail closed on lookup errors: only an explicit 404 means "no release".
+          # A permission, rate-limit, or transient failure must not be mistaken
+          # for an absent release and start a second publication.
           release_exists=false
-          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > "${RUNNER_TEMP}/release.json" 2>/dev/null; then
-            release_exists=true
-          fi
+          lookup_status=$(curl -sS -o "${RUNNER_TEMP}/release.json" -w '%{http_code}' \
+            --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")
+          case "${lookup_status}" in
+            200) release_exists=true ;;
+            404) release_exists=false ;;
+            *)
+              echo "::error::release lookup for ${tag} returned HTTP ${lookup_status}; refusing to guess"
+              exit 1
+              ;;
+          esac
           if [[ "${release_exists}" == "true" ]]; then
             release_state=$(jq -r '[.draft,.prerelease] | @tsv' "${RUNNER_TEMP}/release.json")
             # A public dev prerelease pins the tag's channel classification
