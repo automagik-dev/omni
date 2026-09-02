@@ -81,7 +81,10 @@ ever ask you to configure registry auth for these images.
 
 Provenance is verifiable for the already-published public candidate. The
 verification-only `main` workflow checks the existing SLSA and GitHub-native
-attestations; it does not create them:
+attestations; it does not create them. They are created when an operator mints
+a candidate with the dispatch-only `image-build.yml` at an exact `v<version>`
+tag (`gh workflow run image-build.yml --ref refs/tags/v<version> -f version=<version>`;
+see `docs/deployment/public-launch-readiness.md`, "Candidate minting"):
 
 ```bash
 # The verifiable tag is the pinned public candidate: `.well-known/latest.json`

@@ -23,6 +23,39 @@ build-input difference between the candidate and the final main tree. It has no
 build, tag, release, alias, repository-write, cloud, Helm, kubectl, or Argo
 operation.
 
+## Candidate minting
+
+The read-only promotion above verifies a candidate; it cannot create one. New
+candidates are minted by the dispatch-only `.github/workflows/image-build.yml`
+("Mint Release Candidate"), which is also the orchestrator identity that the
+stable Release (`release.yml` `authorize`), `release-publish.yml`, and the
+stable npm publisher (`version.yml` `publish-stable`) require: each of them
+verifies an in-progress `image-build.yml` run bound to the candidate SHA and an
+OCI attestation signed by `image-build.yml`.
+
+1. `version.yml` (a merged PR to `dev`, or a manual dispatch) bumps the
+   version, cuts `vX` on `dev`, and publishes npm `next`.
+2. An operator dispatches the mint at that exact tag:
+   `gh workflow run image-build.yml --ref refs/tags/vX -f version=X`.
+   `build-push` refuses any non-dispatch entry, a ref other than
+   `refs/tags/vX`, a tag that does not resolve to the dispatched SHA, a
+   package/chart version that differs from `X`, or an already-published
+   `ghcr.io/automagik-dev/omni-api:vX` alias; then it builds the
+   `linux/amd64,linux/arm64` OCI index, pushes only the `vX` alias, and
+   registers GitHub provenance. `finalize` independently re-verifies the digest,
+   platforms, and signer identity, requires the active immutable `v*` tag
+   ruleset, dispatches `release.yml` (`channel=stable`) and `version.yml`
+   (`stable_publish_only=true`) at the same tag, and waits for both. It never
+   creates or moves a tag, pushes a branch, or writes a production pin.
+3. The run prints `CANDIDATE_VERSION=`, `CANDIDATE_SHA=`, `CANDIDATE_DIGEST=`,
+   and `RELEASE_PUBLISHED_AT=`. A reviewed commit copies those values into
+   `image-publish.yml`, `.well-known/latest.json` and `.well-known/dev.json`,
+   `deploy/helm/omni/values.yaml` `image.tag`, the contract test pins
+   (`scripts/release/release-workflow-contract.test.sh`), and the upgrade
+   runbook/rehearsal.
+4. The `dev` → `main` promotion PR carries that commit; on merge,
+   `image-publish.yml` verifies the pinned candidate read-only.
+
 ## Public repository ownership
 
 The generic Helm `image.digest` renderer remains available, but the public
@@ -45,7 +78,7 @@ final head was `b4dd27cb0e4513017de0ad69ece2a4ab03449f22`.
 | Bare-tag comment incorrectly claimed stable fallback | Fixed: the workflow states that stable requires authorized dispatch and bare tags do not release. |
 | Version channel-selector comment was orphaned | Fixed by removing the stale comment and third-channel selector. |
 | Version workflow had a trailing blank line | Fixed; the file ends after its final content plus one newline. |
-| Helm test duplicated release values | Superseded by the ownership correction: the test binds the chart's default `image.tag` to the verified public candidate in `.well-known/latest.json` (decoupled from `Chart.appVersion`, which is stamped on every dev bump although no public workflow builds images), supplies a generic valid digest, and asserts that no public production pin exists. |
+| Helm test duplicated release values | Superseded by the ownership correction: the test binds the chart's default `image.tag` to the verified public candidate in `.well-known/latest.json` (decoupled from `Chart.appVersion`, which is stamped on every dev bump although no image is built until an operator dispatches `image-build.yml` at that tag), supplies a generic valid digest, and asserts that no public production pin exists. |
 | Orchestrated release plus recovery run ID lacked coverage | Fixed with a negative regression test. |
 | Pin test did not set `GITHUB_OUTPUT` | Disproved at final head: `b4dd27cb` deliberately unsets runner-inherited `GITHUB_OUTPUT`, and the helper falls back to `/dev/stdout`. Extracting `scripts/release/pin-production-image{,.test}.sh` with `git archive b4dd27cb0e4513017de0ad69ece2a4ab03449f22` and running the extracted test returns exactly `PASS: race-safe production digest pin contract`. The obsolete pin and test are removed by this ownership change. |
 | npm post-publish readback had no retry | Fixed with bounded retries and backoff that tolerate transient registry 404/stale reads. |

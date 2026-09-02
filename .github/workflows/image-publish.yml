@@ -104,7 +104,7 @@ jobs:
           gh attestation verify "oci://${IMAGE}@${CANDIDATE_DIGEST}" \
             --repo "${GITHUB_REPOSITORY}" \
             --source-digest "${CANDIDATE_SHA}" \
-            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-publish.yml"
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-build.yml"
 
       - name: Install cosign for read-only release verification
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3

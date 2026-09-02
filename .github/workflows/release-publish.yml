@@ -50,7 +50,7 @@ on:
         required: false
         type: string
       orchestrator_run_id:
-        description: 'Stable only: exact in-progress image-publish workflow run'
+        description: 'Stable only: exact in-progress image-build workflow run'
         required: false
         type: string
       orchestrated:
@@ -149,11 +149,13 @@ jobs:
             scripts/release/verify-orchestrator-run.py \
               --run-json "${RUNNER_TEMP}/orchestrator.json" \
               --repository "${GITHUB_REPOSITORY}" \
-              --source-sha "${EXPECTED_SHA}"
+              --source-sha "${EXPECTED_SHA}" \
+              --expected-workflow .github/workflows/image-build.yml \
+              --allowed-event workflow_dispatch
             gh attestation verify "oci://${IMAGE}@${EXPECTED_DIGEST}" \
               --repo "${GITHUB_REPOSITORY}" \
               --source-digest "${EXPECTED_SHA}" \
-              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-publish.yml"
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-build.yml"
           elif [[ "${entry_mode}" == "recovery" ]]; then
             [[ "${RECOVERY_RUN_ID}" =~ ^[0-9]+$ ]]
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RECOVERY_RUN_ID}" > "${RUNNER_TEMP}/upstream-run.json"

@@ -50,7 +50,7 @@ require(image, r"name:\s*Checkout immutable candidate source[\s\S]{0,500}path:\s
 require(image, r"--source-dir\s+\"\$\{GITHUB_WORKSPACE\}/release-candidate\"", "immutable OCI verification does not use the candidate checkout")
 require(image, r"gh attestation verify\s+\"oci://\$\{IMAGE\}@\$\{CANDIDATE_DIGEST\}\"", "exact OCI digest provenance is not verified")
 require(image, r"--source-digest\s+\"\$\{CANDIDATE_SHA\}\"", "OCI provenance is not bound to b8c1bf20")
-require(image, r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-publish\.yml\"", "OCI signer workflow identity is not constrained")
+require(image, r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", "OCI signer workflow identity is not constrained to the candidate minter")
 require(image, r"verify-release-assets\.py", "existing public release asset inventory is not verified read-only")
 require(image, r"cosign verify-blob", "existing release bundle signatures are not verified")
 require(image, r"slsa-verifier verify-artifact", "existing release SLSA provenance is not verified")
@@ -67,6 +67,57 @@ for pattern, message in (
     (r"\b(?:kubectl|helm\s+(?:upgrade|install)|docker\s+service\s+update|aws\s+)", "promotion workflow can mutate production infrastructure"),
 ):
     forbid(image, pattern, message)
+
+# image-build.yml is the only public builder and the stable orchestrator: it
+# mints one immutable candidate at an exact v* tag on explicit dispatch and
+# never carries the retired push-to-main publication or the public pin.
+image_build = workflows.get("image-build.yml")
+if image_build is None:
+    errors.append("dispatch-only candidate minting workflow image-build.yml is missing")
+else:
+    require(image_build, r"^on:\n  workflow_dispatch:\n    inputs:\n      version:", "candidate minting is not a dispatch-only workflow keyed by an exact version input")
+    forbid(image_build, r"^  push:\s*$", "candidate minting can run on a branch or tag push")
+    forbid(image_build, r"pull_request", "candidate minting can run on a pull request event")
+    require(image_build, r"^permissions:\s*\{\s*\}\s*$", "candidate minting does not clear top-level token permissions")
+    require(image_build, r"^concurrency:\n(?:  #[^\n]*\n)*  group: image-build-\$\{\{ inputs\.version \}\}\n  cancel-in-progress: false", "candidate minting does not serialize per candidate version without cancellation")
+    require(image_build, r"timeout-minutes:\s*[0-9]+", "candidate minting has no finite job timeout")
+    require(image_build, r"\[\[ \"\$\{GITHUB_EVENT_NAME\}\" == \"workflow_dispatch\" \]\]", "candidate minting does not reject non-dispatch entry")
+    require(image_build, r"\[\[ \"\$\{GITHUB_REF\}\" == \"refs/tags/v\$\{VERSION\}\" \]\]", "candidate minting is not bound to the exact version tag ref")
+    require(image_build, r"verify-remote-tag\.sh[\s\S]{0,120}--mode exact", "candidate minting does not bind the remote tag to the build source")
+    require(image_build, r"verify-oci-release\.sh[\s\S]{0,200}--source-dir\s+\"\$\{GITHUB_WORKSPACE\}\"", "candidate minting does not run the immutable identity preflight on the checked-out source")
+    require(image_build, r"grep -qx 'publish_required=true'", "candidate minting can rebuild an already published version alias")
+    require(image_build, r"docker/build-push-action@[0-9a-f]{40}", "candidate minting does not build with the pinned build-push action")
+    require(image_build, r"^\s+tags: \|\n\s+\$\{\{ env\.IMAGE \}\}:v\$\{\{ inputs\.version \}\}\n\s+cache-from:", "candidate minting pushes a tag other than the exact v<version> alias")
+    require(image_build, r"platforms:\s*linux/amd64,linux/arm64", "candidate minting does not build both supported platforms")
+    require(image_build, r"actions/attest-build-provenance@[0-9a-f]{40}[\s\S]{0,300}push-to-registry:\s*true", "candidate minting does not register GitHub provenance in the registry")
+    require(image_build, r"verify-oci-alias\.sh", "candidate minting does not read back the published alias digest")
+    require(image_build, r"gh attestation verify\s+\"oci://\$\{IMAGE\}@\$\{DIGEST\}\"[\s\S]{0,300}--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", "candidate minting does not independently verify its own OCI provenance identity")
+    require(image_build, r"verify-tag-ruleset\.py", "candidate minting does not require the active immutable v* tag ruleset")
+    require(image_build, r"gh workflow run release\.yml[\s\S]{0,400}--field channel=stable[\s\S]{0,300}--field orchestrator_run_id=\"\$\{GITHUB_RUN_ID\}\"", "candidate minting does not orchestrate the stable release against its own run")
+    require(image_build, r"gh workflow run version\.yml[\s\S]{0,200}--ref \"refs/tags/v\$\{VERSION\}\"[\s\S]{0,100}--field stable_publish_only=true", "candidate minting does not orchestrate the stable npm publish at the candidate tag")
+    require(image_build, r"gh run list[\s\S]{0,200}--event workflow_dispatch", "candidate minting resolves dispatched runs from gh workflow run stdout instead of the run list")
+    forbid(image_build, r"\brelease_url=\$\(gh workflow run|\bnpm_url=\$\(gh workflow run", "candidate minting still parses gh workflow run stdout as a run id")
+    require(image_build, r'--certificate-identity\s+"https://github\.com/\$\{GITHUB_REPOSITORY\}/\.github/workflows/sign-attest\.yml@refs/tags/v\$\{VERSION\}"', "candidate minting verifies existing release assets with a non-exact signer identity")
+    forbid(image_build, r"--certificate-identity-regexp", "candidate minting accepts a regexp signer identity")
+    require(image_build, r"echo \"CANDIDATE_VERSION=\$\{VERSION\}\"\n\s+echo \"CANDIDATE_SHA=\$\{SOURCE_SHA\}\"\n\s+echo \"CANDIDATE_DIGEST=\$\{DIGEST\}\"", "candidate minting does not print the exact promotion pin values")
+    for pattern, message in (
+        (r"values-prod-gitops|pin-production-image", "candidate minting still writes a public production pin"),
+        (r"secrets:\s*inherit", "candidate minting inherits repository secrets"),
+        (r"pull_request_target", "candidate minting uses pull_request_target"),
+        (r"VERSION_BUMP_PAT", "candidate minting requests the direct-main writer credential"),
+        (r"\bgit\s+push\b", "candidate minting can move a Git ref"),
+        (r"\bgh\s+api\b[^\n]*(?:--method|-X)\s+(?:POST|PATCH|PUT|DELETE)", "candidate minting performs a mutating API call"),
+        (r"\bgh\s+release\s+(?:create|edit|upload|delete)\b", "candidate minting publishes a release directly instead of through release.yml"),
+        (r"\bnpm\s+(?:publish|dist-tag)\b", "candidate minting publishes npm directly instead of through version.yml"),
+        (r"imagetools\s+create", "candidate minting can retag an OCI manifest"),
+        (r"\b(?:kubectl|helm\s+(?:upgrade|install)|docker\s+service\s+update|aws\s+)", "candidate minting can mutate production infrastructure"),
+        (r"ref:\s*main\b", "candidate minting checks out main instead of the dispatched tag source"),
+    ):
+        forbid(image_build, pattern, message)
+    for other in ("release.yml", "release-publish.yml", "version.yml"):
+        require(workflows[other], r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", f"{other} does not bind the OCI signer to the candidate minter")
+        require(workflows[other], r"verify-orchestrator-run\.py[\s\S]{0,300}--expected-workflow \.github/workflows/image-build\.yml\s*\\\n\s+--allowed-event workflow_dispatch", f"{other} does not require an in-progress dispatch-only image-build orchestrator run")
+    forbid(all_workflows, r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-publish\.yml\"", "a workflow still treats the read-only promotion verifier as the OCI signer")
 
 if re.search(r"\bhomolog\b", all_workflows, flags=re.IGNORECASE):
     errors.append("active workflows still encode a homolog branch or channel")
