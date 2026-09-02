@@ -980,6 +980,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/ingress/{source}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Public webhook ingress
+         * @description Auth-exempt receiver for third-party webhook senders. Requires the source to have a signature configuration; the request is verified against it (HMAC over the raw body, or token match) before any event is published. Unknown, disabled, unconfigured, or badly signed requests all return the same 401.
+         */
+        post: operations["receiveWebhookIngress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events/trigger": {
         parameters: {
             query?: never;
@@ -3109,6 +3129,11 @@ export interface components {
             audioSizeKb: number;
             /** @description Audio duration in ms */
             durationMs: number;
+            /**
+             * Format: uuid
+             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+             */
+            senderAgentId?: string | null;
         };
         SendMediaRequest: {
             /**
@@ -3677,6 +3702,17 @@ export interface components {
             /** @description Reason for merge */
             reason?: string;
         };
+        WebhookSignatureConfig: {
+            /**
+             * @description How to verify: HMAC over the raw request body, or direct token match
+             * @enum {string}
+             */
+            algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+            /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+            header: string;
+            /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+            prefix?: string;
+        };
         WebhookSource: {
             /**
              * Format: uuid
@@ -3691,6 +3727,20 @@ export interface components {
             expectedHeaders: {
                 [key: string]: boolean;
             } | null;
+            /** @description Signature verification config */
+            signatureConfig: {
+                /**
+                 * @description How to verify: HMAC over the raw request body, or direct token match
+                 * @enum {string}
+                 */
+                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                header: string;
+                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                prefix?: string;
+            } | null;
+            /** @description Whether a signature secret is stored (secret is write-only) */
+            hasSignatureSecret: boolean;
             /** @description Whether enabled */
             enabled: boolean;
             /**
@@ -3705,7 +3755,7 @@ export interface components {
             updatedAt: string;
         };
         CreateWebhookSourceRequest: {
-            /** @description Unique source name */
+            /** @description Unique source name (e.g., github, stripe, agno) */
             name: string;
             /** @description Description */
             description?: string;
@@ -3713,6 +3763,20 @@ export interface components {
             expectedHeaders?: {
                 [key: string]: boolean;
             };
+            /** @description Signature verification config; required for the source to be reachable on the public ingress. Always paired with signatureSecret: a config without a stored secret is rejected (400), and clearing the config (null) also clears the stored secret. */
+            signatureConfig?: {
+                /**
+                 * @description How to verify: HMAC over the raw request body, or direct token match
+                 * @enum {string}
+                 */
+                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                header: string;
+                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                prefix?: string;
+            } | null;
+            /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
+            signatureSecret?: string | null;
             /**
              * @description Whether enabled
              * @default true
@@ -8895,6 +8959,11 @@ export interface operations {
                             audioSizeKb: number;
                             /** @description Audio duration in ms */
                             durationMs: number;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -10152,6 +10221,20 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10180,7 +10263,7 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    /** @description Unique source name */
+                    /** @description Unique source name (e.g., github, stripe, agno) */
                     name: string;
                     /** @description Description */
                     description?: string;
@@ -10188,6 +10271,20 @@ export interface operations {
                     expectedHeaders?: {
                         [key: string]: boolean;
                     };
+                    /** @description Signature verification config; required for the source to be reachable on the public ingress. Always paired with signatureSecret: a config without a stored secret is rejected (400), and clearing the config (null) also clears the stored secret. */
+                    signatureConfig?: {
+                        /**
+                         * @description How to verify: HMAC over the raw request body, or direct token match
+                         * @enum {string}
+                         */
+                        algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                        /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                        header: string;
+                        /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                        prefix?: string;
+                    } | null;
+                    /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
+                    signatureSecret?: string | null;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -10218,6 +10315,20 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10289,6 +10400,20 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10388,7 +10513,7 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    /** @description Unique source name */
+                    /** @description Unique source name (e.g., github, stripe, agno) */
                     name?: string;
                     /** @description Description */
                     description?: string;
@@ -10396,6 +10521,20 @@ export interface operations {
                     expectedHeaders?: {
                         [key: string]: boolean;
                     };
+                    /** @description Signature verification config; required for the source to be reachable on the public ingress. Always paired with signatureSecret: a config without a stored secret is rejected (400), and clearing the config (null) also clears the stored secret. */
+                    signatureConfig?: {
+                        /**
+                         * @description How to verify: HMAC over the raw request body, or direct token match
+                         * @enum {string}
+                         */
+                        algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                        /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                        header: string;
+                        /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                        prefix?: string;
+                    } | null;
+                    /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
+                    signatureSecret?: string | null;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -10426,6 +10565,20 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10498,6 +10651,65 @@ export interface operations {
                         source: string;
                         /** @description Event type */
                         eventType: string;
+                    };
+                };
+            };
+        };
+    };
+    receiveWebhookIngress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Webhook received */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Created event ID
+                         */
+                        eventId: string;
+                        /** @description Webhook source name */
+                        source: string;
+                        /** @description Event type */
+                        eventType: string;
+                    };
+                };
+            };
+            /** @description Verification failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
                     };
                 };
             };

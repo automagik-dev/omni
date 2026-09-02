@@ -48,6 +48,7 @@ export type {
   ListInstancesParams,
   CreateInstanceBody,
   SendMessageBody,
+  SentBy,
   ListEventsParams,
   SearchPersonsParams,
   ListAccessRulesParams,
