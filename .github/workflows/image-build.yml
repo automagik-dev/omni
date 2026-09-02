@@ -1,0 +1,526 @@
+# =============================================================================
+# Mint one immutable public release candidate at an exact v<version> tag.
+# =============================================================================
+# This is the only public workflow that builds the omni-api container image,
+# and it is dispatch-only. It takes over the orchestrator role that the old
+# main-push image publisher held: the stable Release (release.yml) and the
+# stable npm publication (version.yml publish-stable) both require an in-progress
+# run of THIS workflow file bound to the candidate source SHA, plus an OCI
+# attestation signed by this workflow file.
+#
+# Flow:
+#   gh workflow run version.yml --ref dev -f candidate=true
+#     cuts v<version> on dev and publishes npm `next` WITHOUT dispatching the
+#     dev prerelease. Only such a candidate cut is mintable: a merged-PR bump
+#     (or a dispatch without candidate=true) publishes a dev prerelease at the
+#     tag, and a tag's channel classification is immutable, so finalize refuses
+#     it — cut a fresh candidate instead.
+#   → gh workflow run image-build.yml --ref refs/tags/v<version> -f version=<version>
+#   → build-push: bind the tag/package/chart identity, refuse an existing
+#     v<version> alias, build the linux/amd64 + linux/arm64 OCI index, push
+#     ONLY ghcr.io/<owner>/omni-api:v<version>, attest it
+#   → finalize: independently re-verify the digest, index, platforms, and
+#     provenance; require the active v* tag ruleset; wait for any running
+#     release.yml run at the tag, refuse a dev prerelease at the tag; dispatch
+#     release.yml (channel=stable) and version.yml (stable_publish_only=true)
+#     at the same tag and wait for both; print the CANDIDATE_* values that the
+#     reviewed promotion pins (image-publish.yml, .well-known/*.json, Helm
+#     values, contract tests, upgrade runbook) are updated to.
+#
+# Recovery: if finalize fails after build-push succeeded (ruleset check,
+# run-resolution timeout, concurrent dispatch, a failed release.yml run), a
+# fresh dispatch is refused by design — the v<version> alias now exists. Use
+# "Re-run failed jobs" on the SAME run: it keeps GITHUB_RUN_ID (the
+# orchestrator_run_id the stable publishers re-verify), the build-push outputs,
+# and the in_progress state those publishers require.
+#
+# Both jobs run in the `release` environment. Configure it with required
+# reviewers (repository settings; this file cannot create it) so that a write
+# collaborator cannot publish a stable release or move npm `latest` alone.
+#
+# The main-branch promotion (image-publish.yml) stays read-only: it verifies
+# the candidate this workflow minted and never builds, tags, or publishes.
+#
+# What this workflow never does: move an existing v<version> alias or tag,
+# create a Git tag, push a branch, write a production pin, or touch a
+# cluster. There is no branch tag, no `[skip ci]` path, and no PAT.
+#
+# Actions are pinned to full commit SHAs (supply-chain hardening: this
+# workflow holds `packages: write`). Bump the SHA and the trailing version
+# comment together.
+# =============================================================================
+name: Mint Release Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Exact version without the v prefix (the run must be dispatched at refs/tags/v<version>)'
+        required: true
+        type: string
+
+concurrency:
+  # One lane per candidate version so two mints can never race the same
+  # v<version> alias or stable release state. A started mint must finish.
+  group: image-build-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  build-push:
+    name: Build and attest omni-api candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      version: ${{ inputs.version }}
+      source_sha: ${{ steps.source.outputs.sha }}
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
+    steps:
+      - name: Require an exact dispatched release-tag identity
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] || {
+            echo "::error::candidate minting is dispatch-only"
+            exit 1
+          }
+          [[ "${VERSION}" =~ ${semver} ]] || {
+            echo "::error::version must be a canonical numeric dotted version without the v prefix"
+            exit 1
+          }
+          [[ "${GITHUB_REF}" == "refs/tags/v${VERSION}" ]] || {
+            echo "::error::mint must be dispatched at refs/tags/v${VERSION}, not ${GITHUB_REF}"
+            exit 1
+          }
+          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      # LOW-23: arm64 is built under QEMU emulation (slow for the Bun
+      # install/build stages). The repo is public, so native
+      # `ubuntu-24.04-arm` runners are free; the upgrade path is a
+      # per-platform matrix (push-by-digest) + a `buildx imagetools`
+      # manifest merge. Deliberately not done here: the QEMU path is proven
+      # and a split cannot be validated before a candidate is minted.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # verify-oci-release.sh is the same preflight the read-only promotion
+      # runs: it binds HEAD and the immutable tag to the expected SHA, checks
+      # packages/cli/package.json and Chart.yaml appVersion against the
+      # version, and inspects the registry alias. Without an
+      # --expected-existing-digest it fails closed the moment
+      # ghcr.io/<owner>/omni-api:v<version> already exists, so the only
+      # success path is publish_required=true — a candidate is minted once and
+      # never rebuilt under the same version.
+      - name: Bind source identity and refuse an existing candidate alias
+        id: source
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse "HEAD^{commit}")
+          [[ "${source_sha}" == "${GITHUB_SHA}" ]] || {
+            echo "::error::checked-out source ${source_sha} is not the dispatched ${GITHUB_SHA}"
+            exit 1
+          }
+          scripts/release/verify-remote-tag.sh \
+            --remote origin --version "${VERSION}" --mode exact --expected-sha "${source_sha}"
+          preflight="${RUNNER_TEMP}/release-preflight.out"
+          GITHUB_OUTPUT="${preflight}" scripts/release/verify-oci-release.sh \
+            --source-dir "${GITHUB_WORKSPACE}" \
+            --ref "refs/tags/v${VERSION}" \
+            --expected-version "${VERSION}" \
+            --expected-sha "${source_sha}" \
+            --image "${IMAGE}"
+          grep -qx 'publish_required=true' "${preflight}" || {
+            echo "::error::${IMAGE}:v${VERSION} is already published; a candidate version is minted exactly once"
+            exit 1
+          }
+          echo "sha=${source_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # Exactly one immutable alias. No branch or short-SHA tags: the
+          # candidate identity is the version tag plus the index digest.
+          tags: |
+            ${{ env.IMAGE }}:v${{ inputs.version }}
+          # No BuildKit cache import or export. An immutable candidate is built
+          # from its source alone: the GHA cache is mutable and shared with
+          # whatever else writes the scope (any branch's build, an earlier
+          # candidate), and layers pulled from it would shape the published
+          # image without appearing in the attested source. A cold two-platform
+          # build is the price of that.
+          provenance: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            org.opencontainers.image.version=${{ inputs.version }}
+
+      - name: Read back exact published version alias
+        env:
+          VERSION: ${{ inputs.version }}
+          EXPECTED_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          scripts/release/verify-oci-alias.sh \
+            --image "${IMAGE}" --version "${VERSION}" --expected-digest "${EXPECTED_DIGEST}"
+
+      # GitHub-native provenance (Attestations API + registry referrer), so
+      # `gh attestation verify oci://…` works as deploy/README.md documents
+      # and the stable release/npm authorizers can bind the digest to this
+      # workflow file. BuildKit's inline `provenance: true` above is NOT
+      # visible to `gh`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  # Independent re-verification of the minted artifact, then orchestration of
+  # the stable Release and the stable npm publication against the same tag. This
+  # job writes no Git ref and no registry alias; its only mutations are the
+  # two dispatches, each of which re-verifies this run before publishing.
+  finalize:
+    name: Verify candidate and orchestrate stable publication
+    needs: build-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: release
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+      actions: write # gh workflow run release.yml / version.yml
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
+      DIGEST: ${{ needs.build-push.outputs.digest }}
+      VERSION: ${{ needs.build-push.outputs.version }}
+      SOURCE_SHA: ${{ needs.build-push.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Log in to GHCR for independent verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Buildx for independent index inspection
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Verify exact digest, platforms, and GitHub provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${SOURCE_SHA}" == "${GITHUB_SHA}" ]]
+          [[ "${GITHUB_REF}" == "refs/tags/v${VERSION}" ]]
+          scripts/release/verify-oci-alias.sh \
+            --image "${IMAGE}" --version "${VERSION}" --expected-digest "${DIGEST}"
+          # --raw returns the index exactly as the registry stores it; the
+          # default rendering is human-oriented and not a stable contract.
+          docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}" > "${RUNNER_TEMP}/image-index.json"
+          python3 - "${RUNNER_TEMP}/image-index.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              index = json.load(handle)
+          if not isinstance(index, dict):
+              raise SystemExit("verified artifact is not a JSON object")
+          media_type = index.get("mediaType")
+          if media_type != "application/vnd.oci.image.index.v1+json":
+              raise SystemExit(f"verified artifact is not an OCI image index: {media_type!r}")
+          platforms = set()
+          for manifest in index.get("manifests", []):
+              platform = manifest.get("platform") if isinstance(manifest, dict) else None
+              if isinstance(platform, dict):
+                  platforms.add(f"{platform.get('os')}/{platform.get('architecture')}")
+          missing = sorted({"linux/amd64", "linux/arm64"} - platforms)
+          if missing:
+              raise SystemExit(f"verified OCI index is missing platforms: {missing}")
+          PY
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --source-digest "${SOURCE_SHA}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-build.yml"
+
+      - name: Install cosign for existing release verification
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Install slsa-verifier for existing release verification
+        uses: slsa-framework/slsa-verifier/actions/installer@ea584f4502babc6f60d9bc799dbbb13c1caa9ee6 # v2.7.1
+
+      - name: Require the active immutable v* tag ruleset and the existing tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ref="refs/tags/v${VERSION}"
+          ruleset_ok=false
+          while IFS= read -r ruleset_id; do
+            [[ -n "${ruleset_id}" ]] || continue
+            gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" > "${RUNNER_TEMP}/tag-ruleset-${ruleset_id}.json"
+            if scripts/release/verify-tag-ruleset.py \
+              --ruleset-json "${RUNNER_TEMP}/tag-ruleset-${ruleset_id}.json" \
+              --tag "${ref}"; then
+              ruleset_ok=true
+              break
+            fi
+          done < <(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --paginate --jq '.[] | select(.target == "tag" and .enforcement == "active") | .id')
+          [[ "${ruleset_ok}" == "true" ]] || {
+            echo "::error::an active v* tag ruleset blocking update and deletion is required before a stable candidate is finalized"
+            exit 1
+          }
+          # version.yml already created the tag; this workflow never creates
+          # or moves one. The local and remote tag must both be the source.
+          git show-ref --verify --quiet "${ref}" || {
+            echo "::error::${ref} does not exist; cut it with version.yml before minting"
+            exit 1
+          }
+          existing_sha=$(git rev-parse "${ref}^{commit}")
+          [[ "${existing_sha}" == "${SOURCE_SHA}" ]] || {
+            echo "::error::${ref} points to ${existing_sha}, not verified source ${SOURCE_SHA}"
+            exit 1
+          }
+          scripts/release/verify-remote-tag.sh \
+            --remote origin --version "${VERSION}" --mode exact --expected-sha "${SOURCE_SHA}"
+          echo "Verified remote tag target before publication"
+
+      # The dispatching identity must stay github.token: release.yml's stable
+      # authorize job and version.yml's publish-stable job both require the
+      # actor to be github-actions[bot] and re-verify this run by id.
+      - name: Verify or publish the stable release, then publish stable npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+
+          # `gh workflow run` prints no run id. Snapshot the workflow's
+          # dispatch runs on this tag before dispatching, then poll for
+          # exactly one NEW run whose head SHA is the verified source.
+          list_runs() {
+            gh run list --repo "${GITHUB_REPOSITORY}" \
+              --workflow "$1" --branch "${tag}" --event workflow_dispatch \
+              --limit 50 --json databaseId,headSha
+          }
+          resolve_new_run() {
+            local workflow="$1" before_json="$2" after_json candidates
+            for attempt in $(seq 1 30); do
+              after_json=$(list_runs "${workflow}")
+              candidates=$(jq -r --argjson before "${before_json}" --arg sha "${SOURCE_SHA}" \
+                '[.[] | select(.headSha == $sha) | .databaseId] - [$before[] | .databaseId] | map(tostring) | join(" ")' \
+                <<<"${after_json}")
+              if [[ -n "${candidates}" ]]; then
+                printf '%s\n' "${candidates}"
+                return 0
+              fi
+              sleep 10
+            done
+            return 1
+          }
+          require_single_run() {
+            local candidates="$1" workflow="$2"
+            [[ "${candidates}" =~ ^[0-9]+$ ]] || {
+              echo "::error::could not resolve exactly one new ${workflow} run for ${tag} (got: '${candidates}')"
+              exit 1
+            }
+          }
+
+          # A release.yml run still in flight at this tag (a dev prerelease
+          # cut without candidate=true, or a stable run from a re-run of this
+          # job) must settle before the release state is read, or "no
+          # release yet" is misread and a second publisher is dispatched.
+          active_release_runs() {
+            gh run list --repo "${GITHUB_REPOSITORY}" \
+              --workflow release.yml --branch "${tag}" \
+              --limit 50 --json databaseId,status \
+              --jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested")] | length'
+          }
+          release_runs_settled=false
+          for attempt in $(seq 1 60); do
+            active=$(active_release_runs)
+            if [[ "${active}" == "0" ]]; then
+              release_runs_settled=true
+              break
+            fi
+            echo "waiting for ${active} queued/in_progress release.yml run(s) at ${tag} (attempt ${attempt}/60)"
+            sleep 30
+          done
+          [[ "${release_runs_settled}" == "true" ]] || {
+            echo "::error::a release.yml run for ${tag} is still queued or in progress; re-run this job once it settles"
+            exit 1
+          }
+
+          # Fail closed on lookup errors: only an explicit 404 means "no release".
+          # A permission, rate-limit, or transient failure must not be mistaken
+          # for an absent release and start a second publication.
+          release_exists=false
+          lookup_status=$(curl -sS -o "${RUNNER_TEMP}/release.json" -w '%{http_code}' \
+            --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")
+          case "${lookup_status}" in
+            200) release_exists=true ;;
+            404) release_exists=false ;;
+            *)
+              echo "::error::release lookup for ${tag} returned HTTP ${lookup_status}; refusing to guess"
+              exit 1
+              ;;
+          esac
+          if [[ "${release_exists}" == "true" ]]; then
+            release_state=$(jq -r '[.draft,.prerelease] | @tsv' "${RUNNER_TEMP}/release.json")
+            # A public dev prerelease pins the tag's channel classification
+            # forever (release-publish.yml verify-release-state.py --phase
+            # existing); no stable release can ever be published at this tag.
+            [[ "${release_state}" != $'false\ttrue' ]] || {
+              echo "::error::a dev prerelease already exists at v${VERSION}; this tag cannot become stable — cut a fresh candidate with \`gh workflow run version.yml --ref dev -f candidate=true\`"
+              exit 1
+            }
+            [[ "${release_state}" == $'false\tfalse' ]] || {
+              echo "::error::existing stable release is not public stable"
+              exit 1
+            }
+            verify_dir="${RUNNER_TEMP}/existing-release"
+            mkdir -p "${verify_dir}"
+            gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --dir "${verify_dir}"
+            scripts/release/verify-release-assets.py \
+              --version "${VERSION}" \
+              --release-json "${RUNNER_TEMP}/release.json" \
+              --dist "${verify_dir}"
+            for tarball in "${verify_dir}"/*.tar.gz; do
+              cosign verify-blob \
+                --bundle "${tarball}.bundle" \
+                --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml@refs/tags/v${VERSION}" \
+                --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                "${tarball}"
+              slsa-verifier verify-artifact "${tarball}" \
+                --provenance-path "${tarball}.intoto.jsonl" \
+                --source-uri "github.com/${GITHUB_REPOSITORY}" \
+                --source-tag "v${VERSION}"
+              gh attestation verify "${tarball}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --source-digest "${SOURCE_SHA}" \
+                --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml"
+            done
+            echo "Existing public release assets already match immutable v${VERSION} identity"
+          else
+            release_before=$(list_runs release.yml)
+            gh workflow run release.yml \
+              --repo "${GITHUB_REPOSITORY}" \
+              --ref "refs/tags/v${VERSION}" \
+              --field version="${VERSION}" \
+              --field channel=stable \
+              --field expected_sha="${SOURCE_SHA}" \
+              --field expected_digest="${DIGEST}" \
+              --field orchestrator_run_id="${GITHUB_RUN_ID}"
+            release_run_id=$(resolve_new_run release.yml "${release_before}") || {
+              echo "::error::dispatched release.yml run for ${tag} did not appear"
+              exit 1
+            }
+            require_single_run "${release_run_id}" release.yml
+            gh run watch "${release_run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status
+          fi
+
+          scripts/release/verify-remote-tag.sh \
+            --remote origin --version "${VERSION}" --mode exact --expected-sha "${SOURCE_SHA}"
+          echo "Verified remote tag target after publication"
+
+          # Always dispatch the hardened npm reconciler — even when version and
+          # latest already look correct — so existing package bytes, registry
+          # signatures, and available provenance attestations are reverified.
+          # Dispatched at the tag (not main) so the copy of version.yml that
+          # runs carries the same signer/orchestrator identity as this file.
+          npm_before=$(list_runs version.yml)
+          gh workflow run version.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "refs/tags/v${VERSION}" \
+            --field stable_publish_only=true \
+            --field expected_version="${VERSION}" \
+            --field expected_sha="${SOURCE_SHA}" \
+            --field expected_digest="${DIGEST}" \
+            --field orchestrator_run_id="${GITHUB_RUN_ID}" \
+            --field orchestrator_control_sha="${GITHUB_SHA}"
+          npm_run_id=$(resolve_new_run version.yml "${npm_before}") || {
+            echo "::error::dispatched stable npm run for ${tag} did not appear"
+            exit 1
+          }
+          require_single_run "${npm_run_id}" version.yml
+          gh run watch "${npm_run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status
+
+      - name: Re-check version alias after release finalization
+        run: |
+          scripts/release/verify-oci-alias.sh \
+            --image "${IMAGE}" --version "${VERSION}" --expected-digest "${DIGEST}"
+
+      - name: Write candidate receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          published_at=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v${VERSION}" --jq .published_at)
+          [[ "${published_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || {
+            echo "::error::stable release v${VERSION} has no published_at timestamp"
+            exit 1
+          }
+          {
+            echo "### Omni release candidate v${VERSION}"
+            echo "- source: \`${SOURCE_SHA}\`"
+            echo "- version: \`${VERSION}\`"
+            echo "- OCI digest: \`${DIGEST}\`"
+            echo "- release published at: \`${published_at}\`"
+            echo "- next: paste the CANDIDATE_* values below into image-publish.yml,"
+            echo "  .well-known/{latest,dev}.json, deploy/helm/omni/values.yaml image.tag,"
+            echo "  the contract test pins, and the upgrade runbook in a reviewed commit,"
+            echo "  then open the dev → main promotion."
+            echo "- mutation boundary: no tag, branch, production pin, or cluster write"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "CANDIDATE_VERSION=${VERSION}"
+          echo "CANDIDATE_SHA=${SOURCE_SHA}"
+          echo "CANDIDATE_DIGEST=${DIGEST}"
+          echo "RELEASE_PUBLISHED_AT=${published_at}"
