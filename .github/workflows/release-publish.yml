@@ -1,7 +1,8 @@
 name: Release Publish
 
 # Group 3 of v3-prerelease-trust-loop G2 (mirror of genie pattern) — attaches
-# the signed tarballs + cosign bundles + SLSA attestations produced by
+# the signed tarballs + cosign bundles + GitHub-native provenance bundles
+# produced by
 # sign-attest.yml to the v<version> GitHub Release. Public channel metadata is
 # reviewed in the dev-to-main PR and is never written after merge.
 #
@@ -11,12 +12,17 @@ name: Release Publish
 #
 # workflow_dispatch is the manual override for re-publishing or promoting
 # a draft release; it requires the upstream sign-attest run-id so the
-# 12 signed assets (4 platforms × {tarball, bundle, intoto.jsonl}) can
+# 12 signed assets (4 platforms × {tarball, bundle, provenance.json}) can
 # be downloaded from that run.
 #
 # Verification by consumers:
 #   gh release download v<version> --repo automagik-dev/omni --pattern '*.tar.gz'
 #   gh attestation verify omni-<version>-<platform>.tar.gz --owner automagik-dev
+#   # OR offline from the shipped provenance bundle:
+#   gh attestation verify omni-<version>-<platform>.tar.gz \
+#     --bundle omni-<version>-<platform>.tar.gz.provenance.json \
+#     --repo automagik-dev/omni \
+#     --signer-workflow automagik-dev/omni/.github/workflows/sign-attest.yml
 #   # OR via cosign:
 #   cosign verify-blob \
 #     --bundle omni-<version>-<platform>.tar.gz.bundle \
@@ -232,7 +238,7 @@ jobs:
           EXPECTED_ASSETS=()
           missing=()
           for platform in linux-x64-glibc linux-x64-musl linux-arm64 darwin-arm64; do
-            for suffix in "" .bundle .intoto.jsonl; do
+            for suffix in "" .bundle .provenance.json; do
               asset="omni-${VERSION}-${platform}.tar.gz${suffix}"
               EXPECTED_ASSETS+=("${asset}")
               [[ -f "${asset}" ]] || missing+=("${asset}")
@@ -263,12 +269,13 @@ jobs:
           echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
           echo "Resolved: VERSION=${VERSION} CHANNEL=${CHANNEL}"
           echo "Tarballs: ${#TARBALLS[@]}"
-          echo "=== dist/ inventory (expect 12 files: 4× tarball + 4× bundle + 4× intoto.jsonl) ==="
+          echo "=== dist/ inventory (expect 12 files: 4× tarball + 4× bundle + 4× provenance.json) ==="
           ls -la
 
       - name: Verify release-tag cosign bundles
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
@@ -277,8 +284,9 @@ jobs:
           for tarball in dist/omni-*.tar.gz; do
             [[ -f "${tarball}" ]] || continue
             bundle="${tarball}.bundle"
-            [[ -s "${tarball}" && -s "${bundle}" ]] || {
-              echo "::error::missing or empty cosign tarball/bundle pair for ${tarball}"
+            provenance="${tarball}.provenance.json"
+            [[ -s "${tarball}" && -s "${bundle}" && -s "${provenance}" ]] || {
+              echo "::error::missing or empty tarball/bundle/provenance triple for ${tarball}"
               exit 1
             }
             cosign verify-blob \
@@ -286,6 +294,14 @@ jobs:
               --certificate-identity "https://github.com/${REPOSITORY}/.github/workflows/sign-attest.yml@refs/tags/v${VERSION}" \
               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
               "${tarball}"
+            # The shipped GitHub-native provenance bundle must bind this exact
+            # tarball digest to the verified release source and to the
+            # signing workflow before any of it becomes a public asset.
+            gh attestation verify "${tarball}" \
+              --bundle "${provenance}" \
+              --repo "${REPOSITORY}" \
+              --source-digest "${GITHUB_SHA}" \
+              --signer-workflow "${REPOSITORY}/.github/workflows/sign-attest.yml"
             verified=$((verified + 1))
           done
           [[ "${verified}" -eq 4 ]] || {

@@ -15,7 +15,7 @@ name: Release
 #
 # Job topology:
 #   1. build           — workflow_call into build-tarballs.yml (matrix × 4 platforms)
-#   2. sign-attest     — workflow_call into sign-attest.yml (cosign keyless + SLSA L3)
+#   2. sign-attest     — workflow_call into sign-attest.yml (cosign keyless + GitHub-native provenance)
 #   3. publish         — workflow_call into release-publish.yml (GH release + assets)
 #   4. release-notes   — git-cliff changelog appended to the GH release body.
 #
@@ -125,7 +125,7 @@ jobs:
     needs: build
     uses: ./.github/workflows/sign-attest.yml
     permissions:
-      contents: write       # SLSA reusable nested upload-assets static check
+      contents: read        # checkout only; signing needs no Git-writing token
       id-token: write       # cosign keyless + attest-build-provenance OIDC
       attestations: write   # GitHub Attestations API registration
       actions: read         # cross-run artifact metadata

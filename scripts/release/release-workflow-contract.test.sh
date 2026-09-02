@@ -17,6 +17,7 @@ workflows = {
 image = workflows["image-publish.yml"]
 release = workflows["release.yml"]
 release_publish = workflows["release-publish.yml"]
+sign_attest = workflows["sign-attest.yml"]
 ci = workflows["ci.yml"]
 all_workflows = "\n".join(workflows.values())
 deploy_readme = (root / "deploy/README.md").read_text(encoding="utf-8")
@@ -124,7 +125,11 @@ require(image, r"--source-digest\s+\"\$\{CANDIDATE_SHA\}\"", "OCI provenance is 
 require(image, r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", "OCI signer workflow identity is not constrained to the candidate minter")
 require(image, r"verify-release-assets\.py", "existing public release asset inventory is not verified read-only")
 require(image, r"cosign verify-blob", "existing release bundle signatures are not verified")
-require(image, r"slsa-verifier verify-artifact", "existing release SLSA provenance is not verified")
+require(
+    image,
+    r'gh attestation verify "\$\{tarball\}" \\\n\s+--bundle "\$\{tarball\}\.provenance\.json" \\\n\s+--repo "\$\{GITHUB_REPOSITORY\}" \\\n\s+--source-digest "\$\{CANDIDATE_SHA\}" \\\n\s+--signer-workflow "\$\{GITHUB_REPOSITORY\}/\.github/workflows/sign-attest\.yml"',
+    "existing release provenance bundles are not verified offline against the candidate source and signer",
+)
 
 for pattern, message in (
     (r"docker/build-push-action", "promotion workflow can rebuild the candidate"),
@@ -173,6 +178,11 @@ else:
     require(image_build, r"gh run list[\s\S]{0,200}--event workflow_dispatch", "candidate minting resolves dispatched runs from gh workflow run stdout instead of the run list")
     forbid(image_build, r"\brelease_url=\$\(gh workflow run|\bnpm_url=\$\(gh workflow run", "candidate minting still parses gh workflow run stdout as a run id")
     require(image_build, r'--certificate-identity\s+"https://github\.com/\$\{GITHUB_REPOSITORY\}/\.github/workflows/sign-attest\.yml@refs/tags/v\$\{VERSION\}"', "candidate minting verifies existing release assets with a non-exact signer identity")
+    require(
+        image_build,
+        r'gh attestation verify "\$\{tarball\}" \\\n\s+--bundle "\$\{tarball\}\.provenance\.json" \\\n\s+--repo "\$\{GITHUB_REPOSITORY\}" \\\n\s+--source-digest "\$\{SOURCE_SHA\}" \\\n\s+--signer-workflow "\$\{GITHUB_REPOSITORY\}/\.github/workflows/sign-attest\.yml"',
+        "candidate minting does not verify existing release provenance bundles offline against its own source",
+    )
     forbid(image_build, r"--certificate-identity-regexp", "candidate minting accepts a regexp signer identity")
     require(image_build, r"echo \"CANDIDATE_VERSION=\$\{VERSION\}\"\n\s+echo \"CANDIDATE_SHA=\$\{SOURCE_SHA\}\"\n\s+echo \"CANDIDATE_DIGEST=\$\{DIGEST\}\"", "candidate minting does not print the exact promotion pin values")
     for pattern, message in (
@@ -227,6 +237,58 @@ else:
         require(workflows[other], r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", f"{other} does not bind the OCI signer to the candidate minter")
         require(workflows[other], r"verify-orchestrator-run\.py[\s\S]{0,300}--expected-workflow \.github/workflows/image-build\.yml\s*\\\n\s+--allowed-event workflow_dispatch", f"{other} does not require an in-progress dispatch-only image-build orchestrator run")
     forbid(all_workflows, r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-publish\.yml\"", "a workflow still treats the read-only promotion verifier as the OCI signer")
+
+# Tarball provenance is GitHub-native and produced in-repo. The repository
+# requires every action to be pinned to a full-length commit SHA; the SLSA
+# generator reusable workflow references its own helper actions by tag, so it
+# fails that rule inside the callee where no caller pin can reach. The signing
+# workflow attests each tarball with the pinned action, ships the bundle as
+# <tarball>.provenance.json, self-verifies it offline, and never needs a
+# Git-writing token.
+forbid(
+    all_workflows,
+    r"slsa-framework/|slsa-verifier|\.intoto\.jsonl",
+    "a workflow still depends on the SLSA generator, slsa-verifier, or the retired .intoto.jsonl asset",
+)
+require(
+    sign_attest,
+    r"actions/attest-build-provenance@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+subject-path:\s*dist/omni-\$\{\{ needs\.prepare\.outputs\.version \}\}-\$\{\{ matrix\.platform \}\}\.tar\.gz",
+    "tarball signing does not attest each platform tarball with the pinned GitHub-native provenance action",
+)
+require(
+    sign_attest,
+    r"ATTEST_BUNDLE_PATH:\s*\$\{\{ steps\.attest\.outputs\.bundle-path \}\}",
+    "tarball signing does not stage the attestation bundle from the action's bundle-path output",
+)
+require(
+    sign_attest,
+    r'gh attestation verify "\$\{TARBALL\}" \\\n\s+--bundle "\$\{TARBALL\}\.provenance\.json" \\\n\s+--repo "\$\{GITHUB_REPOSITORY\}" \\\n\s+--source-digest "\$\{GITHUB_SHA\}" \\\n\s+--signer-workflow "\$\{GITHUB_REPOSITORY\}/\.github/workflows/sign-attest\.yml"',
+    "tarball signing does not self-verify the shipped provenance bundle offline against the release source and signer",
+)
+require(
+    sign_attest,
+    r'gh attestation verify "\$\{MUTATED\}" \\\n\s+--bundle "\$\{TARBALL\}\.provenance\.json"',
+    "tarball signing tamper self-test does not require the provenance bundle to reject a mutated tarball",
+)
+require(
+    sign_attest,
+    r"\.tar\.gz\.bundle\n\s+dist/omni-\$\{\{ needs\.prepare\.outputs\.version \}\}-\$\{\{ matrix\.platform \}\}\.tar\.gz\.provenance\.json\n\s+retention-days",
+    "tarball signing does not upload the provenance bundle beside the tarball and cosign bundle",
+)
+forbid(sign_attest, r"contents:\s*write", "tarball signing grants a Git-writing token")
+release_sign_call = "\n".join(job_blocks(release).get("sign-attest", []))
+require(release_sign_call, r"^\s+contents:\s*read", "release orchestration does not call tarball signing with a read-only contents token")
+forbid(release_sign_call, r"contents:\s*write", "release orchestration still grants tarball signing a Git-writing token")
+require(
+    release_publish,
+    r'for suffix in "" \.bundle \.provenance\.json; do',
+    "release publication inventory does not expect the provenance bundle per platform",
+)
+require(
+    release_publish,
+    r'gh attestation verify "\$\{tarball\}" \\\n\s+--bundle "\$\{provenance\}" \\\n\s+--repo "\$\{REPOSITORY\}" \\\n\s+--source-digest "\$\{GITHUB_SHA\}" \\\n\s+--signer-workflow "\$\{REPOSITORY\}/\.github/workflows/sign-attest\.yml"',
+    "release publication does not verify every provenance bundle offline against the release source before publishing",
+)
 
 if re.search(r"\bhomolog\b", all_workflows, flags=re.IGNORECASE):
     errors.append("active workflows still encode a homolog branch or channel")

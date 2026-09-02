@@ -348,6 +348,13 @@ for name, workflow in workflows.items():
             continue
         if re.fullmatch(r"[^@]+@[0-9a-f]{40}", ref) is None:
             errors.append(f"{name} contains mutable action or reusable-workflow ref {ref}")
+        # A remote reusable workflow runs its own nested `uses:` refs under the
+        # repository's full-length-SHA pinning rule, where a caller-side pin
+        # cannot reach (the SLSA generator's tag-referenced helper actions
+        # failed every stable release this way). Only local workflows may be
+        # called; third-party logic enters through SHA-pinned actions.
+        if "/.github/workflows/" in ref:
+            errors.append(f"{name} calls remote reusable workflow {ref}; only local ./.github/workflows/*.yml calls are allowed")
 
 sign_recovery_match = re.search(
     r"- name: Authorize manual recovery release tag(?P<body>.*?)(?=^      - name: Authorize manual recovery source run)",

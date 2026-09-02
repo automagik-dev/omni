@@ -69,12 +69,13 @@ cosign verify-blob \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   omni-<version>-<platform>.tar.gz
 
-# SLSA L3 provenance verification
-slsa-verifier verify-artifact omni-<version>-<platform>.tar.gz \
-  --provenance-path omni-<version>-<platform>.tar.gz.intoto.jsonl \
-  --source-uri github.com/automagik-dev/omni
+# GitHub-native build provenance (offline, from the shipped .provenance.json)
+gh attestation verify omni-<version>-<platform>.tar.gz \
+  --bundle omni-<version>-<platform>.tar.gz.provenance.json \
+  --repo automagik-dev/omni \
+  --signer-workflow automagik-dev/omni/.github/workflows/sign-attest.yml
 
-# GitHub Attestations API
+# GitHub Attestations API (online lookup by digest)
 gh attestation verify omni-<version>-<platform>.tar.gz --owner automagik-dev
 ```
 

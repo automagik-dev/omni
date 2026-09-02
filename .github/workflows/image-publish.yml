@@ -111,9 +111,6 @@ jobs:
         with:
           cosign-release: 'v2.4.1'
 
-      - name: Install slsa-verifier for read-only release verification
-        uses: slsa-framework/slsa-verifier/actions/installer@ea584f4502babc6f60d9bc799dbbb13c1caa9ee6 # v2.7.1
-
       - name: Verify existing public release without republishing
         env:
           GH_TOKEN: ${{ github.token }}
@@ -155,10 +152,15 @@ jobs:
               --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml@refs/tags/v${CANDIDATE_VERSION}" \
               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
               "${tarball}"
-            slsa-verifier verify-artifact "${tarball}" \
-              --provenance-path "${tarball}.intoto.jsonl" \
-              --source-uri "github.com/${GITHUB_REPOSITORY}" \
-              --source-tag "v${CANDIDATE_VERSION}"
+            # Offline: the shipped Sigstore bundle must bind this tarball's
+            # digest to the candidate source and the signing workflow.
+            gh attestation verify "${tarball}" \
+              --bundle "${tarball}.provenance.json" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --source-digest "${CANDIDATE_SHA}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml"
+            # Online: the same attestation must be registered in the
+            # GitHub Attestations API under the candidate identity.
             gh attestation verify "${tarball}" \
               --repo "${GITHUB_REPOSITORY}" \
               --source-digest "${CANDIDATE_SHA}" \

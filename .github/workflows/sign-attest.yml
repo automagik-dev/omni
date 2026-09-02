@@ -1,14 +1,22 @@
 name: Sign + Attest Tarballs
 
 # Group 2 of v3-prerelease-trust-loop G2 (mirror of genie pattern) — signs
-# every tarball produced by build-tarballs.yml with cosign keyless OIDC,
-# registers a GitHub-native build-provenance attestation, and emits a SLSA
-# Level 3 provenance via the upstream slsa-github-generator reusable workflow.
-# Each tarball is then self-verified by cosign + slsa-verifier +
-# gh-attestation-verify, and a byte-flip tamper-detection self-test asserts
-# all three verifiers REJECT a mutated copy. Per-platform
-# `omni-${VERSION}-<platform>-signed` artifacts are uploaded for Group 3
-# (release-publish) to consume.
+# every tarball produced by build-tarballs.yml with cosign keyless OIDC and
+# registers a GitHub-native build-provenance attestation for it
+# (actions/attest-build-provenance, the same action image-build.yml uses for
+# the OCI image). The attestation's Sigstore bundle is shipped next to the
+# tarball as `<tarball>.provenance.json` so consumers can verify provenance
+# offline with `gh attestation verify --bundle`. Each tarball is then
+# self-verified by cosign + the offline bundle + the online Attestations API,
+# and a byte-flip tamper-detection self-test asserts all three verifiers
+# REJECT a mutated copy. Per-platform `omni-${VERSION}-<platform>-signed`
+# artifacts are uploaded for Group 3 (release-publish) to consume.
+#
+# Provenance is produced in-repo on purpose: the repository enforces
+# "Require actions to be pinned to a full-length commit SHA", and a remote
+# reusable workflow carries its own nested action refs that this policy
+# rejects. Only local `./.github/workflows/*.yml` calls and SHA-pinned actions
+# are allowed here (scripts/release/stable-release-order.test.sh).
 #
 # Trigger: orchestrated from release.yml via workflow_call (release.yml
 # passes `orchestrated: true`); also dispatchable manually via
@@ -25,13 +33,14 @@ name: Sign + Attest Tarballs
 # Renaming or relocating this file breaks `pgserve verify --slug omni`.
 #
 # Outputs (per platform, uploaded as `omni-${VERSION}-<platform>-signed`):
-#   omni-${VERSION}-<platform>.tar.gz                 (lifted from build-tarballs)
-#   omni-${VERSION}-<platform>.tar.gz.bundle          (cosign keyless sigstore bundle)
-#   omni-${VERSION}-<platform>.tar.gz.intoto.jsonl    (SLSA L3 DSSE envelope)
+#   omni-${VERSION}-<platform>.tar.gz                  (lifted from build-tarballs)
+#   omni-${VERSION}-<platform>.tar.gz.bundle           (cosign keyless sigstore bundle)
+#   omni-${VERSION}-<platform>.tar.gz.provenance.json  (GitHub-native build-provenance
+#                                                       attestation, Sigstore bundle JSON)
 #
-# The GitHub-native attestation produced by actions/attest-build-provenance
-# is NOT a separate file — it is registered in the GitHub Attestations API
-# and looked up by digest via `gh attestation verify`.
+# The same attestation is also registered in the GitHub Attestations API and
+# can be looked up online by digest via `gh attestation verify` without the
+# bundle file.
 
 on:
   workflow_call:
@@ -76,17 +85,17 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # prepare — resolve version + upstream run-id, download every tarball,
-  # build the multi-subject base64 input the SLSA generator consumes.
+  # prepare — resolve version + upstream run-id, download every tarball, and
+  # record the full digest set once so the per-platform sign jobs share one
+  # resolved version.
   # ---------------------------------------------------------------------------
   prepare:
-    name: Prepare hashes for SLSA
+    name: Prepare tarballs
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       version: ${{ steps.hash.outputs.version }}
       run_id:  ${{ steps.runid.outputs.run_id }}
-      hashes:  ${{ steps.hash.outputs.hashes }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -146,7 +155,7 @@ jobs:
           run-id: ${{ steps.runid.outputs.run_id }}
           github-token: ${{ github.token }}
 
-      - name: Resolve version + compute base64 subjects
+      - name: Resolve version + record tarball digests
         id: hash
         shell: bash
         env:
@@ -179,45 +188,26 @@ jobs:
           echo "Resolved version: ${VERSION}"
           echo "Tarballs to sign: ${#TARBALLS[@]}"
           printf '  %s\n' "${TARBALLS[@]}"
-          HASHES=$(sha256sum "${TARBALLS[@]}" | base64 -w0)
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "hashes=${HASHES}" >> "$GITHUB_OUTPUT"
-          echo "Computed multi-subject digest set:"
+          echo "Upstream tarball digest set:"
           sha256sum "${TARBALLS[@]}"
 
   # ---------------------------------------------------------------------------
-  # provenance — SLSA L3 generator (reusable workflow). Produces ONE
-  # .intoto.jsonl covering every tarball subject. The per-platform sign job
-  # downloads it and copies it to <tarball>.intoto.jsonl.
-  # ---------------------------------------------------------------------------
-  provenance:
-    name: SLSA Provenance (Level 3)
-    needs: [prepare]
-    permissions:
-      id-token: write    # OIDC for SLSA provenance signing
-      contents: write    # Required by nested `upload-assets` job static check
-      actions: read      # read upstream workflow run metadata
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
-    with:
-      base64-subjects: ${{ needs.prepare.outputs.hashes }}
-      provenance-name: omni-${{ needs.prepare.outputs.version }}.intoto.jsonl
-      upload-assets: false
-
-  # ---------------------------------------------------------------------------
   # sign — per-platform: cosign keyless sign-blob + GitHub-native
-  # attest-build-provenance + self-verify (3 verifiers) + tamper-detection
-  # self-test + per-platform signed artifact upload.
+  # attest-build-provenance (bundle staged as <tarball>.provenance.json) +
+  # self-verify (3 verifiers) + tamper-detection self-test + per-platform
+  # signed artifact upload.
   # ---------------------------------------------------------------------------
   sign:
     name: Sign ${{ matrix.platform }}
-    needs: [prepare, provenance]
+    needs: [prepare]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       actions: read        # cross-run tarball artifact download
       id-token: write       # OIDC for cosign keyless + attest-build-provenance
-      attestations: write   # actions/attest-build-provenance@v1 registration
+      attestations: write   # actions/attest-build-provenance registration
     strategy:
       fail-fast: false
       matrix:
@@ -240,35 +230,10 @@ jobs:
           run-id: ${{ needs.prepare.outputs.run_id }}
           github-token: ${{ github.token }}
 
-      - name: Download SLSA provenance artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: ${{ needs.provenance.outputs.provenance-name }}
-          path: dist
-
-      - name: Stage provenance per-platform
-        shell: bash
-        env:
-          VERSION:  ${{ needs.prepare.outputs.version }}
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          set -euo pipefail
-          SRC="dist/omni-${VERSION}.intoto.jsonl"
-          DEST="dist/omni-${VERSION}-${PLATFORM}.tar.gz.intoto.jsonl"
-          if [[ ! -s "${SRC}" ]]; then
-            echo "::error::missing or empty SLSA provenance ${SRC}"
-            exit 1
-          fi
-          cp "${SRC}" "${DEST}"
-          ls -la "${DEST}"
-
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         with:
           cosign-release: 'v2.4.1'
-
-      - name: Install slsa-verifier
-        uses: slsa-framework/slsa-verifier/actions/installer@ea584f4502babc6f60d9bc799dbbb13c1caa9ee6 # v2.7.1
 
       - name: cosign sign-blob (keyless OIDC, sigstore bundle)
         shell: bash
@@ -300,6 +265,56 @@ jobs:
         with:
           subject-path: dist/omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.tar.gz
 
+      # The action writes the attestation's Sigstore bundle (one JSON object
+      # per subject) to a temp file and exposes it as `bundle-path`. Ship it
+      # next to the tarball so provenance verifies offline from release assets.
+      - name: Stage provenance bundle as <tarball>.provenance.json
+        shell: bash
+        env:
+          ATTEST_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          VERSION:  ${{ needs.prepare.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
+          PROVENANCE="${TARBALL}.provenance.json"
+          if [[ -z "${ATTEST_BUNDLE_PATH}" || ! -s "${ATTEST_BUNDLE_PATH}" ]]; then
+            echo "::error::attest-build-provenance produced no bundle file (bundle-path='${ATTEST_BUNDLE_PATH}')"
+            exit 1
+          fi
+          cp "${ATTEST_BUNDLE_PATH}" "${PROVENANCE}"
+          python3 - "${PROVENANCE}" "${TARBALL}" <<'PY'
+          import base64
+          import hashlib
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              lines = [line for line in handle.read().splitlines() if line.strip()]
+          if len(lines) != 1:
+              raise SystemExit(f"provenance bundle must hold exactly one Sigstore bundle, found {len(lines)} lines")
+          bundle = json.loads(lines[0])
+          if not isinstance(bundle, dict):
+              raise SystemExit("provenance bundle is not a JSON object")
+          if not isinstance(bundle.get("verificationMaterial"), dict):
+              raise SystemExit("provenance bundle has no verificationMaterial")
+          envelope = bundle.get("dsseEnvelope")
+          if not isinstance(envelope, dict):
+              raise SystemExit("provenance bundle has no dsseEnvelope")
+          if envelope.get("payloadType") != "application/vnd.in-toto+json":
+              raise SystemExit(f"unexpected DSSE payloadType {envelope.get('payloadType')!r}")
+          statement = json.loads(base64.b64decode(envelope["payload"]))
+          with open(sys.argv[2], "rb") as handle:
+              digest = hashlib.sha256(handle.read()).hexdigest()
+          subjects = statement.get("subject")
+          if not isinstance(subjects, list) or len(subjects) != 1:
+              raise SystemExit("provenance statement must name exactly one subject")
+          if subjects[0].get("digest", {}).get("sha256") != digest:
+              raise SystemExit("provenance statement subject digest does not match the tarball")
+          print(f"provenance bundle bound to sha256:{digest}")
+          PY
+          ls -la "${PROVENANCE}"
+
       - name: Verify cosign bundle (self-check)
         shell: bash
         env:
@@ -315,18 +330,20 @@ jobs:
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${TARBALL}"
 
-      - name: Verify SLSA provenance (self-check)
+      - name: Verify provenance bundle offline (self-check)
         shell: bash
         env:
-          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
           VERSION:  ${{ needs.prepare.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
           TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
-          slsa-verifier verify-artifact "${TARBALL}" \
-            --provenance-path "${TARBALL}.intoto.jsonl" \
-            --source-uri "github.com/${REPOSITORY}"
+          gh attestation verify "${TARBALL}" \
+            --bundle "${TARBALL}.provenance.json" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --source-digest "${GITHUB_SHA}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml"
 
       - name: Verify GitHub-native attestation (self-check)
         shell: bash
@@ -355,8 +372,9 @@ jobs:
           cp "${TARBALL}" "${MUTATED}"
 
           # Flip the last byte. Any single-byte mutation invalidates the
-          # SHA-256 subject that cosign signed AND the SLSA subject hash
-          # AND the GitHub Attestations API digest lookup.
+          # SHA-256 subject that cosign signed AND the attested provenance
+          # subject digest in the shipped bundle AND the GitHub Attestations
+          # API digest lookup.
           SIZE=$(stat -c '%s' "${MUTATED}")
           OFFSET=$((SIZE - 1))
           ORIG_BYTE=$(xxd -p -s "${OFFSET}" -l 1 "${MUTATED}")
@@ -379,15 +397,17 @@ jobs:
           fi
           echo "OK: cosign rejected mutated tarball"
 
-          echo "-> Expecting slsa-verifier verify-artifact to REJECT mutated tarball"
-          if slsa-verifier verify-artifact "${MUTATED}" \
-              --provenance-path "${TARBALL}.intoto.jsonl" \
-              --source-uri "github.com/${REPOSITORY}" > /tmp/slsa-tamper.log 2>&1; then
-            echo "::error::slsa-verifier accepted a mutated tarball — provenance contract broken"
-            cat /tmp/slsa-tamper.log >&2 || true
+          echo "-> Expecting offline provenance bundle verification to REJECT mutated tarball"
+          if gh attestation verify "${MUTATED}" \
+              --bundle "${TARBALL}.provenance.json" \
+              --repo "${REPOSITORY}" \
+              --source-digest "${GITHUB_SHA}" \
+              --signer-workflow "${REPOSITORY}/.github/workflows/sign-attest.yml" > /tmp/bundle-tamper.log 2>&1; then
+            echo "::error::offline provenance bundle accepted a mutated tarball — provenance contract broken"
+            cat /tmp/bundle-tamper.log >&2 || true
             exit 1
           fi
-          echo "OK: slsa-verifier rejected mutated tarball"
+          echo "OK: offline provenance bundle rejected mutated tarball"
 
           echo "-> Expecting gh attestation verify to REJECT mutated tarball"
           if gh attestation verify "${MUTATED}" --owner "${OWNER}" > /tmp/gh-tamper.log 2>&1; then
@@ -406,6 +426,6 @@ jobs:
           path: |
             dist/omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.tar.gz
             dist/omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.tar.gz.bundle
-            dist/omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.tar.gz.intoto.jsonl
+            dist/omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.tar.gz.provenance.json
           retention-days: 30
           if-no-files-found: error

@@ -80,10 +80,12 @@ Adjust `ingress.host`, the dev-only passwords, and `service.type` in a copy of
 ever ask you to configure registry auth for these images.
 
 Provenance is verifiable for the already-published public candidate. The
-verification-only `main` workflow checks the existing SLSA and GitHub-native
-attestations; it does not create them. They are created when an operator mints
-a candidate with the dispatch-only `image-build.yml` at an exact `v<version>`
-tag (`gh workflow run image-build.yml --ref refs/tags/v<version> -f version=<version>`;
+verification-only `main` workflow checks the existing cosign signatures and
+GitHub-native provenance attestations (the OCI image's, and each release
+tarball's shipped `.provenance.json` bundle); it does not create them. They are
+created when an operator mints a candidate with the dispatch-only
+`image-build.yml` at an exact `v<version>` tag
+(`gh workflow run image-build.yml --ref refs/tags/v<version> -f version=<version>`;
 see `docs/deployment/public-launch-readiness.md`, "Candidate minting"):
 
 ```bash
