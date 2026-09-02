@@ -10,7 +10,7 @@ version: 0.1.0
 # v<appVersion> is not guaranteed to exist. Production authority supplies an
 # independently verified immutable digest outside this public repository.
 # Do not edit by hand — scripts/verify-versions.ts fails CI on drift.
-appVersion: "2.260902.2"
+appVersion: "2.260902.3"
 keywords:
   - omni
   - messaging
