@@ -35,6 +35,9 @@ interface SignatureSecretOptions {
 
 /** Read all of stdin as UTF-8 (raw; the caller strips the trailing newline). */
 async function readSecretFromStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    throw new Error('--signature-secret-stdin requires piped stdin (e.g. `printf %s "$SECRET" | omni webhooks ...`)');
+  }
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(Buffer.from(chunk));
