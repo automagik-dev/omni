@@ -75,9 +75,13 @@ publishers re-verify), the `build-push` outputs, and the `in_progress` state
 those publishers require.
 
 Both `image-build.yml` jobs run in the `release` environment. The `release`
-environment must be configured with required reviewers (and the `v*` tag
-ruleset with a `creation` rule) before the first mint; until then the
-environment is unprotected and any write collaborator who can dispatch the
+environment must be configured with required reviewers before the first mint,
+and its deployment tag policy must allow `v*` tags (both jobs are dispatched
+on a tag ref). The active `v*` tag ruleset must keep its `update` and
+`deletion` rules with no bypass actors; do not add a `creation` rule, because
+`scripts/release/verify-tag-ruleset.py` rejects bypass actors and
+`version.yml` must still be able to push the candidate tag. Until the
+environment is protected, any write collaborator who can dispatch the
 workflow can publish a stable release and move npm `latest`.
 
 ## Public repository ownership
