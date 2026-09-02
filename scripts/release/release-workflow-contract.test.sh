@@ -299,6 +299,9 @@ for workflow_name in ("image-publish.yml", "release-publish.yml"):
     forbid(workflow, r"VERSION_BUMP_PAT", f"{workflow_name} still requests the direct-main writer credential")
 
 forbid(release_publish, r"\.well-known/|MANIFEST_FILES|release-manifest", "release publication still owns public channel metadata")
+require(release_publish, r"release_id=\$\(gh release view \"v\$\{VERSION\}\"[\s\S]{0,120}--json databaseId", "post-upload readback does not resolve the draft release id")
+require(release_publish, r"gh api \"repos/\$\{GITHUB_REPOSITORY\}/releases/\$\{release_id\}\"", "post-upload readback is not by release id")
+forbid(release_publish, r"releases/tags/v\$\{VERSION\}\" \\\n\s*> \"\$\{RUNNER_TEMP\}/uploaded-release\.json\"", "post-upload readback looks up a draft by tag")
 forbid(all_workflows, r"values-prod-gitops\.yaml|pin-production-image\.sh", "a workflow still treats the public repo as production pin authority")
 if (root / "deploy/helm/omni/values-prod-gitops.yaml").exists():
     errors.append("public canonical production pin still exists")
