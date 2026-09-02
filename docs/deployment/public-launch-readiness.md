@@ -11,8 +11,10 @@ owned by this public repository.
 - Version tag: `v2.260830.2` (the tag resolves to the source commit above)
 - OCI index: `ghcr.io/automagik-dev/omni-api@sha256:dba9b81cead5efacf9303ab75487a762fa100992dc2bb52741524a7a036b2da8`
 - Public release timestamp: `2026-08-30T21:45:27Z`
-- Protected image build inputs: `deploy/Dockerfile`, root `package.json`,
-  `bun.lock`, `packages/**`, and `apps/**`
+- Protected image build inputs: `deploy/Dockerfile`,
+  `deploy/Dockerfile.dockerignore`, root `package.json`, `bun.lock`,
+  `packages/**`, and `apps/**` (the list in
+  `scripts/release/verify-promotion-candidate.sh` is authoritative)
 
 The promotion workflow has read-only permissions. It rejects a non-main or
 stale invocation, a moved tag or digest, missing platforms, invalid GitHub
@@ -43,7 +45,7 @@ final head was `b4dd27cb0e4513017de0ad69ece2a4ab03449f22`.
 | Bare-tag comment incorrectly claimed stable fallback | Fixed: the workflow states that stable requires authorized dispatch and bare tags do not release. |
 | Version channel-selector comment was orphaned | Fixed by removing the stale comment and third-channel selector. |
 | Version workflow had a trailing blank line | Fixed; the file ends after its final content plus one newline. |
-| Helm test duplicated release values | Superseded by the ownership correction: the test derives `Chart.appVersion`, supplies a generic valid digest, and asserts that no public production pin exists. |
+| Helm test duplicated release values | Superseded by the ownership correction: the test binds the chart's default `image.tag` to the verified public candidate in `.well-known/latest.json` (decoupled from `Chart.appVersion`, which is stamped on every dev bump although no public workflow builds images), supplies a generic valid digest, and asserts that no public production pin exists. |
 | Orchestrated release plus recovery run ID lacked coverage | Fixed with a negative regression test. |
 | Pin test did not set `GITHUB_OUTPUT` | Disproved at final head: `b4dd27cb` deliberately unsets runner-inherited `GITHUB_OUTPUT`, and the helper falls back to `/dev/stdout`. Extracting `scripts/release/pin-production-image{,.test}.sh` with `git archive b4dd27cb0e4513017de0ad69ece2a4ab03449f22` and running the extracted test returns exactly `PASS: race-safe production digest pin contract`. The obsolete pin and test are removed by this ownership change. |
 | npm post-publish readback had no retry | Fixed with bounded retries and backoff that tolerate transient registry 404/stale reads. |
@@ -112,8 +114,15 @@ repository finding.
 
 The final worktree passed the following local, non-mutating gates:
 
-- `git diff --check`
-- `bun scripts/verify-versions.ts` (24/24 versions match `2.260830.2`)
+- `git diff --check` — clean except for the intentional trailing-whitespace
+  fixture inside `scripts/release/stable-release-order.test.sh` (the
+  `run: |  ` block-scalar case of the run-expression matcher self-test), which
+  is exempt by design
+- `bun scripts/verify-versions.ts` — every tracked version field agrees with
+  `packages/cli/package.json`. The value itself follows each dev bump (it was
+  `2.260830.2` when this document was written and is `2.260901.3` at the
+  2026-09-02 revision), so it is not a fixed claim of this document; the
+  immutable candidate above stays `v2.260830.2`
 - every `scripts/release/*.test.sh`
 - `scripts/ci/test-helm-image-digest.sh` with Helm `v3.16.4` pinned to the
   repository's CI checksum

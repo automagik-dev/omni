@@ -367,6 +367,57 @@ else:
     ):
         require(sign_recovery, pattern, message)
 
+# release.yml is itself workflow_dispatch-triggered (version.yml dispatches
+# it), so `github.event_name == 'workflow_dispatch'` alone is TRUE inside the
+# orchestrated workflow_call. The recovery guards then read an empty
+# inputs.version and fail every orchestrated release (v2.260901.1-.3). Both
+# guards must also require `!inputs.orchestrated`, the input must exist on the
+# workflow_call contract, and release.yml must pass it as true.
+sign_call_inputs_match = re.search(
+    r"^on:\n  workflow_call:\n    inputs:\n(?P<body>.*?)(?=^    outputs:)",
+    sign_attest,
+    flags=re.MULTILINE | re.DOTALL,
+)
+if sign_call_inputs_match is None:
+    errors.append("signing workflow has no workflow_call input contract")
+else:
+    require(
+        sign_call_inputs_match.group("body"),
+        r"^      orchestrated:\n(?:        #[^\n]*\n)*        description:[^\n]*\n        required:\s*false\n        type:\s*boolean\n        default:\s*false$",
+        "signing workflow_call contract has no boolean orchestrated input defaulting to false",
+    )
+for step_name in (
+    "Authorize manual recovery release tag",
+    "Authorize manual recovery source run",
+):
+    step_match = re.search(
+        rf"- name: {re.escape(step_name)}\n\s+if:\s*(?P<condition>[^\n]+)",
+        sign_attest,
+    )
+    if step_match is None:
+        errors.append(f"signing recovery step '{step_name}' has no if: guard")
+        continue
+    condition = step_match.group("condition").strip()
+    if "github.event_name == 'workflow_dispatch'" not in condition:
+        errors.append(f"signing recovery step '{step_name}' is not limited to manual dispatch")
+    if "!inputs.orchestrated" not in condition:
+        errors.append(f"signing recovery step '{step_name}' fires inside the orchestrated release call")
+release_sign_job = job_blocks(release).get("sign-attest")
+if release_sign_job is None:
+    errors.append("release orchestration has no sign-attest job")
+else:
+    release_sign_text = "\n".join(release_sign_job)
+    require(
+        release_sign_text,
+        r"^    uses: \./\.github/workflows/sign-attest\.yml$",
+        "release sign-attest job does not call the local signing workflow",
+    )
+    require(
+        release_sign_text,
+        r"^    with:\n(?:      #[^\n]*\n)*      orchestrated:\s*true$",
+        "release orchestration does not mark the signing call as orchestrated",
+    )
+
 sign_tag_guard = sign_attest.find("- name: Authorize manual recovery release tag")
 sign_run_guard = sign_attest.find("- name: Authorize manual recovery source run")
 sign_download = sign_attest.find("- name: Download all tarball artifacts")
@@ -386,6 +437,16 @@ forbid(
     sign_attest,
     r'--certificate-identity-regexp\s+"\^https://github\.com/\$\{REPOSITORY\}/\.github/workflows/sign-attest\.yml@"',
     "signing self-check still accepts branch identities",
+)
+forbid(
+    image,
+    r"--certificate-identity-regexp",
+    "promotion release-asset verification uses a regexp identity instead of the exact release-tag identity",
+)
+require(
+    image,
+    r'--certificate-identity\s+"https://github\.com/\$\{GITHUB_REPOSITORY\}/\.github/workflows/sign-attest\.yml@refs/tags/v\$\{CANDIDATE_VERSION\}"',
+    "promotion release-asset verification does not require the exact candidate release-tag identity",
 )
 
 require(

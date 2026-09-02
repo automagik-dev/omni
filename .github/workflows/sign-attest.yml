@@ -10,9 +10,10 @@ name: Sign + Attest Tarballs
 # `omni-${VERSION}-<platform>-signed` artifacts are uploaded for Group 3
 # (release-publish) to consume.
 #
-# Trigger: orchestrated from release.yml via workflow_call on tag push
-# (refs/tags/v*); also dispatchable manually via workflow_dispatch with the
-# upstream build-tarballs run-id.
+# Trigger: orchestrated from release.yml via workflow_call (release.yml
+# passes `orchestrated: true`); also dispatchable manually via
+# workflow_dispatch with the upstream build-tarballs run-id, in which case the
+# manual-recovery guards below authorize the tag and the upstream run first.
 #
 # Signing model is cosign KEYLESS — the OIDC identity is bound to this
 # workflow file path + ref (Fulcio SAN URI). There is no long-lived key.
@@ -39,6 +40,15 @@ on:
         description: 'Version (derivable from artifact filenames if omitted)'
         required: false
         type: string
+      orchestrated:
+        # release.yml is itself workflow_dispatch-triggered (version.yml
+        # dispatches it), so github.event_name alone cannot distinguish the
+        # orchestrated call from an operator recovery dispatch. Callers set
+        # this to true so the manual-recovery guards below stay off.
+        description: 'Set only by release.yml reusable orchestration'
+        required: false
+        type: boolean
+        default: false
     outputs:
       version:
         description: 'Resolved version (parsed from upstream tarball filenames)'
@@ -83,7 +93,7 @@ jobs:
           persist-credentials: false
 
       - name: Authorize manual recovery release tag
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.orchestrated
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
@@ -95,7 +105,7 @@ jobs:
             --source-sha "${GITHUB_SHA}"
 
       - name: Authorize manual recovery source run
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.orchestrated
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ inputs.run_id }}

@@ -127,12 +127,18 @@ jobs:
       id-token: write       # cosign keyless + attest-build-provenance OIDC
       attestations: write   # GitHub Attestations API registration
       actions: read         # cross-run artifact metadata
+    with:
+      # This run is workflow_dispatch-triggered (version.yml dispatches it), so
+      # sign-attest.yml cannot tell orchestration from operator recovery by
+      # event name alone. Without this flag its manual-recovery guards fire
+      # with an empty inputs.version and fail every orchestrated release.
+      orchestrated: true
 
   publish:
     needs: sign-attest
     uses: ./.github/workflows/release-publish.yml
     permissions:
-      contents: write       # gh release create/upload + push latest.json
+      contents: write       # gh release create/upload (no metadata push; .well-known/ is PR-owned)
       actions: read
       packages: read
       attestations: read
