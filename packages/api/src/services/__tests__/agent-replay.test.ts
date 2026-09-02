@@ -435,7 +435,10 @@ describe('AgentReplayService', () => {
       // persisted with rawPayload.omniSystemNotice=true and must NOT count as
       // an answer — otherwise a crash between the ack and the real reply
       // permanently drops the turn (#912 review).
-      expect(guard).toContain("COALESCE((reply.raw_payload ->> 'omniSystemNotice')::boolean, false) = false");
+      // Compared as jsonb so a foreign non-boolean value under that key can
+      // never make a `::boolean` cast raise and abort the replay.
+      expect(guard).toContain("(reply.raw_payload -> 'omniSystemNotice') IS DISTINCT FROM 'true'::jsonb");
+      expect(guard).not.toContain('::boolean');
     });
 
     test('uses cutoff when since is undefined', async () => {

@@ -5,11 +5,12 @@
 import { zValidator } from '@hono/zod-validator';
 import type { CustomEventType } from '@omni/core';
 import type { WebhookSource } from '@omni/db';
-import { webhookSignatureAlgorithms } from '@omni/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { CreateWebhookSourceSchema } from '../../schemas/openapi/webhooks';
 import { ApiKeyService } from '../../services/api-keys';
 import type { AppVariables } from '../../types';
+import { parseJsonObjectBody } from '../../utils/json-body';
 
 const webhooksRoutes = new Hono<{ Variables: AppVariables }>();
 
@@ -17,27 +18,10 @@ const webhooksRoutes = new Hono<{ Variables: AppVariables }>();
 // Webhook Source CRUD
 // ============================================================================
 
-// Signature verification contract for the source (issue #928)
-const signatureConfigSchema = z
-  .object({
-    algorithm: z.enum(webhookSignatureAlgorithms).describe('How to verify: HMAC over the raw body, or token match'),
-    header: z.string().min(1).max(200).describe('Header carrying the signature/token (e.g. X-Hub-Signature-256)'),
-    prefix: z.string().max(50).optional().describe('Prefix before the hex digest (HMAC algorithms only)'),
-  })
-  .refine((config) => config.algorithm !== 'token-match' || config.prefix === undefined, {
-    message: "prefix is not applicable to algorithm 'token-match'",
-    path: ['prefix'],
-  });
-
-// Create webhook source schema
-const createWebhookSourceSchema = z.object({
-  name: z.string().min(1).max(100).describe('Unique source name (e.g., github, stripe, agno)'),
-  description: z.string().optional().describe('Description of the webhook source'),
-  expectedHeaders: z.record(z.string(), z.boolean()).optional().describe('Headers to validate'),
-  signatureConfig: signatureConfigSchema.nullable().optional().describe('Signature verification config'),
-  signatureSecret: z.string().min(8).max(512).nullable().optional().describe('Shared secret (write-only)'),
-  enabled: z.boolean().default(true).describe('Whether source is enabled'),
-});
+// Create webhook source schema — the shared OpenAPI definition IS the runtime
+// validator (signature contract, bounds and refinements included), so the
+// published document and what the route accepts cannot drift (issue #928).
+const createWebhookSourceSchema = CreateWebhookSourceSchema;
 
 /** The secret is write-only: strip it from every response shape. */
 function sanitizeSource(source: WebhookSource): Omit<WebhookSource, 'signatureSecret'> & {
@@ -129,6 +113,11 @@ webhooksRoutes.delete('/webhook-sources/:id', async (c) => {
  * Sources are created administratively (POST /webhook-sources); a request for
  * an unknown source is a 404 unless OMNI_WEBHOOK_AUTOCREATE=true opts the
  * deployment into the old auto-create behavior (dev convenience, issue #928).
+ *
+ * Body contract matches the public ingress: empty body → `{}`; a non-empty
+ * body that is not a JSON object (malformed, array, scalar) is a 400 —
+ * silently publishing an empty payload would fire automations on a hollow
+ * event.
  */
 webhooksRoutes.post('/webhooks/:source', async (c) => {
   const sourceName = c.req.param('source');
@@ -136,12 +125,7 @@ webhooksRoutes.post('/webhooks/:source', async (c) => {
 
   // Keep the raw bytes: HMAC signature verification must run over them
   const rawBody = await c.req.text();
-  let payload: Record<string, unknown>;
-  try {
-    payload = rawBody ? JSON.parse(rawBody) : {};
-  } catch {
-    payload = {}; // Empty payload is fine for some webhooks
-  }
+  const payload = parseJsonObjectBody(rawBody);
 
   // Extract headers (lowercase keys)
   const headers: Record<string, string> = {};

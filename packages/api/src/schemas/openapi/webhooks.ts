@@ -3,20 +3,33 @@
  */
 
 import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
+import { webhookSignatureAlgorithms } from '@omni/db';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, SuccessSchema } from './common';
 
-// Signature verification contract (issue #928). The secret itself is
-// write-only — it never appears in any response schema.
-export const WebhookSignatureConfigSchema = z.object({
-  algorithm: z.enum(['hmac-sha256', 'hmac-sha1', 'token-match']).openapi({
-    description: 'How to verify: HMAC over the raw request body, or direct token match',
-  }),
-  header: z.string().openapi({ description: 'Header carrying the signature/token (e.g. X-Hub-Signature-256)' }),
-  prefix: z.string().optional().openapi({
-    description: 'Prefix before the hex digest (e.g. "sha256="). HMAC algorithms only — rejected with token-match',
-  }),
-});
+// Signature verification contract (issue #928). This is the ONE Zod
+// definition: the route validator (`routes/v2/webhooks.ts`) imports it, so the
+// published OpenAPI document and the runtime validation cannot drift. The
+// bounds and the token-match/prefix refinement are enforced at the boundary;
+// the config/secret pairing is enforced by `WebhookService` (create/update).
+// The secret itself is write-only — it never appears in any response schema.
+export const WebhookSignatureConfigSchema = z
+  .object({
+    algorithm: z.enum(webhookSignatureAlgorithms).openapi({
+      description: 'How to verify: HMAC over the raw request body, or direct token match',
+    }),
+    header: z.string().min(1).max(200).openapi({
+      description: 'Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters',
+    }),
+    prefix: z.string().max(50).optional().openapi({
+      description:
+        'Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match',
+    }),
+  })
+  .refine((config) => config.algorithm !== 'token-match' || config.prefix === undefined, {
+    message: "prefix is not applicable to algorithm 'token-match'",
+    path: ['prefix'],
+  });
 
 // Webhook source schema
 export const WebhookSourceSchema = z.object({
@@ -35,15 +48,28 @@ export const WebhookSourceSchema = z.object({
 
 // Create webhook source request
 export const CreateWebhookSourceSchema = z.object({
-  name: z.string().min(1).max(100).openapi({ description: 'Unique source name' }),
+  name: z.string().min(1).max(100).openapi({ description: 'Unique source name (e.g., github, stripe, agno)' }),
   description: z.string().optional().openapi({ description: 'Description' }),
   expectedHeaders: z.record(z.string(), z.boolean()).optional().openapi({ description: 'Headers to validate' }),
-  signatureConfig: WebhookSignatureConfigSchema.nullable().optional().openapi({
-    description: 'Signature verification config; required for the source to be reachable on the public ingress',
-  }),
-  signatureSecret: z.string().min(8).max(512).nullable().optional().openapi({
-    description: 'Shared secret used by signatureConfig (write-only, never returned)',
-  }),
+  signatureConfig: WebhookSignatureConfigSchema.nullable()
+    .optional()
+    .openapi({
+      description:
+        'Signature verification config; required for the source to be reachable on the public ingress. ' +
+        'Always paired with signatureSecret: a config without a stored secret is rejected (400), and clearing ' +
+        'the config (null) also clears the stored secret.',
+    }),
+  signatureSecret: z
+    .string()
+    .min(8)
+    .max(512)
+    .nullable()
+    .optional()
+    .openapi({
+      description:
+        'Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set ' +
+        'without a signatureConfig (given in the same request, or already stored on update); null clears it.',
+    }),
   enabled: z.boolean().default(true).openapi({ description: 'Whether enabled' }),
 });
 
@@ -63,6 +89,7 @@ export const WebhookReceiveResponseSchema = z.object({
 });
 
 export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
+  registry.register('WebhookSignatureConfig', WebhookSignatureConfigSchema);
   registry.register('WebhookSource', WebhookSourceSchema);
   registry.register('CreateWebhookSourceRequest', CreateWebhookSourceSchema);
   registry.register('TriggerEventRequest', TriggerEventSchema);

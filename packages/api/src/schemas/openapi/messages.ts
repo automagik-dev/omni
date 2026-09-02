@@ -233,6 +233,10 @@ export const TtsResponseSchema = z.object({
   to: z.string().openapi({ description: 'Recipient' }),
   audioSizeKb: z.number().openapi({ description: 'Audio size in KB' }),
   durationMs: z.number().openapi({ description: 'Audio duration in ms' }),
+  senderAgentId: z.string().uuid().nullable().optional().openapi({
+    description:
+      "Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)",
+  }),
 });
 
 export function registerMessageSchemas(registry: OpenAPIRegistry): void {

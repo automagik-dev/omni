@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { WhatsAppBusinessPlugin } from '@omni/channel-whatsapp-business';
-import { type EventBus, NotFoundError, OmniError, createLogger } from '@omni/core';
+import { type EventBus, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
 import { type Database, type Instance, whatsappFlowKeys } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -88,6 +88,7 @@ import type { Services } from './services';
 import { resolveA2AAgentCard } from './services/a2a-discovery';
 import { isMultitenancyEnabled } from './tenancy/feature-flag';
 import type { AppVariables } from './types';
+import { parseJsonObjectBody } from './utils/json-body';
 
 /**
  * Create app result with app and services
@@ -451,18 +452,14 @@ export function createApp(
     const services = c.get('services');
 
     const rawBody = await c.req.text();
-    let payload: Record<string, unknown> = {};
-    if (rawBody) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(rawBody);
-      } catch {
-        parsed = undefined;
+    let payload: Record<string, unknown>;
+    try {
+      payload = parseJsonObjectBody(rawBody);
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        return c.json({ error: { code: 'VALIDATION', message: error.message } }, 400);
       }
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        return c.json({ error: { code: 'VALIDATION', message: 'Request body must be a JSON object' } }, 400);
-      }
-      payload = parsed as Record<string, unknown>;
+      throw error;
     }
 
     const headers: Record<string, string> = {};

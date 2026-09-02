@@ -42,6 +42,36 @@ const RATE_LIMITS = {
 } as const;
 
 /**
+ * Pick the client IP for the per-IP bucket.
+ *
+ * `TRUSTED_PROXY_HEADER` names a header the deployment's OWN reverse proxy
+ * sets (e.g. `X-Forwarded-For`, `CF-Connecting-IP`, `X-Real-IP`). For
+ * overwrite-style headers the value is a single address. For append-style
+ * headers (`X-Forwarded-For`) every hop appends its peer, so the LEFTMOST
+ * entry is whatever the client chose to send and the RIGHTMOST is the one
+ * written by the trusted proxy in front of this process. Taking the first hop
+ * would let any client pick its own bucket (or evict a victim's) by sending
+ * a forged `X-Forwarded-For`; the rightmost hop is the only one the trusted
+ * proxy vouches for. This assumes exactly one trusted proxy — deployments
+ * with a longer trusted chain must have the edge proxy collapse the header.
+ *
+ * Without the env var the header is ignored entirely and the socket peer
+ * address is used, so a forged header can never influence the bucket.
+ */
+export function resolveClientIp(
+  trustedProxyHeaderValue: string | undefined,
+  remoteAddr: string | undefined,
+): string | undefined {
+  const raw = trustedProxyHeaderValue ?? remoteAddr;
+  if (!raw) return undefined;
+  const hops = raw
+    .split(',')
+    .map((hop) => hop.trim())
+    .filter(Boolean);
+  return hops.at(-1);
+}
+
+/**
  * Create rate limiting middleware.
  *
  * `keyPrefix` isolates a limiter's counters from the default bucket so a
@@ -51,7 +81,9 @@ const RATE_LIMITS = {
 function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general, keyPrefix = 'ratelimit') {
   return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
     // Use API key ID as identifier, then only trusted infra-provided address data.
-    // Do not trust client-supplied IP headers unless explicitly configured.
+    // Do not trust client-supplied IP headers unless explicitly configured
+    // (TRUSTED_PROXY_HEADER) — and even then only the hop the trusted proxy
+    // wrote, see resolveClientIp.
     const apiKey = c.get('apiKey');
     const trustedProxyHeader = process.env.TRUSTED_PROXY_HEADER?.toLowerCase();
     const trustedProxyIp = trustedProxyHeader ? c.req.header(trustedProxyHeader) : undefined;
@@ -63,8 +95,7 @@ function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general, keyPre
       | { remoteAddr?: string; requestIP?: (req: Request) => { address?: string } | null }
       | undefined;
     const remoteAddr = server?.remoteAddr ?? server?.requestIP?.(c.req.raw)?.address;
-    const rawIp = trustedProxyIp ?? remoteAddr;
-    const normalizedIp = rawIp?.split(',')[0]?.trim() || undefined;
+    const normalizedIp = resolveClientIp(trustedProxyIp, remoteAddr);
     const identifier = apiKey?.id ? `api:${apiKey.id}` : normalizedIp ? `ip:${normalizedIp}` : 'anon';
 
     const key = `${keyPrefix}:${identifier}`;

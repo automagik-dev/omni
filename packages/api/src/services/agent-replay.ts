@@ -220,11 +220,15 @@ export class AgentReplayService {
               // feedback) are excluded via the omniSystemNotice marker: they
               // precede or replace the real reply, so counting them would
               // permanently drop turns whose dispatch died mid-flight.
+              // Compared as jsonb (not cast via ->> ::boolean): raw_payload is
+              // foreign channel data, and a non-boolean value under that key
+              // would make the cast raise and abort the whole replay. Only a
+              // JSON `true` is the marker; NULL/missing/anything else counts.
               sql`NOT EXISTS (
               SELECT 1 FROM ${messages} AS reply
               WHERE reply.chat_id = ${messages.chatId}
                 AND reply.is_from_me = true
-                AND COALESCE((reply.raw_payload ->> 'omniSystemNotice')::boolean, false) = false
+                AND (reply.raw_payload -> 'omniSystemNotice') IS DISTINCT FROM 'true'::jsonb
                 AND reply.platform_timestamp > ${messages.platformTimestamp}
                 AND reply.deleted_at IS NULL
             )`,
