@@ -32,6 +32,73 @@ export const InstanceSchema = z.object({
 });
 
 /**
+ * Gupshup HANDOFF options (instances.gupshup_handoff_options). This is the ONE
+ * Zod definition: the route validator (`routes/v2/instances.ts`) imports it for
+ * POST and PATCH, so the published OpenAPI document and the runtime validation
+ * cannot drift. It mirrors the validator the channel plugin applies on connect
+ * (packages/channel-gupshup/src/handoff-options.ts) so a bad shape is rejected
+ * here with a 400 instead of failing the instance later. Keep the two in step.
+ */
+const gupshupHandoffFieldValue = z.string().max(2048);
+const gupshupHandoffFieldKey = z.string().min(1).max(128);
+const gupshupHandoffFields = z.record(gupshupHandoffFieldKey, gupshupHandoffFieldValue);
+export const GupshupHandoffOptionsSchema = z
+  .object({
+    defaultFields: gupshupHandoffFields.optional().openapi({
+      description:
+        'Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue',
+      example: { queue: 'SALES' },
+    }),
+    fieldsByPhonePrefix: z
+      .array(
+        z.object({
+          prefixes: z
+            .array(z.string().min(1).max(15).regex(/^\d+$/))
+            .min(1)
+            .max(256)
+            .openapi({
+              description: 'Digit-only phone prefixes (country code first, no +)',
+              example: ['5511', '5521'],
+            }),
+          fields: gupshupHandoffFields.openapi({
+            description: 'Routing fields applied when the customer phone starts with one of the prefixes',
+            example: { queue: 'SALES-SOUTHEAST' },
+          }),
+        }),
+      )
+      .max(64)
+      .optional()
+      .openapi({ description: 'Prefix rules layered over defaultFields; the first matching rule wins' }),
+    customerFields: z
+      .array(
+        z
+          .object({
+            apiKey: gupshupHandoffFieldKey.openapi({ description: 'customerFields apiKey your Gupshup Journey reads' }),
+            value: gupshupHandoffFieldValue
+              .optional()
+              .openapi({ description: 'Literal value to send; mutually exclusive with `from`' }),
+            from: gupshupHandoffFieldKey.optional().openapi({
+              description: 'Resolved handoff field to copy the value from; mutually exclusive with `value`',
+            }),
+          })
+          .refine((entry) => (entry.value === undefined) !== (entry.from === undefined), {
+            message: 'each customerFields entry needs exactly one of `value` or `from`',
+          }),
+      )
+      .max(64)
+      .optional()
+      .openapi({
+        description:
+          'Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty',
+        example: [
+          { apiKey: 'Queue', from: 'queue' },
+          { apiKey: 'Handled By', value: 'assistant' },
+        ],
+      }),
+  })
+  .strict();
+
+/**
  * Create instance request schema
  */
 export const CreateInstanceSchema = z.object({
@@ -46,6 +113,20 @@ export const CreateInstanceSchema = z.object({
   agentStreamMode: z.boolean().default(false).openapi({ description: 'Enable streaming responses' }),
   isDefault: z.boolean().default(false).openapi({ description: 'Set as default instance for channel' }),
   token: z.string().optional().openapi({ description: 'Bot token for Discord instances' }),
+  gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
+    .optional()
+    .openapi({
+      description:
+        'Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it',
+      example: {
+        defaultFields: { queue: 'SALES' },
+        fieldsByPhonePrefix: [{ prefixes: ['5511', '5521'], fields: { queue: 'SALES-SOUTHEAST' } }],
+        customerFields: [
+          { apiKey: 'Queue', from: 'queue' },
+          { apiKey: 'Handled By', value: 'assistant' },
+        ],
+      },
+    }),
 });
 
 /**

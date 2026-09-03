@@ -5,12 +5,16 @@
  * Outbound: Custom Integration callback URL
  */
 
+import type { GupshupCustomerField, GupshupHandoffOptions } from './handoff-options';
+
 // Instance config
 export interface GupshupConfig {
   gupshupCallbackUrl: string; // required — Custom Integration callback URL
   gupshupAuthToken: string; // required — Custom Integration auth token
   gupshupEventId?: string; // optional, default: "nx_omni_agent_reply"
   webhookVerifyToken?: string; // optional — skip token check if not set
+  /** Validated HANDOFF routing defaults + customerFields template (see handoff-options.ts). */
+  handoffOptions?: GupshupHandoffOptions;
 }
 
 // Outbound message shape (internal)
@@ -27,6 +31,8 @@ export interface GupshupOutboundMessage {
   dados_lead?: string;
   motivo_handoff?: string;
   handoff_fields?: Record<string, unknown>;
+  /** Custom Integration contact fields, rendered from the instance template — HANDOFF only. */
+  customer_fields?: GupshupCustomerField[];
   // Close-contact fields — present only on type === 'CLOSING' (the wire
   // literal Gupshup's Journey routes on; the Omni-side concept is "close
   // contact" but the partner contract uses 'CLOSING').

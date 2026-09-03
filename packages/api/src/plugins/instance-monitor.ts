@@ -38,7 +38,7 @@
  */
 
 import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
-import type { Database } from '@omni/db';
+import type { Database, GupshupHandoffOptions } from '@omni/db';
 import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 
@@ -181,6 +181,7 @@ function buildInstanceConnectOptions(instance: {
   gupshupCallbackUrl?: string | null;
   gupshupAuthToken?: string | null;
   gupshupEventId?: string | null;
+  gupshupHandoffOptions?: GupshupHandoffOptions | null;
   webhookVerifyToken?: string | null;
   twilioAccountSid?: string | null;
   twilioAuthToken?: string | null;
@@ -256,6 +257,7 @@ function applyGupshupOptions(
     gupshupCallbackUrl?: string | null;
     gupshupAuthToken?: string | null;
     gupshupEventId?: string | null;
+    gupshupHandoffOptions?: GupshupHandoffOptions | null;
     gupshupApiKey?: string | null;
     gupshupAppName?: string | null;
     gupshupSourcePhone?: string | null;
@@ -265,6 +267,7 @@ function applyGupshupOptions(
   if (instance.gupshupCallbackUrl) options.gupshupCallbackUrl = instance.gupshupCallbackUrl;
   if (instance.gupshupAuthToken) options.gupshupAuthToken = instance.gupshupAuthToken;
   if (instance.gupshupEventId) options.gupshupEventId = instance.gupshupEventId;
+  if (instance.gupshupHandoffOptions) options.gupshupHandoffOptions = instance.gupshupHandoffOptions;
   if (instance.gupshupApiKey) options.gupshupApiKey = instance.gupshupApiKey;
   if (instance.gupshupAppName) options.gupshupAppName = instance.gupshupAppName;
   if (instance.gupshupSourcePhone) options.gupshupSourcePhone = instance.gupshupSourcePhone;
@@ -316,6 +319,7 @@ async function connectInstance(
     gupshupCallbackUrl?: string | null;
     gupshupAuthToken?: string | null;
     gupshupEventId?: string | null;
+    gupshupHandoffOptions?: GupshupHandoffOptions | null;
     webhookVerifyToken?: string | null;
     twilioAccountSid?: string | null;
     twilioAuthToken?: string | null;
@@ -763,6 +767,7 @@ export class InstanceMonitor {
     gupshupCallbackUrl?: string | null;
     gupshupAuthToken?: string | null;
     gupshupEventId?: string | null;
+    gupshupHandoffOptions?: GupshupHandoffOptions | null;
     webhookVerifyToken?: string | null;
     twilioAccountSid?: string | null;
     twilioAuthToken?: string | null;

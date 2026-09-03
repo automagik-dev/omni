@@ -12,11 +12,19 @@
  * (`applyMigrations` from packages/db/src/migrate.ts) so that the journal
  * guard, the advisory lock, and the count check are exercised rather than
  * simulated.
+ *
+ * The migrator is pointed at a candidate folder materialised from the live
+ * `packages/db/drizzle`: exactly the files the 2.260902.5 image ships
+ * (0000-0052) and a journal truncated to idx 0-52. Both the drizzle migrator
+ * and the count guard read `meta/_journal.json` from the folder they are
+ * given, so migrations added to the live folder after this hop (0053+) belong
+ * to later rehearsals and never leak into this one. The digest and pinning
+ * helpers still read the live folder: the bytes must not drift.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,12 +61,16 @@ interface JournalEntry {
   readonly tag: string;
 }
 
-const journalEntries = (JSON.parse(readFileSync(journalPath, 'utf-8')) as { entries: JournalEntry[] }).entries;
+const journal = JSON.parse(readFileSync(journalPath, 'utf-8')) as { entries: JournalEntry[] } & Record<string, unknown>;
+const journalEntries = journal.entries;
 
 const migrationFiles = readdirSync(drizzleDir)
   .filter((file) => file.endsWith('.sql'))
   .sort();
 const previousReleaseMigrations = migrationFiles.filter((file) => file <= PREVIOUS_RELEASE_LAST_MIGRATION);
+// What the 2.260902.5 image ships: 0000-0052 and the matching journal prefix.
+const candidateMigrations = migrationFiles.filter((file) => file <= TARGET_MIGRATION);
+const candidateJournalEntries = journalEntries.filter((entry) => entry.idx <= TARGET_JOURNAL_IDX);
 
 function migrationSql(file: string): string {
   return readFileSync(join(drizzleDir, file), 'utf-8');
@@ -84,6 +96,24 @@ function journalEntry(idx: number): JournalEntry {
   const entry = journalEntries.find((candidate) => candidate.idx === idx);
   if (!entry) throw new Error(`journal has no entry with idx ${idx}`);
   return entry;
+}
+
+/**
+ * The migrations folder exactly as the 2.260902.5 image ships it: the `.sql`
+ * files through 0052 (byte-identical copies of the live files) and a journal
+ * with the real top-level shape but only entries idx 0-52. drizzle reads
+ * `meta/_journal.json` and then `<tag>.sql` for every entry from this folder,
+ * and `applyMigrations` counts the same journal for its guard.
+ */
+function materializeCandidateMigrations(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'omni-release-candidate-'));
+  mkdirSync(join(dir, 'meta'));
+  for (const file of candidateMigrations) copyFileSync(join(drizzleDir, file), join(dir, file));
+  writeFileSync(
+    join(dir, 'meta', '_journal.json'),
+    JSON.stringify({ ...journal, entries: candidateJournalEntries }, null, 2),
+  );
+  return dir;
 }
 
 interface SqlResult {
@@ -120,8 +150,11 @@ function urlFor(base: string, database: string): string {
 describe('release migration artifacts', () => {
   test('the source and target boundaries stay byte-for-byte pinned', () => {
     expect(previousReleaseMigrations).toHaveLength(PREVIOUS_RELEASE_MIGRATION_COUNT);
-    const targetReleaseMigrations = migrationFiles.filter((file) => file > PREVIOUS_RELEASE_LAST_MIGRATION);
+    const targetReleaseMigrations = migrationFiles.filter(
+      (file) => file > PREVIOUS_RELEASE_LAST_MIGRATION && file <= TARGET_MIGRATION,
+    );
     expect(targetReleaseMigrations).toEqual([...TARGET_MIGRATIONS]);
+    expect(candidateMigrations).toEqual([...previousReleaseMigrations, ...TARGET_MIGRATIONS]);
     expect(migrationDigest(previousReleaseMigrations)).toBe(PREVIOUS_RELEASE_MIGRATIONS_SHA256);
     expect(
       migrationDigest(previousReleaseMigrations.filter((file) => file > '0039_instances_message_supersede_mode.sql')),
@@ -133,10 +166,13 @@ describe('release migration artifacts', () => {
     // packages/db/src/migrate.ts documents the failure mode: drizzle silently
     // skips a migration whose journal `when` is not later than the last applied
     // row's created_at, and the count guard only catches it after the fact.
-    expect(journalEntries).toHaveLength(PREVIOUS_RELEASE_MIGRATION_COUNT + TARGET_MIGRATIONS.length);
-    journalEntries.forEach((entry, position) => {
+    // Only the prefix the candidate ships is under test; later entries (0053+)
+    // belong to later hops and are excluded from the materialised folder.
+    expect(candidateJournalEntries).toHaveLength(PREVIOUS_RELEASE_MIGRATION_COUNT + TARGET_MIGRATIONS.length);
+    expect(journalEntries.slice(0, candidateJournalEntries.length)).toEqual(candidateJournalEntries);
+    candidateJournalEntries.forEach((entry, position) => {
       expect(entry.idx).toBe(position);
-      expect(migrationFiles[position]).toBe(`${entry.tag}.sql`);
+      expect(candidateMigrations[position]).toBe(`${entry.tag}.sql`);
       if (position > 0) expect(entry.when).toBeGreaterThan(journalEntry(position - 1).when);
     });
     const previous = journalEntry(TARGET_JOURNAL_IDX - 1);
@@ -144,7 +180,7 @@ describe('release migration artifacts', () => {
     expect(`${previous.tag}.sql`).toBe(PREVIOUS_RELEASE_LAST_MIGRATION);
     expect(`${target.tag}.sql`).toBe(TARGET_MIGRATION);
     expect(target.when).toBeGreaterThan(previous.when);
-    expect(journalEntries.at(-1)).toEqual(target);
+    expect(candidateJournalEntries.at(-1)).toEqual(target);
   });
 
   test('0052 is additive, idempotent, transaction-free, and touches no policy or data', () => {
@@ -176,6 +212,7 @@ describe('release migration artifacts', () => {
 postgresDescribe('v2.260830.2 -> v2.260902.5 release rehearsal (real PostgreSQL)', () => {
   let database = '';
   let databaseUrl = '';
+  let candidateDrizzleDir = '';
   let handle: ReturnType<typeof createDbHandle> | null = null;
 
   function runSql(script: string): SqlResult {
@@ -246,11 +283,13 @@ postgresDescribe('v2.260830.2 -> v2.260902.5 release rehearsal (real PostgreSQL)
     if (created.exitCode !== 0) throw new Error(`could not create disposable database: ${created.stderr}`);
     databaseUrl = urlFor(postgresUrl, database);
     handle = createDbHandle({ url: databaseUrl, maxConnections: 2 });
+    candidateDrizzleDir = materializeCandidateMigrations();
   });
 
   afterAll(async () => {
     if (handle) await handle.close();
     if (database) runSqlOn(postgresUrl, `DROP DATABASE IF EXISTS "${database}" WITH (FORCE);`);
+    if (candidateDrizzleDir) rmSync(candidateDrizzleDir, { recursive: true, force: true });
   });
 
   test('applies 0052 once through the journaled migrator and proves image-only rollback safe', async () => {
@@ -324,8 +363,9 @@ postgresDescribe('v2.260830.2 -> v2.260902.5 release rehearsal (real PostgreSQL)
       `);
     expect(appliedMigrationCount()).toBe(String(PREVIOUS_RELEASE_MIGRATION_COUNT));
 
-    // The real boot path: advisory lock, drizzle migrator, count guard.
-    await applyMigrations(db, drizzleDir);
+    // The real boot path: advisory lock, drizzle migrator, count guard — fed
+    // the candidate folder so only the 0052 hop is on the table.
+    await applyMigrations(db, candidateDrizzleDir);
 
     const target = journalEntry(TARGET_JOURNAL_IDX);
     expect(appliedMigrationCount()).toBe(String(PREVIOUS_RELEASE_MIGRATION_COUNT + 1));
@@ -351,7 +391,7 @@ postgresDescribe('v2.260830.2 -> v2.260902.5 release rehearsal (real PostgreSQL)
 
     // Re-running the migrator is a no-op, and — unlike 0045 — the raw file is
     // also safe to replay by hand because every statement is IF NOT EXISTS.
-    await applyMigrations(db, drizzleDir);
+    await applyMigrations(db, candidateDrizzleDir);
     expect(appliedMigrationCount()).toBe(String(PREVIOUS_RELEASE_MIGRATION_COUNT + 1));
     const rawReplay = runSql(migrationSql(TARGET_MIGRATION));
     expect(rawReplay.exitCode).toBe(0);
@@ -407,7 +447,7 @@ postgresDescribe('v2.260830.2 -> v2.260902.5 release rehearsal (real PostgreSQL)
     expect(catalogFingerprint()).toBe(fingerprintBefore);
 
     // ...and the re-upgrade after that manual reverse is the ordinary hop.
-    await applyMigrations(db, drizzleDir);
+    await applyMigrations(db, candidateDrizzleDir);
     expect(columnCount()).toBe('12');
     expect(appliedMigrationCount()).toBe(String(PREVIOUS_RELEASE_MIGRATION_COUNT + 1));
     expect(signatureColumns()).toBe('signature_config:jsonb/YES/none,signature_secret:text/YES/none');

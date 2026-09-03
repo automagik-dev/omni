@@ -219,6 +219,7 @@ let dynamicInstances: Array<{
   channel: string;
   isActive: boolean;
   profileName: string | null;
+  gupshupHandoffOptions?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
 }> = [];
@@ -299,6 +300,20 @@ function handleGetInstance(path: string): Response {
   const id = match?.[1] ?? '';
   const found = getAllInstances().find((i) => i.id === id);
   if (!found) return json({ error: { code: 'NOT_FOUND', message: 'Instance not found' } }, 404);
+  return json({ data: found });
+}
+
+async function handleUpdateInstance(req: Request, path: string): Promise<Response> {
+  const match = path.match(/^\/api\/v2\/instances\/([^/]+)$/);
+  const id = match?.[1] ?? '';
+  const found = dynamicInstances.find((i) => i.id === id);
+  if (!found) return json({ error: { code: 'NOT_FOUND', message: 'Instance not found' } }, 404);
+  const body = (await req.json()) as Record<string, unknown>;
+  if (body.name !== undefined) found.name = body.name as string;
+  if (body.gupshupHandoffOptions !== undefined) {
+    found.gupshupHandoffOptions = body.gupshupHandoffOptions as Record<string, unknown> | null;
+  }
+  found.updatedAt = new Date().toISOString();
   return json({ data: found });
 }
 
@@ -580,6 +595,11 @@ const patternRoutes: Array<{
     handler: (_req, path) => handleInstanceStatus(path),
   },
   { method: 'GET', pattern: /^\/api\/v2\/instances\/[^/]+$/, handler: (_req, path) => handleGetInstance(path) },
+  {
+    method: 'PATCH',
+    pattern: /^\/api\/v2\/instances\/[^/]+$/,
+    handler: (req, path) => handleUpdateInstance(req, path),
+  },
   { method: 'DELETE', pattern: /^\/api\/v2\/instances\/[^/]+$/, handler: (_req, path) => handleDeleteInstance(path) },
   // Provider routes
   {

@@ -303,6 +303,7 @@ export interface CreateInstanceBody {
   twilioStatusCallbackUrl?: string;
   twilioWebhookUrl?: string;
   twilioValidateSignature?: boolean;
+  gupshupHandoffOptions?: components['schemas']['CreateInstanceRequest']['gupshupHandoffOptions'];
 }
 
 /**
