@@ -59,6 +59,7 @@
       "omni-*",
       ".worktrees",
       ".genie",
+      "brain/.obsidian",
       ".dev",
       ".hermes",
       "repos",
