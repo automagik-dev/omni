@@ -15,6 +15,7 @@ import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-busin
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
 import { getQrCode } from '../../plugins/qr-store';
+import { GupshupHandoffOptionsSchema } from '../../schemas/openapi/instances';
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import { AgentReplayService } from '../../services/agent-replay';
@@ -42,43 +43,6 @@ const listQuerySchema = z.object({
 });
 
 // Reply filter schema
-/**
- * Gupshup HANDOFF options. Mirrors the validator the channel plugin applies on
- * connect (packages/channel-gupshup/src/handoff-options.ts) so a bad shape is
- * rejected here with a 400 instead of failing the instance later. Keep the two
- * in step.
- */
-const gupshupHandoffFieldValue = z.string().max(2048);
-const gupshupHandoffFieldKey = z.string().min(1).max(128);
-const gupshupHandoffOptionsSchema = z
-  .object({
-    defaultFields: z.record(gupshupHandoffFieldKey, gupshupHandoffFieldValue).optional(),
-    fieldsByPhonePrefix: z
-      .array(
-        z.object({
-          prefixes: z.array(z.string().min(1).max(15).regex(/^\d+$/)).min(1).max(256),
-          fields: z.record(gupshupHandoffFieldKey, gupshupHandoffFieldValue),
-        }),
-      )
-      .max(64)
-      .optional(),
-    customerFields: z
-      .array(
-        z
-          .object({
-            apiKey: gupshupHandoffFieldKey,
-            value: gupshupHandoffFieldValue.optional(),
-            from: gupshupHandoffFieldKey.optional(),
-          })
-          .refine((entry) => (entry.value === undefined) !== (entry.from === undefined), {
-            message: 'each customerFields entry needs exactly one of `value` or `from`',
-          }),
-      )
-      .max(64)
-      .optional(),
-  })
-  .strict();
-
 const agentReplyFilterSchema = z.object({
   mode: z.enum(['all', 'filtered']).describe('Reply mode: all = reply to everything, filtered = check conditions'),
   conditions: z
@@ -211,8 +175,8 @@ const createInstanceSchema = z.object({
   gupshupCallbackUrl: z.string().optional().nullable().describe('Gupshup Custom Integration callback URL'),
   gupshupAuthToken: z.string().optional().nullable().describe('Gupshup Custom Integration auth token'),
   gupshupEventId: z.string().optional().nullable().describe('Gupshup event ID (default: nx_omni_agent_reply)'),
-  gupshupHandoffOptions: gupshupHandoffOptionsSchema
-    .optional()
+  // One definition with the OpenAPI document (schemas/openapi/instances.ts).
+  gupshupHandoffOptions: GupshupHandoffOptionsSchema.optional()
     .nullable()
     .describe('Gupshup HANDOFF routing defaults and customerFields template'),
   webhookVerifyToken: z.string().optional().nullable().describe('Gupshup webhook verify token'),
@@ -338,7 +302,7 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   gupshupCallbackUrl: z.string().nullable().optional(),
   gupshupAuthToken: z.string().nullable().optional(),
   gupshupEventId: z.string().nullable().optional(),
-  gupshupHandoffOptions: gupshupHandoffOptionsSchema.nullable().optional(),
+  gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable().optional(),
   webhookVerifyToken: z.string().nullable().optional(),
   twilioAccountSid: z.string().nullable().optional(),
   twilioAuthToken: z.string().nullable().optional(),
