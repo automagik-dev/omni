@@ -1632,6 +1632,12 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     if (instance.channel === 'hermes') {
       applyHermesConnectionOptions(restartOptions, instance);
     }
+    if (instance.channel === 'gupshup') {
+      // Same failure mode as #894: the plugin's connect() requires the persisted
+      // callback URL and auth token (and validates the handoff options there),
+      // so a restart without this branch left the instance disconnected.
+      applyGupshupConnectionOptions(restartOptions, instance);
+    }
     if (instance.channel === 'whatsapp-business') {
       // Persisted Meta credentials — without them plugin.connect() throws
       // "metaAccessToken is required" and the restart bricks the instance (#894).

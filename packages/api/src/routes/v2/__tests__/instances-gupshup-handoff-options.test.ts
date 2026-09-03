@@ -4,7 +4,10 @@
  * The channel plugin validates `gupshupHandoffOptions` in `connect()` and
  * applies it to every HANDOFF it emits. That only helps if the column reaches
  * the plugin on every path an instance can be (re)connected from: create,
- * PATCH and the generic connect route.
+ * PATCH, the generic connect route and restart. Restart had no gupshup branch
+ * at all before this — it re-connected without the persisted callback URL and
+ * auth token, so the plugin refused and the instance stayed down (same class
+ * of bug as the whatsapp-business fix, #894).
  */
 
 import { describe, expect, mock, test } from 'bun:test';
@@ -181,5 +184,21 @@ describe('POST /instances/:id/connect — persisted options reach the plugin', (
     await app.request(`/${INSTANCE_ID}/connect`, json('POST', {}));
 
     expect(captured.connectOptions).not.toHaveProperty('gupshupHandoffOptions');
+  });
+});
+
+describe('POST /instances/:id/restart — re-reads the persisted Gupshup config', () => {
+  test('threads credentials and handoff options into the reconnect', async () => {
+    const captured: Captured = {};
+    const app = mount(captured);
+
+    const res = await app.request(`/${INSTANCE_ID}/restart`, json('POST'));
+
+    expect(res.status).toBe(200);
+    // Without these the plugin throws "gupshupCallbackUrl is required" and the
+    // handler answers 500 RESTART_FAILED with the instance left disconnected.
+    expect(captured.connectOptions?.gupshupCallbackUrl).toBe('https://callbacks.example.com/abc');
+    expect(captured.connectOptions?.gupshupAuthToken).toBe('persisted-token');
+    expect(captured.connectOptions?.gupshupHandoffOptions).toEqual(HANDOFF_OPTIONS);
   });
 });
