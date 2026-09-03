@@ -1,5 +1,6 @@
 /**
- * Tests for Slack typing indicator (assistant.threads.setStatus)
+ * Tests for Slack thread status (agents.sessions.setStatus with
+ * assistant.threads.setStatus fallback, #914)
  */
 
 import { describe, expect, it, mock } from 'bun:test';
@@ -20,7 +21,36 @@ function makeLogger(): Logger {
   } as unknown as Logger;
 }
 
-function makeClientWithAssistant() {
+/** Slack platform error as the WebClient throws it. */
+function slackError(code: string): Error & { data: { error: string } } {
+  return Object.assign(new Error(`An API error occurred: ${code}`), { data: { error: code } });
+}
+
+/** Client whose apiCall supports the Agent Sessions API. */
+function makeAgentApiClient() {
+  const apiCalls: Array<{ method: string; args: Record<string, unknown> }> = [];
+  const client = {
+    apiCall: mock(async (method: string, args: Record<string, unknown>) => {
+      apiCalls.push({ method, args });
+    }),
+  };
+  return { client, apiCalls };
+}
+
+/** Client where agents.sessions.setStatus fails; other methods succeed. */
+function makeAgentApiFailingClient(code: string) {
+  const apiCalls: Array<{ method: string; args: Record<string, unknown> }> = [];
+  const client = {
+    apiCall: mock(async (method: string, args: Record<string, unknown>) => {
+      apiCalls.push({ method, args });
+      if (method === 'agents.sessions.setStatus') throw slackError(code);
+    }),
+  };
+  return { client, apiCalls };
+}
+
+/** Legacy client: typed assistant.threads.setStatus, no generic apiCall. */
+function makeLegacyAssistantClient() {
   const setStatusCalls: Array<{ channel_id: string; thread_ts: string; status: string; loading_messages?: string[] }> =
     [];
   const client = {
@@ -37,17 +67,7 @@ function makeClientWithAssistant() {
   return { client, setStatusCalls };
 }
 
-function makeClientWithApiCall() {
-  const apiCalls: Array<{ method: string; args: Record<string, unknown> }> = [];
-  const client = {
-    apiCall: mock(async (method: string, args: Record<string, unknown>) => {
-      apiCalls.push({ method, args });
-    }),
-  };
-  return { client, apiCalls };
-}
-
-function makeClientWithoutAssistant() {
+function makeBareClient() {
   return { client: {} };
 }
 
@@ -56,8 +76,8 @@ function makeClientWithoutAssistant() {
 // ─────────────────────────────────────────────────────────────
 
 describe('setSlackThreadStatus', () => {
-  it('no-ops when threadTs is absent', async () => {
-    const { client, setStatusCalls } = makeClientWithAssistant();
+  it('no-ops when threadTs is absent, but logs the bail (#914)', async () => {
+    const { client, apiCalls } = makeAgentApiClient();
     const logger = makeLogger();
 
     const result = await setSlackThreadStatus({
@@ -68,12 +88,155 @@ describe('setSlackThreadStatus', () => {
       logger,
     });
 
-    expect(result).toBe(false);
-    expect(setStatusCalls.length).toBe(0);
+    expect(result.delivered).toBe(false);
+    expect(apiCalls.length).toBe(0);
+
+    const debugCalls = (logger.debug as ReturnType<typeof mock>).mock.calls;
+    expect(debugCalls.length).toBeGreaterThan(0);
+    expect(debugCalls[0]?.[1]).toMatchObject({ reason: 'no_thread_ts' });
   });
 
-  it('calls assistant.threads.setStatus when available', async () => {
-    const { client, setStatusCalls } = makeClientWithAssistant();
+  it('prefers agents.sessions.setStatus, mapping a non-empty status to processing', async () => {
+    const { client, apiCalls } = makeAgentApiClient();
+    const logger = makeLogger();
+
+    const result = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+    });
+
+    expect(result).toEqual({ delivered: true, method: 'agents.sessions.setStatus' });
+    expect(apiCalls).toEqual([
+      {
+        method: 'agents.sessions.setStatus',
+        args: { channel_id: 'C12345', thread_ts: '1234567890.001', status: 'processing' },
+      },
+    ]);
+  });
+
+  it('maps an empty status (clear) to session status active', async () => {
+    const { client, apiCalls } = makeAgentApiClient();
+    const logger = makeLogger();
+
+    const result = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: '',
+      logger,
+    });
+
+    expect(result).toEqual({ delivered: true, method: 'agents.sessions.setStatus' });
+    expect(apiCalls[0]?.args.status).toBe('active');
+  });
+
+  it('falls back to assistant.threads.setStatus when the Agent Sessions API is unavailable', async () => {
+    const { client, apiCalls } = makeAgentApiFailingClient('unknown_method');
+    const logger = makeLogger();
+
+    const result = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      loadingMessages: ['Checking context...'],
+      logger,
+    });
+
+    expect(result).toEqual({ delivered: true, method: 'assistant.threads.setStatus' });
+    expect(apiCalls.length).toBe(2);
+    expect(apiCalls[1]).toEqual({
+      method: 'assistant.threads.setStatus',
+      args: {
+        channel_id: 'C12345',
+        thread_ts: '1234567890.001',
+        status: 'is typing...',
+        loading_messages: ['Checking context...'],
+      },
+    });
+
+    // The unavailability is memoized per client: the next call skips the
+    // Agent Sessions attempt entirely.
+    const second = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+    });
+    expect(second.method).toBe('assistant.threads.setStatus');
+    expect(apiCalls.length).toBe(3);
+    expect(apiCalls[2]?.method).toBe('assistant.threads.setStatus');
+  });
+
+  it('falls through to legacy on transient errors without writing the client off', async () => {
+    const { client, apiCalls } = makeAgentApiFailingClient('channel_not_found');
+    const logger = makeLogger();
+
+    const result = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+    });
+
+    // The legacy bridge still gets its chance on ANY new-API failure —
+    // a status that worked pre-migration must keep working.
+    expect(result).toEqual({ delivered: true, method: 'assistant.threads.setStatus' });
+    expect(apiCalls.map((c) => c.method)).toEqual(['agents.sessions.setStatus', 'assistant.threads.setStatus']);
+
+    // Transient errors do NOT memoize: the next call attempts the new API again.
+    await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+    });
+    expect(apiCalls[2]?.method).toBe('agents.sessions.setStatus');
+
+    // Failure is logged without leaking the raw status string
+    const warnCalls = (logger.warn as ReturnType<typeof mock>).mock.calls;
+    expect(warnCalls.length).toBeGreaterThan(0);
+    expect(warnCalls[0]?.[1]).toMatchObject({ clearing: false, statusLength: 'is typing...'.length });
+    expect(warnCalls[0]?.[1]).not.toHaveProperty('status');
+  });
+
+  it('memoizes onto the legacy path for auth-shaped errors (wrong token type / missing scope)', async () => {
+    const { client, apiCalls } = makeAgentApiFailingClient('not_allowed_token_type');
+    const logger = makeLogger();
+
+    const first = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+    });
+    expect(first).toEqual({ delivered: true, method: 'assistant.threads.setStatus' });
+
+    const second = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+    });
+    expect(second.method).toBe('assistant.threads.setStatus');
+    // Second call skips the doomed new-API attempt entirely
+    expect(apiCalls.map((c) => c.method)).toEqual([
+      'agents.sessions.setStatus',
+      'assistant.threads.setStatus',
+      'assistant.threads.setStatus',
+    ]);
+  });
+
+  it('uses typed assistant.threads.setStatus when there is no generic apiCall', async () => {
+    const { client, setStatusCalls } = makeLegacyAssistantClient();
     const logger = makeLogger();
 
     const result = await setSlackThreadStatus({
@@ -85,8 +248,7 @@ describe('setSlackThreadStatus', () => {
       logger,
     });
 
-    expect(result).toBe(true);
-    expect(setStatusCalls.length).toBe(1);
+    expect(result).toEqual({ delivered: true, method: 'assistant.threads.setStatus' });
     expect(setStatusCalls[0]).toEqual({
       channel_id: 'C12345',
       thread_ts: '1234567890.001',
@@ -95,30 +257,8 @@ describe('setSlackThreadStatus', () => {
     });
   });
 
-  it('falls back to apiCall when assistant.threads.setStatus is absent', async () => {
-    const { client, apiCalls } = makeClientWithApiCall();
-    const logger = makeLogger();
-
-    const result = await setSlackThreadStatus({
-      client: client as never,
-      channelId: 'C12345',
-      threadTs: '1234567890.001',
-      status: 'is typing...',
-      logger,
-    });
-
-    expect(result).toBe(true);
-    expect(apiCalls.length).toBe(1);
-    expect(apiCalls[0]?.method).toBe('assistant.threads.setStatus');
-    expect(apiCalls[0]?.args).toEqual({
-      channel_id: 'C12345',
-      thread_ts: '1234567890.001',
-      status: 'is typing...',
-    });
-  });
-
   it('does not throw when neither method is available', async () => {
-    const { client } = makeClientWithoutAssistant();
+    const { client } = makeBareClient();
     const logger = makeLogger();
 
     const result = await setSlackThreadStatus({
@@ -129,11 +269,11 @@ describe('setSlackThreadStatus', () => {
       logger,
     });
 
-    expect(result).toBe(false);
+    expect(result.delivered).toBe(false);
   });
 
-  it('does not throw when API call fails', async () => {
-    const { client } = makeClientWithAssistant();
+  it('does not throw when the legacy API call fails, and keeps the status out of logs', async () => {
+    const { client } = makeLegacyAssistantClient();
     client.assistant.threads.setStatus = mock(async () => {
       throw new Error('not_allowed_token_type');
     });
@@ -147,29 +287,12 @@ describe('setSlackThreadStatus', () => {
       logger,
     });
 
-    expect(result).toBe(false);
+    expect(result.delivered).toBe(false);
 
-    // Should have logged the failure
     const warnCalls = (logger.warn as ReturnType<typeof mock>).mock.calls;
     expect(warnCalls.length).toBeGreaterThan(0);
     expect(warnCalls[0]?.[1]).toMatchObject({ clearing: false, statusLength: 'is typing...'.length });
     expect(warnCalls[0]?.[1]).not.toHaveProperty('status');
-  });
-
-  it('can clear typing status with empty string', async () => {
-    const { client, setStatusCalls } = makeClientWithAssistant();
-    const logger = makeLogger();
-
-    const result = await setSlackThreadStatus({
-      client: client as never,
-      channelId: 'C12345',
-      threadTs: '1234567890.001',
-      status: '',
-      logger,
-    });
-
-    expect(result).toBe(true);
-    expect(setStatusCalls[0]?.status).toBe('');
   });
 });
 
@@ -178,8 +301,8 @@ describe('setSlackThreadStatus', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('setTypingStatus', () => {
-  it('sets "is typing..." status', async () => {
-    const { client, setStatusCalls } = makeClientWithAssistant();
+  it('sets processing status', async () => {
+    const { client, apiCalls } = makeAgentApiClient();
     const logger = makeLogger();
 
     const result = await setTypingStatus({
@@ -189,12 +312,12 @@ describe('setTypingStatus', () => {
       logger,
     });
 
-    expect(result).toBe(true);
-    expect(setStatusCalls[0]?.status).toBe('is typing...');
+    expect(result.delivered).toBe(true);
+    expect(apiCalls[0]?.args.status).toBe('processing');
   });
 
   it('no-ops when no threadTs', async () => {
-    const { client, setStatusCalls } = makeClientWithAssistant();
+    const { client, apiCalls } = makeAgentApiClient();
     const logger = makeLogger();
 
     const result = await setTypingStatus({
@@ -203,14 +326,14 @@ describe('setTypingStatus', () => {
       logger,
     });
 
-    expect(result).toBe(false);
-    expect(setStatusCalls.length).toBe(0);
+    expect(result.delivered).toBe(false);
+    expect(apiCalls.length).toBe(0);
   });
 });
 
 describe('clearTypingStatus', () => {
-  it('clears status with empty string', async () => {
-    const { client, setStatusCalls } = makeClientWithAssistant();
+  it('clears status back to active', async () => {
+    const { client, apiCalls } = makeAgentApiClient();
     const logger = makeLogger();
 
     const result = await clearTypingStatus({
@@ -220,7 +343,7 @@ describe('clearTypingStatus', () => {
       logger,
     });
 
-    expect(result).toBe(true);
-    expect(setStatusCalls[0]?.status).toBe('');
+    expect(result.delivered).toBe(true);
+    expect(apiCalls[0]?.args.status).toBe('active');
   });
 });

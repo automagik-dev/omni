@@ -1,64 +1,30 @@
 # Omni Deployment
 
-Omni ships as a single Helm umbrella chart — [`deploy/helm/omni`](helm/omni) —
-deployed to three *realms*. Every realm installs the **same chart**; only the
-values overlay changes. The bundled datastores (autopg Postgres, MinIO, NATS)
-turn on or off per realm, so the chart covers both fully self-contained
-self-hosting and Namastex's managed AWS clusters.
+Omni ships a Helm umbrella chart — [`deploy/helm/omni`](helm/omni) — whose
+bundled autopg Postgres, MinIO, and NATS services provide the supported
+self-host shape.
 
-## Realm matrix
+## Public topology and ownership
 
-| Realm | Cluster | Values file | Images / channel | Database | Media | Who deploys |
+The public promotion topology is a direct `dev` → `main` PR reviewed and merged
+by a human. The `main` workflow is verification-only: it checks the already
+published immutable candidate and cannot build, publish, retag, or change a
+runtime.
+
+`hml.omni.khal.ai` is the legacy HML endpoint.
+This change neither mutates nor cleans it up. The endpoint and its HML runtime
+and configuration files remain legacy/reference-only, not an active public
+branch, image tag, release channel, or promotion gate. Production authority is
+separate/private and is not defined by this repository's branches, workflows,
+or legacy overlays.
+
+## Supported public realm
+
+| Realm | Cluster | Values file | Images | Database | Media | Who operates it |
 |---|---|---|---|---|---|---|
-| **dev** | Local k8s (OrbStack, k3d, kind, …) — the self-host shape | [`values-dev.yaml`](helm/omni/values-dev.yaml) | Locally built `omni-api:dev` + `autopg:dev` (`pullPolicy: Never`); tracks the `dev` branch you build from | Bundled **autopg** subchart (Postgres 18, in-cluster) | Bundled **MinIO** (in-cluster S3) | You — `make -C deploy deploy` |
-| **homolog (HML)** | Dedicated AWS cluster | [`values-homolog.yaml`](helm/omni/values-homolog.yaml) | `ghcr.io/automagik-dev/omni-api` — `tag: ""` → `v<Chart.appVersion>`; the `:homolog` tag tracks the `homolog` branch | External **RDS** via pre-created Secret `omni-db` (`DATABASE_URL`) | Real **AWS S3** (`omni-media-hml`) via Secret `omni-media-s3` | Namastex |
-| **HML co-tenant (ALB)** | Shared `langwatch-hml` EKS cluster (sa-east-1), namespace `omni-hml` | [`values-homolog.yaml`](helm/omni/values-homolog.yaml) **+** [`values-hml-alb.yaml`](helm/omni/values-hml-alb.yaml) delta (in that order) | `ghcr.io/automagik-dev/omni-api` — `v<Chart.appVersion>` from public GHCR (no pull secret) | Shared RDS instance, **own `omni` database** — `omni-db` Secret ESO-synced from Secrets Manager `/khal/omni/hml/db` | Real **AWS S3** (`nmstx-khal-omni-hml-media`, sa-east-1) — `omni-media-s3` Secret ESO-synced from `/khal/omni/hml/media-s3` | Namastex |
-| **prod** | Dedicated AWS cluster (separate from HML) | [`values-prod.yaml`](helm/omni/values-prod.yaml) | `ghcr.io/automagik-dev/omni-api` — `tag: ""` → `v<Chart.appVersion>` (v-tags published on merge to `main`; `:main` also available) | External **RDS** via Secret `omni-db` (`DATABASE_URL`) | Real **AWS S3** (`omni-media`) via Secret `omni-media-s3` | Namastex |
+| **dev / self-host** | Local or self-managed k8s (OrbStack, k3d, kind, …) | [`values-dev.yaml`](helm/omni/values-dev.yaml) | Locally built `omni-api:dev` + `autopg:dev` (`pullPolicy: Never`) or an explicitly selected public version | Bundled **autopg** subchart (Postgres 18, in-cluster) | Bundled **MinIO** (in-cluster S3) | The self-hoster |
 
-Notes that apply across the matrix:
-
-- **Promotion flow**: `dev` (local realm) → `homolog` branch (= the HML image
-  channel) → `main` (= prod releases), via rolling PRs that a human merges.
-- **homolog/prod require `--set ingress.host=<fqdn>`** — the overlays leave the
-  host empty on purpose and the chart fail-fasts without it:
-
-  ```bash
-  make -C deploy deploy REALM=homolog HELM_EXTRA='--set ingress.host=omni-hml.example.com'
-  make -C deploy deploy REALM=prod    HELM_EXTRA='--set ingress.host=omni.example.com'
-  ```
-
-- **HML co-tenant (ALB) deploy command** — the co-tenant realm rides on the
-  shared `langwatch-hml` cluster, so ingress is the AWS Load Balancer
-  Controller instead of nginx/cert-manager. Layer the ALB delta AFTER the
-  homolog overlay and pass the ACM certificate ARN at deploy time (see the
-  header of [`values-hml-alb.yaml`](helm/omni/values-hml-alb.yaml)):
-
-  ```bash
-  helm upgrade --install omni deploy/helm/omni -n omni-hml \
-    -f deploy/helm/omni/values-homolog.yaml \
-    -f deploy/helm/omni/values-hml-alb.yaml \
-    --set ingress.host=hml.omni.khal.ai \
-    --set 'ingress.annotations.alb\.ingress\.kubernetes\.io/certificate-arn=<acm-cert-arn>' \
-    --wait
-  ```
-
-  The `omni-db` / `omni-media-s3` Secrets in `omni-hml` are materialized by
-  External Secrets Operator from Secrets Manager `/khal/omni/hml/*` — do not
-  create them by hand in this realm.
-
-  DB TLS is verify-full in this realm: apply
-  [`deploy/k8s/omni-hml/rds-ca-configmap.yaml`](k8s/omni-hml/rds-ca-configmap.yaml)
-  (the RDS sa-east-1 CA bundle) BEFORE the helm upgrade — the Deployment mounts
-  that ConfigMap, so pods stall in `ContainerCreating` if it is missing.
-  `values-hml-alb.yaml` points `database.sslCaConfigMap` at it, and the app
-  then verifies the RDS certificate chain and hostname instead of trusting any
-  cert under `sslmode=require`.
-
-- **homolog/prod pre-created Secrets** (same namespace as the release; see the
-  header comments in each values file for exact commands):
-  - `omni-db` — key `DATABASE_URL`, the full RDS connection URL.
-  - `omni-media-s3` — keys `OMNI_MEDIA_S3_ACCESS_KEY` + `OMNI_MEDIA_S3_SECRET_KEY`.
-- **One replica per realm** — a WhatsApp credential maps to a single live
+- **One replica per installation** — a WhatsApp credential maps to a single live
   Baileys socket; see the "replicas + scaling" notes in
   [`values.yaml`](helm/omni/values.yaml) before scaling out.
 
@@ -68,10 +34,10 @@ Notes that apply across the matrix:
 the supported self-host path.** You do not need AWS, RDS, or an S3 account to
 run Omni: `autopg.enabled: true` gives you an in-cluster Postgres 18 with
 scoped-role provisioning, `minio.enabled: true` gives you an in-cluster S3 for
-media, and NATS/JetStream is bundled as first-party templates. The AWS
-RDS + real-S3 shape (homolog/prod overlays) is **Namastex's cloud path**, not a
-requirement — self-hosters only graduate to external datastores if they want
-managed durability.
+media, and NATS/JetStream is bundled as first-party templates. Legacy
+external-datastore overlays are reference material, not part of the supported
+public path; self-hosters can still select managed datastores through their own
+values when they want managed durability.
 
 Quickstart on any local/self-managed cluster:
 
@@ -89,13 +55,16 @@ make -C deploy health
 ```
 
 To skip local builds entirely, point the dev-shape install at the public
-registry images instead:
+registry images instead. Use the pinned public candidate — the `version` in
+`.well-known/latest.json`, which is also the chart's default `image.tag` in
+`deploy/helm/omni/values.yaml`. `Chart.appVersion` tracks every dev bump and
+is not guaranteed to have a published image, so do not derive the tag from it:
 
 ```bash
 helm upgrade --install omni deploy/helm/omni -n omni --create-namespace \
   -f deploy/helm/omni/values-dev.yaml \
   --set image.repository=ghcr.io/automagik-dev/omni-api \
-  --set image.tag=v<version> --set image.pullPolicy=IfNotPresent \
+  --set image.tag="v$(jq -r .version .well-known/latest.json)" --set image.pullPolicy=IfNotPresent \
   --set autopg.image.repository=ghcr.io/automagik-dev/autopg \
   --set autopg.image.tag=v3.0.7 --set autopg.image.pullPolicy=IfNotPresent
 ```
@@ -110,11 +79,19 @@ Adjust `ingress.host`, the dev-only passwords, and `service.type` in a copy of
 `imagePullSecrets` stays `[]` in every overlay, and nothing in this repo will
 ever ask you to configure registry auth for these images.
 
-Provenance is verifiable — the publish workflow attaches SLSA provenance
-attestations (GitHub-native, via `actions/attest-build-provenance`):
+Provenance is verifiable for the already-published public candidate. The
+verification-only `main` workflow checks the existing cosign signatures and
+GitHub-native provenance attestations (the OCI image's, and each release
+tarball's shipped `.provenance.json` bundle); it does not create them. They are
+created when an operator mints a candidate with the dispatch-only
+`image-build.yml` at an exact `v<version>` tag
+(`gh workflow run image-build.yml --ref refs/tags/v<version> -f version=<version>`;
+see `docs/deployment/public-launch-readiness.md`, "Candidate minting"):
 
 ```bash
-gh attestation verify oci://ghcr.io/automagik-dev/omni-api:v<version> -R automagik-dev/omni
+# The verifiable tag is the pinned public candidate: `.well-known/latest.json`
+# "version" (= the chart's default image.tag), not Chart.appVersion.
+gh attestation verify "oci://ghcr.io/automagik-dev/omni-api:v$(jq -r .version .well-known/latest.json)" -R automagik-dev/omni
 ```
 
 Only images published after attestation support landed (July 2026) carry
@@ -183,7 +160,6 @@ Run everything as `make -C deploy <target>` from the repo root.
 | `deploy-smoke` | Full disposable-cluster install proof (see above) |
 | `uninstall` | Remove the release |
 
-Key variables: `REALM=dev|homolog|prod` picks the values overlay
-(`VALUES=…` still overrides it directly); `HELM_EXTRA='--set …'` appends
-arbitrary helm args (required for homolog/prod ingress hosts);
-`NAMESPACE`/`RELEASE` default to `omni`.
+The supported public path uses `REALM=dev`; `VALUES=…` can select a custom
+self-host overlay. `HELM_EXTRA='--set …'` appends arbitrary Helm arguments,
+and `NAMESPACE`/`RELEASE` default to `omni`.

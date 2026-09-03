@@ -8,6 +8,7 @@ import re
 import subprocess
 import tarfile
 import tempfile
+from datetime import datetime
 from typing import NoReturn
 
 
@@ -58,6 +59,7 @@ parser.add_argument("--expected-tarball", required=True)
 parser.add_argument("--registry-tarball", required=True)
 parser.add_argument("--dist-json", required=True)
 parser.add_argument("--keys-json", required=True)
+parser.add_argument("--packument-json", required=True)
 parser.add_argument("--package", required=True)
 parser.add_argument("--version", required=True)
 args = parser.parse_args()
@@ -65,13 +67,15 @@ expected_tarball = pathlib.Path(args.expected_tarball)
 registry_tarball = pathlib.Path(args.registry_tarball)
 dist_path = pathlib.Path(args.dist_json)
 keys_path = pathlib.Path(args.keys_json)
+packument_path = pathlib.Path(args.packument_json)
 if (
     not expected_tarball.is_file()
     or not registry_tarball.is_file()
     or not dist_path.is_file()
     or not keys_path.is_file()
+    or not packument_path.is_file()
 ):
-    fail("expected tarball, registry tarball, dist JSON, or registry keys JSON is missing")
+    fail("expected tarball, registry tarball, dist JSON, registry keys JSON, or packument JSON is missing")
 if re.fullmatch(r"@[a-z0-9._-]+/[a-z0-9._-]+", args.package) is None:
     fail("package name is invalid")
 if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version) is None:
@@ -79,12 +83,30 @@ if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version) is None:
 try:
     dist = json.loads(dist_path.read_text(encoding="utf-8"))
     keys_document = json.loads(keys_path.read_text(encoding="utf-8"))
+    packument = json.loads(packument_path.read_text(encoding="utf-8"))
 except (OSError, json.JSONDecodeError) as exc:
     fail(f"invalid registry metadata JSON: {exc}")
 if not isinstance(dist, dict):
     fail("registry dist metadata is not an object")
 if not isinstance(keys_document, dict) or not isinstance(keys_document.get("keys"), list):
     fail("registry signing keys metadata is malformed")
+if not isinstance(packument, dict) or not isinstance(packument.get("time"), dict):
+    fail("registry packument publication metadata is malformed")
+
+
+def timestamp(value: object, label: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        fail(f"{label} timestamp is missing")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        fail(f"{label} timestamp is invalid")
+    if parsed.tzinfo is None:
+        fail(f"{label} timestamp has no timezone")
+    return parsed
+
+
+publication_time = timestamp(packument["time"].get(args.version), "package publication")
 registry_data = registry_tarball.read_bytes()
 expected_integrity = "sha512-" + base64.b64encode(hashlib.sha512(registry_data).digest()).decode()
 expected_shasum = hashlib.sha1(registry_data).hexdigest()
@@ -109,12 +131,19 @@ keys = {
 }
 payload = f"{args.package}@{args.version}:{expected_integrity}".encode()
 signature_verified = False
+expired_before_publication = False
 for signature in signatures:
     key = keys.get(signature["keyid"])
     if not isinstance(key, dict):
         continue
     if key.get("keytype") != "ecdsa-sha2-nistp256" or key.get("scheme") != "ecdsa-sha2-nistp256":
         continue
+    expires = key.get("expires")
+    if expires is not None:
+        expiry_time = timestamp(expires, f"signing key {signature['keyid']} expiry")
+        if expiry_time < publication_time:
+            expired_before_publication = True
+            continue
     try:
         public_der = base64.b64decode(str(key.get("key", "")), validate=True)
         signature_der = base64.b64decode(signature["sig"], validate=True)
@@ -141,6 +170,8 @@ for signature in signatures:
             signature_verified = True
             break
 if not signature_verified:
+    if expired_before_publication:
+        fail("registry signing key expired before package publication")
     fail("registry package signature did not verify against an authoritative npm key")
 if package_files(expected_tarball) != package_files(registry_tarball):
     fail("registry package contents differ from the exact locally built source package")

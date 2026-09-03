@@ -63,6 +63,34 @@ async function callHandler(
 }
 
 // ─────────────────────────────────────────────────────────────
+// Thread keys in rawPayload (#914 M2)
+// ─────────────────────────────────────────────────────────────
+
+describe('thread keys in rawPayload', () => {
+  it('keeps cancelThreadId for a DM thread reply even though threadId is dropped', async () => {
+    const result = await callHandler(
+      undefined,
+      makeMsg({ channel: 'D123', channel_type: 'im', thread_ts: '1700000000.000100', ts: '1700000000.000200' }),
+    );
+    expect(result.received).toBe(true);
+    expect(result.rawPayload?.threadId).toBeUndefined();
+    expect(result.rawPayload?.cancelThreadId).toBe('1700000000.000100');
+  });
+
+  it('sets both threadId and cancelThreadId for a channel thread reply', async () => {
+    const result = await callHandler(undefined, makeMsg({ thread_ts: '1700000000.000100', ts: '1700000000.000200' }));
+    expect(result.rawPayload?.threadId).toBe('1700000000.000100');
+    expect(result.rawPayload?.cancelThreadId).toBe('1700000000.000100');
+  });
+
+  it('leaves both undefined for a top-level message', async () => {
+    const result = await callHandler(undefined, makeMsg());
+    expect(result.rawPayload?.threadId).toBeUndefined();
+    expect(result.rawPayload?.cancelThreadId).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
 // Channel allowlist
 // ─────────────────────────────────────────────────────────────
 

@@ -577,6 +577,15 @@ const updateDeliveryStatusSchema = z.object({
   latestEventId: z.string().uuid().optional(),
 });
 
+// Shared authorship marker for all send routes (#912). 'agent' resolves the
+// instance's configured agent server-side — see resolveSentByAgentId.
+const sentByField = z
+  .enum(['agent', 'user'])
+  .optional()
+  .describe(
+    "Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered (#912). The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.",
+  );
+
 // Mention schema - supports both WhatsApp and Discord formats
 const MentionSchema = z.object({
   id: z.string().min(1).describe('User/role ID to mention'),
@@ -623,6 +632,7 @@ const sendTextSchema = z.object({
     .boolean()
     .optional()
     .describe('Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text)'),
+  sentBy: sentByField,
 });
 
 // Send media schema
@@ -640,6 +650,7 @@ const sendMediaSchema = z.object({
     .describe('MIME type of the media (e.g. image/gif enables GIF playback for video type)'),
   voiceNote: z.boolean().optional().describe('Send audio as voice note'),
   threadId: z.string().optional().describe('Thread/topic ID (e.g. Telegram forum topic)'),
+  sentBy: sentByField,
 });
 
 function normalizeSendMediaMimeType(data: z.infer<typeof sendMediaSchema>): string {
@@ -648,6 +659,41 @@ function normalizeSendMediaMimeType(data: z.infer<typeof sendMediaSchema>): stri
     return 'audio/ogg; codecs=opus';
   }
   return inferred;
+}
+
+/**
+ * Resolve `sentBy: 'agent'` to the instance's configured agent (#912).
+ * Server-side on purpose: `messages.sender_agent_id` is an FK, so
+ * caller-provided agent ids are not accepted.
+ *
+ * When the instance has no configured agent (e.g. routing lives in
+ * agent_routes), the send still goes out — failing it would break the
+ * integration harder than missing attribution does — but the miss is logged
+ * here and surfaced to the caller via `sentByResponseFields`.
+ */
+function resolveSentByAgentId(
+  sentBy: 'agent' | 'user' | undefined,
+  instance: { id: string; agentId?: string | null },
+): string | undefined {
+  if (sentBy !== 'agent') return undefined;
+  if (!instance.agentId) {
+    log.warn('sentBy=agent could not be attributed: instance has no configured agent', { instanceId: instance.id });
+    return undefined;
+  }
+  return instance.agentId;
+}
+
+/**
+ * Response fields reporting how `sentBy: 'agent'` resolved: `senderAgentId`
+ * is the attributed agent, or null when the instance has no configured agent
+ * (so callers can detect that attribution silently did not happen). Empty for
+ * sends that did not request agent attribution.
+ */
+function sentByResponseFields(
+  sentBy: 'agent' | 'user' | undefined,
+  senderAgentId: string | undefined,
+): { senderAgentId?: string | null } {
+  return sentBy === 'agent' ? { senderAgentId: senderAgentId ?? null } : {};
 }
 
 function buildSendMediaMetadata(data: z.infer<typeof sendMediaSchema>): Record<string, unknown> {
@@ -671,6 +717,7 @@ const sendStickerSchema = z.object({
   to: z.string().min(1).describe('Recipient'),
   url: z.string().url().optional().describe('Sticker URL'),
   base64: z.string().optional().describe('Base64 encoded sticker'),
+  sentBy: sentByField,
 });
 
 // Send contact schema
@@ -683,6 +730,7 @@ const sendContactSchema = z.object({
     email: z.string().email().optional().describe('Email address'),
     organization: z.string().optional().describe('Organization'),
   }),
+  sentBy: sentByField,
 });
 
 // Send location schema
@@ -693,6 +741,7 @@ const sendLocationSchema = z.object({
   longitude: z.number().describe('Longitude'),
   name: z.string().optional().describe('Location name'),
   address: z.string().optional().describe('Address'),
+  sentBy: sentByField,
 });
 
 const sendHandoffSchema = z.object({
@@ -1187,7 +1236,7 @@ messagesRoutes.post('/send', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', issues: parsed.error.issues } }, 400);
   }
 
-  const { instanceId, to, replyTo, threadId, mentions, buttons, list, requestLocation } = parsed.data;
+  const { instanceId, to, replyTo, threadId, mentions, buttons, list, requestLocation, sentBy } = parsed.data;
   // Strip internal routing headers and agent directives before sending (GH #300)
   const text = sanitizeOutboundText(parsed.data.text);
   if (!text) {
@@ -1214,6 +1263,8 @@ messagesRoutes.post('/send', async (c) => {
   // Get reply context if replying
   const replyContext = replyTo ? await getReplyContext(services, instanceId, resolvedTo, replyTo) : {};
 
+  const senderAgentId = resolveSentByAgentId(sentBy, instance);
+
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     threadId,
@@ -1224,7 +1275,15 @@ messagesRoutes.post('/send', async (c) => {
       ...(list ? { list } : {}),
     } as OutgoingContent,
     replyTo,
-    metadata: { ...(mentions ? { mentions } : {}), ...replyContext },
+    metadata: {
+      ...(mentions ? { mentions } : {}),
+      ...replyContext,
+      ...(senderAgentId ? { senderAgentId } : {}),
+      // Instance-level markdown handling must govern direct API sends the same
+      // way it governs agent-dispatched replies — plugins default to 'convert'
+      // when the key is absent (#894).
+      ...(instance.messageFormatMode ? { messageFormatMode: instance.messageFormatMode } : {}),
+    },
   };
 
   // T8: API processed the send request
@@ -1254,6 +1313,7 @@ messagesRoutes.post('/send', async (c) => {
         instanceId: instance.id,
         to,
         timestamp: result.timestamp,
+        ...sentByResponseFields(sentBy, senderAgentId),
       },
     },
     201,
@@ -1318,6 +1378,8 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
 
   const mediaMimeType = normalizeSendMediaMimeType(data);
 
+  const senderAgentId = resolveSentByAgentId(data.sentBy, instance);
+
   // Build outgoing message
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -1329,7 +1391,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
       filename: data.filename,
       mimeType: mediaMimeType,
     } as OutgoingContent,
-    metadata: buildSendMediaMetadata(data),
+    metadata: { ...buildSendMediaMetadata(data), ...(senderAgentId ? { senderAgentId } : {}) },
   };
 
   // T8: API processed the send request
@@ -1375,6 +1437,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
         to: data.to,
         mediaType: data.type,
         timestamp: result.timestamp,
+        ...sentByResponseFields(data.sentBy, senderAgentId),
       },
     },
     201,
@@ -1524,6 +1587,8 @@ messagesRoutes.post('/send/sticker', zValidator('json', sendStickerSchema), asyn
   // Resolve recipient (handles person ID to platform ID resolution)
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
+  const senderAgentId = resolveSentByAgentId(data.sentBy, instance);
+
   // Build outgoing message for sticker
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -1533,6 +1598,7 @@ messagesRoutes.post('/send/sticker', zValidator('json', sendStickerSchema), asyn
     } as OutgoingContent,
     metadata: {
       base64: data.base64,
+      ...(senderAgentId ? { senderAgentId } : {}),
     },
   };
 
@@ -1560,6 +1626,7 @@ messagesRoutes.post('/send/sticker', zValidator('json', sendStickerSchema), asyn
         externalMessageId: result.messageId,
         status: 'sent',
         timestamp: result.timestamp,
+        ...sentByResponseFields(data.sentBy, senderAgentId),
       },
     },
     201,
@@ -1610,6 +1677,8 @@ messagesRoutes.post('/send/contact', zValidator('json', sendContactSchema), asyn
   // Resolve recipient (handles person ID to platform ID resolution)
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
+  const senderAgentId = resolveSentByAgentId(data.sentBy, instance);
+
   // Build outgoing message for contact
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -1617,6 +1686,7 @@ messagesRoutes.post('/send/contact', zValidator('json', sendContactSchema), asyn
       type: 'contact',
       contact: data.contact,
     } as OutgoingContent,
+    ...(senderAgentId ? { metadata: { senderAgentId } } : {}),
   };
 
   // Send via channel plugin
@@ -1643,6 +1713,7 @@ messagesRoutes.post('/send/contact', zValidator('json', sendContactSchema), asyn
         externalMessageId: result.messageId,
         status: 'sent',
         timestamp: result.timestamp,
+        ...sentByResponseFields(data.sentBy, senderAgentId),
       },
     },
     201,
@@ -1693,6 +1764,8 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
   // Resolve recipient (handles person ID to platform ID resolution)
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
 
+  const senderAgentId = resolveSentByAgentId(data.sentBy, instance);
+
   // Build outgoing message for location
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -1705,6 +1778,7 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
         address: data.address,
       },
     } as OutgoingContent,
+    ...(senderAgentId ? { metadata: { senderAgentId } } : {}),
   };
 
   // Send via channel plugin
@@ -1731,6 +1805,7 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
         externalMessageId: result.messageId,
         status: 'sent',
         timestamp: result.timestamp,
+        ...sentByResponseFields(data.sentBy, senderAgentId),
       },
     },
     201,
@@ -2134,6 +2209,7 @@ const sendTtsSchema = z.object({
     .max(30000)
     .optional()
     .describe('Custom recording presence duration in ms (default: match audio duration)'),
+  sentBy: sentByField,
 });
 
 /**
@@ -2183,6 +2259,8 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
     }
   }
 
+  const senderAgentId = resolveSentByAgentId(data.sentBy, instance);
+
   // Build outgoing voice note message
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -2193,6 +2271,7 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
     metadata: {
       audioBuffer: ttsResult.buffer,
       ptt: true,
+      ...(senderAgentId ? { senderAgentId } : {}),
     },
   };
 
@@ -2224,6 +2303,7 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
         audioSizeKb: ttsResult.sizeKb,
         durationMs: ttsResult.durationMs,
         timestamp: result.timestamp,
+        ...sentByResponseFields(data.sentBy, senderAgentId),
       },
     },
     201,
@@ -2240,6 +2320,7 @@ const forwardMessageSchema = z.object({
   to: z.string().min(1).describe('Recipient to forward to'),
   messageId: z.string().min(1).describe('External message ID to forward'),
   fromChatId: z.string().min(1).describe('Chat ID where the message is from'),
+  sentBy: sentByField,
 });
 
 /**
@@ -2249,7 +2330,7 @@ const forwardMessageSchema = z.object({
  * This ensures the "Forwarded" label appears correctly.
  */
 messagesRoutes.post('/send/forward', zValidator('json', forwardMessageSchema), async (c) => {
-  const { instanceId, to, messageId, fromChatId } = c.req.valid('json');
+  const { instanceId, to, messageId, fromChatId, sentBy } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
   checkInstanceAccess(c.get('apiKey'), instanceId);
@@ -2320,6 +2401,8 @@ messagesRoutes.post('/send/forward', zValidator('json', forwardMessageSchema), a
   // Resolve recipient
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
 
+  const senderAgentId = resolveSentByAgentId(sentBy, instance);
+
   // Build outgoing message for forward with the full rawPayload
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -2333,6 +2416,7 @@ messagesRoutes.post('/send/forward', zValidator('json', forwardMessageSchema), a
         fromChatId,
         rawPayload: originalMessage.rawPayload, // Pass full message for proper forwarding
       },
+      ...(senderAgentId ? { senderAgentId } : {}),
     },
   };
 
@@ -2359,6 +2443,7 @@ messagesRoutes.post('/send/forward', zValidator('json', forwardMessageSchema), a
         messageId: result.messageId,
         status: 'sent',
         timestamp: result.timestamp,
+        ...sentByResponseFields(sentBy, senderAgentId),
       },
     },
     201,
@@ -2427,7 +2512,8 @@ function hasPresenceStatusSender(plugin: unknown): plugin is PresenceStatusSende
  * Shows typing/recording indicator in a chat. Auto-pauses after duration.
  * - WhatsApp: supports typing, recording, paused
  * - Discord: supports typing only (recording/paused treated as typing)
- * - Slack: supports AI Assistant thread status via assistant.threads.setStatus
+ * - Slack: supports agent thread status via agents.sessions.setStatus (legacy
+ *   assistant.threads.setStatus fallback, #914)
  */
 messagesRoutes.post('/send/presence', zValidator('json', sendPresenceSchema), async (c) => {
   const { instanceId, to, type, duration, threadId, status, loadingMessages } = c.req.valid('json');
@@ -2678,6 +2764,7 @@ const sendPollSchema = z.object({
   durationHours: z.number().int().min(1).max(168).optional().describe('Poll duration in hours (default 24, max 168)'),
   multiSelect: z.boolean().optional().describe('Allow multiple selections'),
   replyTo: z.string().optional().describe('Message ID to reply to'),
+  sentBy: sentByField,
 });
 
 // Send embed schema (Discord only)
@@ -2718,6 +2805,7 @@ const sendEmbedSchema = z.object({
     .optional()
     .describe('Embed fields'),
   replyTo: z.string().optional().describe('Message ID to reply to'),
+  sentBy: sentByField,
 });
 
 // Edit message via channel schema
@@ -2755,6 +2843,8 @@ messagesRoutes.post('/send/poll', zValidator('json', sendPollSchema), async (c) 
   // Get reply context if replying
   const replyContext = data.replyTo ? await getReplyContext(services, data.instanceId, resolvedTo, data.replyTo) : {};
 
+  const senderAgentId = resolveSentByAgentId(data.sentBy, instance);
+
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     content: { type: 'poll', text: data.question } as OutgoingContent,
@@ -2766,6 +2856,7 @@ messagesRoutes.post('/send/poll', zValidator('json', sendPollSchema), async (c) 
         multiSelect: data.multiSelect ?? false,
       },
       ...replyContext,
+      ...(senderAgentId ? { senderAgentId } : {}),
     },
     replyTo: data.replyTo,
   };
@@ -2773,7 +2864,17 @@ messagesRoutes.post('/send/poll', zValidator('json', sendPollSchema), async (c) 
   const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
   handleSendResult(result, { channelType: instance.channel, instanceId: data.instanceId, operation: 'send poll' });
 
-  return c.json({ data: { messageId: result.messageId, status: 'sent', timestamp: result.timestamp } }, 201);
+  return c.json(
+    {
+      data: {
+        messageId: result.messageId,
+        status: 'sent',
+        timestamp: result.timestamp,
+        ...sentByResponseFields(data.sentBy, senderAgentId),
+      },
+    },
+    201,
+  );
 });
 
 /**
@@ -2834,6 +2935,8 @@ messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c
     }
   }
 
+  const senderAgentId = resolveSentByAgentId(data.sentBy, instance);
+
   // Build outgoing message for embed
   // Note: We use 'text' type but pass embed data in metadata
   // The Discord plugin checks for metadata.embed and handles accordingly
@@ -2858,6 +2961,7 @@ messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c
       },
       ...(replyToFromMe !== undefined ? { replyToFromMe } : {}),
       ...(replyToRawPayload ? { replyToRawPayload } : {}),
+      ...(senderAgentId ? { senderAgentId } : {}),
     },
     replyTo: data.replyTo,
   };
@@ -2885,6 +2989,7 @@ messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c
         messageId: result.messageId,
         status: 'sent',
         timestamp: result.timestamp,
+        ...sentByResponseFields(data.sentBy, senderAgentId),
       },
     },
     201,

@@ -30,6 +30,9 @@ printf 'apiVersion: v2\nname: omni\nversion: 0.1.0\nappVersion: "%s"\n' "${VERSI
   git tag "v${VERSION}"
 )
 SHA="$(git -C "${repo}" rev-parse HEAD)"
+CONTROL_SHA="$(git -C "${ROOT}" rev-parse HEAD)"
+[[ "${CONTROL_SHA}" != "${SHA}" ]] || \
+  fail "final control checkout unexpectedly equals the historical candidate"
 [[ ! -e "${repo}/scripts/release/verify-oci-release.sh" ]] || \
   fail "historical-source fixture unexpectedly contains hardened control helpers"
 
@@ -57,8 +60,9 @@ run_verify() {
     # This fixture intentionally captures stdout, so isolate that contract from
     # the runner-provided environment.
     unset GITHUB_OUTPUT
-    cd "${repo}"
+    cd "${ROOT}"
     PATH="${work}/bin:${PATH}" "${SCRIPT}" \
+      --source-dir "${repo}" \
       --ref "refs/tags/v${VERSION}" \
       --expected-version "${VERSION}" \
       --expected-sha "${SHA}" \
@@ -93,8 +97,9 @@ if MOCK_REGISTRY_MODE=existing MOCK_REGISTRY_DIGEST="${DIGEST}" \
 fi
 
 if (
-  cd "${repo}"
+  cd "${ROOT}"
   PATH="${work}/bin:${PATH}" MOCK_REGISTRY_MODE=absent "${SCRIPT}" \
+    --source-dir "${repo}" \
     --ref "refs/tags/v9.9.9" \
     --expected-version "${VERSION}" \
     --expected-sha "${SHA}" \

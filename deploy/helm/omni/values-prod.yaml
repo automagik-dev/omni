@@ -10,7 +10,8 @@
 # Realm shape (shared with values-homolog.yaml — separate clusters, one shape):
 #   - NO bundled datastores: autopg + MinIO are OFF. Postgres is external RDS
 #     (database.existingSecret), media is real AWS S3.
-#   - image.tag "" → v<Chart.appVersion>, the tag image-publish.yml publishes.
+#   - image.tag inherits the chart default: the pinned public candidate from
+#     .well-known/latest.json (values.yaml). Production supplies image.digest.
 #   - ingress.host is intentionally EMPTY: the chart fail-fasts unless the
 #     realm FQDN is passed via --set ingress.host=… (see templates/ingress.yaml).
 # Prod hardens beyond homolog:
@@ -38,10 +39,12 @@
 
 image:
   repository: ghcr.io/automagik-dev/omni-api
-  # "" → v<Chart.appVersion>: the latest PUBLISHED release (image-publish.yml
-  # pushes v<packages/cli version> on merges to main). Pin an explicit v-tag
-  # only to hold prod back from the chart's tracked release.
-  tag: ""
+  # tag is NOT overridden here: the chart default (values.yaml) is the pinned
+  # public candidate from .well-known/latest.json. Do not set tag "" — that
+  # falls back to v<Chart.appVersion>, which tracks every dev bump and is not
+  # guaranteed to exist in the registry. Production deploys pass an immutable
+  # image.digest (it wins over any tag); set an explicit v-tag only to hold
+  # prod on a different published release.
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 

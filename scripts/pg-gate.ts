@@ -34,7 +34,8 @@
  *   bun scripts/pg-gate.ts --keep          # leave the cluster up for debugging
  */
 
-import { readdirSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDisposableCluster, destroyDisposableCluster, resolvePgBinaries } from './disposable-pg-cluster';
@@ -42,6 +43,7 @@ import { createDisposableCluster, destroyDisposableCluster, resolvePgBinaries } 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..');
 const packagesDir = join(repoRoot, 'packages');
+const releaseTestsDir = join(repoRoot, 'tests', 'release');
 
 /**
  * Every opt-in variable a `*-postgres.test.ts` in this repository reads.
@@ -73,7 +75,7 @@ function option(name: string): string | undefined {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
-const suites = findPostgresSuites(packagesDir).sort();
+const suites = [...findPostgresSuites(packagesDir), ...findPostgresSuites(releaseTestsDir)].sort();
 if (suites.length === 0) {
   process.stderr.write('pg-gate: found no *-postgres.test.ts suites — the discovery glob is broken.\n');
   process.exit(1);
@@ -117,20 +119,35 @@ for (const variable of [
 
 let exitCode = 1;
 try {
-  const child = Bun.spawnSync({
-    cmd: ['bun', 'test', ...suites],
-    cwd: repoRoot,
-    env,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const output = `${child.stdout.toString()}${child.stderr.toString()}`;
-  process.stdout.write(output);
+  // The PostgreSQL suites can emit several MiB of NOTICE output. Bun's
+  // synchronous in-memory pipe has a fixed capacity and kills the child when
+  // it fills, so spool both streams to disposable files before parsing the
+  // summary. The longer timeout covers integration-scale index assertions.
+  const outputDir = mkdtempSync(join(tmpdir(), 'omni-pg-gate-output-'));
+  const { child, output } = (() => {
+    try {
+      const stdoutPath = join(outputDir, 'stdout');
+      const stderrPath = join(outputDir, 'stderr');
+      const child = Bun.spawnSync({
+        cmd: ['bun', 'test', '--timeout', '30000', ...suites],
+        cwd: repoRoot,
+        env,
+        stdout: Bun.file(stdoutPath),
+        stderr: Bun.file(stderrPath),
+      });
+      return {
+        child,
+        output: `${readFileSync(stdoutPath, 'utf-8')}${readFileSync(stderrPath, 'utf-8')}`,
+      };
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  })();
 
   // --- assert nothing skipped ---------------------------------------------
-  const skipped = /(\d+)\s+skip/.exec(output);
+  const skipped = /^\s*(\d+)\s+skip\s*$/m.exec(output);
   const skipCount = skipped ? Number(skipped[1]) : 0;
-  const ran = /(\d+)\s+pass/.exec(output);
+  const ran = /^\s*(\d+)\s+pass\s*$/m.exec(output);
   const passCount = ran ? Number(ran[1]) : 0;
 
   const problems: string[] = [];
@@ -147,6 +164,8 @@ try {
   }
 
   if (problems.length > 0) {
+    // Successful runs stay concise; failures retain the child diagnostics.
+    process.stderr.write(output);
     process.stderr.write(`\npg-gate: FAILED\n${problems.map((p) => `  - ${p}`).join('\n')}\n`);
     exitCode = 1;
   } else {

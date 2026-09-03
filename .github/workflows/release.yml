@@ -15,12 +15,11 @@ name: Release
 #
 # Job topology:
 #   1. build           — workflow_call into build-tarballs.yml (matrix × 4 platforms)
-#   2. sign-attest     — workflow_call into sign-attest.yml (cosign keyless + SLSA L3)
+#   2. sign-attest     — workflow_call into sign-attest.yml (cosign keyless + GitHub-native provenance)
 #   3. publish         — workflow_call into release-publish.yml (GH release + assets)
 #   4. release-notes   — git-cliff changelog appended to the GH release body.
 #
-# npm publishing happens in version.yml inline (dev/homolog auto-versioning,
-# plus the verified stable-only entry point dispatched by image-publish.yml).
+# npm publishing happens in version.yml inline for dev auto-versioning.
 # Single source of truth — no duplicate publish step here. Codex P1 on PR #633 caught the gap when a previous
 # revision of this file ran an unconditional `npm publish --tag latest`
 # alongside version.yml's @next publish, promoting dev cuts to @latest.
@@ -35,30 +34,24 @@ on:
         required: true
         type: string
       channel:
-        description: 'Release channel — stable publishes to @latest, dev/beta/canary are prereleases with their own .well-known/<channel>.json pointer'
+        description: 'Release channel — stable is authorized orchestration; dev is a prerelease'
         required: false
         type: choice
         default: stable
-        # Canonical channel taxonomy (release taxonomy 2026-05-12,
-        # unified across pgserve/omni/genie):
-        #   stable  → main branch  → .well-known/latest.json
-        #   homolog → homolog branch → .well-known/homolog.json
-        #   dev     → dev branch   → .well-known/dev.json
-        # beta + canary have been retired.
+        # Omni has exactly two active branches/channels: dev and stable main.
         options:
           - stable
-          - homolog
           - dev
       expected_sha:
-        description: 'Stable only: exact verified release source SHA'
-        required: false
+        description: 'Exact verified release source SHA'
+        required: true
         type: string
       expected_digest:
         description: 'Stable only: exact verified omni-api OCI digest'
         required: false
         type: string
       orchestrator_run_id:
-        description: 'Stable only: exact in-progress image-publish workflow run'
+        description: 'Stable only: exact in-progress image-build workflow run'
         required: false
         type: string
 
@@ -73,6 +66,7 @@ jobs:
   authorize:
     name: Authorize release channel
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read
@@ -95,21 +89,27 @@ jobs:
           IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
         run: |
           set -euo pipefail
+          [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]
+          [[ "${INPUT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "${GITHUB_REF}" == "refs/tags/v${INPUT_VERSION}" ]]
+          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${GITHUB_SHA}" == "${EXPECTED_SHA}" ]]
           if [[ "${CHANNEL}" == "stable" ]]; then
-            [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${ACTOR}" == "github-actions[bot]" ]]
-            [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]
+            [[ "${ACTOR}" == "github-actions[bot]" ]]
             [[ "${EXPECTED_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
             [[ "${ORCHESTRATOR_RUN_ID}" =~ ^[0-9]+$ ]]
-            [[ "${GITHUB_REF}" == "refs/tags/v${INPUT_VERSION}" ]]
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ORCHESTRATOR_RUN_ID}" > "${RUNNER_TEMP}/orchestrator.json"
             scripts/release/verify-orchestrator-run.py \
               --run-json "${RUNNER_TEMP}/orchestrator.json" \
               --repository "${GITHUB_REPOSITORY}" \
-              --source-sha "${EXPECTED_SHA}"
+              --source-sha "${EXPECTED_SHA}" \
+              --expected-workflow .github/workflows/image-build.yml \
+              --allowed-event workflow_dispatch
             gh attestation verify "oci://${IMAGE}@${EXPECTED_DIGEST}" \
               --repo "${GITHUB_REPOSITORY}" \
               --source-digest "${EXPECTED_SHA}" \
-              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-publish.yml"
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-build.yml"
           fi
 
   # ---------------------------------------------------------------------------
@@ -120,33 +120,34 @@ jobs:
     uses: ./.github/workflows/build-tarballs.yml
     permissions:
       contents: read
-    secrets: inherit
 
   sign-attest:
     needs: build
     uses: ./.github/workflows/sign-attest.yml
     permissions:
-      contents: write       # SLSA reusable nested upload-assets static check
+      contents: read        # checkout only; signing needs no Git-writing token
       id-token: write       # cosign keyless + attest-build-provenance OIDC
       attestations: write   # GitHub Attestations API registration
       actions: read         # cross-run artifact metadata
-    secrets: inherit
+    with:
+      # This run is workflow_dispatch-triggered (version.yml dispatches it), so
+      # sign-attest.yml cannot tell orchestration from operator recovery by
+      # event name alone. Without this flag its manual-recovery guards fire
+      # with an empty inputs.version and fail every orchestrated release.
+      orchestrated: true
 
   publish:
     needs: sign-attest
     uses: ./.github/workflows/release-publish.yml
     permissions:
-      contents: write       # gh release create/upload + push latest.json
+      contents: write       # gh release create/upload (no metadata push; .well-known/ is PR-owned)
       actions: read
       packages: read
       attestations: read
-    secrets: inherit
     with:
       version: ${{ needs.sign-attest.outputs.version }}
-      # workflow_dispatch supplies the channel (version.yml passes dev/homolog;
-      # the verified image pipeline passes stable). Bare tag pushes fall
-      # through to stable. Mirrors genie wish
-      # release-channel-dev (PR #2419).
+      # workflow_dispatch supplies the channel. Stable publishing requires the
+      # authorized workflow_dispatch path; bare tag pushes do not release.
       channel: ${{ inputs.channel || 'stable' }}
       draft: false
       expected_sha: ${{ inputs.expected_sha }}
@@ -159,7 +160,7 @@ jobs:
   # Updates the release body with the generated changelog.
   #
   # NOTE: npm publish is NOT performed by this workflow. version.yml owns
-  # `npm publish` for dev/homolog and the verified stable-only dispatch. A
+  # `npm publish` for dev. A
   # duplicate publish step here would race
   # version.yml's inline path AND, before this drop, the missing channel
   # gate meant dev dispatches were attempting `npm publish --tag latest`
@@ -168,7 +169,7 @@ jobs:
   # the publish-npm job has been removed to keep a single source of truth.
   # ---------------------------------------------------------------------------
   release-notes:
-    needs: publish
+    needs: [sign-attest, publish]
     name: Generate release notes
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -178,28 +179,56 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve release tag
         id: pkg
         env:
+          PUBLISHED_VERSION: ${{ needs.sign-attest.outputs.version }}
           REF_NAME: ${{ github.ref_name }}
-          INPUT_VERSION: ${{ inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
+          set -euo pipefail
           git fetch --tags --force
-          if [[ -n "${INPUT_VERSION}" ]]; then
-            TAG="v${INPUT_VERSION}"
+          [[ "${PUBLISHED_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::signed artifact version is not a numeric dotted version"
+            exit 1
+          }
+          if [[ -n "${REQUESTED_VERSION}" ]]; then
+            [[ "${REQUESTED_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+              echo "::error::requested version is not a numeric dotted version"
+              exit 1
+            }
+            [[ "${REQUESTED_VERSION}" == "${PUBLISHED_VERSION}" ]] || {
+              echo "::error::requested version does not match the signed and published artifact version"
+              exit 1
+            }
+          elif [[ "${REF_TYPE}" == "tag" && "${REF_NAME}" == "v${PUBLISHED_VERSION}" ]]; then
+            :
           else
-            TAG="${REF_NAME}"
+            echo "::error::release source ref does not match the signed and published artifact version"
+            exit 1
           fi
+          TAG="v${PUBLISHED_VERSION}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Find previous release tag
         id: prev
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.pkg.outputs.tag }}
         run: |
-          TAG="${{ steps.pkg.outputs.tag }}"
-          PREV=$(gh release list --limit 50 --json tagName -q '.[].tagName' | grep -v "^${TAG}$" | head -1)
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          AVAILABLE_TAGS=$(gh release list --limit 50 --json tagName -q '.[].tagName')
+          PREV=""
+          while IFS= read -r candidate; do
+            [[ "${candidate}" == "${TAG}" ]] && continue
+            [[ "${candidate}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+            PREV="${candidate}"
+            break
+          done <<< "${AVAILABLE_TAGS}"
           echo "tag=${PREV:-}" >> "$GITHUB_OUTPUT"
           echo "Previous release tag: ${PREV:-none}"
 
@@ -223,8 +252,10 @@ jobs:
       - name: Update release body with changelog
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.pkg.outputs.tag }}
         run: |
-          TAG="${{ steps.pkg.outputs.tag }}"
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
           if [[ -s /tmp/release-notes.md ]]; then
             gh release edit "${TAG}" --notes-file /tmp/release-notes.md
             echo "Updated release body for ${TAG}"

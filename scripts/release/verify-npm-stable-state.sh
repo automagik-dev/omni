@@ -23,6 +23,13 @@ if [[ -z "${published}" ]]; then
 fi
 [[ "${published}" == "${expected}" ]] || fail "registry returned ${published}, expected ${expected}"
 if [[ "${latest}" != "${expected}" ]]; then
+  if [[ -n "${latest}" ]]; then
+    [[ "${latest}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
+      fail "latest dist-tag returned invalid version ${latest}"
+    newest="$(printf '%s\n%s\n' "${expected}" "${latest}" | sort -V | tail -n 1)"
+    [[ "${newest}" != "${latest}" ]] || \
+      fail "latest ${latest} is newer than expected ${expected}; refusing to move it backwards"
+  fi
   printf 'npm_action=repair_latest\n'
   exit 0
 fi

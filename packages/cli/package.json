@@ -1,6 +1,13 @@
 {
   "name": "@automagik/omni",
-  "version": "2.260830.1",
+  "version": "2.260902.5",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/automagik-dev/omni.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/automagik-dev/omni",
+  "bugs": "https://github.com/automagik-dev/omni/issues",
   "description": "LLM-optimized CLI for Omni",
   "type": "module",
   "bin": {

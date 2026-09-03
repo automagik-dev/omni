@@ -34,15 +34,16 @@ import { SLACK_CAPABILITIES } from './capabilities';
 import { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
 import type { BoltConnection } from './connection/bolt-client';
 import { checkBoltHealth, createBoltApp, destroyBoltConnection, startBoltConnection } from './connection/bolt-client';
+import { setupAgentSessionHandlers } from './handlers/agent-sessions';
 import type { CommandPayload } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
 import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
 import { type SlackDebouncedArgs, setupMessageHandlers } from './handlers/messages';
 import { setupReactionHandlers } from './handlers/reactions';
-import { clearTypingStatus, setSlackThreadStatus } from './handlers/typing';
+import { type SlackStatusMethod, clearTypingStatus, setSlackThreadStatus } from './handlers/typing';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
-import { createNativeStreamSender } from './senders/native-stream';
+import { type NativeStreamSender, createNativeStreamSender } from './senders/native-stream';
 import { createSlackStreamSender } from './senders/stream';
 import {
   cancelScheduledSlackMessage,
@@ -61,7 +62,8 @@ type SlackPresenceType = 'typing' | 'recording' | 'paused';
 
 type SlackPresenceStatusResult = {
   delivered: boolean;
-  method: 'assistant.threads.setStatus';
+  /** Which Slack API handled the call; absent when no call was attempted. */
+  method?: SlackStatusMethod;
   threadId?: string;
   status?: string;
   loadingMessages?: string[];
@@ -185,6 +187,13 @@ export class SlackPlugin extends BaseChannelPlugin {
   private pendingAckReactions = new Map<string, string>();
 
   /**
+   * Live native-mode stream senders keyed by `${instanceId}:${channelId}`.
+   * `agent_session_stopped` lists the streams Slack already halted; these are
+   * told so the cancel path skips chat.stopStream on them (#914).
+   */
+  private activeNativeStreams = new Map<string, Set<NativeStreamSender>>();
+
+  /**
    * Plugin-specific initialization
    */
   protected override async onInitialize(_context: PluginContext): Promise<void> {
@@ -223,6 +232,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     this.presenceStatusTimers.clear();
     this.activeThreads.clear();
     this.pendingAckReactions.clear();
+    this.activeNativeStreams.clear();
   }
 
   /**
@@ -364,6 +374,9 @@ export class SlackPlugin extends BaseChannelPlugin {
       clearTimeout(timer);
       this.presenceStatusTimers.delete(key);
     }
+    for (const key of this.activeNativeStreams.keys()) {
+      if (key.startsWith(`${instanceId}:`)) this.activeNativeStreams.delete(key);
+    }
     for (const key of this.pendingAckReactions.keys()) {
       if (key.startsWith(`${instanceId}:`)) this.pendingAckReactions.delete(key);
     }
@@ -405,6 +418,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         content: { type: message.content.type, text: message.content.text },
         replyToId: message.replyTo,
         senderAgentId: message.metadata?.senderAgentId as string | undefined,
+        systemNotice: message.metadata?.systemNotice as boolean | undefined,
       });
 
       return { success: true, messageId, timestamp: Date.now() };
@@ -455,36 +469,43 @@ export class SlackPlugin extends BaseChannelPlugin {
     const streamMode = resolveStreamMode(slackConfig.streamMode);
     const throttleMs = resolveStreamThrottle(slackConfig.streamThrottleMs);
 
-    const base =
-      streamMode === 'native'
-        ? createNativeStreamSender({
-            client: connection.actingClient,
-            channelId: chatId,
-            threadTs,
-            throttleMs,
-            username: slackConfig.defaultUsername,
-            iconUrl: slackConfig.defaultIconUrl,
-            iconEmoji: slackConfig.defaultIconEmoji,
-            formatMode: options?.formatMode ?? 'convert',
-            logger: this.logger,
-          })
-        : createSlackStreamSender({
-            client: connection.actingClient,
-            channelId: chatId,
-            threadTs,
-            streamMode,
-            throttleMs,
-            username: slackConfig.defaultUsername,
-            iconUrl: slackConfig.defaultIconUrl,
-            iconEmoji: slackConfig.defaultIconEmoji,
-            formatMode: options?.formatMode ?? 'convert',
-            logger: this.logger,
-          });
+    const streamKey = `${instanceId}:${chatId}`;
+    let native: NativeStreamSender | undefined;
+    let base: StreamSender;
+    if (streamMode === 'native') {
+      native = createNativeStreamSender({
+        client: connection.actingClient,
+        channelId: chatId,
+        threadTs,
+        throttleMs,
+        username: slackConfig.defaultUsername,
+        iconUrl: slackConfig.defaultIconUrl,
+        iconEmoji: slackConfig.defaultIconEmoji,
+        formatMode: options?.formatMode ?? 'convert',
+        logger: this.logger,
+      });
+      base = native;
+      this.trackNativeStream(streamKey, native);
+    } else {
+      base = createSlackStreamSender({
+        client: connection.actingClient,
+        channelId: chatId,
+        threadTs,
+        streamMode,
+        throttleMs,
+        username: slackConfig.defaultUsername,
+        iconUrl: slackConfig.defaultIconUrl,
+        iconEmoji: slackConfig.defaultIconEmoji,
+        formatMode: options?.formatMode ?? 'convert',
+        logger: this.logger,
+      });
+    }
 
     // Wrap to clean up ack reactions and typing on stream completion.
     // sendMessage handles cleanup for non-streamed replies, but streamed replies
     // bypass sendMessage entirely — reactions accumulate indefinitely without this.
     const cleanup = () => {
+      if (native) this.untrackNativeStream(streamKey, native);
       this.removeAckReaction(instanceId, chatId, connection, replyToMessageId, threadTs);
       this.clearActiveTyping(instanceId, chatId, connection, threadTs).catch(() => {});
     };
@@ -504,32 +525,68 @@ export class SlackPlugin extends BaseChannelPlugin {
         await base.abort();
         cleanup();
       },
+      async cancel() {
+        // User-requested stop (#914): keep the partial output
+        await (base.cancel ? base.cancel() : base.abort());
+        cleanup();
+      },
     };
   }
 
+  private trackNativeStream(streamKey: string, sender: NativeStreamSender): void {
+    let set = this.activeNativeStreams.get(streamKey);
+    if (!set) {
+      set = new Set();
+      this.activeNativeStreams.set(streamKey, set);
+    }
+    set.add(sender);
+  }
+
+  private untrackNativeStream(streamKey: string, sender: NativeStreamSender): void {
+    const set = this.activeNativeStreams.get(streamKey);
+    if (!set) return;
+    set.delete(sender);
+    if (set.size === 0) this.activeNativeStreams.delete(streamKey);
+  }
+
   /**
-   * Send typing indicator via assistant.threads.setStatus.
+   * Tell the live native streams in a channel which of them Slack already
+   * halted (`agent_session_stopped.streaming_message_ts`), so the dispatcher's
+   * subsequent cancel does not call chat.stopStream on a finished stream.
+   */
+  private markStreamsStoppedByPlatform(instanceId: string, channelId: string, stoppedTs: readonly string[]): void {
+    if (stoppedTs.length === 0) return;
+    const senders = this.activeNativeStreams.get(`${instanceId}:${channelId}`);
+    if (!senders) return;
+    for (const sender of senders) {
+      sender.markStoppedByPlatform(stoppedTs);
+    }
+  }
+
+  /**
+   * Send typing indicator via the Agent Sessions status API.
    *
-   * **Thread-only / no-op for channels and DMs.** Slack's typing API is only
-   * available inside assistant threads (via `assistant.threads.setStatus`).
-   * There is no general "user is typing" indicator for channels or DMs —
-   * hence `canSendTyping: false` in capabilities. This method exists for the
-   * thread context but silently no-ops when no active thread is tracked.
+   * **Thread-only / no-op for channels and DMs.** Slack's status surface is
+   * session/thread-scoped (`agents.sessions.setStatus`, legacy
+   * `assistant.threads.setStatus` as fallback). There is no general "user is
+   * typing" indicator for channels or DMs — hence `canSendTyping: false` in
+   * capabilities. This method exists for the thread context and no-ops (with
+   * a debug log, #914) when no active thread is tracked.
    *
-   * Slack clears status when the assistant replies, when status is set to an
-   * empty string, or after Slack's own timeout. Omni can also clear earlier
-   * when callers pass an explicit duration.
+   * Slack clears status when the agent replies, when status is cleared, or
+   * after Slack's own timeout. Omni can also clear earlier when callers pass
+   * an explicit duration.
    */
   async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
     await this.sendPresenceStatus(instanceId, chatId, duration === 0 ? 'paused' : 'typing', duration);
   }
 
   /**
-   * Send Slack's official AI Assistant thread status.
+   * Send Slack's official agent session status.
    *
    * This is intentionally separate from `canSendTyping`: Slack does not expose
-   * generic channel typing for bots, but `assistant.threads.setStatus` is the
-   * official status surface for AI assistant threads.
+   * generic channel typing for bots, but the Agent Sessions status API is the
+   * official status surface for AI agent threads.
    */
   async sendPresenceStatus(
     instanceId: string,
@@ -538,24 +595,40 @@ export class SlackPlugin extends BaseChannelPlugin {
     duration?: number,
     options?: { threadId?: string; status?: string; loadingMessages?: string[] },
   ): Promise<SlackPresenceStatusResult> {
-    const method = 'assistant.threads.setStatus' as const;
+    // Nominal method on the bail paths below: no call is attempted, but
+    // callers key off `method` to distinguish Slack's session-status surface
+    // from a plain typing indicator, so it must not fall back to some other
+    // channel's default (#914 review).
+    const nominalMethod: SlackStatusMethod = 'agents.sessions.setStatus';
+
     const connection = this.connections.get(instanceId);
-    if (!connection) return { delivered: false, method, reason: 'not_connected' };
+    if (!connection) return { delivered: false, method: nominalMethod, reason: 'not_connected' };
 
     const threadTs = options?.threadId ?? this.activeThreads.get(`${instanceId}:${chatId}`);
-    if (!threadTs) return { delivered: false, method, reason: 'no_active_thread' };
+    if (!threadTs) {
+      // Slack status is thread-scoped; a channel-level mention has no thread
+      // to attach to. Logged so the missing status is diagnosable (#914).
+      this.logger.debug('Slack presence status skipped', {
+        instanceId,
+        chatId,
+        type,
+        reason: 'no_active_thread',
+      });
+      return { delivered: false, method: nominalMethod, reason: 'no_active_thread' };
+    }
 
     const shouldClear = type === 'paused';
     const status = shouldClear ? '' : (options?.status ?? (type === 'recording' ? 'is recording...' : 'is typing...'));
     const timerKey = this.presenceStatusTimerKey(instanceId, chatId, threadTs);
 
-    const delivered =
+    const statusResult =
       status === ''
         ? await clearTypingStatus({
             client: connection.actingClient,
             channelId: chatId,
             threadTs,
             logger: this.logger,
+            instanceId,
           })
         : await setSlackThreadStatus({
             client: connection.actingClient,
@@ -564,7 +637,18 @@ export class SlackPlugin extends BaseChannelPlugin {
             status,
             loadingMessages: options?.loadingMessages,
             logger: this.logger,
+            instanceId,
           });
+    const { delivered, method } = statusResult;
+
+    // Echo only what was actually applied (#914 review): the Agent Sessions
+    // API takes a lifecycle enum and accepts no loading messages, so the
+    // caller's freeform status/loading copy is only in effect when the legacy
+    // API delivered it. Failed calls echo the attempted values for diagnostics.
+    const usedLegacy = method === 'assistant.threads.setStatus';
+    const sessionStatus = shouldClear ? 'active' : 'processing';
+    const appliedStatus = !delivered || usedLegacy ? status : sessionStatus;
+    const appliedLoadingMessages = !delivered || usedLegacy ? options?.loadingMessages : undefined;
 
     if (delivered) {
       this.clearPresenceStatusTimer(timerKey);
@@ -593,13 +677,19 @@ export class SlackPlugin extends BaseChannelPlugin {
     }
 
     return delivered
-      ? { delivered: true, method, threadId: threadTs, status, loadingMessages: options?.loadingMessages }
-      : {
-          delivered: false,
+      ? {
+          delivered: true,
           method,
           threadId: threadTs,
-          status,
-          loadingMessages: options?.loadingMessages,
+          status: appliedStatus,
+          loadingMessages: appliedLoadingMessages,
+        }
+      : {
+          delivered: false,
+          method: method ?? nominalMethod,
+          threadId: threadTs,
+          status: appliedStatus,
+          loadingMessages: appliedLoadingMessages,
           reason: 'slack_status_failed',
         };
   }
@@ -1155,6 +1245,62 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Handle Slack's native stop button (`agent_session_stopped`, #914).
+   *
+   * Publishes `agent.run.cancel_requested` so the agent dispatcher aborts the
+   * in-flight provider run, then transitions the session out of `processing`
+   * (Slack's contract for this event) by clearing the thread status.
+   */
+  private async handleAgentSessionStopped(
+    instanceId: string,
+    connection: BoltConnection,
+    args: { channelId: string; threadTs?: string; userId?: string; streamingMessageTs?: string[]; eventTs?: string },
+  ): Promise<void> {
+    // Slack event_ts is "seconds.micro"; the dispatcher compares this against
+    // each run's start time so a late-delivered stop cannot abort a run that
+    // began after the user pressed the button.
+    const parsedEventTs = args.eventTs ? Number.parseFloat(args.eventTs) : Number.NaN;
+    const requestedAt = Number.isFinite(parsedEventTs) ? Math.round(parsedEventTs * 1000) : Date.now();
+
+    // Slack already halted these streams; flag them BEFORE the cancel fans
+    // out so the sender's stop becomes a no-op instead of an API error.
+    this.markStreamsStoppedByPlatform(instanceId, args.channelId, args.streamingMessageTs ?? []);
+
+    try {
+      await this.eventBus.publish(
+        'agent.run.cancel_requested',
+        {
+          instanceId,
+          chatId: args.channelId,
+          threadId: args.threadTs,
+          requestedBy: args.userId,
+          requestedAt,
+          reason: 'user_stop',
+        },
+        {
+          instanceId,
+          channelType: this.id,
+          source: `channel:${this.id}`,
+        },
+      );
+    } catch (err) {
+      this.logger.error('Failed to publish agent.run.cancel_requested', {
+        instanceId,
+        chatId: args.channelId,
+        error: String(err),
+      });
+    }
+
+    await clearTypingStatus({
+      client: connection.actingClient,
+      channelId: args.channelId,
+      threadTs: args.threadTs ?? this.activeThreads.get(`${instanceId}:${args.channelId}`),
+      logger: this.logger,
+      instanceId,
+    });
+  }
+
+  /**
    * Track the last active thread for a (instanceId, channelId) pair.
    * Used by sendTyping to call assistant.threads.setStatus on the right thread.
    *
@@ -1413,6 +1559,18 @@ export class SlackPlugin extends BaseChannelPlugin {
       {
         onReaction: async (instId, messageId, chatId, userId, emoji, action) => {
           await this.handleReactionReceived(instId, messageId, chatId, userId, emoji, action);
+        },
+      },
+      this.logger,
+    );
+
+    // Agent session handlers — native stop button (#914)
+    setupAgentSessionHandlers(
+      connection.app,
+      instanceId,
+      {
+        onSessionStopped: async (instId, args) => {
+          await this.handleAgentSessionStopped(instId, connection, args);
         },
       },
       this.logger,

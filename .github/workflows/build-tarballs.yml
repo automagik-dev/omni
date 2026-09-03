@@ -66,6 +66,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -122,15 +124,19 @@ jobs:
 
       - name: Build tarball
         shell: bash
-        run: bash scripts/build-binary.sh --platform ${{ matrix.platform }} --version ${{ steps.ver.outputs.version }}
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: bash scripts/build-binary.sh --platform "${PLATFORM}" --version "${VERSION}"
 
       - name: Smoke test (extract + --version on linux runners)
         if: matrix.platform == 'linux-x64-glibc' || matrix.platform == 'linux-arm64'
         shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.ver.outputs.version }}"
-          PLATFORM="${{ matrix.platform }}"
           TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
           STAGE="$(mktemp -d)"
           tar -xzf "${TARBALL}" -C "${STAGE}"
@@ -152,9 +158,10 @@ jobs:
       - name: Smoke test (musl binary in alpine container)
         if: matrix.platform == 'linux-x64-musl'
         shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.ver.outputs.version }}"
           TARBALL="dist/omni-${VERSION}-linux-x64-musl.tar.gz"
           STAGE="$(mktemp -d)"
           tar -xzf "${TARBALL}" -C "${STAGE}"
@@ -171,10 +178,11 @@ jobs:
       - name: Smoke test (extract + --help on macOS runners)
         if: startsWith(matrix.platform, 'darwin-')
         shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.ver.outputs.version }}"
-          PLATFORM="${{ matrix.platform }}"
           TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
           STAGE="$(mktemp -d)"
           tar -xzf "${TARBALL}" -C "${STAGE}"
@@ -186,8 +194,11 @@ jobs:
 
       - name: Verify size budget (≤120 MB compressed)
         shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          TARBALL="dist/omni-${{ steps.ver.outputs.version }}-${{ matrix.platform }}.tar.gz"
+          TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
           SIZE_MB=$(( $(stat -c '%s' "${TARBALL}" 2>/dev/null || stat -f '%z' "${TARBALL}") / 1024 / 1024 ))
           echo "Tarball size: ${SIZE_MB} MB"
           if (( SIZE_MB > 120 )); then

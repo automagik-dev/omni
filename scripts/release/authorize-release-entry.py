@@ -3,14 +3,25 @@ import argparse
 import re
 
 
+# SemVer 2.0.0: numeric identifiers carry no leading zeroes, so `01.02.003` is
+# a distinct string naming the same release as `1.2.3`. Accepting both spellings
+# at the entry boundary would let a caller authorize a release under a version
+# that no downstream identity check ever produces.
+CANONICAL_SEMVER = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+
+
 def fail(message: str) -> None:
     raise SystemExit(f"release entry authorization failed: {message}")
 
 
 parser = argparse.ArgumentParser(description="Classify reusable orchestration versus direct recovery")
-parser.add_argument("--channel", required=True, choices=("stable", "homolog", "dev"))
+parser.add_argument("--channel", required=True, choices=("stable", "dev"))
 parser.add_argument("--orchestrated", required=True, choices=("true", "false"))
 parser.add_argument("--recovery-run-id", default="")
+parser.add_argument("--version", default="")
+parser.add_argument("--source-ref", default="")
+parser.add_argument("--source-sha", default="")
+parser.add_argument("--expected-sha", default="")
 args = parser.parse_args()
 
 orchestrated = args.orchestrated == "true"
@@ -19,8 +30,18 @@ if args.channel == "stable" and not orchestrated:
 if orchestrated:
     if args.recovery_run_id:
         fail("orchestrated publication must use artifacts from its current run")
-    print("mode=orchestrated")
 else:
     if re.fullmatch(r"[0-9]+", args.recovery_run_id) is None:
         fail("direct recovery requires an exact numeric sign-attest run ID")
-    print("mode=recovery")
+
+if re.fullmatch(CANONICAL_SEMVER, args.version) is None:
+    fail("publication requires an exact semantic version")
+if args.source_ref != f"refs/tags/v{args.version}":
+    fail("publication must run from the exact version tag")
+if re.fullmatch(r"[0-9a-f]{40}", args.source_sha) is None:
+    fail("publication source SHA is invalid")
+if re.fullmatch(r"[0-9a-f]{40}", args.expected_sha) is None:
+    fail("publication requires an exact expected source SHA")
+if args.expected_sha != args.source_sha:
+    fail("publication expected SHA does not match the verified source SHA")
+print("mode=orchestrated" if orchestrated else "mode=recovery")

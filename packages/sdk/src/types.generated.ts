@@ -971,9 +971,29 @@ export interface paths {
         put?: never;
         /**
          * Receive webhook
-         * @description Receive webhook from external system. Creates a custom event.
+         * @description Receive webhook from external system. Creates a custom event. An empty body is accepted as an empty payload; a non-empty body that is not a JSON object (malformed, array, scalar) is rejected.
          */
         post: operations["receiveWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/ingress/{source}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Public webhook ingress
+         * @description Auth-exempt receiver for third-party webhook senders. Requires the source to have a signature configuration; the request is verified against it (HMAC over the raw body, or token match) before any event is published. Unknown, disabled, unconfigured, or badly signed requests all return the same 401. A non-empty body that is not a JSON object (malformed, array, scalar) is rejected with 400.
+         */
+        post: operations["receiveWebhookIngress"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3000,6 +3020,11 @@ export interface components {
             to?: string;
             /** @description Media type if applicable */
             mediaType?: string;
+            /**
+             * Format: uuid
+             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+             */
+            senderAgentId?: string | null;
         };
         SendTextRequest: {
             /**
@@ -3038,6 +3063,11 @@ export interface components {
             };
             /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
             requestLocation?: boolean;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         TTSVoice: {
             /** @description ElevenLabs voice ID */
@@ -3075,6 +3105,11 @@ export interface components {
             similarityBoost?: number;
             /** @description Recording presence duration in ms */
             presenceDelay?: number;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         TtsResponse: {
             /** @description Internal message ID */
@@ -3094,6 +3129,11 @@ export interface components {
             audioSizeKb: number;
             /** @description Audio duration in ms */
             durationMs: number;
+            /**
+             * Format: uuid
+             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+             */
+            senderAgentId?: string | null;
         };
         SendMediaRequest: {
             /**
@@ -3121,6 +3161,11 @@ export interface components {
             caption?: string;
             /** @description Send audio as voice note */
             voiceNote?: boolean;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendReactionRequest: {
             /**
@@ -3150,6 +3195,11 @@ export interface components {
             url?: string;
             /** @description Base64 encoded sticker */
             base64?: string;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendContactRequest: {
             /**
@@ -3172,6 +3222,11 @@ export interface components {
                 /** @description Organization */
                 organization?: string;
             };
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendLocationRequest: {
             /**
@@ -3189,6 +3244,11 @@ export interface components {
             name?: string;
             /** @description Address */
             address?: string;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendPresenceRequest: {
             /**
@@ -3642,6 +3702,17 @@ export interface components {
             /** @description Reason for merge */
             reason?: string;
         };
+        WebhookSignatureConfig: {
+            /**
+             * @description How to verify: HMAC over the raw request body, or direct token match
+             * @enum {string}
+             */
+            algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+            /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+            header: string;
+            /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+            prefix?: string;
+        };
         WebhookSource: {
             /**
              * Format: uuid
@@ -3656,6 +3727,20 @@ export interface components {
             expectedHeaders: {
                 [key: string]: boolean;
             } | null;
+            /** @description Signature verification config */
+            signatureConfig: {
+                /**
+                 * @description How to verify: HMAC over the raw request body, or direct token match
+                 * @enum {string}
+                 */
+                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                header: string;
+                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                prefix?: string;
+            } | null;
+            /** @description Whether a signature secret is stored (secret is write-only) */
+            hasSignatureSecret: boolean;
             /** @description Whether enabled */
             enabled: boolean;
             /**
@@ -3670,7 +3755,7 @@ export interface components {
             updatedAt: string;
         };
         CreateWebhookSourceRequest: {
-            /** @description Unique source name */
+            /** @description Unique source name (e.g., github, stripe, agno) */
             name: string;
             /** @description Description */
             description?: string;
@@ -3678,6 +3763,20 @@ export interface components {
             expectedHeaders?: {
                 [key: string]: boolean;
             };
+            /** @description Signature verification config; required for the source to be reachable on the public ingress. Always paired with signatureSecret: a config without a stored secret is rejected (400), and clearing the config (null) also clears the stored secret. */
+            signatureConfig?: {
+                /**
+                 * @description How to verify: HMAC over the raw request body, or direct token match
+                 * @enum {string}
+                 */
+                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                header: string;
+                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                prefix?: string;
+            } | null;
+            /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
+            signatureSecret?: string | null;
             /**
              * @description Whether enabled
              * @default true
@@ -7726,6 +7825,11 @@ export interface operations {
                     };
                     /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
                     requestLocation?: boolean;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -7753,6 +7857,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -7836,6 +7945,11 @@ export interface operations {
                     caption?: string;
                     /** @description Send audio as voice note */
                     voiceNote?: boolean;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -7863,6 +7977,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8018,6 +8137,11 @@ export interface operations {
                     url?: string;
                     /** @description Base64 encoded sticker */
                     base64?: string;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -8045,6 +8169,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8123,6 +8252,11 @@ export interface operations {
                         /** @description Organization */
                         organization?: string;
                     };
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -8150,6 +8284,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8223,6 +8362,11 @@ export interface operations {
                     name?: string;
                     /** @description Address */
                     address?: string;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -8250,6 +8394,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8776,6 +8925,11 @@ export interface operations {
                     similarityBoost?: number;
                     /** @description Recording presence duration in ms */
                     presenceDelay?: number;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -8805,6 +8959,11 @@ export interface operations {
                             audioSizeKb: number;
                             /** @description Audio duration in ms */
                             durationMs: number;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -10062,6 +10221,20 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10090,7 +10263,7 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    /** @description Unique source name */
+                    /** @description Unique source name (e.g., github, stripe, agno) */
                     name: string;
                     /** @description Description */
                     description?: string;
@@ -10098,6 +10271,20 @@ export interface operations {
                     expectedHeaders?: {
                         [key: string]: boolean;
                     };
+                    /** @description Signature verification config; required for the source to be reachable on the public ingress. Always paired with signatureSecret: a config without a stored secret is rejected (400), and clearing the config (null) also clears the stored secret. */
+                    signatureConfig?: {
+                        /**
+                         * @description How to verify: HMAC over the raw request body, or direct token match
+                         * @enum {string}
+                         */
+                        algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                        /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                        header: string;
+                        /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                        prefix?: string;
+                    } | null;
+                    /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
+                    signatureSecret?: string | null;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -10128,6 +10315,20 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10199,6 +10400,20 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10298,7 +10513,7 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    /** @description Unique source name */
+                    /** @description Unique source name (e.g., github, stripe, agno) */
                     name?: string;
                     /** @description Description */
                     description?: string;
@@ -10306,6 +10521,20 @@ export interface operations {
                     expectedHeaders?: {
                         [key: string]: boolean;
                     };
+                    /** @description Signature verification config; required for the source to be reachable on the public ingress. Always paired with signatureSecret: a config without a stored secret is rejected (400), and clearing the config (null) also clears the stored secret. */
+                    signatureConfig?: {
+                        /**
+                         * @description How to verify: HMAC over the raw request body, or direct token match
+                         * @enum {string}
+                         */
+                        algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                        /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                        header: string;
+                        /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                        prefix?: string;
+                    } | null;
+                    /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
+                    signatureSecret?: string | null;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -10336,6 +10565,20 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10408,6 +10651,107 @@ export interface operations {
                         source: string;
                         /** @description Event type */
                         eventType: string;
+                    };
+                };
+            };
+            /** @description Body is not a JSON object */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    receiveWebhookIngress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Webhook received */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Created event ID
+                         */
+                        eventId: string;
+                        /** @description Webhook source name */
+                        source: string;
+                        /** @description Event type */
+                        eventType: string;
+                    };
+                };
+            };
+            /** @description Body is not a JSON object */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Verification failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
                     };
                 };
             };

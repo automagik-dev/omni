@@ -11,6 +11,14 @@ out=$("${SCRIPT}" --expected 2.260830.2 --published '' --latest 2.260830.1)
 grep -q '^npm_action=publish$' <<<"${out}" || fail "missing package did not require publication"
 out=$("${SCRIPT}" --expected 2.260830.2 --published 2.260830.2 --latest 2.260830.1)
 grep -q '^npm_action=repair_latest$' <<<"${out}" || fail "existing package under a non-latest dist-tag did not request repair"
+work="$(mktemp -d)"
+trap 'rm -rf "${work}"' EXIT
+if "${SCRIPT}" --expected 2.260830.2 --published 2.260830.2 --latest 2.260830.3 \
+  >"${work}/newer.out" 2>"${work}/newer.err"; then
+  fail "newer latest dist-tag was allowed to move backwards"
+fi
+grep -q 'newer than expected' "${work}/newer.err" || \
+  fail "newer latest rejection did not identify the downgrade risk"
 if "${SCRIPT}" --expected 2.260830.2 --published 2.260830.1 --latest 2.260830.1; then
   fail "registry returned the wrong requested package version"
 fi

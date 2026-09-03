@@ -11,7 +11,9 @@ import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { agentKeyName } from '../../lib/agent-key-name';
+import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-business-connection';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
+import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
 import { getQrCode } from '../../plugins/qr-store';
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
@@ -544,6 +546,14 @@ type InstanceConnectionOptionsInput = {
   hermesPassword?: string | null;
   hermesMediaId?: string | null;
   hermesTemplateNamespace?: string | null;
+  metaAccessToken?: string | null;
+  metaPhoneNumberId?: string | null;
+  metaWabaId?: string | null;
+  metaAppId?: string | null;
+  metaBusinessId?: string | null;
+  metaApiVersion?: string | null;
+  metaDisplayPhoneNumber?: string | null;
+  metaConnectionMethod?: string | null;
 };
 
 function applyTelegramConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
@@ -622,6 +632,9 @@ function applyChannelSpecificConnectionOptions(
       return;
     case 'hermes':
       applyHermesConnectionOptions(options, input);
+      return;
+    case 'whatsapp-business':
+      applyWhatsAppBusinessConnectionOptions(options, input);
       return;
   }
 }
@@ -861,6 +874,9 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     hermesPassword: instance.hermesPassword,
     hermesMediaId: instance.hermesMediaId,
     hermesTemplateNamespace: instance.hermesTemplateNamespace,
+    // No meta* threading here: createInstanceSchema carries no Meta fields, so
+    // a whatsapp-business row is never credentialed at create — credentials
+    // arrive via the whatsapp-cloud connect/OAuth route.
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -1346,6 +1362,14 @@ function buildConnectConnectionOptions(
     hermesPassword: body.hermesPassword ?? instance.hermesPassword,
     hermesMediaId: body.hermesMediaId ?? instance.hermesMediaId,
     hermesTemplateNamespace: body.hermesTemplateNamespace ?? instance.hermesTemplateNamespace,
+    metaAccessToken: instance.metaAccessToken,
+    metaPhoneNumberId: instance.metaPhoneNumberId,
+    metaWabaId: instance.metaWabaId,
+    metaAppId: instance.metaAppId,
+    metaBusinessId: instance.metaBusinessId,
+    metaApiVersion: instance.metaApiVersion,
+    metaDisplayPhoneNumber: instance.metaDisplayPhoneNumber,
+    metaConnectionMethod: instance.metaConnectionMethod,
   });
 }
 
@@ -1523,6 +1547,11 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
   }
 
+  // omni#906: operators expect restart to re-read config, but disconnect/connect
+  // only recycles the channel connection — the dispatcher's cached agent
+  // provider lives independently of the channel lifecycle, so evict it here.
+  invalidateProviderCacheForInstance(id);
+
   try {
     await plugin.disconnect(id);
     const restartOptions: Record<string, unknown> = { forceNewQr };
@@ -1550,6 +1579,11 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     if (instance.channel === 'hermes') {
       applyHermesConnectionOptions(restartOptions, instance);
+    }
+    if (instance.channel === 'whatsapp-business') {
+      // Persisted Meta credentials — without them plugin.connect() throws
+      // "metaAccessToken is required" and the restart bricks the instance (#894).
+      applyWhatsAppBusinessConnectionOptions(restartOptions, instance);
     }
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {

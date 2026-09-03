@@ -7,7 +7,8 @@ import type { CreateAgentRoute, ListAgentRoutesQuery, UpdateAgentRoute } from '@
 import type { Database } from '@omni/db';
 import { type AgentRoute, type NewAgentRoute, agentRoutes } from '@omni/db';
 import { and, desc, eq } from 'drizzle-orm';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
+import { runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
 import type { RouteResolver } from './route-resolver';
 
 export class RouteService {
@@ -146,8 +147,22 @@ export class RouteService {
     } catch {
       // Ignore cache invalidation errors - the route was created successfully
     }
+    this.evictCachedProvider(instanceId);
 
     return created;
+  }
+
+  /**
+   * omni#906: route overrides (agentId, agentTimeout, enableAutoSplit,
+   * agentPrefixSenderName) get baked into the cached IAgentProvider via
+   * mergeRouteOverrides/applyAgentFkOverrides, onto the same
+   * `${providerId}:${instanceId}` entry the instance itself uses — so every
+   * route mutation must evict it, exactly like an instance update. Deferred to
+   * commit so a concurrent dispatch can't refill the cache from the
+   * pre-commit route row.
+   */
+  private evictCachedProvider(instanceId: string): void {
+    runAfterTenantCommit(() => invalidateProviderCacheForInstance(instanceId));
   }
 
   /**
@@ -173,6 +188,7 @@ export class RouteService {
     } catch {
       // Ignore cache invalidation errors
     }
+    this.evictCachedProvider(route.instanceId);
 
     return updated;
   }
@@ -196,5 +212,6 @@ export class RouteService {
     } catch {
       // Ignore cache invalidation errors
     }
+    this.evictCachedProvider(route.instanceId);
   }
 }

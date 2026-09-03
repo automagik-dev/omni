@@ -1,24 +1,18 @@
 name: Version
 
 on:
-  # Fire directly when a PR merges to dev. Homolog has a single canonical
-  # entry point below, after its push CI succeeds, so one merge cannot publish
-  # twice through both pull_request and workflow_run.
-  # Prior trigger (workflow_run CI on branch=dev) never fired because CI's
-  # `on.push` only lists `[main, homolog]`, never `dev`; merges to dev thus
-  # produced no push-event CI run for workflow_run to observe.
+  # Fire directly when an in-repository PR merges to dev. Stable main versions
+  # are fixed in their reviewed dev-to-main promotion and are never bumped
+  # after merge.
   pull_request:
     types: [closed]
     branches: [dev]
-  # Homolog promotion arrives via CI-on-push. Stable main releases are NOT
-  # versioned here: the release PR must already contain its final version, and
-  # image-publish.yml finalizes the tag/release only after OCI verification.
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [homolog]
   workflow_dispatch:
     inputs:
+      candidate:
+        description: 'Cut a stable candidate tag: skip the dev prerelease so image-build.yml can publish the stable release'
+        type: boolean
+        default: false
       stable_publish_only:
         description: 'Publish one already verified stable tag to npm without creating a new version'
         type: boolean
@@ -36,40 +30,39 @@ on:
         required: false
         type: string
       orchestrator_run_id:
-        description: 'Stable-only: exact in-progress image-publish workflow run'
+        description: 'Stable-only: exact in-progress image-build workflow run'
         required: false
         type: string
       orchestrator_control_sha:
-        description: 'Stable-only: exact control revision executing image-publish'
+        description: 'Stable-only: exact control revision executing image-build'
         required: false
         type: string
 
-permissions:
-  contents: write
-  # OIDC token issuance for npm Trusted Publishing — pairs with the
-  # "Publish to npm via OIDC" step below. Without this, the publish step
-  # gets an empty placeholder token and the registry returns a misleading
-  # 404 instead of the real auth failure.
-  id-token: write
-  # Workflow-write for the "Dispatch release pipeline" step below: `gh workflow
-  # run release.yml` hits the workflow_dispatch API, which requires actions:write.
-  # workflow_dispatch is one of the two events GITHUB_TOKEN IS allowed to trigger
-  # (with repository_dispatch), so this is sufficient — no PAT needed. Without it
-  # the dispatch returns HTTP 403 "Resource not accessible by integration" and the
-  # GitHub Release never fires (npm @latest publishes, but the tagged Release does
-  # not), forcing a manual `gh workflow run release.yml` after every promotion.
-  actions: write
+permissions: {}
 
-concurrency:
-  # Serialize every equivalent entry event by target branch. Keeping event_name
-  # out of the key prevents a future trigger expansion from reintroducing
-  # concurrent duplicate publication for one branch.
-  group: version-${{ github.event.workflow_run.head_branch || github.event.pull_request.base.ref || github.ref_name }}
-  cancel-in-progress: false
+# Concurrency is declared per job, not workflow-wide: the two jobs have
+# different write targets, so one shared key cannot be correct for both.
 
 jobs:
   auto-version:
     name: Auto Version
+    # Serialize every writer to `dev` under one constant group. This job is the
+    # only branch writer here and always targets `dev` (checkout_ref/push_ref
+    # are hardcoded), on a merged `pull_request` and on `workflow_dispatch`
+    # alike. The key therefore must not be derived from the trigger ref: a
+    # dispatch started from `main`, a tag, or a feature branch reports that ref
+    # in `github.ref_name` and leaves `github.event.pull_request.base.ref`
+    # empty, so a ref-keyed group lets such a run bump and tag `dev` concurrently
+    # with a merged-PR run.
+    #
+    # Consequence of the shared group: with `cancel-in-progress: false` a third
+    # run joining the group cancels the pending one. That coalescing is the
+    # intended outcome, not a loss — the surviving run checks `dev` out fresh
+    # and re-derives its version from `git tag --list`, so it absorbs the
+    # displaced bump and still dispatches release.yml for its own tag.
+    concurrency:
+      group: version-dev
+      cancel-in-progress: false
     # GitHub-hosted runner (not Blacksmith). The "Upgrade npm for OIDC
     # trusted publishing" step runs `npm install -g npm@latest` which
     # writes to /usr/local — omni's Blacksmith pool image rejects this
@@ -78,52 +71,32 @@ jobs:
     # /usr/local. (Trade-off: slower job startup vs. publish reliability.)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
+      # OIDC token issuance for npm Trusted Publishing — pairs with the
+      # "Publish to npm via OIDC" step below.
+      id-token: write
+      # `gh workflow run release.yml` requires actions:write. Keeping this on
+      # the only dispatching job prevents the stable read-only job inheriting it.
+      actions: write
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.stable_publish_only != true) ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.merged == true &&
        github.event.pull_request.base.ref == 'dev' &&
-       github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'homolog' &&
-       !contains(github.event.workflow_run.head_commit.message, '[skip ci]') &&
-       startsWith(github.event.workflow_run.head_commit.message, 'Merge pull request') &&
-       (contains(github.event.workflow_run.head_commit.message, '/dev') ||
-        contains(github.event.workflow_run.head_commit.message, '/homolog')))
+       github.event.pull_request.head.repo.full_name == github.repository)
 
     steps:
       - name: Determine channel and npm tag
         id: context
         run: |
-          # Branch semantics:
-          #   - pull_request merged on dev → new dev build → @next, bump dev
-          #   - workflow_run on homolog → canonical HML build → @homolog, bump homolog
-          #   - workflow_dispatch → defaults to dev/@next
-          TRIGGER_BRANCH="dev"
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            TRIGGER_BRANCH="${{ github.event.workflow_run.head_branch }}"
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            TRIGGER_BRANCH="${{ github.event.pull_request.base.ref }}"
-          fi
-
-          case "${TRIGGER_BRANCH}" in
-            homolog)
-              echo "npm_tag=homolog" >> "$GITHUB_OUTPUT"
-              echo "release_channel=homolog" >> "$GITHUB_OUTPUT"
-              echo "checkout_ref=homolog" >> "$GITHUB_OUTPUT"
-              echo "push_ref=homolog" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "npm_tag=next" >> "$GITHUB_OUTPUT"
-              echo "release_channel=dev" >> "$GITHUB_OUTPUT"
-              echo "checkout_ref=dev" >> "$GITHUB_OUTPUT"
-              echo "push_ref=dev" >> "$GITHUB_OUTPUT"
-              ;;
-          esac
-          echo "trigger_branch=${TRIGGER_BRANCH}" >> "$GITHUB_OUTPUT"
-          echo "Triggering branch: ${TRIGGER_BRANCH}"
+          {
+            echo "npm_tag=next"
+            echo "release_channel=dev"
+            echo "checkout_ref=dev"
+            echo "push_ref=dev"
+          } >> "$GITHUB_OUTPUT"
+          echo "Triggering branch: dev"
 
       - name: Require protected version writer credential
         env:
@@ -136,12 +109,12 @@ jobs:
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          # Bump the canonical dev/homolog target branch. Stable main versions
+          # Bump the canonical dev target branch. Stable main versions
           # are fixed in their release PR and never created by this workflow.
           ref: ${{ steps.context.outputs.checkout_ref }}
           fetch-depth: 0
-          # Machine-account PAT for the bump push (checkout persists this
-          # credential, so the branch push in "Commit and tag" inherits it).
+          # The bump push uses a machine-account PAT explicitly in "Commit and
+          # tag"; checkout credentials are never persisted in the worktree.
           # Why: bump commits no longer carry the skip-ci token (D8), so each
           # bump push to dev re-fires any OPEN rolling PR's pull_request runs;
           # when the push actor is github-actions[bot], GitHub holds those
@@ -150,13 +123,10 @@ jobs:
           # Secret spec: fine-grained PAT on a machine account (e.g.
           # automagik-bot) scoped to automagik-dev/omni, Contents: read+write.
           # NOTE: unlike GITHUB_TOKEN, PAT pushes DO fire on:push workflows.
-          # Branch push: desired on homolog (image-publish builds the bump
-          # commit's image, per D8); CI on the homolog bump is a harmless
-          # extra run — Version's workflow_run guard keys on the head-commit
-          # MESSAGE, not the actor, and bump messages fail the startsWith
-          # 'Merge pull request' check, so no re-fire loop. The v* TAG push
-          # must NOT use the PAT: see "Commit and tag" below.
-          token: ${{ secrets.VERSION_BUMP_PAT }}
+          # The branch push must use the machine identity so in-repository PRs
+          # do not become action_required on a github-actions[bot] update. The
+          # v* tag push must NOT use the PAT: see "Commit and tag" below.
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
@@ -187,7 +157,9 @@ jobs:
           OMNI_BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
 
       - name: Sync versions (package.json + chart appVersion)
-        run: bun scripts/sync-versions.ts ${{ steps.version.outputs.version }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bun scripts/sync-versions.ts "${VERSION}"
 
       - name: Format versioned JSON (Biome)
         run: |
@@ -207,11 +179,14 @@ jobs:
 
       - name: Commit and tag
         env:
-          # For the tag push below ONLY — the branch push rides the
-          # checkout-persisted credential (VERSION_BUMP_PAT when configured).
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The branch and tag pushes deliberately use different credentials.
+          GITHUB_TOKEN: ${{ github.token }}
+          PUSH_REF: ${{ steps.context.outputs.push_ref }}
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_WRITER_TOKEN: ${{ secrets.VERSION_BUMP_PAT }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          set -euo pipefail
+          [[ "${PUSH_REF}" == "dev" ]]
 
           # Chart.yaml is listed explicitly: the '*.json' pathspec would
           # silently drop the appVersion stamp sync-versions.ts just wrote,
@@ -220,23 +195,19 @@ jobs:
           if git diff --cached --quiet; then
             echo "No version file changes to commit"
           else
-            # No [skip ci] (D8): homolog bumps MUST trigger image-publish so
-            # the stamped appVersion gets a matching image built from the
-            # bump commit. Blanket removal is safe on the dev path too — no
-            # workflow push-triggers on dev for these paths (CI/image-publish
-            # push branches are [main, homolog] only). Loop-safe: this
-            # commit's message fails version.yml's own startsWith
-            # 'Merge pull request' workflow_run guard.
+            # No [skip ci]: the reviewed dev branch must receive ordinary CI
+            # on every version bump.
             git commit -m "chore(version): bump to ${VERSION}"
           fi
 
           git tag "v${VERSION}"
 
           # Split push (was --atomic): the two refs need DIFFERENT credentials.
-          # Branch push uses the checkout-persisted credential (machine PAT
-          # when VERSION_BUMP_PAT is set) so the push actor is not
+          # Branch push uses the machine PAT explicitly so the push actor is not
           # github-actions[bot] — see the checkout step for why.
-          git push origin HEAD:refs/heads/${{ steps.context.outputs.push_ref }}
+          git -c http.https://github.com/.extraheader= \
+            push "https://x-access-token:${VERSION_WRITER_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${PUSH_REF}"
 
           # Tag push stays on GITHUB_TOKEN DELIBERATELY: GITHUB_TOKEN pushes
           # never fire on:push workflows (GitHub anti-recursion), so
@@ -244,9 +215,9 @@ jobs:
           # passes the correct channel. A PAT-pushed v* tag would ALSO fire
           # release.yml's push:tags path, where channel falls through to
           # 'stable' — duplicating the release pipeline AND promoting a
-          # dev/homolog cut to the stable channel. The -c flag blanks the
-          # checkout-persisted auth header for this one invocation so the
-          # URL-embedded GITHUB_TOKEN wins. Losing --atomic is safe with
+          # dev cut to the stable channel. The -c flag blanks the
+          # default auth header for this one invocation so the URL-embedded
+          # GITHUB_TOKEN wins. Losing --atomic is safe with
           # branch-first ordering: a tag-push failure self-heals on re-run
           # (same derived version → no version-file diff → re-tag HEAD →
           # no-op branch push → tag push retries).
@@ -260,8 +231,6 @@ jobs:
       # guard); workflow_dispatch and repository_dispatch are the documented
       # exceptions, so this step kicks the orchestrator from version.yml.
       #
-      # Channel selector is dev/homolog only. Stable is finalized by the
-      # verified main image pipeline.
       - name: Build CLI
         run: bunx turbo run build --filter=@automagik/omni
 
@@ -271,13 +240,21 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
+      # A candidate cut publishes nothing to npm: npm trusted publishing (OIDC)
+      # can only `npm publish`, never move a dist-tag, so if the candidate
+      # version were already on npm under `next`, the stable `latest` alias
+      # could only be set with a classic token. Leaving the version unpublished
+      # lets image-build.yml's stable publish run `npm publish --tag latest`
+      # through OIDC.
       - name: Publish to npm via OIDC (@${{ steps.context.outputs.npm_tag }})
+        if: inputs.candidate != true
         env:
+          DIST_TAG: ${{ steps.context.outputs.npm_tag }}
           HUSKY: "0"
           NPM_CONFIG_PROVENANCE: "false"
         run: |
           cd packages/cli
-          npm publish --access public --tag ${{ steps.context.outputs.npm_tag }}
+          npm publish --access public --tag "${DIST_TAG}"
 
       # Dispatch the signed-tarball release pipeline (build → sign-attest →
       # publish) via release.yml's workflow_dispatch entry. GITHUB_TOKEN-
@@ -287,30 +264,57 @@ jobs:
       #
       # NOTE: this step runs LAST so a dispatch failure never short-circuits
       # the npm publish step. The historical HTTP 403 (GITHUB_TOKEN lacking
-      # workflow-write) is now fixed by `actions: write` in the top-level
-      # permissions block, so this normally succeeds and the GitHub Release
+      # workflow-write) is now fixed by `actions: write` on this job, so this
+      # normally succeeds and the GitHub Release
       # fires automatically. `continue-on-error: true` is kept as a safety net:
       # any residual dispatch failure becomes a workflow annotation and the
       # operator can manually re-dispatch via `gh workflow run release.yml ...`.
       # Pre-fix history: when dispatch ran BEFORE npm publish + Build CLI,
       # the 403 cascaded and skipped npm publish entirely (v2.260520.1 / .2
       # / .3 never made it to @next).
+      #
+      # `candidate=true` (workflow_dispatch only; a merged PR never sets it)
+      # skips this dispatch entirely. A dev prerelease at v<version> would
+      # otherwise pin the tag's channel classification to dev forever
+      # (verify-release-state.py: "channel classification is immutable"), so
+      # image-build.yml could never publish the stable release at that tag.
+      # The npm `next` publish above is also skipped for a candidate cut.
       - name: Dispatch release pipeline for the new tag
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE: ${{ inputs.candidate }}
+          CHANNEL: ${{ steps.context.outputs.release_channel }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          set -euo pipefail
           TAG="refs/tags/v${VERSION}"
-          CHANNEL="${{ steps.context.outputs.release_channel }}"
+          TAG_SHA=$(git rev-parse "${TAG}^{commit}")
+          [[ "${TAG_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "${CANDIDATE}" == "true" ]]; then
+            echo "candidate=true: skipping the dev prerelease dispatch; ${TAG} is reserved for image-build.yml (gh workflow run image-build.yml --ref ${TAG} -f version=${VERSION})"
+            exit 0
+          fi
           echo "Dispatching release pipeline against ${TAG} (channel=${CHANNEL})..."
-          if ! gh workflow run release.yml --repo "${GITHUB_REPOSITORY}" --ref "${TAG}" --field version="${VERSION}" --field channel="${CHANNEL}"; then
+          if ! gh workflow run release.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "${TAG}" \
+            --field version="${VERSION}" \
+            --field channel="${CHANNEL}" \
+            --field expected_sha="${TAG_SHA}"; then
             echo "::error ::release-trigger.dispatch_failed release.yml dispatch failed for ${TAG} — investigate gh CLI auth or workflow availability before re-running manually"
             exit 1
           fi
 
   publish-stable:
     name: Publish verified stable npm package
+    # Read-only: republishes one already-verified stable version and never
+    # writes a branch or tag, so it must not queue behind (or displace) a `dev`
+    # bump. Keyed per version so repeat dispatches for the same version still
+    # serialize against each other.
+    concurrency:
+      group: version-stable-publish-${{ inputs.expected_version }}
+      cancel-in-progress: false
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.stable_publish_only == true
@@ -348,11 +352,13 @@ jobs:
           scripts/release/verify-orchestrator-run.py \
             --run-json "${RUNNER_TEMP}/orchestrator.json" \
             --repository "${GITHUB_REPOSITORY}" \
-            --source-sha "${ORCHESTRATOR_CONTROL_SHA}"
+            --source-sha "${ORCHESTRATOR_CONTROL_SHA}" \
+            --expected-workflow .github/workflows/image-build.yml \
+            --allowed-event workflow_dispatch
           gh attestation verify "oci://${IMAGE}@${EXPECTED_DIGEST}" \
             --repo "${GITHUB_REPOSITORY}" \
             --source-digest "${EXPECTED_SHA}" \
-            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-publish.yml"
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-build.yml"
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -404,4 +410,3 @@ jobs:
           "${GITHUB_WORKSPACE}/scripts/release/reconcile-npm-stable.sh" \
             --expected "${EXPECTED_VERSION}" \
             --package-dir "${GITHUB_WORKSPACE}/.stable-source/packages/cli"
-

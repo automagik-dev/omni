@@ -37,7 +37,10 @@ function createMockDatabase(results: Agent[] = []) {
       $dynamic: () => selectQuery,
     })),
     $dynamic: () => selectQuery,
-    where: mock(() => selectQuery),
+    // where() returns a real Promise carrying the chainable props, so the
+    // builder resolves like Drizzle's whether awaited directly (update()'s
+    // provider-cache eviction lookups) or chained through orderBy/limit.
+    where: mock((): typeof selectQuery => Object.assign(Promise.resolve(results), selectQuery)),
     orderBy: mock(() => selectQuery),
     limit: mock((_n: number) => Promise.resolve(results)),
   };

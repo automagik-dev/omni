@@ -242,7 +242,7 @@ describeWithDb('POST /messages/send/presence', () => {
         options?: { threadId?: string; status?: string; loadingMessages?: string[] },
       ) => ({
         delivered: true,
-        method: 'assistant.threads.setStatus',
+        method: 'agents.sessions.setStatus',
         threadId: options?.threadId,
         status: options?.status ?? 'is typing...',
         loadingMessages: options?.loadingMessages,
@@ -271,7 +271,7 @@ describeWithDb('POST /messages/send/presence', () => {
     };
     expect(body.success).toBe(true);
     expect(body.data.delivered).toBe(true);
-    expect(body.data.method).toBe('assistant.threads.setStatus');
+    expect(body.data.method).toBe('agents.sessions.setStatus');
     expect(body.data.threadId).toBe('1234567890.001');
     expect(body.data.status).toBe('analisando contexto...');
     expect(body.data.loadingMessages).toEqual(['Lendo contexto...', 'Chamando ferramentas...']);

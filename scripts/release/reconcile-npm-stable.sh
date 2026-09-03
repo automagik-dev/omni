@@ -72,12 +72,28 @@ read_published() {
   printf '%s\n' "${value}"
 }
 
+read_latest() {
+  local error_file="$1" value=""
+  if ! value="$(npm view @automagik/omni dist-tags --json 2>"${error_file}")"; then
+    local error_text
+    error_text="$(<"${error_file}")"
+    case "${error_text}" in
+      *E404*|*"404 Not Found"*) value='{}' ;;
+      *) fail "npm dist-tag lookup failed without a not-found response" ;;
+    esac
+  fi
+  jq -r '.latest // empty' <<<"${value}"
+}
+
 error_file="${RUNNER_TEMP:-/tmp}/npm-view-${$}.err"
+latest_error_file="${RUNNER_TEMP:-/tmp}/npm-latest-${$}.err"
+state_error_file="${RUNNER_TEMP:-/tmp}/npm-state-${$}.err"
 dist_file="${RUNNER_TEMP:-/tmp}/npm-dist-${$}.json"
 keys_file="${RUNNER_TEMP:-/tmp}/npm-keys-${$}.json"
-trap 'rm -f "${error_file}" "${dist_file}" "${keys_file}"; rm -rf "${pack_dir}" "${audit_dir}"' EXIT
+packument_file="${RUNNER_TEMP:-/tmp}/npm-packument-${$}.json"
+trap 'rm -f "${error_file}" "${latest_error_file}" "${state_error_file}" "${dist_file}" "${keys_file}" "${packument_file}"; rm -rf "${pack_dir}" "${audit_dir}"' EXIT
 published="$(read_published "${error_file}")"
-latest="$(npm view @automagik/omni dist-tags --json | jq -r '.latest // empty')"
+latest="$(read_latest "${latest_error_file}")"
 state="$("${state_helper}" --expected "${expected}" --published "${published}" --latest "${latest}")"
 action="${state#npm_action=}"
 
@@ -96,10 +112,19 @@ case "${action}" in
   *) fail "unexpected state action ${action}" ;;
 esac
 
-published_after="$(npm view "@automagik/omni@${expected}" version)"
-latest_after="$(npm view @automagik/omni dist-tags --json | jq -r '.latest // empty')"
-final_state="$("${state_helper}" \
-  --expected "${expected}" --published "${published_after}" --latest "${latest_after}")"
+final_state=""
+for delay in 0 1 2 4 8; do
+  [[ "${delay}" -eq 0 ]] || sleep "${delay}"
+  published_after="$(read_published "${error_file}")"
+  latest_after="$(read_latest "${latest_error_file}")"
+  if ! final_state="$("${state_helper}" \
+    --expected "${expected}" --published "${published_after}" --latest "${latest_after}" \
+    2>"${state_error_file}")"; then
+    cat "${state_error_file}" >&2
+    fail "registry returned an unsafe state after ${action}"
+  fi
+  [[ "${final_state}" != "npm_action=none" ]] || break
+done
 [[ "${final_state}" == "npm_action=none" ]] || \
   fail "registry state did not converge after ${action}"
 npm view "@automagik/omni@${expected}" dist --json > "${dist_file}"
@@ -109,11 +134,16 @@ expected_url="https://registry.npmjs.org/@automagik/omni/-/omni-${expected}.tgz"
 [[ -n "${integrity}" && "${resolved}" == "${expected_url}" ]] || \
   fail "registry metadata is missing an approved npm tarball URL"
 registry_tarball="${pack_dir}/registry-omni-${expected}.tgz"
-curl -fsSLo "${registry_tarball}" "${resolved}"
-curl -fsSLo "${keys_file}" "https://registry.npmjs.org/-/npm/v1/keys"
+curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-connrefused \
+  -o "${registry_tarball}" "${resolved}"
+curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-connrefused \
+  -o "${keys_file}" "https://registry.npmjs.org/-/npm/v1/keys"
+curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-connrefused \
+  -o "${packument_file}" "https://registry.npmjs.org/@automagik%2fomni"
 "${artifact_helper}" --expected-tarball "${tarball}" \
   --registry-tarball "${registry_tarball}" --dist-json "${dist_file}" \
-  --keys-json "${keys_file}" --package @automagik/omni --version "${expected}" >/dev/null
+  --keys-json "${keys_file}" --packument-json "${packument_file}" \
+  --package @automagik/omni --version "${expected}" >/dev/null
 jq -n --arg version "${expected}" \
   '{name:"omni-signature-audit",version:"0.0.0",private:true,dependencies:{"@automagik/omni":$version}}' \
   > "${audit_dir}/package.json"
@@ -122,8 +152,7 @@ jq -n --arg version "${expected}" \
   npm install --ignore-scripts --no-audit --no-fund >/dev/null
   npm audit signatures --json --include-attestations > "${audit_dir}/audit.json"
 )
-if [[ "${action}" == "publish" ]]; then
-  python3 - "${audit_dir}/audit.json" "${expected}" <<'PY'
+python3 - "${audit_dir}/audit.json" "${expected}" <<'PY'
 import json, pathlib, sys
 document = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 matches = [
@@ -133,10 +162,9 @@ matches = [
     and item.get("version") == sys.argv[2]
 ]
 if len(matches) != 1:
-    raise SystemExit("new npm publication has no verified package attestation")
+    raise SystemExit("stable npm package has no verified package attestation")
 provenance = matches[0].get("attestations", {}).get("provenance", {})
 if provenance.get("predicateType") != "https://slsa.dev/provenance/v1":
-    raise SystemExit("new npm publication has no verified SLSA provenance")
+    raise SystemExit("stable npm package has no verified SLSA provenance")
 PY
-fi
 printf 'npm_action=%s\n' "${action}"

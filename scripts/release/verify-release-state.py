@@ -17,7 +17,7 @@ def boolean(value: str) -> bool:
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--phase", choices=("existing", "final"), required=True)
-parser.add_argument("--channel", choices=("stable", "dev", "homolog"), required=True)
+parser.add_argument("--channel", choices=("stable", "dev"), required=True)
 parser.add_argument("--draft", required=True)
 parser.add_argument("--prerelease", required=True)
 parser.add_argument("--requested-draft", default="false")

@@ -106,4 +106,19 @@ if (
   fail "detached repair was accepted without explicit authorization"
 fi
 
+ROOT_SOURCE="$(
+  cd "${repo}"
+  empty_tree="$(git mktree </dev/null)"
+  printf 'detached root\n' | git commit-tree "${empty_tree}"
+)"
+if (
+  cd "${repo}"
+  "${SCRIPT}" --source "${ROOT_SOURCE}" --main "${MAIN}" \
+    --allow-detached-repair --expected-version 2.260830.2
+) >"${work}/root.out" 2>"${work}/root.err"; then
+  fail "detached root source was accepted"
+fi
+grep -q 'single-parent non-root commit' "${work}/root.err" || \
+  fail "detached root failure did not report a source-parent diagnostic"
+
 printf 'PASS: reachable and version-only detached release source contract\n'
