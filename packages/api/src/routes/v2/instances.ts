@@ -5,7 +5,7 @@
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
-import type { SyncJobType } from '@omni/db';
+import type { GupshupHandoffOptions, SyncJobType } from '@omni/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
@@ -42,6 +42,43 @@ const listQuerySchema = z.object({
 });
 
 // Reply filter schema
+/**
+ * Gupshup HANDOFF options. Mirrors the validator the channel plugin applies on
+ * connect (packages/channel-gupshup/src/handoff-options.ts) so a bad shape is
+ * rejected here with a 400 instead of failing the instance later. Keep the two
+ * in step.
+ */
+const gupshupHandoffFieldValue = z.string().max(2048);
+const gupshupHandoffFieldKey = z.string().min(1).max(128);
+const gupshupHandoffOptionsSchema = z
+  .object({
+    defaultFields: z.record(gupshupHandoffFieldKey, gupshupHandoffFieldValue).optional(),
+    fieldsByPhonePrefix: z
+      .array(
+        z.object({
+          prefixes: z.array(z.string().min(1).max(15).regex(/^\d+$/)).min(1).max(256),
+          fields: z.record(gupshupHandoffFieldKey, gupshupHandoffFieldValue),
+        }),
+      )
+      .max(64)
+      .optional(),
+    customerFields: z
+      .array(
+        z
+          .object({
+            apiKey: gupshupHandoffFieldKey,
+            value: gupshupHandoffFieldValue.optional(),
+            from: gupshupHandoffFieldKey.optional(),
+          })
+          .refine((entry) => (entry.value === undefined) !== (entry.from === undefined), {
+            message: 'each customerFields entry needs exactly one of `value` or `from`',
+          }),
+      )
+      .max(64)
+      .optional(),
+  })
+  .strict();
+
 const agentReplyFilterSchema = z.object({
   mode: z.enum(['all', 'filtered']).describe('Reply mode: all = reply to everything, filtered = check conditions'),
   conditions: z
@@ -174,6 +211,10 @@ const createInstanceSchema = z.object({
   gupshupCallbackUrl: z.string().optional().nullable().describe('Gupshup Custom Integration callback URL'),
   gupshupAuthToken: z.string().optional().nullable().describe('Gupshup Custom Integration auth token'),
   gupshupEventId: z.string().optional().nullable().describe('Gupshup event ID (default: nx_omni_agent_reply)'),
+  gupshupHandoffOptions: gupshupHandoffOptionsSchema
+    .optional()
+    .nullable()
+    .describe('Gupshup HANDOFF routing defaults and customerFields template'),
   webhookVerifyToken: z.string().optional().nullable().describe('Gupshup webhook verify token'),
   twilioAccountSid: z.string().optional().nullable().describe('Twilio Account SID'),
   twilioAuthToken: z.string().optional().nullable().describe('Twilio Auth Token'),
@@ -297,6 +338,7 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   gupshupCallbackUrl: z.string().nullable().optional(),
   gupshupAuthToken: z.string().nullable().optional(),
   gupshupEventId: z.string().nullable().optional(),
+  gupshupHandoffOptions: gupshupHandoffOptionsSchema.nullable().optional(),
   webhookVerifyToken: z.string().nullable().optional(),
   twilioAccountSid: z.string().nullable().optional(),
   twilioAuthToken: z.string().nullable().optional(),
@@ -533,6 +575,7 @@ type InstanceConnectionOptionsInput = {
   gupshupCallbackUrl?: string | null;
   gupshupAuthToken?: string | null;
   gupshupEventId?: string | null;
+  gupshupHandoffOptions?: GupshupHandoffOptions | null;
   webhookVerifyToken?: string | null;
   twilioAccountSid?: string | null;
   twilioAuthToken?: string | null;
@@ -574,10 +617,17 @@ function applySlackConnectionOptions(options: Record<string, unknown>, input: In
   if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
 }
 
-function applyGupshupConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
+function applyGupshupConnectionOptions(
+  options: Record<string, unknown>,
+  input: Pick<
+    InstanceConnectionOptionsInput,
+    'gupshupCallbackUrl' | 'gupshupAuthToken' | 'gupshupEventId' | 'gupshupHandoffOptions' | 'webhookVerifyToken'
+  >,
+): void {
   if (input.gupshupCallbackUrl) options.gupshupCallbackUrl = input.gupshupCallbackUrl;
   if (input.gupshupAuthToken) options.gupshupAuthToken = input.gupshupAuthToken;
   if (input.gupshupEventId) options.gupshupEventId = input.gupshupEventId;
+  if (input.gupshupHandoffOptions) options.gupshupHandoffOptions = input.gupshupHandoffOptions;
   if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
 }
 
@@ -861,6 +911,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
     gupshupAuthToken: instance.gupshupAuthToken,
     gupshupEventId: instance.gupshupEventId,
+    gupshupHandoffOptions: instance.gupshupHandoffOptions,
     webhookVerifyToken: instance.webhookVerifyToken,
     twilioAccountSid: instance.twilioAccountSid,
     twilioAuthToken: instance.twilioAuthToken,
@@ -1349,6 +1400,7 @@ function buildConnectConnectionOptions(
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
     gupshupAuthToken: instance.gupshupAuthToken,
     gupshupEventId: instance.gupshupEventId,
+    gupshupHandoffOptions: instance.gupshupHandoffOptions,
     webhookVerifyToken: instance.webhookVerifyToken,
     twilioAccountSid: body.twilioAccountSid ?? instance.twilioAccountSid,
     twilioAuthToken: body.twilioAuthToken ?? body.token ?? instance.twilioAuthToken,

@@ -58,3 +58,34 @@ Handled enum:
 A healthy instance shows almost all traffic under `processed` +
 `dropped_known_non_message`. Any sustained volume under `dropped_unknown_fail_open`
 or `dropped_unrecognized_shape` is an incident.
+
+## Handoff options
+
+Per-instance, stored in `instances.gupshup_handoff_options` (jsonb) and validated
+on connect — a malformed object fails the connect with the offending path in the
+error, it never surfaces as a broken handoff later.
+
+```json
+{
+  "defaultFields": { "queue": "SALES" },
+  "fieldsByPhonePrefix": [
+    { "prefixes": ["5511", "5521"], "fields": { "queue": "SALES-SOUTHEAST" } }
+  ],
+  "customerFields": [
+    { "apiKey": "Queue", "from": "queue" },
+    { "apiKey": "Handled By", "value": "assistant" },
+    { "apiKey": "Full Name", "from": "name" }
+  ]
+}
+```
+
+- `defaultFields` / `fieldsByPhonePrefix` — routing fields merged **under** whatever the
+  emitter sent. Explicit fields always win; an empty or `"undefined"`/`"null"` value from the
+  emitter counts as not sent. This is what keeps a system-initiated handoff (agent dispatch
+  error, silence watchdog) inside a queue: those paths never carry `handoff_fields`.
+- `customerFields` — ordered template for the Custom Integration `customerFields` array.
+  Entries whose source resolves empty are dropped. The `apiKey` set is whatever your Journey
+  reads; the channel does not assume any.
+
+Set it with `omni instances update <id> --gupshup-handoff-options '<json>'` or through
+`PATCH /api/v2/instances/:id`. Instances without the column set behave exactly as before.

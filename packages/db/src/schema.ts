@@ -94,6 +94,20 @@ export interface AgentReplyFilter {
 }
 
 /**
+ * Per-instance Gupshup HANDOFF options: routing defaults applied under the
+ * emitter's fields, and the Custom Integration `customerFields` template.
+ * Validated by the channel plugin on connect (packages/channel-gupshup/src/handoff-options.ts).
+ */
+export interface GupshupHandoffOptions {
+  /** Fields merged under every HANDOFF that lacks them. */
+  defaultFields?: Record<string, string>;
+  /** First rule whose prefix matches the destination phone (digits only) overrides `defaultFields`. */
+  fieldsByPhonePrefix?: Array<{ prefixes: string[]; fields: Record<string, string> }>;
+  /** Ordered template; each entry is a literal (`value`) or a reference to a handoff field (`from`). */
+  customerFields?: Array<{ apiKey: string; value?: string; from?: string }>;
+}
+
+/**
  * Session strategy for agent memory
  * - per_user: Same session across all chats for this user (user continuity)
  * - per_chat: All users in a chat share the session (group memory)
@@ -741,6 +755,8 @@ export const instances = pgTable(
     gupshupAuthToken: text('gupshup_auth_token'),
     gupshupEventId: varchar('gupshup_event_id', { length: 255 }),
     webhookVerifyToken: text('webhook_verify_token'),
+    /** HANDOFF routing defaults + customerFields template. Not a credential. */
+    gupshupHandoffOptions: jsonb('gupshup_handoff_options').$type<GupshupHandoffOptions>(),
 
     // ---- Twilio WhatsApp Configuration ----
     twilioAccountSid: varchar('twilio_account_sid', { length: 34 }),
