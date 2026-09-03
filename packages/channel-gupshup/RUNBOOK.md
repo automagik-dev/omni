@@ -87,5 +87,14 @@ error, it never surfaces as a broken handoff later.
   Entries whose source resolves empty are dropped. The `apiKey` set is whatever your Journey
   reads; the channel does not assume any.
 
-Set it with `omni instances update <id> --gupshup-handoff-options '<json>'` or through
-`PATCH /api/v2/instances/:id`. Instances without the column set behave exactly as before.
+Set it at creation with `omni instances create ... --gupshup-handoff-options '<json>'`, later
+with `omni instances update <id> --gupshup-handoff-options '<json>'` (`'null'` clears it), or
+through `POST /api/v2/instances` / `PATCH /api/v2/instances/:id` (`"gupshupHandoffOptions": null`
+clears it) and the dashboard's instance Config tab. Instances without the column set behave
+exactly as before.
+
+A `PATCH` or Config-tab save only persists the row. The plugin reads the options once, at
+connect, so a running instance keeps the template it connected with until it is restarted:
+`omni instances restart <id>` or `POST /api/v2/instances/:id/restart`. The API rejects a bad
+shape with a 400 before it is stored; anything that still reaches the plugin fails that
+connect/restart with the offending path, and the instance stays down until it is corrected.

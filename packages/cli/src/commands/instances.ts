@@ -1055,6 +1055,11 @@ export function createInstancesCommand(): Command {
     .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation (use "null" to clear)')
     .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
     .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
+    // Gupshup
+    .option(
+      '--gupshup-handoff-options <json>',
+      'Gupshup HANDOFF routing defaults and customerFields template (JSON object, use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
+    )
     // Trigger events
     .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')
     // WhatsApp profile name (separate endpoint)
