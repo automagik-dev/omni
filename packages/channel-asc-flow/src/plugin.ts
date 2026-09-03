@@ -46,7 +46,10 @@
  * because it called the agent itself and had no metadata channel. Two of the
  * Genesys component's fourteen userdata fields are ours to fill — `fila_vq`
  * (destination queue) and `motivo_transf_vq` (reason) — and they ride in the
- * same response body, per HANDOFF-GENESYS.md.
+ * same response body, per HANDOFF-GENESYS.md. `hand_off: "sim"` is only ever
+ * said when `/transferirHumano` was actually ACCEPTED (see `utils/handoff.ts`):
+ * an invalid `cod_servico` or a refusal degrades the turn to `"nao"`, and the
+ * turn still answers rather than leaving the beneficiary in silence.
  */
 
 import { BaseChannelPlugin, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
@@ -70,6 +73,7 @@ import { type ParsedAscFlowTurn, handleAscFlowWebhookRequest } from './handlers/
 import type { AscFlowConfig, AscFlowUra } from './types';
 import { encodeAscEmoji } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
+import { type HandoffPlan, planHandoff } from './utils/handoff';
 import { buildUra, splitBubbles } from './utils/interactive';
 import { isAscMediaFilename, mediaFallbackText, resolveAscInboundMedia } from './utils/media';
 import { OUTBOUND_MEDIA_FALLBACK_TEXT, buildReplyField, buildRichFields, isRichContent } from './utils/outbound';
@@ -306,25 +310,16 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       const ura = rich ? null : buildUra(lastBubble, content.buttons, listOptionsOf(content));
       const { delivered } = await this.deliver(state, cod, { text, bubbles, lastBubble, rich, ura, message });
 
-      const isHandoff = meta.isHandoff === true;
-
-      if (isHandoff) {
-        await state.client.call('/transferirHumano', {
-          cod,
-          cod_servico: Number(meta.handoffServico ?? state.config.ascFlowHandoffServico),
-          cod_prioridade: Number(meta.handoffPriority ?? 0),
-          msgTransferencia: false,
-        });
-      }
+      const handoff = meta.isHandoff === true ? await this.runHandoff(state, instanceId, cod, meta) : null;
 
       this.resolveTurn(state, to, {
         pronto: 1,
         // A refused `/mensagem` with no caption would leave the turn silent —
         // say so instead, so the beneficiary is not left staring at nothing.
         resposta: delivered ? '' : lastBubble || OUTBOUND_MEDIA_FALLBACK_TEXT,
-        hand_off: isHandoff ? 'sim' : 'nao',
+        hand_off: handoff ? 'sim' : 'nao',
         bolhas: bubbles,
-        ...this.buildHandoffFields(isHandoff, meta),
+        ...(handoff ?? {}),
         ...(ura ?? {}),
       });
 
@@ -351,7 +346,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
             uraOptions: ura ? Object.keys(ura.ura_opcoes).length : 0,
             /** Rich content left through `/mensagem` rather than the poll body. */
             viaMensagem: delivered,
-            handoff: isHandoff,
+            handoff: handoff !== null,
           },
         },
         senderAgentId: meta.senderAgentId as string | undefined,
@@ -373,6 +368,43 @@ export class AscFlowPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Transfer the atendimento to a human, and report whether it was ACCEPTED.
+   *
+   * `null` is the only honest answer to a refusal: `hand_off: 'sim'` is what
+   * routes the flow to the Genesys node, so saying it on a transfer that never
+   * landed leaves the beneficiary reading "vou te transferir" with nobody on
+   * the way. Both failure modes — an input that never should have been dialed
+   * (`planHandoff`) and a platform refusal — degrade here rather than throwing:
+   * the turn still answers, like every other best-effort call in this channel.
+   */
+  private async runHandoff(
+    state: AscFlowInstanceState,
+    instanceId: string,
+    cod: number,
+    meta: Record<string, unknown>,
+  ): Promise<HandoffPlan['fields'] | null> {
+    const plan = planHandoff(meta, state.config.ascFlowHandoffServico, this.logger);
+    if (!plan) return null;
+
+    try {
+      await state.client.call('/transferirHumano', {
+        cod,
+        cod_servico: plan.codServico,
+        cod_prioridade: plan.codPrioridade,
+        msgTransferencia: false,
+      });
+      return plan.fields;
+    } catch (err) {
+      this.logger.warn('[asc-flow] transferirHumano refused; turn answers without handoff', {
+        instanceId,
+        cod,
+        err: String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
    * Park the answer on the turn. The next `api_rest` poll takes it, which is
    * what makes `{#BODY.pronto} = 1` fire and the flow advance.
    */
@@ -387,23 +419,6 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     // An outbound with no inbound turn in flight (a proactive send): still park
     // it, so a poll that arrives for this cod collects it.
     state.inFlight.set(cod, { text: '', at: Date.now(), ready });
-  }
-
-  /**
-   * The two Genesys userdata fields the agent owns (HANDOFF-GENESYS.md). Only
-   * set when the turn actually hands off.
-   */
-  private buildHandoffFields(
-    isHandoff: boolean,
-    meta: Record<string, unknown>,
-  ): Pick<AscFlowTurnReady, 'fila_vq' | 'motivo_transf_vq'> {
-    if (!isHandoff) return {};
-    const fila = meta.handoffQueue;
-    const motivo = meta.handoffReason;
-    return {
-      ...(typeof fila === 'string' || typeof fila === 'number' ? { fila_vq: String(fila) } : {}),
-      ...(typeof motivo === 'string' && motivo.trim() ? { motivo_transf_vq: motivo.trim() } : {}),
-    };
   }
 
   /**

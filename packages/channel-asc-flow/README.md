@@ -227,6 +227,30 @@ component forwards, exactly two are the agent's: `fila_vq` and
 overrides the instance's default queue for `transferirHumano`, which is still
 called on top of the body's `hand_off:"sim"`.
 
+**`hand_off:"sim"` means the transfer was ACCEPTED — nothing weaker.** It is
+what makes the flow route to the Genesys node, so claiming it on a transfer
+that never happened leaves the beneficiary reading "vou te transferir" with
+nobody on the way. `utils/handoff.ts` validates the inputs before the call and
+`sendMessage` wraps the call itself:
+
+| Input | Rule | On violation |
+| --- | --- | --- |
+| `cod_servico` | positive integer (number, or a fully-numeric string) | **no transfer**, `error` logged, turn answers with `hand_off:"nao"` |
+| `cod_prioridade` | `0` or `1` | coerced to `0`, `debug` logged |
+| `fila_vq` | `^[A-Za-z0-9_.-]{1,32}$` | field omitted (Genesys uses the flow's default queue), `warn` logged |
+| `motivo_transf_vq` | whitespace collapsed, trimmed, ≤255 chars | omitted when empty |
+| `POST /transferirHumano` | must succeed | `warn` logged, turn answers with `hand_off:"nao"` |
+
+`Number()` was the original trap and is why this is not inline: `Number("")`
+and `Number([])` are `0` — a service that does not exist — and `Number("fila-x")`
+is `NaN`, which `JSON.stringify` puts on the wire as `null`.
+
+A failing transfer never fails the turn. The rest of the channel already
+degrades this way (`callbackFlowMsg`, media, typing are best-effort); silence
+is the worst outcome available to a beneficiary. There is still no domain for
+`fila_vq` (the de-para is a pendency on the Hapvida side), so the check above
+is shape-only.
+
 ## Gotchas
 
 - **401 is overloaded.** `/mensagem` answers 401 with a `cod_error` body for

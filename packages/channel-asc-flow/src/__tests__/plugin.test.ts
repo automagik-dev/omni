@@ -230,20 +230,99 @@ describe('outbound turn', () => {
     expect(eventBus.published.some((e) => e.type.includes('failed'))).toBe(true);
   });
 
-  it('reports failure when the platform refuses the handoff on business grounds', async () => {
+  it('answers the turn with hand_off "nao" when the platform refuses the transfer', async () => {
     await boot({
       '/transferirHumano': () => jsonResponse({ cod_error: 10, msg: 'Atendimento já finalizado!' }, 401),
     });
-    const result = await plugin.sendMessage(instanceId, {
-      to: '42',
-      content: { type: 'text', text: 'oi' } as never,
-      metadata: { isHandoff: true },
+    const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: 'VQ_X' });
+
+    // The transfer failing must never cost the beneficiary the answer.
+    expect(result.success).toBe(true);
+    expect(ready('42')).toEqual({
+      pronto: 1,
+      resposta: 'Vou te transferir.',
+      hand_off: 'nao',
+      bolhas: ['Vou te transferir.'],
+    });
+    // A business 401 is not re-authenticated: exactly one attempt, no retry.
+    expect(of('/transferirHumano')).toHaveLength(1);
+    expect(of('/authuser')).toHaveLength(0);
+  });
+
+  it('answers the turn with hand_off "nao" when the transfer 500s', async () => {
+    await boot({ '/transferirHumano': () => jsonResponse({ msg: 'boom' }, 500) });
+    const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true });
+
+    expect(result.success).toBe(true);
+    expect(ready('42')).toMatchObject({ hand_off: 'nao', resposta: 'Vou te transferir.' });
+  });
+
+  describe('handoff validation', () => {
+    // Measured on the live branch: `Number()` turns each of these into NaN
+    // (→ `null` on the wire) or a silent 0 — a service that does not exist.
+    for (const bad of ['fila-x', '', '12abc', '-3', 0, -1, 1.5, Number.NaN, {}, []] as unknown[]) {
+      it(`refuses the handoff when cod_servico is ${JSON.stringify(bad) ?? String(bad)}`, async () => {
+        await boot();
+        const result = await send(
+          { type: 'text', text: 'Vou te transferir.' },
+          { isHandoff: true, handoffServico: bad, handoffQueue: 'VQ_X', handoffReason: 'fora do escopo' },
+        );
+
+        expect(result.success).toBe(true);
+        expect(of('/transferirHumano')).toHaveLength(0);
+        // No lie to the flow, and no orphan Genesys fields.
+        expect(ready('42')).toEqual({
+          pronto: 1,
+          resposta: 'Vou te transferir.',
+          hand_off: 'nao',
+          bolhas: ['Vou te transferir.'],
+        });
+      });
+    }
+
+    it('accepts a numeric string cod_servico override', async () => {
+      await boot();
+      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffServico: ' 77 ' });
+
+      expect(of('/transferirHumano')[0]?.body).toMatchObject({ cod_servico: 77 });
+      expect(ready('42')).toMatchObject({ hand_off: 'sim' });
     });
 
-    expect(result).toMatchObject({ success: false, retryable: false });
-    // A failed turn parks no answer — the flow times the node out instead of
-    // advancing on a half-delivered turn.
-    expect(plugin.takeReadyTurn(instanceId, '42')).toBeNull();
+    it('clamps cod_prioridade to the 0|1 domain', async () => {
+      await boot();
+      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffPriority: 9 });
+      expect(of('/transferirHumano')[0]?.body).toMatchObject({ cod_prioridade: 0 });
+
+      calls.length = 0;
+      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffPriority: 1 });
+      expect(of('/transferirHumano')[0]?.body).toMatchObject({ cod_prioridade: 1 });
+    });
+
+    it('omits fila_vq when the value is not a queue code', async () => {
+      await boot();
+      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffQueue: 'fila com espaço' });
+
+      expect(ready('42')?.fila_vq).toBeUndefined();
+    });
+
+    it('keeps fila_vq when it matches the accepted shape', async () => {
+      await boot();
+      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffQueue: 'VQ_AGEND.01-a' });
+
+      expect(ready('42')?.fila_vq).toBe('VQ_AGEND.01-a');
+    });
+
+    it('collapses and truncates motivo_transf_vq, and omits an empty one', async () => {
+      await boot();
+      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: `${'a '.repeat(300)}` });
+      expect(ready('42')?.motivo_transf_vq).toHaveLength(255);
+
+      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: '  fora \n do  escopo ' });
+      expect(ready('42')?.motivo_transf_vq).toBe('fora do escopo');
+
+      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: '   \n ' });
+      expect(ready('42')?.motivo_transf_vq).toBeUndefined();
+    });
   });
 
   it('refuses an empty turn instead of sending a blank bubble', async () => {
