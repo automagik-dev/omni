@@ -152,4 +152,19 @@ export interface SendResult {
 
   /** Timestamp of send attempt */
   timestamp: number;
+
+  /**
+   * Handoff sends only. `false` means this channel's handoff does NOT take the
+   * conversation away from the agent, so the caller must NOT set
+   * `agentPaused: true` on the chat.
+   *
+   * The pause is right for a handoff that parks the conversation in a human
+   * queue (Gupshup, asc-flow in `service` mode). It is a DEADLOCK for a channel
+   * whose handoff only routes a running flow: with the agent paused the next
+   * inbound turn is never dispatched, and a channel that resolves its turn from
+   * `sendMessage` never resolves it. Measured on asc-flow atendimento 22289496.
+   *
+   * Left `undefined` by every other channel, which keeps the pause the default.
+   */
+  pauseAgent?: boolean;
 }

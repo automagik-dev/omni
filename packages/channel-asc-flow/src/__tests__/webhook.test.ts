@@ -192,6 +192,38 @@ describe('handleWebhook', () => {
     expect(received()).toHaveLength(2);
   });
 
+  // The deadlock measured on atendimento 22289496: the chat carried a stale
+  // `agentPaused`, the dispatcher skipped the agent, no `sendMessage` ever ran,
+  // and every re-poll was dropped as "turn still in flight" — forever.
+  it('releases the flow when NOTHING ever answers the turn', async () => {
+    await boot();
+    expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toEqual({ pronto: 0 });
+    // Re-polls keep being deduped while the agent could still be running.
+    expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toEqual({ pronto: 0 });
+    expect(received()).toHaveLength(1);
+
+    const realNow = Date.now;
+    Date.now = () => realNow() + 61_000;
+    try {
+      // Past the window with no answer parked: the poll gets an empty ready
+      // body instead of another `pronto:0`, so `async_condition` fires.
+      expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toEqual({
+        pronto: 1,
+        resposta: '',
+        hand_off: 'nao',
+        bolhas: [],
+      });
+    } finally {
+      Date.now = realNow;
+    }
+
+    // The turn is over — no republish happened while releasing it, and the next
+    // message opens a genuinely new one.
+    expect(received()).toHaveLength(1);
+    expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toEqual({ pronto: 0 });
+    expect(received()).toHaveLength(2);
+  });
+
   it('rejects non-POST methods', async () => {
     await boot();
     const response = await plugin.handleWebhook(new Request(url(), { method: 'GET' }));

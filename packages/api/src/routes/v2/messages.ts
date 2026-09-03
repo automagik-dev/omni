@@ -1806,10 +1806,17 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
   // Set agentPaused — chains: chat.handoff_activated → follow-up disarm + agent stop.
   // Merge into existing settings so unrelated keys (followUpConfig, close*, …)
   // survive — a bare `{ agentPaused: true }` replaces the whole JSONB column.
-  const handoffChat = await services.chats.getById(data.chatId);
-  await services.chats.update(data.chatId, {
-    settings: { ...((handoffChat?.settings as Record<string, unknown>) ?? {}), agentPaused: true },
-  });
+  //
+  // A channel may opt OUT (`pauseAgent: false`) when its handoff only routes a
+  // running flow instead of parking the chat in a human queue — pausing there
+  // wedges the next turn. Only asc-flow in `flow` mode does this today; every
+  // other channel leaves the field undefined and still pauses. See issue #921.
+  if (channelSendResult?.pauseAgent !== false) {
+    const handoffChat = await services.chats.getById(data.chatId);
+    await services.chats.update(data.chatId, {
+      settings: { ...((handoffChat?.settings as Record<string, unknown>) ?? {}), agentPaused: true },
+    });
+  }
 
   // Close the race between chat.handoff_activated (two NATS hops away) and the
   // next sweeper tick (every 15s). Idempotent with the event-driven disarm in

@@ -108,6 +108,7 @@ Always HTTP `200`, always JSON. Three states, keyed by `codAtendimento`:
 | re-call while the agent is running | `{"pronto":0}` |
 | body unprocessable (no `chatInput`, bad JSON, oversized) | `{"pronto":0}` |
 | the agent answered | `{"pronto":1,"resposta":"…","hand_off":"nao","bolhas":["…"]}` |
+| nobody answered the turn within 60s | `{"pronto":1,"resposta":"","hand_off":"nao","bolhas":[]}` |
 
 The `pronto:1` body may also carry `fila_vq` / `motivo_transf_vq` (handoff only)
 and `ura_opcoes` / `forcar_botoes` (when the last bubble has options). Reading
@@ -151,6 +152,51 @@ flight`) and still answer `{"pronto":0}`.
 
 The `codAtendimento` is the Omni **chat id**: it is the platform's conversation
 identity and the only handle every outbound endpoint accepts.
+
+### Every turn in flight is guaranteed to end
+
+The dedupe above has a failure mode that was **measured live** (atendimento
+22289496, 03/09): the channel resolves a turn only from `sendMessage`, but the
+dispatcher can decide never to call it — the chat is `agentPaused`, the
+`agentReplyFilter` rejects the message, no route resolves, the dispatch errors.
+The log read:
+
+```
+agent-dispatcher   Agent paused (handoff active), skipping dispatch
+asc-flow           [asc-flow] dropping webhook re-delivery: turn still in flight   (×6…)
+```
+
+Nothing resolved the turn, so every re-poll was dropped as a re-delivery, and at
+the 60s expiry the same text simply re-published and the cycle restarted. The
+flow polled forever; the beneficiary got nothing, from bot **or** human.
+
+So the in-flight window now **releases** instead of expiring: once a turn is
+older than 60s with no answer parked, the next poll gets
+`{"pronto":1,"resposta":"","hand_off":"nao","bolhas":[]}` and the turn is
+cleared. `async_condition` fires, the flow's message node renders nothing (the
+same shape a `/mensagem`-delivered turn already answers with) and moves on. A
+real answer is never lost to this: a parked answer is checked first, and a late
+`sendMessage` re-parks its answer for the next poll. Logged at `warn`:
+
+```
+[asc-flow] no agent answer for this turn — releasing the flow empty
+```
+
+If you see that line, the turn was never dispatched — look at the dispatcher,
+not at this channel.
+
+### `agentPaused` is incompatible with `flow` mode
+
+`POST /messages/send/handoff` sets `agentPaused: true` on the chat. That is
+right for a handoff that parks the conversation in a human queue (Gupshup, and
+this channel in `service` mode). In `flow` mode it is the bug above: the
+beneficiary only leaves the bot at the `genesys_mobile_service` node, so the
+agent must keep answering until the flow gets there — and a paused agent means
+a turn nobody resolves.
+
+The channel says so itself: in `flow` mode `sendMessage` returns
+`pauseAgent: false` in its `SendResult`, and the route skips the pause. Every
+other channel leaves the field undefined and still pauses.
 
 ## Outbound
 

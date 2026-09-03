@@ -359,7 +359,19 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         senderAgentId: meta.senderAgentId as string | undefined,
       });
 
-      return { success: true, messageId, timestamp: Date.now() };
+      return {
+        success: true,
+        messageId,
+        timestamp: Date.now(),
+        // In `flow` mode the handoff is a ROUTE inside the still-running flow,
+        // not a park in a human queue: the beneficiary only leaves the bot at
+        // the `genesys_mobile_service` node. Pausing the agent here stops the
+        // dispatcher from ever answering the next turn, and a turn nobody
+        // answers is a turn nobody resolves — the measured deadlock on
+        // atendimento 22289496. `service` mode keeps the pause: there the
+        // atendimento really did leave "Automático".
+        ...(state.config.ascFlowHandoffMode === 'flow' ? { pauseAgent: false } : {}),
+      };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const retryable = isRetryable(error);
@@ -663,20 +675,46 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
   /**
    * The answer parked by `sendMessage`, if the agent already produced one for
-   * this `cod_atendimento`. Taking it CLOSES the turn: the next call with the
+   * this `cod_atendimento` — or, past the TTL, the empty body that releases a
+   * turn nobody answered. Taking either CLOSES the turn: the next call with the
    * same text is a genuinely new one.
    */
   takeReadyTurn(instanceId: string, codAtendimento: string): AscFlowTurnReady | null {
     const state = this.ascFlowInstances.get(instanceId);
     const entry = state?.inFlight.get(codAtendimento);
-    if (!state || !entry?.ready) return null;
+    if (!state || !entry) return null;
+
+    const ageMs = Date.now() - entry.at;
+
+    // Nobody resolved this turn. `sendMessage` is the ONLY thing that does, and
+    // the dispatcher can skip it for reasons this channel never hears about
+    // (agent paused, reply filter, unresolved route, dispatch error). Leaving
+    // the mark set makes the dedupe drop every re-poll for the same text, so
+    // the flow polls forever and the beneficiary reads nothing — measured on
+    // atendimento 22289496. Release the flow instead: `pronto:1` with an empty
+    // `resposta` is the same shape a `/mensagem`-delivered turn answers with,
+    // so the message node renders nothing and the flow moves on to wait for the
+    // next input. A real answer is never lost to this — `entry.ready` is
+    // checked first, and a late `sendMessage` re-parks its answer for the next
+    // poll.
+    if (!entry.ready) {
+      if (ageMs <= IN_FLIGHT_TTL_MS) return null;
+      state.inFlight.delete(codAtendimento);
+      this.logger.warn('[asc-flow] no agent answer for this turn — releasing the flow empty', {
+        instanceId,
+        codAtendimento,
+        ageMs,
+        reason: 'no sendMessage resolved the turn (agent paused, filtered or not dispatched)',
+      });
+      return { pronto: 1, resposta: '', hand_off: 'nao', bolhas: [] };
+    }
 
     state.inFlight.delete(codAtendimento);
-    if (Date.now() - entry.at > IN_FLIGHT_TTL_MS) {
+    if (ageMs > IN_FLIGHT_TTL_MS) {
       this.logger.warn('[asc-flow] discarding a turn answer the flow never collected', {
         instanceId,
         codAtendimento,
-        ageMs: Date.now() - entry.at,
+        ageMs,
       });
       return null;
     }

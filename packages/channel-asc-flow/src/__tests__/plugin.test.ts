@@ -208,6 +208,25 @@ describe('outbound turn', () => {
     });
   });
 
+  // `POST /messages/send/handoff` sets `agentPaused: true` unless the send says
+  // otherwise. In `flow` mode that pause is the deadlock: the beneficiary only
+  // leaves the bot at the `genesys_mobile_service` node, so the agent must keep
+  // answering until then — and a turn nobody answers is a turn nobody resolves.
+  it('tells the handoff route NOT to pause the agent in flow mode', async () => {
+    await boot();
+    const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: 'VQ_X' });
+
+    expect(result.pauseAgent).toBe(false);
+  });
+
+  it('leaves the agent pause alone in service mode', async () => {
+    await boot({}, SERVICE);
+    const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: 'VQ_X' });
+
+    // Undefined = the route's default, which is to pause.
+    expect(result.pauseAgent).toBeUndefined();
+  });
+
   it('omits the Genesys fields when the turn does not hand off', async () => {
     await boot();
     await send({ type: 'text', text: 'ok' }, { handoffQueue: 'VQ_X' });
