@@ -298,6 +298,27 @@ describe('outbound turn', () => {
       expect(of('/transferirHumano')[0]?.body).toMatchObject({ cod_prioridade: 1 });
     });
 
+    it('reads the dialect POST /messages/send/handoff actually forwards', async () => {
+      await boot();
+      // That route has no per-channel keys: it sends `handoffFields` +
+      // `motivoHandoff`. Without this the REST caller could never fill fila_vq.
+      await send(
+        { type: 'text', text: 'Vou te transferir.' },
+        {
+          isHandoff: true,
+          handoffFields: { fila_vq: 'VQ_AGENDAMENTO', cod_servico: 131, cod_prioridade: 1 },
+          motivoHandoff: 'fora do escopo',
+        },
+      );
+
+      expect(of('/transferirHumano')[0]?.body).toMatchObject({ cod_servico: 131, cod_prioridade: 1 });
+      expect(ready('42')).toMatchObject({
+        hand_off: 'sim',
+        fila_vq: 'VQ_AGENDAMENTO',
+        motivo_transf_vq: 'fora do escopo',
+      });
+    });
+
     it('omits fila_vq when the value is not a queue code', async () => {
       await boot();
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffQueue: 'fila com espaço' });

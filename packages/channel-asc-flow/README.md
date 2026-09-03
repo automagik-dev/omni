@@ -241,6 +241,13 @@ nobody on the way. `utils/handoff.ts` validates the inputs before the call and
 | `motivo_transf_vq` | whitespace collapsed, trimmed, ≤255 chars | omitted when empty |
 | `POST /transferirHumano` | must succeed | `warn` logged, turn answers with `hand_off:"nao"` |
 
+Two dialects reach these inputs. A direct plugin caller sets
+`metadata.handoffQueue` / `handoffReason` / `handoffServico` / `handoffPriority`.
+`POST /messages/send/handoff` — what an agent tool calls — has no per-channel
+keys and forwards a free `handoffFields` record plus `motivoHandoff`, so the
+wire names (`fila_vq`, `motivo_transf_vq`, `cod_servico`, `cod_prioridade`) are
+also read from inside `handoffFields`. Top-level `metadata` wins.
+
 `Number()` was the original trap and is why this is not inline: `Number("")`
 and `Number([])` are `0` — a service that does not exist — and `Number("fila-x")`
 is `NaN`, which `JSON.stringify` puts on the wire as `null`.

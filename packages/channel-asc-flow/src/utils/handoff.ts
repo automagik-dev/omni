@@ -35,6 +35,25 @@ export interface HandoffPlan {
   fields: { fila_vq?: string; motivo_transf_vq?: string };
 }
 
+/**
+ * Read a handoff input under any of its accepted names.
+ *
+ * Two callers exist and they speak different dialects. A plugin caller sets
+ * `metadata.handoffQueue` / `handoffReason` / `handoffServico` directly. The
+ * REST route `POST /messages/send/handoff` (which is what an agent tool calls)
+ * has no per-channel keys: it forwards a free `handoffFields` record plus
+ * `motivoHandoff`. Without this the route could never fill `fila_vq` at all,
+ * so the wire names (`fila_vq`, `motivo_transf_vq`, `cod_servico`) are read
+ * from inside `handoffFields` too. Top-level `metadata` wins.
+ */
+function pickFrom(meta: Record<string, unknown>): (...keys: string[]) => unknown {
+  const bag =
+    typeof meta.handoffFields === 'object' && meta.handoffFields !== null
+      ? (meta.handoffFields as Record<string, unknown>)
+      : {};
+  return (...keys) => keys.map((key) => meta[key] ?? bag[key]).find((value) => value !== undefined);
+}
+
 /** Accept a positive integer, from a number or a fully-numeric string. Nothing else. */
 function toPositiveInt(value: unknown): number | null {
   if (typeof value === 'number') return Number.isInteger(value) && value > 0 ? value : null;
@@ -57,7 +76,8 @@ export function planHandoff(
   fallbackServico: unknown,
   logger: Logger,
 ): HandoffPlan | null {
-  const rawServico = meta.handoffServico ?? fallbackServico;
+  const read = pickFrom(meta);
+  const rawServico = read('handoffServico', 'cod_servico') ?? fallbackServico;
   const codServico = toPositiveInt(rawServico);
   if (codServico === null) {
     logger.error('[asc-flow] handoff refused: cod_servico is not a positive integer', {
@@ -67,21 +87,21 @@ export function planHandoff(
     return null;
   }
 
-  const rawPrioridade = meta.handoffPriority;
+  const rawPrioridade = read('handoffPriority', 'cod_prioridade');
   let codPrioridade: 0 | 1 = 0;
   if (rawPrioridade === 1 || rawPrioridade === '1') codPrioridade = 1;
   else if (rawPrioridade !== undefined && rawPrioridade !== 0 && rawPrioridade !== '0') {
     logger.debug('[asc-flow] cod_prioridade out of domain, defaulting to 0', { received: rawPrioridade });
   }
 
-  return { codServico, codPrioridade, fields: buildGenesysFields(meta, logger) };
+  return { codServico, codPrioridade, fields: buildGenesysFields(read, logger) };
 }
 
 /** The two userdata fields the agent owns. Anything malformed is OMITTED, never coerced. */
-function buildGenesysFields(meta: Record<string, unknown>, logger: Logger): HandoffPlan['fields'] {
+function buildGenesysFields(read: (...keys: string[]) => unknown, logger: Logger): HandoffPlan['fields'] {
   const fields: HandoffPlan['fields'] = {};
 
-  const rawFila = meta.handoffQueue;
+  const rawFila = read('handoffQueue', 'fila_vq');
   if (rawFila !== undefined && rawFila !== null) {
     const fila = String(rawFila).trim();
     if (FILA_PATTERN.test(fila)) fields.fila_vq = fila;
@@ -92,7 +112,7 @@ function buildGenesysFields(meta: Record<string, unknown>, logger: Logger): Hand
     }
   }
 
-  const rawMotivo = meta.handoffReason;
+  const rawMotivo = read('handoffReason', 'motivo_transf_vq', 'motivoHandoff');
   if (typeof rawMotivo === 'string') {
     const motivo = rawMotivo.replace(/\s+/g, ' ').trim().slice(0, MOTIVO_MAX_LENGTH);
     if (motivo) fields.motivo_transf_vq = motivo;
