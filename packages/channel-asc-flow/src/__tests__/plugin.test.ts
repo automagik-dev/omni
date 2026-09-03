@@ -24,20 +24,29 @@ let eventBus: MockEventBus;
 let calls: RecordedCall[];
 let restore: () => void;
 
+/**
+ * The opt-in destination: `/transferirHumano` → the ASC's own internal queue.
+ * The DEFAULT is `flow`, which never calls it (see the `handoff mode` block).
+ */
+const SERVICE = { ascFlowHandoffMode: 'service' } as const;
+
 /** Platform calls in order, `/authuser` filtered out. */
 const sequence = (): string[] => calls.filter((c) => c.path !== '/authuser').map((c) => c.path);
 const of = (path: string) => calls.filter((c) => c.path === path);
 /** The body the next `api_rest` poll would receive. */
 const ready = (cod: string) => plugin.takeReadyTurn(instanceId, cod);
 
-async function boot(overrides: Record<string, () => Response> = {}): Promise<void> {
+async function boot(
+  overrides: Record<string, () => Response> = {},
+  credentials: Record<string, unknown> = {},
+): Promise<void> {
   const stub = stubPlatform(overrides);
   calls = stub.calls;
   restore = stub.restore;
   eventBus = new MockEventBus();
   plugin = new AscFlowPlugin();
   await plugin.initialize(createContext(eventBus));
-  await connectPlugin(plugin);
+  await connectPlugin(plugin, credentials);
   calls.length = 0; // drop the connect-time /authuser
 }
 
@@ -179,7 +188,7 @@ describe('outbound turn', () => {
   });
 
   it('transfers to the configured queue and reports the handoff in the body', async () => {
-    await boot();
+    await boot({}, SERVICE);
     await send(
       { type: 'text', text: 'Vou te transferir.' },
       { isHandoff: true, handoffQueue: 'VQ_AGENDAMENTO', handoffReason: 'fora do escopo' },
@@ -231,9 +240,10 @@ describe('outbound turn', () => {
   });
 
   it('answers the turn with hand_off "nao" when the platform refuses the transfer', async () => {
-    await boot({
-      '/transferirHumano': () => jsonResponse({ cod_error: 10, msg: 'Atendimento já finalizado!' }, 401),
-    });
+    await boot(
+      { '/transferirHumano': () => jsonResponse({ cod_error: 10, msg: 'Atendimento já finalizado!' }, 401) },
+      SERVICE,
+    );
     const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: 'VQ_X' });
 
     // The transfer failing must never cost the beneficiary the answer.
@@ -250,19 +260,19 @@ describe('outbound turn', () => {
   });
 
   it('answers the turn with hand_off "nao" when the transfer 500s', async () => {
-    await boot({ '/transferirHumano': () => jsonResponse({ msg: 'boom' }, 500) });
+    await boot({ '/transferirHumano': () => jsonResponse({ msg: 'boom' }, 500) }, SERVICE);
     const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true });
 
     expect(result.success).toBe(true);
     expect(ready('42')).toMatchObject({ hand_off: 'nao', resposta: 'Vou te transferir.' });
   });
 
-  describe('handoff validation', () => {
+  describe('handoff validation (service mode)', () => {
     // Measured on the live branch: `Number()` turns each of these into NaN
     // (→ `null` on the wire) or a silent 0 — a service that does not exist.
     for (const bad of ['fila-x', '', '12abc', '-3', 0, -1, 1.5, Number.NaN, {}, []] as unknown[]) {
       it(`refuses the handoff when cod_servico is ${JSON.stringify(bad) ?? String(bad)}`, async () => {
-        await boot();
+        await boot({}, SERVICE);
         const result = await send(
           { type: 'text', text: 'Vou te transferir.' },
           { isHandoff: true, handoffServico: bad, handoffQueue: 'VQ_X', handoffReason: 'fora do escopo' },
@@ -281,7 +291,7 @@ describe('outbound turn', () => {
     }
 
     it('accepts a numeric string cod_servico override', async () => {
-      await boot();
+      await boot({}, SERVICE);
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffServico: ' 77 ' });
 
       expect(of('/transferirHumano')[0]?.body).toMatchObject({ cod_servico: 77 });
@@ -289,7 +299,7 @@ describe('outbound turn', () => {
     });
 
     it('clamps cod_prioridade to the 0|1 domain', async () => {
-      await boot();
+      await boot({}, SERVICE);
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffPriority: 9 });
       expect(of('/transferirHumano')[0]?.body).toMatchObject({ cod_prioridade: 0 });
 
@@ -299,7 +309,7 @@ describe('outbound turn', () => {
     });
 
     it('reads the dialect POST /messages/send/handoff actually forwards', async () => {
-      await boot();
+      await boot({}, SERVICE);
       // That route has no per-channel keys: it sends `handoffFields` +
       // `motivoHandoff`. Without this the REST caller could never fill fila_vq.
       await send(
@@ -320,21 +330,21 @@ describe('outbound turn', () => {
     });
 
     it('omits fila_vq when the value is not a queue code', async () => {
-      await boot();
+      await boot({}, SERVICE);
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffQueue: 'fila com espaço' });
 
       expect(ready('42')?.fila_vq).toBeUndefined();
     });
 
     it('keeps fila_vq when it matches the accepted shape', async () => {
-      await boot();
+      await boot({}, SERVICE);
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffQueue: 'VQ_AGEND.01-a' });
 
       expect(ready('42')?.fila_vq).toBe('VQ_AGEND.01-a');
     });
 
     it('collapses and truncates motivo_transf_vq, and omits an empty one', async () => {
-      await boot();
+      await boot({}, SERVICE);
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: `${'a '.repeat(300)}` });
       expect(ready('42')?.motivo_transf_vq).toHaveLength(255);
 
@@ -343,6 +353,72 @@ describe('outbound turn', () => {
 
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: '   \n ' });
       expect(ready('42')?.motivo_transf_vq).toBeUndefined();
+    });
+  });
+
+  /**
+   * The two destinations are EXCLUSIVE. Measured on atendimento 22286567
+   * (flow #225, 03/09): `/transferirHumano` was accepted, the atendimento left
+   * "Automático" — and the flow stopped polling, so it never read
+   * `hand_off:"sim"` and never reached the `genesys_mobile_service` node.
+   * Hapvida's destination is Genesys/WDE, so `flow` is the default.
+   */
+  describe('handoff mode flow (default)', () => {
+    it('never calls transferirHumano and carries the Genesys fields in the body', async () => {
+      await boot();
+      await send(
+        { type: 'text', text: 'Vou te transferir.' },
+        { isHandoff: true, handoffQueue: 'VQ_AGENDAMENTO', handoffReason: 'fora do escopo' },
+      );
+
+      expect(of('/transferirHumano')).toHaveLength(0);
+      expect(ready('42')).toEqual({
+        pronto: 1,
+        resposta: 'Vou te transferir.',
+        hand_off: 'sim',
+        bolhas: ['Vou te transferir.'],
+        fila_vq: 'VQ_AGENDAMENTO',
+        motivo_transf_vq: 'fora do escopo',
+      });
+    });
+
+    it('hands off with no fila_vq — flow #225 hardcodes u_cod_transf', async () => {
+      await boot();
+      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: 'fora do escopo' });
+
+      expect(of('/transferirHumano')).toHaveLength(0);
+      expect(ready('42')).toMatchObject({ hand_off: 'sim', motivo_transf_vq: 'fora do escopo' });
+      expect(ready('42')?.fila_vq).toBeUndefined();
+    });
+
+    it('REFUSES the handoff when fila_vq is present and malformed', async () => {
+      // Unlike service mode, there is no ASC queue holding the atendimento:
+      // fila_vq IS the routing key, so omitting it would strand the transfer.
+      await boot();
+      const result = await send(
+        { type: 'text', text: 'Vou te transferir.' },
+        {
+          isHandoff: true,
+          handoffQueue: 'fila com espaço',
+        },
+      );
+
+      expect(result.success).toBe(true);
+      expect(of('/transferirHumano')).toHaveLength(0);
+      expect(ready('42')).toEqual({
+        pronto: 1,
+        resposta: 'Vou te transferir.',
+        hand_off: 'nao',
+        bolhas: ['Vou te transferir.'],
+      });
+    });
+
+    it('ignores cod_servico entirely — nothing is dialed', async () => {
+      await boot();
+      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffServico: 'lixo', handoffQueue: 'VQ_X' });
+
+      expect(of('/transferirHumano')).toHaveLength(0);
+      expect(ready('42')).toMatchObject({ hand_off: 'sim', fila_vq: 'VQ_X' });
     });
   });
 

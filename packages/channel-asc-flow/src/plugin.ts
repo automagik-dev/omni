@@ -46,10 +46,13 @@
  * because it called the agent itself and had no metadata channel. Two of the
  * Genesys component's fourteen userdata fields are ours to fill — `fila_vq`
  * (destination queue) and `motivo_transf_vq` (reason) — and they ride in the
- * same response body, per HANDOFF-GENESYS.md. `hand_off: "sim"` is only ever
- * said when `/transferirHumano` was actually ACCEPTED (see `utils/handoff.ts`):
- * an invalid `cod_servico` or a refusal degrades the turn to `"nao"`, and the
- * turn still answers rather than leaving the beneficiary in silence.
+ * same response body, per HANDOFF-GENESYS.md. Where the handoff LANDS is
+ * `ascFlowHandoffMode`, and the two destinations are exclusive: `flow` (default)
+ * answers the poll and lets the flow reach the Genesys node, `service` calls
+ * `/transferirHumano` and parks the atendimento in the ASC's own queue, which
+ * stops the poll loop dead. `hand_off: "sim"` is never said on a handoff that
+ * did not hold (see `utils/handoff.ts`), and the turn always answers rather
+ * than leaving the beneficiary in silence.
  */
 
 import { BaseChannelPlugin, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
@@ -73,7 +76,7 @@ import { type ParsedAscFlowTurn, handleAscFlowWebhookRequest } from './handlers/
 import type { AscFlowConfig, AscFlowUra } from './types';
 import { encodeAscEmoji } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
-import { type HandoffPlan, planHandoff } from './utils/handoff';
+import { type AscFlowHandoffMode, type HandoffPlan, planHandoff } from './utils/handoff';
 import { buildUra, splitBubbles } from './utils/interactive';
 import { isAscMediaFilename, mediaFallbackText, resolveAscInboundMedia } from './utils/media';
 import { OUTBOUND_MEDIA_FALLBACK_TEXT, buildReplyField, buildRichFields, isRichContent } from './utils/outbound';
@@ -207,6 +210,9 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     const login = pick('ascFlowLogin') as string | undefined;
     const chave = pick('ascFlowChave') as string | undefined;
     const handoffServico = Number(pick('ascFlowHandoffServico') ?? 0);
+    // `flow` is the default because it is the measured-correct path for the
+    // Genesys/WDE destination; `service` is opt-in for the ASC's own queue.
+    const handoffMode: AscFlowHandoffMode = pick('ascFlowHandoffMode') === 'service' ? 'service' : 'flow';
     const webhookVerifyToken = pick('webhookVerifyToken') as string | undefined;
 
     if (!login) throw new AscFlowApiError(AscFlowErrorCode.AUTH_FAILED, 'ascFlowLogin is required');
@@ -223,6 +229,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       ascFlowBaseUrl: baseUrl,
       ascFlowLogin: login,
       ascFlowChave: chave,
+      ascFlowHandoffMode: handoffMode,
       ascFlowHandoffServico: Number.isFinite(handoffServico) ? handoffServico : 0,
       ascFlowInteractiveViaMensagem: pick('ascFlowInteractiveViaMensagem') !== false,
       webhookVerifyToken,
@@ -368,14 +375,21 @@ export class AscFlowPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Transfer the atendimento to a human, and report whether it was ACCEPTED.
+   * Hand the atendimento to a human, through whichever of the two EXCLUSIVE
+   * destinations this instance is configured for, and report whether it holds.
    *
-   * `null` is the only honest answer to a refusal: `hand_off: 'sim'` is what
-   * routes the flow to the Genesys node, so saying it on a transfer that never
-   * landed leaves the beneficiary reading "vou te transferir" with nobody on
-   * the way. Both failure modes — an input that never should have been dialed
-   * (`planHandoff`) and a platform refusal — degrade here rather than throwing:
-   * the turn still answers, like every other best-effort call in this channel.
+   * In `flow` mode there is NO platform call: `/transferirHumano` takes the
+   * atendimento out of "Automático", which kills the poll loop — measured on
+   * atendimento 22286567 — and a dead flow never reaches the Genesys node. The
+   * fields in the poll body ARE the handoff there.
+   *
+   * In `service` mode the call still gates the answer. `null` is the only
+   * honest answer to a refusal: `hand_off: 'sim'` is what routes the flow, so
+   * saying it on a transfer that never landed leaves the beneficiary reading
+   * "vou te transferir" with nobody on the way. Both failure modes — an input
+   * that never should have been dialed (`planHandoff`) and a platform refusal —
+   * degrade here rather than throwing: the turn still answers, like every other
+   * best-effort call in this channel.
    */
   private async runHandoff(
     state: AscFlowInstanceState,
@@ -383,14 +397,15 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     cod: number,
     meta: Record<string, unknown>,
   ): Promise<HandoffPlan['fields'] | null> {
-    const plan = planHandoff(meta, state.config.ascFlowHandoffServico, this.logger);
+    const plan = planHandoff(state.config.ascFlowHandoffMode, meta, state.config.ascFlowHandoffServico, this.logger);
     if (!plan) return null;
+    if (!plan.transfer) return plan.fields;
 
     try {
       await state.client.call('/transferirHumano', {
         cod,
-        cod_servico: plan.codServico,
-        cod_prioridade: plan.codPrioridade,
+        cod_servico: plan.transfer.codServico,
+        cod_prioridade: plan.transfer.codPrioridade,
         msgTransferencia: false,
       });
       return plan.fields;

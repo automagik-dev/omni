@@ -2,6 +2,8 @@
  * ASC platform Flow channel types.
  */
 
+import type { AscFlowHandoffMode } from './utils/handoff';
+
 /** Per-instance configuration resolved on `connect()`. */
 export interface AscFlowConfig {
   /** Platform base URL including the `/rest/v2` prefix. */
@@ -10,7 +12,13 @@ export interface AscFlowConfig {
   ascFlowLogin: string;
   /** `/authuser` chave (secret). */
   ascFlowChave: string;
-  /** `cod_servico` handed to `/transferirHumano` — the queue that receives handoffs. */
+  /**
+   * Which of the two EXCLUSIVE handoff destinations this instance uses.
+   * `flow` (default) = the flow's Genesys node; `service` = the ASC's own
+   * internal queue via `/transferirHumano`. See `utils/handoff.ts`.
+   */
+  ascFlowHandoffMode: AscFlowHandoffMode;
+  /** `cod_servico` handed to `/transferirHumano` — used ONLY in `service` mode. */
   ascFlowHandoffServico: number;
   /**
    * Deliver an interactive turn through `POST /mensagem` (real buttons/list in

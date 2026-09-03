@@ -790,7 +790,14 @@ export const instances = pgTable(
     ascFlowLogin: text('asc_flow_login'),
     /** `/authuser` chave — secret, redacted from API responses. */
     ascFlowChave: text('asc_flow_chave'),
-    /** `cod_servico` handed to `/transferirHumano` (the handoff queue). */
+    /**
+     * Which of the two EXCLUSIVE handoff destinations this instance uses:
+     * `'flow'` (default when null — the poll body routes to the flow's Genesys
+     * node) or `'service'` (`/transferirHumano`, the ASC's own queue, which
+     * stops the flow polling). See packages/channel-asc-flow/README.md.
+     */
+    ascFlowHandoffMode: text('asc_flow_handoff_mode').$type<'flow' | 'service'>(),
+    /** `cod_servico` handed to `/transferirHumano` — used only in `service` mode. */
     ascFlowHandoffServico: integer('asc_flow_handoff_servico'),
 
     // ---- Agent Reference ----

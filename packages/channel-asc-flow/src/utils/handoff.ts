@@ -2,6 +2,8 @@
  * Handoff validation — everything that decides whether a turn may say
  * `hand_off: "sim"`, and with which values.
  *
+ * The two destinations are EXCLUSIVE — see `AscFlowHandoffMode`.
+ *
  * Why this is its own file: the numbers here leave our process twice. The
  * `cod_servico` goes to `POST /transferirHumano`, and `fila_vq` /
  * `motivo_transf_vq` ride the poll body straight into the Genesys component's
@@ -26,11 +28,29 @@ const FILA_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
 /** `u_bot_motivo_transf` is free text; cap it so a runaway prompt cannot flood it. */
 const MOTIVO_MAX_LENGTH = 255;
 
+/**
+ * Which of the two MUTUALLY EXCLUSIVE handoff destinations this instance uses.
+ *
+ * Measured live on atendimento 22286567 (flow #225, 03/09): `POST
+ * /transferirHumano` was accepted, the atendimento left "Automático" for
+ * "Aguardando atendimento" — and the flow STOPPED POLLING. One event after the
+ * call, nothing more. A dead flow never reads `hand_off:"sim"` and never
+ * reaches the `genesys_mobile_service` node, so the WDE agent got nothing.
+ *
+ * - `flow` (default): do NOT call `/transferirHumano`. Answer the poll with
+ *   `hand_off:"sim"` + `fila_vq` + `motivo_transf_vq` and let the flow route to
+ *   the Genesys node. This is the Hapvida/Genesys path.
+ * - `service`: call `/transferirHumano` — the atendimento lands in the ASC's own
+ *   internal queue, worked from the ASC panel. The flow dies, by design.
+ */
+export type AscFlowHandoffMode = 'flow' | 'service';
+
 export interface HandoffPlan {
-  /** Destination queue for `/transferirHumano`. Validated: positive integer. */
-  codServico: number;
-  /** The platform accepts 0 (normal) or 1 (priority) — nothing else. */
-  codPrioridade: 0 | 1;
+  /**
+   * The `/transferirHumano` arguments — `null` in `flow` mode, where no call is
+   * made at all.
+   */
+  transfer: { codServico: number; codPrioridade: 0 | 1 } | null;
   /** The Genesys userdata fields, present only when they validated. */
   fields: { fila_vq?: string; motivo_transf_vq?: string };
 }
@@ -67,16 +87,31 @@ function toPositiveInt(value: unknown): number | null {
 /**
  * Build the handoff plan for a turn, or `null` when the turn must NOT hand off.
  *
- * `null` means: do not call `/transferirHumano`, and answer the flow with
+ * `null` means: make no platform call, and answer the flow with
  * `hand_off: "nao"`. Lying to the flow routes the beneficiary to a node that
  * has nobody behind it.
+ *
+ * What makes `hand_off:"sim"` TRUE differs per mode:
+ *
+ * - `service`: the transfer was ACCEPTED by `/transferirHumano` (this function
+ *   only validates the inputs; `sendMessage` wraps the call itself).
+ * - `flow`: no call exists to be accepted, so it is true when the handoff was
+ *   REQUESTED and the fields validated. But `fila_vq` is what decides the
+ *   routing here, so a malformed one is a REFUSAL — not a silent omission.
  */
 export function planHandoff(
+  mode: AscFlowHandoffMode,
   meta: Record<string, unknown>,
   fallbackServico: unknown,
   logger: Logger,
 ): HandoffPlan | null {
   const read = pickFrom(meta);
+
+  const fields = buildGenesysFields(read, logger, mode);
+  if (fields === null) return null;
+
+  if (mode === 'flow') return { transfer: null, fields };
+
   const rawServico = read('handoffServico', 'cod_servico') ?? fallbackServico;
   const codServico = toPositiveInt(rawServico);
   if (codServico === null) {
@@ -94,20 +129,37 @@ export function planHandoff(
     logger.debug('[asc-flow] cod_prioridade out of domain, defaulting to 0', { received: rawPrioridade });
   }
 
-  return { codServico, codPrioridade, fields: buildGenesysFields(read, logger) };
+  return { transfer: { codServico, codPrioridade }, fields };
 }
 
-/** The two userdata fields the agent owns. Anything malformed is OMITTED, never coerced. */
-function buildGenesysFields(read: (...keys: string[]) => unknown, logger: Logger): HandoffPlan['fields'] {
+/**
+ * The two userdata fields the agent owns. `null` = refuse the whole handoff.
+ *
+ * A malformed `fila_vq` is only survivable in `service` mode, where the ASC's
+ * own queue receives the atendimento and the field is decoration. In `flow`
+ * mode it is the routing key: omitting it hands Genesys a transfer with no
+ * destination. An ABSENT one is still fine in both — flow #225 hardcodes
+ * `u_cod_transf` to `SKILL_WPP_TECNICA_GENESYS` and never reads `{#fila_vq}`,
+ * so a flow that resolves its own queue is a supported (and current) setup.
+ * Only PRESENT-AND-MALFORMED is the error.
+ */
+function buildGenesysFields(
+  read: (...keys: string[]) => unknown,
+  logger: Logger,
+  mode: AscFlowHandoffMode,
+): HandoffPlan['fields'] | null {
   const fields: HandoffPlan['fields'] = {};
 
   const rawFila = read('handoffQueue', 'fila_vq');
   if (rawFila !== undefined && rawFila !== null) {
     const fila = String(rawFila).trim();
     if (FILA_PATTERN.test(fila)) fields.fila_vq = fila;
-    else {
-      // Omitting is the safe failure: Genesys falls back to the flow's default
-      // queue, which beats routing on a garbage code.
+    else if (mode === 'flow') {
+      logger.error('[asc-flow] handoff refused: fila_vq does not match the accepted shape', { received: rawFila });
+      return null;
+    } else {
+      // Omitting is the safe failure HERE: the ASC queue already has the
+      // atendimento, and Genesys falls back to the flow's default queue.
       logger.warn('[asc-flow] fila_vq omitted: value does not match the accepted shape', { received: rawFila });
     }
   }

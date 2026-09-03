@@ -204,6 +204,7 @@ function buildInstanceConnectOptions(instance: {
   ascFlowBaseUrl?: string | null;
   ascFlowLogin?: string | null;
   ascFlowChave?: string | null;
+  ascFlowHandoffMode?: string | null;
   ascFlowHandoffServico?: number | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
@@ -246,6 +247,7 @@ function applyAscFlowOptions(
     ascFlowBaseUrl?: string | null;
     ascFlowLogin?: string | null;
     ascFlowChave?: string | null;
+    ascFlowHandoffMode?: string | null;
     ascFlowHandoffServico?: number | null;
     webhookVerifyToken?: string | null;
   },
@@ -253,6 +255,7 @@ function applyAscFlowOptions(
   if (instance.ascFlowBaseUrl) options.ascFlowBaseUrl = instance.ascFlowBaseUrl;
   if (instance.ascFlowLogin) options.ascFlowLogin = instance.ascFlowLogin;
   if (instance.ascFlowChave) options.ascFlowChave = instance.ascFlowChave;
+  if (instance.ascFlowHandoffMode) options.ascFlowHandoffMode = instance.ascFlowHandoffMode;
   if (instance.ascFlowHandoffServico != null) options.ascFlowHandoffServico = instance.ascFlowHandoffServico;
   if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }

@@ -35,7 +35,8 @@ Both can exist side by side; they share no code and no configuration.
 | `ascFlowBaseUrl` | no | default `https://sac-notredame.ascbrazil.com.br`; `/rest/v2` is appended when absent |
 | `ascFlowLogin` | yes | `/authuser` login |
 | `ascFlowChave` | yes | `/authuser` chave — **secret**, redacted from API responses |
-| `ascFlowHandoffServico` | no | `cod_servico` for `/transferirHumano` (the destination queue) |
+| `ascFlowHandoffMode` | no | default `flow` — `flow` routes the handoff through the flow's Genesys node (no `/transferirHumano`); `service` calls `/transferirHumano` and parks the atendimento in the ASC's own queue. **Exclusive**, see [Handoff](#handoff) |
+| `ascFlowHandoffServico` | no | `cod_servico` for `/transferirHumano` — **`service` mode only** |
 | `ascFlowInteractiveViaMensagem` | no | default `true` — deliver interactive turns through `POST /mensagem` (real buttons/list); `false` keeps the numbered text in `resposta` |
 | `webhookVerifyToken` | no | shared secret the flow may echo as `?token=` or `x-webhook-token` |
 
@@ -158,7 +159,7 @@ identity and the only handle every outbound endpoint accepts.
 | `POST /sendIndicador` | typing, on inbound arrival and after each pushed bubble |
 | `POST /callbackFlowMsg` | every bubble EXCEPT the last one (plain text turns) |
 | `POST /mensagem` | media, location, contact card, and the interactive last bubble |
-| `POST /transferirHumano` | `metadata.isHandoff === true` |
+| `POST /transferirHumano` | `metadata.isHandoff === true` **and** `ascFlowHandoffMode: 'service'` |
 
 One `sendMessage` is one flow turn. Blank-line-separated paragraphs become
 separate bubbles. The bubbles before the last are **pushed** (best-effort, with
@@ -223,23 +224,62 @@ flow renders that bubble itself.
 `metadata.isHandoff` drives it. Of the fourteen Genesys userdata fields the ASC
 component forwards, exactly two are the agent's: `fila_vq` and
 `motivo_transf_vq`. They ride in the `pronto:1` body, from
-`metadata.handoffQueue` and `metadata.handoffReason`; `metadata.handoffServico`
-overrides the instance's default queue for `transferirHumano`, which is still
-called on top of the body's `hand_off:"sim"`.
+`metadata.handoffQueue` and `metadata.handoffReason`.
 
-**`hand_off:"sim"` means the transfer was ACCEPTED — nothing weaker.** It is
-what makes the flow route to the Genesys node, so claiming it on a transfer
-that never happened leaves the beneficiary reading "vou te transferir" with
-nobody on the way. `utils/handoff.ts` validates the inputs before the call and
-`sendMessage` wraps the call itself:
+#### The two destinations are MUTUALLY EXCLUSIVE
 
-| Input | Rule | On violation |
+There are two ways out of the bot, and taking one forecloses the other:
+
+| | `POST /transferirHumano` | the flow's `genesys_mobile_service` node |
 | --- | --- | --- |
-| `cod_servico` | positive integer (number, or a fully-numeric string) | **no transfer**, `error` logged, turn answers with `hand_off:"nao"` |
-| `cod_prioridade` | `0` or `1` | coerced to `0`, `debug` logged |
-| `fila_vq` | `^[A-Za-z0-9_.-]{1,32}$` | field omitted (Genesys uses the flow's default queue), `warn` logged |
-| `motivo_transf_vq` | whitespace collapsed, trimmed, ≤255 chars | omitted when empty |
-| `POST /transferirHumano` | must succeed | `warn` logged, turn answers with `hand_off:"nao"` |
+| Where the human is | the ASC's own panel | Genesys → WDE |
+| How it is triggered | our HTTP call | `hand_off:"sim"` in the poll body |
+| Requires the flow alive | **no — it kills it** | **yes** |
+
+Measured live on atendimento `22286567` (flow #225, 03/09), and this is the
+whole reason the mode exists:
+
+1. `POST /transferirHumano` was **accepted** — body on the wire was
+   `{"cod":22286567,"cod_servico":130,"cod_prioridade":0,"msgTransferencia":false}`;
+2. the atendimento moved from `Automático` to `Aguardando atendimento`;
+3. **the flow stopped polling** — one event after the call, then nothing;
+4. so it never read `hand_off:"sim"` and never reached `genesys_mobile_service`;
+5. and the agent waiting in the WDE received **nothing**.
+
+Taking the atendimento out of automatic mode is exactly what ends the
+`api_rest` poll loop that the Genesys node lives inside. You get the ASC queue
+**or** you get Genesys — never both.
+
+#### `ascFlowHandoffMode`
+
+| Mode | `/transferirHumano` | `hand_off:"sim"` means | Use it for |
+| --- | --- | --- | --- |
+| **`flow`** (default) | never called | the handoff was **requested** and the fields validated | **Hapvida / Genesys / WDE** |
+| `service` | called with `cod_servico` | the transfer was **accepted** by the platform | a tenant whose humans work the ASC panel |
+
+**`hand_off:"sim"` is never said on a handoff that did not hold.** It is what
+routes the flow, so claiming it otherwise leaves the beneficiary reading "vou te
+transferir" with nobody on the way. `utils/handoff.ts` validates the inputs;
+in `service` mode `sendMessage` also wraps the call itself:
+
+| Input | Mode | Rule | On violation |
+| --- | --- | --- | --- |
+| `cod_servico` | `service` only | positive integer (number, or a fully-numeric string); `metadata.handoffServico` overrides the instance default | **no transfer**, `error` logged, turn answers with `hand_off:"nao"` |
+| `cod_prioridade` | `service` only | `0` or `1` | coerced to `0`, `debug` logged |
+| `fila_vq` | both | `^[A-Za-z0-9_.-]{1,32}$` when present | `service`: field omitted, `warn` logged. `flow`: **handoff refused**, `error` logged, `hand_off:"nao"` |
+| `fila_vq` **absent** | both | allowed | nothing — see below |
+| `motivo_transf_vq` | both | whitespace collapsed, trimmed, ≤255 chars | omitted when empty |
+| `POST /transferirHumano` | `service` only | must succeed | `warn` logged, turn answers with `hand_off:"nao"` |
+
+In `flow` mode `fila_vq` is the **routing key** — there is no ASC queue holding
+the atendimento as a floor, so a malformed value would strand the transfer with
+no destination. That is why it is an error there and a mere omission in
+`service` mode.
+
+An **absent** `fila_vq` is valid in both. Flow #225 hardcodes `u_cod_transf` to
+`SKILL_WPP_TECNICA_GENESYS` and never reads `{#fila_vq}`, so a flow that
+resolves its own queue is a supported (and currently deployed) setup. Only
+*present-and-malformed* is refused.
 
 Two dialects reach these inputs. A direct plugin caller sets
 `metadata.handoffQueue` / `handoffReason` / `handoffServico` / `handoffPriority`.
