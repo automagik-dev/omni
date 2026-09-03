@@ -1,14 +1,29 @@
 # =============================================================================
-# Publish the dev image channel from every qualifying push to `dev`.
+# Publish the dev image channel: one image per merged PR to `dev`.
 # =============================================================================
 # The HML instance is kept on the `dev` branch by Argo CD through the private
 # GitOps repository, which pins ghcr.io/<owner>/omni-api by digest. This
-# workflow is the only producer of that channel: on each push to `dev` that
-# changes a protected image build input (the list in
-# scripts/release/verify-promotion-candidate.sh, mirrored in the `paths:`
-# filter below) it builds the linux/amd64 + linux/arm64 OCI index, pushes an
-# immutable `dev-<sha12>` alias plus the floating `dev` alias, and registers
-# GitHub-native provenance for the index digest.
+# workflow is the only producer of that channel and it has no `push:`
+# trigger, so no commit to `dev` ever builds an image by itself. It is built
+# once per merged PR to `dev`: version.yml calls it as a local reusable
+# workflow (`uses: ./.github/workflows/image-dev.yml`) exactly once per dev
+# version cut, passing the version bump commit it just pushed to `dev`, so
+# every dev image corresponds to one dev version cut. Direct commits to `dev`
+# (fixes, merges, chores) never build; the previous dev image stays valid
+# until the next merged PR. A manual dispatch rebuilds the current `dev` head
+# (for example after a registry-side cleanup) or, given `ref`, one exact
+# commit that is already on `dev`.
+#
+# A local call rather than a dispatch: GitHub resolves a dispatched workflow
+# file against the DEFAULT branch, so a workflow that exists only on `dev`
+# cannot be dispatched until the next dev-to-main promotion (that 404 is
+# exactly how the first image-build.yml dispatch failed). A `uses:` call
+# resolves the file from the caller's own checkout, so it works on `dev`
+# before it ever reaches `main`.
+#
+# Each run builds the linux/amd64 + linux/arm64 OCI index from the resolved
+# `dev` commit, pushes an immutable `dev-<sha12>` alias plus the floating
+# `dev` alias, and registers GitHub-native provenance for the index digest.
 #
 # Dev images are NOT release candidates. Nothing here is promotable: the
 # workflow never creates a tag ref, never pushes a `v<version>` alias, never
@@ -17,10 +32,13 @@
 # dispatch-only image-build.yml at an exact `v<version>` tag, and the read-only
 # main promotion (image-publish.yml) verifies only those.
 #
-# Only the newest `dev` head matters, so an in-flight build is cancelled when a
-# newer push arrives. The floating `dev` alias therefore always converges on
-# the newest head that finished; consumers that need an exact identity pin the
-# `dev-<sha12>` alias or, better, the digest printed in the step summary.
+# Only the newest `dev` cut matters, so an in-flight build is cancelled when a
+# newer call or dispatch arrives (one constant concurrency group: a run is
+# started only for a commit on `dev`, and version.yml serializes bumps, so a
+# newer run is always a newer cut). The floating `dev` alias therefore always
+# converges on the newest cut that finished; consumers that need an exact
+# identity pin the `dev-<sha12>` alias or, better, the digest printed in the
+# step summary.
 #
 # Actions are pinned to full commit SHAs (supply-chain hardening: this
 # workflow holds `packages: write`). Bump the SHA and the trailing version
@@ -29,24 +47,23 @@
 name: Publish dev image
 
 on:
-  push:
-    branches: [dev]
-    # Keep in sync with build_inputs in
-    # scripts/release/verify-promotion-candidate.sh (the contract test binds
-    # the two lists). A push that touches none of these leaves the previous
-    # dev image valid, so it is not rebuilt.
-    paths:
-      - deploy/Dockerfile
-      - deploy/Dockerfile.dockerignore
-      - package.json
-      - bun.lock
-      - 'packages/**'
-      - 'apps/**'
-      - .github/workflows/image-dev.yml
-  # Rebuild the current dev head (for example after a registry-side cleanup).
-  # No inputs: the source is always the head of the ref the run is dispatched
-  # on, and the guard below requires that ref to be `dev`.
+  # No `push:` trigger by design: an image is built once per merged PR to
+  # `dev`, when version.yml calls this workflow after the version bump lands,
+  # and never on a regular commit. Both entries take the same single input;
+  # the guard below requires the resolved commit to be on `dev`.
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Exact 40-hex commit on dev to build (version.yml passes the bump commit)'
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Exact 40-hex commit on dev to build; empty builds the current dev head'
+        required: false
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -56,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
-      group: image-dev-${{ github.ref }}
+      group: image-dev
       cancel-in-progress: true
     permissions:
       contents: read
@@ -66,33 +83,59 @@ jobs:
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
     steps:
-      # Branch-only by construction: any other ref (a tag, another branch, a
-      # dispatch from the wrong ref) is refused before anything is checked out.
-      - name: Require the dev branch head
-        id: guard
-        run: |
-          set -euo pipefail
-          [[ "${GITHUB_REF}" == "refs/heads/dev" ]] || {
-            echo "::error::dev images are built only from the dev branch head, not ${GITHUB_REF}"
-            exit 1
-          }
-          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "::error::GITHUB_SHA is not a full commit SHA"
-            exit 1
-          }
-          echo "sha12=${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
-
+      # Always the `dev` branch, never the calling ref: under the version.yml
+      # call on a merged pull_request the caller's github.ref is the PR merge
+      # ref and github.sha its merge commit, neither of which is on `dev`.
+      # Full history so the ancestry guard below can see every dev commit.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ github.sha }}
+          ref: dev
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Bind the checked-out source to the dev head
+      # Branch-only by construction: the build source is `inputs.ref` when
+      # given (the bump commit from version.yml, or an operator's exact
+      # commit), else the current `dev` head, and it must be a full commit SHA
+      # that is reachable from `origin/dev`. Anything else (a short SHA, a
+      # branch name, a tag, a commit from another branch or a PR merge ref) is
+      # refused before anything is built.
+      - name: Resolve and require a commit on dev
+        id: guard
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          dev_head=$(git rev-parse "refs/remotes/origin/dev^{commit}")
+          [[ "${dev_head}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::origin/dev did not resolve to a full commit SHA"
+            exit 1
+          }
+          target="${REQUESTED_REF:-${dev_head}}"
+          [[ "${target}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::ref must be an exact 40-hex commit SHA on dev, not '${REQUESTED_REF}'"
+            exit 1
+          }
+          git cat-file -e "${target}^{commit}" || {
+            echo "::error::${target} is not a commit in this repository"
+            exit 1
+          }
+          git merge-base --is-ancestor "${target}" origin/dev || {
+            echo "::error::dev images are built only from commits on the dev branch; ${target} is not reachable from origin/dev"
+            exit 1
+          }
+          git checkout --detach "${target}"
+          echo "sha=${target}" >> "$GITHUB_OUTPUT"
+          echo "sha12=${target:0:12}" >> "$GITHUB_OUTPUT"
+          echo "Building dev image from ${target} (dev head: ${dev_head})"
+
+      - name: Bind the checked-out source to the resolved dev commit
+        env:
+          TARGET_SHA: ${{ steps.guard.outputs.sha }}
         run: |
           set -euo pipefail
           source_sha=$(git rev-parse "HEAD^{commit}")
-          [[ "${source_sha}" == "${GITHUB_SHA}" ]] || {
-            echo "::error::checked-out source ${source_sha} is not the dev head ${GITHUB_SHA}"
+          [[ "${source_sha}" == "${TARGET_SHA}" ]] || {
+            echo "::error::checked-out source ${source_sha} is not the resolved dev commit ${TARGET_SHA}"
             exit 1
           }
 
@@ -119,7 +162,7 @@ jobs:
           file: deploy/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          # One immutable alias per dev head plus the floating channel alias.
+          # One immutable alias per dev commit plus the floating channel alias.
           # Never a `v<version>` alias: that identity belongs to candidates
           # minted by image-build.yml.
           tags: |
@@ -127,24 +170,30 @@ jobs:
             ${{ env.IMAGE }}:dev
           # BuildKit cache, deliberately unlike image-build.yml. A candidate is
           # built once from its attested source alone, so it refuses the
-          # mutable GHA cache. A dev image is rebuilt on every qualifying push
-          # and is never promotable, while its QEMU arm64 `bun install` stage
-          # dominates a cold build; without a cache every dev push pays that
-          # in full. The scope is written only by this workflow on
-          # refs/heads/dev (GitHub isolates caches per branch, so a PR or
-          # fork run cannot seed it), and `mode=max` exports the intermediate
-          # deps/builder stages that the runtime stage only copies from.
+          # mutable GHA cache. A dev image is rebuilt for every merged PR to
+          # dev and is never promotable, while its QEMU arm64 `bun install`
+          # stage dominates a cold build; without a cache every dev cut pays
+          # that in full. `mode=max` exports the intermediate deps/builder
+          # stages that the runtime stage only copies from. GitHub isolates
+          # the cache per ref (a run reads its own ref's entries plus the base
+          # and default branches', and writes only its own), so a PR or fork
+          # run can never seed an entry a `dev` run reads. Under the
+          # version.yml call the run's ref is the merged PR's `refs/pull/N/
+          # merge`, so that run reads entries written by manual dispatches on
+          # `dev` and its own write is only reusable by that closed PR; a miss
+          # costs a cold build, nothing else. A manual dispatch on `dev`
+          # warms the entry every later call reads.
           cache-from: type=gha,scope=omni-api-dev
           cache-to: type=gha,scope=omni-api-dev,mode=max
           provenance: true
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.guard.outputs.sha }}
             org.opencontainers.image.version=dev-${{ steps.guard.outputs.sha12 }}
 
       # The immutable alias must resolve to the index this run produced; the
-      # floating alias must too, because a newer dev push cancels this run
-      # before it can build, so at this point this run is the newest head.
+      # floating alias must too, because a newer call cancels this run before
+      # it can build, so at this point this run is the newest cut.
       - name: Read back the immutable and floating dev aliases
         env:
           SHA12: ${{ steps.guard.outputs.sha12 }}
@@ -169,6 +218,7 @@ jobs:
 
       - name: Write dev image receipt
         env:
+          TARGET_SHA: ${{ steps.guard.outputs.sha }}
           SHA12: ${{ steps.guard.outputs.sha12 }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
@@ -178,7 +228,7 @@ jobs:
             exit 1
           }
           {
-            echo "### Omni dev image \`${GITHUB_SHA}\`"
+            echo "### Omni dev image \`${TARGET_SHA}\`"
             echo "- immutable alias: \`${IMAGE}:dev-${SHA12}\`"
             echo "- floating alias: \`${IMAGE}:dev\`"
             echo "- OCI index digest: \`${DIGEST}\`"

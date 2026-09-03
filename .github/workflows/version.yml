@@ -71,6 +71,10 @@ jobs:
     # /usr/local. (Trade-off: slower job startup vs. publish reliability.)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      # The commit "Commit and tag" pushed to dev; the dev-image job below
+      # builds exactly this commit.
+      bump_sha: ${{ steps.bump.outputs.bump_sha }}
     permissions:
       contents: write
       # OIDC token issuance for npm Trusted Publishing — pairs with the
@@ -178,6 +182,7 @@ jobs:
           bun install
 
       - name: Commit and tag
+        id: bump
         env:
           # The branch and tag pushes deliberately use different credentials.
           GITHUB_TOKEN: ${{ github.token }}
@@ -202,6 +207,12 @@ jobs:
 
           git tag "v${VERSION}"
 
+          # The commit that lands on dev (the fresh bump, or the unchanged
+          # head on a no-op re-run). The dev-image job builds exactly this
+          # commit, so it is emitted only after both pushes below succeed.
+          BUMP_SHA=$(git rev-parse "HEAD^{commit}")
+          [[ "${BUMP_SHA}" =~ ^[0-9a-f]{40}$ ]]
+
           # Split push (was --atomic): the two refs need DIFFERENT credentials.
           # Branch push uses the machine PAT explicitly so the push actor is not
           # github-actions[bot] — see the checkout step for why.
@@ -224,6 +235,8 @@ jobs:
           git -c http.https://github.com/.extraheader= \
             push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             "refs/tags/v${VERSION}"
+
+          echo "bump_sha=${BUMP_SHA}" >> "$GITHUB_OUTPUT"
 
       # Dispatch the signed-tarball release pipeline (build → sign-attest →
       # publish) via release.yml's workflow_dispatch entry. GITHUB_TOKEN-
@@ -305,6 +318,43 @@ jobs:
             echo "::error ::release-trigger.dispatch_failed release.yml dispatch failed for ${TAG} — investigate gh CLI auth or workflow availability before re-running manually"
             exit 1
           fi
+
+  # Dev image policy: ONE image per merged PR to dev, never per commit.
+  # image-dev.yml has no push trigger, so a direct commit to dev (a fix, a
+  # merge commit, a chore) never builds an image; the only producer of the
+  # `dev` / `dev-<sha12>` channel is this call, which runs once per dev
+  # version cut after the bump commit and its v<version> tag have been
+  # pushed, and builds exactly that bump commit. A manual dispatch of
+  # image-dev.yml rebuilds the dev head (or a given dev commit) on demand.
+  #
+  # A local reusable-workflow call, not `gh workflow run`: a dispatch resolves
+  # the workflow file against the DEFAULT branch, so image-dev.yml could not
+  # be dispatched until it reached main (the exact 404 the first
+  # image-build.yml dispatch hit). `uses:` resolves it from this run's own
+  # checkout, so it works on dev before any promotion.
+  #
+  # `candidate=true` skips this: a candidate cut mints its own attested image
+  # via image-build.yml at the exact v<version> tag, and a dev image is never
+  # a candidate. On the merged-PR trigger `inputs` is empty, so
+  # `inputs.candidate` is null and `null != true` holds: every merged PR is a
+  # dev cut and builds. (Same expression as the npm publish step above.)
+  #
+  # Runs AFTER auto-version has fully succeeded (tag push, npm publish, and
+  # release dispatch included), so a build failure can never block those; it
+  # surfaces as a failed job, and the operator rebuilds by dispatching
+  # image-dev.yml with `ref=<bump sha>`.
+  dev-image:
+    name: Dev image
+    needs: auto-version
+    if: needs.auto-version.result == 'success' && inputs.candidate != true
+    uses: ./.github/workflows/image-dev.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    with:
+      ref: ${{ needs.auto-version.outputs.bump_sha }}
 
   publish-stable:
     name: Publish verified stable npm package

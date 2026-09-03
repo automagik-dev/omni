@@ -90,16 +90,29 @@ workflow can publish a stable release and move npm `latest`.
 ## Dev image channel
 
 `.github/workflows/image-dev.yml` ("Publish dev image") is the only producer
-of the dev image channel. Every push to `dev` that changes a protected image
-build input (the same list as `scripts/release/verify-promotion-candidate.sh`,
-plus the workflow file itself; a `workflow_dispatch` rebuilds the current
-`dev` head) builds the `linux/amd64` + `linux/arm64` OCI index, pushes the
-immutable `ghcr.io/automagik-dev/omni-api:dev-<sha12>` alias and the floating
-`:dev` alias, and registers GitHub-native provenance for the index digest
-(`DEV_IMAGE_DIGEST=` in the run log and step summary). It uses only
-`github.token` with `contents: read, packages: write, id-token: write,
-attestations: write`, runs in no environment, and never creates a tag ref, a
-`v<version>` alias, a release, an npm publication, or public channel metadata.
+of the dev image channel, and it builds exactly one image per merged PR to
+`dev`. It has no `push:` trigger: `version.yml` calls it as a local reusable
+workflow (`uses: ./.github/workflows/image-dev.yml`) once per dev version cut,
+after the version bump commit and its `v<version>` tag have landed on `dev`,
+passing that bump commit as the `ref` input. Direct commits to `dev` (fixes,
+merge commits, chores) never build an image; the previous dev image stays
+valid until the next merged PR. A manual dispatch rebuilds the current `dev`
+head on demand (`gh workflow run image-dev.yml --ref dev`, or with
+`-f ref=<sha>` for one exact commit already on `dev`; a dispatch only resolves
+once the workflow file is on the default branch, which is why `version.yml`
+calls it instead of dispatching it), and a candidate cut (`version.yml` with
+`candidate=true`) skips the call because `image-build.yml` mints that image at
+its tag. Whatever the entry, the workflow checks out the `dev` branch itself
+and refuses any `ref` that is not a full commit SHA reachable from `dev`.
+
+Each run builds the `linux/amd64` + `linux/arm64` OCI index from the resolved
+`dev` commit, pushes the immutable `ghcr.io/automagik-dev/omni-api:dev-<sha12>`
+alias and the floating `:dev` alias, and registers GitHub-native provenance
+for the index digest (`DEV_IMAGE_DIGEST=` in the run log and step summary). It
+uses only `github.token` with `contents: read, packages: write, id-token:
+write, attestations: write`, runs in no environment, and never creates a tag
+ref, a `v<version>` alias, a release, an npm publication, or public channel
+metadata.
 
 `dev` and `dev-<sha12>` are never promotable: candidates are minted only by
 `image-build.yml` at an exact `v<version>` tag, `image-publish.yml` verifies

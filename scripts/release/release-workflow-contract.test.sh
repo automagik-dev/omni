@@ -238,54 +238,70 @@ else:
         require(workflows[other], r"verify-orchestrator-run\.py[\s\S]{0,300}--expected-workflow \.github/workflows/image-build\.yml\s*\\\n\s+--allowed-event workflow_dispatch", f"{other} does not require an in-progress dispatch-only image-build orchestrator run")
     forbid(all_workflows, r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-publish\.yml\"", "a workflow still treats the read-only promotion verifier as the OCI signer")
 
-# image-dev.yml is the dev image channel: it builds and attests the dev head
-# on every push to dev that changes a protected build input, pushes only the
-# `dev-<sha12>` and floating `dev` aliases, and is never a candidate path. It
-# must not be able to create a tag, a `v<version>` alias, a release, an npm
-# publication, or public channel metadata, and it runs in no environment.
+# image-dev.yml is the dev image channel: one image per merged PR to dev. It
+# has no push trigger (no paths filter, no branches filter), so a direct
+# commit to dev never builds. It is a local reusable workflow: version.yml
+# calls it once per dev version cut with the bump commit it pushed to dev,
+# and a manual dispatch rebuilds the dev head or one exact dev commit. Both
+# entries take exactly one `ref` input, and the guard requires the resolved
+# commit to be a full SHA reachable from origin/dev. It builds and attests
+# that commit, pushes only the `dev-<sha12>` and floating `dev` aliases, and
+# is never a candidate path. It must not be able to create a tag, a
+# `v<version>` alias, a release, an npm publication, or public channel
+# metadata, and it runs in no environment.
 image_dev = workflows.get("image-dev.yml")
 if image_dev is None:
     errors.append("dev image channel workflow image-dev.yml is missing")
 else:
     dev_trigger_match = re.search(
-        r"^on:\n  push:\n    branches: \[dev\]\n(?:    #[^\n]*\n)*    paths:\n(?P<paths>(?:      - [^\n]+\n)+)(?:  #[^\n]*\n)*  workflow_dispatch:\n(?P<dispatch>(?:    [^\n]*\n)*)",
+        r"^on:\n(?:  #[^\n]*\n)*"
+        r"  workflow_call:\n    inputs:\n(?P<call>(?:      [^\n]*\n)*)"
+        r"(?:  #[^\n]*\n)*"
+        r"  workflow_dispatch:\n    inputs:\n(?P<dispatch>(?:      [^\n]*\n)*)"
+        r"\n*permissions:",
         image_dev,
         flags=re.MULTILINE,
     )
     if dev_trigger_match is None:
-        errors.append("dev image channel is not triggered by push to dev with a paths filter plus a bare workflow_dispatch")
+        errors.append("dev image channel is not triggered by exactly workflow_call plus workflow_dispatch, each with inputs (one image per merged PR, called by version.yml)")
     else:
-        dev_paths = {
-            line.strip()[2:].strip().strip("'\"")
-            for line in dev_trigger_match.group("paths").splitlines()
-        }
-        candidate_inputs_match = re.search(r"build_inputs=\((?P<inputs>[^)]*)\)", (root / "scripts/release/verify-promotion-candidate.sh").read_text(encoding="utf-8"))
-        if candidate_inputs_match is None:
-            errors.append("candidate verifier build_inputs list could not be read for the dev image path filter")
-        else:
-            for build_input in candidate_inputs_match.group("inputs").split():
-                expected_path = f"{build_input}/**" if (root / build_input).is_dir() else build_input
-                if expected_path not in dev_paths:
-                    errors.append(f"dev image channel does not rebuild when protected build input {expected_path} changes")
-        if ".github/workflows/image-dev.yml" not in dev_paths:
-            errors.append("dev image channel does not rebuild when its own workflow changes")
-        if dev_trigger_match.group("dispatch").strip():
-            errors.append("dev image channel workflow_dispatch takes inputs; it must rebuild only the current dev head")
+        for entry, body, required in (("workflow_call", dev_trigger_match.group("call"), "true"), ("workflow_dispatch", dev_trigger_match.group("dispatch"), "false")):
+            input_names = re.findall(r"^      ([A-Za-z0-9_-]+):\s*$", body, flags=re.MULTILINE)
+            if input_names != ["ref"]:
+                errors.append(f"dev image channel {entry} inputs are {input_names}; exactly one `ref` input is allowed")
+            require(body, rf"^      ref:\n(?:        #[^\n]*\n)*        description:[^\n]*\n        required: {required}\n        type: string\n", f"dev image channel {entry} `ref` input is not a {'required' if required == 'true' else 'optional'} string")
+        require(dev_trigger_match.group("dispatch"), r"^        default: ''\n", "dev image channel workflow_dispatch `ref` does not default to empty (the current dev head)")
+    forbid(image_dev, r"^  push:", "dev image channel can run on a push; images are built once per merged PR via the version.yml call, never per commit")
+    forbid(image_dev, r"^\s+paths(?:-ignore)?:", "dev image channel carries a paths filter, which only makes sense for a push trigger it must not have")
+    forbid(image_dev, r"^\s+branches(?:-ignore)?:", "dev image channel carries a branches filter, which only makes sense for a push trigger it must not have")
+    forbid(image_dev, r"^  (?:schedule|repository_dispatch|workflow_run|merge_group|create|release|pull_request(?:_target)?):", "dev image channel has a trigger other than workflow_call and workflow_dispatch")
     forbid(image_dev, r"^    tags:", "dev image channel can run on a tag push")
-    forbid(image_dev, r"^  push:\n(?:    [^\n]*\n)*    branches: \[[^\]]*\bmain\b", "dev image channel can run on a push to main")
-    forbid(image_dev, r"pull_request", "dev image channel can run on a pull request event")
     forbid(image_dev, r"refs/tags", "dev image channel names a tag ref")
     forbid(image_dev, r"\bv\$\{", "dev image channel can push or name a v<version> alias")
     require(image_dev, r"^permissions:\s*\{\s*\}\s*$", "dev image channel does not clear top-level token permissions")
-    require(image_dev, r"^    concurrency:\n      group: image-dev-\$\{\{ github\.ref \}\}\n      cancel-in-progress: true", "dev image channel does not cancel superseded builds per ref")
+    require(image_dev, r"^    concurrency:\n      group: image-dev\n      cancel-in-progress: true", "dev image channel does not cancel superseded builds under one constant group (only the newest dev cut matters)")
     require(image_dev, r"timeout-minutes:\s*[0-9]+", "dev image channel has no finite job timeout")
-    require(image_dev, r"\[\[ \"\$\{GITHUB_REF\}\" == \"refs/heads/dev\" \]\]", "dev image channel is not bound to the dev branch head")
-    require(image_dev, r"echo \"sha12=\$\{GITHUB_SHA:0:12\}\" >> \"\$GITHUB_OUTPUT\"", "dev image channel does not derive the immutable alias from the dev head SHA")
-    require(image_dev, r"actions/checkout@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+ref: \$\{\{ github\.sha \}\}\n\s+persist-credentials: false", "dev image channel does not check out the exact dev head without persisted credentials")
+    # The source is always the dev branch, never the calling ref: under the
+    # version.yml call on a merged pull_request the caller's ref is the PR
+    # merge ref. Full history so the ancestry guard sees every dev commit.
+    require(image_dev, r"actions/checkout@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+ref: dev\n\s+fetch-depth: 0\n\s+persist-credentials: false", "dev image channel does not check out the dev branch with full history and without persisted credentials")
+    forbid(image_dev, r"^\s+ref: \$\{\{ (?:github\.(?:ref|sha|head_ref)|inputs\.ref) \}\}", "dev image channel checks out the calling ref or the unverified input instead of the dev branch")
+    require(image_dev, r"- name: Resolve and require a commit on dev\n\s+id: guard\n\s+env:\n\s+REQUESTED_REF: \$\{\{ inputs\.ref \}\}\n", "dev image channel guard does not read the `ref` input through env")
+    require(image_dev, r"dev_head=\$\(git rev-parse \"refs/remotes/origin/dev\^\{commit\}\"\)", "dev image channel guard does not resolve the dev head from origin/dev")
+    require(image_dev, r"target=\"\$\{REQUESTED_REF:-\$\{dev_head\}\}\"", "dev image channel guard does not default an empty `ref` to the dev head")
+    require(image_dev, r"\[\[ \"\$\{target\}\" =~ \^\[0-9a-f\]\{40\}\$ \]\] \|\| \{", "dev image channel guard does not require a full 40-hex commit SHA")
+    require(image_dev, r"git merge-base --is-ancestor \"\$\{target\}\" origin/dev \|\| \{", "dev image channel guard does not require the commit to be on the dev branch")
+    require(image_dev, r"git checkout --detach \"\$\{target\}\"", "dev image channel guard does not check out the resolved dev commit")
+    require(image_dev, r"echo \"sha=\$\{target\}\" >> \"\$GITHUB_OUTPUT\"\n\s+echo \"sha12=\$\{target:0:12\}\" >> \"\$GITHUB_OUTPUT\"", "dev image channel does not derive the immutable alias from the resolved dev commit SHA")
+    require(image_dev, r"- name: Bind the checked-out source to the resolved dev commit\n\s+env:\n\s+TARGET_SHA: \$\{\{ steps\.guard\.outputs\.sha \}\}\n[\s\S]{0,200}\[\[ \"\$\{source_sha\}\" == \"\$\{TARGET_SHA\}\" \]\] \|\| \{", "dev image channel does not bind the checked-out tree to the resolved dev commit")
+    # Non-comment lines only: the workflow's comments explain why the
+    # calling ref is the wrong identity, and may name it.
+    image_dev_code = "\n".join(line for line in image_dev.splitlines() if not line.lstrip().startswith("#"))
+    forbid(image_dev_code, r"GITHUB_SHA|github\.sha|GITHUB_REF\b|github\.ref\b", "dev image channel derives identity from the calling ref or SHA, which is the PR merge ref under the version.yml call")
     require(image_dev, r"docker/build-push-action@[0-9a-f]{40}", "dev image channel does not build with the pinned build-push action")
     require(image_dev, r"platforms:\s*linux/amd64,linux/arm64", "dev image channel does not build both supported platforms")
     require(image_dev, r"^\s+push: true\n(?:\s+#[^\n]*\n)*\s+tags: \|\n\s+\$\{\{ env\.IMAGE \}\}:dev-\$\{\{ steps\.guard\.outputs\.sha12 \}\}\n\s+\$\{\{ env\.IMAGE \}\}:dev\n", "dev image channel does not push exactly the dev-<sha12> and floating dev aliases")
-    require(image_dev, r"org\.opencontainers\.image\.revision=\$\{\{ github\.sha \}\}\n\s+org\.opencontainers\.image\.version=dev-\$\{\{ steps\.guard\.outputs\.sha12 \}\}", "dev image channel does not label the image with the dev head identity")
+    require(image_dev, r"org\.opencontainers\.image\.revision=\$\{\{ steps\.guard\.outputs\.sha \}\}\n\s+org\.opencontainers\.image\.version=dev-\$\{\{ steps\.guard\.outputs\.sha12 \}\}", "dev image channel does not label the image with the resolved dev commit identity")
     require(image_dev, r"verify-oci-alias\.sh \\\n\s+--image \"\$\{IMAGE\}\" --tag \"dev-\$\{SHA12\}\" --expected-digest \"\$\{EXPECTED_DIGEST\}\"", "dev image channel does not read back the immutable dev alias digest")
     require(image_dev, r"verify-oci-alias\.sh \\\n\s+--image \"\$\{IMAGE\}\" --tag dev --expected-digest \"\$\{EXPECTED_DIGEST\}\"", "dev image channel does not read back the floating dev alias digest")
     require(image_dev, r"actions/attest-build-provenance@[0-9a-f]{40}[\s\S]{0,300}push-to-registry:\s*true", "dev image channel does not register GitHub provenance in the registry")
@@ -485,6 +501,74 @@ require(
     r"if \[\[ \"\$\{CANDIDATE\}\" == \"true\" \]\]; then\n\s+echo \"[^\n]*image-build\.yml[^\n]*\"\n\s+exit 0\n\s+fi\n[\s\S]{0,200}gh workflow run release\.yml",
     "the version workflow dispatches the dev prerelease even for a candidate cut",
 )
+
+# Dev image policy: exactly one image per merged PR to dev. The bump job emits
+# the commit it pushed to dev, and a dedicated `dev-image` job calls the
+# LOCAL reusable image-dev.yml with exactly that commit, after auto-version
+# has fully succeeded (tag push, npm publish, release dispatch), so the build
+# can block none of them. A candidate cut skips it because image-build.yml
+# mints that image at its own tag. Never `gh workflow run`: a dispatch
+# resolves the workflow file against the default branch, where image-dev.yml
+# does not exist until the next promotion.
+require(
+    version_workflow,
+    r"- name: Commit and tag\n        id: bump\n",
+    "the version bump step has no `bump` id to expose the pushed commit",
+)
+require(
+    version_workflow,
+    r"BUMP_SHA=\$\(git rev-parse \"HEAD\^\{commit\}\"\)\n\s+\[\[ \"\$\{BUMP_SHA\}\" =~ \^\[0-9a-f\]\{40\}\$ \]\]\n[\s\S]{0,2400}"
+    r"\"refs/tags/v\$\{VERSION\}\"\n\n\s+echo \"bump_sha=\$\{BUMP_SHA\}\" >> \"\$GITHUB_OUTPUT\"\n",
+    "the version bump step does not emit the pushed dev commit as bump_sha after both pushes",
+)
+require(
+    version_workflow,
+    r"^  auto-version:\n(?:    [^\n]*\n|\n)*?    outputs:\n(?:      #[^\n]*\n)*      bump_sha: \$\{\{ steps\.bump\.outputs\.bump_sha \}\}\n",
+    "the auto-version job does not expose bump_sha as a job output",
+)
+dev_image_job_match = re.search(
+    r"^  dev-image:\n(?P<body>(?:    [^\n]*\n)*)",
+    version_workflow,
+    flags=re.MULTILINE,
+)
+if dev_image_job_match is None:
+    errors.append("the version workflow has no dev-image job, so no dev image is built per merged PR")
+else:
+    dev_image_job = dev_image_job_match.group("body")
+    require(dev_image_job, r"^    needs: auto-version\n", "the dev-image job does not depend on auto-version")
+    # `inputs` is empty on the merged pull_request trigger, so
+    # `inputs.candidate != true` holds there (null != true) and every merged
+    # PR builds; only an explicit candidate=true dispatch skips.
+    require(dev_image_job, r"^    if: needs\.auto-version\.result == 'success' && inputs\.candidate != true\n", "the dev-image job is not gated on a successful bump and a non-candidate cut")
+    require(dev_image_job, r"^    uses: \./\.github/workflows/image-dev\.yml\n", "the dev-image job does not call the local reusable image-dev.yml")
+    require(dev_image_job, r"^    with:\n      ref: \$\{\{ needs\.auto-version\.outputs\.bump_sha \}\}\n", "the dev-image job does not build exactly the pushed bump commit")
+    if re.findall(r"^      [A-Za-z0-9_-]+:", dev_image_job[dev_image_job.find("    with:"):], flags=re.MULTILINE) != ["      ref:"]:
+        errors.append("the dev-image job passes inputs other than ref to image-dev.yml")
+    forbid(dev_image_job, r"secrets:", "the dev-image job passes secrets to image-dev.yml, which needs only github.token")
+    forbid(dev_image_job, r"^    (?:runs-on|steps):", "the dev-image job runs its own steps instead of only calling image-dev.yml")
+    expected_dev_image_permissions = {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"}
+    actual_dev_image_permissions = permissions_at(dev_image_job.splitlines(), 4)
+    if actual_dev_image_permissions != expected_dev_image_permissions:
+        errors.append(f"the dev-image job permissions are {actual_dev_image_permissions}, expected exactly {expected_dev_image_permissions}")
+require(
+    version_workflow,
+    r"^  auto-version:\n[\s\S]*- name: Commit and tag\n[\s\S]*- name: Publish to npm via OIDC[\s\S]*- name: Dispatch release pipeline for the new tag\n[\s\S]*^  dev-image:\n[\s\S]*^  publish-stable:",
+    "the dev-image job is not declared after the dev bump job's tag push, npm publish, and release dispatch",
+)
+forbid(version_workflow, r"- name: Dispatch dev image build", "the version workflow still dispatches image-dev.yml instead of calling it")
+# No workflow may dispatch image-dev.yml (it only resolves on the default
+# branch), and no workflow other than version.yml may call it: not the
+# read-only promotion, not the candidate minter, not the release pipeline,
+# not the signer, not CI.
+for other_name in ("image-publish.yml", "image-build.yml", "release.yml", "release-publish.yml", "sign-attest.yml", "ci.yml"):
+    if other_name not in workflows:
+        errors.append(f"{other_name} is missing, so the dev image call boundary cannot be checked")
+for other_name, other in workflows.items():
+    forbid(other, r"gh\s+workflow\s+run\s+(?:\S*/)?image-dev\.yml", f"{other_name} dispatches the dev image build; a dispatch resolves against the default branch, and only version.yml may call image-dev.yml, once per merged PR to dev")
+    forbid(other, r"workflows/image-dev\.yml/dispatches", f"{other_name} dispatches the dev image build through the API; only version.yml may call image-dev.yml, once per merged PR to dev")
+    if other_name == "version.yml":
+        continue
+    forbid(other, r"^\s+uses:\s*\./\.github/workflows/image-dev\.yml", f"{other_name} calls the dev image build; only version.yml may, once per merged PR to dev")
 
 require(release, r"authorize:[\s\S]{0,200}timeout-minutes:\s*[0-9]+", "release authorization has no finite timeout")
 require(release, r"bare tag pushes do not release", "release workflow still misstates bare-tag authorization")
