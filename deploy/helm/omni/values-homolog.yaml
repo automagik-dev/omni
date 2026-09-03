@@ -39,6 +39,15 @@ autoscaling:
 config:
   LOG_LEVEL: "info"
   NODE_ENV: "production"
+  # Every realm below terminates client TLS at a reverse proxy (nginx-ingress
+  # here; the ALB delta layered after this file swaps the controller but keeps
+  # the same shape), so the socket peer the API sees is the proxy, not the
+  # caller. Without this the auth-exempt webhook ingress buckets every caller
+  # under one shared key. resolveClientIp() reads the RIGHTMOST hop — the one
+  # this realm's own proxy appends — so a client-forged prefix cannot pick its
+  # own bucket. Set ONLY where a trusted proxy really fronts the pod: with the
+  # pod directly reachable, the whole header is caller-controlled.
+  TRUSTED_PROXY_HEADER: "X-Forwarded-For"
 
 ingress:
   enabled: true

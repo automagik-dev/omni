@@ -85,6 +85,11 @@ config:
   API_PORT: "8882"
   NODE_ENV: "production"
   LOG_LEVEL: "info"
+  # TRUSTED_PROXY_HEADER is deliberately NOT set here. This base ships
+  # ingress.enabled=false, so the pod may be reached directly and every
+  # forwarding header would be caller-controlled — trusting one would let any
+  # client choose its own rate-limit bucket. Realm overlays that do front the
+  # pod with a proxy (values-dev / values-prod / values-homolog) set it.
 
 # Free-form extra non-secret env (key: value) merged into the ConfigMap.
 extraConfig: {}
