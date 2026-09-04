@@ -5,6 +5,7 @@
  */
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { createHmac } from 'node:crypto';
 import type { CustomEventType, EventBus } from '@omni/core';
 import type { Database, NewWebhookSource, WebhookSource } from '@omni/db';
 import { WebhookService } from '../webhooks';
@@ -17,6 +18,8 @@ function createMockSource(overrides: Partial<WebhookSource> = {}): WebhookSource
     name: 'test-webhook',
     description: 'Test webhook source',
     expectedHeaders: null,
+    signatureConfig: null,
+    signatureSecret: null,
     enabled: true,
     lastReceivedAt: null,
     totalReceived: 0,
@@ -76,6 +79,8 @@ function createMockDatabase(initialSources: WebhookSource[] = []) {
           name: data.name,
           description: data.description ?? null,
           expectedHeaders: data.expectedHeaders ?? null,
+          signatureConfig: data.signatureConfig ?? null,
+          signatureSecret: data.signatureSecret ?? null,
           enabled: data.enabled ?? true,
           lastReceivedAt: null,
           totalReceived: 0,
@@ -472,6 +477,19 @@ describe('WebhookService', () => {
       await expect(service.receive('non-existent', {}, {}, { autoCreate: false })).rejects.toThrow('WebhookSource');
     });
 
+    test('does not auto-create sources by default (issue #928)', async () => {
+      mockDb.select = mock(() => ({
+        from: () => ({
+          where: () => ({
+            limit: () => Promise.resolve([]),
+          }),
+        }),
+      })) as unknown as typeof mockDb.select;
+
+      await expect(service.receive('never-seen', {}, {})).rejects.toThrow('WebhookSource');
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
     test('updates source stats on successful receive', async () => {
       const source = createMockSource({ id: 'test-123', name: 'agno', enabled: true, totalReceived: 5 });
 
@@ -487,6 +505,162 @@ describe('WebhookService', () => {
 
       // Verify update was called to increment stats
       expect(mockDb.update).toHaveBeenCalled();
+    });
+  });
+
+  describe('receive() signature verification', () => {
+    const secret = 'super-secret-value';
+
+    function mockSourceLookup(source: WebhookSource) {
+      mockDb.select = mock(() => ({
+        from: () => ({
+          where: () => ({
+            limit: () => Promise.resolve([source]),
+          }),
+        }),
+      })) as unknown as typeof mockDb.select;
+    }
+
+    function hmacSource(overrides: Partial<WebhookSource> = {}): WebhookSource {
+      return createMockSource({
+        name: 'github',
+        signatureConfig: { algorithm: 'hmac-sha256', header: 'X-Hub-Signature-256', prefix: 'sha256=' },
+        signatureSecret: secret,
+        ...overrides,
+      });
+    }
+
+    test('accepts a valid hmac-sha256 signature over the raw body', async () => {
+      mockSourceLookup(hmacSource());
+      const rawBody = JSON.stringify({ action: 'push' });
+      const signature = `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`;
+
+      const result = await service.receive(
+        'github',
+        { action: 'push' },
+        { 'x-hub-signature-256': signature },
+        { rawBody },
+      );
+
+      expect(result.received).toBe(true);
+      expect(mockEventBus._publishedEvents).toHaveLength(1);
+    });
+
+    test('rejects an invalid hmac signature and publishes nothing', async () => {
+      mockSourceLookup(hmacSource());
+      const rawBody = JSON.stringify({ action: 'push' });
+
+      await expect(
+        service.receive('github', { action: 'push' }, { 'x-hub-signature-256': 'sha256=deadbeef' }, { rawBody }),
+      ).rejects.toThrow('Invalid webhook signature');
+      expect(mockEventBus._publishedEvents).toHaveLength(0);
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    test('rejects when the signature header is absent, whatever other headers say', async () => {
+      mockSourceLookup(hmacSource());
+
+      await expect(service.receive('github', {}, { 'x-anything': 'value' }, { rawBody: '{}' })).rejects.toThrow(
+        'Missing signature header: X-Hub-Signature-256',
+      );
+    });
+
+    test('rejects hmac verification without the raw body', async () => {
+      mockSourceLookup(hmacSource());
+      const signature = `sha256=${createHmac('sha256', secret).update('{}').digest('hex')}`;
+
+      await expect(service.receive('github', {}, { 'x-hub-signature-256': signature })).rejects.toThrow(
+        'raw request body',
+      );
+    });
+
+    test('token-match compares the header value against the secret', async () => {
+      const source = createMockSource({
+        name: 'telegram-like',
+        signatureConfig: { algorithm: 'token-match', header: 'X-Secret-Token' },
+        signatureSecret: secret,
+      });
+      mockSourceLookup(source);
+
+      const ok = await service.receive('telegram-like', {}, { 'x-secret-token': secret });
+      expect(ok.received).toBe(true);
+
+      await expect(service.receive('telegram-like', {}, { 'x-secret-token': 'wrong' })).rejects.toThrow(
+        'Invalid webhook signature',
+      );
+    });
+
+    test('requireSignature rejects sources without a signature config', async () => {
+      mockSourceLookup(createMockSource({ name: 'plain' }));
+
+      await expect(service.receive('plain', {}, {}, { requireSignature: true })).rejects.toThrow(
+        'no signature configuration',
+      );
+    });
+
+    test('rejects when config exists but no secret is stored', async () => {
+      mockSourceLookup(hmacSource({ signatureSecret: null }));
+
+      await expect(
+        service.receive('github', {}, { 'x-hub-signature-256': 'sha256=abc' }, { rawBody: '{}' }),
+      ).rejects.toThrow('verification unavailable');
+    });
+  });
+
+  describe('signature secret invariants', () => {
+    test('create() rejects a signatureConfig without a secret', async () => {
+      await expect(
+        service.create({
+          name: 'github',
+          signatureConfig: { algorithm: 'hmac-sha256', header: 'X-Hub-Signature-256' },
+        }),
+      ).rejects.toThrow('signatureSecret is required');
+    });
+
+    test('create() rejects a secret without a signatureConfig', async () => {
+      await expect(service.create({ name: 'github', signatureSecret: 'orphan-secret' })).rejects.toThrow(
+        'signatureSecret cannot be set without a signatureConfig',
+      );
+    });
+
+    test('update() clearing the config also clears the stored secret', async () => {
+      const source = createMockSource({ id: 'test-123', signatureSecret: 'stored' });
+      mockDb = createMockDatabase([source]);
+      service = new WebhookService(mockDb, mockEventBus);
+
+      await service.update('test-123', { signatureConfig: null });
+
+      expect(mockDb._calls.update[0]).toMatchObject({ signatureConfig: null, signatureSecret: null });
+    });
+
+    test('update() rejects nulling the secret while the config stays set', async () => {
+      const source = createMockSource({
+        id: 'test-123',
+        signatureConfig: { algorithm: 'hmac-sha256', header: 'X-Hub-Signature-256' },
+        signatureSecret: 'stored',
+      });
+      mockDb = createMockDatabase([source]);
+      service = new WebhookService(mockDb, mockEventBus);
+
+      await expect(service.update('test-123', { signatureSecret: null })).rejects.toThrow(
+        'signatureSecret is required when signatureConfig is set',
+      );
+      expect(mockDb._calls.update).toHaveLength(0);
+    });
+
+    test('update() rejects a new secret alongside clearing the config', async () => {
+      const source = createMockSource({
+        id: 'test-123',
+        signatureConfig: { algorithm: 'hmac-sha256', header: 'X-Hub-Signature-256' },
+        signatureSecret: 'stored',
+      });
+      mockDb = createMockDatabase([source]);
+      service = new WebhookService(mockDb, mockEventBus);
+
+      await expect(service.update('test-123', { signatureConfig: null, signatureSecret: 'fresh-one' })).rejects.toThrow(
+        'signatureSecret cannot be set without a signatureConfig',
+      );
+      expect(mockDb._calls.update).toHaveLength(0);
     });
   });
 

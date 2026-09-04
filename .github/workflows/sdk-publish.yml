@@ -13,7 +13,7 @@ name: SDK Publish
 # dry-run.
 #
 # Channel contract — the npm dist-tag is derived from the selected ref and is
-# never operator-controlled: dev -> next, homolog -> homolog, main -> latest.
+# never operator-controlled: dev -> next, main -> latest.
 # Other refs fail before the package or token can be used.
 #
 # Auth — NODE_AUTH_TOKEN is sourced from the NPM_TOKEN repo secret only in the
@@ -79,10 +79,9 @@ jobs:
           PACKAGE_NAME="$(node -p "require('./packages/sdk/package.json').name")"
           case "${GITHUB_REF}" in
             refs/heads/dev) DIST_TAG="next" ;;
-            refs/heads/homolog) DIST_TAG="homolog" ;;
             refs/heads/main) DIST_TAG="latest" ;;
             *)
-              echo "::error::SDK publishing is restricted to dev, homolog, or main branches (got ${GITHUB_REF})"
+              echo "::error::SDK publishing is restricted to dev or main branches (got ${GITHUB_REF})"
               exit 1
               ;;
           esac

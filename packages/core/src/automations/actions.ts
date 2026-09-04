@@ -50,6 +50,8 @@ export interface AgentCallContext {
   providerId?: string;
   /** Chat ID for session continuity */
   chatId: string;
+  /** Thread/topic identifier (e.g. Telegram forum topic) — drives per_thread session keys */
+  threadId?: string;
   /** Sender ID for user identification */
   senderId: string;
   /** Sender's display name */
@@ -419,6 +421,12 @@ function extractAgentCallContext(
   if (!chatId) return { error: 'chatId not found in payload' };
   if (!senderId) return { error: 'senderId not found in payload' };
 
+  // Thread identifier: message events carry it at payload.threadId; some
+  // channels only stamp it inside rawPayload. Needed so a call_agent on a
+  // per_thread instance resumes the thread's session, not the whole chat's.
+  const rawPayload = (context.payload.rawPayload ?? {}) as Record<string, unknown>;
+  const threadId = (context.payload.threadId as string | undefined) ?? (rawPayload.threadId as string | undefined);
+
   const messagesResult = extractMessages(context, config.promptOverride);
   if ('error' in messagesResult) return messagesResult;
 
@@ -431,6 +439,7 @@ function extractAgentCallContext(
       agentId: agentId || undefined,
       providerId: config.providerId ? substituteTemplate(config.providerId, context) : undefined,
       chatId,
+      threadId,
       senderId,
       senderName,
       messages: messagesResult,

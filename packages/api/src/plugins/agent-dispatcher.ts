@@ -33,6 +33,7 @@ import type { StreamSender } from '@omni/channel-sdk';
 import {
   A2AAgentProvider,
   AgUiAgentProvider,
+  type AgentRunCancelRequestedPayload,
   type AgentTrigger,
   type AgentTriggerType,
   AgnoAgentProvider,
@@ -73,6 +74,7 @@ import { createMediaProcessingService } from '@omni/media-processing';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import * as Sentry from '@sentry/bun';
 import { and, eq } from 'drizzle-orm';
+import { z } from 'zod';
 import { agentKeyNameCandidates } from '../lib/agent-key-name';
 import { withIdempotency } from '../lib/idempotency';
 import { sentryEnabled } from '../lib/sentry-scrub';
@@ -100,6 +102,7 @@ import {
   type DebounceConfig,
   type DispatchMetadata,
   MessageDebouncer,
+  type QueuedBehindActiveRunInfo,
 } from './message-debouncer';
 import { extractPlatformTimestamp } from './message-persistence';
 import { createSessionStorage } from './session-storage';
@@ -551,6 +554,7 @@ async function sendTextMessage(
   replyTo?: string,
   correlationId?: string,
   senderAgentId?: string,
+  systemNotice?: boolean,
 ): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
@@ -563,7 +567,7 @@ async function sendTextMessage(
     to: chatId,
     content: { type: 'text', text: sanitized },
     replyTo,
-    metadata: { messageFormatMode, correlationId, senderAgentId },
+    metadata: { messageFormatMode, correlationId, senderAgentId, systemNotice },
   });
 }
 
@@ -614,7 +618,9 @@ async function sendErrorFeedback(
 ): Promise<void> {
   const errorMsg = error instanceof Error ? error.message : String(error);
   log.error('agent_dispatch_error', { channel, instanceId, chatId, error: errorMsg });
-  await sendTextMessage(channel, instanceId, chatId, message);
+  // systemNotice: the dispatch FAILED — this apology must not count as "the
+  // turn was answered" or replay-on-reconnect would never retry it (#912)
+  await sendTextMessage(channel, instanceId, chatId, message, 'convert', undefined, undefined, undefined, true);
 }
 
 /**
@@ -2047,6 +2053,98 @@ async function fetchChatMetadata(
 // ─── Per-chatId stream guard ──────────────────────────────
 const activeStreams = new Map<string, StreamSender>();
 
+// ─── Per-run cancellation (#914) ──────────────────────────
+// Populated while a provider run is in flight; `agent.run.cancel_requested`
+// (e.g. Slack's native stop button) aborts the controller. Streaming providers
+// honor the signal end-to-end (claude-code aborts the SDK run); accumulate-mode
+// runs that ignore it have their reply discarded on completion instead.
+
+interface ActiveRunEntry {
+  controller: AbortController;
+  /** Unix ms when the run registered — compared against a cancel's requestedAt */
+  startedAt: number;
+  /** Stream sender owned by this run (streaming dispatch only) */
+  sender?: StreamSender;
+}
+
+// Keyed by runAbortKey — thread-scoped, because two threads in one Slack
+// channel are two concurrent runs (the second goes down the accumulate path
+// past the per-chat streaming guard). A chat-scoped key would let a stop in
+// thread A abort thread B, and each run's cleanup would delete the other's.
+const activeRunAborts = new Map<string, ActiveRunEntry>();
+
+function runAbortKey(instanceId: string, chatId: string, threadId?: string): string {
+  return `${instanceId}:${chatId}:${threadId ?? ''}`;
+}
+
+/**
+ * Abort the in-flight agent run (and its stream sender) for a chat/thread.
+ *
+ * Looks up the exact thread key first, then the threadless key — Slack's stop
+ * event always carries a thread_ts, but a run triggered by a top-level
+ * mention or DM registered without one. When `requestedAt` is provided, runs
+ * that STARTED after the stop press are left alone, so a late-delivered or
+ * redelivered cancel cannot kill the user's next turn.
+ *
+ * Exported for tests.
+ */
+export async function cancelActiveAgentRun(
+  instanceId: string,
+  chatId: string,
+  reason: string,
+  opts?: { threadId?: string; requestedAt?: number },
+): Promise<boolean> {
+  let entry = activeRunAborts.get(runAbortKey(instanceId, chatId, opts?.threadId));
+  if (!entry && opts?.threadId) {
+    entry = activeRunAborts.get(runAbortKey(instanceId, chatId));
+  }
+
+  if (!entry) {
+    log.info('Agent run cancel requested but nothing in flight', {
+      instanceId,
+      chatId,
+      threadId: opts?.threadId,
+      reason,
+    });
+    return false;
+  }
+
+  // startedAt is this server's clock, requestedAt the platform's; a legit
+  // stop press trails the run start by seconds-to-minutes, so ordinary NTP
+  // skew cannot flip this comparison.
+  if (opts?.requestedAt !== undefined && entry.startedAt > opts.requestedAt) {
+    log.info('Agent run cancel ignored — run started after the stop request', {
+      instanceId,
+      chatId,
+      threadId: opts?.threadId,
+      startedAt: entry.startedAt,
+      requestedAt: opts.requestedAt,
+      reason,
+    });
+    return false;
+  }
+
+  log.info('Cancelling in-flight agent run', {
+    instanceId,
+    chatId,
+    threadId: opts?.threadId,
+    reason,
+    hasActiveStream: !!entry.sender,
+  });
+
+  entry.controller.abort();
+  if (entry.sender) {
+    try {
+      // cancel() halts and KEEPS the partial output (Slack's stop semantics);
+      // abort() is only a fallback for senders without it.
+      await (entry.sender.cancel ? entry.sender.cancel() : entry.sender.abort());
+    } catch (err) {
+      log.warn('Stream sender cancel failed during run cancellation', { instanceId, chatId, error: String(err) });
+    }
+  }
+  return true;
+}
+
 /** Route a single StreamDelta to the appropriate StreamSender method. */
 async function routeStreamDelta(sender: StreamSender, delta: StreamDelta): Promise<void> {
   switch (delta.phase) {
@@ -2174,6 +2272,26 @@ async function consumeStream(
 /** Extract thread ID from the first buffered message rawPayload (for per_thread session strategy) */
 function extractThreadId(messages: BufferedMessage[]): string | undefined {
   return ((messages[0]?.payload.rawPayload ?? {}) as Record<string, unknown>).threadId as string | undefined;
+}
+
+/**
+ * rawPayload fields that scope the per-run abort registry (#914). A channel
+ * may deliberately drop `threadId` for session purposes (Slack DMs share one
+ * session across threads) while its stop affordance is still thread-scoped;
+ * `cancelThreadId` carries the raw platform thread so the abort key matches
+ * what `agent.run.cancel_requested` will later send.
+ */
+const CancelThreadPayloadSchema = z.object({ cancelThreadId: z.string().min(1).optional() });
+
+/**
+ * Thread key for activeRunAborts: the channel's explicit `cancelThreadId` when
+ * present, else the session `threadId`. Two DM-thread runs keyed only by the
+ * session thread would collapse onto one threadless entry — a stop in thread
+ * B would abort thread A, and B's cleanup would delete A's registration.
+ */
+function extractCancelThreadId(messages: BufferedMessage[]): string | undefined {
+  const parsed = CancelThreadPayloadSchema.safeParse(messages[0]?.payload.rawPayload ?? {});
+  return (parsed.success ? parsed.data.cancelThreadId : undefined) ?? extractThreadId(messages);
 }
 
 function extractKhalSessionId(messages: BufferedMessage[]): string | undefined {
@@ -2439,6 +2557,15 @@ async function dispatchViaStreamingProvider(
   const streamKey = `${instance.id}:${chatId}`;
   activeStreams.set(streamKey, sender);
 
+  // Cancellable run (#914): agent.run.cancel_requested aborts this controller,
+  // which providers propagate into the underlying SDK run. The sender rides
+  // along so cancellation can halt-and-keep the partial stream output.
+  const cancelController = new AbortController();
+  const runKey = runAbortKey(instance.id, chatId, extractCancelThreadId(messages));
+  const runEntry: ActiveRunEntry = { controller: cancelController, startedAt: Date.now(), sender };
+  activeRunAborts.set(runKey, runEntry);
+  trigger.abortSignal = cancelController.signal;
+
   const streamDispatchStart = Date.now();
   try {
     const generator = resolved.provider.triggerStream(trigger);
@@ -2460,8 +2587,17 @@ async function dispatchViaStreamingProvider(
       });
     }
 
-    return streamResult;
+    // A cancelled run counts as handled even when the stream ended in an
+    // error delta — falling back would re-run the turn the user stopped.
+    return cancelController.signal.aborted ? true : streamResult;
   } catch (err) {
+    // A user-requested cancellation surfaces as an abort error from the
+    // provider — that's a handled outcome (#914), never a fallback: falling
+    // back to the accumulate path would re-run the turn the user just stopped.
+    if (cancelController.signal.aborted) {
+      log.info('Streaming dispatch cancelled by user', { instanceId: instance.id, chatId, traceId });
+      return true;
+    }
     log.error('Streaming dispatch failed, falling back', {
       instanceId: instance.id,
       chatId,
@@ -2476,6 +2612,9 @@ async function dispatchViaStreamingProvider(
     return false;
   } finally {
     activeStreams.delete(streamKey);
+    // Only drop OUR registration: an overlapping run under the same key may
+    // have replaced it, and deleting blindly would leave that run uncancellable.
+    if (activeRunAborts.get(runKey) === runEntry) activeRunAborts.delete(runKey);
   }
 }
 
@@ -2807,6 +2946,66 @@ async function dispatchViaTurnBasedProvider(
 }
 
 /**
+ * Why an accumulate-mode reply is withheld instead of sent.
+ * Precedence mirrors the original inline checks: a handoff announcement
+ * always wins over discard reasons.
+ */
+function resolveReplySuppression(flags: {
+  handoffTriggered: boolean;
+  errorHandoffDone: boolean;
+  supersededByNewerInbound: boolean;
+  runCancelled: boolean;
+}): 'handoff_triggered' | 'error_handoff' | 'superseded_by_newer_inbound' | 'run_cancelled_by_user' | null {
+  if (flags.handoffTriggered) return 'handoff_triggered';
+  if (flags.errorHandoffDone) return 'error_handoff';
+  if (flags.supersededByNewerInbound) return 'superseded_by_newer_inbound';
+  if (flags.runCancelled) return 'run_cancelled_by_user';
+  return null;
+}
+
+/**
+ * Run provider.trigger() with cancellation registered in activeRunAborts (#914).
+ *
+ * Returns null when the run was cancelled AND the provider surfaced the abort
+ * as a throw — the turn is over, nothing to send. Otherwise returns the result
+ * plus whether a cancel arrived mid-run (callers discard the reply then).
+ */
+async function triggerProviderWithCancellation(
+  provider: IAgentProvider,
+  trigger: AgentTrigger,
+  spanAttributes: Parameters<typeof withLifecycleSpan>[1],
+  instanceId: string,
+  chatId: string,
+  traceId: string,
+  cancelThreadId: string | undefined = trigger.source.threadId,
+): Promise<{ result: Awaited<ReturnType<IAgentProvider['trigger']>>; cancelled: boolean } | null> {
+  const cancelController = new AbortController();
+  const runKey = runAbortKey(instanceId, chatId, cancelThreadId);
+  const runEntry: ActiveRunEntry = { controller: cancelController, startedAt: Date.now() };
+  activeRunAborts.set(runKey, runEntry);
+
+  try {
+    const result = await withLifecycleSpan('omni.dispatch_to_agno', spanAttributes, () =>
+      provider.trigger({
+        ...trigger,
+        abortSignal: cancelController.signal,
+        traceContext: activeProviderTraceContext() ?? trigger.traceContext,
+      }),
+    );
+    return { result, cancelled: cancelController.signal.aborted };
+  } catch (err) {
+    if (cancelController.signal.aborted) {
+      log.info('Agent run cancelled by user during dispatch', { instanceId, chatId, traceId });
+      return null;
+    }
+    throw err;
+  } finally {
+    // See dispatchViaStreamingProvider: only our own registration is ours to drop.
+    if (activeRunAborts.get(runKey) === runEntry) activeRunAborts.delete(runKey);
+  }
+}
+
+/**
  * Try IAgentProvider dispatch first, return true if handled.
  * Falls back to legacy agentRunner.run() if provider not resolved.
  */
@@ -2951,15 +3150,24 @@ async function dispatchViaProvider(
       // ── Standard (round-trip / fire-and-forget) dispatch ──
       const correlationId = messages[0]?.metadata.correlationId;
       const dispatchStart = Date.now();
-      const result = await withLifecycleSpan(
-        'omni.dispatch_to_agno',
+
+      // Cancellable run (#914): providers that honor abortSignal stop mid-run;
+      // for the rest, the cancelled flag discards the reply after completion.
+      const triggerOutcome = await triggerProviderWithCancellation(
+        provider,
+        trigger,
         buildLifecycleSpanAttributes({
           ...lifecycleBase,
           stage: 'dispatch_to_agno',
           extra: { trigger_type: triggerType, provider_id: provider.id, provider_schema: provider.schema },
         }),
-        () => provider.trigger({ ...trigger, traceContext: activeProviderTraceContext() ?? trigger.traceContext }),
+        instance.id,
+        chatId,
+        traceId,
+        extractCancelThreadId(messages),
       );
+      if (!triggerOutcome) return true;
+      const { result, cancelled: runCancelled } = triggerOutcome;
       const dispatchDurationMs = Date.now() - dispatchStart;
 
       // Sentry metrics: agent dispatch count and latency
@@ -3000,7 +3208,14 @@ async function dispatchViaProvider(
         messages[0]?.metadata.trustedTenantId,
       );
 
-      if (result && result.parts.length > 0 && !handoffTriggered && !errorHandoffDone && !supersededByNewerInbound) {
+      const suppressReason = resolveReplySuppression({
+        handoffTriggered,
+        errorHandoffDone,
+        supersededByNewerInbound,
+        runCancelled,
+      });
+
+      if (result && result.parts.length > 0 && !suppressReason) {
         const selfChat = isSelfChat(chatId, instance.ownerIdentifier);
         const rawParts = selfChat ? result.parts.map((p) => `${BOT_PREFIX}${p}`) : result.parts;
         // Apply before_message_write hooks to each response part before sending
@@ -3040,13 +3255,9 @@ async function dispatchViaProvider(
 
         // T10: Agent chaining — forward response to chained instance if configured
         await forwardToChainedInstance(instance, parts, correlationId, messages);
-      } else if (handoffTriggered) {
-        log.info('Agent response suppressed — handoff triggered during run', {
-          instanceId: instance.id,
-          chatId,
-        });
-      } else if (supersededByNewerInbound) {
-        log.info('Agent response discarded — superseded by newer inbound', {
+      } else if (suppressReason) {
+        log.info('Agent response suppressed', {
+          reason: suppressReason,
           instanceId: instance.id,
           chatId,
           parts: result?.parts.length ?? 0,
@@ -3725,6 +3936,73 @@ function buildAckConfig(instance: DispatchInstance): ReactionAckConfig {
   };
 }
 
+/**
+ * #920: Enqueue-time reaction acks, keyed by the debouncer chatKey
+ * (`${instanceId}:${chatId}`). At most ONE live entry per chat — i.e. per
+ * blocking run — so a burst of queued messages costs one ack rate-limit token
+ * (the limiter allows 10/min per instance, shared across all chats), not one
+ * per message. The flush path takes the handle: release() when the batch
+ * dispatches (the dispatch-time ack takes over the same reaction), remove()
+ * when a flush-time gate skips the batch. `at` lets a stale entry (flush never
+ * came — e.g. debouncer cleared on shutdown) expire instead of blocking the
+ * chat's queue acks forever.
+ */
+const queuedMessageAcks = new Map<string, { handle?: AckHandle; at: number }>();
+
+/** #920: max ack lifetime — mirrors channel-sdk's DEC-8 hard cap (startAck clamps to it). */
+const QUEUED_ACK_TIMEOUT_MS = 120_000;
+
+function takeQueuedAck(chatKey: string): AckHandle | undefined {
+  const entry = queuedMessageAcks.get(chatKey);
+  queuedMessageAcks.delete(chatKey);
+  return entry?.handle;
+}
+
+/**
+ * #920: Reaction-ack a message the moment it queues behind an active run.
+ * Without this the only ack fires in processAgentResponse — i.e. at dispatch —
+ * so a message waiting out a long agent run (15+ min on claude-code) shows no
+ * signal at all. Cosmetic and fire-and-forget. The handle is kept in
+ * queuedMessageAcks so the flush path can hand the reaction over to the
+ * dispatch-time ack (release) or clean it up when the batch is skipped
+ * (remove); see onDebouncedFlush. The ack lifetime uses the SDK's 120s cap
+ * rather than the instance ackTimeoutMs (default 30s): this ack means
+ * "received, waiting" and should survive as long as the SDK allows.
+ */
+async function ackQueuedMessage(info: QueuedBehindActiveRunInfo): Promise<void> {
+  const chatKey = `${info.instanceId}:${info.chatId}`;
+  let entry: { handle?: AckHandle; at: number } | undefined;
+  try {
+    const existing = queuedMessageAcks.get(chatKey);
+    if (existing && Date.now() - existing.at < QUEUED_ACK_TIMEOUT_MS) return;
+    const instance = info.message.metadata.resolvedInstance as DispatchInstance | undefined;
+    const messageId = info.message.payload.externalId;
+    if (!instance || !messageId) return;
+    // Reserve the slot synchronously (before the first await) so concurrent
+    // enqueues for the same chat can't both pass the gate and double-ack.
+    entry = { at: Date.now() };
+    queuedMessageAcks.set(chatKey, entry);
+    const channel = (info.message.metadata.channelType ?? instance.channel) as ChannelType;
+    const plugin = (await getPlugin(channel)) ?? null;
+    const handle = startAck(plugin, createPluginAckProvider(plugin), instance.id, info.chatId, messageId, channel, {
+      ...buildAckConfig(instance),
+      ackTimeoutMs: QUEUED_ACK_TIMEOUT_MS,
+    });
+    // The flush may have taken (or a newer enqueue replaced) our slot during
+    // the getPlugin await. Nobody will ever release a handle that is not in
+    // the map, so disarm it now rather than leaving its 120s timer to strip
+    // the successor's reaction.
+    if (queuedMessageAcks.get(chatKey) !== entry) {
+      handle.release();
+      return;
+    }
+    entry.handle = handle;
+  } catch (error) {
+    if (entry && queuedMessageAcks.get(chatKey) === entry) queuedMessageAcks.delete(chatKey);
+    log.debug('Failed to ack queued message', { chatId: info.chatId, error: String(error) });
+  }
+}
+
 async function dispatchToAgent(
   services: Services,
   instance: DispatchInstance,
@@ -4040,7 +4318,19 @@ async function processAgentResponse(
       await sendTypingPresence(channel, instance.id, chatId, 'composing');
       try {
         if (agentAckMessage) {
-          sendTextMessage(channel, instance.id, chatId, agentAckMessage).catch((err) => {
+          // systemNotice: the ack precedes the real reply — it must not count
+          // as "the turn was answered" for agent replay (#912 review)
+          sendTextMessage(
+            channel,
+            instance.id,
+            chatId,
+            agentAckMessage,
+            'convert',
+            undefined,
+            undefined,
+            undefined,
+            true,
+          ).catch((err) => {
             log.warn('Failed to send agent ack message', { instanceId: instance.id, chatId, error: String(err) });
           });
         }
@@ -4519,6 +4809,56 @@ export function invalidateProviderCache(providerId: string): void {
   }
 
   log.debug('Provider cache invalidated', { providerId, removed });
+}
+
+/**
+ * Invalidate cached IAgentProvider instances for a specific instance.
+ *
+ * Instance-level config (enableAutoSplit, agentType, agentTimeout,
+ * agentPrefixSenderName, the resolved agentId) is baked into the provider at
+ * construction time (see createAgnoProvider and friends), so an instance
+ * update must evict the cached entry or the change stays invisible until a
+ * process restart (omni#906). Cache keys are `${providerId}:${instanceId}`;
+ * matching on the `:instanceId` suffix lets callers invalidate without
+ * knowing which provider the instance resolves to.
+ *
+ * Unlike invalidateProviderCache, this never touches the shared OpenClaw
+ * client pool — that pool holds provider-level connection state, which an
+ * instance mutation cannot affect — and accordingly it does NOT dispose
+ * evicted OpenClaw providers: their dispose() stops the pooled client that
+ * every sibling instance of the provider is dispatching through, and nothing
+ * on this path would restart or replace the pool entry. Dropping the wrapper
+ * is the whole eviction there. Every other schema owns its resources (e.g.
+ * the NATS Genie per-provider connection and reply subscription) and must be
+ * disposed, or the rebuilt provider would subscribe alongside the leaked one
+ * and every reply would be delivered twice.
+ *
+ * GRANULARITY CAVEAT: the cache key is route-blind. When agent routes on one
+ * instance target different agents of the SAME provider, they share this one
+ * entry, so eviction guarantees a rebuild from fresh rows but whichever route
+ * dispatches first decides which agent's config gets baked in — a pre-existing
+ * limit of the `${providerId}:${instanceId}` key, not something per-instance
+ * eviction can fix.
+ */
+export function invalidateProviderCacheForInstance(instanceId: string): void {
+  const suffix = `:${instanceId}`;
+  let removed = 0;
+
+  for (const [key, provider] of providerCache.entries()) {
+    if (!key.endsWith(suffix)) continue;
+    providerCache.delete(key);
+    removed++;
+    if (provider.schema === 'openclaw') continue;
+    if (provider.dispose) {
+      provider.dispose().catch((err) => {
+        log.warn('Error disposing provider on instance cache invalidation', { key, error: String(err) });
+      });
+    }
+  }
+
+  if (removed > 0) {
+    log.debug('Provider cache invalidated for instance', { instanceId, removed });
+  }
 }
 
 /**
@@ -5715,9 +6055,18 @@ export async function setupAgentDispatcher(
   // Create debouncer for message events
   // (registered module-wide so dispatch paths can consult pending buffers
   //  for the stale-reply gate — see isReplySuperseded)
-  const debouncer = new MessageDebouncer(async (_chatKey, messages) => {
+  const onDebouncedFlush = async (chatKey: string, messages: BufferedMessage[]) => {
+    // #920: the enqueue-time ack for this chat, if any. Settled on every exit:
+    // release() when the batch reaches dispatch (processAgentResponse's own ack
+    // takes over the reaction — its skip branches and finally-block remove it),
+    // remove() when a flush-time gate drops the batch. An exception mid-flush
+    // leaves it to the handle's own hard-timeout backstop.
+    const queuedAck = takeQueuedAck(chatKey);
     const firstMsg = messages[0];
-    if (!firstMsg) return;
+    if (!firstMsg) {
+      queuedAck?.remove();
+      return;
+    }
 
     const instanceId = firstMsg.metadata.instanceId;
 
@@ -5735,6 +6084,7 @@ export async function setupAgentDispatcher(
       );
       if (!baseInstance) {
         log.warn('Instance not found for debounced messages', { instanceId });
+        queuedAck?.remove();
         return;
       }
       const externalChatId = firstMsg.payload.chatId;
@@ -5755,7 +6105,11 @@ export async function setupAgentDispatcher(
     const msgContext = buildMessageContext(firstMsg.payload, instance);
     const triggerType = classifyMessageTrigger(msgContext);
 
-    if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) return;
+    if (await shouldSkipViaGate(triggerType, firstMsg, instance, messages, services)) {
+      // The agent deliberately won't answer this batch — drop its queue ack too.
+      queuedAck?.remove();
+      return;
+    }
 
     // #384: No inbound rate limiter. The debouncer already collapses conversational
     // bursts into a single trigger — capping inbound volume on top of that silently
@@ -5768,7 +6122,17 @@ export async function setupAgentDispatcher(
       tracker.recordCheckpoint(firstMsg.metadata.correlationId, 'T5', JOURNEY_STAGES.T5);
     }
 
+    // Disarm the enqueue ack's timer WITHOUT removing the reaction: the
+    // dispatch-time ack in processAgentResponse re-adds the same
+    // (instance, chat, message, emoji) tuple and owns removal from here on. An
+    // orphan timer would otherwise strip that live reaction mid-run.
+    queuedAck?.release();
     await processAgentResponse(services, instance, messages, triggerType, db, eventBus);
+  };
+  const debouncer = new MessageDebouncer(onDebouncedFlush, Date.now, {
+    // #920: a message queued behind an active run can wait many minutes with
+    // no visible signal — ack it at enqueue so 👀 means "received", not "started".
+    onQueuedBehindActiveRun: (info) => void ackQueuedMessage(info),
   });
   activeMessageDebouncer = debouncer;
 
@@ -6106,7 +6470,40 @@ export async function setupAgentDispatcher(
       },
     );
 
-    log.info('Agent dispatcher initialized (message + reaction + reaction-removed + media triggers)');
+    // ========================================
+    // Subscribe to agent.run.cancel_requested (#914)
+    // ========================================
+    await eventBus.subscribe(
+      'agent.run.cancel_requested',
+      async (event) => {
+        const payload = event.payload as AgentRunCancelRequestedPayload;
+        try {
+          await cancelActiveAgentRun(payload.instanceId, payload.chatId, payload.reason, {
+            threadId: payload.threadId,
+            requestedAt: payload.requestedAt,
+          });
+        } catch (error) {
+          log.error('Error cancelling agent run', {
+            instanceId: payload.instanceId,
+            chatId: payload.chatId,
+            error: String(error),
+          });
+        }
+      },
+      {
+        // Broadcast, not queue-grouped: the abort registry is per-process, so
+        // EVERY replica must see the cancel and no-op when it isn't running
+        // the turn — a deliver_group would route ~1/replicaCount of stop
+        // presses to the wrong pod. No durable and no withIdempotency either:
+        // both would elect a single winner and defeat the fan-out. Each
+        // process gets an ephemeral consumer starting at 'new' (no replay on
+        // restart), and the requestedAt guard in cancelActiveAgentRun keeps a
+        // redelivered cancel from aborting a newer run.
+        startFrom: 'new',
+      },
+    );
+
+    log.info('Agent dispatcher initialized (message + reaction + reaction-removed + media + cancel triggers)');
   } catch (error) {
     log.error('Failed to set up agent dispatcher', { error: String(error) });
     clearInterval(mediaCleanupInterval);
@@ -6191,6 +6588,15 @@ export const setupAgentResponder = setupAgentDispatcher;
 export const __test__ = {
   buildContextMessages,
   awaitMediaProcessing,
+  // #914 cancel plumbing — exposed so tests can stage in-flight runs and
+  // assert the thread-scoped lookup + requestedAt guard.
+  activeRunAborts,
+  runAbortKey,
+  extractCancelThreadId,
+  triggerProviderWithCancellation,
+  ackQueuedMessage,
+  takeQueuedAck,
+  queuedMessageAcks,
   // Read helpers converted in the G5 read-path leg — exported so the
   // worker-scope probes can assert their threading contract directly.
   resolveQuotedMessage,

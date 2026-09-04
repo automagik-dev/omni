@@ -223,6 +223,7 @@ export function buildAutomationEngineDeps(
       const result = await services.agentRunner.runOrStream({
         instance: runInstance,
         chatId: resolvedChatId,
+        threadId: ctx.threadId,
         senderId: resolvedSenderId,
         senderName: ctx.senderName,
         chatType: 'dm',

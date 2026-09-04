@@ -306,6 +306,13 @@ export interface CreateInstanceBody {
 }
 
 /**
+ * Authorship marker accepted by the send routes (#912). 'agent' attributes the
+ * message to the instance's configured agent server-side — the agent id is
+ * never taken from the caller.
+ */
+export type SentBy = 'agent' | 'user';
+
+/**
  * Body for sending a message
  */
 export interface SendMessageBody {
@@ -314,6 +321,12 @@ export interface SendMessageBody {
   text: string;
   replyTo?: string;
   threadId?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -710,12 +723,34 @@ export interface ListWebhookSourcesParams {
 }
 
 /**
- * Body for creating a webhook source
+ * Signature verification contract for a webhook source (issue #928).
+ * Derived from the generated OpenAPI component so it cannot drift from the API.
+ */
+export type WebhookSignatureConfigBody = components['schemas']['WebhookSignatureConfig'];
+
+/**
+ * Body for creating a webhook source.
+ *
+ * Hand-written on purpose: the generated `CreateWebhookSourceRequest` marks
+ * `enabled` as required because the API schema gives it a default, while for
+ * a caller it is optional. Field set and semantics mirror that component.
  */
 export interface CreateWebhookSourceBody {
   name: string;
   description?: string;
   expectedHeaders?: Record<string, boolean>;
+  /**
+   * Required for the source to be reachable on the public ingress route.
+   * Always paired with `signatureSecret`: a config without a stored secret is
+   * rejected, and clearing the config (null) also clears the stored secret.
+   */
+  signatureConfig?: WebhookSignatureConfigBody | null;
+  /**
+   * Shared secret used by signatureConfig (write-only, never returned; 8-512
+   * chars). Cannot be set without a signatureConfig; null clears it.
+   */
+  signatureSecret?: string | null;
+  /** Defaults to true server-side */
   enabled?: boolean;
 }
 
@@ -775,10 +810,16 @@ export interface SendMediaBody {
   caption?: string;
   voiceNote?: boolean;
   threadId?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
- * Body for sending a reaction
+ * Body for sending a reaction (no `sentBy`: reactions are not attributable sends)
  */
 export interface SendReactionBody {
   instanceId: string;
@@ -803,6 +844,12 @@ export interface SendForwardBody {
   to: string;
   messageId: string;
   fromChatId: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -813,6 +860,12 @@ export interface SendStickerBody {
   to: string;
   url?: string;
   base64?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -827,6 +880,12 @@ export interface SendContactBody {
     email?: string;
     organization?: string;
   };
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -841,6 +900,12 @@ export interface SendTtsBody {
   stability?: number;
   similarityBoost?: number;
   presenceDelay?: number;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -862,6 +927,8 @@ export interface TtsResponse {
   audioSizeKb: number;
   durationMs: number;
   timestamp: number;
+  /** Present when the request set `sentBy: 'agent'`; null when the instance has no configured agent */
+  senderAgentId?: string | null;
 }
 
 /**
@@ -874,6 +941,12 @@ export interface SendLocationBody {
   longitude: number;
   name?: string;
   address?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -887,6 +960,12 @@ export interface SendPollBody {
   durationHours?: number;
   multiSelect?: boolean;
   replyTo?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -906,6 +985,12 @@ export interface SendEmbedBody {
   image?: string;
   fields?: Array<{ name: string; value: string; inline?: boolean }>;
   replyTo?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**

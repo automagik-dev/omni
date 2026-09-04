@@ -3,14 +3,14 @@ name: omni
 description: Omni — multi-channel messaging API (Bun/Hono) with Postgres (autopg) and NATS/JetStream
 type: application
 version: 0.1.0
-# appVersion = the version this tree publishes when promoted. Every version
-# bump (version.yml → scripts/sync-versions.ts) stamps this line in lockstep
-# with every package.json, and image-publish.yml pushes
-# ghcr.io/automagik-dev/omni-api:v<appVersion> when the tree lands on main or
-# homolog. The chart's default image tag is v<appVersion>, so a promoted tree
-# always references exactly the image its own promotion publishes. Do not edit
-# by hand — scripts/verify-versions.ts fails CI on drift.
-appVersion: "2.260804.3"
+# appVersion is stamped by version.yml → scripts/sync-versions.ts in lockstep
+# with every package.json on every dev bump. It is NOT the default image tag:
+# values.yaml pins image.tag to the last verified public candidate
+# (.well-known/latest.json) because no public workflow builds images, so
+# v<appVersion> is not guaranteed to exist. Production authority supplies an
+# independently verified immutable digest outside this public repository.
+# Do not edit by hand — scripts/verify-versions.ts fails CI on drift.
+appVersion: "2.260902.5"
 keywords:
   - omni
   - messaging

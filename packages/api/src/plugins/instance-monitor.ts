@@ -42,6 +42,7 @@ import type { Database } from '@omni/db';
 import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 
+import { applyWhatsAppBusinessConnectionOptions } from '../lib/whatsapp-business-connection';
 import { lookupInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { runForEachActiveTenantRow } from '../tenancy/periodic-tenant-work';
 import { scopedHandle } from '../tenancy/tenant-scope';
@@ -224,7 +225,7 @@ function buildInstanceConnectOptions(instance: {
     applyTwilioWhatsAppOptions(options, instance);
   }
   if (instance.channel === 'whatsapp-business') {
-    applyWhatsAppBusinessOptions(options, instance);
+    applyWhatsAppBusinessConnectionOptions(options, instance);
   }
   if (instance.channel === 'hermes') {
     applyHermesOptions(options, instance);
@@ -280,34 +281,6 @@ function applyHermesOptions(
   if (instance.hermesPassword) options.hermesPassword = instance.hermesPassword;
   if (instance.hermesMediaId) options.hermesMediaId = instance.hermesMediaId;
   if (instance.hermesTemplateNamespace) options.hermesTemplateNamespace = instance.hermesTemplateNamespace;
-}
-
-/**
- * whatsapp-business reconnect credentials — the plugin's `connect()` reads these
- * from `config.options` (same keys as `config.credentials` in the manual
- * connect route). Persisted on `instances` by the connect/oauth routes.
- */
-function applyWhatsAppBusinessOptions(
-  options: Record<string, unknown>,
-  instance: {
-    metaAccessToken?: string | null;
-    metaPhoneNumberId?: string | null;
-    metaWabaId?: string | null;
-    metaAppId?: string | null;
-    metaBusinessId?: string | null;
-    metaApiVersion?: string | null;
-    metaDisplayPhoneNumber?: string | null;
-    metaConnectionMethod?: string | null;
-  },
-): void {
-  if (instance.metaAccessToken) options.metaAccessToken = instance.metaAccessToken;
-  if (instance.metaPhoneNumberId) options.metaPhoneNumberId = instance.metaPhoneNumberId;
-  if (instance.metaWabaId) options.metaWabaId = instance.metaWabaId;
-  if (instance.metaAppId) options.metaAppId = instance.metaAppId;
-  if (instance.metaBusinessId) options.metaBusinessId = instance.metaBusinessId;
-  if (instance.metaApiVersion) options.metaApiVersion = instance.metaApiVersion;
-  if (instance.metaDisplayPhoneNumber) options.metaDisplayPhoneNumber = instance.metaDisplayPhoneNumber;
-  if (instance.metaConnectionMethod) options.metaConnectionMethod = instance.metaConnectionMethod;
 }
 
 function applyGupshupOptions(

@@ -163,6 +163,32 @@ async function withCronMonitor(
 }
 
 /**
+ * Construct the scheduled-message sweeper with its auth-plane connection wired.
+ *
+ * Extracted so the wiring is unit-testable: unlike other sweepers this one is
+ * built HERE (it needs the channel registry, which only exists at scheduler
+ * setup) rather than in `services/index.ts`, so it is easy to forget the
+ * `setAuthPlane` call that every tenant-scoped sweep depends on. Without it,
+ * `sweep()` finds `authPlaneDb` undefined under multitenancy and silently
+ * skips every tenant's rows.
+ */
+export function createScheduledMessageSweeper(
+  services: Services,
+  channelRegistry: ChannelRegistry,
+): ScheduledMessageService {
+  const sweeper = new ScheduledMessageService(
+    services.db,
+    createPluginResolver(services.db, (channel) => channelRegistry.get(channel as ChannelType) ?? undefined),
+  );
+  // Every tenant-scoped sweep reads the active-tenant list through the
+  // auth-plane connection; without this the tenant world is skipped and
+  // tenant-scoped scheduled messages silently never send. Mirrors how
+  // followUpSweeper is wired in services/index.ts.
+  sweeper.setAuthPlane(services.authPlane.db);
+  return sweeper;
+}
+
+/**
  * Setup and start the scheduler with all jobs
  */
 export function setupScheduler(services: Services, channelRegistry?: ChannelRegistry | null): void {
@@ -324,10 +350,7 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
   // double-post. Needs the registry to reach plugin.sendMessage, so it stays
   // unregistered when there is none.
   if (channelRegistry) {
-    const scheduledMessages = new ScheduledMessageService(
-      services.db,
-      createPluginResolver(services.db, (channel) => channelRegistry.get(channel as ChannelType) ?? undefined),
-    );
+    const scheduledMessages = createScheduledMessageSweeper(services, channelRegistry);
 
     scheduler.register({
       name: 'scheduled-message-sweeper',

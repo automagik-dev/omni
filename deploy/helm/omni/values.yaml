@@ -8,14 +8,23 @@ nameOverride: ""
 fullnameOverride: ""
 
 # ---- omni-api image ---------------------------------------------------------
-# Published by .github/workflows/image-publish.yml on merges to main as
-# ghcr.io/automagik-dev/omni-api:v<packages/cli version> (plus :main and
-# :main-<sha12>). tag "" => v<Chart.appVersion> — Chart.yaml appVersion tracks
-# the latest PUBLISHED release. The dev overlay swaps in a locally-built image
+# Public tags are ghcr.io/automagik-dev/omni-api:v<version>. The chart default
+# `tag` is PINNED to the last verified public candidate — the `version` in
+# .well-known/latest.json — and is deliberately decoupled from Chart.appVersion:
+# appVersion is stamped by version.yml on every dev bump, but no workflow in
+# this public repository builds images, so v<Chart.appVersion> is not
+# guaranteed to exist in the registry. scripts/ci/test-helm-image-digest.sh
+# fails CI when this pin and .well-known/latest.json disagree; move both
+# together when a new candidate is verified. tag "" falls back to
+# v<Chart.appVersion>. The dev overlay swaps in a locally-built image
 # (repository omni-api, tag dev, pullPolicy Never).
 image:
   repository: ghcr.io/automagik-dev/omni-api
-  tag: ""
+  tag: "v2.260902.5"
+  # Optional immutable OCI index digest. When set, omni-api renders as
+  # repository@digest and tag/appVersion are ignored. Only lowercase sha256
+  # digests are accepted so GitOps cannot silently deploy a mutable alias.
+  digest: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -197,9 +206,10 @@ extraVolumeMounts: []
 # The Omni Admin UI (apps/khal-ui, app id "omni-admin") as a single-container
 # pod: one Bun process serves the built SPA AND proxies /omni/* to omni-api,
 # injecting the omni_sk_ key server-side so the browser never sees it. Image is
-# ghcr.io/automagik-dev/omni-admin-ui (built by image-publish.yml's
-# build-push-ui job). OFF by default and in the generic AWS overlays; the dev
-# overlay turns it on. On the shared khal.ai realms it stays OFF until a real
+# ghcr.io/automagik-dev/omni-admin-ui. No public workflow builds or pushes it
+# today (image-publish.yml is verification-only and image-build.yml mints only
+# omni-api); an operator supplies it. OFF by default and in the generic AWS
+# overlays; the dev overlay turns it on. On the shared khal.ai realms it stays OFF until a real
 # auth layer fronts it — the harness shell mocks a full-admin user, so an open
 # ingress would hand anyone reaching the host full control of the omni backend.
 adminUi:

@@ -107,6 +107,14 @@ export interface MessageMetadata {
    */
   isThreadBroadcast?: boolean;
 
+  /**
+   * Procedural courtesy send (pre-dispatch auto-ack, dispatch-error feedback)
+   * rather than a substantive reply. Plugins echo this into the
+   * `message.sent` payload so agent replay does not treat the row as evidence
+   * a turn was answered.
+   */
+  systemNotice?: boolean;
+
   /** Additional plugin-specific metadata */
   [key: string]: unknown;
 }

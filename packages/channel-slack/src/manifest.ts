@@ -50,6 +50,10 @@ export const BOT_EVENTS = [
   'member_joined_channel',
   'member_left_channel',
   'channel_rename',
+  // Agent messaging experience (#914): fires when the user presses the native
+  // stop button; subscribing is also what makes Slack SHOW that button while a
+  // session is in `processing`.
+  'agent_session_stopped',
 ] as const;
 
 /**
@@ -65,6 +69,7 @@ const USER_SCOPES = [
   'channels:history',
   'channels:read',
   'chat:write',
+  'files:write',
   'groups:history',
   'groups:read',
   'im:history',
@@ -102,6 +107,21 @@ const USER_EVENTS = [
 ] as const;
 
 /**
+ * Trim to Slack's agent_description cap at a word boundary instead of
+ * mid-word; falls back to a hard cut (without splitting a surrogate pair)
+ * for space-less text.
+ */
+function truncateAtWordBoundary(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max + 1);
+  const lastSpace = cut.lastIndexOf(' ');
+  if (lastSpace > 0) return cut.slice(0, lastSpace).trimEnd();
+  const hard = text.slice(0, max);
+  const tailCode = hard.charCodeAt(hard.length - 1);
+  return tailCode >= 0xd800 && tailCode <= 0xdbff ? hard.slice(0, -1) : hard;
+}
+
+/**
  * Build a Slack App Manifest for the Omni bot
  */
 export function buildSlackManifest(options?: {
@@ -112,6 +132,22 @@ export function buildSlackManifest(options?: {
   slashCommands?: SlackSlashCommand[];
   /** Request user-token scopes and user-scoped events too (authMode 'user'). */
   includeUserScopes?: boolean;
+  /**
+   * Emit `features.agent_view` (the Agent messaging experience). Default true
+   * — new Slack apps can only use `agent_view`, and this generator never
+   * emitted the deprecated `assistant_view`. Set false ONLY when regenerating
+   * a manifest for an existing app that still uses `assistant_view` and must
+   * stay on it: applying an `agent_view` manifest to such an app migrates it
+   * permanently (Slack does not allow reverting to `assistant_view`).
+   */
+  agentView?: boolean;
+  /**
+   * Description shown in the Agent messaging experience (max 300 chars).
+   * Defaults to `description`.
+   */
+  agentDescription?: string;
+  /** Suggested prompts shown at the top of the agent's Messages tab. */
+  suggestedPrompts?: Array<{ title: string; message: string }>;
 }): SlackManifest {
   const {
     appName = 'Omni Bot',
@@ -120,6 +156,9 @@ export function buildSlackManifest(options?: {
     backgroundColor = '#4A154B',
     slashCommands = [],
     includeUserScopes = false,
+    agentView = true,
+    agentDescription,
+    suggestedPrompts,
   } = options ?? {};
 
   return {
@@ -133,6 +172,17 @@ export function buildSlackManifest(options?: {
         display_name: displayName,
         always_online: true,
       },
+      // Agent messaging experience (#914). `assistant_view` is deprecated
+      // (removed February 2027) and new Slack apps can only use `agent_view`.
+      // Slack caps agent_description at 300 chars.
+      ...(agentView
+        ? {
+            agent_view: {
+              agent_description: truncateAtWordBoundary(agentDescription ?? description, 300),
+              ...(suggestedPrompts?.length ? { suggested_prompts: suggestedPrompts } : {}),
+            },
+          }
+        : {}),
       slash_commands:
         slashCommands.length > 0
           ? slashCommands.map((cmd) => ({

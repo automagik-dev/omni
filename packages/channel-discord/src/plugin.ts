@@ -714,6 +714,7 @@ export class DiscordPlugin extends BaseChannelPlugin {
         content: { type: message.content.type, text: message.content.text },
         replyToId: message.replyTo,
         senderAgentId: message.metadata?.senderAgentId as string | undefined,
+        systemNotice: message.metadata?.systemNotice as boolean | undefined,
       });
 
       return { success: true, messageId, timestamp: Date.now() };

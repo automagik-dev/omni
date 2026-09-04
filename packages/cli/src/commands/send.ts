@@ -12,6 +12,7 @@ import { basename, extname } from 'node:path';
 import { OmniApiError, type OmniClient } from '@omni/sdk';
 import chalk, { Chalk, type ChalkInstance } from 'chalk';
 import { Command } from 'commander';
+import { z } from 'zod';
 import { getClient } from '../client.js';
 import { loadConfig } from '../config.js';
 import { resolveContext } from '../context.js';
@@ -86,6 +87,21 @@ interface SendOptions {
   presenceDelay?: number;
   forward?: boolean;
   fromChat?: string;
+  sentBy?: string;
+}
+
+/** Mirrors the API's SentByField (schemas/openapi/messages.ts); the SDK exports only the type. */
+const sentBySchema = z.enum(['agent', 'user']);
+type SentBy = z.infer<typeof sentBySchema>;
+
+/** Validate --sent-by; undefined when not given (unattributed). Exits on an invalid value. */
+function resolveSentBy(value: string | undefined): SentBy | undefined {
+  if (value === undefined) return undefined;
+  const parsed = sentBySchema.safeParse(value);
+  if (!parsed.success) {
+    output.error(`Invalid --sent-by: ${value}`, { validValues: sentBySchema.options });
+  }
+  return parsed.data;
 }
 
 /** Message sender handlers - each validates required fields before use */
@@ -99,6 +115,7 @@ const messageSenders = {
       text,
       replyTo: options.replyTo,
       threadId: options.threadId,
+      sentBy: resolveSentBy(options.sentBy),
     });
     output.success('Message sent', result);
   },
@@ -122,6 +139,7 @@ const messageSenders = {
       caption: options.caption,
       voiceNote: options.voice,
       threadId: options.threadId,
+      sentBy: resolveSentBy(options.sentBy),
     });
     output.success('Media sent', result);
   },
@@ -150,6 +168,7 @@ const messageSenders = {
       instanceId,
       to,
       ...(isBase64 ? { base64: sticker } : { url: sticker }),
+      sentBy: resolveSentBy(options.sentBy),
     });
     output.success('Sticker sent', result);
   },
@@ -169,6 +188,7 @@ const messageSenders = {
         phone: options.phone,
         email: options.email,
       },
+      sentBy: resolveSentBy(options.sentBy),
     });
     output.success('Contact sent', result);
   },
@@ -186,6 +206,7 @@ const messageSenders = {
       latitude: lat,
       longitude: lng,
       address: options.address,
+      sentBy: resolveSentBy(options.sentBy),
     });
     output.success('Location sent', result);
   },
@@ -205,6 +226,7 @@ const messageSenders = {
       answers,
       multiSelect: options.multiSelect,
       durationHours: options.duration,
+      sentBy: resolveSentBy(options.sentBy),
     });
     output.success('Poll sent', result);
   },
@@ -219,6 +241,7 @@ const messageSenders = {
       description: options.description,
       color: options.color,
       url: options.url,
+      sentBy: resolveSentBy(options.sentBy),
     });
     output.success('Embed sent', result);
   },
@@ -251,6 +274,7 @@ const messageSenders = {
       text: tts,
       voiceId: options.voiceId,
       presenceDelay: options.presenceDelay,
+      sentBy: resolveSentBy(options.sentBy),
     });
     output.success('TTS voice note sent', result);
   },
@@ -271,6 +295,7 @@ const messageSenders = {
       to,
       messageId: message,
       fromChatId: fromChat,
+      sentBy: resolveSentBy(options.sentBy),
     });
     output.success('Message forwarded', result);
   },
@@ -349,6 +374,11 @@ function buildGroupedSendHelp(): string {
     {
       flags: '--to <recipient>',
       description: 'Recipient: WA JID (5511@s.whatsapp.net), phone (+5511...), or Omni chat/person UUID',
+    },
+    {
+      flags: '--sent-by <agent|user>',
+      description:
+        "Authorship: 'agent' attributes the send to the instance's configured agent (not for --reaction/--presence)",
     },
   ];
 
@@ -472,6 +502,7 @@ export function createSendCommand(): Command {
     .argument('[file]', 'File to send as media (shorthand for --media, uses context for instance/chat)')
     .option('--instance <id>', 'Instance ID (uses default if not specified)')
     .option('--to <recipient>', 'Recipient: WA JID, phone number, or Omni chat/person UUID')
+    .option('--sent-by <agent|user>', "Authorship: 'agent' attributes the send to the instance's configured agent")
     // Text message
     .option('--text <text>', 'Send text message')
     .option('--reply-to <id>', 'Reply to a message ID')
@@ -556,3 +587,6 @@ export function createSendCommand(): Command {
 
   return send;
 }
+
+/** Test-only surface — not part of the CLI contract. */
+export const __testables = { sentBySchema };

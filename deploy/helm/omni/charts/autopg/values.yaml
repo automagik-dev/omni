@@ -2,9 +2,10 @@
 # -----------------------------------------------------------------------------
 
 image:
-  # Published by the omni repo's image-publish workflow as
-  # ghcr.io/automagik-dev/autopg:v<autopg release> (Chart.appVersion), plus
-  # :v<omni cli version> and :main.
+  # ghcr.io/automagik-dev/autopg:v<autopg release> (Chart.appVersion). No
+  # public workflow builds or pushes this image today (image-publish.yml is
+  # verification-only and image-build.yml mints only omni-api); an operator
+  # supplies it.
   repository: ghcr.io/automagik-dev/autopg
   # Image tag. "" => v<Chart.appVersion>, the autopg release baked into the
   # published image. The dev overlay swaps in a locally-built image

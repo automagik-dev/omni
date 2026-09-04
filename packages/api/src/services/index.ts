@@ -207,6 +207,12 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   const mediaStorage = new MediaStorageService(db);
   mediaStorage.setTenantAdmissibilityCheck((tenantId) => isTenantWorkAdmissible(authPlane.db, tenantId));
 
+  // A provider update/delete must also evict the runner's credential-bearing
+  // client cache, which is only reachable through this container.
+  const providers = new ProviderService(db);
+  const agentRunner = new AgentRunnerService(db);
+  providers.onProviderChanged((providerId) => agentRunner.clearCache(providerId));
+
   return {
     agents: new AgentService(db, eventBus),
     agentState: new AgentStateService(eventBus),
@@ -219,7 +225,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     events: new EventService(db),
     settings,
     access: new AccessService(db, eventBus, accessCache),
-    providers: new ProviderService(db),
+    providers,
     routes: new RouteService(db, routeResolver),
     routeResolver,
     deadLetters,
@@ -231,7 +237,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     messages: new MessageService(db, eventBus),
     syncJobs: new SyncJobService(db, eventBus),
     batchJobs,
-    agentRunner: new AgentRunnerService(db),
+    agentRunner,
     tts,
     turns: new TurnService(db),
     consumerOffsets: new ConsumerOffsetService(db),

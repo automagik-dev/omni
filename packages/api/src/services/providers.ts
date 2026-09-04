@@ -37,7 +37,7 @@ import { type AgentProvider, type NewAgentProvider, agentProviders } from '@omni
 import { eq } from 'drizzle-orm';
 import { invalidateProviderCache } from '../plugins/agent-dispatcher';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
-import { currentTenantScope } from '../tenancy/tenant-scope';
+import { currentTenantScope, runAfterTenantCommit } from '../tenancy/tenant-scope';
 
 export interface ProviderHealthResult {
   healthy: boolean;
@@ -92,7 +92,44 @@ function openProviderSecrets<T extends Record<string, unknown>>(tenantId: string
 }
 
 export class ProviderService {
+  /**
+   * Extra per-provider cache evictions wired by the service container — the
+   * dispatcher's provider cache is reached statically, but
+   * `AgentRunnerService.clientCache` (the legacy `run()`/`stream()` path and
+   * the `call_agent` automation action) caches a client holding the provider's
+   * CREDENTIAL and is only reachable through the container. Without this hook a
+   * rotated `api_key` or changed `base_url` kept being served from that cache
+   * until the process restarted.
+   */
+  private readonly clientCacheInvalidators: Array<(providerId: string) => void> = [];
+
   constructor(private db: Database) {}
+
+  /** Register an additional eviction to run after a provider is updated or deleted. */
+  onProviderChanged(invalidate: (providerId: string) => void): void {
+    this.clientCacheInvalidators.push(invalidate);
+  }
+
+  /**
+   * Evict every cache that baked this provider's row in. Deferred to commit
+   * (same rule as `InstanceService.update`): inside the request transaction a
+   * concurrent dispatch still reads the OLD row and would re-cache stale
+   * credentials right after an immediate eviction; on rollback the eviction is
+   * dropped with the write it belonged to. Best-effort — a failing invalidator
+   * must not turn a committed write into an error.
+   */
+  private invalidateCaches(providerId: string): void {
+    runAfterTenantCommit(() => {
+      invalidateProviderCache(providerId);
+      for (const invalidate of this.clientCacheInvalidators) {
+        try {
+          invalidate(providerId);
+        } catch {
+          // Best-effort cache eviction — see the doc comment above.
+        }
+      }
+    });
+  }
 
   /** The tenant this service seals under / opens with; null on legacy paths. */
   private get tenantId(): string | null {
@@ -169,7 +206,7 @@ export class ProviderService {
       throw new NotFoundError('AgentProvider', id);
     }
 
-    invalidateProviderCache(id);
+    this.invalidateCaches(id);
 
     return openProviderSecrets(tenantId, updated);
   }
@@ -184,7 +221,7 @@ export class ProviderService {
       throw new NotFoundError('AgentProvider', id);
     }
 
-    invalidateProviderCache(id);
+    this.invalidateCaches(id);
   }
 
   /**

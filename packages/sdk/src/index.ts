@@ -48,6 +48,7 @@ export type {
   ListInstancesParams,
   CreateInstanceBody,
   SendMessageBody,
+  SentBy,
   ListEventsParams,
   SearchPersonsParams,
   ListAccessRulesParams,
@@ -96,6 +97,7 @@ export type {
   // Webhook types
   WebhookSource,
   ListWebhookSourcesParams,
+  WebhookSignatureConfigBody,
   CreateWebhookSourceBody,
   TriggerEventBody,
   // Payload types

@@ -297,6 +297,7 @@ export function buildSentMessageContentFields(payload: MessageSentPayload): {
   mediaMetadata?: Record<string, unknown>;
   rawPayload?: Record<string, unknown>;
 } {
+  const sanitizedRawPayload = payload.rawPayload ? deepSanitize(payload.rawPayload) : undefined;
   return {
     textContent: sanitizeText(payload.content.text ?? payload.content.caption),
     hasMedia: isSentMediaContent(payload.content),
@@ -304,7 +305,10 @@ export function buildSentMessageContentFields(payload: MessageSentPayload): {
     mediaUrl: payload.content.mediaUrl,
     mediaLocalPath: payload.content.localPath,
     mediaMetadata: buildSentMediaMetadata(payload.content, payload.rawPayload),
-    rawPayload: payload.rawPayload ? deepSanitize(payload.rawPayload) : undefined,
+    // omniSystemNotice: queried by AgentReplayService's answered-turn guard —
+    // a procedural courtesy send (auto-ack, error feedback) must not look
+    // like an answer to the turn (#912 review)
+    rawPayload: payload.systemNotice ? { ...(sanitizedRawPayload ?? {}), omniSystemNotice: true } : sanitizedRawPayload,
   };
 }
 

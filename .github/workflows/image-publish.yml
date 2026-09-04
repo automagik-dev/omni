@@ -1,302 +1,194 @@
-# =============================================================================
-# Publish the omni-api, autopg, and omni-admin-ui container images to GHCR.
-# =============================================================================
-# build-push         → deploy/Dockerfile          → ghcr.io/<owner>/omni-api
-# build-push-autopg  → deploy/autopg.Dockerfile    → ghcr.io/<owner>/autopg
-# build-push-ui      → deploy/Dockerfile.admin-ui  → ghcr.io/<owner>/omni-admin-ui
-#
-# These are the k8s images referenced by the Helm chart (deploy/helm/omni)
-# for non-dev (registry) deploys; the OrbStack dev overlay keeps building
-# locally and never pulls.
-#
-# build-push-ui bundles PRIVATE @khal-os/* packages, so it needs the
-# KHAL_NPM_TOKEN repo secret (git.namastex.io registry). It is GATED on that
-# secret's presence (check-ui-secret job): SKIPPED — not failed — until the
-# secret is configured, so a promotion stays green; it self-activates once the
-# token lands. The other two images have no private deps and always build.
-#
-# Triggers:
-#   - push to main / homolog  → build + publish (the promotion targets)
-#   - workflow_dispatch        → manual rebuild
-# PRs do NOT publish (build is validated by the normal CI type/lint/test gate);
-# publishing is reserved for the protected branches.
-#
-# RELEASE NOTE (LOW-18): merges to `main` must NOT carry `[skip ci]` in the
-# merge commit message — GitHub then skips ALL workflows for that push,
-# including this publish, and the promoted version never gets an image.
-# Integration-branch tip commits often carry `[skip ci]` from the version-bump
-# bot, so prefer "Create a merge commit" or "Squash and merge" (with a clean
-# message) over "Rebase and merge", and check the final message before merging
-# a promotion PR.
-#
-# Actions are pinned to full commit SHAs (supply-chain hardening: this
-# workflow holds `packages: write`). Bump the SHA and the trailing version
-# comment together.
-# =============================================================================
-name: Publish Image
+# Verify the already-published public-launch candidate without mutating Git,
+# GHCR, npm, GitHub Releases, aliases, or deployment state. Production
+# deployment authority lives outside this public repository; this workflow
+# emits only a verification receipt for the protected dev-to-main promotion.
+name: Verify Production Promotion
 
 on:
   push:
-    branches: [main, homolog]
-    paths:
-      - 'packages/**'
-      - 'apps/**'
-      - 'deploy/Dockerfile'
-      - 'deploy/autopg.Dockerfile'
-      - 'deploy/Dockerfile.admin-ui'
-      # Chart/values-only promotions still advance appVersion (version.yml
-      # stamps deploy/helm/omni/Chart.yaml); without this filter the stamped
-      # tag would never get an image built (stranded-tag case).
-      - 'deploy/helm/**'
-      - 'bun.lock'
-      - '.github/workflows/image-publish.yml'
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      platforms:
-        description: 'Target platforms (comma-separated)'
-        default: 'linux/amd64,linux/arm64'
 
 concurrency:
-  group: image-publish-${{ github.ref }}
-  cancel-in-progress: true
+  group: production-promotion-read-only
+  cancel-in-progress: false
 
 permissions:
   contents: read
-  packages: write
-  # GitHub-native build provenance for the published images — this is what
-  # makes the documented `gh attestation verify oci://…` command
-  # (deploy/README.md) actually pass. `id-token` signs via OIDC/Sigstore;
-  # `attestations` stores the provenance in the repo's Attestations API.
-  id-token: write
-  attestations: write
+  packages: read
+  attestations: read
 
 jobs:
-  build-push:
+  verify-promotion:
+    name: Verify immutable v2.260902.5 candidate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
+      CANDIDATE_VERSION: 2.260902.5
+      CANDIDATE_SHA: ac415b97fe2a5657f7d3203bb0394eb365a97274
+      CANDIDATE_DIGEST: sha256:aafa65b3f0f96381365a955444dd7f815ab461f09c5ce1fb1f735a1be85e565d
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Resolve image version
-        id: meta
-        run: |
-          VERSION="$(node -p "require('./packages/cli/package.json').version" 2>/dev/null || echo 0.0.0)"
-          {
-            echo "version=${VERSION}"
-            echo "sha_short=${GITHUB_SHA::12}"
-            echo "ref_name=${GITHUB_REF_NAME}"
-          } >> "$GITHUB_OUTPUT"
-
-      # LOW-23: arm64 is built under QEMU emulation (slow for the Bun
-      # install/build stages). The repo is public, so native
-      # `ubuntu-24.04-arm` runners are free; the upgrade path is a
-      # per-platform matrix (push-by-digest) + `buildx imagetools create`
-      # manifest merge. Deliberately not done here: the QEMU path is proven
-      # on main and a split cannot be validated before a main promotion.
-      # Revisit if arm64 builds start timing out or OOMing.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
 
-      - name: Build and push
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      - name: Checkout immutable candidate source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          context: .
-          file: deploy/Dockerfile
-          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.ref_name }}
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.ref_name }}-${{ steps.meta.outputs.sha_short }}
-            ${{ env.IMAGE }}:v${{ steps.meta.outputs.version }}
-          cache-from: type=gha,scope=omni-api
-          cache-to: type=gha,mode=max,scope=omni-api
-          provenance: true
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+          ref: ${{ env.CANDIDATE_SHA }}
+          path: release-candidate
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
 
-      # GitHub-native provenance (Attestations API + registry referrer), so
-      # `gh attestation verify oci://…` works as deploy/README.md documents.
-      # BuildKit's inline `provenance: true` above is NOT visible to `gh`.
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        with:
-          subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
-
-  # Packages the automagik-dev/autopg release tarball as a container image
-  # (that repo publishes no image of its own). The Helm chart's prod overlay
-  # pins ghcr.io/<owner>/autopg:v<AUTOPG_VERSION>; the v<cli-version> /
-  # <branch> / <branch>-<sha> tags ride along so every omni promotion has a
-  # matching autopg tag (contract C1').
-  build-push-autopg:
-    runs-on: ubuntu-latest
-    env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/autopg
-      # autopg release baked into deploy/autopg.Dockerfile. Bump together
-      # with that file's AUTOPG_VERSION/PG_RUNTIME_VERSION defaults.
-      AUTOPG_VERSION: 3.0.7
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Resolve image version
-        id: meta
-        run: |
-          VERSION="$(node -p "require('./packages/cli/package.json').version" 2>/dev/null || echo 0.0.0)"
-          {
-            echo "version=${VERSION}"
-            echo "sha_short=${GITHUB_SHA::12}"
-            echo "ref_name=${GITHUB_REF_NAME}"
-          } >> "$GITHUB_OUTPUT"
-
-      # QEMU is fine here: the Dockerfile is download-only (the fetch stage
-      # runs on the build platform; only apt-get runs emulated).
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: deploy
-          file: deploy/autopg.Dockerfile
-          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
-          push: true
-          build-args: |
-            AUTOPG_VERSION=${{ env.AUTOPG_VERSION }}
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.ref_name }}
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.ref_name }}-${{ steps.meta.outputs.sha_short }}
-            ${{ env.IMAGE }}:v${{ steps.meta.outputs.version }}
-            ${{ env.IMAGE }}:v${{ env.AUTOPG_VERSION }}
-          cache-from: type=gha,scope=autopg
-          cache-to: type=gha,mode=max,scope=autopg
-          provenance: true
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ env.AUTOPG_VERSION }}
-
-      # Same GitHub-native provenance as omni-api above (see that comment).
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        with:
-          subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
-
-  # Gate: secrets cannot be referenced in a job-level `if`, so surface the
-  # KHAL_NPM_TOKEN presence as an output. build-push-ui skips cleanly (keeping
-  # the promotion green) until the token is configured, then self-activates.
-  check-ui-secret:
-    runs-on: ubuntu-latest
-    outputs:
-      has_token: ${{ steps.probe.outputs.has_token }}
-    steps:
-      - id: probe
+      - name: Bind final main tree to the immutable candidate
         env:
-          KHAL_NPM_TOKEN: ${{ secrets.KHAL_NPM_TOKEN }}
-        run: echo "has_token=${KHAL_NPM_TOKEN:+true}" >> "$GITHUB_OUTPUT"
-
-  # Publishes the Omni Admin UI (apps/khal-ui) single-container image: one Bun
-  # process serves the built SPA AND proxies /omni/* to omni-api, injecting the
-  # omni_sk_ key server-side. Tags ride every omni promotion (v<cli-version> /
-  # <branch> / <branch>-<sha>) like autopg, so the chart's
-  # adminUi.image.tag "" → v<appVersion> always resolves.
-  build-push-ui:
-    runs-on: ubuntu-latest
-    needs: check-ui-secret
-    if: needs.check-ui-secret.outputs.has_token == 'true'
-    env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/omni-admin-ui
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: Resolve image version
-        id: meta
+          FINAL_SHA: ${{ github.sha }}
         run: |
-          VERSION="$(node -p "require('./packages/cli/package.json').version" 2>/dev/null || echo 0.0.0)"
-          {
-            echo "version=${VERSION}"
-            echo "sha_short=${GITHUB_SHA::12}"
-            echo "ref_name=${GITHUB_REF_NAME}"
-          } >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          [[ "${GITHUB_REF}" == "refs/heads/main" ]] || {
+            echo "::error::production promotion verification is restricted to main"
+            exit 1
+          }
+          [[ "$(git rev-parse 'HEAD^{commit}')" == "${FINAL_SHA}" ]]
+          git fetch --no-tags origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          [[ "$(git rev-parse 'origin/main^{commit}')" == "${FINAL_SHA}" ]] || {
+            echo "::error::checked-out final SHA is not the authoritative main tip"
+            exit 1
+          }
+          scripts/release/verify-promotion-candidate.sh \
+            --candidate-sha "${CANDIDATE_SHA}" \
+            --final-sha "${FINAL_SHA}" \
+            --version "${CANDIDATE_VERSION}" \
+            --digest "${CANDIDATE_DIGEST}"
 
-      # Assemble the @khal-os registry auth into an .npmrc mounted as a BuildKit
-      # secret (never baked into a layer). Registry mapping matches
-      # apps/khal-ui/.npmrc; the token is the KHAL_NPM_TOKEN repo secret.
-      - name: Write @khal-os npmrc
-        env:
-          KHAL_NPM_TOKEN: ${{ secrets.KHAL_NPM_TOKEN }}
-        run: |
-          {
-            echo "@khal-os:registry=https://git.namastex.io/api/packages/khal/npm/"
-            echo "//git.namastex.io/api/packages/khal/npm/:_authToken=${KHAL_NPM_TOKEN}"
-          } > "${RUNNER_TEMP}/khal.npmrc"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-
-      - name: Set up Buildx
+      - name: Set up Buildx for read-only OCI inspection
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify exact OCI alias, index, and GitHub provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          preflight="${RUNNER_TEMP}/release-preflight.out"
+          GITHUB_OUTPUT="${preflight}" scripts/release/verify-oci-release.sh \
+            --source-dir "${GITHUB_WORKSPACE}/release-candidate" \
+            --ref "refs/tags/v${CANDIDATE_VERSION}" \
+            --expected-version "${CANDIDATE_VERSION}" \
+            --expected-sha "${CANDIDATE_SHA}" \
+            --image "${IMAGE}" \
+            --expected-existing-digest "${CANDIDATE_DIGEST}"
+          grep -qx 'publish_required=false' "${preflight}"
+          grep -qx "existing_digest=${CANDIDATE_DIGEST}" "${preflight}"
 
-      - name: Build and push
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          file: deploy/Dockerfile.admin-ui
-          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
-          push: true
-          secret-files: |
-            npmrc=${{ runner.temp }}/khal.npmrc
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.ref_name }}
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.ref_name }}-${{ steps.meta.outputs.sha_short }}
-            ${{ env.IMAGE }}:v${{ steps.meta.outputs.version }}
-          cache-from: type=gha,scope=omni-admin-ui
-          cache-to: type=gha,mode=max,scope=omni-admin-ui
-          provenance: true
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+          docker buildx imagetools inspect "${IMAGE}@${CANDIDATE_DIGEST}" \
+            > "${RUNNER_TEMP}/image-index.txt"
+          python3 - "${RUNNER_TEMP}/image-index.txt" <<'PY'
+          import sys
 
-      # Same GitHub-native provenance as omni-api above (see that comment).
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+          text = open(sys.argv[1], encoding="utf-8").read()
+          required = (
+              "MediaType: application/vnd.oci.image.index.v1+json",
+              "Platform:    linux/amd64",
+              "Platform:    linux/arm64",
+          )
+          missing = [value for value in required if value not in text]
+          if missing:
+              raise SystemExit(f"verified OCI index is missing: {missing}")
+          PY
+          gh attestation verify "oci://${IMAGE}@${CANDIDATE_DIGEST}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --source-digest "${CANDIDATE_SHA}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-build.yml"
+
+      - name: Install cosign for read-only release verification
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         with:
-          subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
+          cosign-release: 'v2.4.1'
+
+      - name: Verify existing public release without republishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          scripts/release/verify-remote-tag.sh \
+            --remote origin \
+            --version "${CANDIDATE_VERSION}" \
+            --mode exact \
+            --expected-sha "${CANDIDATE_SHA}"
+
+          tag="v${CANDIDATE_VERSION}"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            > "${RUNNER_TEMP}/release.json"
+          python3 - "${RUNNER_TEMP}/release.json" "${tag}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              release = json.load(handle)
+          if release.get("tag_name") != sys.argv[2]:
+              raise SystemExit("public release tag does not match the candidate")
+          if release.get("draft") is not False or release.get("prerelease") is not False:
+              raise SystemExit("candidate release is not public stable")
+          PY
+
+          release_dir="${RUNNER_TEMP}/existing-release"
+          mkdir -p "${release_dir}"
+          gh release download "${tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir "${release_dir}"
+          scripts/release/verify-release-assets.py \
+            --version "${CANDIDATE_VERSION}" \
+            --release-json "${RUNNER_TEMP}/release.json" \
+            --dist "${release_dir}"
+          for tarball in "${release_dir}"/*.tar.gz; do
+            cosign verify-blob \
+              --bundle "${tarball}.bundle" \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml@refs/tags/v${CANDIDATE_VERSION}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "${tarball}"
+            # Offline: the shipped Sigstore bundle must bind this tarball's
+            # digest to the candidate source and the signing workflow.
+            gh attestation verify "${tarball}" \
+              --bundle "${tarball}.provenance.json" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --source-digest "${CANDIDATE_SHA}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml"
+            # Online: the same attestation must be registered in the
+            # GitHub Attestations API under the candidate identity.
+            gh attestation verify "${tarball}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --source-digest "${CANDIDATE_SHA}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml"
+          done
+
+      - name: Verify stable npm state without publishing or moving latest
+        run: |
+          set -euo pipefail
+          published="$(npm view "@automagik/omni@${CANDIDATE_VERSION}" version)"
+          latest="$(npm view @automagik/omni dist-tags --json | jq -r '.latest // empty')"
+          state="$(scripts/release/verify-npm-stable-state.sh \
+            --expected "${CANDIDATE_VERSION}" \
+            --published "${published}" \
+            --latest "${latest}")"
+          [[ "${state}" == "npm_action=none" ]] || {
+            echo "::error::stable npm state is not already exact; read-only promotion refuses repair"
+            exit 1
+          }
+
+      - name: Write read-only promotion receipt
+        run: |
+          {
+            echo "### Verified Omni public-launch candidate"
+            echo "- source: \`${CANDIDATE_SHA}\`"
+            echo "- version: \`${CANDIDATE_VERSION}\`"
+            echo "- OCI digest: \`${CANDIDATE_DIGEST}\`"
+            echo "- final main tree: \`${GITHUB_SHA}\`"
+            echo "- result: immutable artifacts and final image build inputs verified"
+            echo "- mutation boundary: no build, tag, release, alias, repository, or cluster write"
+          } >> "${GITHUB_STEP_SUMMARY}"

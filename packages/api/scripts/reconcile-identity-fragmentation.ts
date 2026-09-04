@@ -57,6 +57,16 @@ const sampleLimit = 10;
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
+/**
+ * A pool handle OR an open transaction. Drizzle's `db.transaction(fn)` hands the
+ * callback a distinct tx handle whose type differs from the pool's, yet both
+ * expose the same query-builder surface these helpers use. Typing the mutation
+ * helpers against this union lets the per-group work run atomically inside a
+ * transaction without duplicating them.
+ */
+type TxHandle = Parameters<Parameters<Database['transaction']>[0]>[0];
+type DbHandle = Database | TxHandle;
+
 interface IdentityRow {
   id: string;
   channel: string;
@@ -90,46 +100,58 @@ function sample(line: string): void {
 // ── Person merge (coalesce fields, oldest survives) ─────────────────────────
 
 /**
- * Merge `sourceId` into `targetId`: coalesce person fields onto the target
- * (never dropping a phone/name/email/avatar the source had and the target
- * lacked), move every FK reference, then delete the source. No-op when equal.
+ * Merge `sourceId` into `targetId`: move every FK reference off the source,
+ * delete it, then coalesce its fields onto the target (never dropping a
+ * phone/name/email/avatar the source had and the target lacked). No-op when
+ * equal.
+ *
+ * ORDER MATTERS. The coalesce write must land AFTER the source row is gone:
+ * `persons.primary_phone` carries a unique index, so setting the target's phone
+ * to the source's value while the source still holds it would trip a transient
+ * unique violation. The whole merge runs in one transaction — a savepoint when
+ * the caller already gave us a transaction handle — so it is atomic whether
+ * invoked standalone (Step 2) or inside a group's transaction (Step 1).
  */
-async function mergePersons(db: Database, sourceId: string, targetId: string, reason: string): Promise<void> {
+async function mergePersons(db: DbHandle, sourceId: string, targetId: string, reason: string): Promise<void> {
   if (sourceId === targetId) return;
 
   const [source] = await db.select().from(persons).where(eq(persons.id, sourceId)).limit(1);
   const [target] = await db.select().from(persons).where(eq(persons.id, targetId)).limit(1);
   if (!source || !target) return;
 
-  // Coalesce: keep the target's value, fall back to the source's.
-  await db
-    .update(persons)
-    .set({
-      displayName: target.displayName ?? source.displayName,
-      primaryPhone: target.primaryPhone ?? source.primaryPhone,
-      primaryEmail: target.primaryEmail ?? source.primaryEmail,
-      avatarUrl: target.avatarUrl ?? source.avatarUrl,
-      updatedAt: new Date(),
-    })
-    .where(eq(persons.id, targetId));
+  await db.transaction(async (tx) => {
+    // Move platform identities, participants, messages, events off the source.
+    await tx
+      .update(platformIdentities)
+      .set({ personId: targetId, linkedBy: 'manual', linkReason: reason, updatedAt: new Date() })
+      .where(eq(platformIdentities.personId, sourceId));
+    await tx
+      .update(chatParticipants)
+      .set({ personId: targetId, updatedAt: new Date() })
+      .where(eq(chatParticipants.personId, sourceId));
+    await tx.update(messages).set({ senderPersonId: targetId }).where(eq(messages.senderPersonId, sourceId));
+    await tx.update(omniEvents).set({ personId: targetId }).where(eq(omniEvents.personId, sourceId));
 
-  // Move platform identities, participants, messages, events off the source.
-  await db
-    .update(platformIdentities)
-    .set({ personId: targetId, linkedBy: 'manual', linkReason: reason, updatedAt: new Date() })
-    .where(eq(platformIdentities.personId, sourceId));
-  await db
-    .update(chatParticipants)
-    .set({ personId: targetId, updatedAt: new Date() })
-    .where(eq(chatParticipants.personId, sourceId));
-  await db.update(messages).set({ senderPersonId: targetId }).where(eq(messages.senderPersonId, sourceId));
-  await db.update(omniEvents).set({ personId: targetId }).where(eq(omniEvents.personId, sourceId));
+    // Delete the source BEFORE writing coalesced values onto the target, so the
+    // unique columns (primary_phone) are never held by two rows at once.
+    await tx.delete(persons).where(eq(persons.id, sourceId));
 
-  await db.delete(persons).where(eq(persons.id, sourceId));
+    // Coalesce: keep the target's value, fall back to the source's.
+    await tx
+      .update(persons)
+      .set({
+        displayName: target.displayName ?? source.displayName,
+        primaryPhone: target.primaryPhone ?? source.primaryPhone,
+        primaryEmail: target.primaryEmail ?? source.primaryEmail,
+        avatarUrl: target.avatarUrl ?? source.avatarUrl,
+        updatedAt: new Date(),
+      })
+      .where(eq(persons.id, targetId));
+  });
 }
 
 /** Re-point an identity's messages/participants/events, then delete it. */
-async function absorbIdentity(db: Database, loserId: string, survivorId: string): Promise<void> {
+async function absorbIdentity(db: DbHandle, loserId: string, survivorId: string): Promise<void> {
   await db
     .update(messages)
     .set({ senderPlatformIdentityId: survivorId })
@@ -143,7 +165,7 @@ async function absorbIdentity(db: Database, loserId: string, survivorId: string)
 }
 
 /** The oldest person id among a set, or undefined when none have persons. */
-async function oldestPersonId(db: Database, personIds: string[]): Promise<string | undefined> {
+async function oldestPersonId(db: DbHandle, personIds: string[]): Promise<string | undefined> {
   const ids = [...new Set(personIds)];
   if (ids.length === 0) return undefined;
   const rows = await db
@@ -174,7 +196,7 @@ function groupByCanonical(rows: IdentityRow[]): Map<string, IdentityRow[]> {
   return groups;
 }
 
-async function reconcileGroup(db: Database, key: string, group: IdentityRow[]): Promise<void> {
+async function reconcileGroup(db: Database, key: string, group: IdentityRow[], applyMode: boolean): Promise<void> {
   const [channel, , canonicalId] = key.split('|');
   // Survivor identity: the one already in canonical form, else the oldest.
   const sorted = [...group].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
@@ -188,38 +210,52 @@ async function reconcileGroup(db: Database, key: string, group: IdentityRow[]): 
   stats.fragmentGroups++;
   sample(`group ${channel}/${canonicalId}: ${group.length} identities → 1 (persons: ${new Set(personIds).size})`);
 
-  if (dryRun) {
+  if (!applyMode) {
     stats.identitiesMerged += group.length - 1;
     if (new Set(personIds).size > 1) stats.personsMerged += new Set(personIds).size - 1;
     return;
   }
 
-  // Merge every other person into the surviving person first.
-  if (survivingPersonId) {
-    for (const pid of new Set(personIds)) {
-      if (pid !== survivingPersonId) {
-        await mergePersons(db, pid, survivingPersonId, `identity fragmentation dedupe: ${channel}/${canonicalId}`);
-        stats.personsMerged++;
+  // ATOMICITY: the whole per-group mutation — every person merge, every identity
+  // absorb, and the survivor's canonicalization — runs in ONE transaction. A
+  // mid-way failure must roll the entire group back: idempotency here depends on
+  // the fragmentation signal (`length > 1 && spellings > 1`), so a partially
+  // applied group (some losers already deleted) would no longer be detected on a
+  // re-run, stranding the survivor half-merged / non-canonical forever.
+  // Stats are tallied locally and committed only after the transaction succeeds,
+  // so a rolled-back group leaves the counters untouched too.
+  let personsMerged = 0;
+  let identitiesMerged = 0;
+  await db.transaction(async (tx) => {
+    // Merge every other person into the surviving person first.
+    if (survivingPersonId) {
+      for (const pid of new Set(personIds)) {
+        if (pid !== survivingPersonId) {
+          await mergePersons(tx, pid, survivingPersonId, `identity fragmentation dedupe: ${channel}/${canonicalId}`);
+          personsMerged++;
+        }
       }
     }
-  }
 
-  // Absorb every non-survivor identity into the survivor.
-  for (const loser of group) {
-    if (loser.id !== survivor.id) {
-      await absorbIdentity(db, loser.id, survivor.id);
-      stats.identitiesMerged++;
+    // Absorb every non-survivor identity into the survivor.
+    for (const loser of group) {
+      if (loser.id !== survivor.id) {
+        await absorbIdentity(tx, loser.id, survivor.id);
+        identitiesMerged++;
+      }
     }
-  }
 
-  // Canonicalize the survivor's handle + person link.
-  await db
-    .update(platformIdentities)
-    .set({ platformUserId: canonicalId, personId: survivingPersonId ?? survivor.personId, updatedAt: new Date() })
-    .where(eq(platformIdentities.id, survivor.id));
+    // Canonicalize the survivor's handle + person link.
+    await tx
+      .update(platformIdentities)
+      .set({ platformUserId: canonicalId, personId: survivingPersonId ?? survivor.personId, updatedAt: new Date() })
+      .where(eq(platformIdentities.id, survivor.id));
+  });
+  stats.personsMerged += personsMerged;
+  stats.identitiesMerged += identitiesMerged;
 }
 
-async function dedupeFragmentedIdentities(db: Database): Promise<void> {
+async function dedupeFragmentedIdentities(db: Database, applyMode: boolean): Promise<void> {
   process.stdout.write('Step 1: dedupe fragmented identities\n');
   process.stdout.write(`${'-'.repeat(40)}\n`);
 
@@ -245,7 +281,7 @@ async function dedupeFragmentedIdentities(db: Database): Promise<void> {
     return;
   }
   process.stdout.write(`  Found ${fragmented.length} fragmented group(s).\n`);
-  for (const [key, group] of fragmented) await reconcileGroup(db, key, group);
+  for (const [key, group] of fragmented) await reconcileGroup(db, key, group, applyMode);
   process.stdout.write('\n');
 }
 
@@ -257,7 +293,7 @@ function phoneFromJid(phoneJid: string): string | undefined {
   return /^\d{7,15}$/.test(digits) ? `+${digits}` : undefined;
 }
 
-async function backfillPhonelessPersons(db: Database): Promise<void> {
+async function backfillPhonelessPersons(db: Database, applyMode: boolean): Promise<void> {
   process.stdout.write('Step 2: backfill phone-less persons from chat_id_mappings\n');
   process.stdout.write(`${'-'.repeat(40)}\n`);
 
@@ -296,13 +332,19 @@ async function backfillPhonelessPersons(db: Database): Promise<void> {
     const [existingPhonePerson] = await db.select().from(persons).where(eq(persons.primaryPhone, phone)).limit(1);
 
     if (existingPhonePerson && existingPhonePerson.id !== person.id) {
-      sample(`backfill: person ${person.id} (@lid) merges into phone-person ${existingPhonePerson.id} (${phone})`);
+      // Oldest survives — same rule as Step 1. Merge the YOUNGER of the two into
+      // the OLDER, rather than always keeping the phone-person: keeping the
+      // phone-person regardless of age would delete an older @lid person and
+      // rewrite its createdAt/id, contradicting Step 1's oldest-survives choice.
+      const survivorId = (await oldestPersonId(db, [person.id, existingPhonePerson.id])) ?? existingPhonePerson.id;
+      const loserId = survivorId === person.id ? existingPhonePerson.id : person.id;
+      sample(`backfill: person ${loserId} merges into older person ${survivorId} (${phone})`);
       stats.phonelessMergedIntoPhonePerson++;
-      if (apply) await mergePersons(db, person.id, existingPhonePerson.id, `lid phone backfill merge ${phone}`);
+      if (applyMode) await mergePersons(db, loserId, survivorId, `lid phone backfill merge ${phone}`);
     } else {
       sample(`backfill: set person ${person.id}.primary_phone = ${phone}`);
       stats.phonesBackfilled++;
-      if (apply)
+      if (applyMode)
         await db.update(persons).set({ primaryPhone: phone, updatedAt: new Date() }).where(eq(persons.id, person.id));
     }
   }
@@ -337,10 +379,23 @@ function printReport(): void {
 
 // ── Main ──────────────────────────────────────────────────────────────────
 
-/** Exported for the dry-run test; runs both passes against the given handle. */
-export async function reconcile(db: Database): Promise<Stats> {
-  await dedupeFragmentedIdentities(db);
-  await backfillPhonelessPersons(db);
+/** Options for {@link reconcile}. `apply` defaults to the process-level flag. */
+export interface ReconcileOptions {
+  /** When true, perform writes; when false (default outside `--apply`), dry-run. */
+  apply?: boolean;
+}
+
+/**
+ * Exported for tests; runs both passes against the given handle.
+ *
+ * `apply` defaults to the module-level flag derived from `--apply`, so `main()`
+ * behaves exactly as before. Tests pass `{ apply: true }` explicitly to exercise
+ * the write path against a disposable database.
+ */
+export async function reconcile(db: Database, opts: ReconcileOptions = {}): Promise<Stats> {
+  const applyMode = opts.apply ?? apply;
+  await dedupeFragmentedIdentities(db, applyMode);
+  await backfillPhonelessPersons(db, applyMode);
   return stats;
 }
 
