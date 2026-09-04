@@ -186,3 +186,62 @@ describe('emoji the platform would otherwise eat', () => {
     expect(encodeAscEmoji('opção 1, item #2')).toBe('opção 1, item #2');
   });
 });
+
+describe('the turn window stays bounded', () => {
+  /** The plugin's private per-instance turn map. */
+  const inFlightOf = () =>
+    (
+      plugin as unknown as { ascFlowInstances: Map<string, { inFlight: Map<string, { at: number }> }> }
+    ).ascFlowInstances.get(instanceId)?.inFlight;
+
+  // The per-key TTL is only consulted when that key is touched again, so an
+  // atendimento abandoned mid-turn is never freed. At 80k atendimentos/month
+  // that is the whole leak: it only came down on a restart.
+  it('frees turns the flow abandoned, on the next inbound', async () => {
+    await boot();
+    for (let i = 0; i < 50; i++) await openTurn(plugin, String(1000 + i), `msg ${i}`);
+    expect(inFlightOf()?.size).toBe(50);
+
+    // Age them past the TTL the way an abandoned atendimento does, and move the
+    // sweep clock back so the next inbound is past the throttle interval.
+    for (const entry of inFlightOf()?.values() ?? []) entry.at -= 120_000;
+    const state = (
+      plugin as unknown as { ascFlowInstances: Map<string, { lastSweepAt: number }> }
+    ).ascFlowInstances.get(instanceId);
+    if (state) state.lastSweepAt -= 120_000;
+
+    await openTurn(plugin, '2000', 'uma nova');
+
+    // Only the live one survives — the 50 abandoned ones are gone.
+    expect(inFlightOf()?.size).toBe(1);
+  });
+
+  it('does not sweep a turn that is still in flight', async () => {
+    await boot();
+    await openTurn(plugin, '1001', 'primeira');
+    await openTurn(plugin, '1002', 'segunda');
+
+    expect(inFlightOf()?.size).toBe(2);
+  });
+});
+
+describe('reconnect does not strand the dedupe cache', () => {
+  it('disposes the previous cache when connect runs again', async () => {
+    await boot();
+    const before = (
+      plugin as unknown as { ascFlowInstances: Map<string, { dedupeCache: { dispose: () => void } }> }
+    ).ascFlowInstances.get(instanceId)?.dedupeCache;
+    let disposed = false;
+    if (before) {
+      const original = before.dispose.bind(before);
+      before.dispose = () => {
+        disposed = true;
+        original();
+      };
+    }
+
+    await connectPlugin(plugin);
+
+    expect(disposed).toBe(true);
+  });
+});

@@ -117,6 +117,8 @@ interface AscFlowInstanceState {
   dedupeCache: DedupeCache;
   /** `cod_atendimento` → the turn being answered. See `isRedeliveryOfTurnInFlight`. */
   inFlight: Map<string, AscFlowTurnState>;
+  /** When `sweepInFlight` last ran, so it runs at most once per interval. */
+  lastSweepAt: number;
 }
 
 /**
@@ -127,6 +129,33 @@ interface AscFlowInstanceState {
  * same menu.
  */
 const IN_FLIGHT_TTL_MS = 60_000;
+
+/**
+ * How often `inFlight` is swept for entries past the TTL.
+ *
+ * The TTL alone does NOT bound the map: it is only consulted when that exact
+ * `cod_atendimento` is touched again, so an atendimento abandoned mid-turn —
+ * the beneficiary walks away, the flow stops polling — leaves an entry that
+ * nothing ever reads and nothing ever frees. At the Hapvida volume (80k
+ * atendimentos/month ÷ 30 days ÷ 24h ≈ 111/hour) the LIVE set is ~2 entries
+ * (111/hour over a 60s window), so everything above that is leak, and it only
+ * came down on a restart.
+ *
+ * Sweeping bounds the map to what ARRIVES in one interval rather than to the
+ * process lifetime. It is O(n) over a map the sweep itself keeps small, and it
+ * rides the inbound path instead of a timer — one less handle to leak.
+ */
+const IN_FLIGHT_SWEEP_MS = 60_000;
+
+/**
+ * Hard ceiling on `inFlight`, independent of the sweep.
+ *
+ * The sweep bounds the map by arrival RATE; this bounds it by count, for a
+ * burst that outruns one interval. 5.000 is ~45× the measured hourly arrival
+ * rate — high enough never to evict a live turn, low enough to cap the channel
+ * at a few MB of turn state no matter what the platform does.
+ */
+const IN_FLIGHT_MAX_ENTRIES = 5_000;
 
 /**
  * Markdown → WhatsApp syntax, honoring the instance's `messageFormatMode`
@@ -234,11 +263,18 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       webhookVerifyToken,
     };
 
+    // A reconnect (instance-monitor restart, credential change) calls connect on
+    // an instance that already has state. Overwriting it stranded the previous
+    // dedupe cache's cleanup interval, which then ran for the life of the
+    // process holding its whole map — one leaked timer per restart.
+    this.ascFlowInstances.get(instanceId)?.dedupeCache.dispose();
+
     this.ascFlowInstances.set(instanceId, {
       client,
       config: ascFlowConfig,
       dedupeCache: createInboundDedupeCache(),
       inFlight: new Map(),
+      lastSweepAt: Date.now(),
     });
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -662,7 +698,11 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
     // Open the in-flight window BEFORE anything awaits: the flow re-POSTs every
     // ~2s while it waits, and those re-POSTs must find the mark already set.
-    this.ascFlowInstances.get(instanceId)?.inFlight.set(turn.codAtendimento, { text: turn.text, at: Date.now() });
+    const inboundState = this.ascFlowInstances.get(instanceId);
+    if (inboundState) {
+      this.sweepInFlight(instanceId, inboundState);
+      inboundState.inFlight.set(turn.codAtendimento, { text: turn.text, at: Date.now() });
+    }
 
     // Raise "digitando…" as soon as the turn lands: the agent run is the slow
     // part, and the beneficiary is already waiting.
@@ -732,6 +772,55 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
   getLogger(): Logger {
     return this.logger;
+  }
+
+  /**
+   * Drop turn windows nothing will ever collect, so `inFlight` stays bounded by
+   * arrival rate rather than by process lifetime.
+   *
+   * An entry is freed by the poll that takes its answer. When the flow stops
+   * polling — the beneficiary walked away, the atendimento was closed on the
+   * platform side — nothing ever touches that key again and its per-key TTL is
+   * never consulted. Over a month of Hapvida volume that is the whole leak.
+   *
+   * Runs on the inbound path (throttled), not on a timer: a timer is a handle
+   * to leak on every reconnect, and there is nothing to sweep while no turns
+   * are arriving anyway.
+   */
+  private sweepInFlight(instanceId: string, state: AscFlowInstanceState): void {
+    const now = Date.now();
+    if (now - state.lastSweepAt < IN_FLIGHT_SWEEP_MS && state.inFlight.size < IN_FLIGHT_MAX_ENTRIES) return;
+    state.lastSweepAt = now;
+
+    let expired = 0;
+    for (const [cod, entry] of state.inFlight) {
+      if (now - entry.at > IN_FLIGHT_TTL_MS) {
+        state.inFlight.delete(cod);
+        expired++;
+      }
+    }
+
+    // A burst that outran one sweep interval: evict oldest-first until the map
+    // is back under the ceiling. Only reachable when live turns really are
+    // arriving faster than they resolve, and dropping the oldest is the same
+    // outcome its TTL was about to produce.
+    let evicted = 0;
+    if (state.inFlight.size > IN_FLIGHT_MAX_ENTRIES) {
+      const oldestFirst = [...state.inFlight.entries()].sort((a, b) => a[1].at - b[1].at);
+      for (const [cod] of oldestFirst.slice(0, state.inFlight.size - IN_FLIGHT_MAX_ENTRIES)) {
+        state.inFlight.delete(cod);
+        evicted++;
+      }
+    }
+
+    if (expired || evicted) {
+      this.logger.debug('[asc-flow] swept the turn window', {
+        instanceId,
+        expired,
+        evicted,
+        remaining: state.inFlight.size,
+      });
+    }
   }
 
   /**
