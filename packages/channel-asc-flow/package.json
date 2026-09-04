@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-asc-flow",
-  "version": "2.260904.1",
+  "version": "2.260904.2",
   "description": "ASC platform Flow channel plugin for Omni — inbound from the flow's api_rest node, outbound through the ASC platform REST API (/rest/v2)",
   "type": "module",
   "main": "src/index.ts",
