@@ -23,6 +23,8 @@ or legacy overlays.
 | Realm | Cluster | Values file | Images | Database | Media | Who operates it |
 |---|---|---|---|---|---|---|
 | **dev / self-host** | Local or self-managed k8s (OrbStack, k3d, kind, …) | [`values-dev.yaml`](helm/omni/values-dev.yaml) | Locally built `omni-api:dev` + `autopg:dev` (`pullPolicy: Never`) or an explicitly selected public version | Bundled **autopg** subchart (Postgres 18, in-cluster) | Bundled **MinIO** (in-cluster S3) | The self-hoster |
+| **HML** (`hml.omni.khal.ai`) | Private arm64 cluster | Private GitOps repo | Follows `dev` via `ghcr.io/automagik-dev/omni-api:dev-<sha12>` (built by `.github/workflows/image-dev.yml`: one image per merged PR to `dev`, called by `version.yml` with the version bump commit; direct commits never build; a manual dispatch rebuilds the `dev` head), pinned by digest in the private GitOps repo (`git.namastex.io/khal/deploy`) | Private | Private | The private GitOps repo (Argo CD) |
+| **prod** | Private arm64 cluster | Private GitOps repo | Pinned to the verified candidate digest by the private GitOps repo; the public repo only declares the candidate (`image-publish.yml`, `.well-known/latest.json`) | Private | Private | The private GitOps repo (Argo CD) |
 
 - **One replica per installation** — a WhatsApp credential maps to a single live
   Baileys socket; see the "replicas + scaling" notes in

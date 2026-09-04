@@ -117,6 +117,25 @@ describe('sendHandoff', () => {
     });
   });
 
+  it('forwards customerFields only when provided', async () => {
+    const client = makeClient();
+    const spy = spyOn(client, 'send').mockResolvedValue({ status: 'ok' });
+
+    await sendHandoff(client, '5511111111111', 'Transferring', undefined, undefined, { queue: 'X' });
+    expect(spy.mock.calls[0]?.[1]).not.toHaveProperty('customer_fields');
+
+    await sendHandoff(client, '5511111111111', 'Transferring', undefined, undefined, { queue: 'X' }, [
+      { apiKey: 'Queue', value: 'X' },
+    ]);
+    expect(spy.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        type: 'HANDOFF',
+        handoff_fields: { queue: 'X' },
+        customer_fields: [{ apiKey: 'Queue', value: 'X' }],
+      }),
+    );
+  });
+
   it('includes dados_lead and motivo_handoff when provided', async () => {
     const client = makeClient();
     const spy = spyOn(client, 'send').mockResolvedValueOnce({ status: 'ok' });

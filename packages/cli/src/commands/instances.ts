@@ -38,6 +38,8 @@ const VALID_CHANNELS: Channel[] = [
   'a2a',
   'gupshup',
   'twilio-whatsapp',
+  'hermes',
+  'asc-flow',
 ];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 
@@ -135,6 +137,9 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'gupshupCallbackUrl', opts.gupshupCallbackUrl);
   setVal(body, 'gupshupAuthToken', opts.gupshupAuthToken);
   setVal(body, 'gupshupEventId', opts.gupshupEventId);
+  if (typeof opts.gupshupHandoffOptions === 'string' && opts.gupshupHandoffOptions.length > 0) {
+    body.gupshupHandoffOptions = JSON.parse(opts.gupshupHandoffOptions);
+  }
   setVal(body, 'webhookVerifyToken', opts.gupshupWebhookVerifyToken);
   setVal(body, 'twilioAccountSid', opts.twilioAccountSid);
   setVal(body, 'twilioAuthToken', opts.twilioAuthToken);
@@ -386,6 +391,10 @@ export function createInstancesCommand(): Command {
     .option('--gupshup-callback-url <url>', 'Gupshup Custom Integration callback URL')
     .option('--gupshup-auth-token <token>', 'Gupshup Custom Integration auth token')
     .option('--gupshup-event-id <id>', 'Gupshup event ID (default: nx_omni_agent_reply)')
+    .option(
+      '--gupshup-handoff-options <json>',
+      'Gupshup HANDOFF routing defaults and customerFields template (JSON object)',
+    )
     .option('--gupshup-webhook-verify-token <token>', 'Gupshup webhook verify token')
     // Twilio WhatsApp
     .option('--twilio-account-sid <sid>', 'Twilio Account SID')
@@ -1048,6 +1057,11 @@ export function createInstancesCommand(): Command {
     .option('--twilio-webhook-url <url>', 'Public Twilio webhook URL for signature validation (use "null" to clear)')
     .option('--twilio-validate-signature', 'Validate X-Twilio-Signature on webhooks')
     .option('--no-twilio-validate-signature', 'Disable X-Twilio-Signature validation')
+    // Gupshup
+    .option(
+      '--gupshup-handoff-options <json>',
+      'Gupshup HANDOFF routing defaults and customerFields template (JSON object, use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
+    )
     // Trigger events
     .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')
     // WhatsApp profile name (separate endpoint)

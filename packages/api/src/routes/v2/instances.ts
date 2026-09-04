@@ -5,7 +5,7 @@
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
-import type { SyncJobType } from '@omni/db';
+import type { GupshupHandoffOptions, SyncJobType } from '@omni/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
@@ -15,6 +15,7 @@ import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-busin
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
 import { getQrCode } from '../../plugins/qr-store';
+import { GupshupHandoffOptionsSchema } from '../../schemas/openapi/instances';
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import { AgentReplayService } from '../../services/agent-replay';
@@ -174,6 +175,10 @@ const createInstanceSchema = z.object({
   gupshupCallbackUrl: z.string().optional().nullable().describe('Gupshup Custom Integration callback URL'),
   gupshupAuthToken: z.string().optional().nullable().describe('Gupshup Custom Integration auth token'),
   gupshupEventId: z.string().optional().nullable().describe('Gupshup event ID (default: nx_omni_agent_reply)'),
+  // One definition with the OpenAPI document (schemas/openapi/instances.ts).
+  gupshupHandoffOptions: GupshupHandoffOptionsSchema.optional()
+    .nullable()
+    .describe('Gupshup HANDOFF routing defaults and customerFields template'),
   webhookVerifyToken: z.string().optional().nullable().describe('Gupshup webhook verify token'),
   twilioAccountSid: z.string().optional().nullable().describe('Twilio Account SID'),
   twilioAuthToken: z.string().optional().nullable().describe('Twilio Auth Token'),
@@ -191,6 +196,26 @@ const createInstanceSchema = z.object({
   hermesPassword: z.string().optional().nullable().describe('Hermes account password'),
   hermesMediaId: z.string().optional().nullable().describe('Hermes line UUID (media_id) — required on every send'),
   hermesTemplateNamespace: z.string().optional().nullable().describe('Meta template namespace for HSM sends'),
+  ascFlowBaseUrl: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('ASC platform base URL (default https://sac-notredame.ascbrazil.com.br)'),
+  ascFlowLogin: z.string().optional().nullable().describe('ASC platform /authuser login'),
+  ascFlowChave: z.string().optional().nullable().describe('ASC platform /authuser chave (secret)'),
+  ascFlowHandoffMode: z
+    .enum(['flow', 'service'])
+    .optional()
+    .nullable()
+    .describe(
+      "Handoff destination — EXCLUSIVE. 'flow' (default): no /transferirHumano, the poll body routes to the flow's Genesys node. 'service': /transferirHumano parks the atendimento in the ASC's own queue and the flow stops polling.",
+    ),
+  ascFlowHandoffServico: z
+    .number()
+    .int()
+    .optional()
+    .nullable()
+    .describe('cod_servico handed to /transferirHumano (the handoff queue) — service mode only'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
     .default('on')
@@ -297,6 +322,7 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   gupshupCallbackUrl: z.string().nullable().optional(),
   gupshupAuthToken: z.string().nullable().optional(),
   gupshupEventId: z.string().nullable().optional(),
+  gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable().optional(),
   webhookVerifyToken: z.string().nullable().optional(),
   twilioAccountSid: z.string().nullable().optional(),
   twilioAuthToken: z.string().nullable().optional(),
@@ -438,6 +464,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'webhookVerifyToken',
   'twilioAuthToken',
   'hermesPassword',
+  'ascFlowChave',
 ] as const;
 
 /** Strip secret tokens from an instance before returning it in API responses */
@@ -533,6 +560,7 @@ type InstanceConnectionOptionsInput = {
   gupshupCallbackUrl?: string | null;
   gupshupAuthToken?: string | null;
   gupshupEventId?: string | null;
+  gupshupHandoffOptions?: GupshupHandoffOptions | null;
   webhookVerifyToken?: string | null;
   twilioAccountSid?: string | null;
   twilioAuthToken?: string | null;
@@ -554,6 +582,11 @@ type InstanceConnectionOptionsInput = {
   metaApiVersion?: string | null;
   metaDisplayPhoneNumber?: string | null;
   metaConnectionMethod?: string | null;
+  ascFlowBaseUrl?: string | null;
+  ascFlowLogin?: string | null;
+  ascFlowChave?: string | null;
+  ascFlowHandoffMode?: 'flow' | 'service' | null;
+  ascFlowHandoffServico?: number | null;
 };
 
 function applyTelegramConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
@@ -574,10 +607,17 @@ function applySlackConnectionOptions(options: Record<string, unknown>, input: In
   if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
 }
 
-function applyGupshupConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
+function applyGupshupConnectionOptions(
+  options: Record<string, unknown>,
+  input: Pick<
+    InstanceConnectionOptionsInput,
+    'gupshupCallbackUrl' | 'gupshupAuthToken' | 'gupshupEventId' | 'gupshupHandoffOptions' | 'webhookVerifyToken'
+  >,
+): void {
   if (input.gupshupCallbackUrl) options.gupshupCallbackUrl = input.gupshupCallbackUrl;
   if (input.gupshupAuthToken) options.gupshupAuthToken = input.gupshupAuthToken;
   if (input.gupshupEventId) options.gupshupEventId = input.gupshupEventId;
+  if (input.gupshupHandoffOptions) options.gupshupHandoffOptions = input.gupshupHandoffOptions;
   if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
 }
 
@@ -613,6 +653,25 @@ function applyHermesConnectionOptions(
   if (input.hermesTemplateNamespace) options.hermesTemplateNamespace = input.hermesTemplateNamespace;
 }
 
+function applyAscFlowConnectionOptions(
+  options: Record<string, unknown>,
+  input: {
+    ascFlowBaseUrl?: string | null;
+    ascFlowLogin?: string | null;
+    ascFlowChave?: string | null;
+    ascFlowHandoffMode?: 'flow' | 'service' | null;
+    ascFlowHandoffServico?: number | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (input.ascFlowBaseUrl) options.ascFlowBaseUrl = input.ascFlowBaseUrl;
+  if (input.ascFlowLogin) options.ascFlowLogin = input.ascFlowLogin;
+  if (input.ascFlowChave) options.ascFlowChave = input.ascFlowChave;
+  if (input.ascFlowHandoffMode) options.ascFlowHandoffMode = input.ascFlowHandoffMode;
+  if (input.ascFlowHandoffServico != null) options.ascFlowHandoffServico = input.ascFlowHandoffServico;
+  if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
+}
+
 function applyChannelSpecificConnectionOptions(
   options: Record<string, unknown>,
   input: InstanceConnectionOptionsInput,
@@ -635,6 +694,9 @@ function applyChannelSpecificConnectionOptions(
       return;
     case 'whatsapp-business':
       applyWhatsAppBusinessConnectionOptions(options, input);
+      return;
+    case 'asc-flow':
+      applyAscFlowConnectionOptions(options, input);
       return;
   }
 }
@@ -861,6 +923,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
     gupshupAuthToken: instance.gupshupAuthToken,
     gupshupEventId: instance.gupshupEventId,
+    gupshupHandoffOptions: instance.gupshupHandoffOptions,
     webhookVerifyToken: instance.webhookVerifyToken,
     twilioAccountSid: instance.twilioAccountSid,
     twilioAuthToken: instance.twilioAuthToken,
@@ -877,6 +940,11 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     // No meta* threading here: createInstanceSchema carries no Meta fields, so
     // a whatsapp-business row is never credentialed at create — credentials
     // arrive via the whatsapp-cloud connect/OAuth route.
+    ascFlowBaseUrl: instance.ascFlowBaseUrl,
+    ascFlowLogin: instance.ascFlowLogin,
+    ascFlowChave: instance.ascFlowChave,
+    ascFlowHandoffMode: instance.ascFlowHandoffMode,
+    ascFlowHandoffServico: instance.ascFlowHandoffServico,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -1318,6 +1386,16 @@ const connectInstanceSchema = z.object({
   hermesPassword: z.string().optional().describe('Hermes account password'),
   hermesMediaId: z.string().optional().describe('Hermes line UUID (media_id)'),
   hermesTemplateNamespace: z.string().optional().describe('Meta template namespace for HSM sends'),
+  ascFlowBaseUrl: z.string().optional().describe('ASC platform base URL'),
+  ascFlowLogin: z.string().optional().describe('ASC platform /authuser login'),
+  ascFlowChave: z.string().optional().describe('ASC platform /authuser chave (secret)'),
+  ascFlowHandoffMode: z
+    .enum(['flow', 'service'])
+    .optional()
+    .describe(
+      "Handoff destination: 'flow' (default, poll body → Genesys node) or 'service' (/transferirHumano → ASC queue)",
+    ),
+  ascFlowHandoffServico: z.number().int().optional().describe('cod_servico handed to /transferirHumano (service mode)'),
   whatsapp: z
     .object({
       syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
@@ -1328,6 +1406,26 @@ const connectInstanceSchema = z.object({
 
 type ConnectInstanceBody = z.infer<typeof connectInstanceSchema>;
 type InstanceRecord = Awaited<ReturnType<Services['instances']['getById']>>;
+
+/** asc-flow credentials, body-over-persisted. Extracted to keep the callers' complexity in budget. */
+function mergeAscFlowFields(
+  instance: Pick<
+    InstanceRecord,
+    'ascFlowBaseUrl' | 'ascFlowLogin' | 'ascFlowChave' | 'ascFlowHandoffMode' | 'ascFlowHandoffServico'
+  >,
+  body: Pick<
+    ConnectInstanceBody,
+    'ascFlowBaseUrl' | 'ascFlowLogin' | 'ascFlowChave' | 'ascFlowHandoffMode' | 'ascFlowHandoffServico'
+  >,
+) {
+  return {
+    ascFlowBaseUrl: body.ascFlowBaseUrl ?? instance.ascFlowBaseUrl,
+    ascFlowLogin: body.ascFlowLogin ?? instance.ascFlowLogin,
+    ascFlowChave: body.ascFlowChave ?? instance.ascFlowChave,
+    ascFlowHandoffMode: body.ascFlowHandoffMode ?? instance.ascFlowHandoffMode,
+    ascFlowHandoffServico: body.ascFlowHandoffServico ?? instance.ascFlowHandoffServico,
+  };
+}
 
 function buildConnectConnectionOptions(
   instance: InstanceRecord,
@@ -1349,6 +1447,7 @@ function buildConnectConnectionOptions(
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
     gupshupAuthToken: instance.gupshupAuthToken,
     gupshupEventId: instance.gupshupEventId,
+    gupshupHandoffOptions: instance.gupshupHandoffOptions,
     webhookVerifyToken: instance.webhookVerifyToken,
     twilioAccountSid: body.twilioAccountSid ?? instance.twilioAccountSid,
     twilioAuthToken: body.twilioAuthToken ?? body.token ?? instance.twilioAuthToken,
@@ -1370,6 +1469,7 @@ function buildConnectConnectionOptions(
     metaApiVersion: instance.metaApiVersion,
     metaDisplayPhoneNumber: instance.metaDisplayPhoneNumber,
     metaConnectionMethod: instance.metaConnectionMethod,
+    ...mergeAscFlowFields(instance, body),
   });
 }
 
@@ -1424,6 +1524,10 @@ function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInsta
       hermesMediaId: body.hermesMediaId ?? instance.hermesMediaId,
       hermesTemplateNamespace: body.hermesTemplateNamespace ?? instance.hermesTemplateNamespace,
     };
+  }
+
+  if (instance.channel === 'asc-flow') {
+    return { ...updates, ...mergeAscFlowFields(instance, body) };
   }
 
   return updates;
@@ -1580,10 +1684,19 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     if (instance.channel === 'hermes') {
       applyHermesConnectionOptions(restartOptions, instance);
     }
+    if (instance.channel === 'gupshup') {
+      // Same failure mode as #894: the plugin's connect() requires the persisted
+      // callback URL and auth token (and validates the handoff options there),
+      // so a restart without this branch left the instance disconnected.
+      applyGupshupConnectionOptions(restartOptions, instance);
+    }
     if (instance.channel === 'whatsapp-business') {
       // Persisted Meta credentials — without them plugin.connect() throws
       // "metaAccessToken is required" and the restart bricks the instance (#894).
       applyWhatsAppBusinessConnectionOptions(restartOptions, instance);
+    }
+    if (instance.channel === 'asc-flow') {
+      applyAscFlowConnectionOptions(restartOptions, instance);
     }
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {

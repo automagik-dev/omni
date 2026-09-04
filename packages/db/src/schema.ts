@@ -45,6 +45,7 @@ export const channelTypes = [
   'a2a',
   'gupshup',
   'hermes',
+  'asc-flow',
   'twilio-whatsapp',
   'internal',
 ] as const;
@@ -91,6 +92,20 @@ export interface AgentReplyFilter {
     /** Custom patterns for name matching */
     namePatterns?: string[];
   };
+}
+
+/**
+ * Per-instance Gupshup HANDOFF options: routing defaults applied under the
+ * emitter's fields, and the Custom Integration `customerFields` template.
+ * Validated by the channel plugin on connect (packages/channel-gupshup/src/handoff-options.ts).
+ */
+export interface GupshupHandoffOptions {
+  /** Fields merged under every HANDOFF that lacks them. */
+  defaultFields?: Record<string, string>;
+  /** First rule whose prefix matches the destination phone (digits only) overrides `defaultFields`. */
+  fieldsByPhonePrefix?: Array<{ prefixes: string[]; fields: Record<string, string> }>;
+  /** Ordered template; each entry is a literal (`value`) or a reference to a handoff field (`from`). */
+  customerFields?: Array<{ apiKey: string; value?: string; from?: string }>;
 }
 
 /**
@@ -741,6 +756,8 @@ export const instances = pgTable(
     gupshupAuthToken: text('gupshup_auth_token'),
     gupshupEventId: varchar('gupshup_event_id', { length: 255 }),
     webhookVerifyToken: text('webhook_verify_token'),
+    /** HANDOFF routing defaults + customerFields template. Not a credential. */
+    gupshupHandoffOptions: jsonb('gupshup_handoff_options').$type<GupshupHandoffOptions>(),
 
     // ---- Twilio WhatsApp Configuration ----
     twilioAccountSid: varchar('twilio_account_sid', { length: 34 }),
@@ -781,6 +798,29 @@ export const instances = pgTable(
     hermesMediaId: varchar('hermes_media_id', { length: 64 }),
     /** Meta template namespace required by Hermes template sends. */
     hermesTemplateNamespace: varchar('hermes_template_namespace', { length: 128 }),
+
+    // ---- ASC platform Flow Configuration ----
+    // Per-instance credentials for the ASC platform REST API (/rest/v2), the
+    // Flow integration model. Distinct from the `asc` channel (API Gateway).
+    // ascFlowChave is stored plain text for parity with the other channel
+    // credentials above — same cross-channel encryption-at-rest tech debt.
+    // The optional webhook verify token reuses the shared
+    // webhook_verify_token column above (Gupshup precedent).
+    /** Platform base URL — null means the tenant default. */
+    ascFlowBaseUrl: text('asc_flow_base_url'),
+    /** `/authuser` login. */
+    ascFlowLogin: text('asc_flow_login'),
+    /** `/authuser` chave — secret, redacted from API responses. */
+    ascFlowChave: text('asc_flow_chave'),
+    /**
+     * Which of the two EXCLUSIVE handoff destinations this instance uses:
+     * `'flow'` (default when null — the poll body routes to the flow's Genesys
+     * node) or `'service'` (`/transferirHumano`, the ASC's own queue, which
+     * stops the flow polling). See packages/channel-asc-flow/README.md.
+     */
+    ascFlowHandoffMode: text('asc_flow_handoff_mode').$type<'flow' | 'service'>(),
+    /** `cod_servico` handed to `/transferirHumano` — used only in `service` mode. */
+    ascFlowHandoffServico: integer('asc_flow_handoff_servico'),
 
     // ---- Agent Reference ----
     /** FK to agents table (phase 3: replaces legacy agentProviderId + agentId varchar). */

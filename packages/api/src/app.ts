@@ -295,6 +295,27 @@ export function createApp(
     return plugin.handleWebhook(c.req.raw);
   });
 
+  // Public ASC platform Flow webhook endpoint — auth-exempt.
+  // The flow's `api_rest` node calls this with no credential; the platform
+  // documents no signature mechanism. Authenticity rests on the per-instance
+  // path (unguessable instance UUID, the Gupshup precedent) plus an optional
+  // verify token the handler compares when configured on the instance.
+  // Must be mounted before protectedApp so ASC's servers can reach it.
+  app.post('/api/v2/channels/asc-flow/:instanceId/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('asc-flow');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'ASC Flow plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Public Hermes (Mutant WhatsApp gateway) webhook endpoint — auth-exempt.
   // Hermes has no signature mechanism: authenticity rests on the per-instance
   // path (unguessable instance UUID) plus the handler's cross-check of the

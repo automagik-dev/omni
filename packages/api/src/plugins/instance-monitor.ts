@@ -38,7 +38,7 @@
  */
 
 import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
-import type { Database } from '@omni/db';
+import type { Database, GupshupHandoffOptions } from '@omni/db';
 import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 
@@ -181,6 +181,7 @@ function buildInstanceConnectOptions(instance: {
   gupshupCallbackUrl?: string | null;
   gupshupAuthToken?: string | null;
   gupshupEventId?: string | null;
+  gupshupHandoffOptions?: GupshupHandoffOptions | null;
   webhookVerifyToken?: string | null;
   twilioAccountSid?: string | null;
   twilioAuthToken?: string | null;
@@ -202,6 +203,11 @@ function buildInstanceConnectOptions(instance: {
   hermesPassword?: string | null;
   hermesMediaId?: string | null;
   hermesTemplateNamespace?: string | null;
+  ascFlowBaseUrl?: string | null;
+  ascFlowLogin?: string | null;
+  ascFlowChave?: string | null;
+  ascFlowHandoffMode?: string | null;
+  ascFlowHandoffServico?: number | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
@@ -225,7 +231,35 @@ function buildInstanceConnectOptions(instance: {
   if (instance.channel === 'hermes') {
     applyHermesOptions(options, instance);
   }
+  if (instance.channel === 'asc-flow') {
+    applyAscFlowOptions(options, instance);
+  }
   return options;
+}
+
+/**
+ * asc-flow reconnect credentials — the plugin's `connect()` reads these from
+ * `config.options` (same keys as `config.credentials` in the manual connect
+ * route). Persisted on `instances` by the create/connect/PATCH routes. The
+ * optional webhook verify token reuses the shared webhookVerifyToken column.
+ */
+function applyAscFlowOptions(
+  options: Record<string, unknown>,
+  instance: {
+    ascFlowBaseUrl?: string | null;
+    ascFlowLogin?: string | null;
+    ascFlowChave?: string | null;
+    ascFlowHandoffMode?: string | null;
+    ascFlowHandoffServico?: number | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (instance.ascFlowBaseUrl) options.ascFlowBaseUrl = instance.ascFlowBaseUrl;
+  if (instance.ascFlowLogin) options.ascFlowLogin = instance.ascFlowLogin;
+  if (instance.ascFlowChave) options.ascFlowChave = instance.ascFlowChave;
+  if (instance.ascFlowHandoffMode) options.ascFlowHandoffMode = instance.ascFlowHandoffMode;
+  if (instance.ascFlowHandoffServico != null) options.ascFlowHandoffServico = instance.ascFlowHandoffServico;
+  if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 
 /**
@@ -256,6 +290,7 @@ function applyGupshupOptions(
     gupshupCallbackUrl?: string | null;
     gupshupAuthToken?: string | null;
     gupshupEventId?: string | null;
+    gupshupHandoffOptions?: GupshupHandoffOptions | null;
     gupshupApiKey?: string | null;
     gupshupAppName?: string | null;
     gupshupSourcePhone?: string | null;
@@ -265,6 +300,7 @@ function applyGupshupOptions(
   if (instance.gupshupCallbackUrl) options.gupshupCallbackUrl = instance.gupshupCallbackUrl;
   if (instance.gupshupAuthToken) options.gupshupAuthToken = instance.gupshupAuthToken;
   if (instance.gupshupEventId) options.gupshupEventId = instance.gupshupEventId;
+  if (instance.gupshupHandoffOptions) options.gupshupHandoffOptions = instance.gupshupHandoffOptions;
   if (instance.gupshupApiKey) options.gupshupApiKey = instance.gupshupApiKey;
   if (instance.gupshupAppName) options.gupshupAppName = instance.gupshupAppName;
   if (instance.gupshupSourcePhone) options.gupshupSourcePhone = instance.gupshupSourcePhone;
@@ -316,6 +352,7 @@ async function connectInstance(
     gupshupCallbackUrl?: string | null;
     gupshupAuthToken?: string | null;
     gupshupEventId?: string | null;
+    gupshupHandoffOptions?: GupshupHandoffOptions | null;
     webhookVerifyToken?: string | null;
     twilioAccountSid?: string | null;
     twilioAuthToken?: string | null;
@@ -763,6 +800,7 @@ export class InstanceMonitor {
     gupshupCallbackUrl?: string | null;
     gupshupAuthToken?: string | null;
     gupshupEventId?: string | null;
+    gupshupHandoffOptions?: GupshupHandoffOptions | null;
     webhookVerifyToken?: string | null;
     twilioAccountSid?: string | null;
     twilioAuthToken?: string | null;

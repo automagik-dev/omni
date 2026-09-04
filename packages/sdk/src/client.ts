@@ -94,6 +94,8 @@ export type Channel =
   | 'a2a'
   | 'gupshup'
   | 'twilio-whatsapp'
+  | 'hermes'
+  | 'asc-flow'
   | 'internal';
 
 // Paginated response helper
@@ -303,6 +305,7 @@ export interface CreateInstanceBody {
   twilioStatusCallbackUrl?: string;
   twilioWebhookUrl?: string;
   twilioValidateSignature?: boolean;
+  gupshupHandoffOptions?: components['schemas']['CreateInstanceRequest']['gupshupHandoffOptions'];
 }
 
 /**

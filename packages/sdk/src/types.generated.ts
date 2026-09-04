@@ -2861,6 +2861,87 @@ export interface components {
             isDefault: boolean;
             /** @description Bot token for Discord instances */
             token?: string;
+            /**
+             * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
+             * @example {
+             *       "defaultFields": {
+             *         "queue": "SALES"
+             *       },
+             *       "fieldsByPhonePrefix": [
+             *         {
+             *           "prefixes": [
+             *             "5511",
+             *             "5521"
+             *           ],
+             *           "fields": {
+             *             "queue": "SALES-SOUTHEAST"
+             *           }
+             *         }
+             *       ],
+             *       "customerFields": [
+             *         {
+             *           "apiKey": "Queue",
+             *           "from": "queue"
+             *         },
+             *         {
+             *           "apiKey": "Handled By",
+             *           "value": "assistant"
+             *         }
+             *       ]
+             *     }
+             */
+            gupshupHandoffOptions?: {
+                /**
+                 * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
+                 * @example {
+                 *       "queue": "SALES"
+                 *     }
+                 */
+                defaultFields?: {
+                    [key: string]: string;
+                };
+                /** @description Prefix rules layered over defaultFields; the first matching rule wins */
+                fieldsByPhonePrefix?: {
+                    /**
+                     * @description Digit-only phone prefixes (country code first, no +)
+                     * @example [
+                     *       "5511",
+                     *       "5521"
+                     *     ]
+                     */
+                    prefixes: string[];
+                    /**
+                     * @description Routing fields applied when the customer phone starts with one of the prefixes
+                     * @example {
+                     *       "queue": "SALES-SOUTHEAST"
+                     *     }
+                     */
+                    fields: {
+                        [key: string]: string;
+                    };
+                }[];
+                /**
+                 * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
+                 * @example [
+                 *       {
+                 *         "apiKey": "Queue",
+                 *         "from": "queue"
+                 *       },
+                 *       {
+                 *         "apiKey": "Handled By",
+                 *         "value": "assistant"
+                 *       }
+                 *     ]
+                 */
+                customerFields?: {
+                    /** @description customerFields apiKey your Gupshup Journey reads */
+                    apiKey: string;
+                    /** @description Literal value to send; mutually exclusive with `from` */
+                    value?: string;
+                    /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
+                    from?: string;
+                }[];
+            } | null;
         };
         InstanceStatus: {
             /**
@@ -6560,6 +6641,87 @@ export interface operations {
                     isDefault?: boolean;
                     /** @description Bot token for Discord instances */
                     token?: string;
+                    /**
+                     * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
+                     * @example {
+                     *       "defaultFields": {
+                     *         "queue": "SALES"
+                     *       },
+                     *       "fieldsByPhonePrefix": [
+                     *         {
+                     *           "prefixes": [
+                     *             "5511",
+                     *             "5521"
+                     *           ],
+                     *           "fields": {
+                     *             "queue": "SALES-SOUTHEAST"
+                     *           }
+                     *         }
+                     *       ],
+                     *       "customerFields": [
+                     *         {
+                     *           "apiKey": "Queue",
+                     *           "from": "queue"
+                     *         },
+                     *         {
+                     *           "apiKey": "Handled By",
+                     *           "value": "assistant"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    gupshupHandoffOptions?: {
+                        /**
+                         * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
+                         * @example {
+                         *       "queue": "SALES"
+                         *     }
+                         */
+                        defaultFields?: {
+                            [key: string]: string;
+                        };
+                        /** @description Prefix rules layered over defaultFields; the first matching rule wins */
+                        fieldsByPhonePrefix?: {
+                            /**
+                             * @description Digit-only phone prefixes (country code first, no +)
+                             * @example [
+                             *       "5511",
+                             *       "5521"
+                             *     ]
+                             */
+                            prefixes: string[];
+                            /**
+                             * @description Routing fields applied when the customer phone starts with one of the prefixes
+                             * @example {
+                             *       "queue": "SALES-SOUTHEAST"
+                             *     }
+                             */
+                            fields: {
+                                [key: string]: string;
+                            };
+                        }[];
+                        /**
+                         * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
+                         * @example [
+                         *       {
+                         *         "apiKey": "Queue",
+                         *         "from": "queue"
+                         *       },
+                         *       {
+                         *         "apiKey": "Handled By",
+                         *         "value": "assistant"
+                         *       }
+                         *     ]
+                         */
+                        customerFields?: {
+                            /** @description customerFields apiKey your Gupshup Journey reads */
+                            apiKey: string;
+                            /** @description Literal value to send; mutually exclusive with `from` */
+                            value?: string;
+                            /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
+                            from?: string;
+                        }[];
+                    } | null;
                 };
             };
         };
@@ -6872,6 +7034,87 @@ export interface operations {
                     isDefault?: boolean;
                     /** @description Bot token for Discord instances */
                     token?: string;
+                    /**
+                     * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
+                     * @example {
+                     *       "defaultFields": {
+                     *         "queue": "SALES"
+                     *       },
+                     *       "fieldsByPhonePrefix": [
+                     *         {
+                     *           "prefixes": [
+                     *             "5511",
+                     *             "5521"
+                     *           ],
+                     *           "fields": {
+                     *             "queue": "SALES-SOUTHEAST"
+                     *           }
+                     *         }
+                     *       ],
+                     *       "customerFields": [
+                     *         {
+                     *           "apiKey": "Queue",
+                     *           "from": "queue"
+                     *         },
+                     *         {
+                     *           "apiKey": "Handled By",
+                     *           "value": "assistant"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    gupshupHandoffOptions?: {
+                        /**
+                         * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
+                         * @example {
+                         *       "queue": "SALES"
+                         *     }
+                         */
+                        defaultFields?: {
+                            [key: string]: string;
+                        };
+                        /** @description Prefix rules layered over defaultFields; the first matching rule wins */
+                        fieldsByPhonePrefix?: {
+                            /**
+                             * @description Digit-only phone prefixes (country code first, no +)
+                             * @example [
+                             *       "5511",
+                             *       "5521"
+                             *     ]
+                             */
+                            prefixes: string[];
+                            /**
+                             * @description Routing fields applied when the customer phone starts with one of the prefixes
+                             * @example {
+                             *       "queue": "SALES-SOUTHEAST"
+                             *     }
+                             */
+                            fields: {
+                                [key: string]: string;
+                            };
+                        }[];
+                        /**
+                         * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
+                         * @example [
+                         *       {
+                         *         "apiKey": "Queue",
+                         *         "from": "queue"
+                         *       },
+                         *       {
+                         *         "apiKey": "Handled By",
+                         *         "value": "assistant"
+                         *       }
+                         *     ]
+                         */
+                        customerFields?: {
+                            /** @description customerFields apiKey your Gupshup Journey reads */
+                            apiKey: string;
+                            /** @description Literal value to send; mutually exclusive with `from` */
+                            value?: string;
+                            /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
+                            from?: string;
+                        }[];
+                    } | null;
                 };
             };
         };
