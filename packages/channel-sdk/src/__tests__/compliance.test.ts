@@ -23,6 +23,12 @@ import type { ChannelCapabilities } from '../types/capabilities';
 
 import { ChannelError } from '@omni/core';
 import {
+  ASC_FLOW_CAPABILITIES,
+  AscFlowApiError,
+  AscFlowErrorCode,
+  AscFlowPlugin,
+} from '../../../channel-asc-flow/src/index';
+import {
   DISCORD_CAPABILITIES,
   DiscordError,
   ErrorCode as DiscordErrorCode,
@@ -75,6 +81,20 @@ function channelPath(channel: string, ...segments: string[]): string {
 }
 
 const channels: ChannelDescriptor[] = [
+  {
+    name: 'asc-flow',
+    packageName: '@omni/channel-asc-flow',
+    pluginClass: AscFlowPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: AscFlowApiError,
+    capabilities: ASC_FLOW_CAPABILITIES,
+    pluginSourcePath: channelPath('asc-flow', 'plugin.ts'),
+    handlerSourcePaths: [
+      channelPath('asc-flow', 'handlers', 'webhook.ts'),
+      // Inbound media resolution (the `/atendimento` base64 fetch) lives here.
+      channelPath('asc-flow', 'utils', 'media.ts'),
+    ],
+    errorSourcePath: channelPath('asc-flow', 'utils', 'errors.ts'),
+  },
   {
     name: 'whatsapp',
     packageName: '@omni/channel-whatsapp',
@@ -214,6 +234,7 @@ const REQUIRED_BOOLEAN_FIELDS: (keyof ChannelCapabilities)[] = [
 ];
 
 const errorConstructorArgs: Record<string, unknown[]> = {
+  'asc-flow': [AscFlowErrorCode.INVALID_REQUEST, 'compliance test'],
   whatsapp: [WhatsAppErrorCode.SEND_FAILED, 'compliance test'],
   telegram: [TelegramErrorCode.SEND_FAILED, 'compliance test'],
   discord: [DiscordErrorCode.SEND_FAILED, 'compliance test'],
@@ -226,9 +247,10 @@ const errorConstructorArgs: Record<string, unknown[]> = {
 // Group 1: Infrastructure
 
 describe('SDK compliance test infrastructure', () => {
-  it('has descriptors for all 7 channels', () => {
+  it('has descriptors for all 8 channels', () => {
     const names = channels.map((c) => c.name).sort();
     expect(names).toEqual([
+      'asc-flow',
       'discord',
       'hermes',
       'slack',
@@ -314,6 +336,9 @@ for (const channel of channels) {
       });
 
       it('uses createDownloadGuard for media downloads', () => {
+        // Text-only channels never download inbound bytes, so there is nothing
+        // to guard.
+        if (channel.capabilities.supportedMediaTypes.length === 0) return;
         const allPaths = [channel.pluginSourcePath, ...channel.handlerSourcePaths];
         expect(anySourceContainsCall(allPaths, 'createDownloadGuard')).toBe(true);
       });
@@ -452,7 +477,9 @@ for (const channel of channels) {
       it('has valid supportedMediaTypes', () => {
         const { supportedMediaTypes } = channel.capabilities;
         expect(Array.isArray(supportedMediaTypes)).toBe(true);
-        expect(supportedMediaTypes.length).toBeGreaterThan(0);
+        // An empty list is the honest declaration for a text-only channel
+        // (asc-flow); a media-capable one must enumerate what it accepts.
+        if (channel.capabilities.canSendMedia) expect(supportedMediaTypes.length).toBeGreaterThan(0);
         for (const mediaType of supportedMediaTypes) {
           expect(typeof mediaType.mimeType).toBe('string');
           expect(mediaType.mimeType.length).toBeGreaterThan(0);

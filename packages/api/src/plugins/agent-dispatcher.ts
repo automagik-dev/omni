@@ -697,6 +697,7 @@ export async function triggerErrorHandoff(
     message,
     sendResult?.messageId,
     trustedTenantId,
+    sendResult?.pauseAgent,
   );
 
   log.info('agent_dispatch_error_handoff', { instanceId: instance.id, chatId, channel });
@@ -727,11 +728,18 @@ async function persistErrorHandoffSideEffects(
   message: string,
   sentMessageId: string | null | undefined,
   trustedTenantId?: string,
+  pauseAgent?: boolean,
 ): Promise<void> {
   try {
     const chat = await runDispatchDb(db, trustedTenantId, async () => {
       const found = await services.chats.findByExternalIdSmart(instance.id, chatId);
       if (!found) return null;
+      // A channel may opt OUT (`pauseAgent: false`) when its handoff only routes
+      // a still-running flow instead of parking the chat in a human queue —
+      // pausing there wedges the next turn and nobody answers the beneficiary.
+      // Same contract messages.ts honours on the tool-driven handoff path; this
+      // one used to pause unconditionally and recreated the deadlock.
+      if (pauseAgent === false) return found;
       const settings = (found.settings as Record<string, unknown> | null) ?? {};
       await services.chats.update(found.id, { settings: { ...settings, agentPaused: true } });
       return found;
