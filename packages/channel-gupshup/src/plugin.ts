@@ -19,9 +19,16 @@ import type {
 import type { Logger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 
+import { ZodError } from 'zod';
 import { GUPSHUP_CAPABILITIES } from './capabilities';
 import { GupshupClient } from './client';
 import { handleGupshupWebhook } from './handlers/webhooks';
+import {
+  type GupshupHandoffOptions,
+  buildCustomerFields,
+  parseHandoffOptions,
+  resolveHandoffFields,
+} from './handoff-options';
 import { sendCloseContact } from './senders/close-contact';
 import { sendHandoff } from './senders/handoff';
 import { sendLocation } from './senders/location';
@@ -36,6 +43,7 @@ async function dispatchContent(
   client: GupshupClient,
   dest: string,
   message: OutgoingMessage,
+  handoffOptions?: GupshupHandoffOptions,
 ): Promise<GupshupSendResponse> {
   const { content } = message;
   const meta = message.metadata as Record<string, unknown> | undefined;
@@ -44,8 +52,13 @@ async function dispatchContent(
   if (meta?.isHandoff === true) {
     const dadosLead = meta.dadosLead as string | undefined;
     const motivoHandoff = meta.motivoHandoff as string | undefined;
-    const handoffFields = meta.handoffFields as Record<string, unknown> | undefined;
-    return sendHandoff(client, dest, content.text ?? '', dadosLead, motivoHandoff, handoffFields);
+    // Routing defaults sit UNDER whatever the emitter sent. A system-initiated
+    // handoff (dispatch error, watchdog) arrives with no fields at all; without
+    // this it would reach the Journey unroutable.
+    const explicitFields = meta.handoffFields as Record<string, unknown> | undefined;
+    const handoffFields = resolveHandoffFields(dest, explicitFields, handoffOptions);
+    const customerFields = buildCustomerFields(handoffFields, handoffOptions?.customerFields);
+    return sendHandoff(client, dest, content.text ?? '', dadosLead, motivoHandoff, handoffFields, customerFields);
   }
 
   if (meta?.isCloseContact === true) {
@@ -144,6 +157,19 @@ export class GupshupPlugin extends BaseChannelPlugin {
     const eventId = ((creds.gupshupEventId ?? opts.gupshupEventId) as string | undefined) ?? 'nx_omni_agent_reply';
     const webhookVerifyToken = (creds.webhookVerifyToken ?? opts.webhookVerifyToken) as string | undefined;
 
+    // Validate before touching the network: a malformed template should fail
+    // the connect with a precise message, not the first handoff.
+    let handoffOptions: GupshupHandoffOptions | undefined;
+    try {
+      handoffOptions = parseHandoffOptions(creds.gupshupHandoffOptions ?? opts.gupshupHandoffOptions);
+    } catch (err) {
+      const detail =
+        err instanceof ZodError
+          ? err.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')
+          : String(err);
+      throw new GupshupError(GupshupErrorCode.BAD_REQUEST, `gupshupHandoffOptions is invalid — ${detail}`);
+    }
+
     if (!callbackUrl) throw new GupshupError(GupshupErrorCode.AUTH_FAILED, 'gupshupCallbackUrl is required');
     if (!authToken) throw new GupshupError(GupshupErrorCode.AUTH_FAILED, 'gupshupAuthToken is required');
 
@@ -165,6 +191,7 @@ export class GupshupPlugin extends BaseChannelPlugin {
       gupshupAuthToken: authToken,
       gupshupEventId: eventId,
       webhookVerifyToken,
+      handoffOptions,
     };
     const dedupeCache = createInboundDedupeCache();
 
@@ -221,7 +248,7 @@ export class GupshupPlugin extends BaseChannelPlugin {
     if (correlationId) this.captureT10(correlationId);
 
     try {
-      const response = await dispatchContent(client, dest, message);
+      const response = await dispatchContent(client, dest, message, state.config.handoffOptions);
       const providerAliases = extractGupshupProviderAliases(response);
       // Preserve existing externalId semantics: use Gupshup's canonical
       // messageId when present, otherwise keep Omni's UUID fallback. Other

@@ -377,14 +377,21 @@
       "idx": 53,
       "version": "7",
       "when": 1785300000000,
-      "tag": "0053_asc_flow_channel",
+      "tag": "0053_gupshup_handoff_options",
       "breakpoints": true
     },
     {
       "idx": 54,
       "version": "7",
       "when": 1785400000000,
-      "tag": "0054_asc_flow_handoff_mode",
+      "tag": "0054_asc_flow_channel",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1785500000000,
+      "tag": "0055_asc_flow_handoff_mode",
       "breakpoints": true
     }
   ]

@@ -138,3 +138,116 @@ describe('GupshupPlugin — outbound provider aliases', () => {
     fetchSpy.mockRestore();
   });
 });
+
+describe('GupshupPlugin — handoff options', () => {
+  const handoffOptions = {
+    defaultFields: { queue: 'DEFAULT' },
+    fieldsByPhonePrefix: [{ prefixes: ['5511'], fields: { queue: 'SOUTHEAST' } }],
+    customerFields: [
+      { apiKey: 'Queue', from: 'queue' },
+      { apiKey: 'Source', value: 'assistant' },
+    ],
+  };
+
+  async function connectedPlugin(options: unknown): Promise<GupshupPlugin> {
+    const plugin = new GupshupPlugin();
+    await plugin.initialize({
+      eventBus: { publish: mock(async () => undefined) } as unknown as EventBus,
+      logger: makeLogger(),
+      storage: {} as never,
+      config: {} as never,
+      db: {} as never,
+    });
+    await plugin.connect('inst-1', {
+      instanceId: 'inst-1',
+      credentials: {
+        gupshupCallbackUrl: 'https://callbacks.gupshup.io/custom/abc123',
+        gupshupAuthToken: 'Bearer test-auth-token',
+      },
+      options: { gupshupHandoffOptions: options },
+    });
+    return plugin;
+  }
+
+  function captureBodies(): { bodies: Record<string, unknown>[]; restore: () => void } {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return makeOkResponse({ status: 'ok' });
+    }) as unknown as typeof fetch);
+    return { bodies, restore: () => fetchSpy.mockRestore() };
+  }
+
+  it('routes a fieldless handoff with the instance defaults and renders customerFields', async () => {
+    const { bodies, restore } = captureBodies();
+    try {
+      const plugin = await connectedPlugin(handoffOptions);
+      const result = await plugin.sendMessage('inst-1', {
+        to: '+55 11 98888-0000',
+        content: { type: 'text', text: 'Transferring you now' },
+        metadata: { isHandoff: true, motivoHandoff: 'agent_dispatch_error' },
+      });
+
+      expect(result.success).toBe(true);
+      const handoff = bodies.find((b) => b.msg_type === 'HANDOFF');
+      expect(handoff?.handoff_fields).toEqual({ queue: 'SOUTHEAST' });
+      expect(handoff?.customerFields).toEqual([
+        { apiKey: 'Queue', value: 'SOUTHEAST' },
+        { apiKey: 'Source', value: 'assistant' },
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('never overrides fields the emitter provided', async () => {
+    const { bodies, restore } = captureBodies();
+    try {
+      const plugin = await connectedPlugin(handoffOptions);
+      await plugin.sendMessage('inst-1', {
+        to: '+55 11 98888-0000',
+        content: { type: 'text', text: 'Transferring you now' },
+        metadata: { isHandoff: true, handoffFields: { queue: 'FROM_AGENT', name: 'Ana' } },
+      });
+
+      const handoff = bodies.find((b) => b.msg_type === 'HANDOFF');
+      expect(handoff?.handoff_fields).toEqual({ queue: 'FROM_AGENT', name: 'Ana' });
+      expect(handoff?.customerFields).toEqual([
+        { apiKey: 'Queue', value: 'FROM_AGENT' },
+        { apiKey: 'Source', value: 'assistant' },
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('leaves the wire untouched for instances without options', async () => {
+    const { bodies, restore } = captureBodies();
+    try {
+      const plugin = await connectedPlugin(undefined);
+      await plugin.sendMessage('inst-1', {
+        to: '+55 11 98888-0000',
+        content: { type: 'text', text: 'Transferring you now' },
+        metadata: { isHandoff: true },
+      });
+
+      const handoff = bodies.find((b) => b.msg_type === 'HANDOFF');
+      expect(handoff).not.toHaveProperty('handoff_fields');
+      expect(handoff).not.toHaveProperty('customerFields');
+    } finally {
+      restore();
+    }
+  });
+
+  it('rejects malformed options at connect, before any network call', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(makeOkResponse({ status: 'ok' }));
+    try {
+      await expect(connectedPlugin({ customerFields: [{ apiKey: 'Missing source' }] })).rejects.toThrow(
+        /gupshupHandoffOptions is invalid/,
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});

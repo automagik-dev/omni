@@ -37,6 +37,7 @@ export class GupshupClient {
     if (msg.dados_lead) payload.dados_lead = msg.dados_lead;
     if (msg.motivo_handoff) payload.motivo_handoff = msg.motivo_handoff;
     if (msg.handoff_fields) payload.handoff_fields = msg.handoff_fields;
+    if (msg.customer_fields && msg.customer_fields.length > 0) payload.customerFields = msg.customer_fields;
 
     // POST to callback URL
     const res = await fetch(this.callbackUrl, {
