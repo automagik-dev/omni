@@ -213,7 +213,7 @@ describe('handleWebhook', () => {
     expect(received()).toHaveLength(1);
 
     const realNow = Date.now;
-    Date.now = () => realNow() + 61_000;
+    Date.now = () => realNow() + 200_000;
     try {
       // Past the window with no answer parked: the poll gets an empty ready
       // body instead of another `pronto:0`, so `async_condition` fires.

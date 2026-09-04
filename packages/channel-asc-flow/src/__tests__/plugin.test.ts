@@ -199,7 +199,9 @@ describe('outbound turn', () => {
       { isHandoff: true, handoffQueue: 'VQ_AGENDAMENTO', handoffReason: 'fora do escopo' },
     );
 
-    expect(sequence()).toEqual(['/transferirHumano']);
+    // The farewell is pushed BEFORE the transfer: an accepted /transferirHumano
+    // ends the poll loop, so a goodbye parked in `resposta` is never collected.
+    expect(sequence()).toEqual(['/callbackFlowMsg', '/transferirHumano']);
     expect(ready('42')).toMatchObject({
       hand_off: 'sim',
       fila_vq: 'VQ_AGENDAMENTO',
@@ -243,7 +245,8 @@ describe('outbound turn', () => {
     );
     const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: 'VQ_X' });
 
-    expect(result.pauseAgent).toBe(false);
+    // A refused handoff is a FAILED send now, so there is no pause to report.
+    expect(result.success).toBe(false);
     expect(ready('42')?.hand_off).toBe('nao');
   });
 
@@ -252,7 +255,7 @@ describe('outbound turn', () => {
     await boot({}, { ...SERVICE, ascFlowHandoffServico: 0 });
     const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: 'VQ_X' });
 
-    expect(result.pauseAgent).toBe(false);
+    expect(result.success).toBe(false);
     expect(of('/transferirHumano')).toHaveLength(0);
   });
 
@@ -294,8 +297,11 @@ describe('outbound turn', () => {
     );
     const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: 'VQ_X' });
 
-    // The transfer failing must never cost the beneficiary the answer.
-    expect(result.success).toBe(true);
+    // The transfer failing must never cost the beneficiary the answer — but it
+    // must not read as a completed handoff either, or the route writes an audit
+    // row and disarms the follow-ups for a transfer that never happened.
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('handoff refused');
     expect(ready('42')).toEqual({
       pronto: 1,
       resposta: 'Vou te transferir.',
@@ -311,7 +317,7 @@ describe('outbound turn', () => {
     await boot({ '/transferirHumano': () => jsonResponse({ msg: 'boom' }, 500) }, SERVICE);
     const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true });
 
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
     expect(ready('42')).toMatchObject({ hand_off: 'nao', resposta: 'Vou te transferir.' });
   });
 
@@ -326,7 +332,7 @@ describe('outbound turn', () => {
           { isHandoff: true, handoffServico: bad, handoffQueue: 'VQ_X', handoffReason: 'fora do escopo' },
         );
 
-        expect(result.success).toBe(true);
+        expect(result.success).toBe(false);
         expect(of('/transferirHumano')).toHaveLength(0);
         // No lie to the flow, and no orphan Genesys fields.
         expect(ready('42')).toEqual({
@@ -468,7 +474,9 @@ describe('outbound turn', () => {
         },
       );
 
-      expect(result.success).toBe(true);
+      // The turn still answers, but the send reports failure: a refused handoff
+      // must not read to the route as a completed one.
+      expect(result.success).toBe(false);
       expect(of('/transferirHumano')).toHaveLength(0);
       expect(ready('42')).toEqual({
         pronto: 1,

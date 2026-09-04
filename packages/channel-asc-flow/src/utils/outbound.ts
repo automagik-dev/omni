@@ -19,6 +19,7 @@
 
 import { basename } from 'node:path';
 
+import { createDownloadGuard } from '@omni/channel-sdk';
 import type { OutgoingContent, OutgoingMessage } from '@omni/channel-sdk';
 import type { Logger } from '@omni/core';
 
@@ -30,6 +31,12 @@ import { getMediaBackend } from './media';
  * base64 inflates the payload by a third on top of that.
  */
 const OUTBOUND_MEDIA_MAX_BYTES = 16 * 1024 * 1024;
+
+/** Deadline for fetching a caller-supplied media URL, matching the client's. */
+const OUTBOUND_FETCH_TIMEOUT_MS = 20_000;
+
+/** Rejects an oversized download on the Content-Length, before the body is read. */
+const downloadGuard = createDownloadGuard({ maxSizeBytes: OUTBOUND_MEDIA_MAX_BYTES });
 
 /** Content types that leave through `/mensagem` rather than the poll body. */
 const MEDIA_TYPES = new Set(['image', 'audio', 'video', 'document']);
@@ -43,12 +50,17 @@ export function isRichContent(content: OutgoingContent): boolean {
 }
 
 /** Read stored bytes: a media-backend reference first, a plain path second. */
-async function readMediaBytes(reference: string): Promise<Buffer> {
+async function readMediaBytes(reference: string, logger: Logger): Promise<Buffer> {
   // A public URL is fetched HERE and forwarded as bytes — the platform refuses
   // a foreign `url_arquivo` (see `buildMediaFields`).
   if (/^https?:\/\//i.test(reference)) {
-    const response = await fetch(reference);
+    // The URL comes from the caller, so it is not trusted with either the clock
+    // or memory: without a deadline a tarpit host hangs the turn forever, and
+    // without the guard the whole body is buffered before `withBytes` gets to
+    // reject it — a multi-GB file was downloaded in full to then be refused.
+    const response = await fetch(reference, { signal: AbortSignal.timeout(OUTBOUND_FETCH_TIMEOUT_MS) });
     if (!response.ok) throw new Error(`fetch ${reference} failed: HTTP ${response.status}`);
+    downloadGuard.checkResponse(response, logger, { url: reference, channel: 'asc-flow' });
     return Buffer.from(await response.arrayBuffer());
   }
   try {
@@ -86,7 +98,7 @@ async function buildMediaFields(message: OutgoingMessage, logger: Logger): Promi
   }
 
   try {
-    return withBytes(await readMediaBytes(reference), name, mimeType, logger);
+    return withBytes(await readMediaBytes(reference, logger), name, mimeType, logger);
   } catch (err) {
     logger.warn('[asc-flow] could not read outbound media — degrading to text', {
       reference,

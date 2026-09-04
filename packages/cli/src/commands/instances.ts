@@ -38,6 +38,8 @@ const VALID_CHANNELS: Channel[] = [
   'a2a',
   'gupshup',
   'twilio-whatsapp',
+  'hermes',
+  'asc-flow',
 ];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 

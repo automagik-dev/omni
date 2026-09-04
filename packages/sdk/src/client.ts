@@ -94,6 +94,8 @@ export type Channel =
   | 'a2a'
   | 'gupshup'
   | 'twilio-whatsapp'
+  | 'hermes'
+  | 'asc-flow'
   | 'internal';
 
 // Paginated response helper

@@ -263,7 +263,11 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'credential and the platform documents no HMAC/signature mechanism. Authenticity rests on the per-instance ' +
       'path (an unguessable instance UUID, the Gupshup precedent) plus an optional verify token the handler ' +
       'compares when one is configured on the instance. The tenant comes from the server-side instance record ' +
-      'addressed by the path, never from a body or header claim. Responses are fixed 200 acks with no row data.',
+      'addressed by the path, never from a body or header claim. NOTE: unlike the other callbacks here, this ' +
+      'route is a POLL — the response body carries the agent reply (resposta/bolhas/hand_off), not a fixed ack. ' +
+      'So on an instance with no verify token, possession of the instance UUID is enough to send an arbitrary ' +
+      'chatInput and read the agent answer back, each novel input being a billed dispatch. Configure ' +
+      'webhookVerifyToken (and echo it from the flow node) on any instance carrying tenant data.',
   },
   {
     route: 'POST /api/v2/channels/twilio-whatsapp/:instanceId/webhook',

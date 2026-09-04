@@ -105,7 +105,7 @@ describe('a slow poll does not cost a second agent run', () => {
       plugin as unknown as { ascFlowInstances: Map<string, { inFlight: Map<string, { at: number }> }> }
     ).ascFlowInstances.get(instanceId)?.inFlight;
     const entry = inFlight?.get('42');
-    if (entry) entry.at -= 120_000;
+    if (entry) entry.at -= 200_000;
 
     expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1, resposta: 'a resposta' });
     expect(received()).toHaveLength(1);
@@ -204,11 +204,11 @@ describe('the turn window stays bounded', () => {
 
     // Age them past the TTL the way an abandoned atendimento does, and move the
     // sweep clock back so the next inbound is past the throttle interval.
-    for (const entry of inFlightOf()?.values() ?? []) entry.at -= 120_000;
+    for (const entry of inFlightOf()?.values() ?? []) entry.at -= 200_000;
     const state = (
       plugin as unknown as { ascFlowInstances: Map<string, { lastSweepAt: number }> }
     ).ascFlowInstances.get(instanceId);
-    if (state) state.lastSweepAt -= 120_000;
+    if (state) state.lastSweepAt -= 200_000;
 
     await openTurn(plugin, '2000', 'uma nova');
 
@@ -243,5 +243,95 @@ describe('reconnect does not strand the dedupe cache', () => {
     await connectPlugin(plugin);
 
     expect(disposed).toBe(true);
+  });
+});
+
+describe('an answer belongs to the turn that asked for it', () => {
+  /** The plugin's private per-instance turn map. */
+  const turns = () =>
+    (
+      plugin as unknown as {
+        ascFlowInstances: Map<string, { inFlight: Map<string, { at: number; correlationId?: string }> }>;
+      }
+    ).ascFlowInstances.get(instanceId)?.inFlight;
+
+  // Round 2's worst finding. Turn A's run outlives its window; the beneficiary
+  // sends B; A's late answer was written into B's window and collected as the
+  // reply to B — while B's own answer parked where no poll could reach it.
+  it('drops a late answer instead of delivering it as the reply to the next message', async () => {
+    await boot();
+    await openTurn(plugin, '42', 'quero agendar');
+    const traceA = turns()?.get('42')?.correlationId;
+    expect(traceA).toBeDefined();
+
+    // Age turn A past the TTL and let a poll release it, as production does.
+    const a = turns()?.get('42');
+    if (a) a.at -= 200_000;
+    expect(plugin.takeReadyTurn(instanceId, '42', 'quero agendar')).toMatchObject({ pronto: 1, resposta: '' });
+
+    // The beneficiary moves on; a new turn opens under the same cod.
+    await openTurn(plugin, '42', 'na verdade quero cancelar');
+    const b = turns()?.get('42');
+    if (b) b.correlationId = 'trace-da-vez-B';
+
+    // Turn A's answer finally arrives, carrying A's trace.
+    await plugin.sendMessage(instanceId, {
+      to: '42',
+      content: { type: 'text', text: 'Achei estes horarios para agendar' } as never,
+      metadata: { correlationId: traceA },
+    });
+
+    // B's window is untouched: no stale body waiting for B's poll.
+    expect(plugin.takeReadyTurn(instanceId, '42', 'na verdade quero cancelar')).toBeNull();
+  });
+
+  it('still delivers the answer that carries the turn own trace', async () => {
+    await boot();
+    await openTurn(plugin, '42', 'quero agendar');
+    const trace = turns()?.get('42')?.correlationId;
+
+    await plugin.sendMessage(instanceId, {
+      to: '42',
+      content: { type: 'text', text: 'Achei estes horarios' } as never,
+      metadata: { correlationId: trace },
+    });
+
+    expect(plugin.takeReadyTurn(instanceId, '42', 'quero agendar')).toMatchObject({
+      pronto: 1,
+      resposta: 'Achei estes horarios',
+    });
+  });
+});
+
+describe('a send failure does not become a billed loop', () => {
+  // Flows POST without a messageId, so the in-flight entry is the only
+  // redelivery marker. Deleting it on failure made the next ~2s re-POST look
+  // like a new turn: re-published, re-ran the agent, failed identically.
+  it('keeps the window after a deterministic send failure', async () => {
+    await boot();
+    await openTurn(plugin, '42', 'oi');
+    eventBus.published.length = 0;
+
+    // A whitespace-only reply throws 'refusing to send an empty turn'.
+    const result = await send('   ');
+    expect(result.success).toBe(false);
+
+    // The re-poll is absorbed as a redelivery — the agent is not run again.
+    await openTurn(plugin, '42', 'oi');
+    expect(received()).toHaveLength(0);
+  });
+});
+
+describe('nothing reaches the handset before the deliverability check', () => {
+  // deliver() pushes every bubble but the last through /callbackFlowMsg — a
+  // real delivery. Refusing afterwards reported total failure on a turn whose
+  // first paragraphs had already landed, and the resend duplicated them.
+  it('pushes no bubble when a multi-paragraph text has no poll waiting', async () => {
+    await boot();
+
+    const result = await send('primeiro\n\nsegundo\n\nterceiro');
+
+    expect(result.success).toBe(false);
+    expect(calls.filter((c) => c.path === '/callbackFlowMsg')).toHaveLength(0);
   });
 });

@@ -107,6 +107,14 @@ export const TURN_PENDING = { pronto: 0 } as const;
 interface AscFlowTurnState {
   text: string;
   at: number;
+  /**
+   * The trace the inbound publish opened. The dispatcher threads it back on the
+   * outgoing message, which makes it the only handle that says WHICH turn an
+   * answer belongs to — object identity cannot, because an answer that outlived
+   * its own window captures whatever window occupies the cod when it finally
+   * sends.
+   */
+  correlationId?: string;
   /** Set by `sendMessage`; the next poll takes it and the turn is over. */
   ready?: AscFlowTurnReady;
 }
@@ -122,13 +130,28 @@ interface AscFlowInstanceState {
 }
 
 /**
- * Safety valve for the turn window: if a turn never produces a `sendMessage`
- * (agent crash, dispatcher drop), or the flow stops polling before it collects
- * the answer, the entry would otherwise wedge that `cod_atendimento` forever.
- * Far longer than any agent run, far shorter than a human's next answer to the
- * same menu.
+ * How long a turn stays open: both the deadline for delivering an answer and
+ * the safety valve that releases a turn nobody answered (agent crash,
+ * dispatcher drop) instead of wedging that `cod_atendimento` forever.
+ *
+ * 150s, sized against the two real ceilings rather than a round number:
+ *
+ *   - the `api_rest` node's own `timeout` — 180s on flow #225 — is the hard
+ *     one. Past it the flow stops polling, so no answer is deliverable however
+ *     long Omni holds it; releasing at 150s still reaches the flow before it
+ *     gives up on its own.
+ *   - the instance `agentTimeout` defaults to 600s (schema.ts:830), so the
+ *     previous 60s silently dropped every legitimate 60–600s run. Measured
+ *     agent latency on this deployment is p50 14.7s / p90 30.2s / max 42s, so
+ *     150s carries ~3.5x headroom over the worst observed run.
  */
-const IN_FLIGHT_TTL_MS = 60_000;
+const IN_FLIGHT_TTL_MS = 150_000;
+
+/** A text turn with no poll waiting reaches nobody — see `refuseUndeliverable`. */
+const UNDELIVERABLE_ERROR = 'no ASC flow turn is polling this cod_atendimento — a text-only send cannot be delivered';
+
+/** A handoff that never held must not read to the route as a completed one. */
+const HANDOFF_REFUSED_ERROR = 'handoff refused: the transfer never held, so the turn answers without it';
 
 /**
  * How often `inFlight` is swept for entries past the TTL.
@@ -200,6 +223,31 @@ function toCodAtendimento(chatId: string): number {
 export function normalizeBaseUrl(raw: string): string {
   const trimmed = raw.trim().replace(/\/+$/, '');
   return trimmed.endsWith(REST_PREFIX) ? trimmed : `${trimmed}${REST_PREFIX}`;
+}
+
+/**
+ * The poll body for an answered turn.
+ *
+ * `resposta` is EMPTY when `/mensagem` already put the last bubble on the
+ * handset — the flow's message node renders this slot, so a non-empty one would
+ * show the same bubble twice. A refused `/mensagem` with no caption would leave
+ * the turn silent, so it says so instead of nothing.
+ */
+function buildReadyBody(turn: {
+  delivered: boolean;
+  lastBubble: string;
+  bubbles: string[];
+  handoff: HandoffPlan['fields'] | null;
+  ura: AscFlowUra | null;
+}): AscFlowTurnReady {
+  return {
+    pronto: 1,
+    resposta: turn.delivered ? '' : turn.lastBubble || OUTBOUND_MEDIA_FALLBACK_TEXT,
+    hand_off: turn.handoff ? 'sim' : 'nao',
+    bolhas: turn.bubbles,
+    ...(turn.handoff ?? {}),
+    ...(turn.ura ?? {}),
+  };
 }
 
 export class AscFlowPlugin extends BaseChannelPlugin {
@@ -340,13 +388,19 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
     try {
       const cod = toCodAtendimento(to);
-      // Whether a poll is actually waiting on this cod. A plain-text turn is
-      // delivered ONLY by being collected from the poll body, so parking one
-      // with nobody polling is a message the beneficiary never receives — and
-      // `to` is not guaranteed to be a cod: `resolveRecipient` hands back the
-      // person's `platformUserId` (a bare phone) for a person-UUID recipient,
-      // which passes the digits guard above and parks under a key no poll reads.
-      const polling = state.inFlight.has(to.trim());
+      // The turn this send ANSWERS, captured before anything awaits.
+      //
+      // Identity, not just presence: `resolveTurn` compares this exact object
+      // later, so an answer that arrives after its own window closed cannot be
+      // written into the NEXT turn's window (which delivered turn A's answer as
+      // the reply to message B, and lost B's own answer behind the text gate).
+      //
+      // A ghost — the `{text:''}` entry a proactive send parks — is not a turn:
+      // no poll is waiting on it and its body can never pass `takeReadyTurn`'s
+      // text gate, so counting it as "polling" is what let an undeliverable
+      // text send report success.
+      const answering = state.inFlight.get(to.trim());
+      const polling = answering !== undefined && answering.text !== '';
 
       const { rich, bubbles } = await this.prepareTurn(message, text);
 
@@ -357,26 +411,39 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // what actually renders buttons today).
       const lastBubble = bubbles[bubbles.length - 1] ?? '';
       const ura = rich ? null : buildUra(lastBubble, content.buttons, listOptionsOf(content));
+
+      // Refuse BEFORE anything reaches the handset. `deliver` pushes every
+      // bubble but the last through `/callbackFlowMsg` — a real delivery, not a
+      // parked one — so refusing afterwards reported total failure on a turn
+      // whose first paragraphs had already landed, and the operator's resend
+      // then duplicated them. Rich content and interactives go out through
+      // `/mensagem`, which needs no poll; a plain-text turn is delivered ONLY by
+      // being collected from the poll body.
+      if (!rich && !ura && !polling) return this.refuseUndeliverable(instanceId, to, content.type);
+
       const { delivered } = await this.deliver(state, cod, { text, bubbles, lastBubble, rich, ura, message });
 
-      // Nothing reached the handset and nothing will: `/mensagem` was not used
-      // (or was refused) and there is no poll to hand `resposta` to. Reporting
-      // success here is what let proactive sends — a follow-up sweep, a send to
-      // a person-UUID recipient — persist messages nobody ever received.
-      if (!delivered && !polling) return this.refuseUndeliverable(instanceId, to, content.type);
+      // The farewell only needs pushing when `/mensagem` did not already put it
+      // on the handset (`delivered`); in flow mode it rides `resposta` as usual.
+      const handoff =
+        meta.isHandoff === true
+          ? await this.runHandoff(state, instanceId, cod, meta, delivered ? '' : lastBubble)
+          : null;
+      // A handoff that did not hold must not read as one. `hand_off:'nao'` is
+      // already the honest poll body, but reporting success let the route answer
+      // `201 {status:'sent'}`, write a `handoffLogs` row implying the transfer
+      // happened, and disarm the follow-ups that would have revisited the chat.
+      const handoffRefused = meta.isHandoff === true && handoff === null;
 
-      const handoff = meta.isHandoff === true ? await this.runHandoff(state, instanceId, cod, meta) : null;
+      this.resolveTurn(
+        state,
+        to,
+        buildReadyBody({ delivered, lastBubble, bubbles, handoff, ura }),
+        answering,
+        correlationId,
+      );
 
-      this.resolveTurn(state, to, {
-        pronto: 1,
-        // A refused `/mensagem` with no caption would leave the turn silent —
-        // say so instead, so the beneficiary is not left staring at nothing.
-        resposta: delivered ? '' : lastBubble || OUTBOUND_MEDIA_FALLBACK_TEXT,
-        hand_off: handoff ? 'sim' : 'nao',
-        bolhas: bubbles,
-        ...(handoff ?? {}),
-        ...(ura ?? {}),
-      });
+      if (handoffRefused) return this.refuseSend(instanceId, to, HANDOFF_REFUSED_ERROR);
 
       if (correlationId) this.captureT11(correlationId);
 
@@ -415,9 +482,14 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
       await this.emitMessageFailed({ instanceId, chatId: to, error: errorMessage, retryable });
 
-      // No answer will ever be collected for this turn: drop the window so the
-      // beneficiary's NEXT message is published even when it repeats the text.
-      state.inFlight.delete(to.trim());
+      // The window is LEFT IN PLACE. Flows POST without a `messageId`, so this
+      // entry is the only redelivery marker there is: dropping it made the
+      // api_rest node's next ~2s re-POST look like a brand-new turn, which
+      // republished `message.received`, re-ran the agent, and failed identically
+      // — roughly `180s ÷ agent-latency` billed runs for one user message when
+      // the failure is deterministic (a whitespace-only reply throwing
+      // 'refusing to send an empty turn'). Leaving it absorbs the re-polls and
+      // releases once at the TTL.
 
       return { success: false, error: errorMessage, retryable, timestamp: Date.now() };
     }
@@ -465,8 +537,12 @@ export class AscFlowPlugin extends BaseChannelPlugin {
    * `cod_atendimento` — persist messages the beneficiary never received.
    */
   private async refuseUndeliverable(instanceId: string, to: string, type: string): Promise<SendResult> {
-    const error = 'no ASC flow turn is polling this cod_atendimento — a text-only send cannot be delivered';
     this.logger.warn('[asc-flow] refusing an undeliverable send', { instanceId, to, type });
+    return this.refuseSend(instanceId, to, UNDELIVERABLE_ERROR);
+  }
+
+  /** Report a send as failed, so the caller never records it as delivered. */
+  private async refuseSend(instanceId: string, to: string, error: string): Promise<SendResult> {
     await this.emitMessageFailed({ instanceId, chatId: to, error, retryable: false });
     return { success: false, error, retryable: false, timestamp: Date.now() };
   }
@@ -487,16 +563,41 @@ export class AscFlowPlugin extends BaseChannelPlugin {
    * that never should have been dialed (`planHandoff`) and a platform refusal —
    * degrade here rather than throwing: the turn still answers, like every other
    * best-effort call in this channel.
+   *
+   * `farewell` is PUSHED before a `service`-mode transfer rather than parked.
+   * An accepted `/transferirHumano` ends the poll loop (measured on atendimento
+   * 22286567: one event after the call, then nothing), so a goodbye left in
+   * `resposta` waits for a poll that never comes — and `msgTransferencia:false`
+   * suppresses the platform's own notice too, which put the beneficiary in a
+   * human queue with no word at all while Omni recorded the message as sent.
    */
   private async runHandoff(
     state: AscFlowInstanceState,
     instanceId: string,
     cod: number,
     meta: Record<string, unknown>,
+    farewell: string,
   ): Promise<HandoffPlan['fields'] | null> {
     const plan = planHandoff(state.config.ascFlowHandoffMode, meta, state.config.ascFlowHandoffServico, this.logger);
     if (!plan) return null;
     if (!plan.transfer) return plan.fields;
+
+    if (farewell.trim()) {
+      try {
+        await state.client.call('/callbackFlowMsg', {
+          cod_atendimento: cod,
+          sendMsg: 1,
+          msg_usuario: farewell,
+          entrante: 0,
+        });
+      } catch (err) {
+        // Best-effort: a missed goodbye must not cost the transfer.
+        this.logger.warn('[asc-flow] could not push the handoff farewell before transferring', {
+          cod,
+          err: String(err),
+        });
+      }
+    }
 
     try {
       await state.client.call('/transferirHumano', {
@@ -526,14 +627,58 @@ export class AscFlowPlugin extends BaseChannelPlugin {
    * returns. That second `sendMessage` used to replace the `hand_off:'sim'`
    * body with a `hand_off:'nao'` one, and if the ~2s poll had not collected in
    * between, the flow read "no handoff" and never reached the Genesys node —
-   * silently, which is the worst way to lose a transfer.
+   * silently, which is the worst way to lose a transfer. The bubble that guard
+   * displaces is PUSHED rather than dropped — the agent's leading bubbles are
+   * already on the handset by then, so discarding the last one left the
+   * beneficiary reading half a paragraph.
+   *
+   * `answering` is the turn this answer belongs to, by identity. A late answer
+   * whose own window already closed must not be written into whatever window
+   * happens to occupy the cod now: that delivered turn A's answer as the reply
+   * to message B, and left B's own answer parked where no poll could ever
+   * collect it.
    */
-  private resolveTurn(state: AscFlowInstanceState, chatId: string, ready: AscFlowTurnReady): void {
+  private resolveTurn(
+    state: AscFlowInstanceState,
+    chatId: string,
+    ready: AscFlowTurnReady,
+    answering?: AscFlowTurnState,
+    correlationId?: string,
+  ): void {
     const cod = chatId.trim();
     const entry = state.inFlight.get(cod);
+
+    // The trace is the strongest signal: an answer carries the correlationId of
+    // the turn that asked for it, so a mismatch is proof this body belongs to a
+    // turn that already closed — the case identity alone cannot catch, since a
+    // late send captures whatever window occupies the cod by then.
+    if (entry?.correlationId && correlationId && entry.correlationId !== correlationId) {
+      this.logger.warn('[asc-flow] discarding an answer from a different turn', {
+        cod,
+        reason: 'correlationId does not match the turn now in flight',
+      });
+      return;
+    }
+
+    if (entry && answering && entry !== answering) {
+      this.logger.warn('[asc-flow] discarding an answer whose turn already closed', {
+        cod,
+        reason: 'the window now holds a newer turn — delivering this would answer the wrong message',
+      });
+      return;
+    }
+    // A proactive send (no turn of its own) must not resolve someone else's
+    // turn: its content already left through `/mensagem`, and writing an empty
+    // `resposta` here would close a turn the agent is still answering.
+    if (entry && !answering) {
+      this.logger.debug('[asc-flow] proactive send leaves the in-flight turn alone', { cod });
+      return;
+    }
+
     if (entry) {
       if (entry.ready?.hand_off === 'sim' && ready.hand_off !== 'sim') {
         this.logger.debug('[asc-flow] keeping the parked handoff over a later ordinary answer', { cod });
+        this.pushDisplacedBubble(state, cod, ready.resposta);
         return;
       }
       entry.ready = ready;
@@ -543,6 +688,23 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     // An outbound with no inbound turn in flight (a proactive send): still park
     // it, so a poll that arrives for this cod collects it.
     state.inFlight.set(cod, { text: '', at: Date.now(), ready });
+  }
+
+  /**
+   * Deliver a bubble the poll body can no longer carry.
+   *
+   * Used when the parked-handoff guard keeps an earlier body: the displaced
+   * `resposta` still belongs on the handset, and `/callbackFlowMsg` is the one
+   * path that puts it there without touching the turn. Best-effort and
+   * fire-and-forget — the handoff must not wait on it.
+   */
+  private pushDisplacedBubble(state: AscFlowInstanceState, cod: string, text: string): void {
+    if (!text.trim()) return;
+    void state.client
+      .call('/callbackFlowMsg', { cod_atendimento: Number(cod), sendMsg: 1, msg_usuario: text, entrante: 0 })
+      .catch((err) => {
+        this.logger.warn('[asc-flow] could not push the bubble displaced by the handoff', { cod, err: String(err) });
+      });
   }
 
   /**
@@ -762,6 +924,12 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       },
       timings,
     });
+
+    // Stamp the trace on the turn — but only if this is still the same window.
+    // A slow publish can be overtaken by the beneficiary's next message, and
+    // labelling THAT turn with this trace would defeat the correlation.
+    const stamped = this.ascFlowInstances.get(instanceId)?.inFlight.get(turn.codAtendimento);
+    if (stamped && stamped.text === turn.text && !stamped.correlationId) stamped.correlationId = correlationId;
 
     if (timings) this.captureT2(correlationId, timings);
   }
