@@ -434,13 +434,26 @@ describe('outbound turn', () => {
       });
     });
 
-    it('hands off with no fila_vq — flow #225 hardcodes u_cod_transf', async () => {
+    // Flow #225's Genesys node reads `{#fila_vq}` since 04/09 (it used to
+    // hardcode the queue). With no fila the transfer has no destination, so the
+    // honest answer is to keep the bot talking rather than strand the person.
+    it('REFUSES the handoff when fila_vq is absent — the flow routes on it', async () => {
       await boot();
-      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: 'fora do escopo' });
+      await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffReason: 'fora do escopo' });
 
       expect(of('/transferirHumano')).toHaveLength(0);
-      expect(ready('42')).toMatchObject({ hand_off: 'sim', motivo_transf_vq: 'fora do escopo' });
+      expect(ready('42')).toMatchObject({ hand_off: 'nao', resposta: 'Vou te transferir.' });
       expect(ready('42')?.fila_vq).toBeUndefined();
+    });
+
+    // In service mode the ASC queue already holds the atendimento, so the field
+    // is decoration and its absence must not cost the transfer.
+    it('still hands off with no fila_vq in service mode', async () => {
+      await boot({}, SERVICE);
+      await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: 'fora do escopo' });
+
+      expect(of('/transferirHumano')).toHaveLength(1);
+      expect(ready('42')).toMatchObject({ hand_off: 'sim', motivo_transf_vq: 'fora do escopo' });
     });
 
     it('REFUSES the handoff when fila_vq is present and malformed', async () => {

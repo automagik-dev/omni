@@ -135,13 +135,18 @@ export function planHandoff(
 /**
  * The two userdata fields the agent owns. `null` = refuse the whole handoff.
  *
- * A malformed `fila_vq` is only survivable in `service` mode, where the ASC's
- * own queue receives the atendimento and the field is decoration. In `flow`
- * mode it is the routing key: omitting it hands Genesys a transfer with no
- * destination. An ABSENT one is still fine in both — flow #225 hardcodes
- * `u_cod_transf` to `SKILL_WPP_TECNICA_GENESYS` and never reads `{#fila_vq}`,
- * so a flow that resolves its own queue is a supported (and current) setup.
- * Only PRESENT-AND-MALFORMED is the error.
+ * `fila_vq` is MANDATORY in `flow` mode, and only decoration in `service` mode.
+ *
+ * In `flow` mode it is the routing key. Flow #225 used to hardcode
+ * `u_cod_transf` to a literal queue, which made an absent field harmless — the
+ * flow resolved its own destination. Since 04/09 that node reads `{#fila_vq}`
+ * (so the agent picks the queue per conversation), and an absent or malformed
+ * value now hands Genesys a transfer to nowhere: the beneficiary reads "vou te
+ * transferir" and lands in no queue at all, silently. Refusing keeps the bot
+ * talking instead, which is recoverable and shows up in the logs.
+ *
+ * In `service` mode the ASC's own queue already holds the atendimento, so a bad
+ * value is dropped with a warning rather than costing the transfer.
  */
 function buildGenesysFields(
   read: (...keys: string[]) => unknown,
@@ -151,7 +156,12 @@ function buildGenesysFields(
   const fields: HandoffPlan['fields'] = {};
 
   const rawFila = read('handoffQueue', 'fila_vq');
-  if (rawFila !== undefined && rawFila !== null) {
+  if (rawFila === undefined || rawFila === null) {
+    if (mode === 'flow') {
+      logger.error('[asc-flow] handoff refused: fila_vq is required in flow mode (the flow routes on {#fila_vq})');
+      return null;
+    }
+  } else {
     const fila = String(rawFila).trim();
     if (FILA_PATTERN.test(fila)) fields.fila_vq = fila;
     else if (mode === 'flow') {

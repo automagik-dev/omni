@@ -320,10 +320,12 @@ the atendimento as a floor, so a malformed value would strand the transfer with
 no destination. That is why it is an error there and a mere omission in
 `service` mode.
 
-An **absent** `fila_vq` is valid in both. Flow #225 hardcodes `u_cod_transf` to
-`SKILL_WPP_TECNICA_GENESYS` and never reads `{#fila_vq}`, so a flow that
-resolves its own queue is a supported (and currently deployed) setup. Only
-*present-and-malformed* is refused.
+An **absent** `fila_vq` is refused in `flow` mode and tolerated in `service`
+mode. Flow #225 used to hardcode `u_cod_transf` to a literal queue, which made
+the field optional; since 04/09 that node reads `{#fila_vq}` so the agent picks
+the queue per conversation, and an absent value would hand Genesys a transfer
+with no destination. In `service` mode the ASC queue already holds the
+atendimento, so the field stays decoration there.
 
 Two dialects reach these inputs. A direct plugin caller sets
 `metadata.handoffQueue` / `handoffReason` / `handoffServico` / `handoffPriority`.
