@@ -231,7 +231,6 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       ascFlowChave: chave,
       ascFlowHandoffMode: handoffMode,
       ascFlowHandoffServico: Number.isFinite(handoffServico) ? handoffServico : 0,
-      ascFlowInteractiveViaMensagem: pick('ascFlowInteractiveViaMensagem') !== false,
       webhookVerifyToken,
     };
 
@@ -305,6 +304,13 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
     try {
       const cod = toCodAtendimento(to);
+      // Whether a poll is actually waiting on this cod. A plain-text turn is
+      // delivered ONLY by being collected from the poll body, so parking one
+      // with nobody polling is a message the beneficiary never receives — and
+      // `to` is not guaranteed to be a cod: `resolveRecipient` hands back the
+      // person's `platformUserId` (a bare phone) for a person-UUID recipient,
+      // which passes the digits guard above and parks under a key no poll reads.
+      const polling = state.inFlight.has(to.trim());
 
       const { rich, bubbles } = await this.prepareTurn(message, text);
 
@@ -316,6 +322,12 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       const lastBubble = bubbles[bubbles.length - 1] ?? '';
       const ura = rich ? null : buildUra(lastBubble, content.buttons, listOptionsOf(content));
       const { delivered } = await this.deliver(state, cod, { text, bubbles, lastBubble, rich, ura, message });
+
+      // Nothing reached the handset and nothing will: `/mensagem` was not used
+      // (or was refused) and there is no poll to hand `resposta` to. Reporting
+      // success here is what let proactive sends — a follow-up sweep, a send to
+      // a person-UUID recipient — persist messages nobody ever received.
+      if (!delivered && !polling) return this.refuseUndeliverable(instanceId, to, content.type);
 
       const handoff = meta.isHandoff === true ? await this.runHandoff(state, instanceId, cod, meta) : null;
 
@@ -335,42 +347,31 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // The platform returns no per-message id, so Omni's UUID stays canonical.
       const messageId = crypto.randomUUID();
 
-      await this.emitMessageSent({
-        instanceId,
-        externalId: messageId,
-        chatId: to,
-        to,
-        content: {
-          type: content.type as import('@omni/core/types').ContentType,
-          text: content.text,
-        },
-        replyToId: message.replyTo,
-        rawPayload: {
-          ascFlow: {
-            codAtendimento: cod,
-            bubbles: bubbles.length,
-            interactive: ura ? (ura.forcar_botoes ? 'buttons' : 'list') : 'text',
-            uraOptions: ura ? Object.keys(ura.ura_opcoes).length : 0,
-            /** Rich content left through `/mensagem` rather than the poll body. */
-            viaMensagem: delivered,
-            handoff: handoff !== null,
-          },
-        },
-        senderAgentId: meta.senderAgentId as string | undefined,
+      await this.emitTurnSent(instanceId, message, messageId, {
+        cod,
+        bubbles: bubbles.length,
+        ura,
+        delivered,
+        handoff: handoff !== null,
       });
 
       return {
         success: true,
         messageId,
         timestamp: Date.now(),
-        // In `flow` mode the handoff is a ROUTE inside the still-running flow,
-        // not a park in a human queue: the beneficiary only leaves the bot at
-        // the `genesys_mobile_service` node. Pausing the agent here stops the
-        // dispatcher from ever answering the next turn, and a turn nobody
-        // answers is a turn nobody resolves — the measured deadlock on
-        // atendimento 22289496. `service` mode keeps the pause: there the
-        // atendimento really did leave "Automático".
-        ...(state.config.ascFlowHandoffMode === 'flow' ? { pauseAgent: false } : {}),
+        // Pause the agent only when the beneficiary really did leave the bot.
+        //
+        // In `flow` mode they never do here: the handoff is a ROUTE inside the
+        // still-running flow, and they only leave at the `genesys_mobile_service`
+        // node. Pausing stops the dispatcher from answering the next turn, and a
+        // turn nobody answers is a turn nobody resolves — the measured deadlock
+        // on atendimento 22289496.
+        //
+        // In `service` mode `/transferirHumano` does park the atendimento in a
+        // human queue — but only when it is ACCEPTED. A refusal (`handoff` null)
+        // leaves the atendimento in "Automático" with the flow still polling, so
+        // pausing there recreates the same deadlock with nobody on the way.
+        pauseAgent: state.config.ascFlowHandoffMode === 'service' && handoff !== null,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -384,6 +385,54 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
       return { success: false, error: errorMessage, retryable, timestamp: Date.now() };
     }
+  }
+
+  /** `message.sent` for a turn that was delivered or parked for the poll. */
+  private async emitTurnSent(
+    instanceId: string,
+    message: OutgoingMessage,
+    messageId: string,
+    turn: { cod: number; bubbles: number; ura: AscFlowUra | null; delivered: boolean; handoff: boolean },
+  ): Promise<void> {
+    const { content, to } = message;
+    await this.emitMessageSent({
+      instanceId,
+      externalId: messageId,
+      chatId: to,
+      to,
+      content: {
+        type: content.type as import('@omni/core/types').ContentType,
+        text: content.text,
+      },
+      replyToId: message.replyTo,
+      rawPayload: {
+        ascFlow: {
+          codAtendimento: turn.cod,
+          bubbles: turn.bubbles,
+          interactive: turn.ura ? (turn.ura.forcar_botoes ? 'buttons' : 'list') : 'text',
+          uraOptions: turn.ura ? Object.keys(turn.ura.ura_opcoes).length : 0,
+          /** Rich content left through `/mensagem` rather than the poll body. */
+          viaMensagem: turn.delivered,
+          handoff: turn.handoff,
+        },
+      },
+      senderAgentId: message.metadata?.senderAgentId as string | undefined,
+    });
+  }
+
+  /**
+   * Report a send that reached nothing and never will: `/mensagem` was not used
+   * (or was refused) and no poll is waiting to collect `resposta`.
+   *
+   * Reporting success here is what let proactive sends — a follow-up sweep, or
+   * a recipient `resolveRecipient` resolved to a bare phone rather than a
+   * `cod_atendimento` — persist messages the beneficiary never received.
+   */
+  private async refuseUndeliverable(instanceId: string, to: string, type: string): Promise<SendResult> {
+    const error = 'no ASC flow turn is polling this cod_atendimento — a text-only send cannot be delivered';
+    this.logger.warn('[asc-flow] refusing an undeliverable send', { instanceId, to, type });
+    await this.emitMessageFailed({ instanceId, chatId: to, error, retryable: false });
+    return { success: false, error, retryable: false, timestamp: Date.now() };
   }
 
   /**
@@ -434,11 +483,23 @@ export class AscFlowPlugin extends BaseChannelPlugin {
   /**
    * Park the answer on the turn. The next `api_rest` poll takes it, which is
    * what makes `{#BODY.pronto} = 1` fire and the flow advance.
+   *
+   * A parked handoff is never overwritten by an ordinary answer. In `flow` mode
+   * the handoff leaves `agentPaused` false, so the dispatcher's suppression gate
+   * does not trip and it still sends the agent's remaining parts after the tool
+   * returns. That second `sendMessage` used to replace the `hand_off:'sim'`
+   * body with a `hand_off:'nao'` one, and if the ~2s poll had not collected in
+   * between, the flow read "no handoff" and never reached the Genesys node —
+   * silently, which is the worst way to lose a transfer.
    */
   private resolveTurn(state: AscFlowInstanceState, chatId: string, ready: AscFlowTurnReady): void {
     const cod = chatId.trim();
     const entry = state.inFlight.get(cod);
     if (entry) {
+      if (entry.ready?.hand_off === 'sim' && ready.hand_off !== 'sim') {
+        this.logger.debug('[asc-flow] keeping the parked handoff over a later ordinary answer', { cod });
+        return;
+      }
       entry.ready = ready;
       entry.at = Date.now();
       return;
@@ -506,7 +567,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     // real buttons/list into the running atendimento, so the last bubble goes
     // out there as well — the numbered text it carries stays the canonical
     // fallback either way.
-    if (turn.ura && state.config.ascFlowInteractiveViaMensagem) {
+    if (turn.ura) {
       return { delivered: await this.sendMensagem(state, cod, turn.lastBubble, { ...turn.ura, ...reply }) };
     }
     return { delivered: false };
@@ -678,11 +739,24 @@ export class AscFlowPlugin extends BaseChannelPlugin {
    * this `cod_atendimento` — or, past the TTL, the empty body that releases a
    * turn nobody answered. Taking either CLOSES the turn: the next call with the
    * same text is a genuinely new one.
+   *
+   * `text` is the `chatInput` the flow just POSTed, and it GATES the take. An
+   * answer belongs to the turn that asked for it: the poll re-sends the same
+   * `chatInput` until it collects, so a match is the re-poll and a mismatch is
+   * the beneficiary saying something new. Without the gate a parked body (a
+   * proactive send parks one under `text: ''`, and any answer outlives its poll
+   * by up to the TTL) was handed to that new message and `handleInboundTurn`
+   * was never reached — the message vanished with nothing logged.
    */
-  takeReadyTurn(instanceId: string, codAtendimento: string): AscFlowTurnReady | null {
+  takeReadyTurn(instanceId: string, codAtendimento: string, text: string): AscFlowTurnReady | null {
     const state = this.ascFlowInstances.get(instanceId);
     const entry = state?.inFlight.get(codAtendimento);
     if (!state || !entry) return null;
+
+    // A new message: leave the entry alone. It is not consumed here and not
+    // treated as a redelivery either (`isRedeliveryOfTurnInFlight` compares the
+    // same way), so the turn publishes and overwrites the stale window.
+    if (entry.text !== text) return null;
 
     const ageMs = Date.now() - entry.at;
 
@@ -710,13 +784,17 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     }
 
     state.inFlight.delete(codAtendimento);
+    // Past the TTL the answer is handed over anyway. The text already matched,
+    // so this IS the answer to the question being asked, and the alternative —
+    // dropping it — left no entry behind for `isRedeliveryOfTurnInFlight` to
+    // recognise, so the very same POST republished the turn: a second billed
+    // agent run and a duplicate bubble on the handset.
     if (ageMs > IN_FLIGHT_TTL_MS) {
-      this.logger.warn('[asc-flow] discarding a turn answer the flow never collected', {
+      this.logger.warn('[asc-flow] answering with a turn the flow was slow to collect', {
         instanceId,
         codAtendimento,
         ageMs,
       });
-      return null;
     }
     return entry.ready;
   }

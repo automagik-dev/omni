@@ -143,6 +143,26 @@ export function stubPlatform(overrides: Record<string, () => Response> = {}): {
   };
 }
 
+/** The `chatInput` `openTurn` opens the in-flight window with. */
+export const TURN_TEXT = 'oi';
+
+/**
+ * Put a turn in flight for `cod`, the way the flow's `api_rest` node does.
+ *
+ * Outbound is only deliverable while a poll is waiting: a text turn rides back
+ * in the poll body, so `sendMessage` refuses when nothing is polling. Every
+ * outbound test therefore opens the window first, exactly as production does.
+ */
+export async function openTurn(plugin: AscFlowPlugin, cod = '42', text = TURN_TEXT): Promise<void> {
+  await plugin.handleWebhook(
+    new Request(`http://localhost/api/v2/channels/asc-flow/${instanceId}/webhook`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ codAtendimento: cod, chatInput: text }),
+    }),
+  );
+}
+
 /** Connect the plugin against the stubbed platform. */
 export async function connectPlugin(
   plugin: AscFlowPlugin,

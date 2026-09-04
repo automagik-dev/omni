@@ -131,12 +131,22 @@ describe('handleWebhook', () => {
     expect(received()).toHaveLength(0);
   });
 
-  it('rejects a mismatching verify token but allows a request that carries none', async () => {
+  // The route is mounted auth-exempt, so this token is the only lock once it is
+  // configured: a MISSING one must be refused exactly like a wrong one, or the
+  // check is bypassed by simply not sending it.
+  it('rejects a wrong verify token — and a missing one just the same', async () => {
     await boot({ webhookVerifyToken: 'secret' });
 
     expect((await post({ codAtendimento: '1', chatInput: 'x' }, '?token=wrong')).status).toBe(401);
     expect((await post({ codAtendimento: '1', chatInput: 'x' }, '', { 'x-webhook-token': 'wrong' })).status).toBe(401);
+    expect((await post({ codAtendimento: '1', chatInput: 'x' })).status).toBe(401);
     expect((await post({ codAtendimento: '1', chatInput: 'x' }, '?token=secret')).status).toBe(200);
+    expect((await post({ codAtendimento: '1', chatInput: 'x' }, '', { 'x-webhook-token': 'secret' })).status).toBe(200);
+  });
+
+  it('stays open when no verify token is configured', async () => {
+    await boot();
+
     expect((await post({ codAtendimento: '1', chatInput: 'x' })).status).toBe(200);
   });
 

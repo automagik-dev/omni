@@ -15,10 +15,12 @@ import { AscFlowPlugin } from '../plugin';
 import {
   MockEventBus,
   type RecordedCall,
+  TURN_TEXT,
   connectPlugin,
   createContext,
   instanceId,
   jsonResponse,
+  openTurn,
   stubPlatform,
 } from './helpers';
 
@@ -27,7 +29,7 @@ let calls: RecordedCall[];
 let restore: () => void;
 
 const of = (path: string) => calls.filter((c) => c.path === path);
-const ready = (cod: string) => plugin.takeReadyTurn(instanceId, cod);
+const ready = (cod: string) => plugin.takeReadyTurn(instanceId, cod, TURN_TEXT);
 
 async function boot(
   overrides: Record<string, () => Response> = {},
@@ -39,6 +41,8 @@ async function boot(
   plugin = new AscFlowPlugin();
   await plugin.initialize(createContext(new MockEventBus()));
   await connectPlugin(plugin, credentials);
+  // A poll must be waiting for an outbound text turn to be deliverable.
+  await openTurn(plugin);
   calls.length = 0;
 }
 
@@ -238,14 +242,6 @@ describe('outbound interactive through /mensagem', () => {
     const body = ready('42');
     expect(body).toMatchObject({ resposta: 'Escolha:\n1. a\n2. b' });
     expect(body?.ura_opcoes).toBeUndefined();
-  });
-
-  it('keeps the numbered text in resposta when the tenant opts out', async () => {
-    await boot({}, { ascFlowInteractiveViaMensagem: false });
-    await send({ type: 'text', text: 'Escolha:', buttons: options(2) });
-
-    expect(of('/mensagem')).toHaveLength(0);
-    expect(ready('42')).toMatchObject({ resposta: 'Escolha:', forcar_botoes: true });
   });
 
   it('quotes a platform message id when the caller supplies one', async () => {

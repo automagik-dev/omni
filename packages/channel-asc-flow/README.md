@@ -37,7 +37,6 @@ Both can exist side by side; they share no code and no configuration.
 | `ascFlowChave` | yes | `/authuser` chave — **secret**, redacted from API responses |
 | `ascFlowHandoffMode` | no | default `flow` — `flow` routes the handoff through the flow's Genesys node (no `/transferirHumano`); `service` calls `/transferirHumano` and parks the atendimento in the ASC's own queue. **Exclusive**, see [Handoff](#handoff) |
 | `ascFlowHandoffServico` | no | `cod_servico` for `/transferirHumano` — **`service` mode only** |
-| `ascFlowInteractiveViaMensagem` | no | default `true` — deliver interactive turns through `POST /mensagem` (real buttons/list); `false` keeps the numbered text in `resposta` |
 | `webhookVerifyToken` | no | shared secret the flow may echo as `?token=` or `x-webhook-token` |
 
 ## Inbound contract
@@ -261,9 +260,8 @@ The fields ride in the poll body **and** the last bubble goes out through
 `POST /mensagem` with them, which is what makes the buttons/list render without
 a URA node in the flow. When that push succeeds, `resposta` comes back **empty**
 so the flow's message node does not repeat the bubble — `bolhas` still carries
-the full turn. Set `ascFlowInteractiveViaMensagem: false` on the instance to go
-back to the numbered text in `resposta` (the previous behavior) if a tenant's
-flow renders that bubble itself.
+the full turn. There is no opt-out: a flow that renders the options itself would
+need a URA node consuming `ura_opcoes`, and no tenant runs one.
 
 ### Handoff
 

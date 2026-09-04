@@ -101,12 +101,14 @@ export async function handleAscFlowWebhookRequest(
     return new Response('Method not allowed', { status: 405 });
   }
 
-  // Optional shared secret — only rejects when a token is configured AND the
-  // request carries a mismatching one, so a flow that has not been updated to
-  // echo it keeps working.
+  // Optional shared secret. Once a token IS configured it is mandatory: a
+  // missing one is rejected exactly like a wrong one. Accepting the absence
+  // made the check bypassable by simply not sending it — and this route is
+  // mounted auth-exempt, so anyone holding the instance UUID could inject
+  // turns (billed agent runs) and drain parked answers.
   if (verifyToken) {
     const supplied = new URL(request.url).searchParams.get('token') ?? request.headers.get('x-webhook-token');
-    if (supplied !== null && supplied !== verifyToken) {
+    if (supplied !== verifyToken) {
       logger.warn('[asc-flow] webhook token mismatch — rejecting', { instanceId });
       return new Response('Unauthorized', { status: 401 });
     }
@@ -146,8 +148,10 @@ export async function handleAscFlowWebhookRequest(
 
   // The agent may already have answered a turn for this atendimento. That
   // answer is what the flow is polling FOR, so it is checked before anything
-  // else — and taking it closes the turn.
-  const ready = plugin.takeReadyTurn(instanceId, turn.codAtendimento);
+  // else — and taking it closes the turn. The TEXT is handed along: an answer
+  // belongs to the turn that asked for it, and a parked body must never be
+  // spent on a genuinely new message (which would swallow it silently).
+  const ready = plugin.takeReadyTurn(instanceId, turn.codAtendimento, turn.text);
   if (ready) {
     return json(ready);
   }

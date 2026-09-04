@@ -23,7 +23,15 @@ const MARKER = /##([0-9a-f]{2,6}(?:-[0-9a-f]{2,6})*)##/gi;
  */
 // Alternation rather than a character class: a class cannot express a
 // multi-codepoint emoji, and the linter is right to refuse one here.
-const EMOJI_RUN = /\p{Extended_Pictographic}(?:️|‍|\p{Emoji_Modifier}|\p{Extended_Pictographic})*/gu;
+//
+// The first two alternatives are NOT covered by `Extended_Pictographic`, and
+// without them a flag or a keycap slips through raw and reaches the handset as
+// `?` — the same failure this module exists to prevent:
+//   - a flag is a pair of regional indicators (🇧🇷 = 1f1e7 1f1f7);
+//   - a keycap is an ASCII base plus U+20E3 (1️⃣ = 31 fe0f 20e3).
+// They come first so the pair/keycap wins over any partial pictographic match.
+const EMOJI_RUN =
+  /[\u{1F1E6}-\u{1F1FF}]{2}|[0-9#*]️?⃣|\p{Extended_Pictographic}(?:️|‍|\p{Emoji_Modifier}|\p{Extended_Pictographic})*/gu;
 
 /** `##1f5d1-fe0f##` → 🗑️. Unparseable sequences keep the marker, never drop text. */
 export function decodeAscEmoji(text: string): string {

@@ -12,10 +12,12 @@ import {
   HANDOFF_SERVICO,
   MockEventBus,
   type RecordedCall,
+  TURN_TEXT,
   connectPlugin,
   createContext,
   instanceId,
   jsonResponse,
+  openTurn,
   stubPlatform,
 } from './helpers';
 
@@ -34,7 +36,7 @@ const SERVICE = { ascFlowHandoffMode: 'service' } as const;
 const sequence = (): string[] => calls.filter((c) => c.path !== '/authuser').map((c) => c.path);
 const of = (path: string) => calls.filter((c) => c.path === path);
 /** The body the next `api_rest` poll would receive. */
-const ready = (cod: string) => plugin.takeReadyTurn(instanceId, cod);
+const ready = (cod: string) => plugin.takeReadyTurn(instanceId, cod, TURN_TEXT);
 
 async function boot(
   overrides: Record<string, () => Response> = {},
@@ -47,7 +49,10 @@ async function boot(
   plugin = new AscFlowPlugin();
   await plugin.initialize(createContext(eventBus));
   await connectPlugin(plugin, credentials);
-  calls.length = 0; // drop the connect-time /authuser
+  // A poll must be waiting for an outbound text turn to be deliverable.
+  await openTurn(plugin);
+  calls.length = 0; // drop the connect-time /authuser and the primed turn
+  eventBus.published.length = 0;
 }
 
 afterEach(async () => {
@@ -219,12 +224,36 @@ describe('outbound turn', () => {
     expect(result.pauseAgent).toBe(false);
   });
 
-  it('leaves the agent pause alone in service mode', async () => {
+  it('pauses the agent in service mode once the transfer is accepted', async () => {
     await boot({}, SERVICE);
     const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: 'VQ_X' });
 
-    // Undefined = the route's default, which is to pause.
-    expect(result.pauseAgent).toBeUndefined();
+    // The atendimento really did leave "Automático" — nobody should dispatch
+    // another agent turn into a chat a human now owns.
+    expect(result.pauseAgent).toBe(true);
+  });
+
+  // A refused transfer leaves the atendimento in "Automático" with the flow
+  // still polling. Pausing there is the same deadlock as flow mode: nobody
+  // answers the next turn and the beneficiary gets neither human nor bot.
+  it('does NOT pause the agent when the service-mode transfer is refused', async () => {
+    await boot(
+      { '/transferirHumano': () => jsonResponse({ cod_error: 10, msg: 'Atendimento já finalizado!' }, 401) },
+      SERVICE,
+    );
+    const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: 'VQ_X' });
+
+    expect(result.pauseAgent).toBe(false);
+    expect(ready('42')?.hand_off).toBe('nao');
+  });
+
+  // `planHandoff` refusing (a malformed queue) never dialed anything either.
+  it('does NOT pause the agent when the service-mode handoff never dials', async () => {
+    await boot({}, { ...SERVICE, ascFlowHandoffServico: 0 });
+    const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: 'VQ_X' });
+
+    expect(result.pauseAgent).toBe(false);
+    expect(of('/transferirHumano')).toHaveLength(0);
   });
 
   it('omits the Genesys fields when the turn does not hand off', async () => {
@@ -367,9 +396,13 @@ describe('outbound turn', () => {
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: `${'a '.repeat(300)}` });
       expect(ready('42')?.motivo_transf_vq).toHaveLength(255);
 
+      // Reading the body closes the turn, so each case needs its own — exactly
+      // like production, where one poll collects one answer.
+      await openTurn(plugin);
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: '  fora \n do  escopo ' });
       expect(ready('42')?.motivo_transf_vq).toBe('fora do escopo');
 
+      await openTurn(plugin);
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: '   \n ' });
       expect(ready('42')?.motivo_transf_vq).toBeUndefined();
     });
