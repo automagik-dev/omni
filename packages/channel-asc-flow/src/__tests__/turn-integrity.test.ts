@@ -142,6 +142,77 @@ describe('a parked handoff survives the agent finishing its turn', () => {
   });
 });
 
+describe('one agent reply is one turn, however many sends it arrives in', () => {
+  // The provider splits a reply on blank lines and the dispatcher sends each
+  // part separately. The FIRST part used to answer the poll, the flow collected
+  // it and closed the turn, and parts 2..N were refused as undeliverable — one
+  // paragraph of three reached the beneficiary, and whatever the agent sent
+  // after the text was lost. Measured on atendimento 22325225.
+  const part = (text: string, index: number, count: number, content: Record<string, unknown> = {}) =>
+    plugin.sendMessage(instanceId, {
+      to: '42',
+      content: { type: 'text', text, ...content } as never,
+      metadata: { partIndex: index, partCount: count },
+    });
+
+  it('answers once, with every part a bubble and the URA on the last', async () => {
+    await boot();
+    await openTurn(plugin);
+
+    expect((await part('primeiro', 0, 3)).success).toBe(true);
+    // A poll landing between parts finds the turn still unanswered — that is
+    // what stops the flow from advancing on the first paragraph alone.
+    expect(poll(TURN_TEXT)).toBeNull();
+
+    await part('segundo', 1, 3);
+    await part('Escolha:', 2, 3, { buttons: [{ text: 'Manha' }, { text: 'Tarde' }] });
+
+    expect(poll(TURN_TEXT)).toMatchObject({
+      pronto: 1,
+      bolhas: ['primeiro', 'segundo', 'Escolha:'],
+      ura_opcoes: { '1': 'Manha', '2': 'Tarde' },
+      forcar_botoes: true,
+    });
+
+    // The leading bubbles really left; the last one rode `/mensagem` with the
+    // URA, which is why `resposta` comes back empty.
+    expect(calls.filter((c) => c.path === '/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([
+      'primeiro',
+      'segundo',
+    ]);
+    expect(calls.filter((c) => c.path === '/mensagem')).toHaveLength(1);
+  });
+
+  it('records the reply once, not one message per part', async () => {
+    await boot();
+    await openTurn(plugin);
+
+    await part('primeiro', 0, 3);
+    await part('segundo', 1, 3);
+    await part('terceiro', 2, 3);
+
+    const sent = eventBus.published.filter((e) => e.type.includes('sent'));
+    expect(sent).toHaveLength(1);
+    expect(eventBus.published.some((e) => e.type.includes('failed'))).toBe(false);
+    expect((sent[0]?.payload as { content: { text: string } }).content.text).toBe('primeiro\n\nsegundo\n\nterceiro');
+  });
+
+  it('still refuses a part that arrives after the turn was collected', async () => {
+    await boot();
+    await openTurn(plugin);
+    await part('primeiro', 0, 2);
+    await part('segundo', 1, 2);
+    expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1 });
+
+    // Nothing is polling any more: a straggler must say it reached nobody
+    // rather than be held for a last part that will never come.
+    const late = await part('esqueci de dizer', 0, 2);
+
+    expect(late.success).toBe(false);
+    expect(late.error).toContain('no ASC flow turn is polling');
+  });
+});
+
 describe('an undeliverable send is reported as one', () => {
   // A text turn reaches the handset ONLY by being collected from the poll body.
   // Parking one with nobody polling — a follow-up sweep, or a `to` that

@@ -31,15 +31,15 @@
  * Always HTTP 200. The flow is configured with `async = 1` and
  * `async_condition = {#BODY.pronto} = 1`.
  *
- * Turn boundary. One `sendMessage` is one flow turn. A turn's paragraphs
- * (blank-line separated) become separate bubbles, which is how the scheduling
- * agent writes and what the adapter proved against the ASC emulator. The
- * bubbles before the last one are PUSHED through `callbackFlowMsg` (with typing
- * between them, for rhythm); the LAST one rides back in `resposta`, which is
- * the single slot the flow's `message` node renders.
- * ponytail: if an agent ever emits two `sendMessage` calls for one user turn,
- * the flow advances twice. Upgrade path is a per-`cod` turn buffer flushed on
- * an end-of-turn signal — not built until a dispatcher actually does that.
+ * Turn boundary. One agent REPLY is one flow turn — not one `sendMessage`. A
+ * turn's paragraphs (blank-line separated) become separate bubbles, which is
+ * how the scheduling agent writes and what the adapter proved against the ASC
+ * emulator. The bubbles before the last one are PUSHED through
+ * `callbackFlowMsg` (with typing between them, for rhythm); the LAST one rides
+ * back in `resposta`, which is the single slot the flow's `message` node
+ * renders. The dispatcher does split one reply across several `sendMessage`
+ * calls, so the parts before the last are HELD on the turn window and the last
+ * one answers with all of them — see `collectTurnParts`.
  *
  * Handoff. Detected from `metadata.isHandoff` (the Gupshup precedent), not by
  * sniffing the agent's prose: the adapter only regex-matched the invitation
@@ -115,6 +115,11 @@ interface AscFlowTurnState {
    * sends.
    */
   correlationId?: string;
+  /**
+   * The parts of one agent reply that arrived before its last one. They ride
+   * the window so they share its TTL and its identity — see `collectTurnParts`.
+   */
+  parts?: string[];
   /** Set by `sendMessage`; the next poll takes it and the turn is over. */
   ready?: AscFlowTurnReady;
 }
@@ -196,6 +201,50 @@ function resolveOutboundText(message: OutgoingMessage): string {
   // confirmation). Encoding is the mirror of the inbound decode and runs even
   // in passthrough: it is transport, not formatting.
   return encodeAscEmoji(formatted);
+}
+
+/**
+ * The message that answers the turn — or `null` while its earlier parts are
+ * still being held.
+ *
+ * One agent reply reaches a channel as MANY `sendMessage` calls: the provider
+ * splits it on blank lines (`agno-provider.ts`, `enableAutoSplit`) and the
+ * dispatcher sends each part on its own. Every other channel just shows N
+ * messages. Here the FIRST part answered the poll, the flow's next poll
+ * collected it and closed the turn, and parts 2..N found nothing polling and
+ * were refused as undeliverable — the beneficiary read one paragraph of three
+ * and lost whatever the agent sent after the text. Measured on atendimento
+ * 22325225: "Agno agent responded parts:3", then two undeliverable warnings.
+ *
+ * So the turn is the whole reply, not its first part. The dispatcher stamps
+ * `partIndex`/`partCount`; the parts before the last are held and the last one
+ * answers with all of them joined by a blank line — which `splitBubbles` turns
+ * back into the same bubbles, with the URA on the last one.
+ *
+ * Holding is only ever done on a turn that is really being polled, and the
+ * held parts live ON that window, so they inherit its TTL and its identity: a
+ * window that closes mid-reply takes its held parts with it rather than
+ * leaking them or answering the next turn. A part that arrives with no window
+ * falls through to the usual undeliverable refusal, unchanged.
+ */
+function collectTurnParts(message: OutgoingMessage, turn: AscFlowTurnState | undefined): OutgoingMessage | null {
+  const meta = message.metadata ?? {};
+  const partCount = Number(meta.partCount ?? 1);
+  const partIndex = Number(meta.partIndex ?? 0);
+  // Nothing to collect: no turn to hold on to, a send that stands alone, or a
+  // hint that is not a hint (NaN fails both comparisons). Rich content never
+  // takes this path — it leaves through `/mensagem` and needs no poll.
+  if (!turn || message.content.type !== 'text' || !(partCount > 1) || !(partIndex >= 0)) return message;
+
+  const part = message.content.text ?? '';
+  if (partIndex < partCount - 1) {
+    turn.parts = [...(turn.parts ?? []), part];
+    return null;
+  }
+
+  const text = [...(turn.parts ?? []), part].join('\n\n');
+  turn.parts = undefined;
+  return { ...message, content: { ...message.content, text } };
 }
 
 /** The list presentation hints `buildUra` accepts, when the caller set any. */
@@ -379,9 +428,8 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       return { success: false, error: 'ASC Flow instance not connected', retryable: false, timestamp: Date.now() };
     }
 
-    const { content, to } = message;
+    const { to } = message;
     const meta = message.metadata ?? {};
-    const text = resolveOutboundText(message);
 
     const correlationId = meta.correlationId as string | undefined;
     if (correlationId) this.captureT10(correlationId);
@@ -402,7 +450,17 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       const answering = state.inFlight.get(to.trim());
       const polling = answering !== undefined && answering.text !== '';
 
-      const { rich, bubbles } = await this.prepareTurn(message, text);
+      // One agent reply, many sends. Hold every part but the last so ONE turn
+      // answers with all of them — see `collectTurnParts`. A held part reached
+      // nobody yet and produced no message, hence no id: the dispatcher does
+      // not read this result, and nothing else stamps the hint.
+      const turnMessage = collectTurnParts(message, polling ? answering : undefined);
+      if (!turnMessage) return { success: true, timestamp: Date.now() };
+
+      const content = turnMessage.content;
+      const text = resolveOutboundText(turnMessage);
+
+      const { rich, bubbles } = await this.prepareTurn(turnMessage, text);
 
       // The URA rides on the LAST bubble — the options attach to the last thing
       // the beneficiary read, and that bubble is the one that goes back in
@@ -421,7 +479,14 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // being collected from the poll body.
       if (!rich && !ura && !polling) return this.refuseUndeliverable(instanceId, to, content.type);
 
-      const { delivered } = await this.deliver(state, cod, { text, bubbles, lastBubble, rich, ura, message });
+      const { delivered } = await this.deliver(state, cod, {
+        text,
+        bubbles,
+        lastBubble,
+        rich,
+        ura,
+        message: turnMessage,
+      });
 
       // The farewell only needs pushing when `/mensagem` did not already put it
       // on the handset (`delivered`); in flow mode it rides `resposta` as usual.
@@ -450,7 +515,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // The platform returns no per-message id, so Omni's UUID stays canonical.
       const messageId = crypto.randomUUID();
 
-      await this.emitTurnSent(instanceId, message, messageId, {
+      await this.emitTurnSent(instanceId, turnMessage, messageId, {
         cod,
         bubbles: bubbles.length,
         ura,

@@ -555,6 +555,7 @@ async function sendTextMessage(
   correlationId?: string,
   senderAgentId?: string,
   systemNotice?: boolean,
+  part?: { index: number; count: number },
 ): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
@@ -567,7 +568,13 @@ async function sendTextMessage(
     to: chatId,
     content: { type: 'text', text: sanitized },
     replyTo,
-    metadata: { messageFormatMode, correlationId, senderAgentId, systemNotice },
+    metadata: {
+      messageFormatMode,
+      correlationId,
+      senderAgentId,
+      systemNotice,
+      ...(part ? { partIndex: part.index, partCount: part.count } : {}),
+    },
   });
 }
 
@@ -1568,10 +1575,16 @@ async function sendResponseParts(
   senderAgentId?: string,
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
-  const allChunks: string[] = [];
+  const chunked: string[] = [];
   for (const part of parts) {
-    allChunks.push(...chunkText(part, messageLimit));
+    chunked.push(...chunkText(part, messageLimit));
   }
+
+  // Sanitize BEFORE numbering. `sendTextMessage` drops a chunk that is nothing
+  // but internal metadata, and `partIndex`/`partCount` must count the sends
+  // that really happen — a channel that answers its turn on the LAST part
+  // (asc-flow) would otherwise wait for a part that never arrives.
+  const allChunks = chunked.map((chunk) => sanitizeOutboundText(chunk)).filter(Boolean);
 
   // Slack needs thread_ts on every message to stay in thread.
   // WhatsApp/Discord senders only quote the first chunk internally,
@@ -1589,6 +1602,11 @@ async function sendResponseParts(
       chunkReplyTo,
       correlationId,
       senderAgentId,
+      undefined,
+      // ONE agent reply, many sends. Every channel but one wants exactly that;
+      // asc-flow needs to know where the reply ENDS, because its transport
+      // carries a single answer per polled turn.
+      { index, count: allChunks.length },
     );
     const isLastChunk = index === allChunks.length - 1;
     if (!isLastChunk) {
@@ -6587,6 +6605,8 @@ export const setupAgentResponder = setupAgentDispatcher;
 /** @internal Exported for unit testing only — do not use in production code. */
 export const __test__ = {
   buildContextMessages,
+  /** The one funnel every agent reply leaves through — pins the part stamping. */
+  sendResponseParts,
   awaitMediaProcessing,
   // #914 cancel plumbing — exposed so tests can stage in-flight runs and
   // assert the thread-scoped lookup + requestedAt guard.
