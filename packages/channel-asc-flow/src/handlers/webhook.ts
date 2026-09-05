@@ -194,6 +194,15 @@ export async function handleAscFlowWebhookRequest(
     return pending();
   }
 
+  // A flow that restarted after its own `aguarda_usuario` timeout re-enters
+  // `api_rest` carrying the PREVIOUS input, which reads here as the
+  // beneficiary repeating themselves. Only a text that matches the last turn
+  // we answered gets checked against the platform's own record, so the common
+  // path pays nothing. See `utils/turn-freshness.ts`.
+  if (await plugin.isStaleFlowReplay(instanceId, turn)) {
+    return pending();
+  }
+
   // `messageId` wins when the flow supplies one (60s SDK cache). Otherwise fall
   // back to the in-flight window, which is the REAL case: the flow body we
   // author carries no message id.
