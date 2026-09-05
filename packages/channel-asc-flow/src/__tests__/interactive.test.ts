@@ -88,8 +88,44 @@ describe('buildUra', () => {
     expect(buildUra('Escolha:', [{ text: 'Abrir', url: 'https://example.test' }])).toBeNull();
   });
 
-  it('honours forceList and sectionTitle by rendering a list', () => {
-    expect(buildUra('Escolha:', options(2), { forceList: true })?.forcar_botoes).toBe(false);
-    expect(buildUra('Escolha:', options(2), { sectionTitle: 'Horários' })?.forcar_botoes).toBe(false);
+  // A list does not exist on this platform. Measured on the handset 05/09: the
+  // ASC flattens `forcar_botoes: false` into plain text and appends a numbered
+  // menu of its own, so asking for a list buys the duplicated menu and loses
+  // the taps. Up to three options the answer is always buttons — `forceList`
+  // and `sectionTitle` are honoured only where buttons cannot go.
+  it('takes buttons over a requested list while the options still fit', () => {
+    expect(buildUra('Escolha:', options(2), { forceList: true })?.forcar_botoes).toBe(true);
+    expect(buildUra('Escolha:', options(2), { sectionTitle: 'Horários' })?.forcar_botoes).toBe(true);
+  });
+
+  it('still answers with a list past three options', () => {
+    expect(buildUra('Escolha:', options(5))?.forcar_botoes).toBe(false);
+  });
+
+  // The real case (05/09): two beneficiaries, and the turn went out as a list
+  // because the caller asked for one — so the handset got the duplicated text
+  // menu. Converting it to buttons is what shortens the titles, and it cuts on
+  // a word boundary rather than mid-word.
+  it('shortens a long title on a word boundary when converting to buttons', () => {
+    const ura = buildUra(
+      'Para quem é a consulta?',
+      [{ text: 'ROGERIO AMARO RODRIGUES' }, { text: 'ANELI CAMILO AMARO' }],
+      { forceList: true },
+    );
+
+    expect(ura).toMatchObject({
+      forcar_botoes: true,
+      ura_opcoes: { '1': 'ROGERIO AMARO', '2': 'ANELI CAMILO AMARO' },
+    });
+  });
+
+  // Shortening is what can CREATE the ambiguity, and the tap comes back as the
+  // title — two options that fold together would book the wrong person.
+  it('refuses buttons when shortening makes two titles collide', () => {
+    expect(
+      buildUra('Escolha:', [{ text: 'Consulta cardiologia manhã' }, { text: 'Consulta cardiologia tarde' }], {
+        forceList: true,
+      }),
+    ).toBeNull();
   });
 });
