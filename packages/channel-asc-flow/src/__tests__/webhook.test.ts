@@ -63,9 +63,12 @@ describe('handleWebhook', () => {
 
     expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toEqual({
       pronto: 1,
-      resposta: 'resposta',
+      // Vazia: o turno saiu por `/callbackFlowMsg`, não pelo corpo do poll.
+      resposta: '',
       hand_off: 'nao',
       bolhas: ['resposta'],
+      fila_vq: '',
+      motivo_transf_vq: '',
     });
     // Answer collected: the same text now opens a brand-new turn.
     expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toEqual({ pronto: 0 });
@@ -89,7 +92,7 @@ describe('handleWebhook', () => {
     });
   });
 
-  it('pushes every bubble but the last, and returns the last one in resposta', async () => {
+  it('pushes EVERY bubble and answers with an empty resposta', async () => {
     const stub = stubPlatform();
     restore = stub.restore;
     eventBus = new MockEventBus();
@@ -106,9 +109,10 @@ describe('handleWebhook', () => {
     expect(stub.calls.filter((c) => c.path === '/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([
       'um',
       'dois',
+      'tres',
     ]);
     expect(await body(await post({ codAtendimento: '42', chatInput: 'oi' }))).toMatchObject({
-      resposta: 'tres',
+      resposta: '',
       bolhas: ['um', 'dois', 'tres'],
     });
   });

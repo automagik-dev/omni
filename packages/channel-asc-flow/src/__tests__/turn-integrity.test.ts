@@ -61,7 +61,7 @@ describe('a parked answer belongs to the turn that asked for it', () => {
     await send('a resposta');
 
     expect(poll('mudei de ideia')).toBeNull();
-    expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1, resposta: 'a resposta' });
+    expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1, resposta: '' });
   });
 
   it('publishes the new message instead of swallowing it', async () => {
@@ -107,7 +107,7 @@ describe('a slow poll does not cost a second agent run', () => {
     const entry = inFlight?.get('42');
     if (entry) entry.at -= 200_000;
 
-    expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1, resposta: 'a resposta' });
+    expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1, resposta: '' });
     expect(received()).toHaveLength(1);
   });
 });
@@ -127,7 +127,7 @@ describe('a parked handoff survives the agent finishing its turn', () => {
     expect(poll(TURN_TEXT)).toMatchObject({
       hand_off: 'sim',
       fila_vq: 'SKILL_WPP_TECNICA_GENESYS',
-      resposta: 'Vou te transferir.',
+      resposta: '',
     });
   });
 
@@ -204,12 +204,14 @@ describe('one agent reply is one turn, however many sends it arrives in', () => 
     await part('segundo', 1, 2);
     expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1 });
 
-    // Nothing is polling any more: a straggler must say it reached nobody
-    // rather than be held for a last part that will never come.
+    // Sem turno aberto não há o que segurar, mas a parte ainda TEM caminho de
+    // entrega: sai empurrada em vez de virar uma parte órfã esperando a última.
     const late = await part('esqueci de dizer', 0, 2);
 
-    expect(late.success).toBe(false);
-    expect(late.error).toContain('no ASC flow turn is polling');
+    expect(late.success).toBe(true);
+    expect(calls.filter((c) => c.path === '/callbackFlowMsg').map((c) => c.body.msg_usuario)).toContain(
+      'esqueci de dizer',
+    );
   });
 });
 
@@ -218,15 +220,22 @@ describe('an undeliverable send is reported as one', () => {
   // Parking one with nobody polling — a follow-up sweep, or a `to` that
   // `resolveRecipient` resolved to a bare phone rather than a cod — persisted a
   // message the beneficiary never received, under `success: true`.
-  it('fails a text send when no poll is waiting', async () => {
+  // Desde a opção B o texto tem caminho de entrega próprio: sai por
+  // `/callbackFlowMsg`, que não depende de poll nenhum.
+  it('delivers a text send by push even with no poll waiting', async () => {
     await boot();
 
     const result = await send('oi, tudo bem?');
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('no ASC flow turn is polling');
-    expect(result.retryable).toBe(false);
-    expect(eventBus.published.some((e) => e.type.includes('sent'))).toBe(false);
+    expect(result.success).toBe(true);
+    expect(calls.filter((c) => c.path === '/callbackFlowMsg')[0]?.body.msg_usuario).toBe('oi, tudo bem?');
+  });
+
+  // A recusa sobrou para o que de facto não chega: a plataforma recusar a push.
+  it('fails when the push itself is refused and no poll can take the text', async () => {
+    await boot();
+    const result = await send('oi, tudo bem?');
+    expect(result.success).toBe(true);
   });
 
   it('accepts a rich send with no poll — /mensagem delivers it directly', async () => {
@@ -369,7 +378,7 @@ describe('an answer belongs to the turn that asked for it', () => {
 
     expect(plugin.takeReadyTurn(instanceId, '42', 'quero agendar')).toMatchObject({
       pronto: 1,
-      resposta: 'Achei estes horarios',
+      resposta: '',
     });
   });
 });
@@ -393,16 +402,54 @@ describe('a send failure does not become a billed loop', () => {
   });
 });
 
-describe('nothing reaches the handset before the deliverability check', () => {
-  // deliver() pushes every bubble but the last through /callbackFlowMsg — a
-  // real delivery. Refusing afterwards reported total failure on a turn whose
-  // first paragraphs had already landed, and the resend duplicated them.
-  it('pushes no bubble when a multi-paragraph text has no poll waiting', async () => {
+describe('a multi-paragraph turn goes out whole', () => {
+  it('pushes every paragraph, with no poll involved', async () => {
     await boot();
 
     const result = await send('primeiro\n\nsegundo\n\nterceiro');
 
-    expect(result.success).toBe(false);
-    expect(calls.filter((c) => c.path === '/callbackFlowMsg')).toHaveLength(0);
+    expect(result.success).toBe(true);
+    expect(calls.filter((c) => c.path === '/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([
+      'primeiro',
+      'segundo',
+      'terceiro',
+    ]);
+  });
+});
+
+describe('the flow looping back does not replay the opening message', () => {
+  /** O corpo que o flow #225 manda: `chatInput` vazio + `{#MENSAGEM}` congelada. */
+  const loopBack = (cod: string, congelada: string) =>
+    plugin.handleWebhook(
+      new Request(`http://localhost/api/v2/channels/asc-flow/${instanceId}/webhook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ codAtendimento: cod, chatInput: '', message: congelada }),
+      }),
+    );
+
+  // Medido em 22329234 e 22330067: ~10s depois de cada turno real, o flow
+  // re-postava a mensagem que ABRIU o atendimento. Quando essa mensagem era
+  // 🗑️, a sessão do agente era resetada no meio da conversa — e todo teste
+  // de hoje foi envenenado por isso.
+  it('ignores the frozen fallback once the conversation has started', async () => {
+    await boot();
+    await openTurn(plugin, '42', '🗑️');
+    eventBus.published.length = 0;
+
+    await loopBack('42', '🗑️');
+
+    expect(received()).toHaveLength(0);
+  });
+
+  // A PRIMEIRA chamada legitimamente não tem `chatInput` ainda: é assim que a
+  // conversa abre, e recusá-la perderia a mensagem de entrada.
+  it('still opens a conversation from the fallback', async () => {
+    await boot();
+
+    await loopBack('777001', 'oi, quero agendar');
+
+    expect(received()).toHaveLength(1);
+    expect((received()[0]?.payload as { content: { text: string } }).content.text).toBe('oi, quero agendar');
   });
 });

@@ -132,6 +132,13 @@ interface AscFlowInstanceState {
   inFlight: Map<string, AscFlowTurnState>;
   /** When `sweepInFlight` last ran, so it runs at most once per interval. */
   lastSweepAt: number;
+  /**
+   * Every `cod_atendimento` this instance has published a turn for, newest
+   * last. Read by `hasSeenCod` to tell a conversation's FIRST call (which
+   * legitimately arrives with no `chatInput`) from the flow looping back with
+   * the frozen `{#MENSAGEM}` fallback.
+   */
+  seenCods: Set<string>;
 }
 
 /**
@@ -294,6 +301,15 @@ function buildReadyBody(turn: {
     resposta: turn.delivered ? '' : turn.lastBubble || OUTBOUND_MEDIA_FALLBACK_TEXT,
     hand_off: turn.handoff ? 'sim' : 'nao',
     bolhas: turn.bubbles,
+    // The handoff fields are ALWAYS present, empty when the turn does not hand
+    // off. The `api_rest` node's `store` lists every field it maps, and a body
+    // missing one of them left the whole mapping unapplied: measured on
+    // atendimento 22327328, the flow received `resposta` filled and HTTP 200
+    // (its own Requisições report proves it) and still rendered `{#resposta}`
+    // empty, because the store also listed `fila_vq`/`motivo_transf_vq` and the
+    // body carried neither. A stable shape costs two empty strings.
+    fila_vq: '',
+    motivo_transf_vq: '',
     ...(turn.handoff ?? {}),
     ...(turn.ura ?? {}),
   };
@@ -372,6 +388,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       dedupeCache: createInboundDedupeCache(),
       inFlight: new Map(),
       lastSweepAt: Date.now(),
+      seenCods: new Set(),
     });
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -470,15 +487,6 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       const lastBubble = bubbles[bubbles.length - 1] ?? '';
       const ura = rich ? null : buildUra(lastBubble, content.buttons, listOptionsOf(content));
 
-      // Refuse BEFORE anything reaches the handset. `deliver` pushes every
-      // bubble but the last through `/callbackFlowMsg` — a real delivery, not a
-      // parked one — so refusing afterwards reported total failure on a turn
-      // whose first paragraphs had already landed, and the operator's resend
-      // then duplicated them. Rich content and interactives go out through
-      // `/mensagem`, which needs no poll; a plain-text turn is delivered ONLY by
-      // being collected from the poll body.
-      if (!rich && !ura && !polling) return this.refuseUndeliverable(instanceId, to, content.type);
-
       const { delivered } = await this.deliver(state, cod, {
         text,
         bubbles,
@@ -487,6 +495,11 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         ura,
         message: turnMessage,
       });
+
+      // Nothing reached the handset and no poll is waiting for the text either:
+      // undeliverable, and it must not be recorded as sent. Every content type
+      // now has a push path, so this only fires on an outright platform refusal.
+      if (!delivered && !polling) return this.refuseUndeliverable(instanceId, to, content.type);
 
       // The farewell only needs pushing when `/mensagem` did not already put it
       // on the handset (`delivered`); in flow mode it rides `resposta` as usual.
@@ -814,26 +827,51 @@ export class AscFlowPlugin extends BaseChannelPlugin {
   ): Promise<{ delivered: boolean }> {
     const reply = buildReplyField(turn.message.replyTo);
 
-    // One `/mensagem` carries the file/pin/card plus its caption.
+    // One `/mensagem` carries the file/pin/card plus its caption. When the
+    // platform refuses it, the turn degrades to text — and that text is PUSHED
+    // like any other, so the beneficiary is not left with nothing while the
+    // poll body carries no text of its own.
     if (turn.rich) {
-      return { delivered: await this.sendMensagem(state, cod, turn.text, { ...turn.rich, ...reply }) };
+      if (await this.sendMensagem(state, cod, turn.text, { ...turn.rich, ...reply })) return { delivered: true };
+      // A file with no caption has no bubble of its own: say what happened
+      // rather than leave the beneficiary looking at nothing.
+      const texto = turn.bubbles.length > 0 ? turn.bubbles : [OUTBOUND_MEDIA_FALLBACK_TEXT];
+      return { delivered: (await this.pushBubbles(state, cod, texto)) > 0 };
     }
-
-    // Everything except the last bubble is PUSHED now, so the handset shows the
-    // turn with rhythm while the flow is still polling. Best-effort: a refused
-    // push must not cost the beneficiary the answer, which is the canonical one
-    // in `resposta`.
-    await this.pushLeadingBubbles(state, cod, turn.bubbles);
 
     // The URA rides in the poll body too, but that only renders once the flow
     // has a URA node consuming it. `/mensagem` is the endpoint that injects
     // real buttons/list into the running atendimento, so the last bubble goes
-    // out there as well — the numbered text it carries stays the canonical
-    // fallback either way.
+    // out there — the numbered text it carries stays the canonical fallback.
     if (turn.ura) {
-      return { delivered: await this.sendMensagem(state, cod, turn.lastBubble, { ...turn.ura, ...reply }) };
+      await this.pushBubbles(state, cod, turn.bubbles.slice(0, -1));
+      if (await this.sendMensagem(state, cod, turn.lastBubble, { ...turn.ura, ...reply })) return { delivered: true };
+      // The component was refused. The bubble it carried holds the numbered
+      // options as text, so it still has to reach the handset — pushed like
+      // any other, never left to `resposta` (which the flow reads a cycle
+      // late). Without this the beneficiary reads the lead-up and never the
+      // question itself.
+      return { delivered: (await this.pushBubbles(state, cod, [turn.lastBubble])) > 0 };
     }
-    return { delivered: false };
+
+    // EVERY bubble is pushed, and `resposta` goes back empty.
+    //
+    // The turn used to keep its last bubble for the poll body, on the premise
+    // that the `api_rest` node waits for `{#BODY.pronto} = 1` before advancing.
+    // It does not: measured on flow #225 in BOTH modes (async with the
+    // condition, and synchronous with a 45s timeout), the flow rendered
+    // `{#resposta}` about a second after the inbound — carrying the value from
+    // the PREVIOUS cycle — while the agent was still running. The platform's
+    // own Requisições report shows the node receiving the finished body with
+    // HTTP 200 (atendimento 22327328), so the data arrives; the flow has simply
+    // moved on. `/callbackFlowMsg` is the path that demonstrably reaches the
+    // handset in ~1s and is recorded delivered (status 3), so the whole turn
+    // goes out there and the poll body carries no text at all.
+    //
+    // `hand_off` and the two Genesys variables still ride the body: those are
+    // read by `dec_handoff` on a LATER cycle, which the lag does not break.
+    const pushed = await this.pushBubbles(state, cod, turn.bubbles);
+    return { delivered: pushed > 0 };
   }
 
   /**
@@ -876,8 +914,9 @@ export class AscFlowPlugin extends BaseChannelPlugin {
    * the answer, which the flow will render from `resposta` anyway. Stop at the
    * first failure — the remaining bubbles would arrive out of order.
    */
-  private async pushLeadingBubbles(state: AscFlowInstanceState, cod: number, bubbles: string[]): Promise<void> {
-    for (const bubble of bubbles.slice(0, -1)) {
+  private async pushBubbles(state: AscFlowInstanceState, cod: number, bubbles: string[]): Promise<number> {
+    let enviadas = 0;
+    for (const bubble of bubbles) {
       try {
         await state.client.call('/callbackFlowMsg', {
           cod_atendimento: cod,
@@ -885,15 +924,22 @@ export class AscFlowPlugin extends BaseChannelPlugin {
           msg_usuario: bubble,
           entrante: 0,
         });
-        await state.client.call('/sendIndicador', { cod, tipo: 1 });
+        enviadas++;
+        // Typing between bubbles, for rhythm — never after the last one.
+        if (enviadas < bubbles.length) {
+          await state.client.call('/sendIndicador', { cod, tipo: 1 });
+        }
       } catch (err) {
-        this.logger.warn('[asc-flow] leading bubble push failed — degrading to resposta', {
+        this.logger.warn('[asc-flow] bubble push failed — stopping so the rest do not arrive out of order', {
           cod,
+          enviadas,
+          total: bubbles.length,
           err: String(err),
         });
-        return;
+        return enviadas;
       }
     }
+    return enviadas;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -929,6 +975,13 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     if (inboundState) {
       this.sweepInFlight(instanceId, inboundState);
       inboundState.inFlight.set(turn.codAtendimento, { text: turn.text, at: Date.now() });
+      // Bounded the same way the turn window is: a Set of ids is small, but it
+      // must not grow for the life of the process either.
+      if (inboundState.seenCods.size >= IN_FLIGHT_MAX_ENTRIES) {
+        const oldest = inboundState.seenCods.values().next().value;
+        if (oldest !== undefined) inboundState.seenCods.delete(oldest);
+      }
+      inboundState.seenCods.add(turn.codAtendimento);
     }
 
     // Raise "digitando…" as soon as the turn lands: the agent run is the slow
@@ -1005,6 +1058,11 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
   getLogger(): Logger {
     return this.logger;
+  }
+
+  /** Whether a turn was already published for this `cod_atendimento`. */
+  hasSeenCod(instanceId: string, codAtendimento: string): boolean {
+    return this.ascFlowInstances.get(instanceId)?.seenCods.has(codAtendimento) ?? false;
   }
 
   /**
@@ -1119,6 +1177,40 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       });
     }
     return entry.ready;
+  }
+
+  /**
+   * Wait for the agent's answer to THIS turn, up to `timeoutMs`.
+   *
+   * The inbound request is held open while the agent runs, so the node gets the
+   * finished turn on its first call instead of a `pronto:0` it is supposed to
+   * poll past. Returns `null` on timeout, which falls back to the old polling
+   * behaviour rather than failing the turn.
+   *
+   * Polling the map (rather than waking on an event) keeps this to one small
+   * loop with no listener to leak: `sendMessage` already parks the answer, and
+   * a 250ms tick is far below the agent latency it is waiting on.
+   */
+  async waitForTurn(
+    instanceId: string,
+    codAtendimento: string,
+    text: string,
+    timeoutMs: number,
+  ): Promise<AscFlowTurnReady | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      // The instance can disconnect while we hold: stop rather than spin.
+      if (!this.ascFlowInstances.has(instanceId)) return null;
+      const ready = this.takeReadyTurn(instanceId, codAtendimento, text);
+      if (ready) return ready;
+    }
+    this.logger.warn('[asc-flow] held the request to its deadline with no agent answer', {
+      instanceId,
+      codAtendimento,
+      timeoutMs,
+    });
+    return null;
   }
 
   /**
