@@ -74,7 +74,7 @@ import { ASC_FLOW_CAPABILITIES } from './capabilities';
 import { AscFlowClient } from './client';
 import { type ParsedAscFlowTurn, handleAscFlowWebhookRequest } from './handlers/webhook';
 import type { AscFlowConfig, AscFlowUra } from './types';
-import { encodeAscEmoji } from './utils/emoji';
+import { encodeAscEmoji, nonLatin1Left } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
 import { type AscFlowHandoffMode, type HandoffPlan, planHandoff } from './utils/handoff';
 import { buildUra, splitBubbles } from './utils/interactive';
@@ -210,15 +210,25 @@ const IN_FLIGHT_MAX_ENTRIES = 5_000;
  * the agent's `**bold**` arrives raw and WhatsApp pairs the asterisks wrong.
  * Measured on the live number 01/09.
  */
-function resolveOutboundText(message: OutgoingMessage): string {
+function resolveOutboundText(message: OutgoingMessage, logger?: Logger): string {
   const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const text = message.content.text ?? message.content.caption ?? '';
   const formatted = formatMode === 'passthrough' ? text : markdownToWhatsApp(text);
-  // The platform carries emoji only as `##codepoint##` markers — a raw `✅`
-  // reached the handset as `?` (measured 01/09 on the session-cleared
-  // confirmation). Encoding is the mirror of the inbound decode and runs even
-  // in passthrough: it is transport, not formatting.
-  return encodeAscEmoji(formatted);
+  // The platform is latin-1: emoji ride as `##codepoint##` markers and the
+  // punctuation it cannot hold is transliterated. Both run even in passthrough
+  // — they are transport, not formatting. See `utils/emoji.ts`.
+  const encoded = encodeAscEmoji(formatted);
+  // Whatever is still outside latin-1 will reach the handset as `?`. Naming it
+  // here is what turns the next unknown character into a log line instead of a
+  // mystery on someone's screen — the em dashes went out for days unnoticed.
+  const restante = nonLatin1Left(encoded);
+  if (restante.length > 0) {
+    logger?.warn('[asc-flow] characters the platform cannot carry — they will arrive as "?"', {
+      chars: restante.join(' '),
+      codepoints: restante.map((c) => (c.codePointAt(0) ?? 0).toString(16)).join(' '),
+    });
+  }
+  return encoded;
 }
 
 /**
@@ -487,7 +497,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       if (!turnMessage) return { success: true, timestamp: Date.now() };
 
       const content = turnMessage.content;
-      const text = resolveOutboundText(turnMessage);
+      const text = resolveOutboundText(turnMessage, this.logger);
 
       const { rich, bubbles } = await this.prepareTurn(turnMessage, text);
 

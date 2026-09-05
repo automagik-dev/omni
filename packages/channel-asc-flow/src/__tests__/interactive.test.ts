@@ -11,6 +11,7 @@ import { describe, expect, it } from 'bun:test';
 
 import type { InteractiveButton } from '@omni/channel-sdk';
 
+import { encodeAscEmoji, nonLatin1Left } from '../utils/emoji';
 import { buildUra, foldTitle, splitBubbles } from '../utils/interactive';
 
 const options = (n: number, label = (i: number) => `Opção ${i}`): InteractiveButton[] =>
@@ -127,5 +128,33 @@ describe('buildUra', () => {
         forceList: true,
       }),
     ).toBeNull();
+  });
+});
+
+// A plataforma é latin-1 — provado em 05/09 mandando uma mensagem e lendo de
+// volta em `/atendimento`: tudo que ISO-8859-1 guarda sobrevive, o resto vira
+// `?`. Os travessões do agente chegaram assim num beneficiário real
+// (atendimento 22342782): "Clínico Geral ? inclusive por teleconsulta ?".
+describe('o que a plataforma latin-1 não carrega', () => {
+  it('transliteral a pontuação que viraria "?"', () => {
+    expect(encodeAscEmoji('Clínico Geral — inclusive por teleconsulta — e trazer')).toBe(
+      'Clínico Geral - inclusive por teleconsulta - e trazer',
+    );
+    expect(encodeAscEmoji('aguarde… “assim” e ‘assim’ → fim')).toBe('aguarde... "assim" e \'assim\' -> fim');
+  });
+
+  it('não toca no português acentuado, que a plataforma carrega', () => {
+    const texto = 'Sua sessão foi encerrada às 14h30 — coração, ação, ônibus';
+    expect(encodeAscEmoji(texto)).toBe('Sua sessão foi encerrada às 14h30 - coração, ação, ônibus');
+  });
+
+  it('emoji continua virando marcador, não transliteração', () => {
+    expect(encodeAscEmoji('✅ pronto — vamos')).toBe('##2705## pronto - vamos');
+  });
+
+  it('denuncia o que sobrou fora do latin-1', () => {
+    expect(nonLatin1Left('tudo certo')).toEqual([]);
+    expect(nonLatin1Left('café')).toEqual([]);
+    expect(nonLatin1Left('≥ 5 e ≥ 6')).toEqual(['≥']);
   });
 });
