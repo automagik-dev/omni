@@ -44,16 +44,22 @@ import { decodeAscEmoji } from '../utils/emoji';
 /**
  * How long the inbound request is held waiting for the agent's answer.
  *
- * Under the `api_rest` node's own `timeout` (180s on flow #225) so the platform
- * never gives up on a request we are still holding, and above the measured
- * agent latency (p50 14.7s / p90 30.2s / max 42s).
+ * Sits under the `api_rest` node's own `timeout`, read off the live flow #225
+ * on 05/09: `{"method":"1","async":"0","async_condition":"","timeout":"45"}`.
+ * Holding past that is worthless — the node has already given up, so the
+ * answer is parked for a poll that never comes.
+ *
+ * 40s clears the measured agent latency at p90 (p50 14.7s / p90 30.2s) but not
+ * the worst run seen (42s). That is the node's ceiling, not a choice of ours:
+ * a run slower than the node's timeout cannot be answered in-band whatever we
+ * do, and its bubbles still reach the handset through `/callbackFlowMsg`.
  *
  * `ASC_FLOW_HOLD_MS=0` turns the hold off and restores the pure poll contract.
  * Read per CALL, not at module load: the suite sets it from `helpers.ts`, and a
  * constant would freeze whatever the value was when the module first imported —
  * which import order decides, not the test.
  */
-const holdTimeoutMs = () => Number(process.env.ASC_FLOW_HOLD_MS ?? 120_000);
+const holdTimeoutMs = () => Number(process.env.ASC_FLOW_HOLD_MS ?? 40_000);
 
 /** The flow node posts a small JSON object; 64 KB is generous headroom. */
 const MAX_BODY_BYTES = 64 * 1024;
@@ -218,12 +224,13 @@ export async function handleAscFlowWebhookRequest(
   // HOLD the request until the agent answers, instead of returning `pronto:0`
   // and trusting the node to poll again.
   //
-  // Measured on flow #225 (atendimentos 22327328 and 22327711): the node is
-  // configured `async=1` with `async_condition = {#BODY.pronto} = 1`, and the
+  // Measured on flow #225 (atendimentos 22327328 and 22327711) while the node
+  // was configured `async=1` with `async_condition = {#BODY.pronto} = 1`: the
   // platform's own Requisições report shows it receiving `pronto:1` with the
   // answer filled — yet the flow rendered `{#resposta}` from the PREVIOUS
-  // cycle, one turn late. Whatever the node does with the condition, it does
-  // not wait for it.
+  // cycle, one turn late. Whatever the node did with the condition, it did not
+  // wait for it. The node is synchronous today, which the hold suits either
+  // way: the finished turn rides the first and only response.
   //
   // Answering the FIRST call with the finished turn removes the question: the
   // condition holds on the only response there is. It works the same if the
