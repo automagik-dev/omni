@@ -10,7 +10,7 @@
  *
  * Uses the `describeWithDb` harness (follow-up sweeper precedent): skips
  * cleanly unless ENABLE_DB_TESTS=true and the test database is reachable.
- * Migration 0056 is additive + idempotent, so `beforeAll` applies it from the
+ * Migration 0057 is additive + idempotent, so `beforeAll` applies it from the
  * committed file — the suite never depends on the API having booted since the
  * columns landed.
  */
@@ -63,9 +63,9 @@ describeWithDb('Connector liveness (integration, short windows)', () => {
 
   beforeAll(async () => {
     db = getTestDb();
-    // Additive + idempotent — brings a pre-0056 test database up to date.
+    // Additive + idempotent — brings a pre-0057 test database up to date.
     const migration = readFileSync(
-      join(import.meta.dir, '..', '..', '..', 'db', 'drizzle', '0056_connector_lifecycle_contract.sql'),
+      join(import.meta.dir, '..', '..', '..', 'db', 'drizzle', '0057_connector_lifecycle_contract.sql'),
       'utf-8',
     );
     for (const statement of migration

@@ -36,6 +36,18 @@ export const WebhookSignatureConfigSchema = z
     path: ['prefix'],
   });
 
+// Semantic event-type extraction (issue #959). Like the signature contract
+// above, this is the ONE Zod definition: the route validator imports it, so
+// the published OpenAPI document and the runtime validation cannot drift.
+export const WebhookEventTypeMappingSchema = z.object({
+  source: z.literal('header').openapi({
+    description: 'Where the semantic event name is read from (only headers for now)',
+  }),
+  header: z.string().min(1).max(200).openapi({
+    description: 'Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters',
+  }),
+});
+
 // Webhook source schema
 export const WebhookSourceSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Source UUID' }),
@@ -43,6 +55,10 @@ export const WebhookSourceSchema = z.object({
   description: z.string().nullable().openapi({ description: 'Description' }),
   expectedHeaders: z.record(z.string(), z.boolean()).nullable().openapi({ description: 'Expected headers' }),
   signatureConfig: WebhookSignatureConfigSchema.nullable().openapi({ description: 'Signature verification config' }),
+  eventTypeMapping: WebhookEventTypeMappingSchema.nullable().openapi({
+    description:
+      'Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source}',
+  }),
   hasSignatureSecret: z
     .boolean()
     .openapi({ description: 'Whether a signature secret is stored (secret is write-only)' }),
@@ -98,6 +114,13 @@ export const CreateWebhookSourceSchema = z.object({
       description:
         'Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set ' +
         'without a signatureConfig (given in the same request, or already stored on update); null clears it.',
+    }),
+  eventTypeMapping: WebhookEventTypeMappingSchema.nullable()
+    .optional()
+    .openapi({
+      description:
+        'Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). ' +
+        'Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery.',
     }),
   enabled: z.boolean().default(true).openapi({ description: 'Whether enabled' }),
   // Connector lifecycle contract (#961)
@@ -163,6 +186,7 @@ export const WebhookReceiveResponseSchema = z.object({
 
 export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
   registry.register('WebhookSignatureConfig', WebhookSignatureConfigSchema);
+  registry.register('WebhookEventTypeMapping', WebhookEventTypeMappingSchema);
   registry.register('WebhookSource', WebhookSourceSchema);
   registry.register('CreateWebhookSourceRequest', CreateWebhookSourceSchema);
   registry.register('TriggerEventRequest', TriggerEventSchema);
