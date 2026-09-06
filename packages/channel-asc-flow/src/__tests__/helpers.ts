@@ -6,6 +6,11 @@
  * platform: a stray call there sends a WhatsApp message to a real handset.
  */
 
+// No test may sit on the inbound hold: without this every webhook test blocks
+// for the full 120s deadline. Read per call by the handler, so setting it here
+// holds regardless of which module imported first.
+process.env.ASC_FLOW_HOLD_MS ??= '0';
+
 import type { Logger, PluginContext, PluginStorage } from '@omni/channel-sdk';
 import type { EventBus, PublishResult, Subscription } from '@omni/core/events';
 

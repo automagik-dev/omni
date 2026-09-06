@@ -32,6 +32,26 @@ import type { AscFlowUra } from '../types';
 const MAX_OPTIONS = 10;
 const MAX_BODY_TEXT = 1024;
 
+/** Meta renders at most three reply buttons. */
+const MAX_BUTTONS = 3;
+/** Meta's reply-button title limit. */
+const BUTTON_TITLE_MAX = 20;
+
+/**
+ * Shorten a title to the button limit, cutting on a word boundary when that
+ * leaves something readable.
+ *
+ * "ROGERIO AMARO RODRIGUES" becomes "ROGERIO AMARO", not "ROGERIO AMARO RODRI".
+ * A hard cut is the fallback for a single long word.
+ */
+function shortenTitle(title: string): string {
+  const value = title.trim();
+  if (value.length <= BUTTON_TITLE_MAX) return value;
+  const head = value.slice(0, BUTTON_TITLE_MAX);
+  const boundary = head.lastIndexOf(' ');
+  return (boundary >= 8 ? head.slice(0, boundary) : head).trim();
+}
+
 /**
  * Identity key for a title — accents, case and repeated spaces folded away, so
  * "Consulta às 08h30" and "consulta as 08h30" count as the same choice.
@@ -82,13 +102,41 @@ export function buildUra(
   const type = plan.interactive.type;
   if (type !== 'button' && type !== 'list') return null;
 
-  const titles = titlesOf(plan.interactive);
+  let titles = titlesOf(plan.interactive);
+  let asButtons = type === 'button';
+
+  // A LIST never renders on this platform. Measured on the handset 05/09: with
+  // `forcar_botoes: true` Baileys received a `buttonsMessage` and showed the
+  // taps; with `false` it received a plain `conversation`, and the platform had
+  // APPENDED its own numbered menu to the text. The beneficiary then read the
+  // options twice — once in the agent's own bubbles, once in the menu the
+  // platform built:
+  //
+  //     Encontramos mais de uma pessoa neste cadastro. Para quem é a consulta?
+  //     1. Rogerio
+  //     2. Aneli
+  //     Pode responder com o nome.
+  //     1 - ROGERIO AMARO RODRIGUES
+  //     2 - ANELI CAMILO AMARO
+  //
+  // So when the options FIT in buttons, take buttons even if the plan chose a
+  // list on title length alone — shortening a title costs a few characters on
+  // a tap target whose full text is already in the bubble above it. Past three
+  // options nothing can be done: the numbered text stays the canonical path.
+  if (!asButtons && replyButtons.length <= MAX_BUTTONS) {
+    titles = replyButtons.map((b) => shortenTitle(b.text ?? ''));
+    asButtons = true;
+  }
+
   if (titles.length !== replyButtons.length || titles.some((t) => !t)) return null;
+  // The tap comes back as the TITLE, so two titles that fold together are an
+  // ambiguous choice — and shortening is exactly what can create that
+  // collision. In scheduling it books the wrong person.
   if (new Set(titles.map(foldTitle)).size !== titles.length) return null;
 
   return {
     ura_opcoes: Object.fromEntries(titles.map((title, i) => [String(i + 1), title])),
-    forcar_botoes: type === 'button',
+    forcar_botoes: asButtons,
   };
 }
 

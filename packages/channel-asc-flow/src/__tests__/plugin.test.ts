@@ -35,6 +35,11 @@ const SERVICE = { ascFlowHandoffMode: 'service' } as const;
 /** Platform calls in order, `/authuser` filtered out. */
 const sequence = (): string[] => calls.filter((c) => c.path !== '/authuser').map((c) => c.path);
 const of = (path: string) => calls.filter((c) => c.path === path);
+/** O texto que REALMENTE saiu para o aparelho (última bolha empurrada). */
+const entregue = (): string | undefined => {
+  const p = of('/callbackFlowMsg');
+  return p.length ? (p[p.length - 1]?.body.msg_usuario as string) : undefined;
+};
 /** The body the next `api_rest` poll would receive. */
 const ready = (cod: string) => plugin.takeReadyTurn(instanceId, cod, TURN_TEXT);
 
@@ -74,11 +79,26 @@ describe('parseInboundTurn', () => {
       codAtendimento: '42',
       text: 'oi',
       phone: '5551999',
+      fromFallback: false,
     });
   });
 
   it('accepts the snake_case aliases the client flows use', () => {
     expect(parseInboundTurn({ cod_atendimento: '42', message: 'oi', telefone: '5551' })?.codAtendimento).toBe('42');
+  });
+
+  // `message` carries `{#MENSAGEM}`, which flow #225 freezes on the message
+  // that opened the atendimento. Text taken from it is FLAGGED so the handler
+  // can use it to open a conversation and never to republish it on a loop.
+  it('flags text that came from the frozen fallback', () => {
+    expect(parseInboundTurn({ codAtendimento: '42', chatInput: 'oi', message: '🗑️' })).toMatchObject({
+      text: 'oi',
+      fromFallback: false,
+    });
+    expect(parseInboundTurn({ codAtendimento: '42', chatInput: '', message: '🗑️' })).toMatchObject({
+      text: '🗑️',
+      fromFallback: true,
+    });
   });
 
   // The platform transcodes emoji: a 🗑️ arrives as `##1f5d1-fe0f##`. Left raw
@@ -135,7 +155,12 @@ describe('connect', () => {
 describe('inbound', () => {
   it('raises typing and publishes the turn with cod_atendimento as the chat id', async () => {
     await boot();
-    await plugin.handleInboundTurn(instanceId, { codAtendimento: '42', text: 'oi', phone: '5551999' });
+    await plugin.handleInboundTurn(instanceId, {
+      codAtendimento: '42',
+      text: 'oi',
+      phone: '5551999',
+      fromFallback: false,
+    });
 
     expect(of('/sendIndicador')[0]?.body).toEqual({ cod: 42, tipo: 1 });
 
@@ -146,7 +171,7 @@ describe('inbound', () => {
 
   it('falls back to the cod as the sender when the flow sends no phone', async () => {
     await boot();
-    await plugin.handleInboundTurn(instanceId, { codAtendimento: '42', text: 'oi', phone: '' });
+    await plugin.handleInboundTurn(instanceId, { codAtendimento: '42', text: 'oi', phone: '', fromFallback: false });
 
     expect(eventBus.published.find((e) => e.type.includes('received'))?.payload).toMatchObject({ from: '42' });
   });
@@ -156,15 +181,23 @@ describe('outbound turn', () => {
   const send = (content: Record<string, unknown>, metadata: Record<string, unknown> = {}) =>
     plugin.sendMessage(instanceId, { to: '42', content: content as never, metadata });
 
-  it('pushes every bubble but the last, with typing between them', async () => {
+  // O nó `api_rest` não espera a resposta HTTP (medido no flow #225, síncrono
+  // e assíncrono), então NADA viaja no `resposta`: o turno inteiro é empurrado
+  // por `/callbackFlowMsg`, que chega em ~1s e é registrado como entregue.
+  it('pushes EVERY bubble, with typing between them, and answers with an empty resposta', async () => {
     await boot();
     const result = await send({ type: 'text', text: 'um\n\ndois\n\ntres' });
 
     expect(result.success).toBe(true);
-    // The last bubble is NOT pushed — it rides back in `resposta`.
-    expect(sequence()).toEqual(['/callbackFlowMsg', '/sendIndicador', '/callbackFlowMsg', '/sendIndicador']);
-    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois']);
-    expect(ready('42')).toMatchObject({ pronto: 1, resposta: 'tres', hand_off: 'nao', bolhas: ['um', 'dois', 'tres'] });
+    expect(sequence()).toEqual([
+      '/callbackFlowMsg',
+      '/sendIndicador',
+      '/callbackFlowMsg',
+      '/sendIndicador',
+      '/callbackFlowMsg',
+    ]);
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois', 'tres']);
+    expect(ready('42')).toMatchObject({ pronto: 1, resposta: '', hand_off: 'nao', bolhas: ['um', 'dois', 'tres'] });
   });
 
   it('carries the URA of the last bubble in the response body', async () => {
@@ -259,11 +292,18 @@ describe('outbound turn', () => {
     expect(of('/transferirHumano')).toHaveLength(0);
   });
 
-  it('omits the Genesys fields when the turn does not hand off', async () => {
+  it('sends the Genesys fields EMPTY when the turn does not hand off', async () => {
     await boot();
     await send({ type: 'text', text: 'ok' }, { handoffQueue: 'VQ_X' });
 
-    expect(ready('42')).toEqual({ pronto: 1, resposta: 'ok', hand_off: 'nao', bolhas: ['ok'] });
+    expect(ready('42')).toEqual({
+      pronto: 1,
+      resposta: '',
+      hand_off: 'nao',
+      bolhas: ['ok'],
+      fila_vq: '',
+      motivo_transf_vq: '',
+    });
     expect(of('/transferirHumano')).toHaveLength(0);
   });
 
@@ -273,7 +313,8 @@ describe('outbound turn', () => {
     });
     const result = await send({ type: 'text', text: 'um\n\ndois' });
 
-    // The push is best-effort; `resposta` is the canonical delivery path.
+    // Nenhuma bolha saiu: o turno degrada para o corpo do poll, que é o que
+    // resta quando a push é recusada.
     expect(result.success).toBe(true);
     expect(ready('42')).toMatchObject({ resposta: 'dois' });
   });
@@ -304,9 +345,12 @@ describe('outbound turn', () => {
     expect(result.error).toContain('handoff refused');
     expect(ready('42')).toEqual({
       pronto: 1,
-      resposta: 'Vou te transferir.',
+      // Vazia: o turno inteiro saiu por `/callbackFlowMsg`.
+      resposta: '',
       hand_off: 'nao',
       bolhas: ['Vou te transferir.'],
+      fila_vq: '',
+      motivo_transf_vq: '',
     });
     // A business 401 is not re-authenticated: exactly one attempt, no retry.
     expect(of('/transferirHumano')).toHaveLength(1);
@@ -318,7 +362,7 @@ describe('outbound turn', () => {
     const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true });
 
     expect(result.success).toBe(false);
-    expect(ready('42')).toMatchObject({ hand_off: 'nao', resposta: 'Vou te transferir.' });
+    expect(ready('42')).toMatchObject({ hand_off: 'nao', resposta: '' });
   });
 
   describe('handoff validation (service mode)', () => {
@@ -337,9 +381,13 @@ describe('outbound turn', () => {
         // No lie to the flow, and no orphan Genesys fields.
         expect(ready('42')).toEqual({
           pronto: 1,
-          resposta: 'Vou te transferir.',
+          resposta: '',
           hand_off: 'nao',
           bolhas: ['Vou te transferir.'],
+          // Always present, empty: the flow's `store` maps every field it lists
+          // and a missing one left the whole mapping unapplied.
+          fila_vq: '',
+          motivo_transf_vq: '',
         });
       });
     }
@@ -387,7 +435,7 @@ describe('outbound turn', () => {
       await boot({}, SERVICE);
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffQueue: 'fila com espaço' });
 
-      expect(ready('42')?.fila_vq).toBeUndefined();
+      expect(ready('42')?.fila_vq).toBe('');
     });
 
     it('keeps fila_vq when it matches the accepted shape', async () => {
@@ -410,7 +458,7 @@ describe('outbound turn', () => {
 
       await openTurn(plugin);
       await send({ type: 'text', text: 'ok' }, { isHandoff: true, handoffReason: '   \n ' });
-      expect(ready('42')?.motivo_transf_vq).toBeUndefined();
+      expect(ready('42')?.motivo_transf_vq).toBe('');
     });
   });
 
@@ -432,7 +480,7 @@ describe('outbound turn', () => {
       expect(of('/transferirHumano')).toHaveLength(0);
       expect(ready('42')).toEqual({
         pronto: 1,
-        resposta: 'Vou te transferir.',
+        resposta: '',
         hand_off: 'sim',
         bolhas: ['Vou te transferir.'],
         fila_vq: 'VQ_AGENDAMENTO',
@@ -448,8 +496,11 @@ describe('outbound turn', () => {
       await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffReason: 'fora do escopo' });
 
       expect(of('/transferirHumano')).toHaveLength(0);
-      expect(ready('42')).toMatchObject({ hand_off: 'nao', resposta: 'Vou te transferir.' });
-      expect(ready('42')?.fila_vq).toBeUndefined();
+      // Read the body ONCE: taking it closes the turn.
+      const body = ready('42');
+      expect(body).toMatchObject({ hand_off: 'nao', resposta: '' });
+      expect(entregue()).toBe('Vou te transferir.');
+      expect(body?.fila_vq).toBe('');
     });
 
     // In service mode the ASC queue already holds the atendimento, so the field
@@ -478,9 +529,9 @@ describe('outbound turn', () => {
       // must not read to the route as a completed one.
       expect(result.success).toBe(false);
       expect(of('/transferirHumano')).toHaveLength(0);
-      expect(ready('42')).toEqual({
+      expect(ready('42')).toMatchObject({
         pronto: 1,
-        resposta: 'Vou te transferir.',
+        resposta: '',
         hand_off: 'nao',
         bolhas: ['Vou te transferir.'],
       });
@@ -516,7 +567,7 @@ describe('outbound turn', () => {
     });
 
     expect(ready('42')).toMatchObject({
-      resposta: 'Bom dia, *Rogerio*. Informe seu *CPF*.',
+      resposta: '',
     });
   });
 
@@ -528,7 +579,7 @@ describe('outbound turn', () => {
       metadata: { messageFormatMode: 'passthrough' },
     });
 
-    expect(ready('42')).toMatchObject({ resposta: '**cru**' });
+    expect(entregue()).toBe('**cru**');
   });
 
   // The platform carries emoji only as markers; a raw `✅` reached the handset
@@ -540,7 +591,7 @@ describe('outbound turn', () => {
       content: { type: 'text', text: '✅ Conversa limpa!' } as never,
     });
 
-    expect(ready('42')).toMatchObject({ resposta: '##2705## Conversa limpa!' });
+    expect(entregue()).toBe('##2705## Conversa limpa!');
   });
 
   it('leaves accented text alone — only emoji are transcoded', async () => {
@@ -549,8 +600,7 @@ describe('outbound turn', () => {
       to: '42',
       content: { type: 'text', text: 'Sua sessão foi resetada, coração' } as never,
     });
-
-    expect(ready('42')).toMatchObject({ resposta: 'Sua sessão foi resetada, coração' });
+    expect(entregue()).toBe('Sua sessão foi resetada, coração');
   });
 });
 

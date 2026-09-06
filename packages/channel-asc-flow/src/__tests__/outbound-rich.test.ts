@@ -163,7 +163,8 @@ describe('outbound media', () => {
 
     expect(result.success).toBe(true);
     expect(of('/mensagem')).toHaveLength(0);
-    expect(ready('42')).toMatchObject({ pronto: 1, resposta: 'segue a imagem' });
+    // Degrada para texto — e o texto sai empurrado, não pelo corpo do poll.
+    expect(of('/callbackFlowMsg')[0]?.body.msg_usuario).toBe('segue a imagem');
   });
 
   it('degrades when the platform refuses the media call', async () => {
@@ -175,7 +176,7 @@ describe('outbound media', () => {
     // A business 401 must not be retried (it would duplicate the bubble).
     expect(of('/mensagem')).toHaveLength(1);
     expect(result.success).toBe(true);
-    expect(ready('42')?.resposta).toBe('[não foi possível enviar o arquivo]');
+    expect(of('/callbackFlowMsg')[0]?.body.msg_usuario).toBe('[não foi possível enviar o arquivo]');
   });
 });
 
@@ -207,7 +208,7 @@ describe('outbound location and contact', () => {
 
     expect(result.success).toBe(true);
     expect(of('/mensagem')).toHaveLength(0);
-    expect(ready('42')?.resposta).toBe('endereço da clínica');
+    expect(of('/callbackFlowMsg')[0]?.body.msg_usuario).toBe('endereço da clínica');
   });
 });
 
@@ -239,8 +240,8 @@ describe('outbound interactive through /mensagem', () => {
     await send({ type: 'text', text: 'Escolha:\n1. a\n2. b', buttons: options(11) });
 
     expect(of('/mensagem')).toHaveLength(0);
+    expect(of('/callbackFlowMsg')[0]?.body.msg_usuario).toBe('Escolha:\n1. a\n2. b');
     const body = ready('42');
-    expect(body).toMatchObject({ resposta: 'Escolha:\n1. a\n2. b' });
     expect(body?.ura_opcoes).toBeUndefined();
   });
 
@@ -260,13 +261,13 @@ describe('outbound interactive through /mensagem', () => {
 });
 
 describe('the plain text turn is untouched', () => {
-  it('still pushes leading bubbles and answers with the last one', async () => {
+  it('pushes every bubble and answers empty', async () => {
     await boot();
     await send({ type: 'text', text: 'um\n\ndois' });
 
     expect(of('/mensagem')).toHaveLength(0);
-    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um']);
-    expect(ready('42')).toMatchObject({ resposta: 'dois', bolhas: ['um', 'dois'] });
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois']);
+    expect(ready('42')).toMatchObject({ resposta: '', bolhas: ['um', 'dois'] });
   });
 });
 
