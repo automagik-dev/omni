@@ -2,7 +2,7 @@
 # Universal Event-Driven Omnichannel Platform
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
-        test test-watch test-api test-db test-pg-gate typecheck typecheck-ui lint lint-fix lint-ui format check dead-code verify-migrations \
+        test test-sweep test-watch test-api test-db test-pg-gate typecheck typecheck-ui lint lint-fix lint-ui format check dead-code verify-migrations \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -35,7 +35,8 @@ help:
 	@echo "  make lint-api      Lint API package only"
 	@echo "  make format        Format code with Biome"
 	@echo "  make dead-code     Run knip dead code detection"
-	@echo "  make test          Run all tests"
+	@echo "  make test          Run all tests (per-package, turbo-cached)"
+	@echo "  make test-sweep    Run all tests in one process (CI parity, leak hunting)"
 	@echo "  make test-watch    Run tests in watch mode"
 	@echo "  make test-api      Run API package tests only"
 	@echo "  make test-db       Run DB package tests only"
@@ -215,11 +216,21 @@ lint-core:
 format:
 	bunx biome format --write .
 
-# Scope to omni packages + the ui app, mirroring ci.yml: apps/khal-ui is a
-# decoupled sub-project (private @khal-os deps) with its own test run, and an
-# unscoped `bun test` from the repo root sweeps it up and fails on machines
-# that do not have those deps installed.
+# Per-package tests via turbo (#967): unchanged packages replay their cached
+# green run instead of re-executing, so an incremental `make check` pays only
+# for the packages the change touched. The turbo `test` task hashes
+# DATABASE_URL / TEST_DATABASE_URL / ENABLE_DB_TESTS / OMNI_* on top of each
+# package's files, so pointing at a different database invalidates the cache.
+# Env is loaded into the environment here because per-package `bun test` runs
+# have no --env-file. Workspaces only — apps/khal-ui stays out (private
+# @khal-os deps, own test run).
 test: _build-dist _sync-db
+	@set -a && . ./.env && set +a && bun run test
+
+# The pre-#967 single-process sweep, kept for CI parity and for hunting
+# cross-file state leaks (e.g. globalThis.fetch pollution) that only reproduce
+# when every suite shares one process.
+test-sweep: _build-dist _sync-db
 	bun test --env-file=.env packages apps/ui
 
 test-watch: _build-dist

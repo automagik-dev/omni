@@ -76,7 +76,7 @@ fi
 # concurrent bun processes so two agents pushing at once cannot exhaust swap
 # the way one monolithic 6500-test process previously did.
 echo "▶ pre-push: full test suite (turbo-cached)"
-if ! bunx turbo test --concurrency=4 --output-logs=new-only; then
+if ! bunx turbo test --concurrency=4 --continue --output-logs=new-only; then
   echo ""
   echo "✗ tests failed."
   echo "  → Re-run just the red package: bunx turbo test --filter=<pkg>"
