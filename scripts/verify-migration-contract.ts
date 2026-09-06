@@ -30,7 +30,10 @@
  *   bun scripts/verify-migration-contract.ts [--base <git-ref>]
  *
  * The base ref defaults to `origin/dev`; override with --base or the
- * OMNI_MIGRATION_BASE_REF env var (CI passes the PR's target branch). When the
+ * OMNI_MIGRATION_BASE_REF env var. CI passes the PR's target branch, except
+ * that dev → main promotion PRs still compare against dev — a migration is
+ * "deployed" once it lands on dev, and promotion is carry-exact, so the gate
+ * never re-lints history that was vetted when it entered dev. When the
  * base ref shares history with HEAD the comparison point is the merge-base,
  * otherwise the base ref's tip (correct in CI, where pull_request jobs check
  * out the merge commit).

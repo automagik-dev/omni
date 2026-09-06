@@ -122,11 +122,17 @@ jobs:
         # Static check of packages/db/drizzle/ (journal ↔ files bijection,
         # deployed-migration immutability, additive-only lint, headers,
         # schema.ts pairing). No DB. On pull_request the checkout is the merge
-        # commit, so comparing against the target branch TIP is exact; on push
-        # events compare against origin/main (dev is only ever ahead of main).
+        # commit, so comparing against the target branch TIP is exact.
+        # The contract base is DEV: a migration is "deployed" once it lands on
+        # dev (the API auto-migrates from dev), and dev → main promotion is
+        # carry-exact — so promotion PRs and push events compare against
+        # origin/dev to avoid re-litigating history that was vetted when it
+        # entered dev. Journal-integrity checks (bijection, idx sequence,
+        # monotonic `when`) are base-independent and still run on every event,
+        # which catches parallel-PR numbering collisions after auto-merge.
         # Not the same tool as verify-schema-drift.ts (live-DB audit).
         env:
-          MIGRATION_BASE_BRANCH: ${{ github.base_ref || 'main' }}
+          MIGRATION_BASE_BRANCH: ${{ github.base_ref == 'main' && 'dev' || github.base_ref || 'dev' }}
         run: |
           git fetch --no-tags --depth=1 origin "+refs/heads/${MIGRATION_BASE_BRANCH}:refs/remotes/origin/${MIGRATION_BASE_BRANCH}"
           bun test scripts/verify-migration-contract.test.ts
