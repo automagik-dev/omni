@@ -48,11 +48,3 @@ export interface AscFlowResponse {
   status: number;
   body: unknown;
 }
-
-/** The URA fields `POST /mensagem` accepts alongside a text bubble. */
-export interface AscFlowUra {
-  /** Ordinal → label, e.g. `{"1": "Manhã", "2": "Tarde"}`. */
-  ura_opcoes: Record<string, string>;
-  /** true → reply buttons; false → list. */
-  forcar_botoes: boolean;
-}

@@ -35,7 +35,7 @@ export const ASC_FLOW_CAPABILITIES: ChannelCapabilities = {
   /** `POST /mensagem` with `localizacao` (latitude/longitude/endereco). */
   canSendLocation: true,
   canSendSticker: false,
-  /** URA options on `POST /mensagem` (`ura_opcoes` + `forcar_botoes`). */
+  /** Native list/buttons on `POST /sendMsgInterativaAvancado`. */
   canSendButtons: true,
   canHandleGroups: false,
   canHandleBroadcast: false,

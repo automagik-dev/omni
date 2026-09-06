@@ -156,7 +156,7 @@ describe('one agent reply is one turn, however many sends it arrives in', () => 
       metadata: { partIndex: index, partCount: count },
     });
 
-  it('answers once, with every part a bubble and the URA on the last', async () => {
+  it('answers once, with every part a bubble and the component on the last', async () => {
     await boot();
     await openTurn(plugin);
 
@@ -171,17 +171,17 @@ describe('one agent reply is one turn, however many sends it arrives in', () => 
     expect(poll(TURN_TEXT)).toMatchObject({
       pronto: 1,
       bolhas: ['primeiro', 'segundo', 'Escolha:'],
-      ura_opcoes: { '1': 'Manha', '2': 'Tarde' },
-      forcar_botoes: true,
+      resposta: '',
     });
 
-    // The leading bubbles really left; the last one rode `/mensagem` with the
-    // URA, which is why `resposta` comes back empty.
+    // The leading bubbles really left; the last one rode
+    // `/sendMsgInterativaAvancado` as a component, which is why `resposta`
+    // comes back empty.
     expect(calls.filter((c) => c.path === '/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([
       'primeiro',
       'segundo',
     ]);
-    expect(calls.filter((c) => c.path === '/mensagem')).toHaveLength(1);
+    expect(calls.filter((c) => c.path === '/sendMsgInterativaAvancado')).toHaveLength(1);
   });
 
   it('records the reply once, not one message per part', async () => {

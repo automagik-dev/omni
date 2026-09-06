@@ -208,7 +208,11 @@ describe('outbound turn', () => {
     expect(ready('42')).toMatchObject({ pronto: 1, resposta: '', hand_off: 'nao', bolhas: ['um', 'dois', 'tres'] });
   });
 
-  it('carries the URA of the last bubble in the response body', async () => {
+  it('keeps the URA fields OUT of the response body', async () => {
+    // The component now leaves through `/sendMsgInterativaAvancado`. Repeating
+    // it as URA fields in the poll body would make the flow's URA node build a
+    // SECOND menu under the first — the beneficiary reading the same options
+    // twice, with two numbering systems.
     await boot();
     await send({
       type: 'text',
@@ -216,10 +220,9 @@ describe('outbound turn', () => {
       buttons: [{ text: 'seg 01/09 08:30' }, { text: 'seg 01/09 09:00' }],
     });
 
-    expect(ready('42')).toMatchObject({
-      forcar_botoes: true,
-      ura_opcoes: { '1': 'seg 01/09 08:30', '2': 'seg 01/09 09:00' },
-    });
+    const body = ready('42');
+    expect(body?.ura_opcoes).toBeUndefined();
+    expect(body?.forcar_botoes).toBeUndefined();
   });
 
   it('omits the URA when the options do not fit the component', async () => {

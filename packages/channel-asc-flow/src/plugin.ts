@@ -73,11 +73,11 @@ import type { ChannelType } from '@omni/core/types';
 import { ASC_FLOW_CAPABILITIES } from './capabilities';
 import { AscFlowClient } from './client';
 import { type ParsedAscFlowTurn, handleAscFlowWebhookRequest } from './handlers/webhook';
-import type { AscFlowConfig, AscFlowUra } from './types';
+import type { AscFlowConfig } from './types';
 import { encodeAscEmoji, nonLatin1Left } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
 import { type AscFlowHandoffMode, type HandoffPlan, planHandoff } from './utils/handoff';
-import { buildUra, splitBubbles } from './utils/interactive';
+import { buildInteractive, splitBubbles } from './utils/interactive';
 import { isAscMediaFilename, mediaFallbackText, resolveAscInboundMedia } from './utils/media';
 import { OUTBOUND_MEDIA_FALLBACK_TEXT, buildReplyField, buildRichFields, isRichContent } from './utils/outbound';
 import { isStaleFlowReplay } from './utils/turn-freshness';
@@ -150,6 +150,13 @@ interface AscFlowInstanceState {
    * `utils/turn-freshness.ts`.
    */
   lastAnswered: Map<string, string>;
+
+  /**
+   * `cod_atendimento` → the account and phone the interactive endpoint
+   * addresses. Neither changes while the atendimento runs, and reading them
+   * costs a `GET /atendimento`. See `resolveDestino`.
+   */
+  destinos: Map<string, { codConta: string; telefone: string }>;
 }
 
 /**
@@ -310,12 +317,25 @@ export function normalizeBaseUrl(raw: string): string {
  * show the same bubble twice. A refused `/mensagem` with no caption would leave
  * the turn silent, so it says so instead of nothing.
  */
+/** `'buttons' | 'list' | 'text'`, for the `message.sent` payload. */
+function interactiveKindOf(params: Record<string, unknown> | null): string {
+  if (!params) return 'text';
+  return params.tipo === 2 ? 'buttons' : 'list';
+}
+
+/** How many options the component carried, 0 when the turn went out as text. */
+function interactiveRowsOf(params: Record<string, unknown> | null): number {
+  if (!params) return 0;
+  if (Array.isArray(params.button)) return params.button.length;
+  const list = params.list as { secao?: Array<{ linhas?: unknown[] }> } | undefined;
+  return list?.secao?.[0]?.linhas?.length ?? 0;
+}
+
 function buildReadyBody(turn: {
   delivered: boolean;
   lastBubble: string;
   bubbles: string[];
   handoff: HandoffPlan['fields'] | null;
-  ura: AscFlowUra | null;
 }): AscFlowTurnReady {
   return {
     pronto: 1,
@@ -332,7 +352,6 @@ function buildReadyBody(turn: {
     fila_vq: '',
     motivo_transf_vq: '',
     ...(turn.handoff ?? {}),
-    ...(turn.ura ?? {}),
   };
 }
 
@@ -411,6 +430,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       lastSweepAt: Date.now(),
       seenCods: new Set(),
       lastAnswered: new Map(),
+      destinos: new Map(),
     });
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -507,14 +527,14 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // a URA node) and on the `/mensagem` that delivers that bubble (which is
       // what actually renders buttons today).
       const lastBubble = bubbles[bubbles.length - 1] ?? '';
-      const ura = rich ? null : buildUra(lastBubble, content.buttons, listOptionsOf(content));
+      const interativa = rich ? null : buildInteractive(lastBubble, content.buttons, listOptionsOf(content));
 
       const { delivered } = await this.deliver(state, cod, {
         text,
         bubbles,
         lastBubble,
         rich,
-        ura,
+        interativa,
         message: turnMessage,
       });
 
@@ -538,7 +558,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       this.resolveTurn(
         state,
         to,
-        buildReadyBody({ delivered, lastBubble, bubbles, handoff, ura }),
+        buildReadyBody({ delivered, lastBubble, bubbles, handoff }),
         answering,
         correlationId,
       );
@@ -553,7 +573,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       await this.emitTurnSent(instanceId, turnMessage, messageId, {
         cod,
         bubbles: bubbles.length,
-        ura,
+        interativa,
         delivered,
         handoff: handoff !== null,
       });
@@ -600,7 +620,13 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     instanceId: string,
     message: OutgoingMessage,
     messageId: string,
-    turn: { cod: number; bubbles: number; ura: AscFlowUra | null; delivered: boolean; handoff: boolean },
+    turn: {
+      cod: number;
+      bubbles: number;
+      interativa: Record<string, unknown> | null;
+      delivered: boolean;
+      handoff: boolean;
+    },
   ): Promise<void> {
     const { content, to } = message;
     await this.emitMessageSent({
@@ -617,8 +643,8 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         ascFlow: {
           codAtendimento: turn.cod,
           bubbles: turn.bubbles,
-          interactive: turn.ura ? (turn.ura.forcar_botoes ? 'buttons' : 'list') : 'text',
-          uraOptions: turn.ura ? Object.keys(turn.ura.ura_opcoes).length : 0,
+          interactive: interactiveKindOf(turn.interativa),
+          interactiveRows: interactiveRowsOf(turn.interativa),
           /** Rich content left through `/mensagem` rather than the poll body. */
           viaMensagem: turn.delivered,
           handoff: turn.handoff,
@@ -843,7 +869,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       bubbles: string[];
       lastBubble: string;
       rich: Record<string, unknown> | null;
-      ura: AscFlowUra | null;
+      interativa: Record<string, unknown> | null;
       message: OutgoingMessage;
     },
   ): Promise<{ delivered: boolean }> {
@@ -861,13 +887,14 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       return { delivered: (await this.pushBubbles(state, cod, texto)) > 0 };
     }
 
-    // The URA rides in the poll body too, but that only renders once the flow
-    // has a URA node consuming it. `/mensagem` is the endpoint that injects
-    // real buttons/list into the running atendimento, so the last bubble goes
-    // out there — the numbered text it carries stays the canonical fallback.
-    if (turn.ura) {
+    // `/sendMsgInterativaAvancado` is the endpoint that renders a real
+    // WhatsApp list or buttons INSIDE the running atendimento — with a
+    // description under every row, which the URA fields on `/mensagem` cannot
+    // express (see `utils/interactive.ts`). The last bubble goes out there;
+    // the numbered text it carries stays the canonical fallback.
+    if (turn.interativa) {
       await this.pushBubbles(state, cod, turn.bubbles.slice(0, -1));
-      if (await this.sendMensagem(state, cod, turn.lastBubble, { ...turn.ura, ...reply })) return { delivered: true };
+      if (await this.sendInterativa(state, cod, turn.interativa)) return { delivered: true };
       // The component was refused. The bubble it carried holds the numbered
       // options as text, so it still has to reach the handset — pushed like
       // any other, never left to `resposta` (which the flow reads a cycle
@@ -894,6 +921,77 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     // read by `dec_handoff` on a LATER cycle, which the lag does not break.
     const pushed = await this.pushBubbles(state, cod, turn.bubbles);
     return { delivered: pushed > 0 };
+  }
+
+  /**
+   * `POST /sendMsgInterativaAvancado` — a native WhatsApp list or reply
+   * buttons inside the running atendimento.
+   *
+   * The endpoint addresses the CONTACT, not the atendimento: `cod_conta` plus
+   * `contato.telefone` are both mandatory (probed 06/09 — with a
+   * `cod_atendimento` alone it answers "Faltando identificador da conta", and
+   * with the account but no contact "Contato com telefone é obrigatório").
+   * `bol_incluir_atual: 1` is what lands the message in the conversation the
+   * beneficiary is already in instead of opening a new one.
+   *
+   * Best-effort, like every other push: `false` means the caller falls back to
+   * the numbered text, never that the turn fails.
+   */
+  private async sendInterativa(
+    state: AscFlowInstanceState,
+    cod: number,
+    params: Record<string, unknown>,
+  ): Promise<boolean> {
+    try {
+      const destino = await this.resolveDestino(state, cod);
+      if (!destino) return false;
+      await state.client.callForm('/sendMsgInterativaAvancado', {
+        cod_conta: destino.codConta,
+        // 1 = automatic service: the atendimento is already running under the
+        // bot, and this rides in it rather than queueing or notifying.
+        tipo_envio: 1,
+        bol_incluir_atual: 1,
+        contato: { telefone: destino.telefone },
+        msg_interativa_parametros: params,
+      });
+      return true;
+    } catch (err) {
+      this.logger.warn('[asc-flow] interactive message refused — degrading to the numbered text', {
+        cod,
+        err: String(err),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * The account and phone behind a `cod_atendimento`, cached for the life of
+   * the atendimento — neither can change while it runs, and the interactive
+   * endpoint needs both on every send.
+   */
+  private async resolveDestino(
+    state: AscFlowInstanceState,
+    cod: number,
+  ): Promise<{ codConta: string; telefone: string } | null> {
+    const chave = String(cod);
+    const cacheado = state.destinos.get(chave);
+    if (cacheado) return cacheado;
+
+    const { status, body } = await state.client.get('/atendimento', { codigo_atendimento: cod });
+    if (status !== 200 || typeof body !== 'object' || body === null) return null;
+
+    const dados = body as Record<string, unknown>;
+    const contato = (dados.contato ?? {}) as Record<string, unknown>;
+    const codConta = String(dados.id_conta ?? '').trim();
+    const telefone = String(contato.telefone ?? '').trim();
+    if (!codConta || !telefone) {
+      this.logger.warn('[asc-flow] atendimento carries no account/phone — no interactive message for it', { cod });
+      return null;
+    }
+
+    const destino = { codConta, telefone };
+    state.destinos.set(chave, destino);
+    return destino;
   }
 
   /**
