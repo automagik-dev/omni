@@ -7,6 +7,7 @@
 import { brokeredFetch } from '../egress';
 import type { EventBus } from '../events/bus';
 import { resolveAmbientTenantId } from '../events/envelope';
+import { SCHEMA_VALIDATION_FAILED } from '../events/schema-registry';
 import type { CustomEventType, GenericEventPayload } from '../events/types';
 import { createLogger } from '../logger';
 import { type TemplateContext, substituteTemplate, substituteTemplateObject } from './templates';
@@ -127,6 +128,20 @@ export interface ActionDependencies {
      */
     trustedTenantId?: string | null,
   ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
+  /**
+   * Optional schema-registry gate for `emit_event` (issue #959). Invoked with
+   * the resolved event type and payload BEFORE publish; an invalid verdict
+   * fails the action and nothing enters the journal. The implementation
+   * (packages/api `automation-actions.ts`) consults the `event_schemas`
+   * registry and dead-letters the refused payload with reason
+   * `schema_validation_failed`. Omitted (existing tests, route-side manual
+   * execute) → no gate, behavior unchanged.
+   */
+  validateEmitEvent?: (
+    eventType: string,
+    payload: Record<string, unknown>,
+    trustedTenantId?: string | null,
+  ) => Promise<{ valid: boolean; errors?: string[] }>;
   /**
    * Release a claim previously granted by `staleIdleTimeoutGate`. The gate
    * records the claim before the event is executed, so a delivery that throws
@@ -296,6 +311,18 @@ async function executeEmitEventAction(
     }
 
     const eventType = substituteTemplate(config.eventType, context) as CustomEventType;
+
+    // Schema-registry gate (issue #959): a registered type's payload must
+    // satisfy its schema or the emit fails BEFORE publish (the gate impl
+    // dead-letters it). Unregistered types pass through — opt-in per type.
+    if (deps.validateEmitEvent) {
+      const verdict = await deps.validateEmitEvent(eventType, payload, trustedTenantId);
+      if (!verdict.valid) {
+        const detail = verdict.errors?.length ? `: ${verdict.errors.join('; ')}` : '';
+        logger.warn('Emit event refused by schema registry', { eventType, errors: verdict.errors });
+        return { success: false, error: `${SCHEMA_VALIDATION_FAILED}${detail}` };
+      }
+    }
 
     logger.debug('Emitting event', { eventType });
 

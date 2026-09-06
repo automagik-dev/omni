@@ -393,6 +393,13 @@
       "when": 1785500000000,
       "tag": "0055_asc_flow_handoff_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1785600000000,
+      "tag": "0056_event_schema_registry",
+      "breakpoints": true
     }
   ]
 }

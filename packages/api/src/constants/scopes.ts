@@ -145,6 +145,11 @@ export const SCOPE_MAP: Record<string, string> = {
   'DELETE /event-ops/replay/:id': 'event-ops:write',
   'POST /event-ops/scheduled': 'event-ops:write',
 
+  // --- event schema registry (mounted at root: /events/schemas, #959) ---
+  'GET /events/schemas': 'events:read',
+  'GET /events/schemas/:eventType': 'events:read',
+  'POST /events/schemas': 'events:write',
+
   // --- events ---
   'GET /events': 'events:read',
   'GET /events/analytics': 'events:read',

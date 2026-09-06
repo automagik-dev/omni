@@ -3,14 +3,23 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { ERROR_CODES, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
+import {
+  ERROR_CODES,
+  NotFoundError,
+  OmniError,
+  SCHEMA_VALIDATION_FAILED,
+  ValidationError,
+  createLogger,
+} from '@omni/core';
 import type { CustomEventType, EventBus } from '@omni/core';
 import { generateId } from '@omni/core';
 import type { Database } from '@omni/db';
-import { type NewWebhookSource, type WebhookSource, webhookSources } from '@omni/db';
+import { type NewWebhookSource, type WebhookEventTypeMapping, type WebhookSource, webhookSources } from '@omni/db';
 import { eq, sql } from 'drizzle-orm';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import type { DeadLetterService } from './dead-letters';
+import type { EventSchemaService } from './event-schemas';
 
 const log = createLogger('api:webhooks');
 
@@ -37,6 +46,42 @@ function timingSafeEqualStrings(a: string, b: string): boolean {
   return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
 }
 
+/**
+ * Normalize a delivery's semantic event name into an event-type token:
+ * lowercased, `[a-z0-9_-]` only, at most 64 characters. Null when nothing
+ * usable remains — the caller falls back to the collapsed legacy type.
+ */
+function sanitizeEventToken(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const token = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+  return token.length > 0 ? token : null;
+}
+
+/**
+ * Source→semantic-type mapping (issue #959). A source configured with an
+ * `eventTypeMapping` emits `custom.{source}.{event}` (e.g. `X-GitHub-Event:
+ * push` → `custom.github.push`) instead of collapsing every delivery into
+ * `custom.webhook.{source}`. No mapping, or a delivery the mapping cannot
+ * resolve (header absent/empty), falls back to the legacy collapsed type.
+ */
+export function resolveWebhookEventType(
+  sourceName: string,
+  mapping: WebhookEventTypeMapping | null,
+  headers: Record<string, string>,
+): CustomEventType {
+  const fallback = `custom.webhook.${sourceName}` as CustomEventType;
+  if (!mapping || mapping.source !== 'header') {
+    return fallback;
+  }
+  const token = sanitizeEventToken(headers[mapping.header.toLowerCase()]);
+  return token ? (`custom.${sourceName}.${token}` as CustomEventType) : fallback;
+}
+
 export class WebhookService {
   /**
    * The handle every query in this service uses.
@@ -58,6 +103,13 @@ export class WebhookService {
   constructor(
     private readonly pool: Database,
     private eventBus: EventBus | null,
+    /**
+     * Schema-registry gate (issue #959). Optional so existing constructions
+     * (tests, tooling) keep working; without both collaborators the ingress
+     * publishes exactly as before.
+     */
+    private readonly eventSchemas: EventSchemaService | null = null,
+    private readonly deadLetters: DeadLetterService | null = null,
   ) {}
 
   /**
@@ -237,7 +289,19 @@ export class WebhookService {
 
     // Generate event ID
     const eventId = generateId();
-    const eventType = `custom.webhook.${sourceName}` as CustomEventType;
+    // Semantic type extraction (issue #959): a mapped source emits
+    // custom.{source}.{event}; unmapped keeps the legacy collapsed type.
+    const eventType = resolveWebhookEventType(sourceName, source.eventTypeMapping, headers);
+    const eventPayload = {
+      source: sourceName,
+      ...payload,
+    };
+
+    // Schema-registry gate (issue #959): a registered type's payload must
+    // satisfy its schema BEFORE anything is published or counted. An invalid
+    // payload is dead-lettered with reason `schema_validation_failed` and
+    // never enters the journal; unregistered types pass through (opt-in).
+    await this.enforceRegisteredSchema(eventType, eventPayload, eventId, `webhook '${sourceName}'`);
 
     // Update stats
     await this.db
@@ -251,17 +315,10 @@ export class WebhookService {
 
     // Publish event
     if (this.eventBus) {
-      await this.eventBus.publishGeneric(
-        eventType,
-        {
-          source: sourceName,
-          ...payload,
-        },
-        {
-          correlationId: eventId,
-          source: 'webhook',
-        },
-      );
+      await this.eventBus.publishGeneric(eventType, eventPayload, {
+        correlationId: eventId,
+        source: 'webhook',
+      });
     }
 
     return {
@@ -313,6 +370,43 @@ export class WebhookService {
   }
 
   /**
+   * Schema-registry gate (issue #959): validates the payload of a REGISTERED
+   * event type; unregistered types return immediately (opt-in per type). An
+   * invalid payload is dead-lettered (reason `schema_validation_failed`,
+   * manual-retry only) and the ingress request fails with a 400 — nothing
+   * enters the journal.
+   */
+  private async enforceRegisteredSchema(
+    eventType: CustomEventType,
+    payload: Record<string, unknown>,
+    eventId: string,
+    origin: string,
+  ): Promise<void> {
+    if (!this.eventSchemas) {
+      return;
+    }
+    const verdict = await this.eventSchemas.validate(eventType, payload);
+    if (verdict.valid) {
+      return;
+    }
+
+    await this.deadLetters?.createSchemaValidationFailure({
+      eventId,
+      eventType,
+      subject: eventType,
+      payload,
+      errors: verdict.errors,
+    });
+
+    log.warn('Webhook payload refused by schema registry', { eventType, origin, errors: verdict.errors });
+    throw new ValidationError(
+      `${SCHEMA_VALIDATION_FAILED}: payload for '${eventType}' violates its registered schema (${origin})`,
+      undefined,
+      { eventType, errors: verdict.errors },
+    );
+  }
+
+  /**
    * Manually trigger a custom event
    */
   async trigger(
@@ -321,6 +415,10 @@ export class WebhookService {
     metadata?: { correlationId?: string; instanceId?: string },
   ): Promise<{ eventId: string; published: boolean }> {
     const eventId = metadata?.correlationId ?? generateId();
+
+    // Same gate as the webhook ingress: a registered type's contract holds on
+    // every publish path into the journal (issue #959).
+    await this.enforceRegisteredSchema(eventType, payload, eventId, 'manual trigger');
 
     if (this.eventBus) {
       await this.eventBus.publishGeneric(eventType, payload, {

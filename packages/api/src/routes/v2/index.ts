@@ -20,6 +20,7 @@ import { contextRoutes } from './context';
 import { conversationsRoutes } from './conversations';
 import { deadLettersRoutes } from './dead-letters';
 import { eventOpsRoutes } from './event-ops';
+import { eventSchemasRoutes } from './event-schemas';
 import { eventsRoutes } from './events';
 import { followUpRoutes } from './follow-up';
 import { handoffsRoutes } from './handoffs';
@@ -58,6 +59,7 @@ v2Routes.route('/logs', logsRoutes);
 v2Routes.route('/messages', messagesRoutes); // Message CRUD + send operations
 v2Routes.route('/scheduled-messages', scheduledMessagesRoutes); // Deferred sends (#889)
 v2Routes.route('/slack', slackRoutes); // Slack-only: DM open + search (#889)
+v2Routes.route('/', eventSchemasRoutes); // Event schema registry at /api/v2/events/schemas (#959) - must be before /events, whose /:id catch-all would swallow 'schemas'
 v2Routes.route('/events', eventsRoutes);
 v2Routes.route('/journeys', journeysRoutes); // Journey tracing endpoints
 v2Routes.route('/persons', personsRoutes);
