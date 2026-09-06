@@ -16,6 +16,9 @@ variables through its `store`. In async mode it re-calls this endpoint until
 `async_condition` over that body holds. So the channel is a **poll**, not a
 push: the turn is state here, and each call answers JSON.
 
+Runbook operacional (portal da ASC, cada nó do flow, configuração das duas
+pontas, handoff e diagnóstico): [`INTEGRATION.md`](./INTEGRATION.md).
+
 ## Not `@omni/channel-asc`
 
 | | `channel-asc` | `channel-asc-flow` (this) |
