@@ -753,6 +753,13 @@ export interface CreateWebhookSourceBody {
    * chars). Cannot be set without a signatureConfig; null clears it.
    */
   signatureSecret?: string | null;
+  /**
+   * How the delivery-identity idempotency key is derived (#958). Placeholders:
+   * {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. Defaults
+   * to "{source}:{sha256(body)}" server-side. Dedupes provider REDELIVERY,
+   * not semantic identity.
+   */
+  idempotencyKeyTemplate?: string;
   /** Defaults to true server-side */
   enabled?: boolean;
   /**

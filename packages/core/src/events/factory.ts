@@ -35,7 +35,10 @@ export function createOmniEvent(
   metadata: Partial<EventMetadata> | undefined,
   serviceName: string,
 ): OmniEvent {
-  const eventId = crypto.randomUUID();
+  // #958: an idempotency-claimed publish supplies its journal row's id so the
+  // claim and the published event share one identity (see EventMetadata.
+  // publishEventId — a directive consumed here, never copied to the wire).
+  const eventId = metadata?.publishEventId ?? crypto.randomUUID();
   const timestamp = Date.now();
 
   // Versioned tenant-aware envelope (G5, ADR-0008). One decision, three

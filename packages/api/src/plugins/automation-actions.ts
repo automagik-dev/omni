@@ -35,8 +35,8 @@
 
 import type { AgentCallContext, AgentRunResult, CallAgentActionConfig } from '@omni/core';
 import { createLogger, generateId } from '@omni/core';
-import type { Database } from '@omni/db';
-import { agents } from '@omni/db';
+import type { Database, EventType } from '@omni/db';
+import { agents, omniEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import type { Services } from '../services';
 import { releaseIdleTimeoutClaim } from '../services/follow-up-lifecycle';
@@ -108,6 +108,18 @@ export interface AutomationEngineDeps {
     trustedTenantId?: string | null,
   ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
   releaseIdleTimeoutClaim: (claimToken: string) => void | Promise<void>;
+  claimEmittedEvent: (
+    claim: {
+      idempotencyKey: string;
+      eventId: string;
+      eventType: string;
+      payload: Record<string, unknown>;
+      correlationId?: string;
+      causationId?: string;
+    },
+    trustedTenantId?: string | null,
+  ) => Promise<boolean>;
+  releaseEmittedEventClaim: (eventId: string) => Promise<void>;
   validateEmitEvent: (
     eventType: string,
     payload: Record<string, unknown>,
@@ -263,6 +275,50 @@ export function buildAutomationEngineDeps(
     // so the NATS redelivery is a first delivery and not a "duplicate". The
     // claim registry is in-memory (no DB), so no tenant scope applies.
     releaseIdleTimeoutClaim: (claimToken) => releaseIdleTimeoutClaim(claimToken),
+
+    // Derived-key emission idempotency (#958). The claim IS the journal row:
+    // inserting it makes the `omni_events.idempotency_key` unique index the
+    // dedup authority for automation re-publishes, exactly as webhook ingress
+    // does in `WebhookService.receive`. An empty RETURNING means the key was
+    // already journaled — a NATS redelivery/replay of the same
+    // (event, automation, action) slot — and the emission is skipped. The
+    // emission then publishes UNDER this row's id, so the #957 `custom.>`
+    // journal consumer's insert lands here (ON CONFLICT (id) DO NOTHING) —
+    // one row, carrying the causality fields `omni events trace` walks
+    // (causation_id column + correlationId in the metadata jsonb).
+    claimEmittedEvent: async (claim, trustedTenantId = null) => {
+      const claimed = await runTenantWorkDb(db, trustedTenantId, () =>
+        scopedHandle(db)
+          .insert(omniEvents)
+          .values({
+            id: claim.eventId,
+            channel: 'internal',
+            eventType: claim.eventType.slice(0, 255) as EventType,
+            direction: 'internal',
+            status: 'completed',
+            rawPayload: claim.payload,
+            idempotencyKey: claim.idempotencyKey,
+            causationId: claim.causationId ?? null,
+            receivedAt: new Date(),
+            metadata: {
+              correlationId: claim.correlationId ?? claim.eventId,
+              source: 'automation',
+              fullEventType: claim.eventType,
+              idempotencyKey: claim.idempotencyKey,
+            },
+          })
+          .onConflictDoNothing({ target: omniEvents.idempotencyKey })
+          .returning({ id: omniEvents.id }),
+      );
+      return claimed.length > 0;
+    },
+
+    // Release a claim whose publish then failed — leaving it would drop the
+    // retry's emission as a "duplicate" of an event that never reached the
+    // bus. Best-effort ambient delete (additive tenancy phase).
+    releaseEmittedEventClaim: async (eventId) => {
+      await scopedHandle(db).delete(omniEvents).where(eq(omniEvents.id, eventId));
+    },
 
     // Schema-registry gate for emit_event (issue #959). The engine calls this
     // BEFORE publish; an unregistered type reports valid (opt-in per type).

@@ -27,10 +27,12 @@ function makeSource(overrides: Partial<WebhookSource> = {}): WebhookSource {
     expectedHeaders: null,
     signatureConfig: { algorithm: 'hmac-sha256', header: 'X-Hub-Signature-256', prefix: 'sha256=' },
     signatureSecret: SECRET,
+    idempotencyKeyTemplate: '{source}:{sha256(body)}',
     eventTypeMapping: null,
     enabled: true,
     lastReceivedAt: null,
     totalReceived: 0,
+    totalDuplicates: 0,
     expectedIntervalSeconds: null,
     lastHeartbeatAt: null,
     heartbeatCount: 0,
@@ -46,8 +48,9 @@ function makeSource(overrides: Partial<WebhookSource> = {}): WebhookSource {
 }
 
 /**
- * Minimal DB stub: source lookups resolve to `sources`, the stats update is a
- * no-op, and anything else throws so the surface can't quietly grow DB use.
+ * Minimal DB stub: source lookups resolve to `sources`, the stats update and
+ * the journal claim insert (#958) are no-ops (every claim succeeds), and
+ * anything else throws so the surface can't quietly grow DB use.
  */
 function buildApp(sources: WebhookSource[]) {
   const db = new Proxy(
@@ -65,6 +68,14 @@ function buildApp(sources: WebhookSource[]) {
         }
         if (prop === 'update') {
           return () => ({ set: () => ({ where: () => Promise.resolve([]) }) });
+        }
+        if (prop === 'insert') {
+          return () => ({
+            values: (data: { id: string }) => ({
+              onConflictDoNothing: () => ({ returning: () => Promise.resolve([{ id: data.id }]) }),
+              returning: () => Promise.resolve([data]),
+            }),
+          });
         }
         return () => {
           throw new Error(`db.${String(prop)} must not be touched by ingress tests`);

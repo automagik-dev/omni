@@ -9,8 +9,24 @@ import {
   connectorWindowSemanticsValues,
   webhookSignatureAlgorithms,
 } from '@omni/db';
+import { DEFAULT_IDEMPOTENCY_KEY_TEMPLATE, isValidIdempotencyKeyTemplate } from '../../lib/ingress-idempotency';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, SuccessSchema } from './common';
+
+// Ingress idempotency key template (#958). Validated at the boundary: a pure
+// literal (no placeholder) would collide EVERY delivery of the source into
+// one "duplicate", so at least one `{...}` placeholder is required.
+const IdempotencyKeyTemplateSchema = z
+  .string()
+  .min(1)
+  .max(500)
+  .refine(isValidIdempotencyKeyTemplate, {
+    message:
+      'Template must contain at least one placeholder: {source}, {sha256(body)}, {headers.<name>} or {payload.<path>}',
+  })
+  .openapi({
+    description: `How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "${DEFAULT_IDEMPOTENCY_KEY_TEMPLATE}". This dedupes provider REDELIVERY, not semantic identity.`,
+  });
 
 // Signature verification contract (issue #928). This is the ONE Zod
 // definition: the route validator (`routes/v2/webhooks.ts`) imports it, so the
@@ -62,6 +78,8 @@ export const WebhookSourceSchema = z.object({
   hasSignatureSecret: z
     .boolean()
     .openapi({ description: 'Whether a signature secret is stored (secret is write-only)' }),
+  idempotencyKeyTemplate: z.string().openapi({ description: 'Idempotency key derivation template' }),
+  totalDuplicates: z.number().int().openapi({ description: 'Redeliveries acked without creating a second event' }),
   enabled: z.boolean().openapi({ description: 'Whether enabled' }),
   lastReceivedAt: z.string().datetime().nullable().openapi({ description: 'When the last webhook was received' }),
   totalReceived: z.number().int().openapi({ description: 'Total webhooks received' }),
@@ -115,6 +133,7 @@ export const CreateWebhookSourceSchema = z.object({
         'Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set ' +
         'without a signatureConfig (given in the same request, or already stored on update); null clears it.',
     }),
+  idempotencyKeyTemplate: IdempotencyKeyTemplateSchema.optional(),
   eventTypeMapping: WebhookEventTypeMappingSchema.nullable()
     .optional()
     .openapi({
@@ -179,9 +198,13 @@ export const TriggerEventSchema = z.object({
 
 // Webhook receive response
 export const WebhookReceiveResponseSchema = z.object({
-  eventId: z.string().uuid().openapi({ description: 'Created event ID' }),
+  eventId: z.string().uuid().openapi({ description: 'Created event ID (the ORIGINAL event on a duplicate)' }),
   source: z.string().openapi({ description: 'Webhook source name' }),
   eventType: z.string().openapi({ description: 'Event type' }),
+  duplicate: z
+    .boolean()
+    .optional()
+    .openapi({ description: 'True when the delivery was a redelivery: acked, but no second event was created' }),
 });
 
 export function registerWebhookSchemas(registry: OpenAPIRegistry): void {

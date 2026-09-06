@@ -137,6 +137,11 @@ export class AutomationEngine {
       callAgent: deps.callAgent,
       staleIdleTimeoutGate: deps.staleIdleTimeoutGate,
       releaseIdleTimeoutClaim: deps.releaseIdleTimeoutClaim,
+      claimEmittedEvent: deps.claimEmittedEvent,
+      releaseEmittedEventClaim: deps.releaseEmittedEventClaim,
+      // #959 gate — threaded here so engine executions validate too; without
+      // this line the dep is provided by the API but silently dropped.
+      validateEmitEvent: deps.validateEmitEvent,
     };
     this.automations = automations.filter((a) => a.enabled);
 
@@ -753,6 +758,8 @@ export class AutomationEngine {
       // triggering event and continues its correlation. For a debounced
       // execution `context.event.id` is the last REAL event of the window, so
       // causal links never point at the synthetic flush id.
+      // Emit provenance (#958) rides along so emit_event re-publishes derive
+      // a stable idempotency key for this (event, automation, action) slot.
       const actionsExecuted = await runWithEventCausality(
         {
           correlationId: context.event?.metadata.correlationId ?? event.metadata.correlationId,
@@ -764,6 +771,7 @@ export class AutomationEngine {
             context,
             this.deps,
             trustedTenantId,
+            { parentEventId: event.id, automationId: automation.id },
           ),
       );
 

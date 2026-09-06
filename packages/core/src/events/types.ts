@@ -184,6 +184,17 @@ export interface EventMetadata {
    * a publish that threads nothing produces a byte-identical envelope.
    */
   causationId?: string | null;
+  /**
+   * Publish-time DIRECTIVE, not envelope data (#958): when set, the factory
+   * uses this as the published event's id instead of minting one, then
+   * DROPS the field — it never appears on the wire. Lets an ingress/emission
+   * idempotency claim (`omni_events.idempotency_key`, inserted BEFORE the
+   * publish) share the published event's identity, so the #957 `custom.>`
+   * journal consumer lands on the claim row (`ON CONFLICT (id) DO NOTHING`)
+   * instead of writing a second row, and `omni events trace` finds the root/
+   * hop by the same id its children's `causation_id` points at.
+   */
+  publishEventId?: string;
   instanceId?: string;
   channelType?: ChannelType;
   personId?: string;

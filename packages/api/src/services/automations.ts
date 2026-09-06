@@ -71,6 +71,19 @@ export class AutomationService {
       trustedTenantId?: string | null,
     ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
     releaseIdleTimeoutClaim?: (claimToken: string) => void | Promise<void>;
+    // Derived-key emission idempotency (#958) — see ActionDependencies.
+    claimEmittedEvent?: (
+      claim: {
+        idempotencyKey: string;
+        eventId: string;
+        eventType: string;
+        payload: Record<string, unknown>;
+        correlationId?: string;
+        causationId?: string;
+      },
+      trustedTenantId?: string | null,
+    ) => Promise<boolean>;
+    releaseEmittedEventClaim?: (eventId: string) => Promise<void>;
     // Schema-registry gate for emit_event (issue #959) — see automation-actions.ts.
     validateEmitEvent?: (
       eventType: string,

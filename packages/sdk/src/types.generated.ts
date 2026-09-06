@@ -1600,6 +1600,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events/schemas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List registered event schemas
+         * @description Get every event type with a registered payload schema. The registry is opt-in per type.
+         */
+        get: operations["listEventSchemas"];
+        put?: never;
+        /**
+         * Register or revise an event schema
+         * @description Register a JSON Schema for an event type. Once registered, the webhook ingress and automation emit_event validate payloads of this type before publishing; invalid payloads are dead-lettered with reason schema_validation_failed. Revising an existing registration must be additive-optional (the evolution rule) — an incompatible change is refused with 409 and must ship as a new versioned event type (e.g. custom.github.push.v2).
+         */
+        post: operations["registerEventSchema"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/schemas/{eventType}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a registered event schema
+         * @description Get the stored JSON Schema artifact for one event type.
+         */
+        get: operations["getEventSchema"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
@@ -3814,6 +3858,15 @@ export interface components {
             /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
             prefix?: string;
         };
+        WebhookEventTypeMapping: {
+            /**
+             * @description Where the semantic event name is read from (only headers for now)
+             * @enum {string}
+             */
+            source: "header";
+            /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+            header: string;
+        };
         WebhookSource: {
             /**
              * Format: uuid
@@ -3840,8 +3893,22 @@ export interface components {
                 /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
                 prefix?: string;
             } | null;
+            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+            eventTypeMapping: {
+                /**
+                 * @description Where the semantic event name is read from (only headers for now)
+                 * @enum {string}
+                 */
+                source: "header";
+                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                header: string;
+            } | null;
             /** @description Whether a signature secret is stored (secret is write-only) */
             hasSignatureSecret: boolean;
+            /** @description Idempotency key derivation template */
+            idempotencyKeyTemplate: string;
+            /** @description Redeliveries acked without creating a second event */
+            totalDuplicates: number;
             /** @description Whether enabled */
             enabled: boolean;
             /**
@@ -3919,6 +3986,18 @@ export interface components {
             } | null;
             /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
             signatureSecret?: string | null;
+            /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
+            idempotencyKeyTemplate?: string;
+            /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
+            eventTypeMapping?: {
+                /**
+                 * @description Where the semantic event name is read from (only headers for now)
+                 * @enum {string}
+                 */
+                source: "header";
+                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                header: string;
+            } | null;
             /**
              * @description Whether enabled
              * @default true
@@ -3955,13 +4034,15 @@ export interface components {
         WebhookReceiveResponse: {
             /**
              * Format: uuid
-             * @description Created event ID
+             * @description Created event ID (the ORIGINAL event on a duplicate)
              */
             eventId: string;
             /** @description Webhook source name */
             source: string;
             /** @description Event type */
             eventType: string;
+            /** @description True when the delivery was a redelivery: acked, but no second event was created */
+            duplicate?: boolean;
         };
         WebhookHeartbeatResponse: {
             /**
@@ -4926,6 +5007,47 @@ export interface components {
             payloadCleanup: {
                 deleted: number;
             };
+        };
+        EventSchema: {
+            /**
+             * Format: uuid
+             * @description Registration UUID
+             */
+            id: string;
+            /** @description Event type the schema governs (e.g. custom.github.push) */
+            eventType: string;
+            /** @description Revision counter; bumps on each compatible replacement */
+            version: number;
+            /** @description JSON Schema (draft-07) artifact, stored as-is */
+            schema: {
+                [key: string]: unknown;
+            };
+            /** @description Description */
+            description: string | null;
+            /** @description Whether the validation gate is active for this type */
+            enabled: boolean;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        RegisterEventSchemaRequest: {
+            /** @description Event type to register the schema for (e.g. custom.github.push) */
+            eventType: string;
+            /** @description JSON Schema (draft-07) the payload must satisfy. Stored as-is */
+            schema: {
+                [key: string]: unknown;
+            };
+            /** @description Description */
+            description?: string;
+            /** @description Whether the validation gate is active (default true) */
+            enabled?: boolean;
         };
         Automation: {
             /**
@@ -10570,8 +10692,22 @@ export interface operations {
                                 /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
                                 prefix?: string;
                             } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10663,6 +10799,18 @@ export interface operations {
                     } | null;
                     /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
                     signatureSecret?: string | null;
+                    /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
+                    idempotencyKeyTemplate?: string;
+                    /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
+                    eventTypeMapping?: {
+                        /**
+                         * @description Where the semantic event name is read from (only headers for now)
+                         * @enum {string}
+                         */
+                        source: "header";
+                        /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                        header: string;
+                    } | null;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -10717,8 +10865,22 @@ export interface operations {
                                 /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
                                 prefix?: string;
                             } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10843,8 +11005,22 @@ export interface operations {
                                 /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
                                 prefix?: string;
                             } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -11007,6 +11183,18 @@ export interface operations {
                     } | null;
                     /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
                     signatureSecret?: string | null;
+                    /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
+                    idempotencyKeyTemplate?: string;
+                    /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
+                    eventTypeMapping?: {
+                        /**
+                         * @description Where the semantic event name is read from (only headers for now)
+                         * @enum {string}
+                         */
+                        source: "header";
+                        /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                        header: string;
+                    } | null;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -11061,8 +11249,22 @@ export interface operations {
                                 /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
                                 prefix?: string;
                             } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -11169,13 +11371,15 @@ export interface operations {
                     "application/json": {
                         /**
                          * Format: uuid
-                         * @description Created event ID
+                         * @description Created event ID (the ORIGINAL event on a duplicate)
                          */
                         eventId: string;
                         /** @description Webhook source name */
                         source: string;
                         /** @description Event type */
                         eventType: string;
+                        /** @description True when the delivery was a redelivery: acked, but no second event was created */
+                        duplicate?: boolean;
                     };
                 };
             };
@@ -11312,13 +11516,15 @@ export interface operations {
                     "application/json": {
                         /**
                          * Format: uuid
-                         * @description Created event ID
+                         * @description Created event ID (the ORIGINAL event on a duplicate)
                          */
                         eventId: string;
                         /** @description Webhook source name */
                         source: string;
                         /** @description Event type */
                         eventType: string;
+                        /** @description True when the delivery was a redelivery: acked, but no second event was created */
+                        duplicate?: boolean;
                     };
                 };
             };
@@ -11402,13 +11608,15 @@ export interface operations {
                     "application/json": {
                         /**
                          * Format: uuid
-                         * @description Created event ID
+                         * @description Created event ID (the ORIGINAL event on a duplicate)
                          */
                         eventId: string;
                         /** @description Webhook source name */
                         source: string;
                         /** @description Event type */
                         eventType: string;
+                        /** @description True when the delivery was a redelivery: acked, but no second event was created */
+                        duplicate?: boolean;
                     };
                 };
             };
@@ -15156,6 +15364,238 @@ export interface operations {
                             payloadCleanup: {
                                 deleted: number;
                             };
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listEventSchemas: {
+        parameters: {
+            query?: {
+                enabled?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of registered schemas */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /**
+                             * Format: uuid
+                             * @description Registration UUID
+                             */
+                            id: string;
+                            /** @description Event type the schema governs (e.g. custom.github.push) */
+                            eventType: string;
+                            /** @description Revision counter; bumps on each compatible replacement */
+                            version: number;
+                            /** @description JSON Schema (draft-07) artifact, stored as-is */
+                            schema: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Description */
+                            description: string | null;
+                            /** @description Whether the validation gate is active for this type */
+                            enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    registerEventSchema: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Event type to register the schema for (e.g. custom.github.push) */
+                    eventType: string;
+                    /** @description JSON Schema (draft-07) the payload must satisfy. Stored as-is */
+                    schema: {
+                        [key: string]: unknown;
+                    };
+                    /** @description Description */
+                    description?: string;
+                    /** @description Whether the validation gate is active (default true) */
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Schema registered (or compatibly revised) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Registration UUID
+                             */
+                            id: string;
+                            /** @description Event type the schema governs (e.g. custom.github.push) */
+                            eventType: string;
+                            /** @description Revision counter; bumps on each compatible replacement */
+                            version: number;
+                            /** @description JSON Schema (draft-07) artifact, stored as-is */
+                            schema: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Description */
+                            description: string | null;
+                            /** @description Whether the validation gate is active for this type */
+                            enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Not a valid JSON Schema */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Incompatible schema change refused (evolution rule) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getEventSchema: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eventType: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered schema */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Registration UUID
+                             */
+                            id: string;
+                            /** @description Event type the schema governs (e.g. custom.github.push) */
+                            eventType: string;
+                            /** @description Revision counter; bumps on each compatible replacement */
+                            version: number;
+                            /** @description JSON Schema (draft-07) artifact, stored as-is */
+                            schema: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Description */
+                            description: string | null;
+                            /** @description Whether the validation gate is active for this type */
+                            enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description No schema registered for this type */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
                         };
                     };
                 };

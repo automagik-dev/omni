@@ -114,6 +114,54 @@ function buildSignatureConfig(options: {
   return { algorithm, header: signatureHeader, prefix: signaturePrefix };
 }
 
+interface UpdateSourceOptions extends SignatureSecretOptions {
+  name?: string;
+  description?: string;
+  enable?: boolean;
+  disable?: boolean;
+  signatureAlgorithm?: string;
+  signatureHeader?: string;
+  signaturePrefix?: string;
+  clearSignature?: boolean;
+  idempotencyKeyTemplate?: string;
+  // Connector lifecycle contract (#961)
+  expectedInterval?: string;
+  clearCadence?: boolean;
+  windowSemantics?: string;
+  mutationPolicy?: string;
+}
+
+interface UpdateSourcePatch {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  signatureConfig?: WebhookSignatureConfigBody | null;
+  signatureSecret?: string;
+  idempotencyKeyTemplate?: string;
+  expectedIntervalSeconds?: number | null;
+  windowSemantics?: (typeof WINDOW_SEMANTICS)[number];
+  mutationPolicy?: (typeof MUTATION_POLICIES)[number];
+}
+
+/** Assemble the PATCH body from the update flags (only touched fields). */
+async function buildUpdateSourcePatch(options: UpdateSourceOptions): Promise<UpdateSourcePatch> {
+  const updates: UpdateSourcePatch = buildLifecycleUpdates(options);
+  if (options.name) updates.name = options.name;
+  if (options.description) updates.description = options.description;
+  if (options.idempotencyKeyTemplate) updates.idempotencyKeyTemplate = options.idempotencyKeyTemplate;
+  if (options.enable) updates.enabled = true;
+  if (options.disable) updates.enabled = false;
+  if (options.clearSignature) {
+    updates.signatureConfig = null;
+    return updates;
+  }
+  const signatureConfig = buildSignatureConfig(options);
+  if (signatureConfig) updates.signatureConfig = signatureConfig;
+  const signatureSecret = await resolveSignatureSecret(options);
+  if (signatureSecret) updates.signatureSecret = signatureSecret;
+  return updates;
+}
+
 /**
  * Create-only pairing: the API rejects a `signatureConfig` without a secret
  * and a secret without a config (CreateWebhookSourceSchema). Fail here, before
@@ -264,6 +312,11 @@ export function createWebhooksCommand(): Command {
     .option('--signature-secret-env <VAR>', 'Read the shared secret from environment variable VAR')
     .option('--signature-secret-stdin', 'Read the shared secret from stdin (trailing newline stripped)')
     .option(
+      '--idempotency-key-template <template>',
+      'Delivery-identity key template for redelivery dedup (#958). Placeholders: {source}, {sha256(body)}, ' +
+        "{headers.<name>}, {payload.<dot.path>}. Defaults to '{source}:{sha256(body)}'",
+    )
+    .option(
       '--expected-interval <seconds>',
       'Declared cadence: >=1 event or heartbeat per N seconds. Arms liveness supervision (#961)',
     )
@@ -281,6 +334,7 @@ export function createWebhooksCommand(): Command {
         signatureSecret?: string;
         signatureSecretEnv?: string;
         signatureSecretStdin?: boolean;
+        idempotencyKeyTemplate?: string;
         expectedInterval?: string;
         windowSemantics?: string;
         mutationPolicy?: string;
@@ -308,6 +362,7 @@ export function createWebhooksCommand(): Command {
             expectedHeaders,
             signatureConfig,
             signatureSecret,
+            idempotencyKeyTemplate: options.idempotencyKeyTemplate,
             expectedIntervalSeconds: parseExpectedInterval(options.expectedInterval),
             windowSemantics: parseWindowSemantics(options.windowSemantics),
             mutationPolicy: parseMutationPolicy(options.mutationPolicy),
@@ -349,72 +404,34 @@ export function createWebhooksCommand(): Command {
     .option('--signature-secret-stdin', 'Read the shared secret from stdin (trailing newline stripped)')
     .option('--clear-signature', 'Remove the signature config and stored secret')
     .option(
+      '--idempotency-key-template <template>',
+      'Delivery-identity key template for redelivery dedup (#958). Placeholders: {source}, {sha256(body)}, ' +
+        '{headers.<name>}, {payload.<dot.path>}',
+    )
+    .option(
       '--expected-interval <seconds>',
       'Declared cadence: >=1 event or heartbeat per N seconds. (Re)arms liveness supervision (#961)',
     )
     .option('--clear-cadence', 'Remove the declared cadence (disarms liveness supervision)')
     .option('--window-semantics <value>', `Declared window semantics: ${WINDOW_SEMANTICS.join(' or ')}`)
     .option('--mutation-policy <value>', `Declared mutation re-emit policy: ${MUTATION_POLICIES.join(' or ')}`)
-    .action(
-      async (
-        id: string,
-        options: {
-          name?: string;
-          description?: string;
-          enable?: boolean;
-          disable?: boolean;
-          signatureAlgorithm?: string;
-          signatureHeader?: string;
-          signaturePrefix?: string;
-          signatureSecret?: string;
-          signatureSecretEnv?: string;
-          signatureSecretStdin?: boolean;
-          clearSignature?: boolean;
-          expectedInterval?: string;
-          clearCadence?: boolean;
-          windowSemantics?: string;
-          mutationPolicy?: string;
-        },
-      ) => {
-        const resolvedId = await resolveWebhookId(id);
-        const client = getClient();
+    .action(async (id: string, options: UpdateSourceOptions) => {
+      const resolvedId = await resolveWebhookId(id);
+      const client = getClient();
 
-        try {
-          const updates: {
-            name?: string;
-            description?: string;
-            enabled?: boolean;
-            signatureConfig?: WebhookSignatureConfigBody | null;
-            signatureSecret?: string;
-            expectedIntervalSeconds?: number | null;
-            windowSemantics?: (typeof WINDOW_SEMANTICS)[number];
-            mutationPolicy?: (typeof MUTATION_POLICIES)[number];
-          } = buildLifecycleUpdates(options);
-          if (options.name) updates.name = options.name;
-          if (options.description) updates.description = options.description;
-          if (options.enable) updates.enabled = true;
-          if (options.disable) updates.enabled = false;
-          if (options.clearSignature) {
-            updates.signatureConfig = null;
-          } else {
-            const signatureConfig = buildSignatureConfig(options);
-            if (signatureConfig) updates.signatureConfig = signatureConfig;
-            const signatureSecret = await resolveSignatureSecret(options);
-            if (signatureSecret) updates.signatureSecret = signatureSecret;
-          }
-
-          const source = await client.webhooks.updateSource(resolvedId, updates);
-          output.success(`Webhook source updated: ${source.id}`, {
-            id: source.id,
-            name: source.name,
-            enabled: source.enabled,
-          });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          output.error(`Failed to update webhook source: ${message}`);
-        }
-      },
-    );
+      try {
+        const updates = await buildUpdateSourcePatch(options);
+        const source = await client.webhooks.updateSource(resolvedId, updates);
+        output.success(`Webhook source updated: ${source.id}`, {
+          id: source.id,
+          name: source.name,
+          enabled: source.enabled,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to update webhook source: ${message}`);
+      }
+    });
 
   // omni webhooks delete <id>
   webhooks
