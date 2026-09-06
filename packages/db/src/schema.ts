@@ -48,6 +48,7 @@ export const channelTypes = [
   'asc-flow',
   'twilio-whatsapp',
   'internal',
+  'msteams',
 ] as const;
 export type ChannelType = (typeof channelTypes)[number];
 

@@ -504,7 +504,8 @@ describe('channel coverage', () => {
           e.name !== 'channel-a2a' &&
           e.name !== 'channel-internal' &&
           e.name !== 'channel-linkedin' && // Placeholder package — no source yet
-          e.name !== 'channel-gupshup', // In progress — PR #334
+          e.name !== 'channel-gupshup' && // In progress — PR #334
+          e.name !== 'channel-msteams', // Scaffold — text path only, PR #916
       )
       .map((e) => e.name.replace('channel-', ''));
 
