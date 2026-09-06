@@ -393,6 +393,34 @@
       "when": 1785500000000,
       "tag": "0055_asc_flow_handoff_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1785600000000,
+      "tag": "0056_event_schema_registry",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1785700000000,
+      "tag": "0057_connector_lifecycle_contract",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1785800000000,
+      "tag": "0058_omni_events_causation_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1785900000000,
+      "tag": "0059_ingress_idempotency",
+      "breakpoints": true
     }
   ]
 }

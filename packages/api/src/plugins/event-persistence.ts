@@ -136,6 +136,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 from: payload.from,
               },
               agentId: metadata.agentId ?? null,
+              causationId: metadata.causationId ?? null,
               conversationId: null,
               chatUuid,
             };
@@ -201,6 +202,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 voiceNote: payload.content.isVoiceNote,
               },
               agentId: metadata.agentId ?? null,
+              causationId: metadata.causationId ?? null,
               conversationId: null,
               chatUuid,
             };
@@ -256,6 +258,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 receivedAt: new Date(event.timestamp),
                 deliveredAt: new Date(payload.deliveredAt),
                 agentId: metadata.agentId ?? null,
+                causationId: metadata.causationId ?? null,
                 conversationId: null,
                 chatUuid,
               };
@@ -309,6 +312,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 receivedAt: new Date(event.timestamp),
                 readAt: new Date(payload.readAt),
                 agentId: metadata.agentId ?? null,
+                causationId: metadata.causationId ?? null,
                 conversationId: null,
                 chatUuid,
               };
@@ -394,6 +398,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                   retryable: payload.retryable,
                 },
                 agentId: metadata.agentId ?? null,
+                causationId: metadata.causationId ?? null,
                 conversationId: null,
                 chatUuid,
               };
@@ -416,6 +421,55 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         }
       },
       { ...CONSUMER_OPTIONS, durable: 'event-persistence-failed' },
+    );
+
+    // Subscribe to ALL custom events (#957). Webhook ingress roots and
+    // automation emit_event hops live on the CUSTOM stream but were never
+    // journaled, so `omni events trace` could not include the root ingress
+    // event or any intermediate hop — the chain existed only in NATS
+    // retention. Each custom event gets a minimal row: identity, causality
+    // (causation_id column + correlationId in the metadata jsonb), and the
+    // payload for debugging. channel is 'internal' (there is no channel-side
+    // fact here) and the eventType is truncated to the column's 50 chars.
+    await eventBus.subscribePattern(
+      'custom.>',
+      async (event) => {
+        const metadata = event.metadata;
+        try {
+          await runConsumerInTenantContext(db, event, async () => {
+            const sdb = scopedHandle(db);
+            const newEvent: NewOmniEvent = {
+              ...eventIdInsert(event.id),
+              channel: 'internal',
+              instanceId: metadata.instanceId && isValidUuid(metadata.instanceId) ? metadata.instanceId : null,
+              eventType: event.type.slice(0, 50) as NewOmniEvent['eventType'],
+              direction: 'internal',
+              status: 'completed',
+              receivedAt: new Date(event.timestamp),
+              rawPayload: deepSanitize(event.payload as Record<string, unknown>),
+              metadata: {
+                correlationId: metadata.correlationId,
+                source: metadata.source,
+                fullEventType: event.type,
+              },
+              causationId: metadata.causationId ?? null,
+              conversationId: null,
+            };
+            await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
+          });
+        } catch (error) {
+          log.error('Failed to persist custom event', {
+            eventType: event.type,
+            eventId: event.id,
+            error: String(error),
+          });
+        }
+      },
+      // startFrom 'new', unlike the message subscribers: #957 is explicitly
+      // forward-only — replaying the whole CUSTOM stream retention on first
+      // deploy would journal thousands of historical events that can never
+      // carry a causation parent.
+      { ...CONSUMER_OPTIONS, durable: 'event-persistence-custom', startFrom: 'new' },
     );
 
     log.info('Event persistence initialized - listening for message events');

@@ -20,9 +20,20 @@ function createMockSource(overrides: Partial<WebhookSource> = {}): WebhookSource
     expectedHeaders: null,
     signatureConfig: null,
     signatureSecret: null,
+    idempotencyKeyTemplate: '{source}:{sha256(body)}',
+    eventTypeMapping: null,
     enabled: true,
     lastReceivedAt: null,
     totalReceived: 0,
+    totalDuplicates: 0,
+    expectedIntervalSeconds: null,
+    lastHeartbeatAt: null,
+    heartbeatCount: 0,
+    livenessStatus: null,
+    livenessArmedAt: null,
+    stalledAt: null,
+    windowSemantics: null,
+    mutationPolicy: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -69,10 +80,29 @@ function createMockDatabase(initialSources: WebhookSource[] = []) {
     return query;
   }
 
+  // Journal claims by idempotency key (#958) — mirrors the unique-index
+  // semantics: a second insert with the same key "conflicts" and returns [].
+  const journaledKeys = new Map<string, { id: string }>();
+
   const db = {
     select: mock(() => createSelectQuery(Array.from(sources.values()))),
     insert: mock((_table: unknown) => ({
-      values: mock((data: NewWebhookSource) => {
+      values: mock((data: NewWebhookSource | { id: string; idempotencyKey: string }) => {
+        // Journal claim insert (#958): mirrors the unique-index semantics —
+        // a second insert with the same idempotency key conflicts → [].
+        if ('idempotencyKey' in data) {
+          const row = { id: data.id };
+          const conflict = journaledKeys.has(data.idempotencyKey);
+          if (!conflict) journaledKeys.set(data.idempotencyKey, row);
+          calls.insert.push(data);
+          return {
+            onConflictDoNothing: mock(() => ({
+              returning: mock(() => Promise.resolve(conflict ? [] : [row])),
+            })),
+            returning: mock(() => Promise.resolve([row])),
+          };
+        }
+
         const newSource: WebhookSource = {
           id: `generated-${Date.now()}`,
           tenantId: null,
@@ -81,9 +111,20 @@ function createMockDatabase(initialSources: WebhookSource[] = []) {
           expectedHeaders: data.expectedHeaders ?? null,
           signatureConfig: data.signatureConfig ?? null,
           signatureSecret: data.signatureSecret ?? null,
+          idempotencyKeyTemplate: data.idempotencyKeyTemplate ?? '{source}:{sha256(body)}',
+          eventTypeMapping: data.eventTypeMapping ?? null,
           enabled: data.enabled ?? true,
           lastReceivedAt: null,
           totalReceived: 0,
+          totalDuplicates: 0,
+          expectedIntervalSeconds: data.expectedIntervalSeconds ?? null,
+          lastHeartbeatAt: null,
+          heartbeatCount: 0,
+          livenessStatus: data.livenessStatus ?? null,
+          livenessArmedAt: data.livenessArmedAt ?? null,
+          stalledAt: null,
+          windowSemantics: data.windowSemantics ?? null,
+          mutationPolicy: data.mutationPolicy ?? null,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
@@ -118,24 +159,33 @@ function createMockDatabase(initialSources: WebhookSource[] = []) {
         calls.delete.push({ condition });
         // For testing, delete the first source
         const firstId = sources.keys().next().value;
+        let result: WebhookSource[] = [];
         if (firstId) {
           const deleted = sources.get(firstId);
           sources.delete(firstId);
-          return {
-            returning: mock(() => Promise.resolve(deleted ? [deleted] : [])),
-          };
+          result = deleted ? [deleted] : [];
         }
-        return {
-          returning: mock(() => Promise.resolve([])),
+        // Thenable AND returning()-capable: the service's delete() chains
+        // .returning(), while the publish-failure claim release awaits the
+        // builder directly.
+        const promiseLike = Promise.resolve(result) as Promise<WebhookSource[]> & {
+          returning: () => Promise<WebhookSource[]>;
         };
+        promiseLike.returning = () => Promise.resolve(result);
+        return promiseLike;
       }),
     })),
     // Expose internal state for testing
     _sources: sources,
     _calls: calls,
+    _journaledKeys: journaledKeys,
   };
 
-  return db as unknown as Database & { _sources: Map<string, WebhookSource>; _calls: typeof calls };
+  return db as unknown as Database & {
+    _sources: Map<string, WebhookSource>;
+    _calls: typeof calls;
+    _journaledKeys: Map<string, { id: string }>;
+  };
 }
 
 // Create mock event bus
@@ -154,8 +204,11 @@ function createMockEventBus() {
         metadata: { correlationId?: string; instanceId?: string; source?: string },
       ) => {
         publishedEvents.push({ eventType, payload, metadata });
+        // Mirror the real bus (#956): the event id is minted per publish and
+        // is NOT the correlation — a caller-supplied correlationId only rides
+        // in the metadata.
         return {
-          id: metadata.correlationId ?? 'generated-event-id',
+          id: crypto.randomUUID(),
           type: eventType,
           timestamp: Date.now(),
           metadata,
@@ -508,6 +561,78 @@ describe('WebhookService', () => {
     });
   });
 
+  describe('receive() ingress idempotency (#958)', () => {
+    function mockSourceLookup(source: WebhookSource) {
+      mockDb.select = mock(() => ({
+        from: () => ({
+          where: () => ({
+            limit: () => Promise.resolve([source]),
+          }),
+        }),
+      })) as unknown as typeof mockDb.select;
+    }
+
+    test('a redelivery (same derived key) is acked as duplicate and publishes nothing', async () => {
+      const source = createMockSource({ id: 'src-1', name: 'github', enabled: true });
+      mockSourceLookup(source);
+
+      const rawBody = JSON.stringify({ action: 'push', id: 42 });
+      const payload = JSON.parse(rawBody) as Record<string, unknown>;
+
+      const first = await service.receive('github', payload, {}, { rawBody });
+      const second = await service.receive('github', payload, {}, { rawBody });
+
+      expect(first.duplicate).toBeUndefined();
+      expect(second.received).toBe(true);
+      expect(second.duplicate).toBe(true);
+      // Exactly one event was published and one key journaled.
+      expect(mockEventBus.publishGeneric).toHaveBeenCalledTimes(1);
+      expect(mockDb._journaledKeys.size).toBe(1);
+    });
+
+    test('different bodies derive different keys and both publish', async () => {
+      const source = createMockSource({ id: 'src-1', name: 'github', enabled: true });
+      mockSourceLookup(source);
+
+      const a = await service.receive('github', { id: 1 }, {}, { rawBody: '{"id":1}' });
+      const b = await service.receive('github', { id: 2 }, {}, { rawBody: '{"id":2}' });
+
+      expect(a.duplicate).toBeUndefined();
+      expect(b.duplicate).toBeUndefined();
+      expect(mockEventBus.publishGeneric).toHaveBeenCalledTimes(2);
+      expect(mockDb._journaledKeys.size).toBe(2);
+    });
+
+    test('a provider-identity template dedupes on the id even when body noise differs', async () => {
+      const source = createMockSource({
+        id: 'src-1',
+        name: 'github',
+        enabled: true,
+        idempotencyKeyTemplate: 'github:{headers.x-github-delivery}',
+      });
+      mockSourceLookup(source);
+
+      const headers = { 'x-github-delivery': 'delivery-1' };
+      const first = await service.receive('github', { try: 1 }, headers, { rawBody: '{"try":1}' });
+      const second = await service.receive('github', { try: 2 }, headers, { rawBody: '{"try":2}' });
+
+      expect(first.duplicate).toBeUndefined();
+      expect(second.duplicate).toBe(true);
+      expect(mockEventBus.publishGeneric).toHaveBeenCalledTimes(1);
+    });
+
+    test('a failed publish releases the claim so the retry is a first delivery', async () => {
+      const source = createMockSource({ id: 'src-1', name: 'github', enabled: true });
+      mockSourceLookup(source);
+      mockEventBus.publishGeneric = mock(() => Promise.reject(new Error('NATS down'))) as never;
+
+      await expect(service.receive('github', { id: 1 }, {}, { rawBody: '{"id":1}' })).rejects.toThrow('NATS down');
+      // The claim was released (delete was issued) — the provider's retry
+      // must not be swallowed as a duplicate of an event that never existed.
+      expect(mockDb._calls.delete.length).toBe(1);
+    });
+  });
+
   describe('receive() signature verification', () => {
     const secret = 'super-secret-value';
 
@@ -684,7 +809,10 @@ describe('WebhookService', () => {
 
       const result = await service.trigger(eventType, {}, { correlationId });
 
-      expect(result.eventId).toBe(correlationId);
+      // #956: the returned id is the PUBLISHED event's id; the supplied
+      // correlation rides in the metadata instead of doubling as the id.
+      expect(result.eventId).toBeTruthy();
+      expect(result.eventId).not.toBe(correlationId);
       expect(mockEventBus._publishedEvents[0]?.metadata.correlationId).toBe(correlationId);
     });
 
@@ -818,5 +946,108 @@ describe('Webhook Event Flow Integration', () => {
     expect(mockEventBus._publishedEvents).toHaveLength(2);
     expect(mockEventBus._publishedEvents[0]?.eventType).toBe('custom.webhook.github');
     expect(mockEventBus._publishedEvents[1]?.eventType).toBe('custom.webhook.stripe');
+  });
+});
+
+describe('Connector lifecycle contract (#961)', () => {
+  describe('heartbeat()', () => {
+    test('records the heartbeat without publishing any event', async () => {
+      const source = createMockSource({
+        id: 'hb-1',
+        name: 'gmail-purchases',
+        expectedIntervalSeconds: 900,
+        livenessStatus: 'healthy',
+      });
+      const mockDb = createMockDatabase([source]);
+      const mockEventBus = createMockEventBus();
+      const service = new WebhookService(mockDb, mockEventBus);
+
+      const result = await service.heartbeat('gmail-purchases');
+
+      expect(result.ok).toBe(true);
+      expect(result.source).toBe('gmail-purchases');
+      expect(result.livenessStatus).toBe('healthy');
+      expect(result.expectedIntervalSeconds).toBe(900);
+      // Compacted representation: a timestamped counter update, zero journal events.
+      expect(mockEventBus._publishedEvents).toHaveLength(0);
+      const update = mockDb._calls.update[0] as { lastHeartbeatAt?: Date } | undefined;
+      expect(update?.lastHeartbeatAt).toBeInstanceOf(Date);
+    });
+
+    test('throws NotFoundError for an unknown source', async () => {
+      const service = new WebhookService(createMockDatabase(), createMockEventBus());
+      await expect(service.heartbeat('nope')).rejects.toThrow('WebhookSource');
+    });
+
+    test('rejects a disabled source', async () => {
+      const source = createMockSource({ id: 'hb-2', name: 'off', enabled: false });
+      const service = new WebhookService(createMockDatabase([source]), createMockEventBus());
+      await expect(service.heartbeat('off')).rejects.toThrow('disabled');
+    });
+  });
+
+  describe('liveness arming on create()/update()', () => {
+    test('create with a declared cadence arms supervision', async () => {
+      const service = new WebhookService(createMockDatabase(), createMockEventBus());
+
+      const created = await service.create({ name: 'calendar', expectedIntervalSeconds: 300 });
+
+      expect(created.livenessStatus).toBe('healthy');
+      expect(created.livenessArmedAt).toBeInstanceOf(Date);
+    });
+
+    test('create without a cadence stays unsupervised', async () => {
+      const service = new WebhookService(createMockDatabase(), createMockEventBus());
+      const created = await service.create({ name: 'plain' });
+      expect(created.livenessStatus).toBeNull();
+      expect(created.livenessArmedAt).toBeNull();
+    });
+
+    test('update declaring a cadence re-anchors the window and sets healthy when unsupervised', async () => {
+      const source = createMockSource({ id: 'arm-1', name: 'src' });
+      const mockDb = createMockDatabase([source]);
+      const service = new WebhookService(mockDb, createMockEventBus());
+
+      const updated = await service.update('arm-1', { expectedIntervalSeconds: 120 });
+
+      expect(updated.expectedIntervalSeconds).toBe(120);
+      expect(updated.livenessStatus).toBe('healthy');
+      expect(updated.livenessArmedAt).toBeInstanceOf(Date);
+    });
+
+    test('re-arming a stalled source keeps stalled — recovery stays sweeper-owned', async () => {
+      const source = createMockSource({
+        id: 'arm-2',
+        name: 'src',
+        expectedIntervalSeconds: 60,
+        livenessStatus: 'stalled',
+        stalledAt: new Date(),
+      });
+      const service = new WebhookService(createMockDatabase([source]), createMockEventBus());
+
+      const updated = await service.update('arm-2', { expectedIntervalSeconds: 600 });
+
+      expect(updated.livenessStatus).toBe('stalled');
+      expect(updated.livenessArmedAt).toBeInstanceOf(Date);
+    });
+
+    test('update with null disarms supervision entirely', async () => {
+      const source = createMockSource({
+        id: 'arm-3',
+        name: 'src',
+        expectedIntervalSeconds: 60,
+        livenessStatus: 'stalled',
+        livenessArmedAt: new Date(),
+        stalledAt: new Date(),
+      });
+      const service = new WebhookService(createMockDatabase([source]), createMockEventBus());
+
+      const updated = await service.update('arm-3', { expectedIntervalSeconds: null });
+
+      expect(updated.expectedIntervalSeconds).toBeNull();
+      expect(updated.livenessStatus).toBeNull();
+      expect(updated.livenessArmedAt).toBeNull();
+      expect(updated.stalledAt).toBeNull();
+    });
   });
 });

@@ -19,7 +19,7 @@
     },
     "apps/ui": {
       "name": "@omni/ui",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/sdk": "workspace:*",
         "@radix-ui/react-dialog": "^1.1.15",
@@ -54,7 +54,7 @@
     },
     "packages/api": {
       "name": "@omni/api",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@google/genai": "^1.0.0",
         "@hono/swagger-ui": "^0.4.1",
@@ -95,7 +95,7 @@
     },
     "packages/channel-a2a": {
       "name": "@omni/channel-a2a",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -111,7 +111,7 @@
     },
     "packages/channel-asc-flow": {
       "name": "@omni/channel-asc-flow",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -126,7 +126,7 @@
     },
     "packages/channel-discord": {
       "name": "@omni/channel-discord",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -143,7 +143,7 @@
     },
     "packages/channel-gupshup": {
       "name": "@omni/channel-gupshup",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -159,7 +159,7 @@
     },
     "packages/channel-hermes": {
       "name": "@omni/channel-hermes",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -174,7 +174,7 @@
     },
     "packages/channel-internal": {
       "name": "@omni/channel-internal",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -189,7 +189,7 @@
     },
     "packages/channel-sdk": {
       "name": "@omni/channel-sdk",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/core": "workspace:*",
         "zod": "^3.24.1",
@@ -201,7 +201,7 @@
     },
     "packages/channel-slack": {
       "name": "@omni/channel-slack",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -219,7 +219,7 @@
     },
     "packages/channel-telegram": {
       "name": "@omni/channel-telegram",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -235,7 +235,7 @@
     },
     "packages/channel-twilio-whatsapp": {
       "name": "@omni/channel-twilio-whatsapp",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -250,7 +250,7 @@
     },
     "packages/channel-whatsapp": {
       "name": "@omni/channel-whatsapp",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@hapi/boom": "^10.0.1",
         "@omni/channel-sdk": "workspace:*",
@@ -271,7 +271,7 @@
     },
     "packages/channel-whatsapp-business": {
       "name": "@omni/channel-whatsapp-business",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -287,7 +287,7 @@
     },
     "packages/cli": {
       "name": "@automagik/omni",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "bin": {
         "omni": "./bin/omni",
       },
@@ -329,14 +329,16 @@
     },
     "packages/core": {
       "name": "@omni/core",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.62",
         "@opentelemetry/api": "^1.9.1",
+        "ajv": "^8.17.1",
         "croner": "^9.1.0",
         "nats": "^2.29.3",
         "prom-client": "^15.1.3",
         "zod": "^3.24.1",
+        "zod-to-json-schema": "^3.25.1",
       },
       "devDependencies": {
         "@types/bun": "1.3.14",
@@ -345,7 +347,7 @@
     },
     "packages/db": {
       "name": "@omni/db",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@omni/core": "workspace:*",
         "drizzle-orm": "^0.38.4",
@@ -359,7 +361,7 @@
     },
     "packages/media-processing": {
       "name": "@omni/media-processing",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@google/generative-ai": "^0.21.0",
         "@omni/core": "workspace:*",
@@ -378,7 +380,7 @@
     },
     "packages/plugin-openclaw": {
       "name": "@omni/plugin-openclaw",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "devDependencies": {
         "@types/bun": "1.3.14",
         "typescript": "^5.7.3",
@@ -386,7 +388,7 @@
     },
     "packages/sdk": {
       "name": "@omni/sdk",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "openapi-fetch": "^0.13.6",
       },
@@ -400,7 +402,7 @@
     },
     "packages/voice-client": {
       "name": "@omni/voice-client",
-      "version": "2.260906.1",
+      "version": "2.260906.5",
       "dependencies": {
         "@snazzah/davey": "^0.1.11",
         "libsodium-wrappers": "^0.7.15",

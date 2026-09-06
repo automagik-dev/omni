@@ -3,11 +3,13 @@
  *
  * omni events list --instance <id>
  * omni events stream [flags]
+ * omni events trace <id>
  * omni events search <query>
  * omni events timeline <person-id>
  */
 
 import type { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import type { Event, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
@@ -204,6 +206,225 @@ function displayRecordBreakdown(title: string, record: Record<string, number>, k
 }
 
 // ============================================================================
+// TRACE
+// ============================================================================
+
+/** One journal row as returned inside a trace response. */
+interface TraceEvent {
+  id: string;
+  eventType: string;
+  receivedAt: string;
+  causationId: string | null;
+  metadata?: { correlationId?: string } | null;
+  textContent?: string | null;
+}
+
+interface TraceResponse {
+  data: {
+    event: TraceEvent;
+    ancestors: TraceEvent[];
+    descendants: Array<{ event: TraceEvent; depth: number }>;
+    truncated: boolean;
+  };
+}
+
+/**
+ * Fetch a causality trace from the API. Raw fetch (like `fetchAnalytics`)
+ * because the generated SDK does not expose the trace endpoint yet — the CLI
+ * still only ever talks to the API, never the database.
+ */
+async function fetchTrace(id: string): Promise<TraceResponse['data']> {
+  const config = loadConfig();
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+
+  const resp = await fetch(`${baseUrl}/api/v2/events/${encodeURIComponent(id)}/trace`, {
+    headers: { 'x-api-key': config.apiKey ?? '' },
+  });
+
+  if (!resp.ok) {
+    throw new Error(`API returned ${resp.status}: ${await resp.text()}`);
+  }
+
+  return ((await resp.json()) as TraceResponse).data;
+}
+
+/** One human-readable trace line: type, short id, time, correlation. */
+export function formatTraceLine(event: TraceEvent, marker: string): string {
+  const time = new Date(event.receivedAt).toISOString().replace('T', ' ').slice(0, 19);
+  const corr = event.metadata?.correlationId?.slice(0, 8) ?? '--------';
+  const text = event.textContent ? `  "${event.textContent.slice(0, 40)}"` : '';
+  return `${marker}${event.eventType}  ${event.id.slice(0, 8)}  ${time}  corr=${corr}${text}`;
+}
+
+/**
+ * Render the chain root→focus→fan-out as an indented tree. Answers "why did
+ * this event happen?" (the ancestors) and "what did it cause?" (the
+ * descendants) in one view.
+ */
+function displayTrace(data: TraceResponse['data']): void {
+  if (getOutputFormat() === 'json') {
+    output.data(data);
+    return;
+  }
+
+  let indent = 0;
+  for (const ancestor of data.ancestors) {
+    const label = indent === 0 && !ancestor.causationId ? ' (root)' : '';
+    output.raw(`${'  '.repeat(indent)}${formatTraceLine(ancestor, indent === 0 ? '● ' : '└─ ')}${label}`);
+    indent++;
+  }
+
+  const focusIsRoot = data.ancestors.length === 0 && !data.event.causationId;
+  output.raw(
+    `${'  '.repeat(indent)}${formatTraceLine(data.event, indent === 0 ? '● ' : '└─ ')}${focusIsRoot ? ' (root)' : ''}  ← trace target`,
+  );
+
+  for (const { event, depth } of data.descendants) {
+    output.raw(`${'  '.repeat(indent + depth)}${formatTraceLine(event, '└─ ')}`);
+  }
+
+  if (data.descendants.length === 0) {
+    output.dim('(no descendants — nothing was caused by this event)');
+  }
+  if (data.truncated) {
+    output.warn('Trace truncated (depth/node cap reached)');
+  }
+}
+
+// ============================================================================
+// SCHEMA REGISTRY (issue #959)
+// ============================================================================
+
+/** A registered event schema as returned by the API. */
+interface EventSchemaData {
+  id: string;
+  eventType: string;
+  version: number;
+  schema: Record<string, unknown>;
+  description: string | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Raw CLI→API call for endpoints the generated SDK does not cover yet
+ * (`fetchAnalytics` precedent above; the CLI never queries the DB directly).
+ */
+async function schemaApiRequest<T>(path: string, init: { method?: string; body?: string } = {}): Promise<T> {
+  const config = loadConfig();
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+
+  const resp = await fetch(`${baseUrl}/api/v2/events/schemas${path}`, {
+    method: init.method ?? 'GET',
+    body: init.body,
+    headers: { 'content-type': 'application/json', 'x-api-key': config.apiKey ?? '' },
+  });
+
+  if (!resp.ok) {
+    throw new Error(`API returned ${resp.status}: ${await resp.text()}`);
+  }
+
+  return (await resp.json()) as T;
+}
+
+/** Load the JSON Schema artifact from --file or inline --schema (exactly one). */
+function loadSchemaArtifact(options: { file?: string; schema?: string }): Record<string, unknown> {
+  if ((options.file ? 1 : 0) + (options.schema ? 1 : 0) !== 1) {
+    throw new Error('Provide the JSON Schema via exactly one of --file <path> or --schema <json>');
+  }
+  const raw = options.file ? readFileSync(options.file, 'utf-8') : (options.schema as string);
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('The JSON Schema artifact must be a JSON object');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function summarizeSchemaRow(row: EventSchemaData): Record<string, unknown> {
+  return {
+    eventType: row.eventType,
+    version: row.version,
+    enabled: row.enabled,
+    description: row.description ?? '-',
+    updatedAt: row.updatedAt,
+  };
+}
+
+function createSchemaCommand(): Command {
+  const schema = new Command('schema').description('Manage the event schema registry (per-type payload contracts)');
+
+  schema
+    .command('register <eventType>')
+    .description('Register (or compatibly revise) the JSON Schema for an event type')
+    .option('--file <path>', 'Path to a JSON Schema file')
+    .option('--schema <json>', 'Inline JSON Schema')
+    .option('--description <text>', 'Description for the registration')
+    .option('--disabled', 'Register with the validation gate disabled')
+    .action(
+      async (
+        eventType: string,
+        options: { file?: string; schema?: string; description?: string; disabled?: boolean },
+      ) => {
+        try {
+          const artifact = loadSchemaArtifact(options);
+
+          const result = await schemaApiRequest<{ data: EventSchemaData }>('', {
+            method: 'POST',
+            body: JSON.stringify({
+              eventType,
+              schema: artifact,
+              description: options.description,
+              enabled: options.disabled ? false : undefined,
+            }),
+          });
+
+          output.success(`Schema registered: ${result.data.eventType} (version ${result.data.version})`, {
+            eventType: result.data.eventType,
+            version: result.data.version,
+            enabled: result.data.enabled,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to register schema: ${message}`);
+        }
+      },
+    );
+
+  schema
+    .command('list')
+    .description('List registered event schemas')
+    .option('--enabled', 'Only schemas with an active validation gate')
+    .action(async (options: { enabled?: boolean }) => {
+      try {
+        const query = options.enabled ? '?enabled=true' : '';
+        const result = await schemaApiRequest<{ items: EventSchemaData[] }>(query);
+        output.list(result.items.map(summarizeSchemaRow), { emptyMessage: 'No event schemas registered.' });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to list schemas: ${message}`);
+      }
+    });
+
+  schema
+    .command('get <eventType>')
+    .description('Show the registered schema for an event type')
+    .action(async (eventType: string) => {
+      try {
+        const result = await schemaApiRequest<{ data: EventSchemaData }>(`/${encodeURIComponent(eventType)}`);
+        output.data(result.data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get schema: ${message}`);
+      }
+    });
+
+  return schema;
+}
+
+export const __testables = { schemaApiRequest, loadSchemaArtifact, summarizeSchemaRow };
+
+// ============================================================================
 // STREAM
 // ============================================================================
 
@@ -394,6 +615,9 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
 export function createEventsCommand(): Command {
   const events = new Command('events').description('Query events');
 
+  // omni events schema register|list|get (issue #959)
+  events.addCommand(createSchemaCommand());
+
   // omni events list
   events
     .command('list')
@@ -501,6 +725,20 @@ export function createEventsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get event: ${message}`);
+      }
+    });
+
+  // omni events trace <id>
+  events
+    .command('trace <id>')
+    .description('Walk the causality chain around an event: root → parents → this event → everything it caused')
+    .action(async (id: string) => {
+      try {
+        const data = await fetchTrace(id);
+        displayTrace(data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to trace event: ${message}`);
       }
     });
 

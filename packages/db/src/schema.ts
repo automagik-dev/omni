@@ -158,7 +158,13 @@ export type ApiKeyProfileOverrides = {
 };
 
 export const eventTypes = CORE_EVENT_TYPES;
-export type EventType = CoreEventType;
+/**
+ * Journaled event types: the core tuple plus the open custom/system
+ * namespaces — custom events (webhook ingress roots #958, automation
+ * emit_event hops) are journaled into omni_events since #957 so
+ * `omni events trace` can walk a chain back to its root.
+ */
+export type EventType = CoreEventType | `custom.${string}` | `system.${string}`;
 
 // Derived from core CONTENT_TYPES (same no-drift rule as eventTypes above) —
 // this local tuple had fallen behind by ten content types.
@@ -1740,7 +1746,9 @@ export const omniEvents = pgTable(
     platformIdentityId: uuid('platform_identity_id').references(() => platformIdentities.id, { onDelete: 'set null' }),
 
     // ---- Event Classification ----
-    eventType: varchar('event_type', { length: 50 }).notNull().$type<EventType>(),
+    // 255: `custom.webhook.{source}` types embed the source name (≤100 chars),
+    // which does not fit the original 50.
+    eventType: varchar('event_type', { length: 255 }).notNull().$type<EventType>(),
     direction: varchar('direction', { length: 10 }).notNull().default('inbound'), // 'inbound' | 'outbound'
     contentType: varchar('content_type', { length: 20 }).$type<ContentType>(),
 
@@ -1787,15 +1795,47 @@ export const omniEvents = pgTable(
     agentRequest: jsonb('agent_request').$type<Record<string, unknown>>(),
     agentResponse: jsonb('agent_response').$type<Record<string, unknown>>(),
 
+    // ---- Ingress Idempotency (#958) ----
+    /**
+     * Delivery-identity key, unique when present. Set at PUBLISH time for
+     * webhook ingress (`{source}:{sha256(body)}` or the source's configured
+     * template) and for automation `emit_event` re-publishes
+     * (`derived:{parent_event_id}:{automation_id}:{action_index}`). Internal
+     * events without a derivation stay NULL (forward-only — no backfill).
+     * The DATABASE dedupes via the unique index; a colliding insert means a
+     * redelivery and the emitter is acked without a second event.
+     */
+    idempotencyKey: text('idempotency_key'),
+
     // ---- Metadata ----
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    /**
+     * Id of the IMMEDIATE parent event — the event whose consumption caused
+     * this one to be published (#957, RFC #925 G3). `correlationId` (in the
+     * metadata jsonb) groups a flow; `causationId` gives the tree. NULL for
+     * root events (external ingress) and for every event persisted before the
+     * stamp existed (forward-only, no backfill). Additive-optional, mirroring
+     * how tenantId landed (G5/ADR-0008). Not an FK: the parent may be an
+     * event that was never persisted or was pruned.
+     */
+    causationId: uuid('causation_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     /** G2 additive tenant ownership. Nullable through the additive phase. */
     tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    /** Children lookup for `omni events trace` (descendants = causation_id = :id). */
+    causationIdx: index('omni_events_causation_idx').on(table.causationId),
     tenantIdx: index('omni_events_tenant_idx').on(table.tenantId),
     tenantIdUq: uniqueIndex('omni_events_tenant_id_uq').on(table.tenantId, table.id),
+    // Global uniqueness through the additive phase (mirrors the
+    // webhook_sources name indexes): the plain index is the ON CONFLICT
+    // target, the tenant-scoped partial positions the enforcement phase.
+    // NULL keys are distinct, so the ~349k legacy rows are unaffected.
+    idempotencyKeyUq: uniqueIndex('omni_events_idempotency_key_uq').on(table.idempotencyKey),
+    tenantIdempotencyKeyUq: uniqueIndex('omni_events_tenant_idempotency_key_uq')
+      .on(table.tenantId, table.idempotencyKey)
+      .where(sql`${table.tenantId} IS NOT NULL AND ${table.idempotencyKey} IS NOT NULL`),
     externalIdIdx: index('omni_events_external_id_idx').on(table.externalId),
     channelIdx: index('omni_events_channel_idx').on(table.channel),
     instanceIdx: index('omni_events_instance_idx').on(table.instanceId),
@@ -2699,6 +2739,53 @@ export interface WebhookSignatureConfig {
 }
 
 /**
+ * Connector liveness state (issue #961). Only `healthy` and `stalled` exist —
+ * a source without a declared cadence has NULL here (unsupervised). The
+ * liveness sweeper is the ONLY writer of transitions; guarded updates
+ * (`WHERE liveness_status = <previous>`) make each transition — and therefore
+ * each `system.connector.stalled`/`recovered` event — happen exactly once.
+ */
+export const connectorLivenessStatuses = ['healthy', 'stalled'] as const;
+export type ConnectorLivenessStatus = (typeof connectorLivenessStatuses)[number];
+
+/**
+ * Declared window semantics of a connector (issue #961): for sources that emit
+ * items from a time window, does the window include items already in progress?
+ * The dogfood calendar connector briefed a meeting 17 minutes after it started
+ * because this was undeclared. NULL = the source has not declared it.
+ */
+export const connectorWindowSemanticsValues = ['future_only', 'includes_in_progress'] as const;
+export type ConnectorWindowSemantics = (typeof connectorWindowSemanticsValues)[number];
+
+/**
+ * Declared mutation policy of a connector (issue #961): when an upstream item
+ * changes (e.g. a meeting reschedule), does the source re-emit it under the
+ * SAME source id or a NEW one? Feeds the idempotency-key template choice
+ * (issue #958): `same_id` sources must key on id+content, `new_id` sources can
+ * key on id alone. NULL = the source has not declared it.
+ */
+export const connectorMutationPolicies = ['same_id', 'new_id'] as const;
+export type ConnectorMutationPolicy = (typeof connectorMutationPolicies)[number];
+
+/**
+ * Per-source semantic event-type extraction for the generic webhook ingress
+ * (issue #959, RFC #925 G1).
+ *
+ * Without a mapping every delivery from a source collapses into the fixed
+ * `custom.webhook.{source}` type — GitHub push, PR, issue and release all
+ * arrive indistinguishable. A mapping extracts the semantic event name from
+ * the delivery (e.g. the `X-GitHub-Event` header) so the published type
+ * becomes `custom.{source}.{event}` (`custom.github.push`). A delivery the
+ * mapping cannot resolve falls back to the legacy collapsed type.
+ */
+export interface WebhookEventTypeMapping {
+  /** Where the semantic event name is read from. Only headers for now. */
+  source: 'header';
+  /** Header carrying the semantic event name (e.g. 'X-GitHub-Event'). */
+  header: string;
+}
+
+/**
  * Webhook source configurations.
  * External systems can trigger events in Omni via webhooks.
  *
@@ -2719,12 +2806,51 @@ export const webhookSources = pgTable(
     signatureConfig: jsonb('signature_config').$type<WebhookSignatureConfig>(),
     signatureSecret: text('signature_secret'),
 
+    /**
+     * Ingress idempotency key template (#958). Placeholders: `{source}`,
+     * `{sha256(body)}`, `{headers.<name>}`, `{payload.<dot.path>}`. Existing
+     * sources migrated onto the body-hash default; new sources may configure
+     * a provider-identity template (e.g. `github:{headers.x-github-delivery}`).
+     */
+    idempotencyKeyTemplate: text('idempotency_key_template').notNull().default('{source}:{sha256(body)}'),
+
+    // Semantic event-type extraction (issue #959). Null = legacy collapsed
+    // `custom.webhook.{source}` type for every delivery.
+    eventTypeMapping: jsonb('event_type_mapping').$type<WebhookEventTypeMapping>(),
+
     // State
     enabled: boolean('enabled').notNull().default(true),
 
     // Stats
     lastReceivedAt: timestamp('last_received_at', { withTimezone: true }),
     totalReceived: integer('total_received').notNull().default(0),
+    /** Redeliveries acked without a second event (#958). */
+    totalDuplicates: integer('total_duplicates').notNull().default(0),
+
+    // Connector lifecycle contract (issue #961).
+    //
+    // Liveness: a source that declares `expectedIntervalSeconds` promises
+    // "≥1 event or heartbeat per N seconds". The liveness sweeper compares the
+    // most recent signal — GREATEST(lastReceivedAt, lastHeartbeatAt,
+    // livenessArmedAt) — against that window and owns every status transition.
+    // `livenessArmedAt` is (re)stamped whenever the cadence is declared, so a
+    // freshly supervised source gets a full window before it can stall.
+    /** Declared cadence in seconds; NULL = unsupervised. */
+    expectedIntervalSeconds: integer('expected_interval_seconds'),
+    /**
+     * Heartbeat ingress ("I ran, zero events found"): the compacted
+     * representation is this timestamp + counter — heartbeats create no
+     * journal events (see WebhookService.heartbeat).
+     */
+    lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
+    heartbeatCount: integer('heartbeat_count').notNull().default(0),
+    livenessStatus: varchar('liveness_status', { length: 20 }).$type<ConnectorLivenessStatus>(),
+    livenessArmedAt: timestamp('liveness_armed_at', { withTimezone: true }),
+    /** When the current stall began; cleared on recovery. */
+    stalledAt: timestamp('stalled_at', { withTimezone: true }),
+    // Declared semantics (informational contract, exposed via API/CLI).
+    windowSemantics: varchar('window_semantics', { length: 40 }).$type<ConnectorWindowSemantics>(),
+    mutationPolicy: varchar('mutation_policy', { length: 20 }).$type<ConnectorMutationPolicy>(),
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -2739,11 +2865,66 @@ export const webhookSources = pgTable(
       .where(sql`${table.tenantId} IS NOT NULL`),
     nameIdx: uniqueIndex('webhook_sources_name_idx').on(table.name),
     enabledIdx: index('webhook_sources_enabled_idx').on(table.enabled),
+    // The liveness sweeper's scan: enabled sources with a declared cadence.
+    supervisedIdx: index('webhook_sources_supervised_idx')
+      .on(table.enabled)
+      .where(sql`${table.expectedIntervalSeconds} IS NOT NULL`),
   }),
 );
 
 export type WebhookSource = typeof webhookSources.$inferSelect;
 export type NewWebhookSource = Omit<typeof webhookSources.$inferInsert, 'tenantId'>;
+
+// ============================================================================
+// EVENT SCHEMA REGISTRY (issue #959, RFC #925 G1)
+// ============================================================================
+
+/**
+ * Registered payload contracts for event types.
+ *
+ * One row per event_type: the stored artifact is a JSON Schema (externally
+ * registered as-is, or exported from a Zod definition — Zod-first per the RFC
+ * decision). The validation gates (webhook ingress, automation emit_event)
+ * consult this table BEFORE publishing; an invalid payload goes to
+ * `dead_letter_events` with reason `schema_validation_failed` and never enters
+ * the journal. The registry is opt-in per type: an event type with no row
+ * passes through unchanged.
+ *
+ * `version` counts in-place compatible (additive-optional) revisions of one
+ * event_type's schema; an incompatible change is refused at register time and
+ * must ship as a new versioned event_type (e.g. `custom.github.push.v2`).
+ *
+ * TENANCY: registrations are GLOBAL for now — the table deliberately carries
+ * no `tenant_id` (the `scheduled_messages` precedent). The RLS coverage gate
+ * (`tenancy-rls.test.ts`) requires every tenant_id-bearing table to be in the
+ * frozen G0 manifest, the G1 tenant plane, or the runtime-denied exclusions;
+ * a born-tenant business table fits none of those, so per-tenant registration
+ * joins the tenancy machinery in the G6+ ownership pass, additively.
+ */
+export const eventSchemas = pgTable(
+  'event_schemas',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventType: varchar('event_type', { length: 150 }).notNull().unique(),
+    version: integer('version').notNull().default(1),
+    /** JSON Schema (draft-07) the payload must satisfy. Stored as-is. */
+    schema: jsonb('schema').notNull().$type<Record<string, unknown>>(),
+    description: text('description'),
+
+    // A disabled row keeps the artifact but suspends the gate for its type.
+    enabled: boolean('enabled').notNull().default(true),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    eventTypeIdx: uniqueIndex('event_schemas_event_type_idx').on(table.eventType),
+    enabledIdx: index('event_schemas_enabled_idx').on(table.enabled),
+  }),
+);
+
+export type EventSchemaRow = typeof eventSchemas.$inferSelect;
+export type NewEventSchemaRow = typeof eventSchemas.$inferInsert;
 
 // ============================================================================
 // AUTOMATIONS (Events Ext)

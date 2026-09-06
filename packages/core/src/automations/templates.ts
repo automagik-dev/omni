@@ -14,9 +14,41 @@
  * - {{attemptNumber}} - Special: one-based attempt number (follow-up)
  * - {{totalAttempts}} - Special: total attempts configured (follow-up)
  * - {{chatName}} - Special: chat display name (follow-up)
+ * - {{event.id}} - Envelope: id of the triggering event (#960)
+ * - {{event.type}} - Envelope: type of the triggering event
+ * - {{event.timestamp}} - Envelope: publish timestamp (Unix ms)
+ * - {{event.metadata.correlationId}} - Envelope: correlation of the flow
+ *   (any `event.metadata.*` field resolves; absent for envelope-less
+ *   invocations, where `{{event.*}}` renders empty)
  */
 
+import type { EventMetadata } from '../events/types';
 import { getNestedValue } from './conditions';
+
+/**
+ * Envelope of the event that triggered the automation (issue #956).
+ *
+ * The engine threads this alongside the payload so actions can propagate the
+ * TRIGGERING event's correlation/causality into their own side effects
+ * (emit_event re-publish, webhook headers, call_agent context) instead of
+ * fishing correlation out of the payload — payloads don't carry correlation,
+ * envelopes do. For a debounced (synthetic) trigger, `id` is the id of the
+ * last REAL event that entered the window, so causal links always point at a
+ * published event.
+ *
+ * Route-side manual `execute` calls and legacy tests thread nothing and the
+ * field stays undefined — actions then behave exactly as before.
+ */
+export interface TemplateEventContext {
+  /** Id of the triggering event (last real event for debounced windows). */
+  id: string;
+  /** Event type of the trigger. */
+  type: string;
+  /** Publish timestamp of the trigger (Unix ms). */
+  timestamp: number;
+  /** The trigger's envelope metadata (correlationId et al.) as stamped by the producer. */
+  metadata: EventMetadata;
+}
 
 /**
  * Follow-up context surfaced to templates when an automation fires on a
@@ -67,6 +99,10 @@ export interface TemplateContext {
   };
   /** Special follow-up context (chat.idle_timeout events / promptOverride) */
   followUp?: TemplateFollowUpContext;
+  /** Envelope of the triggering event — threaded by the engine, see TemplateEventContext. */
+  event?: TemplateEventContext;
+  /** The automation being executed — threaded by the engine (delivery-id derivation, #960). */
+  automation?: { id: string };
 }
 
 /**
@@ -114,6 +150,29 @@ function resolveFollowUpValue(trimmed: string, followUp: TemplateFollowUpContext
 }
 
 /**
+ * Resolve the special context roots: debounce placeholders, follow-up
+ * placeholders, and the triggering-envelope root ({{event.id}},
+ * {{event.metadata.correlationId}}, ... — #960). The envelope resolves
+ * before the variables fallback, so a stored variable named `event` is
+ * shadowed only when an envelope was actually threaded. Returns `undefined`
+ * when the key belongs to none of them so the caller falls through.
+ */
+function resolveSpecialValue(trimmed: string, root: string, rest: string, context: TemplateContext): unknown {
+  if (context.debounce) {
+    const debounceValue = resolveDebounceValue(trimmed, rest, context.debounce);
+    if (debounceValue !== undefined) return debounceValue;
+  }
+  if (context.followUp) {
+    const followUpValue = resolveFollowUpValue(trimmed, context.followUp);
+    if (followUpValue !== undefined) return followUpValue;
+  }
+  if (root === 'event' && context.event) {
+    return rest ? getNestedValue(context.event, rest) : context.event;
+  }
+  return undefined;
+}
+
+/**
  * Resolve a single template path to its value
  */
 function resolveTemplatePath(path: string, context: TemplateContext): unknown {
@@ -124,17 +183,8 @@ function resolveTemplatePath(path: string, context: TemplateContext): unknown {
   const root = parts[0] ?? '';
   const rest = parts.slice(1).join('.');
 
-  // Handle special debounce variables
-  if (context.debounce) {
-    const debounceValue = resolveDebounceValue(trimmed, rest, context.debounce);
-    if (debounceValue !== undefined) return debounceValue;
-  }
-
-  // Handle special follow-up variables
-  if (context.followUp) {
-    const followUpValue = resolveFollowUpValue(trimmed, context.followUp);
-    if (followUpValue !== undefined) return followUpValue;
-  }
+  const specialValue = resolveSpecialValue(trimmed, root, rest, context);
+  if (specialValue !== undefined) return specialValue;
 
   // Handle payload access
   if (root === 'payload') return rest ? getNestedValue(context.payload, rest) : context.payload;
@@ -278,6 +328,8 @@ export function createTemplateContext(
     variables?: Record<string, unknown>;
     debounce?: TemplateContext['debounce'];
     followUp?: TemplateFollowUpContext;
+    event?: TemplateEventContext;
+    automation?: { id: string };
   } = {},
 ): TemplateContext {
   const followUp = options.followUp ?? deriveFollowUpFromPayload(payload);
@@ -288,5 +340,7 @@ export function createTemplateContext(
     env: process.env as Record<string, string | undefined>,
     debounce: options.debounce,
     followUp,
+    event: options.event,
+    automation: options.automation,
   };
 }
