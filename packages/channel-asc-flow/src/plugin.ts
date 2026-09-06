@@ -80,6 +80,7 @@ import { type AscFlowHandoffMode, type HandoffPlan, planHandoff } from './utils/
 import { buildUra, splitBubbles } from './utils/interactive';
 import { isAscMediaFilename, mediaFallbackText, resolveAscInboundMedia } from './utils/media';
 import { OUTBOUND_MEDIA_FALLBACK_TEXT, buildReplyField, buildRichFields, isRichContent } from './utils/outbound';
+import { isStaleFlowReplay } from './utils/turn-freshness';
 
 /** Platform default — the NotreDame tenant this channel was built against. */
 export const DEFAULT_ASC_FLOW_BASE_URL = 'https://sac-notredame.ascbrazil.com.br';
@@ -139,6 +140,16 @@ interface AscFlowInstanceState {
    * the frozen `{#MENSAGEM}` fallback.
    */
   seenCods: Set<string>;
+
+  /**
+   * The text of the last turn ANSWERED for each `cod_atendimento`.
+   *
+   * A re-send whose fields AGREE can only be told from a real repeat by asking
+   * the platform, and this is what narrows that to almost never: only a text
+   * that matches the entry here pays for the round trip. See
+   * `utils/turn-freshness.ts`.
+   */
+  lastAnswered: Map<string, string>;
 }
 
 /**
@@ -399,6 +410,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       inFlight: new Map(),
       lastSweepAt: Date.now(),
       seenCods: new Set(),
+      lastAnswered: new Map(),
     });
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -1186,7 +1198,32 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         ageMs,
       });
     }
+    // Remember what this turn answered: a re-send repeats exactly this text,
+    // and that is the trigger for the freshness check.
+    if (state.lastAnswered.size >= IN_FLIGHT_MAX_ENTRIES) {
+      const oldest = state.lastAnswered.keys().next().value;
+      if (oldest !== undefined) state.lastAnswered.delete(oldest);
+    }
+    state.lastAnswered.set(codAtendimento, text.trim());
     return entry.ready;
+  }
+
+  /**
+   * Whether a body whose two fields AGREE is still a re-send — the one shape
+   * `entradaDefasada` cannot see. Narrow by construction: only a text that
+   * repeats the last turn we answered for this cod reaches the platform.
+   */
+  async isStaleFlowReplay(instanceId: string, turn: ParsedAscFlowTurn): Promise<boolean> {
+    const state = this.ascFlowInstances.get(instanceId);
+    if (!state) return false;
+    if (state.lastAnswered.get(turn.codAtendimento) !== turn.text.trim()) return false;
+    return isStaleFlowReplay({
+      client: state.client,
+      instanceId,
+      codAtendimento: turn.codAtendimento,
+      text: turn.text,
+      logger: this.logger,
+    });
   }
 
   /**

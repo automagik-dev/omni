@@ -18,6 +18,7 @@ import {
   connectPlugin,
   createContext,
   instanceId,
+  jsonResponse,
   openTurn,
   stubPlatform,
 } from './helpers';
@@ -522,5 +523,84 @@ describe('the flow re-sending an old input', () => {
     await post('42', 'segunda', '');
 
     expect(received()).toHaveLength(1);
+  });
+});
+
+/**
+ * The re-send `entradaDefasada` cannot see: the input that came back IS the
+ * message that opened the cycle, so both fields carry it.
+ *
+ * Measured on 22344480 — a 🗑️ at 23:20:54 and the same 🗑️ back at 23:21:11,
+ * byte for byte, resetting the session in the middle of an identification.
+ * Only the platform's record separates those.
+ */
+describe('a re-send whose fields agree', () => {
+  async function bootComAtendimento(latestInbound: string): Promise<void> {
+    const stub = stubPlatform({
+      '/atendimento': () =>
+        jsonResponse({
+          mensagens: [
+            { boleano_entrante: '1', descricao_msg: encodeAscEmoji('🗑️') },
+            { boleano_entrante: '0', descricao_msg: 'ja respondi isso' },
+            { boleano_entrante: '1', descricao_msg: encodeAscEmoji(latestInbound) },
+          ],
+        }),
+    });
+    calls = stub.calls;
+    restore = stub.restore;
+    eventBus = new MockEventBus();
+    plugin = new AscFlowPlugin();
+    await plugin.initialize(createContext(eventBus));
+    await connectPlugin(plugin);
+    calls.length = 0;
+    eventBus.published.length = 0;
+  }
+
+  const post = (cod: string, texto: string) =>
+    plugin.handleWebhook(
+      new Request(`http://localhost/api/v2/channels/asc-flow/${instanceId}/webhook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ codAtendimento: cod, chatInput: texto, message: texto }),
+      }),
+    );
+
+  /** One full turn: it lands, the agent answers, the poll collects. */
+  async function turno(texto: string): Promise<void> {
+    await post('42', texto);
+    await plugin.sendMessage(instanceId, { to: '42', content: { type: 'text', text: 'ok' } as never });
+    plugin.takeReadyTurn(instanceId, '42', texto);
+  }
+
+  it('drops it when the platform already holds a NEWER message', async () => {
+    // The beneficiary typed their CPF after the 🗑️ — the 🗑️ coming back is the
+    // flow, not them.
+    await bootComAtendimento('369.376.143-49 13/08/1971');
+    await turno('🗑️');
+    eventBus.published.length = 0;
+
+    await post('42', '🗑️');
+
+    expect(received()).toHaveLength(0);
+  });
+
+  it('keeps a genuine repeat — the platform holds that same text', async () => {
+    await bootComAtendimento('1');
+    await turno('1');
+    eventBus.published.length = 0;
+
+    await post('42', '1');
+
+    expect(received()).toHaveLength(1);
+  });
+
+  it('does not touch the platform for a text that is not a repeat', async () => {
+    await bootComAtendimento('qualquer coisa');
+    await turno('1');
+    calls.length = 0;
+
+    await post('42', '2');
+
+    expect(calls.filter((c) => c.path === '/atendimento')).toHaveLength(0);
   });
 });
