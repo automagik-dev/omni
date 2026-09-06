@@ -214,8 +214,12 @@ lint-core:
 format:
 	bunx biome format --write .
 
+# Scope to omni packages + the ui app, mirroring ci.yml: apps/khal-ui is a
+# decoupled sub-project (private @khal-os deps) with its own test run, and an
+# unscoped `bun test` from the repo root sweeps it up and fails on machines
+# that do not have those deps installed.
 test: _build-dist _sync-db
-	bun test --env-file=.env
+	bun test --env-file=.env packages apps/ui
 
 test-watch: _build-dist
 	bun test --env-file=.env --watch
