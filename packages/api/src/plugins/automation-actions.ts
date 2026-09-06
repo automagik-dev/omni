@@ -34,7 +34,7 @@
  */
 
 import type { AgentCallContext, AgentRunResult, CallAgentActionConfig } from '@omni/core';
-import { createLogger } from '@omni/core';
+import { createLogger, generateId } from '@omni/core';
 import type { Database } from '@omni/db';
 import { agents } from '@omni/db';
 import { eq } from 'drizzle-orm';
@@ -108,6 +108,11 @@ export interface AutomationEngineDeps {
     trustedTenantId?: string | null,
   ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
   releaseIdleTimeoutClaim: (claimToken: string) => void | Promise<void>;
+  validateEmitEvent: (
+    eventType: string,
+    payload: Record<string, unknown>,
+    trustedTenantId?: string | null,
+  ) => Promise<{ valid: boolean; errors?: string[] }>;
 }
 
 /** Injectable seams (tests only — production uses the module defaults). */
@@ -258,5 +263,38 @@ export function buildAutomationEngineDeps(
     // so the NATS redelivery is a first delivery and not a "duplicate". The
     // claim registry is in-memory (no DB), so no tenant scope applies.
     releaseIdleTimeoutClaim: (claimToken) => releaseIdleTimeoutClaim(claimToken),
+
+    // Schema-registry gate for emit_event (issue #959). The engine calls this
+    // BEFORE publish; an unregistered type reports valid (opt-in per type).
+    // An invalid payload is dead-lettered here (reason
+    // `schema_validation_failed`, manual-retry only — the refused event's only
+    // record) and the action then fails without publishing. Each DB block runs
+    // through `runTenantWorkDb` like every other callback: scoped in the
+    // tenant world, ambient passthrough in legacy.
+    validateEmitEvent: async (eventType, payload, trustedTenantId = null) => {
+      const verdict = await runTenantWorkDb(db, trustedTenantId, () =>
+        services.eventSchemas.validate(eventType, payload),
+      );
+      if (verdict.valid) {
+        return { valid: true };
+      }
+      try {
+        await runTenantWorkDb(db, trustedTenantId, () =>
+          services.deadLetters.createSchemaValidationFailure({
+            eventId: generateId(),
+            eventType,
+            subject: eventType,
+            payload,
+            errors: verdict.errors,
+          }),
+        );
+      } catch (error) {
+        log.error('Failed to dead-letter refused emit_event payload', {
+          eventType,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return { valid: false, errors: verdict.errors };
+    },
   };
 }
