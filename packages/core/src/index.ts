@@ -67,6 +67,9 @@ export * from './secrets';
 // Automations
 export * from './automations';
 
+// Connector lifecycle contract (#961)
+export * from './connectors';
+
 // Sessions
 export * from './sessions/reset';
 

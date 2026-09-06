@@ -2699,6 +2699,35 @@ export interface WebhookSignatureConfig {
 }
 
 /**
+ * Connector liveness state (issue #961). Only `healthy` and `stalled` exist —
+ * a source without a declared cadence has NULL here (unsupervised). The
+ * liveness sweeper is the ONLY writer of transitions; guarded updates
+ * (`WHERE liveness_status = <previous>`) make each transition — and therefore
+ * each `system.connector.stalled`/`recovered` event — happen exactly once.
+ */
+export const connectorLivenessStatuses = ['healthy', 'stalled'] as const;
+export type ConnectorLivenessStatus = (typeof connectorLivenessStatuses)[number];
+
+/**
+ * Declared window semantics of a connector (issue #961): for sources that emit
+ * items from a time window, does the window include items already in progress?
+ * The dogfood calendar connector briefed a meeting 17 minutes after it started
+ * because this was undeclared. NULL = the source has not declared it.
+ */
+export const connectorWindowSemanticsValues = ['future_only', 'includes_in_progress'] as const;
+export type ConnectorWindowSemantics = (typeof connectorWindowSemanticsValues)[number];
+
+/**
+ * Declared mutation policy of a connector (issue #961): when an upstream item
+ * changes (e.g. a meeting reschedule), does the source re-emit it under the
+ * SAME source id or a NEW one? Feeds the idempotency-key template choice
+ * (issue #958): `same_id` sources must key on id+content, `new_id` sources can
+ * key on id alone. NULL = the source has not declared it.
+ */
+export const connectorMutationPolicies = ['same_id', 'new_id'] as const;
+export type ConnectorMutationPolicy = (typeof connectorMutationPolicies)[number];
+
+/**
  * Per-source semantic event-type extraction for the generic webhook ingress
  * (issue #959, RFC #925 G1).
  *
@@ -2748,6 +2777,31 @@ export const webhookSources = pgTable(
     lastReceivedAt: timestamp('last_received_at', { withTimezone: true }),
     totalReceived: integer('total_received').notNull().default(0),
 
+    // Connector lifecycle contract (issue #961).
+    //
+    // Liveness: a source that declares `expectedIntervalSeconds` promises
+    // "≥1 event or heartbeat per N seconds". The liveness sweeper compares the
+    // most recent signal — GREATEST(lastReceivedAt, lastHeartbeatAt,
+    // livenessArmedAt) — against that window and owns every status transition.
+    // `livenessArmedAt` is (re)stamped whenever the cadence is declared, so a
+    // freshly supervised source gets a full window before it can stall.
+    /** Declared cadence in seconds; NULL = unsupervised. */
+    expectedIntervalSeconds: integer('expected_interval_seconds'),
+    /**
+     * Heartbeat ingress ("I ran, zero events found"): the compacted
+     * representation is this timestamp + counter — heartbeats create no
+     * journal events (see WebhookService.heartbeat).
+     */
+    lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
+    heartbeatCount: integer('heartbeat_count').notNull().default(0),
+    livenessStatus: varchar('liveness_status', { length: 20 }).$type<ConnectorLivenessStatus>(),
+    livenessArmedAt: timestamp('liveness_armed_at', { withTimezone: true }),
+    /** When the current stall began; cleared on recovery. */
+    stalledAt: timestamp('stalled_at', { withTimezone: true }),
+    // Declared semantics (informational contract, exposed via API/CLI).
+    windowSemantics: varchar('window_semantics', { length: 40 }).$type<ConnectorWindowSemantics>(),
+    mutationPolicy: varchar('mutation_policy', { length: 20 }).$type<ConnectorMutationPolicy>(),
+
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -2761,6 +2815,10 @@ export const webhookSources = pgTable(
       .where(sql`${table.tenantId} IS NOT NULL`),
     nameIdx: uniqueIndex('webhook_sources_name_idx').on(table.name),
     enabledIdx: index('webhook_sources_enabled_idx').on(table.enabled),
+    // The liveness sweeper's scan: enabled sources with a declared cadence.
+    supervisedIdx: index('webhook_sources_supervised_idx')
+      .on(table.enabled)
+      .where(sql`${table.expectedIntervalSeconds} IS NOT NULL`),
   }),
 );
 

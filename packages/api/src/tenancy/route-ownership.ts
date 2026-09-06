@@ -721,6 +721,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/voice/leave',
   'POST /api/v2/webhook-sources',
   'POST /api/v2/webhooks/:source',
+  'POST /api/v2/webhooks/:source/heartbeat',
   'PUT /api/v2/agent-state/:agentId/:chatId',
   'PUT /api/v2/follow-up/agents/:id',
   'PUT /api/v2/follow-up/chats/:id',

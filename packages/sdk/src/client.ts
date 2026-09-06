@@ -755,7 +755,23 @@ export interface CreateWebhookSourceBody {
   signatureSecret?: string | null;
   /** Defaults to true server-side */
   enabled?: boolean;
+  /**
+   * Connector lifecycle contract (#961): declared cadence — the connector
+   * promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it arms
+   * liveness supervision; null disarms it.
+   */
+  expectedIntervalSeconds?: number | null;
+  /** Declared window semantics; null = undeclared. */
+  windowSemantics?: 'future_only' | 'includes_in_progress' | null;
+  /** Declared upstream-mutation re-emit policy; null = undeclared. */
+  mutationPolicy?: 'same_id' | 'new_id' | null;
 }
+
+/**
+ * Response of the connector heartbeat verb (#961).
+ * Derived from the generated OpenAPI component so it cannot drift from the API.
+ */
+export type WebhookHeartbeatResponse = components['schemas']['WebhookHeartbeatResponse'];
 
 /**
  * Body for triggering a custom event
@@ -3145,6 +3161,19 @@ export function createOmniClient(config: OmniClientConfig) {
         const { data, error, response } = await client.POST('/events/trigger', { body });
         throwIfError(response, error);
         return data ?? { eventId: '', eventType: body.eventType };
+      },
+
+      /**
+       * Record a connector heartbeat: "I ran, zero events found" (#961).
+       * Resets the source's liveness window without creating a journal event.
+       * Keyed on the source NAME (like the receiver), not the id.
+       */
+      async heartbeat(source: string): Promise<WebhookHeartbeatResponse> {
+        const { data, error, response } = await client.POST('/webhooks/{source}/heartbeat', {
+          params: { path: { source } },
+        });
+        throwIfError(response, error);
+        return data;
       },
     },
 

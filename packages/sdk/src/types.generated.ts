@@ -980,6 +980,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/{source}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connector heartbeat
+         * @description Record a connector heartbeat: "I ran, zero events found". Resets the liveness window of a supervised source (one declaring expectedIntervalSeconds) so silence-beyond-window detection can tell quiet from dead. Creates NO journal event — only the stalled/recovered transitions are journaled. No request body.
+         */
+        post: operations["heartbeatWebhookSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/webhooks/ingress/{source}": {
         parameters: {
             query?: never;
@@ -2791,7 +2811,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -2836,7 +2856,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -3014,7 +3034,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -3826,6 +3846,47 @@ export interface components {
             enabled: boolean;
             /**
              * Format: date-time
+             * @description When the last webhook was received
+             */
+            lastReceivedAt: string | null;
+            /** @description Total webhooks received */
+            totalReceived: number;
+            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+            expectedIntervalSeconds: number | null;
+            /**
+             * Format: date-time
+             * @description Last heartbeat ("ran, zero events")
+             */
+            lastHeartbeatAt: string | null;
+            /** @description Total heartbeats received */
+            heartbeatCount: number;
+            /**
+             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+             * @enum {string|null}
+             */
+            livenessStatus: "healthy" | "stalled" | null;
+            /**
+             * Format: date-time
+             * @description When the cadence was (re)declared
+             */
+            livenessArmedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the current stall began
+             */
+            stalledAt: string | null;
+            /**
+             * @description Declared window semantics; null = undeclared
+             * @enum {string|null}
+             */
+            windowSemantics: "future_only" | "includes_in_progress" | null;
+            /**
+             * @description Declared upstream-mutation re-emit policy; null = undeclared
+             * @enum {string|null}
+             */
+            mutationPolicy: "same_id" | "new_id" | null;
+            /**
+             * Format: date-time
              * @description Creation timestamp
              */
             createdAt: string;
@@ -3863,6 +3924,18 @@ export interface components {
              * @default true
              */
             enabled: boolean;
+            /** @description Declared cadence: the connector promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it arms liveness supervision (silence beyond the window emits system.connector.stalled and marks the source unhealthy); null disarms it. */
+            expectedIntervalSeconds?: number | null;
+            /**
+             * @description Declared time-window semantics: 'future_only' (only not-yet-started items) or 'includes_in_progress'. Informational contract for consumers; null = undeclared.
+             * @enum {string|null}
+             */
+            windowSemantics?: "future_only" | "includes_in_progress" | null;
+            /**
+             * @description How the source re-emits a changed upstream item: 'same_id' (reschedule case — consumers must key on id+content) or 'new_id'. Feeds the idempotency key template choice; null = undeclared.
+             * @enum {string|null}
+             */
+            mutationPolicy?: "same_id" | "new_id" | null;
         };
         TriggerEventRequest: {
             /** @description Event type (must start with custom.) */
@@ -3889,6 +3962,27 @@ export interface components {
             source: string;
             /** @description Event type */
             eventType: string;
+        };
+        WebhookHeartbeatResponse: {
+            /**
+             * @description Heartbeat recorded
+             * @enum {boolean}
+             */
+            ok: true;
+            /** @description Webhook source name */
+            source: string;
+            /**
+             * Format: date-time
+             * @description When the heartbeat was recorded
+             */
+            heartbeatAt: string;
+            /**
+             * @description Status before this heartbeat (a stalled source recovers on the next sweep tick)
+             * @enum {string|null}
+             */
+            livenessStatus: "healthy" | "stalled" | null;
+            /** @description Declared cadence, if any */
+            expectedIntervalSeconds: number | null;
         };
         AccessRule: {
             /**
@@ -6551,7 +6645,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6616,7 +6710,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -6745,7 +6839,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6830,7 +6924,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -6879,7 +6973,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -7009,7 +7103,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -7138,7 +7232,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -10482,6 +10576,47 @@ export interface operations {
                             enabled: boolean;
                             /**
                              * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
+                            /**
+                             * Format: date-time
                              * @description Creation timestamp
                              */
                             createdAt: string;
@@ -10533,6 +10668,18 @@ export interface operations {
                      * @default true
                      */
                     enabled?: boolean;
+                    /** @description Declared cadence: the connector promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it arms liveness supervision (silence beyond the window emits system.connector.stalled and marks the source unhealthy); null disarms it. */
+                    expectedIntervalSeconds?: number | null;
+                    /**
+                     * @description Declared time-window semantics: 'future_only' (only not-yet-started items) or 'includes_in_progress'. Informational contract for consumers; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    windowSemantics?: "future_only" | "includes_in_progress" | null;
+                    /**
+                     * @description How the source re-emits a changed upstream item: 'same_id' (reschedule case — consumers must key on id+content) or 'new_id'. Feeds the idempotency key template choice; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    mutationPolicy?: "same_id" | "new_id" | null;
                 };
             };
         };
@@ -10574,6 +10721,47 @@ export interface operations {
                             hasSignatureSecret: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -10659,6 +10847,47 @@ export interface operations {
                             hasSignatureSecret: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -10783,6 +11012,18 @@ export interface operations {
                      * @default true
                      */
                     enabled?: boolean;
+                    /** @description Declared cadence: the connector promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it arms liveness supervision (silence beyond the window emits system.connector.stalled and marks the source unhealthy); null disarms it. */
+                    expectedIntervalSeconds?: number | null;
+                    /**
+                     * @description Declared time-window semantics: 'future_only' (only not-yet-started items) or 'includes_in_progress'. Informational contract for consumers; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    windowSemantics?: "future_only" | "includes_in_progress" | null;
+                    /**
+                     * @description How the source re-emits a changed upstream item: 'same_id' (reschedule case — consumers must key on id+content) or 'new_id'. Feeds the idempotency key template choice; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    mutationPolicy?: "same_id" | "new_id" | null;
                 };
             };
         };
@@ -10824,6 +11065,47 @@ export interface operations {
                             hasSignatureSecret: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -10899,6 +11181,90 @@ export interface operations {
             };
             /** @description Body is not a JSON object */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    heartbeatWebhookSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Heartbeat recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Heartbeat recorded
+                         * @enum {boolean}
+                         */
+                        ok: true;
+                        /** @description Webhook source name */
+                        source: string;
+                        /**
+                         * Format: date-time
+                         * @description When the heartbeat was recorded
+                         */
+                        heartbeatAt: string;
+                        /**
+                         * @description Status before this heartbeat (a stalled source recovers on the next sweep tick)
+                         * @enum {string|null}
+                         */
+                        livenessStatus: "healthy" | "stalled" | null;
+                        /** @description Declared cadence, if any */
+                        expectedIntervalSeconds: number | null;
+                    };
+                };
+            };
+            /** @description Source disabled */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Source not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
