@@ -205,12 +205,39 @@ jobs:
       - name: Dead code check (knip)
         run: bunx knip
 
-      - name: Test
-        # Scope to omni packages + the ui app; apps/khal-ui is a decoupled
-        # sub-project (private @khal-os deps) with its own test run.
+      - name: Test (pull requests — per-package via the turbo cache)
+        # Per-package `turbo test` (#967), fed by the "Turbo remote cache" step
+        # above: packages a PR does not touch replay their previously proven
+        # green run (byte-identical inputs — package files, dependency sources
+        # via the synthetic `topo` task, and the declared env vars) instead of
+        # re-executing, so an incremental PR pays only for what it changed.
+        # Coverage is identical to the sweep: every workspace with test files
+        # has a `test` script, and the pre-push hook runs this same command.
+        #
+        # Env: per-package runs have no --env-file, so .env is sourced into the
+        # environment here. NODE_ENV=test is re-exported AFTER sourcing (the
+        # .env template says development), matching the old step's env, and
+        # LOG_LEVEL=silent mutes the thousands of intentional warn/error lines
+        # the suites emit — neither is part of the turbo test hash.
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          set -a && . ./.env && set +a
+          export NODE_ENV=test LOG_LEVEL=silent
+          bun run test
+
+      - name: Test (pushes — full single-process sweep)
+        # Pushes to dev/main re-prove everything with the pre-#967 sweep: no
+        # cache replay on the integration branch, and the one-process run is
+        # also the only configuration where cross-file state leaks (e.g.
+        # globalThis.fetch pollution, issue #967 comment) reproduce. Scope to
+        # omni packages + the ui app; apps/khal-ui is a decoupled sub-project
+        # (private @khal-os deps) with its own test run.
+        if: ${{ github.event_name != 'pull_request' }}
         run: bun test packages apps/ui --env-file=.env
         env:
           NODE_ENV: test
+          LOG_LEVEL: silent
 
   pg-isolation-gate:
     name: PostgreSQL Isolation Gate (tenancy/RLS)
