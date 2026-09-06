@@ -133,6 +133,64 @@ function assertPairedSignatureOnCreate(
   throw new Error(`--signature-algorithm and --signature-header require a signature secret (${SECRET_SOURCE_FLAGS})`);
 }
 
+// Connector lifecycle contract (#961) — declared semantics values, mirroring
+// the API's enums (schemas/openapi/webhooks.ts).
+const WINDOW_SEMANTICS = ['future_only', 'includes_in_progress'] as const;
+const MUTATION_POLICIES = ['same_id', 'new_id'] as const;
+
+/** Positive integer seconds, or undefined when the flag was not given. */
+function parseExpectedInterval(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const seconds = Number(raw);
+  if (!Number.isInteger(seconds) || seconds < 1) {
+    output.error('--expected-interval must be a positive integer number of seconds');
+  }
+  return seconds;
+}
+
+function parseWindowSemantics(raw: string | undefined): (typeof WINDOW_SEMANTICS)[number] | undefined {
+  if (raw === undefined) return undefined;
+  const value = WINDOW_SEMANTICS.find((v) => v === raw);
+  if (!value) {
+    output.error(`Invalid --window-semantics; expected one of: ${WINDOW_SEMANTICS.join(', ')}`);
+  }
+  return value;
+}
+
+function parseMutationPolicy(raw: string | undefined): (typeof MUTATION_POLICIES)[number] | undefined {
+  if (raw === undefined) return undefined;
+  const value = MUTATION_POLICIES.find((v) => v === raw);
+  if (!value) {
+    output.error(`Invalid --mutation-policy; expected one of: ${MUTATION_POLICIES.join(', ')}`);
+  }
+  return value;
+}
+
+/** The lifecycle-contract portion of a source update, from the (#961) flags. */
+function buildLifecycleUpdates(options: {
+  expectedInterval?: string;
+  clearCadence?: boolean;
+  windowSemantics?: string;
+  mutationPolicy?: string;
+}): {
+  expectedIntervalSeconds?: number | null;
+  windowSemantics?: (typeof WINDOW_SEMANTICS)[number];
+  mutationPolicy?: (typeof MUTATION_POLICIES)[number];
+} {
+  if (options.clearCadence && options.expectedInterval !== undefined) {
+    output.error('Use only one of --expected-interval and --clear-cadence');
+  }
+  const updates: ReturnType<typeof buildLifecycleUpdates> = {};
+  if (options.clearCadence) updates.expectedIntervalSeconds = null;
+  const expectedIntervalSeconds = parseExpectedInterval(options.expectedInterval);
+  if (expectedIntervalSeconds !== undefined) updates.expectedIntervalSeconds = expectedIntervalSeconds;
+  const windowSemantics = parseWindowSemantics(options.windowSemantics);
+  if (windowSemantics !== undefined) updates.windowSemantics = windowSemantics;
+  const mutationPolicy = parseMutationPolicy(options.mutationPolicy);
+  if (mutationPolicy !== undefined) updates.mutationPolicy = mutationPolicy;
+  return updates;
+}
+
 export function createWebhooksCommand(): Command {
   const webhooks = new Command('webhooks').description('Manage webhook sources');
 
@@ -158,6 +216,9 @@ export function createWebhooksCommand(): Command {
           id: w.id,
           name: w.name,
           enabled: w.enabled ? 'yes' : 'no',
+          // Liveness (#961): '-' = unsupervised (no declared cadence).
+          health: w.livenessStatus ?? '-',
+          cadence: w.expectedIntervalSeconds != null ? `${w.expectedIntervalSeconds}s` : '-',
           createdAt: w.createdAt,
         }));
 
@@ -202,6 +263,12 @@ export function createWebhooksCommand(): Command {
     )
     .option('--signature-secret-env <VAR>', 'Read the shared secret from environment variable VAR')
     .option('--signature-secret-stdin', 'Read the shared secret from stdin (trailing newline stripped)')
+    .option(
+      '--expected-interval <seconds>',
+      'Declared cadence: >=1 event or heartbeat per N seconds. Arms liveness supervision (#961)',
+    )
+    .option('--window-semantics <value>', `Declared window semantics: ${WINDOW_SEMANTICS.join(' or ')}`)
+    .option('--mutation-policy <value>', `Declared mutation re-emit policy: ${MUTATION_POLICIES.join(' or ')}`)
     .action(
       async (options: {
         name: string;
@@ -214,6 +281,9 @@ export function createWebhooksCommand(): Command {
         signatureSecret?: string;
         signatureSecretEnv?: string;
         signatureSecretStdin?: boolean;
+        expectedInterval?: string;
+        windowSemantics?: string;
+        mutationPolicy?: string;
       }) => {
         const client = getClient();
 
@@ -238,6 +308,9 @@ export function createWebhooksCommand(): Command {
             expectedHeaders,
             signatureConfig,
             signatureSecret,
+            expectedIntervalSeconds: parseExpectedInterval(options.expectedInterval),
+            windowSemantics: parseWindowSemantics(options.windowSemantics),
+            mutationPolicy: parseMutationPolicy(options.mutationPolicy),
           });
 
           const details: Record<string, unknown> = {
@@ -275,6 +348,13 @@ export function createWebhooksCommand(): Command {
     .option('--signature-secret-env <VAR>', 'Read the shared secret from environment variable VAR')
     .option('--signature-secret-stdin', 'Read the shared secret from stdin (trailing newline stripped)')
     .option('--clear-signature', 'Remove the signature config and stored secret')
+    .option(
+      '--expected-interval <seconds>',
+      'Declared cadence: >=1 event or heartbeat per N seconds. (Re)arms liveness supervision (#961)',
+    )
+    .option('--clear-cadence', 'Remove the declared cadence (disarms liveness supervision)')
+    .option('--window-semantics <value>', `Declared window semantics: ${WINDOW_SEMANTICS.join(' or ')}`)
+    .option('--mutation-policy <value>', `Declared mutation re-emit policy: ${MUTATION_POLICIES.join(' or ')}`)
     .action(
       async (
         id: string,
@@ -290,6 +370,10 @@ export function createWebhooksCommand(): Command {
           signatureSecretEnv?: string;
           signatureSecretStdin?: boolean;
           clearSignature?: boolean;
+          expectedInterval?: string;
+          clearCadence?: boolean;
+          windowSemantics?: string;
+          mutationPolicy?: string;
         },
       ) => {
         const resolvedId = await resolveWebhookId(id);
@@ -302,7 +386,10 @@ export function createWebhooksCommand(): Command {
             enabled?: boolean;
             signatureConfig?: WebhookSignatureConfigBody | null;
             signatureSecret?: string;
-          } = {};
+            expectedIntervalSeconds?: number | null;
+            windowSemantics?: (typeof WINDOW_SEMANTICS)[number];
+            mutationPolicy?: (typeof MUTATION_POLICIES)[number];
+          } = buildLifecycleUpdates(options);
           if (options.name) updates.name = options.name;
           if (options.description) updates.description = options.description;
           if (options.enable) updates.enabled = true;
@@ -380,6 +467,27 @@ export function createWebhooksCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to trigger event: ${message}`);
+      }
+    });
+
+  // omni webhooks heartbeat <source-name>
+  webhooks
+    .command('heartbeat <source>')
+    .description('Record a connector heartbeat ("ran, zero events found") — resets the liveness window (#961)')
+    .action(async (source: string) => {
+      const client = getClient();
+
+      try {
+        // Keyed on the source NAME (like the receiver URL), not the id.
+        const result = await client.webhooks.heartbeat(source);
+        output.success(`Heartbeat recorded for '${result.source}'`, {
+          heartbeatAt: result.heartbeatAt,
+          livenessStatus: result.livenessStatus ?? 'unsupervised',
+          expectedIntervalSeconds: result.expectedIntervalSeconds,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to record heartbeat: ${message}`);
       }
     });
 
