@@ -9,6 +9,7 @@
  */
 
 import type { EventBus, Subscription } from '../events/bus';
+import { runWithEventCausality } from '../events/causality';
 import { classifyEnvelope } from '../events/envelope';
 import type { EventType, GenericEventPayload, OmniEvent } from '../events/types';
 import { generateId } from '../ids';
@@ -528,13 +529,16 @@ export class AutomationEngine {
         ? { envelopeVersion: classification.envelopeVersion, tenantId: classification.tenantId }
         : null;
 
-    // Build debounced message
+    // Build debounced message. Event identity + correlation ride along so the
+    // synthetic flush event continues this flow's chain (#956).
     const content = payload.content as { type: string; text?: string } | undefined;
     const message: DebouncedMessage = {
       type: content?.type ?? 'unknown',
       text: content?.text,
       timestamp: event.timestamp,
       payload,
+      eventId: event.id,
+      correlationId: event.metadata.correlationId,
     };
 
     manager.addMessage(key, message, from, instanceId, stamp);
@@ -545,7 +549,13 @@ export class AutomationEngine {
    */
   private async handleImmediate(automation: Automation, event: OmniEvent): Promise<void> {
     const instanceId = event.metadata.instanceId ?? 'global';
-    const context = createTemplateContext(event.payload as Record<string, unknown>);
+    // Thread the triggering event's ENVELOPE alongside its payload (#956):
+    // actions propagate correlation/causality from metadata, never from
+    // payload fields.
+    const context = createTemplateContext(event.payload as Record<string, unknown>, {
+      event: { id: event.id, type: event.type, timestamp: event.timestamp, metadata: event.metadata },
+      automation: { id: automation.id },
+    });
 
     await this.queueExecution(automation, event, context, instanceId);
   }
@@ -568,7 +578,27 @@ export class AutomationEngine {
         return;
       }
 
-      // Build context with grouped messages
+      // Create a synthetic event. The window's envelope stamp (G5) is carried
+      // onto the synthetic metadata — same fields, same version the producer
+      // stamped — so `executeAutomation`'s classification sees exactly the
+      // world the original events belonged to. A legacy window stamps nothing.
+      // The correlation continues from the last REAL event in the window
+      // (#956) — only a window whose events carried no correlation mints one.
+      const syntheticEvent: OmniEvent = {
+        id: generateId(),
+        type: automation.triggerEventType as EventType,
+        payload: lastMessage.payload as GenericEventPayload,
+        metadata: {
+          correlationId: lastMessage.correlationId ?? generateId(),
+          instanceId,
+          ...(stamp ? { envelopeVersion: stamp.envelopeVersion, tenantId: stamp.tenantId } : {}),
+        },
+        timestamp: Date.now(),
+      };
+
+      // Build context with grouped messages. The threaded envelope's `id` is
+      // the last REAL event's id (when known) so downstream causal links point
+      // at a published event, never at the synthetic flush id.
       const context = createTemplateContext(lastMessage.payload, {
         debounce: {
           messages: messages.map((m) => ({
@@ -579,23 +609,14 @@ export class AutomationEngine {
           from,
           instanceId,
         },
-      });
-
-      // Create a synthetic event. The window's envelope stamp (G5) is carried
-      // onto the synthetic metadata — same fields, same version the producer
-      // stamped — so `executeAutomation`'s classification sees exactly the
-      // world the original events belonged to. A legacy window stamps nothing.
-      const syntheticEvent: OmniEvent = {
-        id: generateId(),
-        type: automation.triggerEventType as EventType,
-        payload: lastMessage.payload as GenericEventPayload,
-        metadata: {
-          correlationId: generateId(),
-          instanceId,
-          ...(stamp ? { envelopeVersion: stamp.envelopeVersion, tenantId: stamp.tenantId } : {}),
+        event: {
+          id: lastMessage.eventId ?? syntheticEvent.id,
+          type: syntheticEvent.type,
+          timestamp: syntheticEvent.timestamp,
+          metadata: syntheticEvent.metadata,
         },
-        timestamp: Date.now(),
-      };
+        automation: { id: automation.id },
+      });
 
       await this.queueExecution(automation, syntheticEvent, context, instanceId);
     };
@@ -730,15 +751,28 @@ export class AutomationEngine {
         return result;
       }
 
-      // Execute actions, threading the envelope's trusted tenant (null =
-      // legacy) and the emit provenance (#958) so emit_event re-publishes
-      // derive a stable idempotency key for this (event, automation) slot.
-      const actionsExecuted = await executeActions(
-        automation.actions as Parameters<typeof executeActions>[0],
-        context,
-        this.deps,
-        trustedTenantId,
-        { parentEventId: event.id, automationId: automation.id },
+      // Execute actions, threading the envelope's trusted tenant (null = legacy).
+      // The whole action run is scoped with the trigger's causality (#957):
+      // any publish an action performs — however deep (send_message → API
+      // callback → channel plugin emit) — is stamped as caused by the
+      // triggering event and continues its correlation. For a debounced
+      // execution `context.event.id` is the last REAL event of the window, so
+      // causal links never point at the synthetic flush id.
+      // Emit provenance (#958) rides along so emit_event re-publishes derive
+      // a stable idempotency key for this (event, automation, action) slot.
+      const actionsExecuted = await runWithEventCausality(
+        {
+          correlationId: context.event?.metadata.correlationId ?? event.metadata.correlationId,
+          causationId: context.event?.id ?? event.id,
+        },
+        () =>
+          executeActions(
+            automation.actions as Parameters<typeof executeActions>[0],
+            context,
+            this.deps,
+            trustedTenantId,
+            { parentEventId: event.id, automationId: automation.id },
+          ),
       );
 
       // Determine overall status

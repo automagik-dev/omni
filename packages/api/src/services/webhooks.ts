@@ -353,8 +353,6 @@ export class WebhookService {
       }
     }
 
-    // Generate event ID
-    const eventId = generateId();
     // Semantic type extraction (issue #959): a mapped source emits
     // custom.{source}.{event}; unmapped keeps the legacy collapsed type.
     const eventType = resolveWebhookEventType(sourceName, source.eventTypeMapping, headers);
@@ -362,6 +360,11 @@ export class WebhookService {
       source: sourceName,
       ...payload,
     };
+
+    // Provisional id: referenced by the schema gate's dead-letter entry and
+    // returned when no bus is wired; the publish path below replaces it with
+    // the PUBLISHED event's id (#956).
+    const eventId = generateId();
 
     // Schema-registry gate (issue #959): a registered type's payload must
     // satisfy its schema BEFORE anything is published or counted. An invalid
@@ -395,7 +398,7 @@ export class WebhookService {
         rawPayload: payload,
         idempotencyKey,
         receivedAt: new Date(),
-        metadata: { correlationId: eventId, webhookSource: sourceName },
+        metadata: { correlationId: eventId, source: 'webhook', fullEventType: eventType, webhookSource: sourceName },
       })
       .onConflictDoNothing({ target: omniEvents.idempotencyKey })
       .returning({ id: omniEvents.id });
@@ -436,11 +439,21 @@ export class WebhookService {
       })
       .where(eq(webhookSources.id, source.id));
 
-    // Publish event
+    // Publish event. The bus mints the event id and self-references the
+    // correlation (root event, fresh correlation — #956), and the id we hand
+    // back IS the published event's id: previously a locally generated id was
+    // returned and stamped as `correlationId`, so the caller-visible id never
+    // matched anything in the journal (4 ids for 2 facts in the RFC #925
+    // dogfood evidence).
     if (this.eventBus) {
       try {
+        // Published UNDER the claim row's id (#958): the journal row and the
+        // event share one identity, so the #957 `custom.>` consumer's insert
+        // no-ops on the claim row and `omni events trace` roots here. The
+        // envelope's correlation defaults to this same id (factory root
+        // self-reference).
         await this.eventBus.publishGeneric(eventType, eventPayload, {
-          correlationId: eventId,
+          publishEventId: eventId,
           source: 'webhook',
         });
       } catch (error) {
@@ -555,23 +568,30 @@ export class WebhookService {
     payload: Record<string, unknown>,
     metadata?: { correlationId?: string; instanceId?: string },
   ): Promise<{ eventId: string; published: boolean }> {
-    const eventId = metadata?.correlationId ?? generateId();
+    // Provisional id for the schema gate's dead-letter reference and the
+    // no-bus fallback; the publish path returns the PUBLISHED event's id (#956).
+    const provisionalId = metadata?.correlationId ?? generateId();
 
     // Same gate as the webhook ingress: a registered type's contract holds on
     // every publish path into the journal (issue #959).
-    await this.enforceRegisteredSchema(eventType, payload, eventId, 'manual trigger');
+    await this.enforceRegisteredSchema(eventType, payload, provisionalId, 'manual trigger');
 
     if (this.eventBus) {
-      await this.eventBus.publishGeneric(eventType, payload, {
-        correlationId: eventId,
+      // A caller-supplied correlationId CONTINUES an existing flow; with none
+      // supplied the bus self-references (root event, fresh correlation).
+      // Either way the returned id is the published event's own id, not the
+      // correlation (#956 — the two used to be conflated, so the caller's id
+      // never matched the journal).
+      const result = await this.eventBus.publishGeneric(eventType, payload, {
+        correlationId: metadata?.correlationId,
         instanceId: metadata?.instanceId,
         source: 'manual-trigger',
       });
 
-      return { eventId, published: true };
+      return { eventId: result.id, published: true };
     }
 
-    return { eventId, published: false };
+    return { eventId: provisionalId, published: false };
   }
 
   /**

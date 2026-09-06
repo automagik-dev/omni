@@ -7,13 +7,33 @@
  * API contract, plus the artifact-loading rules (--file XOR --schema).
  */
 
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { __testables } from '../events';
 
 const { schemaApiRequest, loadSchemaArtifact, summarizeSchemaRow } = __testables;
+
+// The round-trip talks to a REAL in-process server, so it needs the REAL
+// fetch. `bun test` runs every package's files in ONE process, and a file
+// that stubbed `globalThis.fetch` without restoring it makes these requests
+// resolve against the leftover stub instead of the registry server — observed
+// on CI (dev and PR #963): `registered.data` undefined from a leaked
+// `{items:[...]}`-shaped stub response, and a "JSON Parse error: Unexpected
+// identifier undefined" where a 404 was expected. The leak is
+// order-dependent (Linux readdir order differs from macOS), so it never
+// reproduces locally. Pin the native fetch for the duration of each test and
+// restore whatever was there afterwards — same precedent as
+// core's webhook-envelope suite; tracked repo-wide in #967.
+let priorFetch: typeof globalThis.fetch;
+beforeEach(() => {
+  priorFetch = globalThis.fetch;
+  globalThis.fetch = Bun.fetch as unknown as typeof globalThis.fetch;
+});
+afterEach(() => {
+  globalThis.fetch = priorFetch;
+});
 
 interface StoredSchema {
   id: string;

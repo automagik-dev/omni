@@ -269,6 +269,27 @@ eventsRoutes.get('/:id', async (c) => {
 });
 
 /**
+ * GET /events/:id/trace - Walk the causality chain around an event (#957)
+ *
+ * UP via causation_id to the root ingress event, DOWN breadth-first through
+ * fan-out (children = events whose causation_id is this id). Instance access
+ * is gated on the focus event, same as GET /events/:id.
+ */
+eventsRoutes.get('/:id/trace', async (c) => {
+  const id = c.req.param('id');
+  const services = c.get('services');
+  const apiKey = c.get('apiKey');
+
+  const trace = await services.events.trace(id);
+
+  if (trace.event.instanceId && apiKey && !ApiKeyService.instanceAllowed(apiKey.instanceIds, trace.event.instanceId)) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'API key does not have access to this instance' } }, 403);
+  }
+
+  return c.json({ data: trace });
+});
+
+/**
  * GET /events/by-sender/:senderId - Get events by sender
  */
 eventsRoutes.get('/by-sender/:senderId', async (c) => {

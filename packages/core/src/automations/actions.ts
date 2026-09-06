@@ -60,6 +60,17 @@ export interface AgentCallContext {
   senderName?: string;
   /** The message(s) to send to the agent */
   messages: string[];
+  /**
+   * Envelope of the event that woke this agent (#960) — threaded from the
+   * engine's TemplateContext so the agent (and the callAgent implementation)
+   * knows which event it is responding to. Absent for envelope-less
+   * invocations (route-side manual execute, legacy tests).
+   */
+  event?: {
+    id: string;
+    type: string;
+    correlationId?: string;
+  };
 }
 
 /**
@@ -100,7 +111,15 @@ export interface ActionDependencies {
    * wiring, tests) emissions publish unconditionally as before.
    */
   claimEmittedEvent?: (
-    claim: { idempotencyKey: string; eventId: string; eventType: string; payload: Record<string, unknown> },
+    claim: {
+      idempotencyKey: string;
+      eventId: string;
+      eventType: string;
+      payload: Record<string, unknown>;
+      /** Flow/tree identity (#956/#957) journaled on the claim row. */
+      correlationId?: string;
+      causationId?: string;
+    },
     trustedTenantId?: string | null,
   ) => Promise<boolean>;
   /**
@@ -186,16 +205,53 @@ export interface ActionDependencies {
 }
 
 /**
- * Build headers for webhook request
+ * Build headers for webhook request.
+ *
+ * Envelope headers (#960, the khal/brain push-ingress contract):
+ *   - `X-Omni-Event-Id`: the triggering event's id.
+ *   - `X-Omni-Delivery-Id`: `{event.id}:{automation.id}:{actionIndex}` —
+ *     stable across retries of the SAME delivery attempt chain, so a receiver
+ *     can dedupe on an id Omni minted. `manual` stands in for the automation
+ *     id on route-side manual executions that still thread an envelope.
+ * Both are only stamped when the engine threaded a triggering envelope;
+ * envelope-less invocations send exactly the headers they always did.
+ * Config-declared headers are applied last so an operator can override.
  */
-function buildWebhookHeaders(config: WebhookActionConfig, context: TemplateContext): Record<string, string> {
+function buildWebhookHeaders(
+  config: WebhookActionConfig,
+  context: TemplateContext,
+  actionIndex: number,
+): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (context.event) {
+    headers['X-Omni-Event-Id'] = context.event.id;
+    headers['X-Omni-Delivery-Id'] = `${context.event.id}:${context.automation?.id ?? 'manual'}:${actionIndex}`;
+  }
   if (config.headers) {
     for (const [key, value] of Object.entries(config.headers)) {
       headers[key] = substituteTemplate(value, context);
     }
   }
   return headers;
+}
+
+/**
+ * Default webhook body (#960): the FULL OmniEvent envelope when one was
+ * threaded and `includeEnvelope` is not explicitly false; the bare payload
+ * otherwise (legacy default, and always the fallback for envelope-less
+ * invocations). A configured `bodyTemplate` bypasses this entirely.
+ */
+function buildDefaultWebhookBody(config: WebhookActionConfig, context: TemplateContext): string {
+  if (context.event && config.includeEnvelope !== false) {
+    return JSON.stringify({
+      id: context.event.id,
+      type: context.event.type,
+      payload: context.payload,
+      metadata: context.event.metadata,
+      timestamp: context.event.timestamp,
+    });
+  }
+  return JSON.stringify(context.payload);
 }
 
 /**
@@ -214,14 +270,15 @@ async function executeWebhookAction(
   context: TemplateContext,
   _deps: ActionDependencies,
   trustedTenantId?: string | null,
+  actionIndex = 0,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
     const url = substituteTemplate(config.url, context);
     const method = config.method ?? 'POST';
-    const headers = buildWebhookHeaders(config, context);
+    const headers = buildWebhookHeaders(config, context, actionIndex);
     const body = config.bodyTemplate
       ? substituteTemplate(config.bodyTemplate, context)
-      : JSON.stringify(context.payload);
+      : buildDefaultWebhookBody(config, context);
 
     logger.debug(`Webhook ${method} ${url}`, { method, url, waitForResponse: config.waitForResponse });
 
@@ -328,8 +385,9 @@ async function claimEmissionSlot(
   deps: ActionDependencies,
   eventType: string,
   payload: GenericEventPayload,
-  trustedTenantId?: string | null,
-  provenance?: EmitProvenance & { actionIndex: number },
+  trustedTenantId: string | null | undefined,
+  provenance: (EmitProvenance & { actionIndex: number }) | undefined,
+  causality: { correlationId?: string; causationId?: string },
 ): Promise<{ duplicate: boolean; claimedEventId?: string }> {
   if (!deps.claimEmittedEvent || !provenance) {
     return { duplicate: false };
@@ -337,7 +395,7 @@ async function claimEmissionSlot(
   const idempotencyKey = `derived:${provenance.parentEventId}:${provenance.automationId}:${provenance.actionIndex}`;
   const claimedEventId = generateId();
   const claimed = await deps.claimEmittedEvent(
-    { idempotencyKey, eventId: claimedEventId, eventType, payload },
+    { idempotencyKey, eventId: claimedEventId, eventType, payload, ...causality },
     trustedTenantId,
   );
   if (!claimed) {
@@ -374,7 +432,8 @@ async function executeEmitEventAction(
   context: TemplateContext,
   deps: ActionDependencies,
   trustedTenantId?: string | null,
-  provenance?: EmitProvenance & { actionIndex: number },
+  actionIndex = 0,
+  provenance?: EmitProvenance,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
     if (!deps.eventBus) {
@@ -408,11 +467,33 @@ async function executeEmitEventAction(
       }
     }
 
+    // Correlation rides the same threading (#956): the next hop continues the
+    // TRIGGERING event's envelope correlation, never a payload claim. The
+    // payload fallback only applies to envelope-less invocations (route-side
+    // manual execute), which is the pre-#956 behavior unchanged.
+    // causationId (#957): the emitted event's immediate parent IS the event
+    // that triggered this automation — stamped explicitly (more precise than
+    // the ambient causality scope, same value).
+    const correlationId =
+      context.event?.metadata.correlationId ?? (context.payload.correlationId as string) ?? undefined;
+    const causationId = context.event?.id ?? provenance?.parentEventId;
+
     // Derived-key idempotency (#958): claim before publishing so re-running
     // the same automation over the same event does not duplicate the
     // emission. This dedupes REPLAY of the same (event, automation, action)
-    // slot only — two different parent events legitimately emit twice.
-    const claim = await claimEmissionSlot(deps, eventType, payload, trustedTenantId, provenance);
+    // slot only — two different parent events legitimately emit twice. The
+    // parent id prefers `context.event.id` (a debounced execution's LAST REAL
+    // event — stable across replay, unlike the synthetic flush id). The claim
+    // row is journaled with the emission's causality so the #957 `custom.>`
+    // consumer's insert lands on it (same id, ON CONFLICT DO NOTHING) and
+    // `omni events trace` walks through it.
+    const slotProvenance = provenance
+      ? { ...provenance, parentEventId: context.event?.id ?? provenance.parentEventId, actionIndex }
+      : undefined;
+    const claim = await claimEmissionSlot(deps, eventType, payload, trustedTenantId, slotProvenance, {
+      correlationId,
+      causationId,
+    });
     if (claim.duplicate) {
       return { success: true, result: { eventType, duplicate: true } };
     }
@@ -428,7 +509,11 @@ async function executeEmitEventAction(
     let result: { id: string };
     try {
       result = await deps.eventBus.publishGeneric(eventType, payload, {
-        correlationId: (context.payload.correlationId as string) ?? undefined,
+        correlationId,
+        causationId: context.event?.id,
+        // A claimed emission publishes UNDER the claim row's id (#958) so the
+        // journal row and the event share one identity.
+        ...(claim.claimedEventId ? { publishEventId: claim.claimedEventId } : {}),
         source: 'automation',
         ...(trustedTenantId ? { tenantId: trustedTenantId } : {}),
       });
@@ -569,6 +654,15 @@ function extractAgentCallContext(
       senderId,
       senderName,
       messages: messagesResult,
+      // Envelope of the triggering event (#960) — lets the agent know which
+      // event woke it. Derived from engine-threaded metadata, never payload.
+      event: context.event
+        ? {
+            id: context.event.id,
+            type: context.event.type,
+            correlationId: context.event.metadata.correlationId,
+          }
+        : undefined,
     },
   };
 }
@@ -638,7 +732,12 @@ export async function executeAction(
   context: TemplateContext,
   deps: ActionDependencies,
   trustedTenantId?: string | null,
-  provenance?: EmitProvenance & { actionIndex: number },
+  /** Position of this action in its automation's action list — part of the
+   * webhook delivery-id derivation (#960) and of the emit_event derived
+   * idempotency key (#958). Defaults to 0 for direct calls. */
+  actionIndex = 0,
+  /** Triggering event + automation identity for emit_event dedup (#958). */
+  provenance?: EmitProvenance,
 ): Promise<ActionExecutionResult> {
   const start = Date.now();
 
@@ -646,13 +745,13 @@ export async function executeAction(
 
   switch (action.type) {
     case 'webhook':
-      result = await executeWebhookAction(action.config, context, deps, trustedTenantId);
+      result = await executeWebhookAction(action.config, context, deps, trustedTenantId, actionIndex);
       break;
     case 'send_message':
       result = await executeSendMessageAction(action.config, context, deps, trustedTenantId);
       break;
     case 'emit_event':
-      result = await executeEmitEventAction(action.config, context, deps, trustedTenantId, provenance);
+      result = await executeEmitEventAction(action.config, context, deps, trustedTenantId, actionIndex, provenance);
       break;
     case 'log':
       result = await executeLogAction(action.config, context, deps);
@@ -699,13 +798,7 @@ export async function executeActions(
       variables,
     };
 
-    const result = await executeAction(
-      action,
-      actionContext,
-      deps,
-      trustedTenantId,
-      provenance ? { ...provenance, actionIndex } : undefined,
-    );
+    const result = await executeAction(action, actionContext, deps, trustedTenantId, actionIndex, provenance);
     results.push(result);
 
     // Store response as variable if configured (for webhook and call_agent)

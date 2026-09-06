@@ -22,6 +22,19 @@ export interface DebouncedMessage {
   text?: string;
   timestamp: number;
   payload: Record<string, unknown>;
+  /**
+   * Id of the real event that entered the window (#956). The flush callback
+   * builds a SYNTHETIC event, so without carrying the source identity the
+   * causal link from a debounced execution would point at an id that was
+   * never published.
+   */
+  eventId?: string;
+  /**
+   * The source event's envelope correlationId (#956) — carried so the
+   * synthetic flush event continues the flow's correlation instead of
+   * minting a fresh one and breaking the chain at every debounced hop.
+   */
+  correlationId?: string;
 }
 
 /**

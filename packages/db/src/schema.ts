@@ -10,12 +10,7 @@
  */
 
 import type { ProviderSchema as CoreProviderSchema, FollowUpSequenceConfig } from '@omni/core';
-import {
-  CORE_EVENT_TYPES,
-  type CoreEventType,
-  type SyncJobConfig as CoreSyncJobConfig,
-  type CustomEventType,
-} from '@omni/core/events';
+import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJobConfig } from '@omni/core/events';
 import { CONTENT_TYPES, type ContentType as CoreContentType } from '@omni/core/types';
 import { relations, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
@@ -163,9 +158,13 @@ export type ApiKeyProfileOverrides = {
 };
 
 export const eventTypes = CORE_EVENT_TYPES;
-// Webhook ingress journals `custom.webhook.{source}` rows (#958), so the
-// column type carries the custom namespace alongside the core tuple.
-export type EventType = CoreEventType | CustomEventType;
+/**
+ * Journaled event types: the core tuple plus the open custom/system
+ * namespaces — custom events (webhook ingress roots #958, automation
+ * emit_event hops) are journaled into omni_events since #957 so
+ * `omni events trace` can walk a chain back to its root.
+ */
+export type EventType = CoreEventType | `custom.${string}` | `system.${string}`;
 
 // Derived from core CONTENT_TYPES (same no-drift rule as eventTypes above) —
 // this local tuple had fallen behind by ten content types.
@@ -1810,11 +1809,23 @@ export const omniEvents = pgTable(
 
     // ---- Metadata ----
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    /**
+     * Id of the IMMEDIATE parent event — the event whose consumption caused
+     * this one to be published (#957, RFC #925 G3). `correlationId` (in the
+     * metadata jsonb) groups a flow; `causationId` gives the tree. NULL for
+     * root events (external ingress) and for every event persisted before the
+     * stamp existed (forward-only, no backfill). Additive-optional, mirroring
+     * how tenantId landed (G5/ADR-0008). Not an FK: the parent may be an
+     * event that was never persisted or was pruned.
+     */
+    causationId: uuid('causation_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     /** G2 additive tenant ownership. Nullable through the additive phase. */
     tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    /** Children lookup for `omni events trace` (descendants = causation_id = :id). */
+    causationIdx: index('omni_events_causation_idx').on(table.causationId),
     tenantIdx: index('omni_events_tenant_idx').on(table.tenantId),
     tenantIdUq: uniqueIndex('omni_events_tenant_id_uq').on(table.tenantId, table.id),
     // Global uniqueness through the additive phase (mirrors the

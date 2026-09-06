@@ -109,7 +109,14 @@ export interface AutomationEngineDeps {
   ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
   releaseIdleTimeoutClaim: (claimToken: string) => void | Promise<void>;
   claimEmittedEvent: (
-    claim: { idempotencyKey: string; eventId: string; eventType: string; payload: Record<string, unknown> },
+    claim: {
+      idempotencyKey: string;
+      eventId: string;
+      eventType: string;
+      payload: Record<string, unknown>;
+      correlationId?: string;
+      causationId?: string;
+    },
     trustedTenantId?: string | null,
   ) => Promise<boolean>;
   releaseEmittedEventClaim: (eventId: string) => Promise<void>;
@@ -274,7 +281,11 @@ export function buildAutomationEngineDeps(
     // dedup authority for automation re-publishes, exactly as webhook ingress
     // does in `WebhookService.receive`. An empty RETURNING means the key was
     // already journaled — a NATS redelivery/replay of the same
-    // (event, automation, action) slot — and the emission is skipped.
+    // (event, automation, action) slot — and the emission is skipped. The
+    // emission then publishes UNDER this row's id, so the #957 `custom.>`
+    // journal consumer's insert lands here (ON CONFLICT (id) DO NOTHING) —
+    // one row, carrying the causality fields `omni events trace` walks
+    // (causation_id column + correlationId in the metadata jsonb).
     claimEmittedEvent: async (claim, trustedTenantId = null) => {
       const claimed = await runTenantWorkDb(db, trustedTenantId, () =>
         scopedHandle(db)
@@ -283,12 +294,18 @@ export function buildAutomationEngineDeps(
             id: claim.eventId,
             channel: 'internal',
             eventType: claim.eventType.slice(0, 255) as EventType,
-            direction: 'inbound',
-            status: 'received',
+            direction: 'internal',
+            status: 'completed',
             rawPayload: claim.payload,
             idempotencyKey: claim.idempotencyKey,
+            causationId: claim.causationId ?? null,
             receivedAt: new Date(),
-            metadata: { emittedBy: 'automation', idempotencyKey: claim.idempotencyKey },
+            metadata: {
+              correlationId: claim.correlationId ?? claim.eventId,
+              source: 'automation',
+              fullEventType: claim.eventType,
+              idempotencyKey: claim.idempotencyKey,
+            },
           })
           .onConflictDoNothing({ target: omniEvents.idempotencyKey })
           .returning({ id: omniEvents.id }),
