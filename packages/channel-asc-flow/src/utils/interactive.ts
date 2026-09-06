@@ -128,6 +128,28 @@ export function buildUra(
     asButtons = true;
   }
 
+  // Past three options there is no component, and sending one anyway is WORSE
+  // than sending none.
+  //
+  // A list here is flattened into a numbered menu the platform builds from
+  // `ura_opcoes` — titles only, descriptions dropped, because the URA has no
+  // field for them. The agent puts what identifies the choice IN the
+  // description (`domain/interactive.py::from_proposal`: the title is the
+  // slot, the description is the clinic and the doctor), which is right for a
+  // channel that renders lists and useless here.
+  //
+  // The result reached a beneficiary on 06/09 (atendimento 22348…): the bubble
+  // numbered four clinics 1-4, and under it the platform's menu numbered ten
+  // slots 1-10, each reading only `amanhã 07/09 · 08:00`. Two numbering systems
+  // in one message, neither naming a place — and rows 1, 5 and 9 were the same
+  // clinic while 1, 2, 3 were three different ones. Tapping "3" lands somewhere
+  // other than the third thing the person read.
+  //
+  // With no URA the agent's own numbered text stands alone and coherent. It
+  // loses a tap affordance that never worked and removes a menu that
+  // contradicted the message it was attached to.
+  if (!asButtons) return null;
+
   if (titles.length !== replyButtons.length || titles.some((t) => !t)) return null;
   // The tap comes back as the TITLE, so two titles that fold together are an
   // ambiguous choice — and shortening is exactly what can create that

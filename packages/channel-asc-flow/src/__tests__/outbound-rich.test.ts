@@ -227,12 +227,16 @@ describe('outbound interactive through /mensagem', () => {
     expect(ready('42')).toMatchObject({ resposta: '', forcar_botoes: true });
   });
 
-  it('sends 4-10 options as a list', async () => {
+  // Past three there is no component: the platform would flatten it into a
+  // numbered menu of its own, built from the titles alone, contradicting the
+  // numbering of the message it hangs under. The turn goes out as the agent's
+  // numbered text, pushed like any other.
+  it('sends 4-10 options as plain pushed text, never a list', async () => {
     await boot();
-    await send({ type: 'text', text: 'Escolha:', buttons: options(5) });
+    await send({ type: 'text', text: 'Escolha:\n\n1. a\n2. b', buttons: options(5) });
 
-    expect(of('/mensagem')[0]?.body).toMatchObject({ forcar_botoes: false });
-    expect(Object.keys(of('/mensagem')[0]?.body.ura_opcoes as object)).toHaveLength(5);
+    expect(of('/mensagem')).toHaveLength(0);
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['Escolha:', '1. a\n2. b']);
   });
 
   it('degrades past 10 options to the numbered text in resposta', async () => {
