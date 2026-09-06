@@ -107,6 +107,10 @@ if (!explicitUrl) {
 const binaries = resolvePgBinaries();
 const env: Record<string, string> = { ...(process.env as Record<string, string>) };
 for (const variable of POSTGRES_URL_VARS) env[variable] = url;
+// Mute the app logger under the gate unless the caller asked for logs (#967):
+// the suites intentionally exercise warn/error paths and the JSON flood is
+// pure I/O on green runs. bun test's own failure diagnostics are unaffected.
+if (!env.LOG_LEVEL) env.LOG_LEVEL = 'silent';
 // The suites shell out to psql; point them at whichever client we resolved.
 for (const variable of [
   'OMNI_G1_PSQL_BIN',

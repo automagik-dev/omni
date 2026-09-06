@@ -29,10 +29,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import {
   DEFAULT_ROLE_NAMES,
   type Database,
@@ -40,15 +39,13 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
+import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { createServices } from '../../services';
 import { buildAutomationEngineDeps } from '../automation-actions';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const drizzleDir = join(here, '..', '..', '..', '..', 'db', 'drizzle');
 
 const TENANT_A = '11111111-1111-4111-8111-1111111111aa';
 const TENANT_B = '22222222-2222-4222-8222-2222222222bb';
@@ -103,17 +100,8 @@ postgresDescribe('two-tenant automation-actions containment (real PostgreSQL)', 
   }
 
   beforeAll(async () => {
-    const created = runSqlOn(superUrl, `CREATE DATABASE "${dbName}";`);
-    if (created.exitCode !== 0) throw new Error(`could not create database: ${created.stderr}`);
-
-    const migrations = readdirSync(drizzleDir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort()
-      .map((f) => readFileSync(join(drizzleDir, f), 'utf-8'))
-      .join('\n');
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
     const superDbUrl = urlFor(superUrl, dbName);
-    const migrated = runSqlOn(superDbUrl, migrations);
-    if (migrated.exitCode !== 0) throw new Error(`migrations failed: ${migrated.stderr}`);
 
     // Seed: both tenants own an instance and a chat. The agent row is
     // deliberately NULL-tenant — that IS production's shape until the G6

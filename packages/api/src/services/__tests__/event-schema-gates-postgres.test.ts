@@ -20,13 +20,13 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import type { EventBus } from '@omni/core';
 import { executeAction } from '@omni/core';
 import { type Database, createDbHandle, deadLetterEvents } from '@omni/db';
+import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { buildAutomationEngineDeps } from '../../plugins/automation-actions';
 import { DeadLetterService } from '../dead-letters';
 import { EventSchemaService } from '../event-schemas';
@@ -36,9 +36,6 @@ import { WebhookService } from '../webhooks';
 const superUrl = process.env.OMNI_G1_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G1_PSQL_BIN ?? 'psql';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const drizzleDir = join(here, '..', '..', '..', '..', 'db', 'drizzle');
 
 function runSqlOn(url: string, script: string): { exitCode: number; stderr: string } {
   const file = join(tmpdir(), `omni-959-registry-${crypto.randomUUID()}.sql`);
@@ -106,17 +103,8 @@ postgresDescribe('event schema registry gates (real PostgreSQL)', () => {
   }
 
   beforeAll(async () => {
-    const created = runSqlOn(superUrl, `CREATE DATABASE "${dbName}";`);
-    if (created.exitCode !== 0) throw new Error(`could not create database: ${created.stderr}`);
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
     const dbUrl = urlFor(superUrl, dbName);
-
-    const migrations = readdirSync(drizzleDir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort()
-      .map((f) => readFileSync(join(drizzleDir, f), 'utf-8'))
-      .join('\n');
-    const migrated = runSqlOn(dbUrl, migrations);
-    if (migrated.exitCode !== 0) throw new Error(`migrations failed: ${migrated.stderr}`);
 
     const handle = createDbHandle({ url: dbUrl, maxConnections: 3 });
     closers.push(() => handle.close().catch(() => undefined));

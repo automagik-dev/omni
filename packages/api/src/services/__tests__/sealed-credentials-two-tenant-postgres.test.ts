@@ -23,10 +23,9 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { setTenantSecretMasterKey } from '@omni/core';
 import {
   DEFAULT_ROLE_NAMES,
@@ -35,6 +34,7 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
+import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { isSealedCredentialField, openCredentialField } from '../../tenancy/sealed-credentials';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
 import { InstanceService } from '../instances';
@@ -42,9 +42,6 @@ import { InstanceService } from '../instances';
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const drizzleDir = join(here, '..', '..', '..', '..', 'db', 'drizzle');
 
 const TENANT_A = '11111111-1111-4111-8111-1111111111da';
 const TENANT_B = '22222222-2222-4222-8222-2222222222db';
@@ -108,17 +105,8 @@ postgresDescribe('two-tenant sealed credentials at rest (real PostgreSQL)', () =
   }
 
   beforeAll(async () => {
-    const created = runSqlOn(superUrl, `CREATE DATABASE "${dbName}";`);
-    if (created.exitCode !== 0) throw new Error(`could not create database: ${created.stderr}`);
-
-    const migrations = readdirSync(drizzleDir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort()
-      .map((f) => readFileSync(join(drizzleDir, f), 'utf-8'))
-      .join('\n');
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
     superDbUrl = urlFor(superUrl, dbName);
-    const migrated = runSqlOn(superDbUrl, migrations);
-    if (migrated.exitCode !== 0) throw new Error(`migrations failed: ${migrated.stderr}`);
 
     const seeded = runSqlOn(
       superDbUrl,

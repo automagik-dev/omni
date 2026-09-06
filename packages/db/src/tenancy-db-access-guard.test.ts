@@ -28,11 +28,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');
 const packagesDir = join(repoRoot, 'packages');
 
+// An interrupted previous run (ctrl-C, a cancelled turbo task) can leave the
+// scratch behind — its afterAll never fired — so clear it BEFORE the baseline
+// scan or the leftover rogue file poisons `found` (#967).
+const scratchDir = join(packagesDir, 'db', 'src', '__g3_access_scratch__');
+rmSync(scratchDir, { recursive: true, force: true });
+afterAll(() => rmSync(scratchDir, { recursive: true, force: true }));
+
 const found = scanDbAccessSites(packagesDir, repoRoot);
 const report = evaluateDbAccessGuard(found);
-
-const scratchDir = join(packagesDir, 'db', 'src', '__g3_access_scratch__');
-afterAll(() => rmSync(scratchDir, { recursive: true, force: true }));
 
 describe('db-access guard', () => {
   test('the scan finds sites at all (guards against a broken scanner)', () => {

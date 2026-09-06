@@ -257,13 +257,23 @@ make dev-services # Start PostgreSQL + NATS + API via PM2
 
 ```bash
 make check        # All checks: typecheck + lint + test
+make check-all    # check + the real-PostgreSQL gate, run CONCURRENTLY (fastest full validation)
 make typecheck    # TypeScript only
 make lint         # Biome linter
 make lint-fix     # Auto-fix lint issues
-make test         # All tests
+make test         # All tests (per-package via turbo — unchanged packages replay their cached green run)
+make test-sweep   # All tests in ONE process (CI parity; use to hunt cross-file state leaks)
 make test-api     # API package tests only
 make test-file F=<path>  # Specific test file
+make test-pg-gate       # Every real-PostgreSQL suite on a fresh disposable cluster (never skips)
+make test-pg-gate-warm  # Same gate against a kept-warm cluster (fast dev loop; state in .pg-gate-warm.json)
+make pg-gate-warm-stop  # Destroy the kept-warm cluster
 ```
+
+Test runs default to `LOG_LEVEL=silent` (suites intentionally exercise noisy
+warn/error paths). Re-enable logs for a run with `make test TEST_LOG_LEVEL=debug`.
+Tests that assert on log output must `configureLogging({ level: ... })`
+themselves rather than rely on the ambient threshold.
 
 ### Individual Services
 

@@ -23,7 +23,7 @@
 import { getLogBuffer } from './buffer';
 import { createFormatter, isTTY } from './formatters';
 import { redactObject } from './redact';
-import type { LogConfig, LogEntry, LogFormat, LogLevel, Logger } from './types';
+import type { LogConfig, LogEntry, LogFormat, LogLevel, LogThreshold, Logger } from './types';
 import { LOG_LEVEL_VALUES } from './types';
 
 // Re-export all types
@@ -52,8 +52,8 @@ let formatter: ((entry: LogEntry) => string) | null = null;
  */
 function initFromEnv(): void {
   const level = process.env.LOG_LEVEL;
-  if (level && ['debug', 'info', 'warn', 'error'].includes(level)) {
-    config.level = level as LogLevel;
+  if (level && ['debug', 'info', 'warn', 'error', 'silent'].includes(level)) {
+    config.level = level as LogThreshold;
   }
 
   const format = process.env.LOG_FORMAT;
@@ -122,8 +122,8 @@ function matchesModuleFilter(module: string): boolean {
  * Write a log entry to output
  */
 function writeLog(entry: LogEntry): void {
-  // Check level filter
-  if (LOG_LEVEL_VALUES[entry.level] < LOG_LEVEL_VALUES[config.level]) {
+  // Check level filter ('silent' is a threshold above every entry level)
+  if (config.level === 'silent' || LOG_LEVEL_VALUES[entry.level] < LOG_LEVEL_VALUES[config.level]) {
     return;
   }
 
@@ -154,7 +154,7 @@ function writeLog(entry: LogEntry): void {
  *
  * Call this once at application startup to configure logging.
  * Settings can also be controlled via environment variables:
- * - LOG_LEVEL: debug, info, warn, error
+ * - LOG_LEVEL: debug, info, warn, error, silent
  * - LOG_FORMAT: auto, pretty, json
  * - LOG_FILE: path for file logging
  * - LOG_FILE_MAX_SIZE: rotation threshold (e.g., '10m')

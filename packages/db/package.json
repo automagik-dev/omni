@@ -14,6 +14,10 @@
     "./client": {
       "types": "./src/client.ts",
       "default": "./src/client.ts"
+    },
+    "./pg-migrated-template": {
+      "types": "./src/pg-migrated-template.ts",
+      "default": "./src/pg-migrated-template.ts"
     }
   },
   "scripts": {

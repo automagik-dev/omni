@@ -17,6 +17,7 @@ import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createDatabaseFromTemplate, ensureSqlTemplate, sqlTemplateName } from './pg-migrated-template';
 import {
   COMPOSITE_FK_TARGETS,
   G2_NEW_TABLES,
@@ -45,6 +46,9 @@ const throughG1Sql = readdirSync(drizzleDir)
   .sort()
   .map((f) => readFileSync(join(drizzleDir, f), 'utf-8'))
   .join('\n');
+
+/** Pre-G2 template: the 0000-0040 prefix replayed once per cluster (#967). */
+const throughG1Template = sqlTemplateName('omni_tmpl_through_g1', throughG1Sql);
 
 interface SqlResult {
   exitCode: number;
@@ -90,8 +94,11 @@ function runSqlOn(url: string, script: string, env?: Record<string, string>): Sq
  */
 function createDatabase(): { url: string; name: string } {
   const name = `omni_g2_${crypto.randomUUID().replaceAll('-', '')}`;
-  const admin = runSqlOn(postgresUrl, `CREATE DATABASE "${name}";`);
-  if (admin.exitCode !== 0) throw new Error(`could not create disposable database: ${admin.stderr}`);
+  // Clone the 0000-0040 prefix from its per-cluster template instead of
+  // replaying it — every suite database here starts from that exact state.
+  const access = { superUrl: postgresUrl, psqlBin };
+  ensureSqlTemplate(access, throughG1Template, throughG1Sql);
+  createDatabaseFromTemplate(access, name, throughG1Template);
   const url = new URL(postgresUrl);
   url.pathname = `/${name}`;
   return { url: url.toString(), name };
@@ -152,7 +159,7 @@ postgresDescribe('G2 ownership schema — real PostgreSQL', () => {
     // UPGRADE PATH: build the real committed pre-G2 state, seed legacy
     // NULL-owner rows, and only then apply G2 on top.
     main = createDatabase();
-    runOrThrow(`${throughG1Sql}\n${LEGACY_ROWS}\n${TENANTS}`);
+    runOrThrow(`${LEGACY_ROWS}\n${TENANTS}`);
   });
 
   afterAll(() => {
@@ -620,7 +627,7 @@ postgresDescribe('G2 fresh install', () => {
 
   beforeAll(() => {
     fresh = createDatabase();
-    const result = runSqlOn(fresh.url, `${throughG1Sql}\n${g2Sql}`);
+    const result = runSqlOn(fresh.url, g2Sql);
     if (result.exitCode !== 0) throw new Error(`fresh install failed: ${result.stderr}`);
   });
 
@@ -662,7 +669,7 @@ postgresDescribe('G2 online DDL phase', () => {
   beforeAll(() => {
     // Pre-G2 state only: the online phase must be able to run BEFORE 0041.
     online = createDatabase();
-    const result = runSqlOn(online.url, `${throughG1Sql}\n${LEGACY_ROWS}\n${TENANTS}`);
+    const result = runSqlOn(online.url, `${LEGACY_ROWS}\n${TENANTS}`);
     if (result.exitCode !== 0) throw new Error(`pre-G2 setup failed: ${result.stderr}`);
   });
 

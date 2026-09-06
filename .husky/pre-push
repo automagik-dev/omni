@@ -76,7 +76,11 @@ fi
 # concurrent bun processes so two agents pushing at once cannot exhaust swap
 # the way one monolithic 6500-test process previously did.
 echo "▶ pre-push: full test suite (turbo-cached)"
-if ! bunx turbo test --concurrency=4 --output-logs=new-only; then
+# Suites intentionally exercise thousands of warn/error log paths; mute the
+# app logger unless the pusher asked for logs (#967). LOG_LEVEL is not part
+# of the turbo test hash — tests must not depend on the ambient threshold.
+export LOG_LEVEL="${LOG_LEVEL:-silent}"
+if ! bunx turbo test --concurrency=4 --continue --output-logs=new-only; then
   echo ""
   echo "✗ tests failed."
   echo "  → Re-run just the red package: bunx turbo test --filter=<pkg>"

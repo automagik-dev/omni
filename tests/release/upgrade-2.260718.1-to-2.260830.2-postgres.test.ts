@@ -12,6 +12,11 @@ import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  createDatabaseFromTemplate,
+  ensureSqlTemplate,
+  sqlTemplateName,
+} from '../../packages/db/src/pg-migrated-template';
 
 const postgresUrl = process.env.OMNI_G2_POSTGRES_URL ?? '';
 const postgresDescribe = postgresUrl.length > 0 ? describe : describe.skip;
@@ -139,8 +144,16 @@ postgresDescribe('v2.260718.1 -> v2.260830.2 release rehearsal (real PostgreSQL)
 
   beforeAll(() => {
     database = `omni_release_upgrade_${crypto.randomUUID().replaceAll('-', '')}`;
-    const created = runSqlOn(postgresUrl, `CREATE DATABASE "${database}";`);
-    if (created.exitCode !== 0) throw new Error(`could not create disposable database: ${created.stderr}`);
+    // The v2.260718.1 boundary (0000-0039) is frozen by definition — its bytes
+    // are pinned by OLD_RELEASE_MIGRATIONS_SHA256 above — so its migrated
+    // state is cached once per cluster as a template database and cloned here
+    // (#967). The template name embeds a digest of the same bytes, so any
+    // drift builds a fresh template (and fails the pinning test regardless).
+    const access = { superUrl: postgresUrl, psqlBin };
+    const oldReleaseSql = oldReleaseMigrations.map(migrationSql).join('\n');
+    const template = sqlTemplateName('omni_rel_tmpl', oldReleaseSql);
+    ensureSqlTemplate(access, template, oldReleaseSql);
+    createDatabaseFromTemplate(access, database, template);
     databaseUrl = urlFor(postgresUrl, database);
   });
 
@@ -149,7 +162,8 @@ postgresDescribe('v2.260718.1 -> v2.260830.2 release rehearsal (real PostgreSQL)
   });
 
   test('rehearses the quiesced upgrade and proves rolling/image-only rollback unsafe', () => {
-    runOrThrow(oldReleaseMigrations.map(migrationSql).join('\n'));
+    // The database is a clone of the pinned v2.260718.1 boundary template
+    // (0000-0039 applied) built in beforeAll.
 
     // Every channel-bearing column that 0047 rewrites is populated using a
     // value accepted by the v2.260718.1 ChannelTypeSchema.
