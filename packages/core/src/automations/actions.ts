@@ -58,6 +58,17 @@ export interface AgentCallContext {
   senderName?: string;
   /** The message(s) to send to the agent */
   messages: string[];
+  /**
+   * Envelope of the event that woke this agent (#960) — threaded from the
+   * engine's TemplateContext so the agent (and the callAgent implementation)
+   * knows which event it is responding to. Absent for envelope-less
+   * invocations (route-side manual execute, legacy tests).
+   */
+  event?: {
+    id: string;
+    type: string;
+    correlationId?: string;
+  };
 }
 
 /**
@@ -138,16 +149,53 @@ export interface ActionDependencies {
 }
 
 /**
- * Build headers for webhook request
+ * Build headers for webhook request.
+ *
+ * Envelope headers (#960, the khal/brain push-ingress contract):
+ *   - `X-Omni-Event-Id`: the triggering event's id.
+ *   - `X-Omni-Delivery-Id`: `{event.id}:{automation.id}:{actionIndex}` —
+ *     stable across retries of the SAME delivery attempt chain, so a receiver
+ *     can dedupe on an id Omni minted. `manual` stands in for the automation
+ *     id on route-side manual executions that still thread an envelope.
+ * Both are only stamped when the engine threaded a triggering envelope;
+ * envelope-less invocations send exactly the headers they always did.
+ * Config-declared headers are applied last so an operator can override.
  */
-function buildWebhookHeaders(config: WebhookActionConfig, context: TemplateContext): Record<string, string> {
+function buildWebhookHeaders(
+  config: WebhookActionConfig,
+  context: TemplateContext,
+  actionIndex: number,
+): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (context.event) {
+    headers['X-Omni-Event-Id'] = context.event.id;
+    headers['X-Omni-Delivery-Id'] = `${context.event.id}:${context.automation?.id ?? 'manual'}:${actionIndex}`;
+  }
   if (config.headers) {
     for (const [key, value] of Object.entries(config.headers)) {
       headers[key] = substituteTemplate(value, context);
     }
   }
   return headers;
+}
+
+/**
+ * Default webhook body (#960): the FULL OmniEvent envelope when one was
+ * threaded and `includeEnvelope` is not explicitly false; the bare payload
+ * otherwise (legacy default, and always the fallback for envelope-less
+ * invocations). A configured `bodyTemplate` bypasses this entirely.
+ */
+function buildDefaultWebhookBody(config: WebhookActionConfig, context: TemplateContext): string {
+  if (context.event && config.includeEnvelope !== false) {
+    return JSON.stringify({
+      id: context.event.id,
+      type: context.event.type,
+      payload: context.payload,
+      metadata: context.event.metadata,
+      timestamp: context.event.timestamp,
+    });
+  }
+  return JSON.stringify(context.payload);
 }
 
 /**
@@ -166,14 +214,15 @@ async function executeWebhookAction(
   context: TemplateContext,
   _deps: ActionDependencies,
   trustedTenantId?: string | null,
+  actionIndex = 0,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
     const url = substituteTemplate(config.url, context);
     const method = config.method ?? 'POST';
-    const headers = buildWebhookHeaders(config, context);
+    const headers = buildWebhookHeaders(config, context, actionIndex);
     const body = config.bodyTemplate
       ? substituteTemplate(config.bodyTemplate, context)
-      : JSON.stringify(context.payload);
+      : buildDefaultWebhookBody(config, context);
 
     logger.debug(`Webhook ${method} ${url}`, { method, url, waitForResponse: config.waitForResponse });
 
@@ -450,6 +499,15 @@ function extractAgentCallContext(
       senderId,
       senderName,
       messages: messagesResult,
+      // Envelope of the triggering event (#960) — lets the agent know which
+      // event woke it. Derived from engine-threaded metadata, never payload.
+      event: context.event
+        ? {
+            id: context.event.id,
+            type: context.event.type,
+            correlationId: context.event.metadata.correlationId,
+          }
+        : undefined,
     },
   };
 }
@@ -519,6 +577,9 @@ export async function executeAction(
   context: TemplateContext,
   deps: ActionDependencies,
   trustedTenantId?: string | null,
+  /** Position of this action in its automation's action list — part of the
+   * webhook delivery-id derivation (#960). Defaults to 0 for direct calls. */
+  actionIndex = 0,
 ): Promise<ActionExecutionResult> {
   const start = Date.now();
 
@@ -526,7 +587,7 @@ export async function executeAction(
 
   switch (action.type) {
     case 'webhook':
-      result = await executeWebhookAction(action.config, context, deps, trustedTenantId);
+      result = await executeWebhookAction(action.config, context, deps, trustedTenantId, actionIndex);
       break;
     case 'send_message':
       result = await executeSendMessageAction(action.config, context, deps, trustedTenantId);
@@ -571,14 +632,14 @@ export async function executeActions(
   const results: ActionExecutionResult[] = [];
   const variables = { ...context.variables };
 
-  for (const action of actions) {
+  for (const [actionIndex, action] of actions.entries()) {
     // Create context with updated variables
     const actionContext: TemplateContext = {
       ...context,
       variables,
     };
 
-    const result = await executeAction(action, actionContext, deps, trustedTenantId);
+    const result = await executeAction(action, actionContext, deps, trustedTenantId, actionIndex);
     results.push(result);
 
     // Store response as variable if configured (for webhook and call_agent)
