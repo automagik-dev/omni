@@ -359,10 +359,14 @@ async function executeEmitEventAction(
     // TRIGGERING event's envelope correlation, never a payload claim. The
     // payload fallback only applies to envelope-less invocations (route-side
     // manual execute), which is the pre-#956 behavior unchanged.
+    // causationId (#957): the emitted event's immediate parent IS the event
+    // that triggered this automation — stamped explicitly (more precise than
+    // the ambient causality scope, same value).
     const correlationId =
       context.event?.metadata.correlationId ?? (context.payload.correlationId as string) ?? undefined;
     const result = await deps.eventBus.publishGeneric(eventType, payload, {
       correlationId,
+      causationId: context.event?.id,
       source: 'automation',
       ...(trustedTenantId ? { tenantId: trustedTenantId } : {}),
     });

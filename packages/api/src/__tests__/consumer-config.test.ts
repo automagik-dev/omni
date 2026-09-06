@@ -24,9 +24,10 @@ function extractStartFromValues(filePath: string): Array<{ line: number; value: 
     const match = line.match(/startFrom:\s*['"](\w+)['"]/);
     const matchValue = match?.[1];
     if (matchValue) {
-      // Look back for durable consumer name
+      // Look back for durable consumer name (starting at the startFrom line
+      // itself — inline option objects put both on one line)
       let context = '';
-      for (let j = i - 1; j >= Math.max(0, i - 15); j--) {
+      for (let j = i; j >= Math.max(0, i - 15); j--) {
         const durableMatch = lines[j]?.match(/durable:\s*['"]([^'"]+)['"]/);
         if (durableMatch?.[1]) {
           context = durableMatch[1];
@@ -114,11 +115,21 @@ describe('Consumer startFrom Configuration', () => {
     expect(main?.value).toBe('new');
   });
 
-  test('event-persistence: all consumers use startFrom: first', () => {
+  test('event-persistence: message consumers use startFrom: first; custom journal consumer is forward-only', () => {
     const values = extractStartFromValues(join(PLUGINS_DIR, 'event-persistence.ts'));
 
     expect(values.length).toBeGreaterThanOrEqual(1);
+
+    // The custom-event journal consumer (#957) is deliberately 'new': #957 is
+    // forward-only, and a 'first' durable would replay the entire CUSTOM
+    // stream retention as journal rows that can never carry a causation
+    // parent.
+    const custom = values.find((v) => v.context === 'event-persistence-custom');
+    expect(custom).toBeDefined();
+    expect(custom?.value).toBe('new');
+
     for (const entry of values) {
+      if (entry.context === 'event-persistence-custom') continue;
       expect(entry.value).toBe('first');
     }
   });

@@ -158,7 +158,13 @@ export type ApiKeyProfileOverrides = {
 };
 
 export const eventTypes = CORE_EVENT_TYPES;
-export type EventType = CoreEventType;
+/**
+ * Journaled event types: the core tuple plus the open custom/system
+ * namespaces — custom events (webhook ingress roots, automation emit_event
+ * hops) are journaled into omni_events since #957 so `omni events trace` can
+ * walk a chain back to its root.
+ */
+export type EventType = CoreEventType | `custom.${string}` | `system.${string}`;
 
 // Derived from core CONTENT_TYPES (same no-drift rule as eventTypes above) —
 // this local tuple had fallen behind by ten content types.

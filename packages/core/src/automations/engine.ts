@@ -9,6 +9,7 @@
  */
 
 import type { EventBus, Subscription } from '../events/bus';
+import { runWithEventCausality } from '../events/causality';
 import { classifyEnvelope } from '../events/envelope';
 import type { EventType, GenericEventPayload, OmniEvent } from '../events/types';
 import { generateId } from '../ids';
@@ -746,11 +747,24 @@ export class AutomationEngine {
       }
 
       // Execute actions, threading the envelope's trusted tenant (null = legacy).
-      const actionsExecuted = await executeActions(
-        automation.actions as Parameters<typeof executeActions>[0],
-        context,
-        this.deps,
-        trustedTenantId,
+      // The whole action run is scoped with the trigger's causality (#957):
+      // any publish an action performs — however deep (send_message → API
+      // callback → channel plugin emit) — is stamped as caused by the
+      // triggering event and continues its correlation. For a debounced
+      // execution `context.event.id` is the last REAL event of the window, so
+      // causal links never point at the synthetic flush id.
+      const actionsExecuted = await runWithEventCausality(
+        {
+          correlationId: context.event?.metadata.correlationId ?? event.metadata.correlationId,
+          causationId: context.event?.id ?? event.id,
+        },
+        () =>
+          executeActions(
+            automation.actions as Parameters<typeof executeActions>[0],
+            context,
+            this.deps,
+            trustedTenantId,
+          ),
       );
 
       // Determine overall status

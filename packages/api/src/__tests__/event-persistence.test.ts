@@ -34,6 +34,12 @@ describeWithDb('Event Persistence Handler', () => {
         handlers.push(handler);
         subscriptions.set(eventType, handlers);
       }),
+      // The custom-event journal subscriber (#957) registers via a pattern.
+      subscribePattern: mock(async (pattern: string, handler: (event: unknown) => Promise<void>) => {
+        const handlers = subscriptions.get(pattern) || [];
+        handlers.push(handler);
+        subscriptions.set(pattern, handlers);
+      }),
       publish: mock(async () => {}),
       publishGeneric: mock(async () => {}),
       close: mock(async () => {}),
