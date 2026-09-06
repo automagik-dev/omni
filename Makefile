@@ -2,7 +2,7 @@
 # Universal Event-Driven Omnichannel Platform
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
-        test test-sweep test-watch test-api test-db test-pg-gate typecheck typecheck-ui lint lint-fix lint-ui format check dead-code verify-migrations \
+        test test-sweep test-watch test-api test-db test-pg-gate typecheck typecheck-ui lint lint-fix lint-ui format check check-all dead-code verify-migrations \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -28,6 +28,7 @@ help:
 	@echo ""
 	@echo "Quality:"
 	@echo "  make check         Run all quality checks (typecheck + lint + dead-code + migrations + test)"
+	@echo "  make check-all     Run check AND the pg-gate concurrently (fastest full validation)"
 	@echo "  make verify-migrations  Static migration contract gate (journal/immutability/lint)"
 	@echo "  make typecheck     TypeScript type checking"
 	@echo "  make lint          Run Biome linter"
@@ -283,6 +284,24 @@ verify-migrations:
 check: typecheck lint dead-code verify-migrations test
 	@echo ""
 	@echo "All checks passed!"
+
+# Run `make check` and the real-PostgreSQL gate CONCURRENTLY (#967). Safe
+# because the pg-gate stands up its own disposable cluster on a random
+# loopback port and never reads .env, so it cannot collide with check's
+# database. pg-gate output is spooled to a temp file and replayed after
+# check's, so the two streams never interleave.
+check-all:
+	@pg_out=$$(mktemp -t omni-pg-gate-out); \
+	( $(MAKE) test-pg-gate >"$$pg_out" 2>&1 ) & pg_pid=$$!; \
+	check_status=0; $(MAKE) check || check_status=$$?; \
+	pg_status=0; wait $$pg_pid || pg_status=$$?; \
+	echo ""; echo "===== pg-gate (ran concurrently) ====="; \
+	cat "$$pg_out"; rm -f "$$pg_out"; \
+	if [ $$check_status -ne 0 ] || [ $$pg_status -ne 0 ]; then \
+		echo ""; echo "check-all: FAILED (check=$$check_status, pg-gate=$$pg_status)"; \
+		exit 1; \
+	fi; \
+	echo ""; echo "check-all: PASSED — check and pg-gate both green"
 
 # ============================================================================
 # Database (Drizzle)
