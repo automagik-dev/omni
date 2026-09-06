@@ -7,8 +7,9 @@ import { ERROR_CODES, NotFoundError, OmniError, ValidationError, createLogger } 
 import type { CustomEventType, EventBus } from '@omni/core';
 import { generateId } from '@omni/core';
 import type { Database } from '@omni/db';
-import { type NewWebhookSource, type WebhookSource, webhookSources } from '@omni/db';
+import { type NewWebhookSource, type WebhookSource, omniEvents, webhookSources } from '@omni/db';
 import { eq, sql } from 'drizzle-orm';
+import { deriveIdempotencyKey } from '../lib/ingress-idempotency';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 
@@ -19,6 +20,12 @@ export interface WebhookReceiveResult {
   eventId: string;
   source: string;
   eventType: string;
+  /**
+   * True when this delivery collided with an already-journaled idempotency
+   * key (#958): the emitter is acked so it stops redelivering, but no second
+   * event was created. `eventId` is the ORIGINAL event's id in that case.
+   */
+  duplicate?: boolean;
 }
 
 export interface WebhookReceiveOptions {
@@ -239,6 +246,63 @@ export class WebhookService {
     const eventId = generateId();
     const eventType = `custom.webhook.${sourceName}` as CustomEventType;
 
+    // Ingress idempotency (#958): derive the delivery-identity key from the
+    // source's template and CLAIM it by inserting the journal row — the
+    // `omni_events.idempotency_key` unique index is the dedup authority. A
+    // conflict means the provider redelivered: ack it (200) so it stops
+    // retrying, bump the source's dup counter, create no second event.
+    // Scope boundary: this dedupes REDELIVERY, not semantic identity — see
+    // `lib/ingress-idempotency.ts`.
+    const idempotencyKey = deriveIdempotencyKey({
+      template: source.idempotencyKeyTemplate,
+      sourceName,
+      rawBody: rawBody ?? JSON.stringify(payload),
+      payload,
+      headers,
+    });
+
+    const claimed = await this.db
+      .insert(omniEvents)
+      .values({
+        id: eventId,
+        channel: 'internal',
+        eventType,
+        direction: 'inbound',
+        status: 'received',
+        rawPayload: payload,
+        idempotencyKey,
+        receivedAt: new Date(),
+        metadata: { correlationId: eventId, webhookSource: sourceName },
+      })
+      .onConflictDoNothing({ target: omniEvents.idempotencyKey })
+      .returning({ id: omniEvents.id });
+
+    if (claimed.length === 0) {
+      await this.db
+        .update(webhookSources)
+        .set({
+          totalDuplicates: sql`${webhookSources.totalDuplicates} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(webhookSources.id, source.id));
+
+      const [original] = await this.db
+        .select({ id: omniEvents.id })
+        .from(omniEvents)
+        .where(eq(omniEvents.idempotencyKey, idempotencyKey))
+        .limit(1);
+
+      log.info('Webhook redelivery acked without a second event', { sourceName, idempotencyKey });
+
+      return {
+        received: true,
+        duplicate: true,
+        eventId: original?.id ?? eventId,
+        source: sourceName,
+        eventType,
+      };
+    }
+
     // Update stats
     await this.db
       .update(webhookSources)
@@ -251,17 +315,35 @@ export class WebhookService {
 
     // Publish event
     if (this.eventBus) {
-      await this.eventBus.publishGeneric(
-        eventType,
-        {
-          source: sourceName,
-          ...payload,
-        },
-        {
-          correlationId: eventId,
-          source: 'webhook',
-        },
-      );
+      try {
+        await this.eventBus.publishGeneric(
+          eventType,
+          {
+            source: sourceName,
+            ...payload,
+          },
+          {
+            correlationId: eventId,
+            source: 'webhook',
+          },
+        );
+      } catch (error) {
+        // The claim must not outlive a failed publish: leaving it would ack
+        // the provider's retry as a "duplicate" of an event that never
+        // reached the bus. Release the row and let the emitter redeliver.
+        await this.db
+          .delete(omniEvents)
+          .where(eq(omniEvents.id, eventId))
+          .catch((releaseError: unknown) => {
+            log.error('Failed to release idempotency claim after publish failure', {
+              sourceName,
+              eventId,
+              idempotencyKey,
+              error: String(releaseError),
+            });
+          });
+        throw error;
+      }
     }
 
     return {

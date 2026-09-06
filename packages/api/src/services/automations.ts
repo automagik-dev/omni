@@ -71,6 +71,12 @@ export class AutomationService {
       trustedTenantId?: string | null,
     ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
     releaseIdleTimeoutClaim?: (claimToken: string) => void | Promise<void>;
+    // Derived-key emission idempotency (#958) — see ActionDependencies.
+    claimEmittedEvent?: (
+      claim: { idempotencyKey: string; eventId: string; eventType: string; payload: Record<string, unknown> },
+      trustedTenantId?: string | null,
+    ) => Promise<boolean>;
+    releaseEmittedEventClaim?: (eventId: string) => Promise<void>;
   }): Promise<void> {
     if (!this.eventBus) {
       return;
