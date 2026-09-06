@@ -80,6 +80,7 @@ describe('parseInboundTurn', () => {
       text: 'oi',
       phone: '5551999',
       fromFallback: false,
+      entradaDefasada: false,
     });
   });
 
@@ -160,6 +161,7 @@ describe('inbound', () => {
       text: 'oi',
       phone: '5551999',
       fromFallback: false,
+      entradaDefasada: false,
     });
 
     expect(of('/sendIndicador')[0]?.body).toEqual({ cod: 42, tipo: 1 });
@@ -171,7 +173,13 @@ describe('inbound', () => {
 
   it('falls back to the cod as the sender when the flow sends no phone', async () => {
     await boot();
-    await plugin.handleInboundTurn(instanceId, { codAtendimento: '42', text: 'oi', phone: '', fromFallback: false });
+    await plugin.handleInboundTurn(instanceId, {
+      codAtendimento: '42',
+      text: 'oi',
+      phone: '',
+      fromFallback: false,
+      entradaDefasada: false,
+    });
 
     expect(eventBus.published.find((e) => e.type.includes('received'))?.payload).toMatchObject({ from: '42' });
   });

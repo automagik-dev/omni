@@ -18,7 +18,6 @@ import {
   connectPlugin,
   createContext,
   instanceId,
-  jsonResponse,
   openTurn,
   stubPlatform,
 } from './helpers';
@@ -456,100 +455,72 @@ describe('the flow looping back does not replay the opening message', () => {
 });
 
 /**
- * The flow restarting after its own `aguarda_usuario` timeout, which re-enters
- * `api_rest` with the PREVIOUS input variable. Measured on 22342225: a 🗑️ from
- * six minutes earlier arrived as the "new" message and reset the session.
+ * The flow re-sending the PREVIOUS input before the current one — it does this
+ * on EVERY turn. Measured on 22344480: "ROGERIO AMARO" was answered at
+ * 22:36:27 and came back six times from 22:36:51, each re-send opening a fresh
+ * agent run that re-derived the same proposal; the beneficiary read the four
+ * options twice and then a nudge to choose.
  *
- * Both cases below post the SAME text twice — only the platform's record of
- * the atendimento separates them.
+ * The two body fields separate them, verified on 30 calls across atendimentos
+ * 22342225, 22342782 and 22344480 with no counterexample:
+ *
+ *   real     chatInput 'ROGERIO AMARO'  message 'ROGERIO AMARO'
+ *   re-send  chatInput 'ROGERIO AMARO'  message '##1f5d1-fe0f##'
  */
-describe('a restarted flow must not replay the previous input', () => {
-  /** Boot with `/atendimento` answering whatever the platform "really" holds. */
-  async function bootWithAtendimento(latestInbound: string): Promise<void> {
-    const stub = stubPlatform({
-      '/atendimento': () =>
-        jsonResponse({
-          mensagens: [
-            { boleano_entrante: '1', descricao_msg: 'oi' },
-            { boleano_entrante: '0', descricao_msg: 'ja respondi isso' },
-            { boleano_entrante: '1', descricao_msg: encodeAscEmoji(latestInbound) },
-          ],
-        }),
-    });
-    calls = stub.calls;
-    restore = stub.restore;
-    eventBus = new MockEventBus();
-    plugin = new AscFlowPlugin();
-    await plugin.initialize(createContext(eventBus));
-    await connectPlugin(plugin);
-    calls.length = 0;
-    eventBus.published.length = 0;
-  }
-
-  const post = (cod: string, text: string) =>
+describe('the flow re-sending an old input', () => {
+  const post = (cod: string, chatInput: string, message: string) =>
     plugin.handleWebhook(
       new Request(`http://localhost/api/v2/channels/asc-flow/${instanceId}/webhook`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ codAtendimento: cod, chatInput: text, message: text }),
+        body: JSON.stringify({ codAtendimento: cod, chatInput, message }),
       }),
     );
 
-  /** One full turn: the message lands, the agent answers, the poll collects. */
-  async function turn(text: string): Promise<void> {
-    await post('42', text);
-    await plugin.sendMessage(instanceId, { to: '42', content: { type: 'text', text: 'ok' } as never });
-    plugin.takeReadyTurn(instanceId, '42', text);
-  }
-
-  it('drops the replay when the platform holds a NEWER message', async () => {
-    // The beneficiary moved on ("quero falar com um atendente"), but the flow
-    // restarted and handed us the 🗑️ it still had in the variable.
-    await bootWithAtendimento('quero falar com um atendente');
-    await turn('🗑️');
+  it('drops the re-send — the fields disagree', async () => {
+    await boot();
+    await post('42', 'ROGERIO AMARO', 'ROGERIO AMARO');
     eventBus.published.length = 0;
 
-    await post('42', '🗑️');
+    await post('42', 'ROGERIO AMARO', encodeAscEmoji('🗑️'));
 
     expect(received()).toHaveLength(0);
   });
 
-  it('keeps a genuine repeat — the platform holds that same text', async () => {
-    // "1" twice in a two-step menu: the platform's newest inbound IS the "1",
-    // so this is the beneficiary answering again, not a replay.
-    await bootWithAtendimento('1');
-    await turn('1');
+  it('keeps a genuine repeat — the fields agree', async () => {
+    // "1" twice in a two-step menu is a real pair of answers. The first turn is
+    // ANSWERED before the repeat, or the in-flight dedupe would swallow it as a
+    // re-poll and the test would pass for the wrong reason.
+    await boot();
+    await post('42', '1', '1');
+    await plugin.sendMessage(instanceId, { to: '42', content: { type: 'text', text: 'ok' } as never });
+    plugin.takeReadyTurn(instanceId, '42', '1');
     eventBus.published.length = 0;
 
-    await post('42', '1');
+    await post('42', '1', '1');
 
     expect(received()).toHaveLength(1);
   });
 
-  it('processes the turn when the atendimento cannot be read', async () => {
-    // Fail OPEN: losing a real message costs the beneficiary their turn.
-    const stub = stubPlatform({ '/atendimento': () => new Response('nope', { status: 500 }) });
-    calls = stub.calls;
-    restore = stub.restore;
-    eventBus = new MockEventBus();
-    plugin = new AscFlowPlugin();
-    await plugin.initialize(createContext(eventBus));
-    await connectPlugin(plugin);
-    await turn('1');
-    eventBus.published.length = 0;
+  // The first call of a conversation legitimately has no `chatInput` yet, so
+  // the fields differ there too — and refusing it would lose the opening.
+  it('still opens a conversation when only the fallback has text', async () => {
+    await boot();
 
-    await post('42', '1');
+    await post('777003', '', 'oi, quero agendar');
 
     expect(received()).toHaveLength(1);
   });
 
-  it('does not touch the platform for a text that is not a repeat', async () => {
-    await bootWithAtendimento('qualquer coisa');
-    await turn('1');
-    calls.length = 0;
+  // A flow that does not send `message` at all must keep working: with nothing
+  // to compare against, every turn is a real turn.
+  it('processes the turn when there is nothing to compare', async () => {
+    await boot();
+    await post('42', 'primeira', '');
+    eventBus.published.length = 0;
 
-    await post('42', '2');
+    await post('42', 'segunda', '');
 
-    expect(calls.filter((c) => c.path === '/atendimento')).toHaveLength(0);
+    expect(received()).toHaveLength(1);
   });
 });

@@ -85,6 +85,22 @@ export interface ParsedAscFlowTurn {
   text: string;
   /** The text came from the frozen `message` fallback, not from `chatInput`. */
   fromFallback: boolean;
+  /**
+   * `chatInput` and `message` disagree — the flow is re-sending an OLD input.
+   *
+   * On a real turn the two fields carry the SAME text: `{#entrada}` is what
+   * the beneficiary just typed and `{#MENSAGEM}` is the message that carried
+   * it. On a re-send `{#entrada}` still holds a previous value while
+   * `{#MENSAGEM}` does not follow it. Verified on 30 calls across atendimentos
+   * 22342225, 22342782 and 22344480, with no counterexample:
+   *
+   *   real     chatInput 'ROGERIO AMARO'  message 'ROGERIO AMARO'
+   *   re-send  chatInput 'ROGERIO AMARO'  message '##1f5d1-fe0f##'
+   *
+   * `false` whenever the comparison cannot be made (either field empty) — a
+   * flow that does not send `message` must keep working.
+   */
+  entradaDefasada: boolean;
   phone: string;
   messageId?: string;
 }
@@ -112,6 +128,7 @@ export function parseInboundTurn(body: AscFlowInboundBody): ParsedAscFlowTurn | 
     codAtendimento,
     text,
     fromFallback: !typed,
+    entradaDefasada: Boolean(typed) && Boolean(fallback) && typed !== fallback,
     phone: firstString(body.phone, body.telefone),
     ...(messageId ? { messageId } : {}),
   };
@@ -200,12 +217,25 @@ export async function handleAscFlowWebhookRequest(
     return pending();
   }
 
-  // A flow that restarted after its own `aguarda_usuario` timeout re-enters
-  // `api_rest` carrying the PREVIOUS input, which reads here as the
-  // beneficiary repeating themselves. Only a text that matches the last turn
-  // we answered gets checked against the platform's own record, so the common
-  // path pays nothing. See `utils/turn-freshness.ts`.
-  if (await plugin.isStaleFlowReplay(instanceId, turn)) {
+  // The flow re-sends the PREVIOUS input before the current one, on every
+  // turn — measured on 22344480: "ROGERIO AMARO" was answered at 22:36:27 and
+  // came back six times from 22:36:51, each one opening a fresh agent run that
+  // re-derived the same proposal. The beneficiary read the four options twice
+  // and then a nudge to choose.
+  //
+  // The two body fields tell a re-send from a real turn without asking anyone:
+  // they agree when the beneficiary just spoke and disagree when `{#entrada}`
+  // is behind. See `entradaDefasada`.
+  //
+  // ⚠ Two messages typed in quick succession can also land here with the
+  // fields disagreeing, and this drops the older one. That is the trade taken
+  // knowingly: the alternative measured above is answering a message that was
+  // already answered, which is worse and happens on every single turn.
+  if (turn.entradaDefasada && plugin.hasSeenCod(instanceId, turn.codAtendimento)) {
+    logger.info('[asc-flow] chatInput is behind message — the flow re-sent an old input', {
+      instanceId,
+      codAtendimento: turn.codAtendimento,
+    });
     return pending();
   }
 
