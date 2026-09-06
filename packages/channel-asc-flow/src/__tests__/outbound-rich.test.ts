@@ -212,51 +212,85 @@ describe('outbound location and contact', () => {
   });
 });
 
-describe('outbound interactive through /mensagem', () => {
+describe('outbound interactive through /sendMsgInterativaAvancado', () => {
   const options = (n: number) => Array.from({ length: n }, (_, i) => ({ text: `Opção ${i + 1}` }));
+  const interativa = () => of('/sendMsgInterativaAvancado')[0]?.body;
 
   it('sends up to 3 options as buttons', async () => {
     await boot();
     await send({ type: 'text', text: 'Escolha:', buttons: options(3) });
 
-    expect(of('/mensagem')[0]?.body).toMatchObject({
-      mensagem: 'Escolha:',
-      forcar_botoes: true,
-      ura_opcoes: { '1': 'Opção 1', '2': 'Opção 2', '3': 'Opção 3' },
+    expect(interativa()).toMatchObject({
+      cod_conta: '18',
+      tipo_envio: '1',
+      bol_incluir_atual: '1',
+      contato: { telefone: '5551999999999' },
+      msg_interativa_parametros: {
+        tipo: '2',
+        mensagem: 'Escolha:',
+        button: ['Opção 1', 'Opção 2', 'Opção 3'],
+      },
     });
-    expect(ready('42')).toMatchObject({ resposta: '', forcar_botoes: true });
+    // The component left through its own endpoint, so the poll body carries no
+    // text — and no URA fields either, which would render a SECOND menu.
+    const body = ready('42');
+    expect(body).toMatchObject({ resposta: '' });
+    expect(body?.ura_opcoes).toBeUndefined();
   });
 
-  it('sends 4-10 options as a list', async () => {
+  it('sends 4-10 options as a list, with the description under each row', async () => {
     await boot();
-    await send({ type: 'text', text: 'Escolha:', buttons: options(5) });
+    await send({
+      type: 'text',
+      text: 'Escolha:',
+      buttons: [
+        { text: 'amanhã 07/09 · 08:00', description: 'Teleconsulta · Dr. Francisco' },
+        { text: 'amanhã 07/09 · 19:00', description: 'HAP Conjunto Ceará · Dra. Renata' },
+        ...options(3),
+      ],
+      list: { sectionTitle: 'Horários' },
+    });
 
-    expect(of('/mensagem')[0]?.body).toMatchObject({ forcar_botoes: false });
-    expect(Object.keys(of('/mensagem')[0]?.body.ura_opcoes as object)).toHaveLength(5);
+    const params = interativa()?.msg_interativa_parametros as Record<string, unknown>;
+    expect(params.tipo).toBe('1');
+    const secao = (params.list as { secao: Array<{ texto: string; linhas: unknown[] }> }).secao[0];
+    expect(secao?.texto).toBe('Horários');
+    expect(secao?.linhas).toHaveLength(5);
+    // The row description is the whole point of this endpoint: the URA fields
+    // on `/mensagem` have nowhere to put it, so the clinic never reached the
+    // handset (measured 06/09).
+    expect(secao?.linhas[0]).toEqual({
+      texto: 'amanhã 07/09 · 08:00',
+      descricao: 'Teleconsulta · Dr. Francisco',
+    });
   });
 
   it('degrades past 10 options to the numbered text in resposta', async () => {
     await boot();
     await send({ type: 'text', text: 'Escolha:\n1. a\n2. b', buttons: options(11) });
 
-    expect(of('/mensagem')).toHaveLength(0);
+    expect(of('/sendMsgInterativaAvancado')).toHaveLength(0);
     expect(of('/callbackFlowMsg')[0]?.body.msg_usuario).toBe('Escolha:\n1. a\n2. b');
-    const body = ready('42');
-    expect(body?.ura_opcoes).toBeUndefined();
   });
 
-  it('quotes a platform message id when the caller supplies one', async () => {
-    await boot();
-    await send({ type: 'text', text: 'Escolha:', buttons: options(2) }, { replyTo: '9911' });
+  it('falls back to the numbered text when the platform refuses the component', async () => {
+    await boot({
+      '/sendMsgInterativaAvancado': () => jsonResponse({ cod_error: 1, msg: 'nao' }, 400),
+    });
+    const result = await send({ type: 'text', text: 'Escolha:\n1. a\n2. b', buttons: options(3) });
 
-    expect(of('/mensagem')[0]?.body.id_mensagem_resposta).toBe(9911);
+    expect(result.success).toBe(true);
+    // The bubble holding the options still has to reach the handset.
+    expect(of('/callbackFlowMsg')[0]?.body.msg_usuario).toBe('Escolha:\n1. a\n2. b');
   });
 
-  it('ignores an Omni UUID as a reply target', async () => {
-    await boot();
-    await send({ type: 'text', text: 'Escolha:', buttons: options(2) }, { replyTo: crypto.randomUUID() });
+  it('sends nothing interactive when the atendimento has no account or phone', async () => {
+    await boot({ '/atendimento': () => jsonResponse({ mensagens: [] }) });
+    const result = await send({ type: 'text', text: 'Escolha:', buttons: options(3) });
 
-    expect(of('/mensagem')[0]?.body.id_mensagem_resposta).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect(of('/sendMsgInterativaAvancado')).toHaveLength(0);
+    expect(of('/callbackFlowMsg')[0]?.body.msg_usuario).toBe('Escolha:');
   });
 });
 

@@ -156,7 +156,7 @@ describe('one agent reply is one turn, however many sends it arrives in', () => 
       metadata: { partIndex: index, partCount: count },
     });
 
-  it('answers once, with every part a bubble and the URA on the last', async () => {
+  it('answers once, with every part a bubble and the component on the last', async () => {
     await boot();
     await openTurn(plugin);
 
@@ -171,17 +171,17 @@ describe('one agent reply is one turn, however many sends it arrives in', () => 
     expect(poll(TURN_TEXT)).toMatchObject({
       pronto: 1,
       bolhas: ['primeiro', 'segundo', 'Escolha:'],
-      ura_opcoes: { '1': 'Manha', '2': 'Tarde' },
-      forcar_botoes: true,
+      resposta: '',
     });
 
-    // The leading bubbles really left; the last one rode `/mensagem` with the
-    // URA, which is why `resposta` comes back empty.
+    // The leading bubbles really left; the last one rode
+    // `/sendMsgInterativaAvancado` as a component, which is why `resposta`
+    // comes back empty.
     expect(calls.filter((c) => c.path === '/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([
       'primeiro',
       'segundo',
     ]);
-    expect(calls.filter((c) => c.path === '/mensagem')).toHaveLength(1);
+    expect(calls.filter((c) => c.path === '/sendMsgInterativaAvancado')).toHaveLength(1);
   });
 
   it('records the reply once, not one message per part', async () => {
@@ -456,21 +456,91 @@ describe('the flow looping back does not replay the opening message', () => {
 });
 
 /**
- * The flow restarting after its own `aguarda_usuario` timeout, which re-enters
- * `api_rest` with the PREVIOUS input variable. Measured on 22342225: a 🗑️ from
- * six minutes earlier arrived as the "new" message and reset the session.
+ * The flow re-sending the PREVIOUS input before the current one — it does this
+ * on EVERY turn. Measured on 22344480: "ROGERIO AMARO" was answered at
+ * 22:36:27 and came back six times from 22:36:51, each re-send opening a fresh
+ * agent run that re-derived the same proposal; the beneficiary read the four
+ * options twice and then a nudge to choose.
  *
- * Both cases below post the SAME text twice — only the platform's record of
- * the atendimento separates them.
+ * The two body fields separate them, verified on 30 calls across atendimentos
+ * 22342225, 22342782 and 22344480 with no counterexample:
+ *
+ *   real     chatInput 'ROGERIO AMARO'  message 'ROGERIO AMARO'
+ *   re-send  chatInput 'ROGERIO AMARO'  message '##1f5d1-fe0f##'
  */
-describe('a restarted flow must not replay the previous input', () => {
-  /** Boot with `/atendimento` answering whatever the platform "really" holds. */
-  async function bootWithAtendimento(latestInbound: string): Promise<void> {
+describe('the flow re-sending an old input', () => {
+  const post = (cod: string, chatInput: string, message: string) =>
+    plugin.handleWebhook(
+      new Request(`http://localhost/api/v2/channels/asc-flow/${instanceId}/webhook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ codAtendimento: cod, chatInput, message }),
+      }),
+    );
+
+  it('drops the re-send — the fields disagree', async () => {
+    await boot();
+    await post('42', 'ROGERIO AMARO', 'ROGERIO AMARO');
+    eventBus.published.length = 0;
+
+    await post('42', 'ROGERIO AMARO', encodeAscEmoji('🗑️'));
+
+    expect(received()).toHaveLength(0);
+  });
+
+  it('keeps a genuine repeat — the fields agree', async () => {
+    // "1" twice in a two-step menu is a real pair of answers. The first turn is
+    // ANSWERED before the repeat, or the in-flight dedupe would swallow it as a
+    // re-poll and the test would pass for the wrong reason.
+    await boot();
+    await post('42', '1', '1');
+    await plugin.sendMessage(instanceId, { to: '42', content: { type: 'text', text: 'ok' } as never });
+    plugin.takeReadyTurn(instanceId, '42', '1');
+    eventBus.published.length = 0;
+
+    await post('42', '1', '1');
+
+    expect(received()).toHaveLength(1);
+  });
+
+  // The first call of a conversation legitimately has no `chatInput` yet, so
+  // the fields differ there too — and refusing it would lose the opening.
+  it('still opens a conversation when only the fallback has text', async () => {
+    await boot();
+
+    await post('777003', '', 'oi, quero agendar');
+
+    expect(received()).toHaveLength(1);
+  });
+
+  // A flow that does not send `message` at all must keep working: with nothing
+  // to compare against, every turn is a real turn.
+  it('processes the turn when there is nothing to compare', async () => {
+    await boot();
+    await post('42', 'primeira', '');
+    eventBus.published.length = 0;
+
+    await post('42', 'segunda', '');
+
+    expect(received()).toHaveLength(1);
+  });
+});
+
+/**
+ * The re-send `entradaDefasada` cannot see: the input that came back IS the
+ * message that opened the cycle, so both fields carry it.
+ *
+ * Measured on 22344480 — a 🗑️ at 23:20:54 and the same 🗑️ back at 23:21:11,
+ * byte for byte, resetting the session in the middle of an identification.
+ * Only the platform's record separates those.
+ */
+describe('a re-send whose fields agree', () => {
+  async function bootComAtendimento(latestInbound: string): Promise<void> {
     const stub = stubPlatform({
       '/atendimento': () =>
         jsonResponse({
           mensagens: [
-            { boleano_entrante: '1', descricao_msg: 'oi' },
+            { boleano_entrante: '1', descricao_msg: encodeAscEmoji('🗑️') },
             { boleano_entrante: '0', descricao_msg: 'ja respondi isso' },
             { boleano_entrante: '1', descricao_msg: encodeAscEmoji(latestInbound) },
           ],
@@ -486,27 +556,27 @@ describe('a restarted flow must not replay the previous input', () => {
     eventBus.published.length = 0;
   }
 
-  const post = (cod: string, text: string) =>
+  const post = (cod: string, texto: string) =>
     plugin.handleWebhook(
       new Request(`http://localhost/api/v2/channels/asc-flow/${instanceId}/webhook`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ codAtendimento: cod, chatInput: text, message: text }),
+        body: JSON.stringify({ codAtendimento: cod, chatInput: texto, message: texto }),
       }),
     );
 
-  /** One full turn: the message lands, the agent answers, the poll collects. */
-  async function turn(text: string): Promise<void> {
-    await post('42', text);
+  /** One full turn: it lands, the agent answers, the poll collects. */
+  async function turno(texto: string): Promise<void> {
+    await post('42', texto);
     await plugin.sendMessage(instanceId, { to: '42', content: { type: 'text', text: 'ok' } as never });
-    plugin.takeReadyTurn(instanceId, '42', text);
+    plugin.takeReadyTurn(instanceId, '42', texto);
   }
 
-  it('drops the replay when the platform holds a NEWER message', async () => {
-    // The beneficiary moved on ("quero falar com um atendente"), but the flow
-    // restarted and handed us the 🗑️ it still had in the variable.
-    await bootWithAtendimento('quero falar com um atendente');
-    await turn('🗑️');
+  it('drops it when the platform already holds a NEWER message', async () => {
+    // The beneficiary typed their CPF after the 🗑️ — the 🗑️ coming back is the
+    // flow, not them.
+    await bootComAtendimento('369.376.143-49 13/08/1971');
+    await turno('🗑️');
     eventBus.published.length = 0;
 
     await post('42', '🗑️');
@@ -515,27 +585,8 @@ describe('a restarted flow must not replay the previous input', () => {
   });
 
   it('keeps a genuine repeat — the platform holds that same text', async () => {
-    // "1" twice in a two-step menu: the platform's newest inbound IS the "1",
-    // so this is the beneficiary answering again, not a replay.
-    await bootWithAtendimento('1');
-    await turn('1');
-    eventBus.published.length = 0;
-
-    await post('42', '1');
-
-    expect(received()).toHaveLength(1);
-  });
-
-  it('processes the turn when the atendimento cannot be read', async () => {
-    // Fail OPEN: losing a real message costs the beneficiary their turn.
-    const stub = stubPlatform({ '/atendimento': () => new Response('nope', { status: 500 }) });
-    calls = stub.calls;
-    restore = stub.restore;
-    eventBus = new MockEventBus();
-    plugin = new AscFlowPlugin();
-    await plugin.initialize(createContext(eventBus));
-    await connectPlugin(plugin);
-    await turn('1');
+    await bootComAtendimento('1');
+    await turno('1');
     eventBus.published.length = 0;
 
     await post('42', '1');
@@ -544,8 +595,8 @@ describe('a restarted flow must not replay the previous input', () => {
   });
 
   it('does not touch the platform for a text that is not a repeat', async () => {
-    await bootWithAtendimento('qualquer coisa');
-    await turn('1');
+    await bootComAtendimento('qualquer coisa');
+    await turno('1');
     calls.length = 0;
 
     await post('42', '2');

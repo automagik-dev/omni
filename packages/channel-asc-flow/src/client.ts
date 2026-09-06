@@ -141,8 +141,40 @@ export class AscFlowClient {
     return response;
   }
 
-  private rawPost(path: string, payload: Record<string, unknown>, token?: string): Promise<AscFlowResponse> {
-    return this.rawRequest('POST', path, {}, payload, token);
+  private rawPost(
+    path: string,
+    payload: Record<string, unknown>,
+    token?: string,
+    form = false,
+  ): Promise<AscFlowResponse> {
+    return this.rawRequest('POST', path, {}, payload, token, form);
+  }
+
+  /**
+   * Authenticated POST of a FORM body, for the endpoints that do not read JSON.
+   *
+   * `/sendMsgInterativaAvancado` is one: sent as JSON it answers
+   * `400 Faltando identificador da conta` with `cod_conta` right there in the
+   * body, because it never parses it. Sent as `application/x-www-form-urlencoded`
+   * with PHP-style nested keys (`msg_interativa_parametros[list][secao][0]…`)
+   * the same payload is accepted. Measured 06/09/2026.
+   *
+   * Percent-encoding is UTF-8, the platform's `/mensagem` latin-1 rule does NOT
+   * apply here: `acentuação · ç ã` came back off the handset intact.
+   */
+  async callForm(path: string, payload: Record<string, unknown>): Promise<unknown> {
+    let response = await this.rawPost(path, payload, await this.getToken(), true);
+    if (response.status === 401 && codErrorOf(response.body) === undefined) {
+      response = await this.rawPost(path, payload, await this.getToken(true), true);
+    }
+    if (isPlatformOk(response)) return response.body;
+
+    const codError = codErrorOf(response.body);
+    throw new AscFlowApiError(
+      mapHttpStatusToAscFlowError(response.status, codError !== undefined),
+      `ASC ${path} failed (HTTP ${response.status}${codError === undefined ? '' : `, cod_error ${codError}`})`,
+      { httpStatus: response.status, operation: path, codError, raw: JSON.stringify(response.body).slice(0, 500) },
+    );
   }
 
   private async rawRequest(
@@ -151,8 +183,11 @@ export class AscFlowClient {
     query: Record<string, string | number>,
     payload: Record<string, unknown> | undefined,
     token?: string,
+    form = false,
   ): Promise<AscFlowResponse> {
-    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    const headers: Record<string, string> = {
+      'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json',
+    };
     if (token) headers.authorization = `Bearer ${token}`;
 
     const url = new URL(`${this.baseUrl}${path}`);
@@ -163,7 +198,7 @@ export class AscFlowClient {
       response = await fetch(url.toString(), {
         method,
         headers,
-        ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+        ...(payload === undefined ? {} : { body: form ? formEncode(payload) : JSON.stringify(payload) }),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (err) {
@@ -181,4 +216,26 @@ export class AscFlowClient {
     }
     return { status: response.status, body };
   }
+}
+
+/**
+ * PHP-style nested form encoding — `{a: {b: [1]}}` → `a[b][0]=1`.
+ *
+ * The shape the platform's form endpoints expect; a nested object sent as a
+ * JSON string in a form field is not read (`/sendMsgInterativaAvancado`
+ * answered `Contato com telefone é obrigatório` for exactly that).
+ */
+function formEncode(payload: Record<string, unknown>): string {
+  const params = new URLSearchParams();
+  const walk = (value: unknown, key: string): void => {
+    if (Array.isArray(value)) {
+      value.forEach((item, i) => walk(item, `${key}[${i}]`));
+    } else if (typeof value === 'object' && value !== null) {
+      for (const [k, v] of Object.entries(value)) walk(v, key ? `${key}[${k}]` : k);
+    } else if (value !== undefined && value !== null) {
+      params.set(key, String(value));
+    }
+  };
+  walk(payload, '');
+  return params.toString();
 }
