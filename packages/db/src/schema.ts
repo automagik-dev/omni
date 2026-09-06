@@ -1789,11 +1789,23 @@ export const omniEvents = pgTable(
 
     // ---- Metadata ----
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    /**
+     * Id of the IMMEDIATE parent event — the event whose consumption caused
+     * this one to be published (#957, RFC #925 G3). `correlationId` (in the
+     * metadata jsonb) groups a flow; `causationId` gives the tree. NULL for
+     * root events (external ingress) and for every event persisted before the
+     * stamp existed (forward-only, no backfill). Additive-optional, mirroring
+     * how tenantId landed (G5/ADR-0008). Not an FK: the parent may be an
+     * event that was never persisted or was pruned.
+     */
+    causationId: uuid('causation_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     /** G2 additive tenant ownership. Nullable through the additive phase. */
     tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    /** Children lookup for `omni events trace` (descendants = causation_id = :id). */
+    causationIdx: index('omni_events_causation_idx').on(table.causationId),
     tenantIdx: index('omni_events_tenant_idx').on(table.tenantId),
     tenantIdUq: uniqueIndex('omni_events_tenant_id_uq').on(table.tenantId, table.id),
     externalIdIdx: index('omni_events_external_id_idx').on(table.externalId),
