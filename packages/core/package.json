@@ -1,6 +1,6 @@
 {
   "name": "@omni/core",
-  "version": "2.260906.2",
+  "version": "2.260906.3",
   "type": "module",
   "exports": {
     ".": {
