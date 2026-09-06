@@ -228,8 +228,11 @@ format:
 # Env is loaded into the environment here because per-package `bun test` runs
 # have no --env-file. Workspaces only — apps/khal-ui stays out (private
 # @khal-os deps, own test run).
+# LOG_LEVEL is forced to 'silent' AFTER .env loads (which sets debug): suites
+# intentionally exercise thousands of warn/error paths and the JSON flood is
+# pure I/O + noise (#967). Override: make test TEST_LOG_LEVEL=debug
 test: _build-dist _sync-db
-	@set -a && . ./.env && set +a && bun run test
+	@set -a && . ./.env && set +a && LOG_LEVEL=$(or $(TEST_LOG_LEVEL),silent) bun run test
 
 # The pre-#967 single-process sweep, kept for CI parity and for hunting
 # cross-file state leaks (e.g. globalThis.fetch pollution) that only reproduce

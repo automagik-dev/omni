@@ -15,6 +15,14 @@ export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
 /**
+ * Output threshold: any entry level, or 'silent' to drop everything.
+ * 'silent' is a threshold only — no log entry carries it — so it lives
+ * beside LogLevel instead of inside it. Test runs use it to mute the
+ * thousands of intentional warn/error lines exercised suites emit (#967).
+ */
+export type LogThreshold = LogLevel | 'silent';
+
+/**
  * Log level numeric values (for filtering)
  */
 export const LOG_LEVEL_VALUES: Record<LogLevel, number> = {
@@ -84,10 +92,10 @@ export interface Logger {
  */
 export interface LogConfig {
   /**
-   * Minimum log level to output
+   * Minimum log level to output, or 'silent' to disable output entirely
    * @default 'info'
    */
-  level?: LogLevel;
+  level?: LogThreshold;
 
   /**
    * Output format
