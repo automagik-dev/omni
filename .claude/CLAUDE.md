@@ -72,16 +72,25 @@ throw new OmniError({
 
 ## Database Schema Changes
 
-**The API auto-migrates on startup.** Schema changes use Drizzle migrations, not push.
+**The API auto-migrates on startup.** Schema changes are **hand-written SQL
+migrations** — do NOT run `drizzle-kit generate` (it is broken here; see the
+comprehensive reference below for why).
 
 ```bash
-# 1. Edit schema
+# 1. Edit schema source of truth
 vim packages/db/src/schema.ts
 
-# 2. Generate migration
-cd packages/db && bunx drizzle-kit generate
+# 2. Hand-write an additive, idempotent migration with a header comment
+#    (copy the style of 0043/0044/0052 in packages/db/drizzle/)
+vim packages/db/drizzle/NNNN_short_name.sql
 
-# 3. Commit migration + schema together
+# 3. Append a journal entry by hand (idx = prev + 1, when = prev + 100000000)
+vim packages/db/drizzle/meta/_journal.json
+
+# 4. Verify against the contract gate
+make verify-migrations
+
+# 5. Commit migration + journal + schema together
 git add packages/db/drizzle/ packages/db/src/schema.ts
 ```
 
@@ -90,8 +99,9 @@ Push creates tables without journal entries. The API's auto-migrate then crashes
 with "relation already exists". Never use push in CI or production.
 
 **Never:**
-- Delete deployed migration files
-- Hand-edit migration SQL (hash must match)
+- Edit, delete, or renumber a migration file that exists on the base branch
+  (deployed migrations are immutable — the migrator tracks them by content hash)
+- Add a migration without a journal entry, or vice versa
 - Squash migrations without a journal fix script
 - Use `drizzle-kit push` in CI (use `pg_isready` for readiness)
 
@@ -292,32 +302,78 @@ migration journal entries. Migrate then crashes with "relation already exists". 
 use `drizzle-kit push` in CI, production, or any pipeline that also runs `migrateDb()`.
 `db-push` is a local dev convenience ONLY.
 
-### Schema Change Workflow
+### Why migrations are hand-written (do not "fix" this)
+
+`drizzle-kit generate` is **dead in this repo**: the `meta/*_snapshot.json`
+files stop at `0026` while migrations continue past `0055`. Generate diffs
+`schema.ts` against the LAST snapshot, so it compares against a ~30-migration-old
+state and proposes recreating the world (or hangs on interactive rename
+prompts). Regenerating snapshots is riskier than living without them — the API
+auto-migrates on boot and is intolerant of journal drift, and 12+ deployed
+migrations already follow the hand-written precedent. Do not attempt to
+resurrect generate or add new snapshots.
+
+### Schema Change Workflow (hand-written precedent — 0043/0044/0052)
 
 ```bash
 # 1. Edit schema source of truth
 vim packages/db/src/schema.ts
 
-# 2. Generate migration (creates SQL + updates journal)
-cd packages/db && bunx drizzle-kit generate
+# 2. Hand-write the migration SQL (next free number, snake_case name)
+vim packages/db/drizzle/0056_short_name.sql
 
-# 3. Review generated SQL
-cat packages/db/drizzle/NNNN_<name>.sql
+# 3. Append a journal entry to packages/db/drizzle/meta/_journal.json:
+#    {"idx": 56, "version": "7", "when": <prev when + 100000000>,
+#     "tag": "0056_short_name", "breakpoints": true}
 
-# 4. Test — restart API (auto-migrates on boot)
+# 4. Verify against the contract gate (also runs in make check and CI)
+make verify-migrations
+
+# 5. Test — restart API (auto-migrates on boot)
 pm2 restart omni-v2-api
 
-# 5. Commit migration + schema together
+# 6. Commit migration + journal + schema together
 git add packages/db/drizzle/ packages/db/src/schema.ts
 git commit -m "feat(db): add <description>"
 ```
 
+**Migration SQL rules** (enforced by `scripts/verify-migration-contract.ts`):
+
+- **Header comment first.** Open with a `--` comment block: what the migration
+  adds, why, the issue/PR reference, and a line like
+  `-- Hand-written following the 0043/0044/0052 precedent (additive, idempotent).`
+- **Additive + idempotent.** `ADD COLUMN IF NOT EXISTS`,
+  `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`. The boot migrator
+  may race across replicas and re-run against half-migrated databases.
+- **No destructive statements** — `DROP TABLE`, `DROP COLUMN`,
+  `ALTER COLUMN ... TYPE`, `TRUNCATE` fail the gate. If one is genuinely
+  required, add a header line `-- destructive: <justification>`; the gate then
+  passes and the justification lands in the diff for review.
+- **No explicit `BEGIN`/`COMMIT`.** The boot migrator runs each file on a
+  pooled postgres-js connection that rejects raw transaction control.
+- **`when` timestamps must strictly increase** — the migrator SILENTLY SKIPS
+  entries whose `when` is out of order (see `packages/db/src/migrate.ts`).
+- **schema.ts and the migration ship in the same PR.** Escape hatches for the
+  rare exceptions: `// no-migration-needed: <why>` on a changed schema.ts line
+  (type-only change), or `-- no-schema-change: <why>` in the migration header
+  (data-only/backfill migration).
+
+### Parallel-worktree numbering collisions
+
+Multiple in-flight branches will often claim the same next number (e.g. two
+PRs both adding `0056_*`). The contract gate fails the merge with a duplicate
+`idx` / non-sequential journal. **Whoever merges second renumbers their OWN
+migration**: rename the `.sql` file to the next free number, update the journal
+entry's `tag` + `idx`, and bump `when` above the new previous entry. Never
+renumber the migration that already landed.
+
 ### Make Targets
 
 ```bash
-make db-push          # Push schema directly (DEV ONLY, no journal)
-make db-studio        # Open Drizzle Studio
-make db-fix-journal   # Fix journal after migration consolidation
+make verify-migrations  # Static migration contract gate (also in make check + CI)
+make db-push            # Push schema directly (DEV ONLY, no journal)
+make db-studio          # Open Drizzle Studio
+make db-fix-journal     # Fix journal after migration consolidation
 ```
 
 ### Key Files
@@ -329,12 +385,16 @@ make db-fix-journal   # Fix journal after migration consolidation
 | `packages/db/drizzle/meta/_journal.json` | Migration journal |
 | `packages/db/src/migrate.ts` | Programmatic runner |
 | `packages/api/src/index.ts:302` | Auto-migrate on startup |
+| `scripts/verify-migration-contract.ts` | Static contract gate (make check + CI) |
+| `scripts/verify-schema-drift.ts` | Live-DB drift audit — a DIFFERENT tool |
 
 ### NEVER
 
 - Use `drizzle-kit push` in CI or production
-- Delete migration files that have been deployed
-- Hand-edit migration SQL without recomputing the SHA256 hash
+- Edit, delete, or renumber migration files that have been deployed (they are
+  immutable once on the base branch — the gate enforces byte-identity)
+- Run `drizzle-kit generate` or regenerate `meta/` snapshots (frozen at 0026;
+  see "Why migrations are hand-written")
 - Squash migrations without a journal fix script
 - Mix push and migrate in the same environment
 
