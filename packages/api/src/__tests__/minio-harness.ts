@@ -348,6 +348,71 @@ export class MinioContainerLifecycle {
   }
 }
 
+/**
+ * How old a labeled container must be before another session may reap it.
+ * A live suite run holds its container for a few minutes at most (readiness
+ * budget is 120s, the suites themselves finish well inside pre-push), so half
+ * an hour of age means the owning process is long gone — while a concurrent
+ * agent's freshly started container is never touched.
+ */
+export const STALE_CONTAINER_MIN_AGE_MS = 30 * 60 * 1000;
+
+/**
+ * Reap MinIO test containers leaked by PREVIOUS test processes.
+ *
+ * The exit/signal teardown in MinioContainerLifecycle cannot run when the test
+ * process dies to SIGKILL — which is exactly what the OOM killer delivers (the
+ * observed exit-144 incidents when two agents ran the full suite at once).
+ * Each leaked container keeps 512MB reserved and slowly degrades the Docker
+ * daemon until the readiness probe itself starts flaking. So the moment a new
+ * container is about to launch is also the moment to sweep: any RUNNING
+ * container carrying our harness label, from a different session, older than
+ * STALE_CONTAINER_MIN_AGE_MS is unambiguously abandoned and force-removed.
+ * Entirely best-effort — a reap failure is reported and never blocks the
+ * launch.
+ */
+export function reapStaleContainers(dependencies: SharedMinioHarnessDependencies): void {
+  const list = dependencies.runSync([
+    'docker',
+    'ps',
+    '--filter',
+    'label=com.automagik.omni.test-harness=minio',
+    '--format',
+    '{{.ID}}\t{{.Label "com.automagik.omni.test-session"}}',
+  ]);
+  if (list.exitCode !== 0) return;
+
+  for (const line of list.stdout.split('\n')) {
+    const [containerId, session] = line.trim().split('\t');
+    if (!containerId || session === dependencies.sessionId) continue;
+
+    // RFC3339 from inspect (docker ps only offers a locale-shaped CreatedAt).
+    const created = dependencies.runSync(['docker', 'inspect', '-f', '{{.Created}}', containerId]);
+    if (created.exitCode !== 0) continue; // gone already — nothing to reap
+    const createdAtMs = Date.parse(created.stdout.trim());
+    if (Number.isNaN(createdAtMs)) continue; // unparseable — leave it alone
+    if (dependencies.now() - createdAtMs < STALE_CONTAINER_MIN_AGE_MS) continue;
+
+    const removed = dependencies.runSync(['docker', 'rm', '-f', containerId]);
+    if (removed.exitCode !== 0) {
+      dependencies.reportCleanupFailure(
+        `Failed to reap stale MinIO test container ${containerId}: ${removed.stderr.trim() || `exit ${removed.exitCode}`}`,
+      );
+    }
+  }
+}
+
+/** reapStaleContainers with every failure funneled to reportCleanupFailure. */
+function reapStaleContainersGuarded(dependencies: SharedMinioHarnessDependencies): void {
+  try {
+    reapStaleContainers(dependencies);
+  } catch (error) {
+    dependencies.reportCleanupFailure(
+      `Stale-container reap failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 export function createSharedMinioHarness(dependencies: SharedMinioHarnessDependencies): {
   getSharedMinio(): Promise<SharedMinio>;
 } {
@@ -358,6 +423,10 @@ export function createSharedMinioHarness(dependencies: SharedMinioHarnessDepende
     // Register signal/exit cleanup before any blocking Docker operation and
     // fail closed if an earlier container has not been successfully stopped.
     lifecycle.prepareForLaunch();
+
+    // Best-effort sweep of containers leaked by SIGKILLed previous runs —
+    // never allowed to fail or delay this launch.
+    reapStaleContainersGuarded(dependencies);
 
     // Pre-pull explicitly so a cold image cache (fresh CI runner) cannot eat
     // into the readiness budget or fail the run with an opaque timeout.
