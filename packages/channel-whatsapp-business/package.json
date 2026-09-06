@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-whatsapp-business",
-  "version": "2.260906.4",
+  "version": "2.260906.5",
   "description": "WhatsApp Cloud API (Meta) channel plugin for Omni — webhook + REST outbound, Embedded Signup OAuth, templates HSM",
   "type": "module",
   "main": "src/index.ts",
