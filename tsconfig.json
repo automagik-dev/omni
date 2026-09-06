@@ -20,7 +20,7 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "incremental": true,
-    "types": ["bun-types"]
+    "types": ["bun"]
   },
   "exclude": ["node_modules", "dist", ".turbo"]
 }
