@@ -143,8 +143,17 @@ export class DeadLetterService {
     subject: string;
     error: Error;
     retryCount: number;
+    /**
+     * `false` files a manual-resolution-only entry (no auto-retry schedule).
+     * Used for entries where republishing the event would be wrong — e.g. a
+     * connector stall marker (#961), whose event is emitted-once by contract.
+     */
+    autoRetry?: boolean;
   }): Promise<DeadLetterEntry> {
     const insertData = prepareDeadLetterInsert(options);
+    if (options.autoRetry === false) {
+      insertData.nextAutoRetryAt = null;
+    }
 
     const [result] = await this.db.insert(deadLetterEvents).values(insertData).returning();
 

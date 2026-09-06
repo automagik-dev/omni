@@ -24,6 +24,14 @@ function createMockSource(overrides: Partial<WebhookSource> = {}): WebhookSource
     enabled: true,
     lastReceivedAt: null,
     totalReceived: 0,
+    expectedIntervalSeconds: null,
+    lastHeartbeatAt: null,
+    heartbeatCount: 0,
+    livenessStatus: null,
+    livenessArmedAt: null,
+    stalledAt: null,
+    windowSemantics: null,
+    mutationPolicy: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -86,6 +94,14 @@ function createMockDatabase(initialSources: WebhookSource[] = []) {
           enabled: data.enabled ?? true,
           lastReceivedAt: null,
           totalReceived: 0,
+          expectedIntervalSeconds: data.expectedIntervalSeconds ?? null,
+          lastHeartbeatAt: null,
+          heartbeatCount: 0,
+          livenessStatus: data.livenessStatus ?? null,
+          livenessArmedAt: data.livenessArmedAt ?? null,
+          stalledAt: null,
+          windowSemantics: data.windowSemantics ?? null,
+          mutationPolicy: data.mutationPolicy ?? null,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
@@ -826,5 +842,108 @@ describe('Webhook Event Flow Integration', () => {
     expect(mockEventBus._publishedEvents).toHaveLength(2);
     expect(mockEventBus._publishedEvents[0]?.eventType).toBe('custom.webhook.github');
     expect(mockEventBus._publishedEvents[1]?.eventType).toBe('custom.webhook.stripe');
+  });
+});
+
+describe('Connector lifecycle contract (#961)', () => {
+  describe('heartbeat()', () => {
+    test('records the heartbeat without publishing any event', async () => {
+      const source = createMockSource({
+        id: 'hb-1',
+        name: 'gmail-purchases',
+        expectedIntervalSeconds: 900,
+        livenessStatus: 'healthy',
+      });
+      const mockDb = createMockDatabase([source]);
+      const mockEventBus = createMockEventBus();
+      const service = new WebhookService(mockDb, mockEventBus);
+
+      const result = await service.heartbeat('gmail-purchases');
+
+      expect(result.ok).toBe(true);
+      expect(result.source).toBe('gmail-purchases');
+      expect(result.livenessStatus).toBe('healthy');
+      expect(result.expectedIntervalSeconds).toBe(900);
+      // Compacted representation: a timestamped counter update, zero journal events.
+      expect(mockEventBus._publishedEvents).toHaveLength(0);
+      const update = mockDb._calls.update[0] as { lastHeartbeatAt?: Date } | undefined;
+      expect(update?.lastHeartbeatAt).toBeInstanceOf(Date);
+    });
+
+    test('throws NotFoundError for an unknown source', async () => {
+      const service = new WebhookService(createMockDatabase(), createMockEventBus());
+      await expect(service.heartbeat('nope')).rejects.toThrow('WebhookSource');
+    });
+
+    test('rejects a disabled source', async () => {
+      const source = createMockSource({ id: 'hb-2', name: 'off', enabled: false });
+      const service = new WebhookService(createMockDatabase([source]), createMockEventBus());
+      await expect(service.heartbeat('off')).rejects.toThrow('disabled');
+    });
+  });
+
+  describe('liveness arming on create()/update()', () => {
+    test('create with a declared cadence arms supervision', async () => {
+      const service = new WebhookService(createMockDatabase(), createMockEventBus());
+
+      const created = await service.create({ name: 'calendar', expectedIntervalSeconds: 300 });
+
+      expect(created.livenessStatus).toBe('healthy');
+      expect(created.livenessArmedAt).toBeInstanceOf(Date);
+    });
+
+    test('create without a cadence stays unsupervised', async () => {
+      const service = new WebhookService(createMockDatabase(), createMockEventBus());
+      const created = await service.create({ name: 'plain' });
+      expect(created.livenessStatus).toBeNull();
+      expect(created.livenessArmedAt).toBeNull();
+    });
+
+    test('update declaring a cadence re-anchors the window and sets healthy when unsupervised', async () => {
+      const source = createMockSource({ id: 'arm-1', name: 'src' });
+      const mockDb = createMockDatabase([source]);
+      const service = new WebhookService(mockDb, createMockEventBus());
+
+      const updated = await service.update('arm-1', { expectedIntervalSeconds: 120 });
+
+      expect(updated.expectedIntervalSeconds).toBe(120);
+      expect(updated.livenessStatus).toBe('healthy');
+      expect(updated.livenessArmedAt).toBeInstanceOf(Date);
+    });
+
+    test('re-arming a stalled source keeps stalled — recovery stays sweeper-owned', async () => {
+      const source = createMockSource({
+        id: 'arm-2',
+        name: 'src',
+        expectedIntervalSeconds: 60,
+        livenessStatus: 'stalled',
+        stalledAt: new Date(),
+      });
+      const service = new WebhookService(createMockDatabase([source]), createMockEventBus());
+
+      const updated = await service.update('arm-2', { expectedIntervalSeconds: 600 });
+
+      expect(updated.livenessStatus).toBe('stalled');
+      expect(updated.livenessArmedAt).toBeInstanceOf(Date);
+    });
+
+    test('update with null disarms supervision entirely', async () => {
+      const source = createMockSource({
+        id: 'arm-3',
+        name: 'src',
+        expectedIntervalSeconds: 60,
+        livenessStatus: 'stalled',
+        livenessArmedAt: new Date(),
+        stalledAt: new Date(),
+      });
+      const service = new WebhookService(createMockDatabase([source]), createMockEventBus());
+
+      const updated = await service.update('arm-3', { expectedIntervalSeconds: null });
+
+      expect(updated.expectedIntervalSeconds).toBeNull();
+      expect(updated.livenessStatus).toBeNull();
+      expect(updated.livenessArmedAt).toBeNull();
+      expect(updated.stalledAt).toBeNull();
+    });
   });
 });
