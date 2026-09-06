@@ -109,7 +109,7 @@ USER bun
 LABEL org.opencontainers.image.title="omni-api" \
       org.opencontainers.image.description="Omni multi-channel messaging API (Bun/Hono)" \
       org.opencontainers.image.source="https://github.com/automagik-dev/omni" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="Apache-2.0"
 
 EXPOSE 8882
 # Health: GET /health → {"status":"healthy",...} once DB + NATS are reachable.

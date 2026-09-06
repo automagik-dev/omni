@@ -69,7 +69,7 @@ USER bun
 LABEL org.opencontainers.image.title="omni-admin-ui" \
       org.opencontainers.image.description="Omni Admin UI (KhalOS pack + BFF) — single-origin static + x-api-key proxy" \
       org.opencontainers.image.source="https://github.com/automagik-dev/omni" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="Apache-2.0"
 
 EXPOSE 8899
 # Health: GET /health → "ok" (the BFF answers immediately; no upstream needed).
