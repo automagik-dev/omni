@@ -246,21 +246,12 @@ platform exposes no endpoint for either.
 
 `content.buttons` maps onto `ura_opcoes` + `forcar_botoes` through the SDK's
 shared `planInteractive`, so **Meta's limits are the ceiling** — the ASC
-platform is a BSP on top of Meta, so no limit of theirs can be looser.
-
-**Only buttons exist here: ≤3 options, label ≤20.** A list is not a lesser
-rendering on this platform, it is no rendering — measured on the handset 05/09,
-`forcar_botoes: false` arrives as a plain `conversation` and the platform
-appends a numbered menu it builds from `ura_opcoes` **alone**. The URA has no
-field for a row description, so whatever identifies the choice beyond the
-title is dropped, and the menu that appears contradicts the numbering of the
-message it hangs under. Measured 06/09: four clinics numbered 1–4 in the
-bubble, ten slots numbered 1–10 underneath, each reading only
-`amanhã 07/09 · 08:00`.
+platform is a BSP on top of Meta, so no limit of theirs can be looser. ≤3
+options render as buttons (label ≤20), 4–10 as a list (title ≤24).
 
 The mapping degrades to plain numbered text — never dropping content — when:
 
-- more than three options (see above);
+- more than 10 options (Meta truncates the overflow silently);
 - the body exceeds 1024 characters;
 - two titles collide after truncation (the tap comes back as the **title**, so
   a collision would book the wrong appointment).

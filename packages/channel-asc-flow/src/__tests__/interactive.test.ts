@@ -45,16 +45,14 @@ describe('buildUra', () => {
     });
   });
 
-  // Past three options there is no component here, and sending one anyway is
-  // WORSE than sending none — the platform flattens it into a numbered menu
-  // built from the titles alone, which contradicts the numbering of the very
-  // message it is attached to. See the block in `buildUra`.
-  it('refuses 4 options — a list is not an affordance on this platform', () => {
-    expect(buildUra('Escolha:', options(4))).toBeNull();
+  it('renders 4 options as a list', () => {
+    const ura = buildUra('Escolha:', options(4));
+    expect(ura?.forcar_botoes).toBe(false);
+    expect(Object.keys(ura?.ura_opcoes ?? {})).toHaveLength(4);
   });
 
-  it('refuses ten options for the same reason', () => {
-    expect(buildUra('Escolha:', options(10))).toBeNull();
+  it('accepts exactly 10 options', () => {
+    expect(Object.keys(buildUra('Escolha:', options(10))?.ura_opcoes ?? {})).toHaveLength(10);
   });
 
   it('degrades above 10 options — Meta truncates the overflow silently', () => {
@@ -66,10 +64,14 @@ describe('buildUra', () => {
     expect(buildUra('x'.repeat(1024), options(3))).not.toBeNull();
   });
 
-  it('truncates button labels at 20 — the only shape that survives here', () => {
+  it('truncates button labels at 20 and list titles at 24', () => {
     const long = 'Cardiologia com Dr. Fulano de Tal na unidade central';
     const asButtons = buildUra('Escolha:', [{ text: long }, { text: 'b' }]);
     expect((asButtons?.ura_opcoes['1'] ?? '').length).toBeLessThanOrEqual(20);
+
+    const asList = buildUra('Escolha:', [{ text: long }, { text: 'b' }, { text: 'c' }, { text: 'd' }]);
+    expect((asList?.ura_opcoes['1'] ?? '').length).toBeLessThanOrEqual(24);
+    expect((asList?.ura_opcoes['1'] ?? '').length).toBeGreaterThan(20);
   });
 
   it('degrades when titles collide after truncation', () => {
@@ -97,8 +99,8 @@ describe('buildUra', () => {
     expect(buildUra('Escolha:', options(2), { sectionTitle: 'Horários' })?.forcar_botoes).toBe(true);
   });
 
-  it('answers with nothing past three options — never a list', () => {
-    expect(buildUra('Escolha:', options(5))).toBeNull();
+  it('still answers with a list past three options', () => {
+    expect(buildUra('Escolha:', options(5))?.forcar_botoes).toBe(false);
   });
 
   // The real case (05/09): two beneficiaries, and the turn went out as a list
