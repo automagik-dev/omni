@@ -181,8 +181,10 @@ async function processRow(
   stats: ConnectorLivenessSweepStats,
 ): Promise<void> {
   const signal = latestConnectorSignal(row);
-  const silentForSeconds = Math.max(0, Math.round((now.getTime() - signal.at.getTime()) / 1000));
-  const overdue = silentForSeconds > row.expectedIntervalSeconds;
+  // Compare in ms — rounding to seconds first would stretch short windows.
+  const silentMs = Math.max(0, now.getTime() - signal.at.getTime());
+  const overdue = silentMs > row.expectedIntervalSeconds * 1000;
+  const silentForSeconds = Math.round(silentMs / 1000);
 
   if (overdue) {
     if (row.livenessStatus === 'stalled') return; // transition already announced

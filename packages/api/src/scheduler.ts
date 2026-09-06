@@ -343,6 +343,33 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
     },
   });
 
+  // Connector liveness sweeper — every 30 seconds (#961).
+  //
+  // Supervises the connector CONTRACT (are events/heartbeats arriving as
+  // declared), never the connector process. Guarded transitions in the repo
+  // make each system.connector.stalled/recovered event fire exactly once per
+  // transition, so a 30s tick only bounds detection latency, not event volume.
+  scheduler.register({
+    name: 'connector-liveness-sweeper',
+    cron: '*/30 * * * * *',
+    runOnStart: false,
+    handler: async () => {
+      await withCronMonitor('connector-liveness-sweeper', '*/30 * * * * *', 1, 1, async () => {
+        const startTime = Date.now();
+        try {
+          const stats = await services.webhooks.sweepLiveness({ deadLetters: services.deadLetters });
+          recordScheduledJob('connector-liveness-sweeper', 'success', (Date.now() - startTime) / 1000);
+          if (stats.stalled > 0 || stats.recovered > 0) {
+            log.info('Connector liveness sweep tick', { ...stats });
+          }
+        } catch (err) {
+          recordScheduledJob('connector-liveness-sweeper', 'failure', (Date.now() - startTime) / 1000);
+          throw err;
+        }
+      });
+    },
+  });
+
   // Scheduled-message sweeper — every 15 seconds (#889).
   //
   // Only local-mode rows are swept: platform-mode messages are held by the

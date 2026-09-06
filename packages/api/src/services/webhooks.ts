@@ -3,14 +3,30 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { ERROR_CODES, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
-import type { CustomEventType, EventBus } from '@omni/core';
+import {
+  ERROR_CODES,
+  NotFoundError,
+  OmniError,
+  ValidationError,
+  createLogger,
+  sweepConnectorLiveness,
+} from '@omni/core';
+import type {
+  ConnectorLivenessDeps,
+  ConnectorLivenessRepo,
+  ConnectorLivenessRow,
+  ConnectorLivenessSweepStats,
+  CustomEventType,
+  EventBus,
+  OmniEvent,
+} from '@omni/core';
 import { generateId } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type NewWebhookSource, type WebhookSource, webhookSources } from '@omni/db';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import type { DeadLetterService } from './dead-letters';
 
 const log = createLogger('api:webhooks');
 
@@ -28,6 +44,16 @@ export interface WebhookReceiveOptions {
   rawBody?: string;
   /** Reject sources without a signature config (the auth-exempt public ingress sets this). */
   requireSignature?: boolean;
+}
+
+export interface WebhookHeartbeatResult {
+  ok: true;
+  source: string;
+  /** ISO timestamp the heartbeat was recorded at. */
+  heartbeatAt: string;
+  /** Status BEFORE this heartbeat — the sweeper owns transitions, so a stalled source recovers on its next tick. */
+  livenessStatus: WebhookSource['livenessStatus'];
+  expectedIntervalSeconds: number | null;
 }
 
 /** Constant-time string comparison; a length mismatch short-circuits, which leaks only the length. */
@@ -105,9 +131,13 @@ export class WebhookService {
       throw new ValidationError('signatureSecret cannot be set without a signatureConfig');
     }
 
-    const values = data.signatureSecret
+    let values = data.signatureSecret
       ? { ...data, signatureSecret: sealCredentialField(this.tenantId, data.signatureSecret) }
       : data;
+    // Declaring a cadence arms liveness supervision with a full fresh window.
+    if (values.expectedIntervalSeconds != null) {
+      values = { ...values, livenessArmedAt: new Date(), livenessStatus: 'healthy' };
+    }
     const [created] = await this.db.insert(webhookSources).values(values).returning();
 
     if (!created) {
@@ -148,6 +178,8 @@ export class WebhookService {
       }
     }
 
+    await this.applyLivenessArming(id, data, patch);
+
     const [updated] = await this.db
       .update(webhookSources)
       .set({ ...patch, updatedAt: new Date() })
@@ -159,6 +191,34 @@ export class WebhookService {
     }
 
     return updated;
+  }
+
+  /**
+   * Liveness arming on update (issue #961). `undefined` = untouched; a number
+   * (re)declares the cadence and re-anchors the window; `null` disarms
+   * supervision entirely. A stalled source keeps its status on re-arm — the
+   * sweeper sees the fresh window on its next tick and emits the `recovered`
+   * event, so recovery stays single-writer.
+   */
+  private async applyLivenessArming(
+    id: string,
+    data: Partial<NewWebhookSource>,
+    patch: Partial<NewWebhookSource>,
+  ): Promise<void> {
+    if (data.expectedIntervalSeconds === undefined) return;
+
+    if (data.expectedIntervalSeconds === null) {
+      patch.livenessStatus = null;
+      patch.livenessArmedAt = null;
+      patch.stalledAt = null;
+      return;
+    }
+
+    patch.livenessArmedAt = new Date();
+    const existing = await this.getById(id);
+    if (existing.livenessStatus === null) {
+      patch.livenessStatus = 'healthy';
+    }
   }
 
   /**
@@ -333,5 +393,172 @@ export class WebhookService {
     }
 
     return { eventId, published: false };
+  }
+
+  /**
+   * Heartbeat ingress (#961): a connector's cheap "I ran, zero events found".
+   *
+   * Distinguishes quiet from dead — this is the exact signal that would have
+   * caught the dogfood week's three silent environment failures on the first
+   * tick. Deliberately NO journal event per heartbeat: at cadence a heartbeat
+   * is pure control-plane noise in the journal, so the compacted
+   * representation is the `lastHeartbeatAt` timestamp + `heartbeatCount`
+   * counter on the source row. The journaled state changes are the
+   * TRANSITIONS (`system.connector.stalled`/`recovered`), which the liveness
+   * sweeper owns — a stalled source that heartbeats recovers on the sweeper's
+   * next tick, keeping every transition single-writer and emitted once.
+   */
+  async heartbeat(sourceName: string): Promise<WebhookHeartbeatResult> {
+    const source = await this.getByName(sourceName);
+    if (!source) {
+      throw new NotFoundError('WebhookSource', sourceName);
+    }
+    if (!source.enabled) {
+      throw new OmniError({
+        code: ERROR_CODES.FORBIDDEN,
+        message: `Webhook source '${sourceName}' is disabled`,
+        context: { sourceName },
+      });
+    }
+
+    const now = new Date();
+    await this.db
+      .update(webhookSources)
+      .set({
+        lastHeartbeatAt: now,
+        heartbeatCount: sql`${webhookSources.heartbeatCount} + 1`,
+        updatedAt: now,
+      })
+      .where(eq(webhookSources.id, source.id));
+
+    return {
+      ok: true,
+      source: sourceName,
+      heartbeatAt: now.toISOString(),
+      livenessStatus: source.livenessStatus,
+      expectedIntervalSeconds: source.expectedIntervalSeconds,
+    };
+  }
+
+  /**
+   * One liveness sweep tick (#961) — called by the scheduler. Lives on
+   * WebhookService because this is the one file sanctioned to touch
+   * `webhook_sources` (tenancy-db-access-guard); the transition semantics
+   * live in `@omni/core` (`sweepConnectorLiveness`).
+   *
+   * When a `DeadLetterService` is provided, a stalled transition also files a
+   * manual-resolution DLQ entry (the "zero-emission dead-letter" ops surface)
+   * and recovery auto-resolves it.
+   */
+  async sweepLiveness(options: { deadLetters?: DeadLetterService } = {}): Promise<ConnectorLivenessSweepStats> {
+    const { deadLetters } = options;
+    const hooks: Pick<ConnectorLivenessDeps, 'onStalled' | 'onRecovered'> = deadLetters
+      ? {
+          onStalled: (row, payload, publishedEventId) =>
+            fileStallDeadLetter(deadLetters, row, payload, publishedEventId),
+          onRecovered: (row) => resolveStallDeadLetters(deadLetters, row),
+        }
+      : {};
+
+    return sweepConnectorLiveness({
+      repo: this.livenessRepo(),
+      eventBus: this.eventBus,
+      logger: log,
+      ...hooks,
+    });
+  }
+
+  /**
+   * `ConnectorLivenessRepo` over `webhook_sources`. The guarded transition
+   * updates (`WHERE liveness_status = <previous>`) are what makes each
+   * stalled/recovered event single-winner under overlapping ticks.
+   */
+  private livenessRepo(): ConnectorLivenessRepo {
+    return {
+      findSupervised: async (): Promise<ConnectorLivenessRow[]> => {
+        const rows = await this.db
+          .select()
+          .from(webhookSources)
+          .where(and(eq(webhookSources.enabled, true), isNotNull(webhookSources.expectedIntervalSeconds)));
+        return rows
+          .filter(
+            (row): row is WebhookSource & { expectedIntervalSeconds: number } => row.expectedIntervalSeconds !== null,
+          )
+          .map((row) => ({
+            id: row.id,
+            name: row.name,
+            expectedIntervalSeconds: row.expectedIntervalSeconds,
+            lastReceivedAt: row.lastReceivedAt,
+            lastHeartbeatAt: row.lastHeartbeatAt,
+            livenessArmedAt: row.livenessArmedAt,
+            livenessStatus: row.livenessStatus,
+            stalledAt: row.stalledAt,
+            createdAt: row.createdAt,
+            tenantId: row.tenantId,
+          }));
+      },
+      markStalled: async (id: string, at: Date): Promise<boolean> => {
+        const res = await this.db
+          .update(webhookSources)
+          .set({ livenessStatus: 'stalled', stalledAt: at, updatedAt: at })
+          .where(and(eq(webhookSources.id, id), sql`${webhookSources.livenessStatus} IS DISTINCT FROM 'stalled'`))
+          .returning({ id: webhookSources.id });
+        return res.length > 0;
+      },
+      markRecovered: async (id: string, at: Date): Promise<boolean> => {
+        const res = await this.db
+          .update(webhookSources)
+          .set({ livenessStatus: 'healthy', stalledAt: null, updatedAt: at })
+          .where(and(eq(webhookSources.id, id), eq(webhookSources.livenessStatus, 'stalled')))
+          .returning({ id: webhookSources.id });
+        return res.length > 0;
+      },
+    };
+  }
+}
+
+/**
+ * File the stalled transition into the DLQ so a dead connector surfaces on
+ * the ops surface, not only in a log (#961). Manual resolution only
+ * (`autoRetry: false`): auto-retry would republish the stalled event and
+ * break its emitted-once contract — recovery resolves the entry instead.
+ */
+async function fileStallDeadLetter(
+  deadLetters: DeadLetterService,
+  row: ConnectorLivenessRow,
+  payload: Parameters<NonNullable<ConnectorLivenessDeps['onStalled']>>[1],
+  publishedEventId: string | null,
+): Promise<void> {
+  const event: OmniEvent = {
+    id: publishedEventId ?? generateId(),
+    type: 'system.connector.stalled',
+    payload: { ...payload },
+    metadata: {
+      correlationId: generateId(),
+      source: 'connector-liveness',
+      ...(row.tenantId ? { tenantId: row.tenantId } : {}),
+    },
+    timestamp: payload.stalledAt,
+  };
+  await deadLetters.create({
+    event,
+    subject: 'system.connector.stalled.internal.global',
+    error: new Error(
+      `Connector '${row.name}' declared >=1 event or heartbeat per ${row.expectedIntervalSeconds}s ` +
+        `but has been silent for ${payload.silentForSeconds}s`,
+    ),
+    retryCount: 0,
+    autoRetry: false,
+  });
+}
+
+/** Recovery auto-resolves the pending stall entries this sweeper filed for the source. */
+async function resolveStallDeadLetters(deadLetters: DeadLetterService, row: ConnectorLivenessRow): Promise<void> {
+  const { items } = await deadLetters.list({ status: ['pending'], eventType: ['system.connector.stalled'] });
+  for (const entry of items) {
+    const stored = entry.payload as { payload?: { sourceId?: unknown } };
+    if (stored.payload?.sourceId === row.id) {
+      await deadLetters.resolve(entry.id, 'connector-liveness: recovered');
+    }
   }
 }
