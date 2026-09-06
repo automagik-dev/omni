@@ -3,6 +3,7 @@
  *
  * omni events list --instance <id>
  * omni events stream [flags]
+ * omni events trace <id>
  * omni events search <query>
  * omni events timeline <person-id>
  */
@@ -202,6 +203,92 @@ function displayRecordBreakdown(title: string, record: Record<string, number>, k
     .sort(([, a], [, b]) => b - a)
     .map(([key, count]) => ({ [keyName]: key, count }));
   output.list(items);
+}
+
+// ============================================================================
+// TRACE
+// ============================================================================
+
+/** One journal row as returned inside a trace response. */
+interface TraceEvent {
+  id: string;
+  eventType: string;
+  receivedAt: string;
+  causationId: string | null;
+  metadata?: { correlationId?: string } | null;
+  textContent?: string | null;
+}
+
+interface TraceResponse {
+  data: {
+    event: TraceEvent;
+    ancestors: TraceEvent[];
+    descendants: Array<{ event: TraceEvent; depth: number }>;
+    truncated: boolean;
+  };
+}
+
+/**
+ * Fetch a causality trace from the API. Raw fetch (like `fetchAnalytics`)
+ * because the generated SDK does not expose the trace endpoint yet — the CLI
+ * still only ever talks to the API, never the database.
+ */
+async function fetchTrace(id: string): Promise<TraceResponse['data']> {
+  const config = loadConfig();
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+
+  const resp = await fetch(`${baseUrl}/api/v2/events/${encodeURIComponent(id)}/trace`, {
+    headers: { 'x-api-key': config.apiKey ?? '' },
+  });
+
+  if (!resp.ok) {
+    throw new Error(`API returned ${resp.status}: ${await resp.text()}`);
+  }
+
+  return ((await resp.json()) as TraceResponse).data;
+}
+
+/** One human-readable trace line: type, short id, time, correlation. */
+export function formatTraceLine(event: TraceEvent, marker: string): string {
+  const time = new Date(event.receivedAt).toISOString().replace('T', ' ').slice(0, 19);
+  const corr = event.metadata?.correlationId?.slice(0, 8) ?? '--------';
+  const text = event.textContent ? `  "${event.textContent.slice(0, 40)}"` : '';
+  return `${marker}${event.eventType}  ${event.id.slice(0, 8)}  ${time}  corr=${corr}${text}`;
+}
+
+/**
+ * Render the chain root→focus→fan-out as an indented tree. Answers "why did
+ * this event happen?" (the ancestors) and "what did it cause?" (the
+ * descendants) in one view.
+ */
+function displayTrace(data: TraceResponse['data']): void {
+  if (getOutputFormat() === 'json') {
+    output.data(data);
+    return;
+  }
+
+  let indent = 0;
+  for (const ancestor of data.ancestors) {
+    const label = indent === 0 && !ancestor.causationId ? ' (root)' : '';
+    output.raw(`${'  '.repeat(indent)}${formatTraceLine(ancestor, indent === 0 ? '● ' : '└─ ')}${label}`);
+    indent++;
+  }
+
+  const focusIsRoot = data.ancestors.length === 0 && !data.event.causationId;
+  output.raw(
+    `${'  '.repeat(indent)}${formatTraceLine(data.event, indent === 0 ? '● ' : '└─ ')}${focusIsRoot ? ' (root)' : ''}  ← trace target`,
+  );
+
+  for (const { event, depth } of data.descendants) {
+    output.raw(`${'  '.repeat(indent + depth)}${formatTraceLine(event, '└─ ')}`);
+  }
+
+  if (data.descendants.length === 0) {
+    output.dim('(no descendants — nothing was caused by this event)');
+  }
+  if (data.truncated) {
+    output.warn('Trace truncated (depth/node cap reached)');
+  }
 }
 
 // ============================================================================
@@ -638,6 +725,20 @@ export function createEventsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get event: ${message}`);
+      }
+    });
+
+  // omni events trace <id>
+  events
+    .command('trace <id>')
+    .description('Walk the causality chain around an event: root → parents → this event → everything it caused')
+    .action(async (id: string) => {
+      try {
+        const data = await fetchTrace(id);
+        displayTrace(data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to trace event: ${message}`);
       }
     });
 

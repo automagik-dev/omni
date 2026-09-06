@@ -172,8 +172,11 @@ function createMockEventBus() {
         metadata: { correlationId?: string; instanceId?: string; source?: string },
       ) => {
         publishedEvents.push({ eventType, payload, metadata });
+        // Mirror the real bus (#956): the event id is minted per publish and
+        // is NOT the correlation — a caller-supplied correlationId only rides
+        // in the metadata.
         return {
-          id: metadata.correlationId ?? 'generated-event-id',
+          id: crypto.randomUUID(),
           type: eventType,
           timestamp: Date.now(),
           metadata,
@@ -702,7 +705,10 @@ describe('WebhookService', () => {
 
       const result = await service.trigger(eventType, {}, { correlationId });
 
-      expect(result.eventId).toBe(correlationId);
+      // #956: the returned id is the PUBLISHED event's id; the supplied
+      // correlation rides in the metadata instead of doubling as the id.
+      expect(result.eventId).toBeTruthy();
+      expect(result.eventId).not.toBe(correlationId);
       expect(mockEventBus._publishedEvents[0]?.metadata.correlationId).toBe(correlationId);
     });
 

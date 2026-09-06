@@ -173,6 +173,17 @@ export interface OmniEvent<T extends EventType = EventType, P = unknown> {
 
 export interface EventMetadata {
   correlationId: string;
+  /**
+   * Id of the IMMEDIATE parent event — the event whose consumption caused
+   * this publish (#957, RFC #925 G3). `correlationId` groups a flow;
+   * `causationId` gives the tree. Stamped by the publisher from the consumed
+   * envelope (explicit metadata or the ambient causality context — see
+   * `events/causality.ts`), never from a payload claim. Absent/null for root
+   * events (external ingress) and for every pre-#957 producer — additive-
+   * optional, following the pattern `tenantId` landed with (G5, ADR-0008):
+   * a publish that threads nothing produces a byte-identical envelope.
+   */
+  causationId?: string | null;
   instanceId?: string;
   channelType?: ChannelType;
   personId?: string;

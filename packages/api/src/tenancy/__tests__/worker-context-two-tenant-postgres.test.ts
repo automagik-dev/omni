@@ -184,6 +184,10 @@ postgresDescribe('two-tenant worker-context containment (real PostgreSQL)', () =
       subscribe: async (type: string, handler: (event: unknown) => Promise<void>) => {
         handlers.set(type, handler);
       },
+      // The custom-event journal consumer (#957) registers via a pattern.
+      subscribePattern: async (pattern: string, handler: (event: unknown) => Promise<void>) => {
+        handlers.set(pattern, handler);
+      },
     } as unknown as EventBus;
     await setupEventPersistence(captureBus, runtimeDb);
   }, 180_000);
@@ -227,6 +231,40 @@ postgresDescribe('two-tenant worker-context containment (real PostgreSQL)', () =
       expect((await eventsForTenant(TENANT_B, extA)).length).toBe(0);
       expect((await eventsForTenant(TENANT_B, extB)).length).toBe(1);
       expect((await eventsForTenant(TENANT_A, extB)).length).toBe(0);
+    });
+
+    test('the custom-event journal consumer (#957) isolates by envelope tenant the same way', async () => {
+      const custom = handlers.get('custom.>');
+      if (!custom) throw new Error('custom.> handler not captured');
+
+      const customEvent = (instanceId: string, tenantId: string): OmniEvent =>
+        ({
+          id: crypto.randomUUID(),
+          type: 'custom.webhook.g5-isolation',
+          timestamp: Date.now(),
+          payload: { source: 'g5-isolation' },
+          metadata: {
+            correlationId: crypto.randomUUID(),
+            instanceId,
+            envelopeVersion: 1,
+            tenantId,
+          },
+        }) as OmniEvent;
+
+      const eventA = customEvent(INSTANCE_A, TENANT_A);
+      const eventB = customEvent(INSTANCE_B, TENANT_B);
+      await custom(eventA);
+      await custom(eventB);
+
+      const rowsById = (tenantId: string, id: string): Promise<{ id: string }[]> =>
+        runInWorkerTenantScope(runtimeDb, tenantId, async () =>
+          scopedHandle(runtimeDb).select({ id: omniEvents.id }).from(omniEvents).where(eq(omniEvents.id, id)),
+        );
+
+      expect((await rowsById(TENANT_A, eventA.id)).length).toBe(1);
+      expect((await rowsById(TENANT_B, eventA.id)).length).toBe(0);
+      expect((await rowsById(TENANT_B, eventB.id)).length).toBe(1);
+      expect((await rowsById(TENANT_A, eventB.id)).length).toBe(0);
     });
 
     test('a producer LYING about tenant is rejected by server-side ownership, not trusted', async () => {

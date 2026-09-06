@@ -22,6 +22,11 @@ export const EventSchema = z.object({
   conversationId: z.string().uuid().nullable().openapi({ description: 'Conversation UUID (FK → conversations.id)' }),
   receivedAt: z.string().datetime().openapi({ description: 'When event was received' }),
   processedAt: z.string().datetime().nullable().openapi({ description: 'When event was processed' }),
+  causationId: z
+    .string()
+    .uuid()
+    .nullable()
+    .openapi({ description: 'Id of the immediate parent event (null for roots and pre-#957 rows)' }),
 });
 
 // Event summary schema
@@ -62,6 +67,23 @@ export const EventAnalyticsSchema = z.object({
     .openapi({ description: 'Timeline data (hourly or daily buckets)' }),
 });
 
+// Causality trace schema (#957)
+export const EventTraceSchema = z.object({
+  event: EventSchema.openapi({ description: 'The event the trace was requested for' }),
+  ancestors: z
+    .array(EventSchema)
+    .openapi({ description: 'Chain above the event via causationId, root first, ending at the immediate parent' }),
+  descendants: z
+    .array(
+      z.object({
+        event: EventSchema,
+        depth: z.number().int().openapi({ description: 'Distance below the focus event (1 = direct child)' }),
+      }),
+    )
+    .openapi({ description: 'Fan-out below the event, breadth-first' }),
+  truncated: z.boolean().openapi({ description: 'True when a depth/node cap cut the walk short' }),
+});
+
 // Search body schema
 export const EventSearchSchema = z.object({
   query: z.string().optional().openapi({ description: 'Full-text search query' }),
@@ -86,6 +108,7 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
   registry.register('EventSummary', EventSummarySchema);
   registry.register('EventAnalytics', EventAnalyticsSchema);
   registry.register('EventSearch', EventSearchSchema);
+  registry.register('EventTrace', EventTraceSchema);
 
   registry.registerPath({
     method: 'get',
@@ -214,6 +237,24 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
       200: {
         description: 'Event details',
         content: { 'application/json': { schema: z.object({ data: EventSchema }) } },
+      },
+      404: { description: 'Event not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'get',
+    path: '/events/{id}/trace',
+    operationId: 'traceEvent',
+    tags: ['Events'],
+    summary: 'Trace the causality chain around an event',
+    description:
+      'Walks UP via causationId to the root ingress event and DOWN breadth-first through fan-out (children are events whose causationId equals this id). correlationId groups the flow; causationId gives the tree.',
+    request: { params: z.object({ id: z.string().uuid().openapi({ description: 'Event UUID' }) }) },
+    responses: {
+      200: {
+        description: 'Causality trace',
+        content: { 'application/json': { schema: z.object({ data: EventTraceSchema }) } },
       },
       404: { description: 'Event not found', content: { 'application/json': { schema: ErrorSchema } } },
     },

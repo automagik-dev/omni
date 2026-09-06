@@ -26,6 +26,10 @@ const WebhookActionSchema = z.object({
     waitForResponse: z.boolean().default(false),
     timeoutMs: z.number().int().default(30000),
     responseAs: z.string().optional(),
+    includeEnvelope: z
+      .boolean()
+      .optional()
+      .openapi({ description: 'Send the full OmniEvent envelope as the default body (default true)' }),
   }),
 });
 

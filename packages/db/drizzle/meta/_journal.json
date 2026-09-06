@@ -407,6 +407,13 @@
       "when": 1785700000000,
       "tag": "0057_connector_lifecycle_contract",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1785800000000,
+      "tag": "0058_omni_events_causation_id",
+      "breakpoints": true
     }
   ]
 }

@@ -23,7 +23,7 @@ import {
   headers as natsHeaders,
 } from 'nats';
 import { createLogger } from '../../logger';
-import { CURRENT_ENVELOPE_VERSION, resolvePublishTenantId } from '../envelope';
+import { createOmniEvent } from '../factory';
 
 const log = createLogger('nats');
 
@@ -237,36 +237,10 @@ export class NatsEventBus implements EventBus {
   ): Promise<PublishResult> {
     await this.ensureConnected();
 
-    const eventId = crypto.randomUUID();
-    const timestamp = Date.now();
-
-    // Versioned tenant-aware envelope (G5, ADR-0008). One decision, three
-    // sources in trust order — explicit republish tenant, then the request
-    // scope, then the named instance's PERSISTED owner (the channel-plugin
-    // producer path, which has neither of the first two). When none yields a
-    // tenant — every flag-off publish, and every publish naming no known
-    // instance — both fields stay undefined and the envelope is `legacy`, i.e.
-    // byte-identical to pre-G5.
-    const tenantId = resolvePublishTenantId(metadata?.tenantId, metadata?.instanceId);
-
-    const event: OmniEvent = {
-      id: eventId,
-      type,
-      payload,
-      timestamp,
-      metadata: {
-        correlationId: metadata?.correlationId ?? eventId,
-        instanceId: metadata?.instanceId,
-        channelType: metadata?.channelType,
-        personId: metadata?.personId,
-        platformIdentityId: metadata?.platformIdentityId,
-        traceId: metadata?.traceId ?? eventId,
-        source: metadata?.source ?? this.config.serviceName,
-        ingestMode: metadata?.ingestMode,
-        timings: metadata?.timings,
-        ...(tenantId ? { envelopeVersion: CURRENT_ENVELOPE_VERSION, tenantId } : {}),
-      },
-    };
+    // Envelope defaulting (correlation self-reference for roots, tenant
+    // stamping per G5/ADR-0008) lives in the shared factory — see factory.ts.
+    const event = createOmniEvent(type, payload, metadata, this.config.serviceName);
+    const eventId = event.id;
 
     // Build subject with hierarchy if instance info available.
     // Subscribe patterns always append `.>`, so the subject must have >= 3

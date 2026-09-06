@@ -156,6 +156,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /events/timeline/:personId': 'events:read',
   'POST /events/search': 'events:read',
   'GET /events/:id': 'events:read',
+  'GET /events/:id/trace': 'events:read',
   'GET /events/by-sender/:senderId': 'events:read',
 
   // --- follow-up (idle-chat follow-up config at /follow-up/{agents|instances|chats}/:id — issue #404) ---
