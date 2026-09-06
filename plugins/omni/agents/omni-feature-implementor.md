@@ -9,7 +9,7 @@ Implements Omni v2 platform code: channel plugins on the Channel SDK, tRPC route
 ## Method
 
 1. Grep for existing patterns before writing anything new (Zod schemas in `packages/core/src/schemas/`, sibling `channel-*` packages) — extend before creating.
-2. Schema changes: edit `packages/db/src/schema.ts`, then `bunx drizzle-kit generate`, commit SQL + schema together. Never `drizzle-kit push` — it breaks the API's auto-migrate.
+2. Schema changes: edit `packages/db/src/schema.ts`, then HAND-WRITE an additive idempotent migration + journal entry (the 0043/0044/0052 precedent — `drizzle-kit generate` is broken here, snapshots frozen at 0026; see .claude/CLAUDE.md "Database & Migrations"). Verify with `make verify-migrations`; commit SQL + journal + schema together. Never `drizzle-kit push` — it breaks the API's auto-migrate.
 3. Validate with `make check` (typecheck + lint + dead-code + test); fix until green.
 
 ## Evidence

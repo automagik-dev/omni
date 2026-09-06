@@ -2,7 +2,7 @@
 # Universal Event-Driven Omnichannel Platform
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
-        test test-watch test-api test-db test-pg-gate typecheck typecheck-ui lint lint-fix lint-ui format check dead-code \
+        test test-watch test-api test-db test-pg-gate typecheck typecheck-ui lint lint-fix lint-ui format check dead-code verify-migrations \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -27,7 +27,8 @@ help:
 	@echo "  make dev-stop      Stop PM2 dev services"
 	@echo ""
 	@echo "Quality:"
-	@echo "  make check         Run all quality checks (typecheck + lint + dead-code + test)"
+	@echo "  make check         Run all quality checks (typecheck + lint + dead-code + migrations + test)"
+	@echo "  make verify-migrations  Static migration contract gate (journal/immutability/lint)"
 	@echo "  make typecheck     TypeScript type checking"
 	@echo "  make lint          Run Biome linter"
 	@echo "  make lint-fix      Fix auto-fixable lint issues"
@@ -260,8 +261,15 @@ test-file:
 dead-code:
 	bunx knip
 
+# Static migration contract gate (journal ↔ files, immutability, additive-only
+# lint, headers, schema.ts pairing). No DB — see scripts/verify-migration-contract.ts.
+# Base ref defaults to origin/dev; override: make verify-migrations BASE=origin/main
+verify-migrations:
+	bun test scripts/verify-migration-contract.test.ts
+	bun scripts/verify-migration-contract.ts $(if $(BASE),--base $(BASE),)
+
 # Run all quality checks
-check: typecheck lint dead-code test
+check: typecheck lint dead-code verify-migrations test
 	@echo ""
 	@echo "All checks passed!"
 
