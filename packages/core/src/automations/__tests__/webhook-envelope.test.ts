@@ -10,7 +10,7 @@
  * no bound egress policy is a passthrough to fetch) — no external network.
  */
 
-import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { type ActionDependencies, type AgentCallContext, executeAction, executeActions } from '../actions';
 import { type TemplateContext, createTemplateContext, substituteTemplate } from '../templates';
 import type { AutomationAction } from '../types';
@@ -43,6 +43,23 @@ beforeAll(() => {
 
 afterAll(() => {
   server.stop(true);
+});
+
+// These tests exercise a REAL local receiver, so they need the REAL fetch.
+// `bun test` runs every package's test files in ONE process, and any earlier
+// file that stubbed `globalThis.fetch` without restoring it makes these
+// deliveries "succeed" (ok-stub response) without ever reaching the receiver
+// — observed on PR #963's CI, where file ordering differs from macOS and all
+// 8 webhook tests failed with an empty capture log. Pin the native fetch for
+// the duration of each test and put back whatever was there afterwards, so
+// this suite neither depends on nor disturbs other suites' fetch state.
+let priorFetch: typeof globalThis.fetch;
+beforeEach(() => {
+  priorFetch = globalThis.fetch;
+  globalThis.fetch = Bun.fetch as unknown as typeof globalThis.fetch;
+});
+afterEach(() => {
+  globalThis.fetch = priorFetch;
 });
 
 const deps: ActionDependencies = { eventBus: null };
