@@ -2791,7 +2791,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -2836,7 +2836,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -3014,7 +3014,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -3822,6 +3822,10 @@ export interface components {
             } | null;
             /** @description Whether a signature secret is stored (secret is write-only) */
             hasSignatureSecret: boolean;
+            /** @description Idempotency key derivation template */
+            idempotencyKeyTemplate: string;
+            /** @description Redeliveries acked without creating a second event */
+            totalDuplicates: number;
             /** @description Whether enabled */
             enabled: boolean;
             /**
@@ -3858,6 +3862,8 @@ export interface components {
             } | null;
             /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
             signatureSecret?: string | null;
+            /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
+            idempotencyKeyTemplate?: string;
             /**
              * @description Whether enabled
              * @default true
@@ -3882,13 +3888,15 @@ export interface components {
         WebhookReceiveResponse: {
             /**
              * Format: uuid
-             * @description Created event ID
+             * @description Created event ID (the ORIGINAL event on a duplicate)
              */
             eventId: string;
             /** @description Webhook source name */
             source: string;
             /** @description Event type */
             eventType: string;
+            /** @description True when the delivery was a redelivery: acked, but no second event was created */
+            duplicate?: boolean;
         };
         AccessRule: {
             /**
@@ -6551,7 +6559,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6616,7 +6624,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -6745,7 +6753,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6830,7 +6838,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -6879,7 +6887,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -7009,7 +7017,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -7138,7 +7146,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -10478,6 +10486,10 @@ export interface operations {
                             } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10528,6 +10540,8 @@ export interface operations {
                     } | null;
                     /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
                     signatureSecret?: string | null;
+                    /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
+                    idempotencyKeyTemplate?: string;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -10572,6 +10586,10 @@ export interface operations {
                             } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10657,6 +10675,10 @@ export interface operations {
                             } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10778,6 +10800,8 @@ export interface operations {
                     } | null;
                     /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
                     signatureSecret?: string | null;
+                    /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
+                    idempotencyKeyTemplate?: string;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -10822,6 +10846,10 @@ export interface operations {
                             } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -10887,13 +10915,15 @@ export interface operations {
                     "application/json": {
                         /**
                          * Format: uuid
-                         * @description Created event ID
+                         * @description Created event ID (the ORIGINAL event on a duplicate)
                          */
                         eventId: string;
                         /** @description Webhook source name */
                         source: string;
                         /** @description Event type */
                         eventType: string;
+                        /** @description True when the delivery was a redelivery: acked, but no second event was created */
+                        duplicate?: boolean;
                     };
                 };
             };
@@ -10946,13 +10976,15 @@ export interface operations {
                     "application/json": {
                         /**
                          * Format: uuid
-                         * @description Created event ID
+                         * @description Created event ID (the ORIGINAL event on a duplicate)
                          */
                         eventId: string;
                         /** @description Webhook source name */
                         source: string;
                         /** @description Event type */
                         eventType: string;
+                        /** @description True when the delivery was a redelivery: acked, but no second event was created */
+                        duplicate?: boolean;
                     };
                 };
             };
@@ -11036,13 +11068,15 @@ export interface operations {
                     "application/json": {
                         /**
                          * Format: uuid
-                         * @description Created event ID
+                         * @description Created event ID (the ORIGINAL event on a duplicate)
                          */
                         eventId: string;
                         /** @description Webhook source name */
                         source: string;
                         /** @description Event type */
                         eventType: string;
+                        /** @description True when the delivery was a redelivery: acked, but no second event was created */
+                        duplicate?: boolean;
                     };
                 };
             };
