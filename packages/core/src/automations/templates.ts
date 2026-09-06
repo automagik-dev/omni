@@ -16,7 +16,33 @@
  * - {{chatName}} - Special: chat display name (follow-up)
  */
 
+import type { EventMetadata } from '../events/types';
 import { getNestedValue } from './conditions';
+
+/**
+ * Envelope of the event that triggered the automation (issue #956).
+ *
+ * The engine threads this alongside the payload so actions can propagate the
+ * TRIGGERING event's correlation/causality into their own side effects
+ * (emit_event re-publish, webhook headers, call_agent context) instead of
+ * fishing correlation out of the payload — payloads don't carry correlation,
+ * envelopes do. For a debounced (synthetic) trigger, `id` is the id of the
+ * last REAL event that entered the window, so causal links always point at a
+ * published event.
+ *
+ * Route-side manual `execute` calls and legacy tests thread nothing and the
+ * field stays undefined — actions then behave exactly as before.
+ */
+export interface TemplateEventContext {
+  /** Id of the triggering event (last real event for debounced windows). */
+  id: string;
+  /** Event type of the trigger. */
+  type: string;
+  /** Publish timestamp of the trigger (Unix ms). */
+  timestamp: number;
+  /** The trigger's envelope metadata (correlationId et al.) as stamped by the producer. */
+  metadata: EventMetadata;
+}
 
 /**
  * Follow-up context surfaced to templates when an automation fires on a
@@ -67,6 +93,10 @@ export interface TemplateContext {
   };
   /** Special follow-up context (chat.idle_timeout events / promptOverride) */
   followUp?: TemplateFollowUpContext;
+  /** Envelope of the triggering event — threaded by the engine, see TemplateEventContext. */
+  event?: TemplateEventContext;
+  /** The automation being executed — threaded by the engine (delivery-id derivation, #960). */
+  automation?: { id: string };
 }
 
 /**
@@ -278,6 +308,8 @@ export function createTemplateContext(
     variables?: Record<string, unknown>;
     debounce?: TemplateContext['debounce'];
     followUp?: TemplateFollowUpContext;
+    event?: TemplateEventContext;
+    automation?: { id: string };
   } = {},
 ): TemplateContext {
   const followUp = options.followUp ?? deriveFollowUpFromPayload(payload);
@@ -288,5 +320,7 @@ export function createTemplateContext(
     env: process.env as Record<string, string | undefined>,
     debounce: options.debounce,
     followUp,
+    event: options.event,
+    automation: options.automation,
   };
 }

@@ -305,8 +305,15 @@ async function executeEmitEventAction(
     // hop's envelope — a consumer chain never silently drops back to the
     // legacy world. With nothing threaded the metadata is unchanged and the
     // publish stays byte-identical.
+    //
+    // Correlation rides the same threading (#956): the next hop continues the
+    // TRIGGERING event's envelope correlation, never a payload claim. The
+    // payload fallback only applies to envelope-less invocations (route-side
+    // manual execute), which is the pre-#956 behavior unchanged.
+    const correlationId =
+      context.event?.metadata.correlationId ?? (context.payload.correlationId as string) ?? undefined;
     const result = await deps.eventBus.publishGeneric(eventType, payload, {
-      correlationId: (context.payload.correlationId as string) ?? undefined,
+      correlationId,
       source: 'automation',
       ...(trustedTenantId ? { tenantId: trustedTenantId } : {}),
     });

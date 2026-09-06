@@ -235,8 +235,6 @@ export class WebhookService {
       }
     }
 
-    // Generate event ID
-    const eventId = generateId();
     const eventType = `custom.webhook.${sourceName}` as CustomEventType;
 
     // Update stats
@@ -249,19 +247,25 @@ export class WebhookService {
       })
       .where(eq(webhookSources.id, source.id));
 
-    // Publish event
+    // Publish event. The bus mints the event id and self-references the
+    // correlation (root event, fresh correlation — #956), and the id we hand
+    // back IS the published event's id: previously a locally generated id was
+    // returned and stamped as `correlationId`, so the caller-visible id never
+    // matched anything in the journal (4 ids for 2 facts in the RFC #925
+    // dogfood evidence).
+    let eventId = generateId();
     if (this.eventBus) {
-      await this.eventBus.publishGeneric(
+      const result = await this.eventBus.publishGeneric(
         eventType,
         {
           source: sourceName,
           ...payload,
         },
         {
-          correlationId: eventId,
           source: 'webhook',
         },
       );
+      eventId = result.id;
     }
 
     return {
@@ -320,18 +324,21 @@ export class WebhookService {
     payload: Record<string, unknown>,
     metadata?: { correlationId?: string; instanceId?: string },
   ): Promise<{ eventId: string; published: boolean }> {
-    const eventId = metadata?.correlationId ?? generateId();
-
     if (this.eventBus) {
-      await this.eventBus.publishGeneric(eventType, payload, {
-        correlationId: eventId,
+      // A caller-supplied correlationId CONTINUES an existing flow; with none
+      // supplied the bus self-references (root event, fresh correlation).
+      // Either way the returned id is the published event's own id, not the
+      // correlation (#956 — the two used to be conflated, so the caller's id
+      // never matched the journal).
+      const result = await this.eventBus.publishGeneric(eventType, payload, {
+        correlationId: metadata?.correlationId,
         instanceId: metadata?.instanceId,
         source: 'manual-trigger',
       });
 
-      return { eventId, published: true };
+      return { eventId: result.id, published: true };
     }
 
-    return { eventId, published: false };
+    return { eventId: metadata?.correlationId ?? generateId(), published: false };
   }
 }
