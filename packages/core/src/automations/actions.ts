@@ -8,6 +8,7 @@ import { brokeredFetch } from '../egress';
 import type { EventBus } from '../events/bus';
 import { resolveAmbientTenantId } from '../events/envelope';
 import type { CustomEventType, GenericEventPayload } from '../events/types';
+import { generateId } from '../ids';
 import { createLogger } from '../logger';
 import { type TemplateContext, substituteTemplate, substituteTemplateObject } from './templates';
 import type {
@@ -72,8 +73,40 @@ export interface AgentCallContext {
  * caller that threads nothing (the route-side manual `execute`, existing
  * tests) leaves it `undefined` and the callbacks behave exactly as before.
  */
+/**
+ * Where a re-published event came from (#958): the triggering event and the
+ * automation/action slot that emitted it. Threaded by the engine so
+ * `emit_event` can derive the deterministic idempotency key
+ * `derived:{parent_event_id}:{automation_id}:{action_index}` — re-running the
+ * same automation over the same event (NATS redelivery, replay) claims the
+ * same key and does not duplicate the emission.
+ */
+export interface EmitProvenance {
+  /** Id of the event that triggered the automation. */
+  parentEventId: string;
+  /** Id of the automation whose action is emitting. */
+  automationId: string;
+}
+
 export interface ActionDependencies {
   eventBus: EventBus | null;
+  /**
+   * Claim an emission's idempotency key BEFORE publishing (#958). Returns
+   * true when this is the first claim (publish proceeds) and false when the
+   * key is already journaled (a redelivery/replay — the publish is skipped
+   * and the action reports `duplicate: true`). Backed by the
+   * `omni_events.idempotency_key` unique index in the API; when absent (older
+   * wiring, tests) emissions publish unconditionally as before.
+   */
+  claimEmittedEvent?: (
+    claim: { idempotencyKey: string; eventId: string; eventType: string; payload: Record<string, unknown> },
+    trustedTenantId?: string | null,
+  ) => Promise<boolean>;
+  /**
+   * Release a claim taken by `claimEmittedEvent` whose publish then failed —
+   * leaving it would suppress the retry's emission forever.
+   */
+  releaseEmittedEventClaim?: (eventId: string) => Promise<void>;
   sendMessage?: (instanceId: string, to: string, content: string, trustedTenantId?: string | null) => Promise<void>;
   /**
    * Call an AI agent and return the response.
@@ -278,6 +311,7 @@ async function executeEmitEventAction(
   context: TemplateContext,
   deps: ActionDependencies,
   trustedTenantId?: string | null,
+  provenance?: EmitProvenance & { actionIndex: number },
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
     if (!deps.eventBus) {
@@ -297,6 +331,27 @@ async function executeEmitEventAction(
 
     const eventType = substituteTemplate(config.eventType, context) as CustomEventType;
 
+    // Derived-key idempotency (#958): claim before publishing so re-running
+    // the same automation over the same event does not duplicate the
+    // emission. This dedupes REPLAY of the same (event, automation, action)
+    // slot only — two different parent events legitimately emit twice.
+    let claimedEventId: string | undefined;
+    if (deps.claimEmittedEvent && provenance) {
+      const idempotencyKey = `derived:${provenance.parentEventId}:${provenance.automationId}:${provenance.actionIndex}`;
+      claimedEventId = generateId();
+      const claimed = await deps.claimEmittedEvent(
+        { idempotencyKey, eventId: claimedEventId, eventType, payload },
+        trustedTenantId,
+      );
+      if (!claimed) {
+        logger.info('Skipping duplicate emission (idempotency key already journaled)', {
+          eventType,
+          idempotencyKey,
+        });
+        return { success: true, result: { eventType, duplicate: true } };
+      }
+    }
+
     logger.debug('Emitting event', { eventType });
 
     // G5 (ADR-0008): a tenant-world execution threads its trusted tenant into
@@ -305,11 +360,27 @@ async function executeEmitEventAction(
     // hop's envelope — a consumer chain never silently drops back to the
     // legacy world. With nothing threaded the metadata is unchanged and the
     // publish stays byte-identical.
-    const result = await deps.eventBus.publishGeneric(eventType, payload, {
-      correlationId: (context.payload.correlationId as string) ?? undefined,
-      source: 'automation',
-      ...(trustedTenantId ? { tenantId: trustedTenantId } : {}),
-    });
+    let result: { id: string };
+    try {
+      result = await deps.eventBus.publishGeneric(eventType, payload, {
+        correlationId: (context.payload.correlationId as string) ?? undefined,
+        source: 'automation',
+        ...(trustedTenantId ? { tenantId: trustedTenantId } : {}),
+      });
+    } catch (error) {
+      // A claim must not outlive a failed publish — leaving it would drop the
+      // retry's emission as a "duplicate" of an event that never existed.
+      if (claimedEventId && deps.releaseEmittedEventClaim) {
+        await deps.releaseEmittedEventClaim(claimedEventId).catch((releaseError: unknown) => {
+          logger.error('Failed to release emission idempotency claim', {
+            eventType,
+            claimedEventId,
+            error: String(releaseError),
+          });
+        });
+      }
+      throw error;
+    }
 
     return {
       success: true,
@@ -512,6 +583,7 @@ export async function executeAction(
   context: TemplateContext,
   deps: ActionDependencies,
   trustedTenantId?: string | null,
+  provenance?: EmitProvenance & { actionIndex: number },
 ): Promise<ActionExecutionResult> {
   const start = Date.now();
 
@@ -525,7 +597,7 @@ export async function executeAction(
       result = await executeSendMessageAction(action.config, context, deps, trustedTenantId);
       break;
     case 'emit_event':
-      result = await executeEmitEventAction(action.config, context, deps, trustedTenantId);
+      result = await executeEmitEventAction(action.config, context, deps, trustedTenantId, provenance);
       break;
     case 'log':
       result = await executeLogAction(action.config, context, deps);
@@ -560,18 +632,25 @@ export async function executeActions(
   context: TemplateContext,
   deps: ActionDependencies,
   trustedTenantId?: string | null,
+  provenance?: EmitProvenance,
 ): Promise<ActionExecutionResult[]> {
   const results: ActionExecutionResult[] = [];
   const variables = { ...context.variables };
 
-  for (const action of actions) {
+  for (const [actionIndex, action] of actions.entries()) {
     // Create context with updated variables
     const actionContext: TemplateContext = {
       ...context,
       variables,
     };
 
-    const result = await executeAction(action, actionContext, deps, trustedTenantId);
+    const result = await executeAction(
+      action,
+      actionContext,
+      deps,
+      trustedTenantId,
+      provenance ? { ...provenance, actionIndex } : undefined,
+    );
     results.push(result);
 
     // Store response as variable if configured (for webhook and call_agent)

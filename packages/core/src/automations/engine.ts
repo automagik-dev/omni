@@ -136,6 +136,8 @@ export class AutomationEngine {
       callAgent: deps.callAgent,
       staleIdleTimeoutGate: deps.staleIdleTimeoutGate,
       releaseIdleTimeoutClaim: deps.releaseIdleTimeoutClaim,
+      claimEmittedEvent: deps.claimEmittedEvent,
+      releaseEmittedEventClaim: deps.releaseEmittedEventClaim,
     };
     this.automations = automations.filter((a) => a.enabled);
 
@@ -725,12 +727,15 @@ export class AutomationEngine {
         return result;
       }
 
-      // Execute actions, threading the envelope's trusted tenant (null = legacy).
+      // Execute actions, threading the envelope's trusted tenant (null =
+      // legacy) and the emit provenance (#958) so emit_event re-publishes
+      // derive a stable idempotency key for this (event, automation) slot.
       const actionsExecuted = await executeActions(
         automation.actions as Parameters<typeof executeActions>[0],
         context,
         this.deps,
         trustedTenantId,
+        { parentEventId: event.id, automationId: automation.id },
       );
 
       // Determine overall status
