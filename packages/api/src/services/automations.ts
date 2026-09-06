@@ -71,6 +71,12 @@ export class AutomationService {
       trustedTenantId?: string | null,
     ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
     releaseIdleTimeoutClaim?: (claimToken: string) => void | Promise<void>;
+    // Schema-registry gate for emit_event (issue #959) — see automation-actions.ts.
+    validateEmitEvent?: (
+      eventType: string,
+      payload: Record<string, unknown>,
+      trustedTenantId?: string | null,
+    ) => Promise<{ valid: boolean; errors?: string[] }>;
   }): Promise<void> {
     if (!this.eventBus) {
       return;

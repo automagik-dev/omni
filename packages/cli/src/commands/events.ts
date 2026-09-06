@@ -9,6 +9,7 @@
  */
 
 import type { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import type { Event, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
@@ -291,6 +292,139 @@ function displayTrace(data: TraceResponse['data']): void {
 }
 
 // ============================================================================
+// SCHEMA REGISTRY (issue #959)
+// ============================================================================
+
+/** A registered event schema as returned by the API. */
+interface EventSchemaData {
+  id: string;
+  eventType: string;
+  version: number;
+  schema: Record<string, unknown>;
+  description: string | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Raw CLI→API call for endpoints the generated SDK does not cover yet
+ * (`fetchAnalytics` precedent above; the CLI never queries the DB directly).
+ */
+async function schemaApiRequest<T>(path: string, init: { method?: string; body?: string } = {}): Promise<T> {
+  const config = loadConfig();
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+
+  const resp = await fetch(`${baseUrl}/api/v2/events/schemas${path}`, {
+    method: init.method ?? 'GET',
+    body: init.body,
+    headers: { 'content-type': 'application/json', 'x-api-key': config.apiKey ?? '' },
+  });
+
+  if (!resp.ok) {
+    throw new Error(`API returned ${resp.status}: ${await resp.text()}`);
+  }
+
+  return (await resp.json()) as T;
+}
+
+/** Load the JSON Schema artifact from --file or inline --schema (exactly one). */
+function loadSchemaArtifact(options: { file?: string; schema?: string }): Record<string, unknown> {
+  if ((options.file ? 1 : 0) + (options.schema ? 1 : 0) !== 1) {
+    throw new Error('Provide the JSON Schema via exactly one of --file <path> or --schema <json>');
+  }
+  const raw = options.file ? readFileSync(options.file, 'utf-8') : (options.schema as string);
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('The JSON Schema artifact must be a JSON object');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function summarizeSchemaRow(row: EventSchemaData): Record<string, unknown> {
+  return {
+    eventType: row.eventType,
+    version: row.version,
+    enabled: row.enabled,
+    description: row.description ?? '-',
+    updatedAt: row.updatedAt,
+  };
+}
+
+function createSchemaCommand(): Command {
+  const schema = new Command('schema').description('Manage the event schema registry (per-type payload contracts)');
+
+  schema
+    .command('register <eventType>')
+    .description('Register (or compatibly revise) the JSON Schema for an event type')
+    .option('--file <path>', 'Path to a JSON Schema file')
+    .option('--schema <json>', 'Inline JSON Schema')
+    .option('--description <text>', 'Description for the registration')
+    .option('--disabled', 'Register with the validation gate disabled')
+    .action(
+      async (
+        eventType: string,
+        options: { file?: string; schema?: string; description?: string; disabled?: boolean },
+      ) => {
+        try {
+          const artifact = loadSchemaArtifact(options);
+
+          const result = await schemaApiRequest<{ data: EventSchemaData }>('', {
+            method: 'POST',
+            body: JSON.stringify({
+              eventType,
+              schema: artifact,
+              description: options.description,
+              enabled: options.disabled ? false : undefined,
+            }),
+          });
+
+          output.success(`Schema registered: ${result.data.eventType} (version ${result.data.version})`, {
+            eventType: result.data.eventType,
+            version: result.data.version,
+            enabled: result.data.enabled,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to register schema: ${message}`);
+        }
+      },
+    );
+
+  schema
+    .command('list')
+    .description('List registered event schemas')
+    .option('--enabled', 'Only schemas with an active validation gate')
+    .action(async (options: { enabled?: boolean }) => {
+      try {
+        const query = options.enabled ? '?enabled=true' : '';
+        const result = await schemaApiRequest<{ items: EventSchemaData[] }>(query);
+        output.list(result.items.map(summarizeSchemaRow), { emptyMessage: 'No event schemas registered.' });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to list schemas: ${message}`);
+      }
+    });
+
+  schema
+    .command('get <eventType>')
+    .description('Show the registered schema for an event type')
+    .action(async (eventType: string) => {
+      try {
+        const result = await schemaApiRequest<{ data: EventSchemaData }>(`/${encodeURIComponent(eventType)}`);
+        output.data(result.data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get schema: ${message}`);
+      }
+    });
+
+  return schema;
+}
+
+export const __testables = { schemaApiRequest, loadSchemaArtifact, summarizeSchemaRow };
+
+// ============================================================================
 // STREAM
 // ============================================================================
 
@@ -480,6 +614,9 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
 
 export function createEventsCommand(): Command {
   const events = new Command('events').description('Query events');
+
+  // omni events schema register|list|get (issue #959)
+  events.addCommand(createSchemaCommand());
 
   // omni events list
   events
