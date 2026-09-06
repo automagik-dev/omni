@@ -10,7 +10,12 @@
  */
 
 import type { ProviderSchema as CoreProviderSchema, FollowUpSequenceConfig } from '@omni/core';
-import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJobConfig } from '@omni/core/events';
+import {
+  CORE_EVENT_TYPES,
+  type CoreEventType,
+  type SyncJobConfig as CoreSyncJobConfig,
+  type CustomEventType,
+} from '@omni/core/events';
 import { CONTENT_TYPES, type ContentType as CoreContentType } from '@omni/core/types';
 import { relations, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
@@ -158,7 +163,9 @@ export type ApiKeyProfileOverrides = {
 };
 
 export const eventTypes = CORE_EVENT_TYPES;
-export type EventType = CoreEventType;
+// Webhook ingress journals `custom.webhook.{source}` rows (#958), so the
+// column type carries the custom namespace alongside the core tuple.
+export type EventType = CoreEventType | CustomEventType;
 
 // Derived from core CONTENT_TYPES (same no-drift rule as eventTypes above) —
 // this local tuple had fallen behind by ten content types.
@@ -1740,7 +1747,9 @@ export const omniEvents = pgTable(
     platformIdentityId: uuid('platform_identity_id').references(() => platformIdentities.id, { onDelete: 'set null' }),
 
     // ---- Event Classification ----
-    eventType: varchar('event_type', { length: 50 }).notNull().$type<EventType>(),
+    // 255: `custom.webhook.{source}` types embed the source name (≤100 chars),
+    // which does not fit the original 50.
+    eventType: varchar('event_type', { length: 255 }).notNull().$type<EventType>(),
     direction: varchar('direction', { length: 10 }).notNull().default('inbound'), // 'inbound' | 'outbound'
     contentType: varchar('content_type', { length: 20 }).$type<ContentType>(),
 
@@ -1787,6 +1796,18 @@ export const omniEvents = pgTable(
     agentRequest: jsonb('agent_request').$type<Record<string, unknown>>(),
     agentResponse: jsonb('agent_response').$type<Record<string, unknown>>(),
 
+    // ---- Ingress Idempotency (#958) ----
+    /**
+     * Delivery-identity key, unique when present. Set at PUBLISH time for
+     * webhook ingress (`{source}:{sha256(body)}` or the source's configured
+     * template) and for automation `emit_event` re-publishes
+     * (`derived:{parent_event_id}:{automation_id}:{action_index}`). Internal
+     * events without a derivation stay NULL (forward-only — no backfill).
+     * The DATABASE dedupes via the unique index; a colliding insert means a
+     * redelivery and the emitter is acked without a second event.
+     */
+    idempotencyKey: text('idempotency_key'),
+
     // ---- Metadata ----
     metadata: jsonb('metadata').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -1796,6 +1817,14 @@ export const omniEvents = pgTable(
   (table) => ({
     tenantIdx: index('omni_events_tenant_idx').on(table.tenantId),
     tenantIdUq: uniqueIndex('omni_events_tenant_id_uq').on(table.tenantId, table.id),
+    // Global uniqueness through the additive phase (mirrors the
+    // webhook_sources name indexes): the plain index is the ON CONFLICT
+    // target, the tenant-scoped partial positions the enforcement phase.
+    // NULL keys are distinct, so the ~349k legacy rows are unaffected.
+    idempotencyKeyUq: uniqueIndex('omni_events_idempotency_key_uq').on(table.idempotencyKey),
+    tenantIdempotencyKeyUq: uniqueIndex('omni_events_tenant_idempotency_key_uq')
+      .on(table.tenantId, table.idempotencyKey)
+      .where(sql`${table.tenantId} IS NOT NULL AND ${table.idempotencyKey} IS NOT NULL`),
     externalIdIdx: index('omni_events_external_id_idx').on(table.externalId),
     channelIdx: index('omni_events_channel_idx').on(table.channel),
     instanceIdx: index('omni_events_instance_idx').on(table.instanceId),
@@ -2719,12 +2748,22 @@ export const webhookSources = pgTable(
     signatureConfig: jsonb('signature_config').$type<WebhookSignatureConfig>(),
     signatureSecret: text('signature_secret'),
 
+    /**
+     * Ingress idempotency key template (#958). Placeholders: `{source}`,
+     * `{sha256(body)}`, `{headers.<name>}`, `{payload.<dot.path>}`. Existing
+     * sources migrated onto the body-hash default; new sources may configure
+     * a provider-identity template (e.g. `github:{headers.x-github-delivery}`).
+     */
+    idempotencyKeyTemplate: text('idempotency_key_template').notNull().default('{source}:{sha256(body)}'),
+
     // State
     enabled: boolean('enabled').notNull().default(true),
 
     // Stats
     lastReceivedAt: timestamp('last_received_at', { withTimezone: true }),
     totalReceived: integer('total_received').notNull().default(0),
+    /** Redeliveries acked without a second event (#958). */
+    totalDuplicates: integer('total_duplicates').notNull().default(0),
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
