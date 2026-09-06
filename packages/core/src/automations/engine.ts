@@ -138,6 +138,9 @@ export class AutomationEngine {
       releaseIdleTimeoutClaim: deps.releaseIdleTimeoutClaim,
       claimEmittedEvent: deps.claimEmittedEvent,
       releaseEmittedEventClaim: deps.releaseEmittedEventClaim,
+      // #959 gate — threaded here so engine executions validate too; without
+      // this line the dep is provided by the API but silently dropped.
+      validateEmitEvent: deps.validateEmitEvent,
     };
     this.automations = automations.filter((a) => a.enabled);
 

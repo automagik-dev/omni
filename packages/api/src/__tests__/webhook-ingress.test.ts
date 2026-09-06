@@ -13,6 +13,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
 import type { Database, WebhookSource } from '@omni/db';
+import { webhookSources } from '@omni/db';
 import { createApp } from '../app';
 
 const SECRET = 'ingress-test-secret';
@@ -27,10 +28,19 @@ function makeSource(overrides: Partial<WebhookSource> = {}): WebhookSource {
     signatureConfig: { algorithm: 'hmac-sha256', header: 'X-Hub-Signature-256', prefix: 'sha256=' },
     signatureSecret: SECRET,
     idempotencyKeyTemplate: '{source}:{sha256(body)}',
+    eventTypeMapping: null,
     enabled: true,
     lastReceivedAt: null,
     totalReceived: 0,
     totalDuplicates: 0,
+    expectedIntervalSeconds: null,
+    lastHeartbeatAt: null,
+    heartbeatCount: 0,
+    livenessStatus: null,
+    livenessArmedAt: null,
+    stalledAt: null,
+    windowSemantics: null,
+    mutationPolicy: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -48,7 +58,13 @@ function buildApp(sources: WebhookSource[]) {
     {
       get: (_target, prop) => {
         if (prop === 'select') {
-          return () => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve(sources) }) }) });
+          // Table-aware: only webhook_sources lookups resolve to `sources`;
+          // any other read (e.g. the #959 event_schemas gate) sees no rows.
+          return () => ({
+            from: (table: unknown) => ({
+              where: () => ({ limit: () => Promise.resolve(table === webhookSources ? sources : []) }),
+            }),
+          });
         }
         if (prop === 'update') {
           return () => ({ set: () => ({ where: () => Promise.resolve([]) }) });

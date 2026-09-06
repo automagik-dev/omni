@@ -2728,6 +2728,53 @@ export interface WebhookSignatureConfig {
 }
 
 /**
+ * Connector liveness state (issue #961). Only `healthy` and `stalled` exist —
+ * a source without a declared cadence has NULL here (unsupervised). The
+ * liveness sweeper is the ONLY writer of transitions; guarded updates
+ * (`WHERE liveness_status = <previous>`) make each transition — and therefore
+ * each `system.connector.stalled`/`recovered` event — happen exactly once.
+ */
+export const connectorLivenessStatuses = ['healthy', 'stalled'] as const;
+export type ConnectorLivenessStatus = (typeof connectorLivenessStatuses)[number];
+
+/**
+ * Declared window semantics of a connector (issue #961): for sources that emit
+ * items from a time window, does the window include items already in progress?
+ * The dogfood calendar connector briefed a meeting 17 minutes after it started
+ * because this was undeclared. NULL = the source has not declared it.
+ */
+export const connectorWindowSemanticsValues = ['future_only', 'includes_in_progress'] as const;
+export type ConnectorWindowSemantics = (typeof connectorWindowSemanticsValues)[number];
+
+/**
+ * Declared mutation policy of a connector (issue #961): when an upstream item
+ * changes (e.g. a meeting reschedule), does the source re-emit it under the
+ * SAME source id or a NEW one? Feeds the idempotency-key template choice
+ * (issue #958): `same_id` sources must key on id+content, `new_id` sources can
+ * key on id alone. NULL = the source has not declared it.
+ */
+export const connectorMutationPolicies = ['same_id', 'new_id'] as const;
+export type ConnectorMutationPolicy = (typeof connectorMutationPolicies)[number];
+
+/**
+ * Per-source semantic event-type extraction for the generic webhook ingress
+ * (issue #959, RFC #925 G1).
+ *
+ * Without a mapping every delivery from a source collapses into the fixed
+ * `custom.webhook.{source}` type — GitHub push, PR, issue and release all
+ * arrive indistinguishable. A mapping extracts the semantic event name from
+ * the delivery (e.g. the `X-GitHub-Event` header) so the published type
+ * becomes `custom.{source}.{event}` (`custom.github.push`). A delivery the
+ * mapping cannot resolve falls back to the legacy collapsed type.
+ */
+export interface WebhookEventTypeMapping {
+  /** Where the semantic event name is read from. Only headers for now. */
+  source: 'header';
+  /** Header carrying the semantic event name (e.g. 'X-GitHub-Event'). */
+  header: string;
+}
+
+/**
  * Webhook source configurations.
  * External systems can trigger events in Omni via webhooks.
  *
@@ -2756,6 +2803,10 @@ export const webhookSources = pgTable(
      */
     idempotencyKeyTemplate: text('idempotency_key_template').notNull().default('{source}:{sha256(body)}'),
 
+    // Semantic event-type extraction (issue #959). Null = legacy collapsed
+    // `custom.webhook.{source}` type for every delivery.
+    eventTypeMapping: jsonb('event_type_mapping').$type<WebhookEventTypeMapping>(),
+
     // State
     enabled: boolean('enabled').notNull().default(true),
 
@@ -2764,6 +2815,31 @@ export const webhookSources = pgTable(
     totalReceived: integer('total_received').notNull().default(0),
     /** Redeliveries acked without a second event (#958). */
     totalDuplicates: integer('total_duplicates').notNull().default(0),
+
+    // Connector lifecycle contract (issue #961).
+    //
+    // Liveness: a source that declares `expectedIntervalSeconds` promises
+    // "≥1 event or heartbeat per N seconds". The liveness sweeper compares the
+    // most recent signal — GREATEST(lastReceivedAt, lastHeartbeatAt,
+    // livenessArmedAt) — against that window and owns every status transition.
+    // `livenessArmedAt` is (re)stamped whenever the cadence is declared, so a
+    // freshly supervised source gets a full window before it can stall.
+    /** Declared cadence in seconds; NULL = unsupervised. */
+    expectedIntervalSeconds: integer('expected_interval_seconds'),
+    /**
+     * Heartbeat ingress ("I ran, zero events found"): the compacted
+     * representation is this timestamp + counter — heartbeats create no
+     * journal events (see WebhookService.heartbeat).
+     */
+    lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
+    heartbeatCount: integer('heartbeat_count').notNull().default(0),
+    livenessStatus: varchar('liveness_status', { length: 20 }).$type<ConnectorLivenessStatus>(),
+    livenessArmedAt: timestamp('liveness_armed_at', { withTimezone: true }),
+    /** When the current stall began; cleared on recovery. */
+    stalledAt: timestamp('stalled_at', { withTimezone: true }),
+    // Declared semantics (informational contract, exposed via API/CLI).
+    windowSemantics: varchar('window_semantics', { length: 40 }).$type<ConnectorWindowSemantics>(),
+    mutationPolicy: varchar('mutation_policy', { length: 20 }).$type<ConnectorMutationPolicy>(),
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -2778,11 +2854,66 @@ export const webhookSources = pgTable(
       .where(sql`${table.tenantId} IS NOT NULL`),
     nameIdx: uniqueIndex('webhook_sources_name_idx').on(table.name),
     enabledIdx: index('webhook_sources_enabled_idx').on(table.enabled),
+    // The liveness sweeper's scan: enabled sources with a declared cadence.
+    supervisedIdx: index('webhook_sources_supervised_idx')
+      .on(table.enabled)
+      .where(sql`${table.expectedIntervalSeconds} IS NOT NULL`),
   }),
 );
 
 export type WebhookSource = typeof webhookSources.$inferSelect;
 export type NewWebhookSource = Omit<typeof webhookSources.$inferInsert, 'tenantId'>;
+
+// ============================================================================
+// EVENT SCHEMA REGISTRY (issue #959, RFC #925 G1)
+// ============================================================================
+
+/**
+ * Registered payload contracts for event types.
+ *
+ * One row per event_type: the stored artifact is a JSON Schema (externally
+ * registered as-is, or exported from a Zod definition — Zod-first per the RFC
+ * decision). The validation gates (webhook ingress, automation emit_event)
+ * consult this table BEFORE publishing; an invalid payload goes to
+ * `dead_letter_events` with reason `schema_validation_failed` and never enters
+ * the journal. The registry is opt-in per type: an event type with no row
+ * passes through unchanged.
+ *
+ * `version` counts in-place compatible (additive-optional) revisions of one
+ * event_type's schema; an incompatible change is refused at register time and
+ * must ship as a new versioned event_type (e.g. `custom.github.push.v2`).
+ *
+ * TENANCY: registrations are GLOBAL for now — the table deliberately carries
+ * no `tenant_id` (the `scheduled_messages` precedent). The RLS coverage gate
+ * (`tenancy-rls.test.ts`) requires every tenant_id-bearing table to be in the
+ * frozen G0 manifest, the G1 tenant plane, or the runtime-denied exclusions;
+ * a born-tenant business table fits none of those, so per-tenant registration
+ * joins the tenancy machinery in the G6+ ownership pass, additively.
+ */
+export const eventSchemas = pgTable(
+  'event_schemas',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventType: varchar('event_type', { length: 150 }).notNull().unique(),
+    version: integer('version').notNull().default(1),
+    /** JSON Schema (draft-07) the payload must satisfy. Stored as-is. */
+    schema: jsonb('schema').notNull().$type<Record<string, unknown>>(),
+    description: text('description'),
+
+    // A disabled row keeps the artifact but suspends the gate for its type.
+    enabled: boolean('enabled').notNull().default(true),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    eventTypeIdx: uniqueIndex('event_schemas_event_type_idx').on(table.eventType),
+    enabledIdx: index('event_schemas_enabled_idx').on(table.enabled),
+  }),
+);
+
+export type EventSchemaRow = typeof eventSchemas.$inferSelect;
+export type NewEventSchemaRow = typeof eventSchemas.$inferInsert;
 
 // ============================================================================
 // AUTOMATIONS (Events Ext)

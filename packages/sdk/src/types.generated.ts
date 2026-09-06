@@ -980,6 +980,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/{source}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connector heartbeat
+         * @description Record a connector heartbeat: "I ran, zero events found". Resets the liveness window of a supervised source (one declaring expectedIntervalSeconds) so silence-beyond-window detection can tell quiet from dead. Creates NO journal event — only the stalled/recovered transitions are journaled. No request body.
+         */
+        post: operations["heartbeatWebhookSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/webhooks/ingress/{source}": {
         parameters: {
             query?: never;
@@ -1574,6 +1594,50 @@ export interface paths {
          * @description Manually trigger scheduled operations.
          */
         post: operations["runScheduledOps"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/schemas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List registered event schemas
+         * @description Get every event type with a registered payload schema. The registry is opt-in per type.
+         */
+        get: operations["listEventSchemas"];
+        put?: never;
+        /**
+         * Register or revise an event schema
+         * @description Register a JSON Schema for an event type. Once registered, the webhook ingress and automation emit_event validate payloads of this type before publishing; invalid payloads are dead-lettered with reason schema_validation_failed. Revising an existing registration must be additive-optional (the evolution rule) — an incompatible change is refused with 409 and must ship as a new versioned event type (e.g. custom.github.push.v2).
+         */
+        post: operations["registerEventSchema"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/schemas/{eventType}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a registered event schema
+         * @description Get the stored JSON Schema artifact for one event type.
+         */
+        get: operations["getEventSchema"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3794,6 +3858,15 @@ export interface components {
             /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
             prefix?: string;
         };
+        WebhookEventTypeMapping: {
+            /**
+             * @description Where the semantic event name is read from (only headers for now)
+             * @enum {string}
+             */
+            source: "header";
+            /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+            header: string;
+        };
         WebhookSource: {
             /**
              * Format: uuid
@@ -3820,6 +3893,16 @@ export interface components {
                 /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
                 prefix?: string;
             } | null;
+            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+            eventTypeMapping: {
+                /**
+                 * @description Where the semantic event name is read from (only headers for now)
+                 * @enum {string}
+                 */
+                source: "header";
+                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                header: string;
+            } | null;
             /** @description Whether a signature secret is stored (secret is write-only) */
             hasSignatureSecret: boolean;
             /** @description Idempotency key derivation template */
@@ -3828,6 +3911,47 @@ export interface components {
             totalDuplicates: number;
             /** @description Whether enabled */
             enabled: boolean;
+            /**
+             * Format: date-time
+             * @description When the last webhook was received
+             */
+            lastReceivedAt: string | null;
+            /** @description Total webhooks received */
+            totalReceived: number;
+            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+            expectedIntervalSeconds: number | null;
+            /**
+             * Format: date-time
+             * @description Last heartbeat ("ran, zero events")
+             */
+            lastHeartbeatAt: string | null;
+            /** @description Total heartbeats received */
+            heartbeatCount: number;
+            /**
+             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+             * @enum {string|null}
+             */
+            livenessStatus: "healthy" | "stalled" | null;
+            /**
+             * Format: date-time
+             * @description When the cadence was (re)declared
+             */
+            livenessArmedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the current stall began
+             */
+            stalledAt: string | null;
+            /**
+             * @description Declared window semantics; null = undeclared
+             * @enum {string|null}
+             */
+            windowSemantics: "future_only" | "includes_in_progress" | null;
+            /**
+             * @description Declared upstream-mutation re-emit policy; null = undeclared
+             * @enum {string|null}
+             */
+            mutationPolicy: "same_id" | "new_id" | null;
             /**
              * Format: date-time
              * @description Creation timestamp
@@ -3864,11 +3988,33 @@ export interface components {
             signatureSecret?: string | null;
             /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
             idempotencyKeyTemplate?: string;
+            /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
+            eventTypeMapping?: {
+                /**
+                 * @description Where the semantic event name is read from (only headers for now)
+                 * @enum {string}
+                 */
+                source: "header";
+                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                header: string;
+            } | null;
             /**
              * @description Whether enabled
              * @default true
              */
             enabled: boolean;
+            /** @description Declared cadence: the connector promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it arms liveness supervision (silence beyond the window emits system.connector.stalled and marks the source unhealthy); null disarms it. */
+            expectedIntervalSeconds?: number | null;
+            /**
+             * @description Declared time-window semantics: 'future_only' (only not-yet-started items) or 'includes_in_progress'. Informational contract for consumers; null = undeclared.
+             * @enum {string|null}
+             */
+            windowSemantics?: "future_only" | "includes_in_progress" | null;
+            /**
+             * @description How the source re-emits a changed upstream item: 'same_id' (reschedule case — consumers must key on id+content) or 'new_id'. Feeds the idempotency key template choice; null = undeclared.
+             * @enum {string|null}
+             */
+            mutationPolicy?: "same_id" | "new_id" | null;
         };
         TriggerEventRequest: {
             /** @description Event type (must start with custom.) */
@@ -3897,6 +4043,27 @@ export interface components {
             eventType: string;
             /** @description True when the delivery was a redelivery: acked, but no second event was created */
             duplicate?: boolean;
+        };
+        WebhookHeartbeatResponse: {
+            /**
+             * @description Heartbeat recorded
+             * @enum {boolean}
+             */
+            ok: true;
+            /** @description Webhook source name */
+            source: string;
+            /**
+             * Format: date-time
+             * @description When the heartbeat was recorded
+             */
+            heartbeatAt: string;
+            /**
+             * @description Status before this heartbeat (a stalled source recovers on the next sweep tick)
+             * @enum {string|null}
+             */
+            livenessStatus: "healthy" | "stalled" | null;
+            /** @description Declared cadence, if any */
+            expectedIntervalSeconds: number | null;
         };
         AccessRule: {
             /**
@@ -4840,6 +5007,47 @@ export interface components {
             payloadCleanup: {
                 deleted: number;
             };
+        };
+        EventSchema: {
+            /**
+             * Format: uuid
+             * @description Registration UUID
+             */
+            id: string;
+            /** @description Event type the schema governs (e.g. custom.github.push) */
+            eventType: string;
+            /** @description Revision counter; bumps on each compatible replacement */
+            version: number;
+            /** @description JSON Schema (draft-07) artifact, stored as-is */
+            schema: {
+                [key: string]: unknown;
+            };
+            /** @description Description */
+            description: string | null;
+            /** @description Whether the validation gate is active for this type */
+            enabled: boolean;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        RegisterEventSchemaRequest: {
+            /** @description Event type to register the schema for (e.g. custom.github.push) */
+            eventType: string;
+            /** @description JSON Schema (draft-07) the payload must satisfy. Stored as-is */
+            schema: {
+                [key: string]: unknown;
+            };
+            /** @description Description */
+            description?: string;
+            /** @description Whether the validation gate is active (default true) */
+            enabled?: boolean;
         };
         Automation: {
             /**
@@ -10484,6 +10692,16 @@ export interface operations {
                                 /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
                                 prefix?: string;
                             } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */
@@ -10492,6 +10710,47 @@ export interface operations {
                             totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -10542,11 +10801,33 @@ export interface operations {
                     signatureSecret?: string | null;
                     /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
                     idempotencyKeyTemplate?: string;
+                    /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
+                    eventTypeMapping?: {
+                        /**
+                         * @description Where the semantic event name is read from (only headers for now)
+                         * @enum {string}
+                         */
+                        source: "header";
+                        /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                        header: string;
+                    } | null;
                     /**
                      * @description Whether enabled
                      * @default true
                      */
                     enabled?: boolean;
+                    /** @description Declared cadence: the connector promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it arms liveness supervision (silence beyond the window emits system.connector.stalled and marks the source unhealthy); null disarms it. */
+                    expectedIntervalSeconds?: number | null;
+                    /**
+                     * @description Declared time-window semantics: 'future_only' (only not-yet-started items) or 'includes_in_progress'. Informational contract for consumers; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    windowSemantics?: "future_only" | "includes_in_progress" | null;
+                    /**
+                     * @description How the source re-emits a changed upstream item: 'same_id' (reschedule case — consumers must key on id+content) or 'new_id'. Feeds the idempotency key template choice; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    mutationPolicy?: "same_id" | "new_id" | null;
                 };
             };
         };
@@ -10584,6 +10865,16 @@ export interface operations {
                                 /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
                                 prefix?: string;
                             } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */
@@ -10592,6 +10883,47 @@ export interface operations {
                             totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -10673,6 +11005,16 @@ export interface operations {
                                 /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
                                 prefix?: string;
                             } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */
@@ -10681,6 +11023,47 @@ export interface operations {
                             totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -10802,11 +11185,33 @@ export interface operations {
                     signatureSecret?: string | null;
                     /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
                     idempotencyKeyTemplate?: string;
+                    /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
+                    eventTypeMapping?: {
+                        /**
+                         * @description Where the semantic event name is read from (only headers for now)
+                         * @enum {string}
+                         */
+                        source: "header";
+                        /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                        header: string;
+                    } | null;
                     /**
                      * @description Whether enabled
                      * @default true
                      */
                     enabled?: boolean;
+                    /** @description Declared cadence: the connector promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it arms liveness supervision (silence beyond the window emits system.connector.stalled and marks the source unhealthy); null disarms it. */
+                    expectedIntervalSeconds?: number | null;
+                    /**
+                     * @description Declared time-window semantics: 'future_only' (only not-yet-started items) or 'includes_in_progress'. Informational contract for consumers; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    windowSemantics?: "future_only" | "includes_in_progress" | null;
+                    /**
+                     * @description How the source re-emits a changed upstream item: 'same_id' (reschedule case — consumers must key on id+content) or 'new_id'. Feeds the idempotency key template choice; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    mutationPolicy?: "same_id" | "new_id" | null;
                 };
             };
         };
@@ -10844,6 +11249,16 @@ export interface operations {
                                 /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
                                 prefix?: string;
                             } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | null;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */
@@ -10852,6 +11267,47 @@ export interface operations {
                             totalDuplicates: number;
                             /** @description Whether enabled */
                             enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -10929,6 +11385,90 @@ export interface operations {
             };
             /** @description Body is not a JSON object */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    heartbeatWebhookSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Heartbeat recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Heartbeat recorded
+                         * @enum {boolean}
+                         */
+                        ok: true;
+                        /** @description Webhook source name */
+                        source: string;
+                        /**
+                         * Format: date-time
+                         * @description When the heartbeat was recorded
+                         */
+                        heartbeatAt: string;
+                        /**
+                         * @description Status before this heartbeat (a stalled source recovers on the next sweep tick)
+                         * @enum {string|null}
+                         */
+                        livenessStatus: "healthy" | "stalled" | null;
+                        /** @description Declared cadence, if any */
+                        expectedIntervalSeconds: number | null;
+                    };
+                };
+            };
+            /** @description Source disabled */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Source not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14824,6 +15364,238 @@ export interface operations {
                             payloadCleanup: {
                                 deleted: number;
                             };
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listEventSchemas: {
+        parameters: {
+            query?: {
+                enabled?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of registered schemas */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /**
+                             * Format: uuid
+                             * @description Registration UUID
+                             */
+                            id: string;
+                            /** @description Event type the schema governs (e.g. custom.github.push) */
+                            eventType: string;
+                            /** @description Revision counter; bumps on each compatible replacement */
+                            version: number;
+                            /** @description JSON Schema (draft-07) artifact, stored as-is */
+                            schema: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Description */
+                            description: string | null;
+                            /** @description Whether the validation gate is active for this type */
+                            enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    registerEventSchema: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Event type to register the schema for (e.g. custom.github.push) */
+                    eventType: string;
+                    /** @description JSON Schema (draft-07) the payload must satisfy. Stored as-is */
+                    schema: {
+                        [key: string]: unknown;
+                    };
+                    /** @description Description */
+                    description?: string;
+                    /** @description Whether the validation gate is active (default true) */
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Schema registered (or compatibly revised) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Registration UUID
+                             */
+                            id: string;
+                            /** @description Event type the schema governs (e.g. custom.github.push) */
+                            eventType: string;
+                            /** @description Revision counter; bumps on each compatible replacement */
+                            version: number;
+                            /** @description JSON Schema (draft-07) artifact, stored as-is */
+                            schema: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Description */
+                            description: string | null;
+                            /** @description Whether the validation gate is active for this type */
+                            enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Not a valid JSON Schema */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Incompatible schema change refused (evolution rule) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getEventSchema: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eventType: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered schema */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Registration UUID
+                             */
+                            id: string;
+                            /** @description Event type the schema governs (e.g. custom.github.push) */
+                            eventType: string;
+                            /** @description Revision counter; bumps on each compatible replacement */
+                            version: number;
+                            /** @description JSON Schema (draft-07) artifact, stored as-is */
+                            schema: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Description */
+                            description: string | null;
+                            /** @description Whether the validation gate is active for this type */
+                            enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description No schema registered for this type */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
                         };
                     };
                 };

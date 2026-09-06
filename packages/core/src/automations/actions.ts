@@ -7,6 +7,7 @@
 import { brokeredFetch } from '../egress';
 import type { EventBus } from '../events/bus';
 import { resolveAmbientTenantId } from '../events/envelope';
+import { SCHEMA_VALIDATION_FAILED } from '../events/schema-registry';
 import type { CustomEventType, GenericEventPayload } from '../events/types';
 import { generateId } from '../ids';
 import { createLogger } from '../logger';
@@ -161,6 +162,20 @@ export interface ActionDependencies {
     trustedTenantId?: string | null,
   ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
   /**
+   * Optional schema-registry gate for `emit_event` (issue #959). Invoked with
+   * the resolved event type and payload BEFORE publish; an invalid verdict
+   * fails the action and nothing enters the journal. The implementation
+   * (packages/api `automation-actions.ts`) consults the `event_schemas`
+   * registry and dead-letters the refused payload with reason
+   * `schema_validation_failed`. Omitted (existing tests, route-side manual
+   * execute) → no gate, behavior unchanged.
+   */
+  validateEmitEvent?: (
+    eventType: string,
+    payload: Record<string, unknown>,
+    trustedTenantId?: string | null,
+  ) => Promise<{ valid: boolean; errors?: string[] }>;
+  /**
    * Release a claim previously granted by `staleIdleTimeoutGate`. The gate
    * records the claim before the event is executed, so a delivery that throws
    * (queue full → `nak`, dispatcher error) must give the claim back or its own
@@ -304,6 +319,54 @@ async function executeSendMessageAction(
 }
 
 /**
+ * Claim the (event, automation, action) slot's derived idempotency key
+ * (#958) before an emission publishes. `duplicate: true` means the key is
+ * already journaled — a replay/redelivery of the slot — and the emission
+ * must be skipped. Without the dep or provenance the claim is a no-op.
+ */
+async function claimEmissionSlot(
+  deps: ActionDependencies,
+  eventType: string,
+  payload: GenericEventPayload,
+  trustedTenantId?: string | null,
+  provenance?: EmitProvenance & { actionIndex: number },
+): Promise<{ duplicate: boolean; claimedEventId?: string }> {
+  if (!deps.claimEmittedEvent || !provenance) {
+    return { duplicate: false };
+  }
+  const idempotencyKey = `derived:${provenance.parentEventId}:${provenance.automationId}:${provenance.actionIndex}`;
+  const claimedEventId = generateId();
+  const claimed = await deps.claimEmittedEvent(
+    { idempotencyKey, eventId: claimedEventId, eventType, payload },
+    trustedTenantId,
+  );
+  if (!claimed) {
+    logger.info('Skipping duplicate emission (idempotency key already journaled)', { eventType, idempotencyKey });
+    return { duplicate: true };
+  }
+  return { duplicate: false, claimedEventId };
+}
+
+/**
+ * A claim must not outlive a failed publish — leaving it would drop the
+ * retry's emission as a "duplicate" of an event that never existed.
+ */
+async function releaseEmissionClaim(
+  deps: ActionDependencies,
+  claimedEventId: string | undefined,
+  eventType: string,
+): Promise<void> {
+  if (!claimedEventId || !deps.releaseEmittedEventClaim) return;
+  await deps.releaseEmittedEventClaim(claimedEventId).catch((releaseError: unknown) => {
+    logger.error('Failed to release emission idempotency claim', {
+      eventType,
+      claimedEventId,
+      error: String(releaseError),
+    });
+  });
+}
+
+/**
  * Execute an emit_event action
  */
 async function executeEmitEventAction(
@@ -331,25 +394,27 @@ async function executeEmitEventAction(
 
     const eventType = substituteTemplate(config.eventType, context) as CustomEventType;
 
+    // Schema-registry gate (issue #959): a registered type's payload must
+    // satisfy its schema or the emit fails BEFORE publish (the gate impl
+    // dead-letters it). Unregistered types pass through — opt-in per type.
+    // Runs BEFORE the idempotency claim (#958): a refused payload must not
+    // journal an event or burn the slot's derived key.
+    if (deps.validateEmitEvent) {
+      const verdict = await deps.validateEmitEvent(eventType, payload, trustedTenantId);
+      if (!verdict.valid) {
+        const detail = verdict.errors?.length ? `: ${verdict.errors.join('; ')}` : '';
+        logger.warn('Emit event refused by schema registry', { eventType, errors: verdict.errors });
+        return { success: false, error: `${SCHEMA_VALIDATION_FAILED}${detail}` };
+      }
+    }
+
     // Derived-key idempotency (#958): claim before publishing so re-running
     // the same automation over the same event does not duplicate the
     // emission. This dedupes REPLAY of the same (event, automation, action)
     // slot only — two different parent events legitimately emit twice.
-    let claimedEventId: string | undefined;
-    if (deps.claimEmittedEvent && provenance) {
-      const idempotencyKey = `derived:${provenance.parentEventId}:${provenance.automationId}:${provenance.actionIndex}`;
-      claimedEventId = generateId();
-      const claimed = await deps.claimEmittedEvent(
-        { idempotencyKey, eventId: claimedEventId, eventType, payload },
-        trustedTenantId,
-      );
-      if (!claimed) {
-        logger.info('Skipping duplicate emission (idempotency key already journaled)', {
-          eventType,
-          idempotencyKey,
-        });
-        return { success: true, result: { eventType, duplicate: true } };
-      }
+    const claim = await claimEmissionSlot(deps, eventType, payload, trustedTenantId, provenance);
+    if (claim.duplicate) {
+      return { success: true, result: { eventType, duplicate: true } };
     }
 
     logger.debug('Emitting event', { eventType });
@@ -368,17 +433,7 @@ async function executeEmitEventAction(
         ...(trustedTenantId ? { tenantId: trustedTenantId } : {}),
       });
     } catch (error) {
-      // A claim must not outlive a failed publish — leaving it would drop the
-      // retry's emission as a "duplicate" of an event that never existed.
-      if (claimedEventId && deps.releaseEmittedEventClaim) {
-        await deps.releaseEmittedEventClaim(claimedEventId).catch((releaseError: unknown) => {
-          logger.error('Failed to release emission idempotency claim', {
-            eventType,
-            claimedEventId,
-            error: String(releaseError),
-          });
-        });
-      }
+      await releaseEmissionClaim(deps, claim.claimedEventId, eventType);
       throw error;
     }
 

@@ -3,7 +3,12 @@
  */
 
 import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
-import { webhookSignatureAlgorithms } from '@omni/db';
+import {
+  connectorLivenessStatuses,
+  connectorMutationPolicies,
+  connectorWindowSemanticsValues,
+  webhookSignatureAlgorithms,
+} from '@omni/db';
 import { DEFAULT_IDEMPOTENCY_KEY_TEMPLATE, isValidIdempotencyKeyTemplate } from '../../lib/ingress-idempotency';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, SuccessSchema } from './common';
@@ -47,6 +52,18 @@ export const WebhookSignatureConfigSchema = z
     path: ['prefix'],
   });
 
+// Semantic event-type extraction (issue #959). Like the signature contract
+// above, this is the ONE Zod definition: the route validator imports it, so
+// the published OpenAPI document and the runtime validation cannot drift.
+export const WebhookEventTypeMappingSchema = z.object({
+  source: z.literal('header').openapi({
+    description: 'Where the semantic event name is read from (only headers for now)',
+  }),
+  header: z.string().min(1).max(200).openapi({
+    description: 'Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters',
+  }),
+});
+
 // Webhook source schema
 export const WebhookSourceSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Source UUID' }),
@@ -54,12 +71,40 @@ export const WebhookSourceSchema = z.object({
   description: z.string().nullable().openapi({ description: 'Description' }),
   expectedHeaders: z.record(z.string(), z.boolean()).nullable().openapi({ description: 'Expected headers' }),
   signatureConfig: WebhookSignatureConfigSchema.nullable().openapi({ description: 'Signature verification config' }),
+  eventTypeMapping: WebhookEventTypeMappingSchema.nullable().openapi({
+    description:
+      'Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source}',
+  }),
   hasSignatureSecret: z
     .boolean()
     .openapi({ description: 'Whether a signature secret is stored (secret is write-only)' }),
   idempotencyKeyTemplate: z.string().openapi({ description: 'Idempotency key derivation template' }),
   totalDuplicates: z.number().int().openapi({ description: 'Redeliveries acked without creating a second event' }),
   enabled: z.boolean().openapi({ description: 'Whether enabled' }),
+  lastReceivedAt: z.string().datetime().nullable().openapi({ description: 'When the last webhook was received' }),
+  totalReceived: z.number().int().openapi({ description: 'Total webhooks received' }),
+  // Connector lifecycle contract (#961)
+  expectedIntervalSeconds: z
+    .number()
+    .int()
+    .nullable()
+    .openapi({ description: 'Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised' }),
+  lastHeartbeatAt: z.string().datetime().nullable().openapi({ description: 'Last heartbeat ("ran, zero events")' }),
+  heartbeatCount: z.number().int().openapi({ description: 'Total heartbeats received' }),
+  livenessStatus: z
+    .enum(connectorLivenessStatuses)
+    .nullable()
+    .openapi({ description: 'Liveness state; null = unsupervised. Transitions emit system.connector.* events' }),
+  livenessArmedAt: z.string().datetime().nullable().openapi({ description: 'When the cadence was (re)declared' }),
+  stalledAt: z.string().datetime().nullable().openapi({ description: 'When the current stall began' }),
+  windowSemantics: z
+    .enum(connectorWindowSemanticsValues)
+    .nullable()
+    .openapi({ description: 'Declared window semantics; null = undeclared' }),
+  mutationPolicy: z
+    .enum(connectorMutationPolicies)
+    .nullable()
+    .openapi({ description: 'Declared upstream-mutation re-emit policy; null = undeclared' }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
 });
@@ -89,7 +134,58 @@ export const CreateWebhookSourceSchema = z.object({
         'without a signatureConfig (given in the same request, or already stored on update); null clears it.',
     }),
   idempotencyKeyTemplate: IdempotencyKeyTemplateSchema.optional(),
+  eventTypeMapping: WebhookEventTypeMappingSchema.nullable()
+    .optional()
+    .openapi({
+      description:
+        'Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). ' +
+        'Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery.',
+    }),
   enabled: z.boolean().default(true).openapi({ description: 'Whether enabled' }),
+  // Connector lifecycle contract (#961)
+  expectedIntervalSeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(2_592_000)
+    .nullable()
+    .optional()
+    .openapi({
+      description:
+        'Declared cadence: the connector promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it ' +
+        'arms liveness supervision (silence beyond the window emits system.connector.stalled and marks the ' +
+        'source unhealthy); null disarms it.',
+    }),
+  windowSemantics: z
+    .enum(connectorWindowSemanticsValues)
+    .nullable()
+    .optional()
+    .openapi({
+      description:
+        "Declared time-window semantics: 'future_only' (only not-yet-started items) or 'includes_in_progress'. " +
+        'Informational contract for consumers; null = undeclared.',
+    }),
+  mutationPolicy: z
+    .enum(connectorMutationPolicies)
+    .nullable()
+    .optional()
+    .openapi({
+      description:
+        "How the source re-emits a changed upstream item: 'same_id' (reschedule case — consumers must key on " +
+        "id+content) or 'new_id'. Feeds the idempotency key template choice; null = undeclared.",
+    }),
+});
+
+// Heartbeat response (#961)
+export const WebhookHeartbeatResponseSchema = z.object({
+  ok: z.literal(true).openapi({ description: 'Heartbeat recorded' }),
+  source: z.string().openapi({ description: 'Webhook source name' }),
+  heartbeatAt: z.string().datetime().openapi({ description: 'When the heartbeat was recorded' }),
+  livenessStatus: z
+    .enum(connectorLivenessStatuses)
+    .nullable()
+    .openapi({ description: 'Status before this heartbeat (a stalled source recovers on the next sweep tick)' }),
+  expectedIntervalSeconds: z.number().int().nullable().openapi({ description: 'Declared cadence, if any' }),
 });
 
 // Trigger event request
@@ -113,10 +209,12 @@ export const WebhookReceiveResponseSchema = z.object({
 
 export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
   registry.register('WebhookSignatureConfig', WebhookSignatureConfigSchema);
+  registry.register('WebhookEventTypeMapping', WebhookEventTypeMappingSchema);
   registry.register('WebhookSource', WebhookSourceSchema);
   registry.register('CreateWebhookSourceRequest', CreateWebhookSourceSchema);
   registry.register('TriggerEventRequest', TriggerEventSchema);
   registry.register('WebhookReceiveResponse', WebhookReceiveResponseSchema);
+  registry.register('WebhookHeartbeatResponse', WebhookHeartbeatResponseSchema);
 
   registry.registerPath({
     method: 'get',
@@ -221,6 +319,29 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
         content: { 'application/json': { schema: WebhookReceiveResponseSchema } },
       },
       400: { description: 'Body is not a JSON object', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
+    path: '/webhooks/{source}/heartbeat',
+    operationId: 'heartbeatWebhookSource',
+    tags: ['Webhooks'],
+    summary: 'Connector heartbeat',
+    description:
+      'Record a connector heartbeat: "I ran, zero events found". Resets the liveness window of a supervised ' +
+      'source (one declaring expectedIntervalSeconds) so silence-beyond-window detection can tell quiet from ' +
+      'dead. Creates NO journal event — only the stalled/recovered transitions are journaled. No request body.',
+    request: {
+      params: z.object({ source: z.string().openapi({ description: 'Source name' }) }),
+    },
+    responses: {
+      200: {
+        description: 'Heartbeat recorded',
+        content: { 'application/json': { schema: WebhookHeartbeatResponseSchema } },
+      },
+      403: { description: 'Source disabled', content: { 'application/json': { schema: ErrorSchema } } },
+      404: { description: 'Source not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
 

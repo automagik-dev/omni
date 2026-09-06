@@ -212,6 +212,34 @@ describe('SystemEventSchemas', () => {
     const result = SystemEventSchemas.healthDegraded.schema.safeParse(validPayload);
     expect(result.success).toBe(true);
   });
+
+  test('connectorStalled schema validates correctly', () => {
+    const result = SystemEventSchemas.connectorStalled.schema.safeParse({
+      sourceId: 'a4b1c9c2-0000-4000-8000-000000000000',
+      sourceName: 'gmail-purchases',
+      expectedIntervalSeconds: 900,
+      lastReceivedAt: Date.now() - 3_600_000,
+      lastHeartbeatAt: null,
+      silentForSeconds: 3600,
+      stalledAt: Date.now(),
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test('connectorRecovered schema validates correctly and rejects unknown recoveredBy', () => {
+    const validPayload = {
+      sourceId: 'a4b1c9c2-0000-4000-8000-000000000000',
+      sourceName: 'gmail-purchases',
+      expectedIntervalSeconds: 900,
+      stalledForSeconds: 5400,
+      recoveredBy: 'heartbeat' as const,
+      recoveredAt: Date.now(),
+    };
+    expect(SystemEventSchemas.connectorRecovered.schema.safeParse(validPayload).success).toBe(true);
+    expect(
+      SystemEventSchemas.connectorRecovered.schema.safeParse({ ...validPayload, recoveredBy: 'restart' }).success,
+    ).toBe(false);
+  });
 });
 
 describe('CustomEventSchemas', () => {
