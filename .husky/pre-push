@@ -9,15 +9,22 @@ set -e
 # failure was already on dev. "It was already broken" is not an exception;
 # the hook stays strict so the repo state monotonically improves.
 #
+# HOW IT STAYS FAST without getting lenient: both gates run through turbo,
+# whose task hashes cover each package's own files, the sources of every
+# internal dependency (via the synthetic `topo` task in turbo.json), and the
+# env vars that gate test behavior (CI, MINIO_INTEGRATION, OMNI_*, ...).
+# A cache hit therefore replays a run of BYTE-IDENTICAL inputs — nothing is
+# skipped, previously-proven work is just not re-proven. Any change to a
+# package re-runs that package's tests plus every dependent's. To force a
+# full uncached run: `bunx turbo test --force`.
+#
+# The SDK dist/ staleness footgun is gone: `test` and `typecheck` depend on
+# `^build`, so turbo rebuilds packages/sdk (content-hashed) whenever its
+# sources change — no manual `cd packages/sdk && bun run build` needed.
+#
 # Common causes + how to fix them:
 #
-#   • Typecheck error in packages/cli referencing SDK types
-#       → SDK dist/ is stale. Run `cd packages/sdk && bun run build`,
-#         then re-push. The hook auto-builds SDK if dist/ is missing
-#         entirely, but a stale dist (older than source) is harder to
-#         detect — always rebuild after touching packages/sdk/src.
-#
-#   • Logger / Buffer / formatter tests failing in full suite but
+#   • Logger / Buffer / formatter tests failing in a package's suite but
 #     passing in isolation
 #       → Some other test file is calling `mock.module('@omni/core', ...)`
 #         with a truncated surface. Bun's mock.module is process-wide,
@@ -31,6 +38,12 @@ set -e
 #       → Bisect: `bun test <suspect_file> packages/core/src/logger`.
 #         If failing only in pairs, the suspect is poisoning shared state.
 #         Reach for spyOn/local fixtures over mock.module.
+#
+#   • MinIO suites timing out locally
+#       → The harness needs a healthy Docker daemon. Leaked test containers
+#         from OOM-killed runs degrade it; the harness reaps stale ones at
+#         launch, but `docker ps --filter label=com.automagik.omni.test-harness=minio`
+#         shows anything left to clean by hand.
 #
 #   • Force push to main/master
 #       → Refused by design. Main is production; merge through the
@@ -50,30 +63,25 @@ while read local_ref local_oid remote_ref remote_oid; do
   fi
 done
 
-# Build SDK dist if missing (CLI typecheck depends on SDK type declarations)
-if [ ! -d packages/sdk/dist ]; then
-  echo "Building SDK (dist/ missing) — re-running typecheck against fresh dist..."
-  cd packages/sdk && bun run build && cd ../..
-fi
-
-echo "▶ pre-push: typecheck"
+echo "▶ pre-push: typecheck (turbo-cached)"
 if ! make typecheck; then
   echo ""
-  echo "✗ typecheck failed."
-  echo "  → If errors reference SDK types, run: cd packages/sdk && bun run build"
-  echo "  → Then re-push. See hook header for full guidance."
+  echo "✗ typecheck failed. See hook header for guidance."
   exit 1
 fi
 
-echo "▶ pre-push: full test suite"
-if ! bun test packages apps/ui; then
+# Full test suite, per-package via turbo. Coverage is identical to the old
+# `bun test packages apps/ui` (every workspace with test files has a `test`
+# script — keep it that way when adding packages). --concurrency=4 bounds
+# concurrent bun processes so two agents pushing at once cannot exhaust swap
+# the way one monolithic 6500-test process previously did.
+echo "▶ pre-push: full test suite (turbo-cached)"
+if ! bunx turbo test --concurrency=4 --output-logs=new-only; then
   echo ""
   echo "✗ tests failed."
-  echo "  → If Logger / Buffer tests fail in the full suite but pass in"
-  echo "    isolation, hunt for a mock.module('@omni/core', ...) call in"
-  echo "    api/cli test files — that's the usual culprit. See hook"
-  echo "    header for full guidance."
-  echo "  → Bisect with: bun test <suspect_file> packages/core/src/logger"
+  echo "  → Re-run just the red package: bunx turbo test --filter=<pkg>"
+  echo "  → Force a full uncached run:   bunx turbo test --force"
+  echo "  → See hook header for mock.module / MinIO guidance."
   exit 1
 fi
 

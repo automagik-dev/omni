@@ -7,11 +7,11 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
-    "typecheck": "turbo typecheck",
+    "typecheck": "turbo typecheck --concurrency=4",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "test": "turbo test",
+    "test": "turbo test --concurrency=4",
     "verify:versions": "bun scripts/verify-versions.ts",
     "db:verify-drift": "bun scripts/verify-schema-drift.ts",
     "clean": "turbo clean && rm -rf node_modules",
