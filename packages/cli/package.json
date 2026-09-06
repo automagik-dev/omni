@@ -9,6 +9,7 @@
   "homepage": "https://github.com/automagik-dev/omni",
   "bugs": "https://github.com/automagik-dev/omni/issues",
   "description": "LLM-optimized CLI for Omni",
+  "license": "Apache-2.0",
   "keywords": [
     "omni",
     "cli",
@@ -39,7 +40,7 @@
       "import": "./dist/sdk/index.js"
     }
   },
-  "files": ["dist", "bin", "db", "scripts/postinstall-pin-version.cjs"],
+  "files": ["dist", "bin", "db", "scripts/postinstall-pin-version.cjs", "LICENSE"],
   "publishConfig": {
     "access": "public"
   },
