@@ -2785,6 +2785,13 @@ export type NewWebhookSource = Omit<typeof webhookSources.$inferInsert, 'tenantI
  * `version` counts in-place compatible (additive-optional) revisions of one
  * event_type's schema; an incompatible change is refused at register time and
  * must ship as a new versioned event_type (e.g. `custom.github.push.v2`).
+ *
+ * TENANCY: registrations are GLOBAL for now — the table deliberately carries
+ * no `tenant_id` (the `scheduled_messages` precedent). The RLS coverage gate
+ * (`tenancy-rls.test.ts`) requires every tenant_id-bearing table to be in the
+ * frozen G0 manifest, the G1 tenant plane, or the runtime-denied exclusions;
+ * a born-tenant business table fits none of those, so per-tenant registration
+ * joins the tenancy machinery in the G6+ ownership pass, additively.
  */
 export const eventSchemas = pgTable(
   'event_schemas',
@@ -2801,21 +2808,15 @@ export const eventSchemas = pgTable(
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-    /** Additive tenancy, same playbook as webhook_sources: global rows carry NULL. */
-    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
-    tenantIdx: index('event_schemas_tenant_idx').on(table.tenantId),
-    tenantEventTypeUq: uniqueIndex('event_schemas_tenant_event_type_uq')
-      .on(table.tenantId, table.eventType)
-      .where(sql`${table.tenantId} IS NOT NULL`),
     eventTypeIdx: uniqueIndex('event_schemas_event_type_idx').on(table.eventType),
     enabledIdx: index('event_schemas_enabled_idx').on(table.enabled),
   }),
 );
 
 export type EventSchemaRow = typeof eventSchemas.$inferSelect;
-export type NewEventSchemaRow = Omit<typeof eventSchemas.$inferInsert, 'tenantId'>;
+export type NewEventSchemaRow = typeof eventSchemas.$inferInsert;
 
 // ============================================================================
 // AUTOMATIONS (Events Ext)

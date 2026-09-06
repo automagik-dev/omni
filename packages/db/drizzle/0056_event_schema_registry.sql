@@ -13,8 +13,11 @@
 -- collapsing every delivery into custom.webhook.{source}. NULL keeps the
 -- legacy collapsed type.
 --
--- Tenancy is additive, same playbook as webhook_sources: nullable tenant_id,
--- global rows carry NULL, partial per-tenant unique prepared for G7+.
+-- TENANCY: registrations are global — no tenant_id column, following the
+-- scheduled_messages precedent. The RLS coverage gate requires every
+-- tenant_id-bearing table to be in the frozen G0 manifest, the G1 tenant
+-- plane, or the runtime-denied exclusions; per-tenant registration joins the
+-- tenancy machinery additively in the G6+ ownership pass.
 --
 -- Hand-written following the 0044-0055 precedent (snapshot drift keeps
 -- drizzle-kit generate interactive). Additive + idempotent. No explicit
@@ -30,22 +33,9 @@ CREATE TABLE IF NOT EXISTS "event_schemas" (
   "enabled" boolean DEFAULT true NOT NULL,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-  "tenant_id" uuid,
   CONSTRAINT "event_schemas_event_type_unique" UNIQUE("event_type")
 );
 
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'event_schemas_tenant_id_tenants_id_fk' AND conrelid = '"event_schemas"'::regclass
-  ) THEN
-    ALTER TABLE "event_schemas" ADD CONSTRAINT "event_schemas_tenant_id_tenants_id_fk"
-      FOREIGN KEY ("tenant_id") REFERENCES "tenants" ("id") ON DELETE RESTRICT;
-  END IF;
-END $$;
-
-CREATE INDEX IF NOT EXISTS "event_schemas_tenant_idx" ON "event_schemas" ("tenant_id");
-CREATE UNIQUE INDEX IF NOT EXISTS "event_schemas_tenant_event_type_uq" ON "event_schemas" ("tenant_id", "event_type") WHERE "tenant_id" IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS "event_schemas_event_type_idx" ON "event_schemas" ("event_type");
 CREATE INDEX IF NOT EXISTS "event_schemas_enabled_idx" ON "event_schemas" ("enabled");
 
