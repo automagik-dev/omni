@@ -2,7 +2,8 @@
 # Universal Event-Driven Omnichannel Platform
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
-        test test-sweep test-watch test-api test-db test-pg-gate typecheck typecheck-ui lint lint-fix lint-ui format check check-all dead-code verify-migrations \
+        test test-sweep test-watch test-api test-db test-pg-gate test-pg-gate-warm pg-gate-warm-stop \
+        typecheck typecheck-ui lint lint-fix lint-ui format check check-all dead-code verify-migrations \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -42,6 +43,8 @@ help:
 	@echo "  make test-api      Run API package tests only"
 	@echo "  make test-db       Run DB package tests only"
 	@echo "  make test-pg-gate  Run every real-PostgreSQL suite (fails loudly, never skips)"
+	@echo "  make test-pg-gate-warm  Same gate against a kept-warm cluster (fast dev loop)"
+	@echo "  make pg-gate-warm-stop  Destroy the kept-warm pg-gate cluster"
 	@echo "  make test-file F=<path>  Run a specific test file"
 	@echo "  make kill-stale-test-daemons  Sweep leaked PM2 god daemons from CLI tests (#413)"
 	@echo ""
@@ -264,6 +267,16 @@ test-db:
 # DATABASE_URL or a shared cluster.
 test-pg-gate:
 	bun scripts/pg-gate.ts
+
+# Keep-warm variant (#967): first run creates the disposable cluster and
+# remembers it in .pg-gate-warm.json; later runs reuse it via --url, skipping
+# the ~15-20s initdb + role setup per iteration. Same gate, same zero-skip
+# contract. `make pg-gate-warm-stop` destroys the kept cluster.
+test-pg-gate-warm:
+	bun scripts/pg-gate-warm.ts run
+
+pg-gate-warm-stop:
+	bun scripts/pg-gate-warm.ts stop
 
 # Run a specific test file (usage: make test-file F=packages/api/src/__tests__/foo.test.ts)
 test-file:
