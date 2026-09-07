@@ -10,8 +10,10 @@
 
 import type { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
+import { type AutomationCondition, evaluateConditions } from '@omni/core';
 import type { Event, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
+import { z } from 'zod';
 import { getClient } from '../client.js';
 import { getOutputFormat, loadConfig } from '../config.js';
 import * as output from '../output.js';
@@ -622,6 +624,106 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
   }
 }
 
+// ============================================================================
+// WAIT (issue #966)
+// ============================================================================
+
+/**
+ * The journal row as the API actually returns it: the generated SDK `Event`
+ * type is a projection, but GET /events returns full omni_events rows —
+ * including rawPayload, which is where the `custom.>` journal subscriber puts
+ * the published payload. `wait --filter` matches against those top-level
+ * payload fields.
+ */
+type WaitEventRow = Event & { rawPayload?: Record<string, unknown> | null };
+
+/** `--filter` entries must look like key=value (dot paths allowed on the key). */
+const WaitFilterEntrySchema = z
+  .string()
+  .regex(/^[^=\s]+=/, 'each --filter must look like key=value (dot paths allowed, e.g. --filter user.id=42)');
+
+/** Validated `omni events wait` inputs (Zod on external input, repo contract). */
+const WaitOptionsSchema = z.object({
+  timeout: z.coerce.number().positive().max(86400).optional(),
+  pollMs: z.coerce.number().int().min(250).max(60000).default(2000),
+  filter: z.array(WaitFilterEntrySchema).default([]),
+});
+
+/**
+ * Turn `--filter k=v` entries into automation trigger conditions — the SAME
+ * matcher automations use (`evaluateConditions`, @omni/core), per the issue's
+ * contract. Values parse as JSON when valid (`count=5` → number 5,
+ * `ok=true` → boolean) and fall back to the raw string (`status=open`).
+ */
+export function parseWaitFilters(entries: string[]): AutomationCondition[] {
+  return entries.map((entry) => {
+    const idx = entry.indexOf('=');
+    const raw = entry.slice(idx + 1);
+    let value: unknown;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      value = raw;
+    }
+    return { field: entry.slice(0, idx), operator: 'eq', value };
+  });
+}
+
+interface WaitParams {
+  filters: StreamFilterOptions;
+  conditions: AutomationCondition[];
+  sinceIso: string;
+  pollMs: number;
+  /** Absent = wait forever (until the process is interrupted). */
+  timeoutMs?: number;
+}
+
+/** True when the row passes the envelope filters AND the payload conditions. */
+export function matchesWaitEvent(
+  event: WaitEventRow,
+  filters: StreamFilterOptions,
+  conditions: AutomationCondition[],
+): boolean {
+  if (!passesStreamFilters(event, filters)) return false;
+  return evaluateConditions(conditions, event.rawPayload ?? {});
+}
+
+/**
+ * One-shot blocking subscription (#966): poll the same list endpoint
+ * `omni events stream` uses (`fetchStreamBatch`) and resolve with the FIRST
+ * matching event, or null once the deadline passes. DB polling is the
+ * accepted transport (the issue's non-goal keeps SSE/WS out of scope).
+ */
+export async function waitForEvent(client: OmniClient, params: WaitParams): Promise<WaitEventRow | null> {
+  const deadline = params.timeoutMs === undefined ? undefined : Date.now() + params.timeoutMs;
+  const state: StreamState = { sinceIso: params.sinceIso, seen: new Set<string>() };
+
+  for (;;) {
+    const items = await fetchStreamBatch(
+      client,
+      params.filters,
+      params.filters.channel,
+      params.filters.type,
+      state.sinceIso,
+    );
+    const ascending = [...items].sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
+    for (const ev of ascending) {
+      if (state.seen.has(ev.id)) continue;
+      state.seen.add(ev.id);
+      if (ev.receivedAt > state.sinceIso) state.sinceIso = ev.receivedAt;
+      if (matchesWaitEvent(ev, params.filters, params.conditions)) return ev;
+    }
+    // Same dedupe-set bound as processStreamBatch — an open-ended wait must
+    // not grow memory with every observed-but-unmatched event.
+    if (state.seen.size > 5000 && items.length > 0) {
+      state.seen = new Set(items.map((ev) => ev.id));
+    }
+    const remaining = deadline === undefined ? params.pollMs : deadline - Date.now();
+    if (remaining <= 0) return null;
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(params.pollMs, remaining)));
+  }
+}
+
 export function createEventsCommand(): Command {
   const events = new Command('events').description('Query events');
 
@@ -718,6 +820,81 @@ export function createEventsCommand(): Command {
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
           output.error(`Failed to stream events: ${message}`);
+        }
+      },
+    );
+
+  // omni events wait (issue #966) — one-shot blocking subscription
+  events
+    .command('wait')
+    .description('Block until the first matching event, print it as JSON, exit 0. Exits non-zero on --timeout.')
+    .option('--instance <id>', 'Filter by instance ID')
+    .option('--channel <type>', 'Filter by channel type')
+    .option('--type <type>', 'Filter by event type (trailing * = prefix glob, e.g. custom.*)')
+    .option('--chat-id <id>', 'Filter by chat ID')
+    .option('--person-id <id>', 'Filter by person ID')
+    .option(
+      '--filter <k=v>',
+      'Payload condition, repeatable (dot paths + JSON values, e.g. --filter user.id=42 --filter status=open)',
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .option('--timeout <seconds>', 'Give up after N seconds: exit non-zero, nothing on stdout')
+    .option('--since <time>', 'Start cursor (e.g., 5min, ISO timestamp; default: now)')
+    .option('--poll-ms <n>', 'Polling interval in milliseconds', (v) => Number.parseInt(v, 10), 2000)
+    .action(
+      async (options: {
+        instance?: string;
+        channel?: string;
+        type?: string;
+        chatId?: string;
+        personId?: string;
+        filter: string[];
+        timeout?: string;
+        since?: string;
+        pollMs?: number;
+      }) => {
+        const client = getClient();
+        try {
+          const parsed = WaitOptionsSchema.parse({
+            timeout: options.timeout,
+            pollMs: options.pollMs,
+            filter: options.filter,
+          });
+          const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
+          const chatId = options.chatId ? await resolveChatId(options.chatId) : undefined;
+
+          const event = await waitForEvent(client, {
+            // all: true — an explicit wait must also see "noisy" types
+            // (message.delivered/read etc.) the stream hides by default.
+            filters: {
+              instanceId,
+              channel: options.channel,
+              type: options.type,
+              chatId,
+              personId: options.personId,
+              all: true,
+            },
+            conditions: parseWaitFilters(parsed.filter),
+            sinceIso: options.since ? parseSinceTime(options.since) : new Date().toISOString(),
+            pollMs: parsed.pollMs,
+            timeoutMs: parsed.timeout === undefined ? undefined : parsed.timeout * 1000,
+          });
+
+          if (event) {
+            output.raw(JSON.stringify(event));
+            await output.flushStdout();
+            return;
+          }
+          output.error(`Timed out after ${parsed.timeout}s waiting for a matching event`);
+        } catch (err) {
+          const message =
+            err instanceof z.ZodError
+              ? err.issues.map((i) => i.message).join('; ')
+              : err instanceof Error
+                ? err.message
+                : 'Unknown error';
+          output.error(`Failed to wait for event: ${message}`);
         }
       },
     );
