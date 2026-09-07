@@ -47,6 +47,7 @@ import { setupCommandHandlers } from './handlers/commands';
 import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
 import { type SlackDebouncedArgs, setupMessageHandlers } from './handlers/messages';
+import { setupPinHandlers } from './handlers/pins';
 import { setupReactionHandlers } from './handlers/reactions';
 import { type SlackStatusMethod, clearTypingStatus, setSlackThreadStatus } from './handlers/typing';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
@@ -1660,6 +1661,23 @@ export class SlackPlugin extends BaseChannelPlugin {
       {
         onReaction: async (instId, messageId, chatId, userId, emoji, action) => {
           await this.handleReactionReceived(instId, messageId, chatId, userId, emoji, action);
+        },
+      },
+      this.logger,
+    );
+
+    // Pin handlers (#889) — the manifest subscribes to pin_added/pin_removed;
+    // these turn them into message.pinned/unpinned so core records the state.
+    setupPinHandlers(
+      connection.app,
+      instanceId,
+      {
+        onPin: async (instId, messageId, chatId, userId, action) => {
+          if (action === 'pin') {
+            await this.emitMessagePinned({ instanceId: instId, messageId, chatId, from: userId });
+          } else {
+            await this.emitMessageUnpinned({ instanceId: instId, messageId, chatId, from: userId });
+          }
         },
       },
       this.logger,
