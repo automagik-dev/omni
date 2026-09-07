@@ -1,9 +1,13 @@
 /**
  * Custom-event journal row fidelity, over real PostgreSQL (#966).
  *
- * The `custom.>` subscriber (#957) truncated eventType to a stale 50-char cap
- * (the column is 255 since #958), silently breaking exact-match `--type`
- * filters for longer `custom.webhook.{source}.{event}` types.
+ * The `custom.>` subscriber (#957) journals every custom event, but the row
+ * it wrote was lossy in ways that broke the CLI event surface:
+ *  - eventType was truncated to a stale 50-char cap (the column is 255 since
+ *    #958), silently breaking exact-match `--type` filters for longer
+ *    `custom.webhook.{source}.{event}` types;
+ *  - chatUuid/personId were never populated, so `--chat-id`/`--person-id`
+ *    could never match a custom event.
  *
  * These suites drive the REAL subscriber handler (a mock bus captures it —
  * events-trace.test.ts precedent) against a migrated disposable database.
@@ -15,7 +19,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import type { EventBus } from '@omni/core';
-import { type Database, type EventType, createDbHandle } from '@omni/db';
+import { type Database, type EventType, chats, createDbHandle, instances, persons } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { setupEventPersistence } from '../plugins/event-persistence';
 import { EventService } from '../services/events';
@@ -60,6 +64,10 @@ postgresDescribe('custom event journal fidelity (#966, real PostgreSQL)', () => 
   let closeDb: () => Promise<void>;
   let handler: CustomEventHandler;
   let service: EventService;
+  let instanceId: string;
+  let personId: string;
+  let chatUuid: string;
+  const chatExternalId = 'wait-966@s.whatsapp.net';
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
@@ -69,6 +77,32 @@ postgresDescribe('custom event journal fidelity (#966, real PostgreSQL)', () => 
 
     handler = await captureCustomHandler(db);
     service = new EventService(db);
+
+    const [instance] = await db
+      .insert(instances)
+      .values({ name: 'events-966', channel: 'whatsapp-baileys' as const })
+      .returning();
+    if (!instance) throw new Error('instance insert returned nothing');
+    instanceId = instance.id;
+
+    const [person] = await db.insert(persons).values({ displayName: 'Wait 966' }).returning();
+    if (!person) throw new Error('person insert returned nothing');
+    personId = person.id;
+
+    const [chat] = await db
+      .insert(chats)
+      .values({
+        instanceId,
+        externalId: chatExternalId,
+        chatType: 'dm',
+        channel: 'whatsapp-baileys',
+        name: 'Wait 966 DM',
+        visibility: 'visible',
+        lastMessageAt: new Date(),
+      })
+      .returning();
+    if (!chat) throw new Error('chat insert returned nothing');
+    chatUuid = chat.id;
   });
 
   afterAll(async () => {
@@ -112,6 +146,39 @@ postgresDescribe('custom event journal fidelity (#966, real PostgreSQL)', () => 
       expect(row.eventType).toBe(overlongType.slice(0, 255) as EventType);
       // The untruncated type is preserved in the metadata jsonb for forensics.
       expect((row.metadata as { fullEventType?: string })?.fullEventType).toBe(overlongType);
+    });
+  });
+
+  describe('chatUuid/personId population', () => {
+    test('metadata.personId maps onto the row when the person exists', async () => {
+      const { row } = await journal('custom.identity-966.meta_person', {}, { personId });
+      expect(row.personId).toBe(personId);
+    });
+
+    test('payload.personId maps when metadata carries none', async () => {
+      const { row } = await journal('custom.identity-966.payload_person', { personId });
+      expect(row.personId).toBe(personId);
+    });
+
+    test('a personId claim with no persons row is dropped, not fatal (FK safety)', async () => {
+      const { row } = await journal('custom.identity-966.bogus_person', { personId: randomUUID() });
+      expect(row.personId).toBeNull(); // the row itself still persisted
+    });
+
+    test('payload.chatId + metadata.instanceId resolve to the chats.id UUID', async () => {
+      const { row } = await journal('custom.identity-966.chat_jid', { chatId: chatExternalId }, { instanceId });
+      expect(row.chatUuid).toBe(chatUuid);
+      expect(row.chatId).toBe(chatExternalId);
+    });
+
+    test('payload.chatUuid maps directly when it names an existing chat', async () => {
+      const { row } = await journal('custom.identity-966.chat_uuid', { chatUuid });
+      expect(row.chatUuid).toBe(chatUuid);
+    });
+
+    test('a chatUuid claim with no chats row is dropped, not fatal (FK safety)', async () => {
+      const { row } = await journal('custom.identity-966.bogus_chat', { chatUuid: randomUUID() });
+      expect(row.chatUuid).toBeNull();
     });
   });
 });

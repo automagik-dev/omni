@@ -22,7 +22,7 @@
 import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni/core';
 import { JOURNEY_STAGES, createLogger, getJourneyTracker, isValidUuid } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
-import { type ChannelType, type ContentType, channelTypes, chats, contentTypes, omniEvents } from '@omni/db';
+import { type ChannelType, type ContentType, channelTypes, chats, contentTypes, omniEvents, persons } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runConsumerInTenantContext } from '../tenancy/worker-tenant-context';
@@ -74,6 +74,33 @@ async function resolveChatUuid(
       .from(chats)
       .where(and(eq(chats.instanceId, instanceId), eq(chats.externalId, chatId)))
       .limit(1);
+    return chat?.id ?? null;
+  } catch {
+    return null; // best-effort — never fail event persistence because of this
+  }
+}
+
+/**
+ * Best-effort person resolution for custom journal rows (#966): accept a
+ * personId claim only when it is a valid UUID AND the persons row exists —
+ * person_id carries an FK, and a bogus claim must not fail the whole insert.
+ * Never throws.
+ */
+async function resolvePersonId(db: Database, candidate: unknown): Promise<string | null> {
+  if (typeof candidate !== 'string' || !isValidUuid(candidate)) return null;
+  try {
+    const [person] = await db.select({ id: persons.id }).from(persons).where(eq(persons.id, candidate)).limit(1);
+    return person?.id ?? null;
+  } catch {
+    return null; // best-effort — never fail event persistence because of this
+  }
+}
+
+/** Same FK-safe contract for a direct chats.id claim (payload.chatUuid). */
+async function resolveChatUuidById(db: Database, candidate: unknown): Promise<string | null> {
+  if (typeof candidate !== 'string' || !isValidUuid(candidate)) return null;
+  try {
+    const [chat] = await db.select({ id: chats.id }).from(chats).where(eq(chats.id, candidate)).limit(1);
     return chat?.id ?? null;
   } catch {
     return null; // best-effort — never fail event persistence because of this
@@ -433,7 +460,9 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
     // fact here) and the eventType is truncated to the column's 255 chars
     // (#966 — a stale 50-char cap silently broke exact-match type filters
     // for longer custom.webhook.{source}.{event} types after #958 widened
-    // the column).
+    // the column). chatUuid and personId are mapped best-effort from the
+    // envelope metadata / payload (see the inline comment) so the CLI's
+    // --chat-id / --person-id filters can match custom events too.
     await eventBus.subscribePattern(
       'custom.>',
       async (event) => {
@@ -441,15 +470,36 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         try {
           await runConsumerInTenantContext(db, event, async () => {
             const sdb = scopedHandle(db);
+            const payload =
+              typeof event.payload === 'object' && event.payload !== null
+                ? (event.payload as Record<string, unknown>)
+                : {};
+            const instanceId = metadata.instanceId && isValidUuid(metadata.instanceId) ? metadata.instanceId : null;
+            const payloadChatId = typeof payload.chatId === 'string' ? payload.chatId : undefined;
+
+            // #966: best-effort identity mapping so --chat-id/--person-id
+            // filters can match custom events. personId: metadata.personId
+            // (publisher claim) first, then payload.personId — either must
+            // reference an existing persons row (FK safety). chatUuid:
+            // payload.chatUuid (a chats.id UUID) first, then payload.chatId
+            // (a platform JID) resolved against the instance like the
+            // message subscribers do.
+            const personId =
+              (await resolvePersonId(sdb, metadata.personId)) ?? (await resolvePersonId(sdb, payload.personId));
+            const chatUuid =
+              (await resolveChatUuidById(sdb, payload.chatUuid)) ??
+              (await resolveChatUuid(sdb, instanceId ?? undefined, payloadChatId));
+
             const newEvent: NewOmniEvent = {
               ...eventIdInsert(event.id),
               channel: 'internal',
-              instanceId: metadata.instanceId && isValidUuid(metadata.instanceId) ? metadata.instanceId : null,
+              instanceId,
+              personId,
               eventType: event.type.slice(0, 255) as NewOmniEvent['eventType'],
               direction: 'internal',
               status: 'completed',
               receivedAt: new Date(event.timestamp),
-              rawPayload: deepSanitize(event.payload as Record<string, unknown>),
+              rawPayload: deepSanitize(payload),
               metadata: {
                 correlationId: metadata.correlationId,
                 source: metadata.source,
@@ -457,6 +507,8 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               },
               causationId: metadata.causationId ?? null,
               conversationId: null,
+              chatId: payloadChatId,
+              chatUuid,
             };
             await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
           });
