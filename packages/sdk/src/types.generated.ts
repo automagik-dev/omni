@@ -748,6 +748,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events/{id}/trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trace the causality chain around an event
+         * @description Walks UP via causationId to the root ingress event and DOWN breadth-first through fan-out (children are events whose causationId equals this id). correlationId groups the flow; causationId gives the tree.
+         */
+        get: operations["traceEvent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events/by-sender/{senderId}": {
         parameters: {
             query?: never;
@@ -2392,6 +2412,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/channels/harness/{instanceId}/say": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drive an inbound turn
+         * @description Injects an inbound message on a harness instance exactly as a real channel webhook would (message.received → dispatcher → agent: the production path).
+         */
+        post: operations["harnessSay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/harness/{instanceId}/tap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Simulate a component tap
+         * @description Converts a button/list row of a component the agent actually sent into the inbound a real tap produces (text = the option title).
+         */
+        post: operations["harnessTap"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/harness/{instanceId}/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a chat transcript
+         * @description Ordered verbatim capture of one chat: every OutgoingMessage handed to sendMessage() (refused sends included, with violations) plus the injected inbounds, and the enforced capability profile.
+         */
+        get: operations["harnessGetTranscript"];
+        put?: never;
+        post?: never;
+        /**
+         * Reset transcripts
+         * @description Drops one chat transcript, or every transcript of the instance when chatId is omitted.
+         */
+        delete: operations["harnessResetTranscript"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/platform/tenants": {
         parameters: {
             query?: never;
@@ -2855,7 +2939,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -2900,7 +2984,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -3078,7 +3162,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
+            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -3538,6 +3622,11 @@ export interface components {
              * @description When event was processed
              */
             processedAt: string | null;
+            /**
+             * Format: uuid
+             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+             */
+            causationId: string | null;
         };
         EventSummary: {
             /**
@@ -3648,6 +3737,203 @@ export interface components {
              * @default 50
              */
             limit: number;
+        };
+        EventTrace: {
+            /** @description The event the trace was requested for */
+            event: {
+                /**
+                 * Format: uuid
+                 * @description Event UUID
+                 */
+                id: string;
+                /** @description Event type */
+                eventType: string;
+                /** @description Content type */
+                contentType: string | null;
+                /**
+                 * Format: uuid
+                 * @description Instance UUID
+                 */
+                instanceId: string;
+                /**
+                 * Format: uuid
+                 * @description Person UUID
+                 */
+                personId: string | null;
+                /**
+                 * @description Message direction
+                 * @enum {string}
+                 */
+                direction: "inbound" | "outbound";
+                /** @description Text content */
+                textContent: string | null;
+                /** @description Audio transcription */
+                transcription: string | null;
+                /** @description Image description */
+                imageDescription: string | null;
+                /**
+                 * Format: uuid
+                 * @description Chat UUID (FK → chats.id)
+                 */
+                chatUuid: string | null;
+                /**
+                 * Format: uuid
+                 * @description Agent UUID (FK → agents.id)
+                 */
+                agentId: string | null;
+                /**
+                 * Format: uuid
+                 * @description Conversation UUID (FK → conversations.id)
+                 */
+                conversationId: string | null;
+                /**
+                 * Format: date-time
+                 * @description When event was received
+                 */
+                receivedAt: string;
+                /**
+                 * Format: date-time
+                 * @description When event was processed
+                 */
+                processedAt: string | null;
+                /**
+                 * Format: uuid
+                 * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                 */
+                causationId: string | null;
+            };
+            /** @description Chain above the event via causationId, root first, ending at the immediate parent */
+            ancestors: {
+                /**
+                 * Format: uuid
+                 * @description Event UUID
+                 */
+                id: string;
+                /** @description Event type */
+                eventType: string;
+                /** @description Content type */
+                contentType: string | null;
+                /**
+                 * Format: uuid
+                 * @description Instance UUID
+                 */
+                instanceId: string;
+                /**
+                 * Format: uuid
+                 * @description Person UUID
+                 */
+                personId: string | null;
+                /**
+                 * @description Message direction
+                 * @enum {string}
+                 */
+                direction: "inbound" | "outbound";
+                /** @description Text content */
+                textContent: string | null;
+                /** @description Audio transcription */
+                transcription: string | null;
+                /** @description Image description */
+                imageDescription: string | null;
+                /**
+                 * Format: uuid
+                 * @description Chat UUID (FK → chats.id)
+                 */
+                chatUuid: string | null;
+                /**
+                 * Format: uuid
+                 * @description Agent UUID (FK → agents.id)
+                 */
+                agentId: string | null;
+                /**
+                 * Format: uuid
+                 * @description Conversation UUID (FK → conversations.id)
+                 */
+                conversationId: string | null;
+                /**
+                 * Format: date-time
+                 * @description When event was received
+                 */
+                receivedAt: string;
+                /**
+                 * Format: date-time
+                 * @description When event was processed
+                 */
+                processedAt: string | null;
+                /**
+                 * Format: uuid
+                 * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                 */
+                causationId: string | null;
+            }[];
+            /** @description Fan-out below the event, breadth-first */
+            descendants: {
+                event: {
+                    /**
+                     * Format: uuid
+                     * @description Event UUID
+                     */
+                    id: string;
+                    /** @description Event type */
+                    eventType: string;
+                    /** @description Content type */
+                    contentType: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Instance UUID
+                     */
+                    instanceId: string;
+                    /**
+                     * Format: uuid
+                     * @description Person UUID
+                     */
+                    personId: string | null;
+                    /**
+                     * @description Message direction
+                     * @enum {string}
+                     */
+                    direction: "inbound" | "outbound";
+                    /** @description Text content */
+                    textContent: string | null;
+                    /** @description Audio transcription */
+                    transcription: string | null;
+                    /** @description Image description */
+                    imageDescription: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Chat UUID (FK → chats.id)
+                     */
+                    chatUuid: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Agent UUID (FK → agents.id)
+                     */
+                    agentId: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Conversation UUID (FK → conversations.id)
+                     */
+                    conversationId: string | null;
+                    /**
+                     * Format: date-time
+                     * @description When event was received
+                     */
+                    receivedAt: string;
+                    /**
+                     * Format: date-time
+                     * @description When event was processed
+                     */
+                    processedAt: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                     */
+                    causationId: string | null;
+                };
+                /** @description Distance below the focus event (1 = direct child) */
+                depth: number;
+            }[];
+            /** @description True when a depth/node cap cut the walk short */
+            truncated: boolean;
         };
         Identity: {
             /**
@@ -5099,6 +5385,8 @@ export interface components {
                     /** @default 30000 */
                     timeoutMs: number;
                     responseAs?: string;
+                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                    includeEnvelope?: boolean;
                 };
             } | {
                 /** @enum {string} */
@@ -5223,6 +5511,8 @@ export interface components {
                     /** @default 30000 */
                     timeoutMs: number;
                     responseAs?: string;
+                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                    includeEnvelope?: boolean;
                 };
             } | {
                 /** @enum {string} */
@@ -5768,6 +6058,92 @@ export interface components {
              * @enum {string}
              */
             flowAction?: "navigate" | "data_exchange";
+        };
+        /** @description What the simulated platform renders, per instance. Configured via profileMetadata.harnessProfile on the instance and enforced by the plugin sendMessage(). */
+        HarnessCapabilityProfile: {
+            canSendText: boolean;
+            canSendMedia: boolean;
+            canSendButtons: boolean;
+            canSendList: boolean;
+            maxButtons: number;
+            maxListRows: number;
+            /** @description 0 = unlimited */
+            maxMessageLength: number;
+        };
+        HarnessTranscript: {
+            chatId: string;
+            /** @description What the simulated platform renders, per instance. Configured via profileMetadata.harnessProfile on the instance and enforced by the plugin sendMessage(). */
+            profile: {
+                canSendText: boolean;
+                canSendMedia: boolean;
+                canSendButtons: boolean;
+                canSendList: boolean;
+                maxButtons: number;
+                maxListRows: number;
+                /** @description 0 = unlimited */
+                maxMessageLength: number;
+            };
+            entries: ({
+                /** @description Position in the chat transcript (1-based, per chat) */
+                seq: number;
+                /** @enum {string} */
+                direction: "inbound";
+                /** @description Unix ms timestamp */
+                at: number;
+                /** @enum {string} */
+                kind: "say" | "tap";
+                externalId: string;
+                from: string;
+                content: {
+                    type: string;
+                    text?: string;
+                };
+                /** @description Present on kind 'tap' */
+                tap?: {
+                    /** @description seq of the outbound whose component was tapped */
+                    sourceSeq: number;
+                    /** @description 1-based index into that outbound buttons */
+                    optionIndex: number;
+                    /** @description button.data when set */
+                    optionId?: string;
+                    /** @description button.text — what comes back as the inbound text */
+                    optionText: string;
+                };
+            } | {
+                seq: number;
+                /** @enum {string} */
+                direction: "outbound";
+                at: number;
+                /** @description Absent when the send was refused by the profile */
+                externalId?: string;
+                /** @description The FULL OutgoingMessage verbatim — buttons, list, media, metadata included */
+                message: {
+                    [key: string]: unknown;
+                };
+                /** @description Capability-profile violations; empty when it rendered */
+                violations: string[];
+                result: {
+                    success: boolean;
+                    error?: string;
+                };
+            })[];
+            /** @description Oldest entries evicted by the per-chat bound (1000) */
+            droppedEntries: number;
+        };
+        HarnessSayRequest: {
+            /** @description Free-form conversation id — N chats run in parallel */
+            chatId: string;
+            text: string;
+            /** @description Sender id; defaults to user:<chatId> */
+            from?: string;
+            senderName?: string;
+        };
+        HarnessTapRequest: {
+            chatId: string;
+            /** @description 1-based button index, or a string matched against button.data then button.text */
+            option: number | string;
+            /** @description Outbound seq to tap; defaults to the latest rendered outbound with a component */
+            messageSeq?: number;
         };
         PlatformTenant: {
             /**
@@ -6767,7 +7143,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6832,7 +7208,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
+                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -6961,7 +7337,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -7046,7 +7422,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
+                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -7095,7 +7471,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -7225,7 +7601,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
+                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -7354,7 +7730,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -9555,6 +9931,11 @@ export interface operations {
                              * @description When event was processed
                              */
                             processedAt: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                             */
+                            causationId: string | null;
                         }[];
                         meta: {
                             /** @description Whether there are more items */
@@ -9719,6 +10100,11 @@ export interface operations {
                              * @description When event was processed
                              */
                             processedAt: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                             */
+                            causationId: string | null;
                         }[];
                         meta: {
                             /** @description Whether there are more items */
@@ -9854,6 +10240,11 @@ export interface operations {
                              * @description When event was processed
                              */
                             processedAt: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                             */
+                            causationId: string | null;
                         }[];
                         meta: {
                             /** @description Whether there are more items */
@@ -9942,6 +10333,252 @@ export interface operations {
                              * @description When event was processed
                              */
                             processedAt: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                             */
+                            causationId: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Event not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    traceEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Causality trace */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description The event the trace was requested for */
+                            event: {
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                id: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /** @description Content type */
+                                contentType: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /**
+                                 * @description Message direction
+                                 * @enum {string}
+                                 */
+                                direction: "inbound" | "outbound";
+                                /** @description Text content */
+                                textContent: string | null;
+                                /** @description Audio transcription */
+                                transcription: string | null;
+                                /** @description Image description */
+                                imageDescription: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Chat UUID (FK → chats.id)
+                                 */
+                                chatUuid: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Agent UUID (FK → agents.id)
+                                 */
+                                agentId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Conversation UUID (FK → conversations.id)
+                                 */
+                                conversationId: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was received
+                                 */
+                                receivedAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was processed
+                                 */
+                                processedAt: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                                 */
+                                causationId: string | null;
+                            };
+                            /** @description Chain above the event via causationId, root first, ending at the immediate parent */
+                            ancestors: {
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                id: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /** @description Content type */
+                                contentType: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /**
+                                 * @description Message direction
+                                 * @enum {string}
+                                 */
+                                direction: "inbound" | "outbound";
+                                /** @description Text content */
+                                textContent: string | null;
+                                /** @description Audio transcription */
+                                transcription: string | null;
+                                /** @description Image description */
+                                imageDescription: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Chat UUID (FK → chats.id)
+                                 */
+                                chatUuid: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Agent UUID (FK → agents.id)
+                                 */
+                                agentId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Conversation UUID (FK → conversations.id)
+                                 */
+                                conversationId: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was received
+                                 */
+                                receivedAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was processed
+                                 */
+                                processedAt: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                                 */
+                                causationId: string | null;
+                            }[];
+                            /** @description Fan-out below the event, breadth-first */
+                            descendants: {
+                                event: {
+                                    /**
+                                     * Format: uuid
+                                     * @description Event UUID
+                                     */
+                                    id: string;
+                                    /** @description Event type */
+                                    eventType: string;
+                                    /** @description Content type */
+                                    contentType: string | null;
+                                    /**
+                                     * Format: uuid
+                                     * @description Instance UUID
+                                     */
+                                    instanceId: string;
+                                    /**
+                                     * Format: uuid
+                                     * @description Person UUID
+                                     */
+                                    personId: string | null;
+                                    /**
+                                     * @description Message direction
+                                     * @enum {string}
+                                     */
+                                    direction: "inbound" | "outbound";
+                                    /** @description Text content */
+                                    textContent: string | null;
+                                    /** @description Audio transcription */
+                                    transcription: string | null;
+                                    /** @description Image description */
+                                    imageDescription: string | null;
+                                    /**
+                                     * Format: uuid
+                                     * @description Chat UUID (FK → chats.id)
+                                     */
+                                    chatUuid: string | null;
+                                    /**
+                                     * Format: uuid
+                                     * @description Agent UUID (FK → agents.id)
+                                     */
+                                    agentId: string | null;
+                                    /**
+                                     * Format: uuid
+                                     * @description Conversation UUID (FK → conversations.id)
+                                     */
+                                    conversationId: string | null;
+                                    /**
+                                     * Format: date-time
+                                     * @description When event was received
+                                     */
+                                    receivedAt: string;
+                                    /**
+                                     * Format: date-time
+                                     * @description When event was processed
+                                     */
+                                    processedAt: string | null;
+                                    /**
+                                     * Format: uuid
+                                     * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                                     */
+                                    causationId: string | null;
+                                };
+                                /** @description Distance below the focus event (1 = direct child) */
+                                depth: number;
+                            }[];
+                            /** @description True when a depth/node cap cut the walk short */
+                            truncated: boolean;
                         };
                     };
                 };
@@ -10046,6 +10683,11 @@ export interface operations {
                              * @description When event was processed
                              */
                             processedAt: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                             */
+                            causationId: string | null;
                         }[];
                         meta: {
                             total: number;
@@ -15701,6 +16343,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -15839,6 +16483,8 @@ export interface operations {
                             /** @default 30000 */
                             timeoutMs?: number;
                             responseAs?: string;
+                            /** @description Send the full OmniEvent envelope as the default body (default true) */
+                            includeEnvelope?: boolean;
                         };
                     } | {
                         /** @enum {string} */
@@ -15973,6 +16619,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -16145,6 +16793,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -16354,6 +17004,8 @@ export interface operations {
                             /** @default 30000 */
                             timeoutMs?: number;
                             responseAs?: string;
+                            /** @description Send the full OmniEvent envelope as the default body (default true) */
+                            includeEnvelope?: boolean;
                         };
                     } | {
                         /** @enum {string} */
@@ -16488,6 +17140,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -16660,6 +17314,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -16832,6 +17488,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -17002,6 +17660,8 @@ export interface operations {
                                 /** @default 30000 */
                                 timeoutMs: number;
                                 responseAs?: string;
+                                /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                includeEnvelope?: boolean;
                             };
                         } | {
                             /** @enum {string} */
@@ -19848,6 +20508,347 @@ export interface operations {
                 };
             };
             /** @description Channel guard failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    harnessSay: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Free-form conversation id — N chats run in parallel */
+                    chatId: string;
+                    text: string;
+                    /** @description Sender id; defaults to user:<chatId> */
+                    from?: string;
+                    senderName?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Inbound injected */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Position in the chat transcript (1-based, per chat) */
+                            seq: number;
+                            /** @enum {string} */
+                            direction: "inbound";
+                            /** @description Unix ms timestamp */
+                            at: number;
+                            /** @enum {string} */
+                            kind: "say" | "tap";
+                            externalId: string;
+                            from: string;
+                            content: {
+                                type: string;
+                                text?: string;
+                            };
+                            /** @description Present on kind 'tap' */
+                            tap?: {
+                                /** @description seq of the outbound whose component was tapped */
+                                sourceSeq: number;
+                                /** @description 1-based index into that outbound buttons */
+                                optionIndex: number;
+                                /** @description button.data when set */
+                                optionId?: string;
+                                /** @description button.text — what comes back as the inbound text */
+                                optionText: string;
+                            };
+                        };
+                    };
+                };
+            };
+            /** @description Not a harness instance */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    harnessTap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    chatId: string;
+                    /** @description 1-based button index, or a string matched against button.data then button.text */
+                    option: number | string;
+                    /** @description Outbound seq to tap; defaults to the latest rendered outbound with a component */
+                    messageSeq?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Tap injected */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Position in the chat transcript (1-based, per chat) */
+                            seq: number;
+                            /** @enum {string} */
+                            direction: "inbound";
+                            /** @description Unix ms timestamp */
+                            at: number;
+                            /** @enum {string} */
+                            kind: "say" | "tap";
+                            externalId: string;
+                            from: string;
+                            content: {
+                                type: string;
+                                text?: string;
+                            };
+                            /** @description Present on kind 'tap' */
+                            tap?: {
+                                /** @description seq of the outbound whose component was tapped */
+                                sourceSeq: number;
+                                /** @description 1-based index into that outbound buttons */
+                                optionIndex: number;
+                                /** @description button.data when set */
+                                optionId?: string;
+                                /** @description button.text — what comes back as the inbound text */
+                                optionText: string;
+                            };
+                        };
+                    };
+                };
+            };
+            /** @description No rendered component / option not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Targeted outbound was refused by the profile — it never rendered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    harnessGetTranscript: {
+        parameters: {
+            query: {
+                chatId: string;
+            };
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Transcript (empty entries for an unknown chatId) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            chatId: string;
+                            /** @description What the simulated platform renders, per instance. Configured via profileMetadata.harnessProfile on the instance and enforced by the plugin sendMessage(). */
+                            profile: {
+                                canSendText: boolean;
+                                canSendMedia: boolean;
+                                canSendButtons: boolean;
+                                canSendList: boolean;
+                                maxButtons: number;
+                                maxListRows: number;
+                                /** @description 0 = unlimited */
+                                maxMessageLength: number;
+                            };
+                            entries: ({
+                                /** @description Position in the chat transcript (1-based, per chat) */
+                                seq: number;
+                                /** @enum {string} */
+                                direction: "inbound";
+                                /** @description Unix ms timestamp */
+                                at: number;
+                                /** @enum {string} */
+                                kind: "say" | "tap";
+                                externalId: string;
+                                from: string;
+                                content: {
+                                    type: string;
+                                    text?: string;
+                                };
+                                /** @description Present on kind 'tap' */
+                                tap?: {
+                                    /** @description seq of the outbound whose component was tapped */
+                                    sourceSeq: number;
+                                    /** @description 1-based index into that outbound buttons */
+                                    optionIndex: number;
+                                    /** @description button.data when set */
+                                    optionId?: string;
+                                    /** @description button.text — what comes back as the inbound text */
+                                    optionText: string;
+                                };
+                            } | {
+                                seq: number;
+                                /** @enum {string} */
+                                direction: "outbound";
+                                at: number;
+                                /** @description Absent when the send was refused by the profile */
+                                externalId?: string;
+                                /** @description The FULL OutgoingMessage verbatim — buttons, list, media, metadata included */
+                                message: {
+                                    [key: string]: unknown;
+                                };
+                                /** @description Capability-profile violations; empty when it rendered */
+                                violations: string[];
+                                result: {
+                                    success: boolean;
+                                    error?: string;
+                                };
+                            })[];
+                            /** @description Oldest entries evicted by the per-chat bound (1000) */
+                            droppedEntries: number;
+                        };
+                    };
+                };
+            };
+            /** @description Not a harness instance */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    harnessResetTranscript: {
+        parameters: {
+            query?: {
+                chatId?: string;
+            };
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reset done */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            reset: boolean;
+                            chatId?: string;
+                            scope?: string;
+                        };
+                    };
+                };
+            };
+            /** @description Not a harness instance */
             400: {
                 headers: {
                     [name: string]: unknown;

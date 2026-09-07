@@ -331,6 +331,7 @@
         "@omni/channel-asc-flow": "workspace:*",
         "@omni/channel-discord": "workspace:*",
         "@omni/channel-gupshup": "workspace:*",
+        "@omni/channel-harness": "workspace:*",
         "@omni/channel-hermes": "workspace:*",
         "@omni/channel-sdk": "workspace:*",
         "@omni/channel-slack": "workspace:*",
