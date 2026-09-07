@@ -62,6 +62,7 @@ import { createSpeakCommand } from './commands/speak.js';
 import { createStartCommand } from './commands/start.js';
 import { createStatusCommand } from './commands/status.js';
 import { createStopCommand } from './commands/stop.js';
+import { createTenantsCommand } from './commands/tenants.js';
 import { createTrustCommand } from './commands/trust.js';
 import { createTtsCommand } from './commands/tts.js';
 import { createTurnsCommand } from './commands/turns.js';
@@ -356,6 +357,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Management',
     helpDescription: 'API key management',
+  },
+  {
+    create: createTenantsCommand,
+    category: 'advanced',
+    helpGroup: 'Management',
+    helpDescription: 'Platform tenant control plane (multitenancy)',
   },
   {
     create: createTrustCommand,

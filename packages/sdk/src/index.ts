@@ -155,6 +155,13 @@ export type {
   UpdateApiKeyBody,
   RevokeApiKeyBody,
   ListApiKeysParams,
+  // Platform control plane types (tenants + memberships)
+  PlatformTenant,
+  PlatformTenantMembership,
+  PlatformTenantRole,
+  PlatformMembershipStatus,
+  CreatePlatformTenantBody,
+  AttachPlatformMembershipBody,
 } from './client';
 
 // Errors

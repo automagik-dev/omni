@@ -302,6 +302,20 @@ const CLI_COMMANDS: Record<string, string> = {
   'slack.search': 'slack search',
 
   // ============================================================================
+  // PLATFORM CONTROL PLANE (tenants + memberships — issue #981)
+  // ============================================================================
+  'platform.tenants.list': 'tenants list --reason <text>',
+  'platform.tenants.get': 'tenants get <id> --reason <text>',
+  'platform.tenants.create': 'tenants create --slug --name --max-key-ttl --max-key-rate --max-key-budget --reason',
+  'platform.tenants.suspend': 'tenants suspend <id> --reason <text>',
+  'platform.tenants.archive': 'tenants archive <id> --reason <text>',
+  'platform.tenants.memberships.list': 'tenants memberships list <tenant-id> --reason <text>',
+  'platform.tenants.memberships.attach': 'tenants memberships add <tenant-id> --principal --role --reason',
+  'platform.tenants.memberships.disable': 'tenants memberships disable <tenant-id> <membership-id> --reason <text>',
+  'platform.tenants.memberships.setStatus': 'tenants memberships status <tenant-id> <membership-id> --status --reason',
+  'platform.tenants.memberships.setRole': 'tenants memberships role <tenant-id> <membership-id> --role --reason',
+
+  // ============================================================================
   // SYSTEM
   // ============================================================================
   'system.health': 'status',
