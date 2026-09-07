@@ -82,6 +82,7 @@
       "devDependencies": {
         "@asteasolutions/zod-to-openapi": "7.3.4",
         "@omni/channel-a2a": "workspace:*",
+        "@omni/channel-harness": "workspace:*",
         "@types/bun": "1.3.14",
         "@types/qrcode-terminal": "^0.12.2",
         "openapi3-ts": "^4.5.0",
@@ -143,6 +144,22 @@
     },
     "packages/channel-gupshup": {
       "name": "@omni/channel-gupshup",
+      "version": "2.260906.8",
+      "dependencies": {
+        "@omni/channel-sdk": "workspace:*",
+        "@omni/core": "workspace:*",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "1.3.14",
+        "typescript": "^5.7.3",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
+    "packages/channel-harness": {
+      "name": "@omni/channel-harness",
       "version": "2.260906.8",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
@@ -314,6 +331,7 @@
         "@omni/channel-asc-flow": "workspace:*",
         "@omni/channel-discord": "workspace:*",
         "@omni/channel-gupshup": "workspace:*",
+        "@omni/channel-harness": "workspace:*",
         "@omni/channel-hermes": "workspace:*",
         "@omni/channel-sdk": "workspace:*",
         "@omni/channel-slack": "workspace:*",
@@ -755,6 +773,8 @@
     "@omni/channel-discord": ["@omni/channel-discord@workspace:packages/channel-discord"],
 
     "@omni/channel-gupshup": ["@omni/channel-gupshup@workspace:packages/channel-gupshup"],
+
+    "@omni/channel-harness": ["@omni/channel-harness@workspace:packages/channel-harness"],
 
     "@omni/channel-hermes": ["@omni/channel-hermes@workspace:packages/channel-hermes"],
 

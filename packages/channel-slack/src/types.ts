@@ -165,6 +165,11 @@ export interface SlackConnectionOptions {
   mode?: SlackConnectionMode;
   /** Port for the built-in HTTP receiver (HTTP mode only, default: 3001) */
   httpPort?: number;
+  /**
+   * How long to wait for the Socket Mode WebSocket to be verifiably open after
+   * `app.start()` resolves before failing the start (#941). Default: 10s.
+   */
+  socketConnectTimeoutMs?: number;
 }
 
 /**

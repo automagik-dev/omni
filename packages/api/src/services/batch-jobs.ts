@@ -237,7 +237,7 @@ export class BatchJobService {
         this.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
         this.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
         this.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
-        this.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
+        this.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-4o-transcribe'),
         this.settings.getString('stt.gemini.model', 'GEMINI_STT_MODEL', GEMINI_AUDIO_MODEL),
         this.settings.getString('prompt.audio_transcription'),
       ]);
@@ -247,7 +247,7 @@ export class BatchJobService {
         geminiApiKey: geminiApiKey ?? undefined,
         defaultLanguage: defaultLanguage ?? 'pt',
         audioProvider: audioProvider ?? 'openai',
-        audioModel: audioModel ?? 'gpt-audio-mini',
+        audioModel: audioModel ?? 'gpt-4o-transcribe',
         geminiAudioModel: geminiAudioModel ?? GEMINI_AUDIO_MODEL,
         audioPrompt: audioPrompt ?? undefined,
       };

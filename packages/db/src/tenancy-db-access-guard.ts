@@ -948,6 +948,15 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'tenant-boundary',
   },
   {
+    // Same scoping as the sibling `chats` entry above: the #966 best-effort
+    // personId existence check for custom journal rows (FK safety before
+    // stamping person_id) issues on `scopedHandle` inside the consumer's
+    // worker tenant scope. Consumer-only callers.
+    file: 'packages/api/src/plugins/event-persistence.ts',
+    table: 'persons',
+    class: 'tenant-boundary',
+  },
+  {
     file: 'packages/api/src/plugins/instance-monitor.ts',
     table: 'instances',
     class: 'tenant-boundary',

@@ -15,6 +15,7 @@ import { agentsRoutes } from './agents';
 import { authRoutes } from './auth';
 import { automationsRoutes } from './automations';
 import { batchJobsRoutes } from './batch-jobs';
+import { harnessRoutes } from './channel-harness';
 import { chatsRoutes } from './chats';
 import { contextRoutes } from './context';
 import { conversationsRoutes } from './conversations';
@@ -72,6 +73,7 @@ v2Routes.route('/processed-events', processedEventsRoutes); // Placeholder until
 v2Routes.route('/metrics', metricsRoutes);
 v2Routes.route('/conversations', conversationsRoutes); // Cross-channel conversation continuity
 v2Routes.route('/chats', chatsRoutes); // Unified chat model - must be before root mounts with /:id
+v2Routes.route('/channels/harness', harnessRoutes); // E2E agent-test harness driving/inspection (#953) — auth-required, unlike the public channel webhooks
 v2Routes.route('/media', mediaRoutes); // Media file serving - must be before root mounts with /:id
 v2Routes.route('/batch-jobs', batchJobsRoutes); // Batch job routes - must be before root mounts with /:id
 v2Routes.route('/keys', keysRoutes); // API key management
