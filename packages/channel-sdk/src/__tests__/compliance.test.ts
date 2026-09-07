@@ -492,7 +492,7 @@ for (const channel of channels) {
 // Discovery guard
 
 describe('channel coverage', () => {
-  it('covers all channel-* packages (excluding a2a, internal, and linkedin)', () => {
+  it('covers all channel-* packages (excluding a2a, internal, harness, and linkedin)', () => {
     const entries = readdirSync(packagesRoot, { withFileTypes: true });
     const channelPackages = entries
       .filter(
@@ -503,6 +503,7 @@ describe('channel coverage', () => {
           e.name !== 'channel-sdk' &&
           e.name !== 'channel-a2a' &&
           e.name !== 'channel-internal' &&
+          e.name !== 'channel-harness' && // Transport-less E2E test harness (#953) — no webhooks/media/dedupe, same category as internal
           e.name !== 'channel-linkedin' && // Placeholder package — no source yet
           e.name !== 'channel-gupshup', // In progress — PR #334
       )

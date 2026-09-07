@@ -209,6 +209,7 @@ const CLI_COMMANDS: Record<string, string> = {
   'webhooks.updateSource': 'webhooks update',
   'webhooks.deleteSource': 'webhooks delete',
   'webhooks.trigger': 'webhooks trigger',
+  'webhooks.heartbeat': 'webhooks heartbeat',
 
   // ============================================================================
   // PAYLOADS (event payload storage)

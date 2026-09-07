@@ -39,6 +39,7 @@ import { ConsumerOffsetService } from './consumer-offsets';
 import { ConversationService } from './conversations';
 import { DeadLetterService } from './dead-letters';
 import { EventOpsService } from './event-ops';
+import { EventSchemaService } from './event-schemas';
 import { EventService } from './events';
 import { FollowUpLifecycleService } from './follow-up-lifecycle';
 import { FollowUpSweeperService } from './follow-up-sweeper';
@@ -80,6 +81,11 @@ export interface Services {
   deadLetters: DeadLetterService;
   payloadStore: PayloadStoreService;
   eventOps: EventOpsService;
+  /**
+   * Event schema registry (issue #959): per-type payload contracts consulted
+   * by the webhook ingress and the automation emit_event gate before publish.
+   */
+  eventSchemas: EventSchemaService;
   webhooks: WebhookService;
   automations: AutomationService;
   chats: ChatService;
@@ -145,6 +151,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   const apiKeys = new ApiKeyService(db);
   const deadLetters = new DeadLetterService(db, eventBus);
   const payloadStore = new PayloadStoreService(db);
+  const eventSchemas = new EventSchemaService(db);
 
   const settings = new SettingsService(db);
   const routeResolver = new RouteResolver(db);
@@ -231,7 +238,8 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     deadLetters,
     payloadStore,
     eventOps,
-    webhooks: new WebhookService(db, eventBus),
+    eventSchemas,
+    webhooks: new WebhookService(db, eventBus, eventSchemas, deadLetters),
     automations: new AutomationService(db, eventBus),
     chats: new ChatService(db, eventBus),
     messages: new MessageService(db, eventBus),

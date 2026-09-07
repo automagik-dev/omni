@@ -100,6 +100,7 @@ export type {
   WebhookSignatureConfigBody,
   CreateWebhookSourceBody,
   TriggerEventBody,
+  WebhookHeartbeatResponse,
   // Payload types
   PayloadConfig,
   UpdatePayloadConfigBody,

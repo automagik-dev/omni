@@ -33,6 +33,10 @@ const webhookActionSchema = z.object({
     waitForResponse: z.boolean().default(false).describe('Wait for response before continuing'),
     timeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Request timeout'),
     responseAs: z.string().optional().describe('Store response as variable name'),
+    includeEnvelope: z
+      .boolean()
+      .optional()
+      .describe('Send the full OmniEvent envelope as the default body when no bodyTemplate is set (default true)'),
   }),
 });
 

@@ -18,34 +18,22 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { type Database, createDbHandle, persons, platformIdentities } from '@omni/db';
+import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { reconcile } from '../reconcile-identity-fragmentation';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const drizzleDir = join(here, '..', '..', '..', 'db', 'drizzle');
-
 const INSTANCE = '55555555-5555-4555-8555-5555555555b1';
 const PERSON_BARE = '99999999-9999-4999-8999-9999999999b1';
 const PERSON_SUFFIXED = '99999999-9999-4999-8999-9999999999b2';
 const PERSON_LID = '99999999-9999-4999-8999-9999999999b3';
 const PERSON_PHONE = '99999999-9999-4999-8999-9999999999b4';
-
-/** Every migration SQL file concatenated, applied to a fresh database. */
-function loadMigrations(): string {
-  return readdirSync(drizzleDir)
-    .filter((f) => f.endsWith('.sql'))
-    .sort()
-    .map((f) => readFileSync(join(drizzleDir, f), 'utf-8'))
-    .join('\n');
-}
 
 /**
  * Create + migrate a fresh disposable database, returning a handle and a
@@ -58,11 +46,8 @@ async function provisionDatabase(): Promise<{
   cleanup: () => Promise<void>;
 }> {
   const dbName = `omni_p0_recon_${crypto.randomUUID().replaceAll('-', '')}`;
-  const created = runSqlOn(superUrl, `CREATE DATABASE "${dbName}";`);
-  if (created.exitCode !== 0) throw new Error(`could not create database: ${created.stderr}`);
+  provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
   const dbUrl = urlFor(superUrl, dbName);
-  const migrated = runSqlOn(dbUrl, loadMigrations());
-  if (migrated.exitCode !== 0) throw new Error(`migrations failed: ${migrated.stderr}`);
   const handle = createDbHandle({ url: dbUrl, maxConnections: 2 });
   return {
     db: handle.db,
@@ -141,17 +126,8 @@ postgresDescribe('reconciliation script dry-run mutates nothing (real PostgreSQL
   let db: Database;
 
   beforeAll(async () => {
-    const created = runSqlOn(superUrl, `CREATE DATABASE "${dbName}";`);
-    if (created.exitCode !== 0) throw new Error(`could not create database: ${created.stderr}`);
-
-    const migrations = readdirSync(drizzleDir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort()
-      .map((f) => readFileSync(join(drizzleDir, f), 'utf-8'))
-      .join('\n');
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
     const dbUrl = urlFor(superUrl, dbName);
-    const migrated = runSqlOn(dbUrl, migrations);
-    if (migrated.exitCode !== 0) throw new Error(`migrations failed: ${migrated.stderr}`);
 
     // Seed: a fragmented number (bare + suffixed → two persons) and a phone-less
     // @lid person whose phone is derivable from chat_id_mappings. The instance is

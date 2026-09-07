@@ -24,12 +24,12 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import postgres from 'postgres';
 import { type Database, createDbHandle } from './client';
+import { provisionMigratedDatabase } from './pg-migrated-template';
 import { DEFAULT_ROLE_NAMES, RLS_TENANT_TABLES, applyTenantRlsEnforcement, readEnforcementState } from './tenancy-rls';
 import { applyTenancyRoles, readRoleAttributes, roleAttributeViolations } from './tenancy-roles';
 import { EnforcementStartupError, assertEnforcedRuntimeIdentity } from './tenancy-startup';
@@ -37,16 +37,6 @@ import { EnforcementStartupError, assertEnforcedRuntimeIdentity } from './tenanc
 const superUrl = process.env.OMNI_G3_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G3_PSQL_BIN ?? 'psql';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const drizzleDir = join(here, '..', 'drizzle');
-
-/** Every committed migration, in order — the real schema, not a hand-written subset. */
-const allMigrations = readdirSync(drizzleDir)
-  .filter((f) => f.endsWith('.sql'))
-  .sort()
-  .map((f) => readFileSync(join(drizzleDir, f), 'utf-8'))
-  .join('\n');
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';
@@ -96,9 +86,9 @@ function urlFor(base: string, database: string, user?: { name: string; password:
   return url.toString();
 }
 
-function createDatabase(name: string): void {
-  const result = runSqlOn(superUrl, `CREATE DATABASE "${name}";`);
-  if (result.exitCode !== 0) throw new Error(`could not create ${name}: ${result.stderr}`);
+/** A private, fully migrated database — file-level clone of the template (#967). */
+function createMigratedDatabase(name: string): void {
+  provisionMigratedDatabase({ superUrl, psqlBin }, name);
 }
 
 /**
@@ -199,10 +189,8 @@ postgresDescribe('G3 enforcement (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     // ---- enforced world -------------------------------------------------
-    createDatabase(enforcedDbName);
+    createMigratedDatabase(enforcedDbName);
     const enforcedSuperUrl = urlFor(superUrl, enforcedDbName);
-    const migrated = runSqlOn(enforcedSuperUrl, allMigrations);
-    if (migrated.exitCode !== 0) throw new Error(`migrations failed: ${migrated.stderr}`);
     const seeded = runSqlOn(enforcedSuperUrl, SEED);
     if (seeded.exitCode !== 0) throw new Error(`seed failed: ${seeded.stderr}`);
 
@@ -253,10 +241,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE O
     );
 
     // ---- legacy world ---------------------------------------------------
-    createDatabase(legacyDbName);
+    createMigratedDatabase(legacyDbName);
     const legacySuperUrl = urlFor(superUrl, legacyDbName);
-    const legacyMigrated = runSqlOn(legacySuperUrl, allMigrations);
-    if (legacyMigrated.exitCode !== 0) throw new Error(`legacy migrations failed: ${legacyMigrated.stderr}`);
     const legacySeeded = runSqlOn(legacySuperUrl, SEED);
     if (legacySeeded.exitCode !== 0) throw new Error(`legacy seed failed: ${legacySeeded.stderr}`);
     legacy = connect(legacySuperUrl);

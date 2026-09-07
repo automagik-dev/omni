@@ -66,6 +66,7 @@ import {
   generateCorrelationId,
   getHookRegistry,
   getJourneyTracker,
+  runWithEventCausality,
 } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
 import { agentSessions, agents, handoffLogs, instances } from '@omni/db';
@@ -5582,6 +5583,44 @@ async function listActiveOwnerIdentifiers(db: Database, trustedTenantId?: string
   return cachedActiveOwnerIdentifiers;
 }
 
+/**
+ * #938: baileys echoes the instance's own outbound sends back as
+ * message.received with rawPayload.isFromMe=true. The plugin-level echo
+ * filter (sentMessageIds) is an in-memory TTL cache wiped on reconnect — a
+ * miss lets the echo reach the dispatch gate, where a mode:'all' reply filter
+ * dispatches it and the agent answers itself in a loop. A blanket isFromMe
+ * skip would reintroduce #344 (the owner typing on their own phone also
+ * arrives with isFromMe=true via multi-device sync and MUST dispatch), so
+ * distinguish the two durably: agent outbound sends are persisted with
+ * senderAgentId (message-persistence, message.sent path). If this externalId
+ * already exists as an agent-authored row for this instance, it is our own
+ * echo — one indexed read, only on the isFromMe branch. A missing row fails
+ * open (dispatch proceeds): never silently drop what might be a human message.
+ */
+async function isAgentOutboundEcho(
+  chatsService: Services['chats'],
+  messagesService: Services['messages'],
+  db: Database,
+  payload: MessageReceivedPayload,
+  instanceId: string,
+  trustedTenantId?: string,
+): Promise<boolean> {
+  if (payload.rawPayload?.isFromMe !== true) return false;
+  const priorMessage = await runDispatchDb(db, trustedTenantId, async () => {
+    const chat = await chatsService.findByExternalIdSmart(instanceId, payload.chatId);
+    if (!chat) return null;
+    return messagesService.getByExternalId(chat.id, payload.externalId);
+  });
+  if (!priorMessage?.senderAgentId) return false;
+  log.info('Skipping own outbound echo (agent-authored message received back)', {
+    instanceId,
+    chatId: payload.chatId,
+    externalId: payload.externalId,
+    senderAgentId: priorMessage.senderAgentId,
+  });
+  return true;
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -5599,6 +5638,10 @@ async function shouldProcessMessage(
   }
   if (payload.from === metadata.platformIdentityId) {
     log.debug('Message from self, skipping', { instanceId: metadata.instanceId, from: payload.from });
+    return null;
+  }
+
+  if (await isAgentOutboundEcho(chatsService, messagesService, db, payload, metadata.instanceId, trustedTenantId)) {
     return null;
   }
 
@@ -6145,7 +6188,17 @@ export async function setupAgentDispatcher(
     // (instance, chat, message, emoji) tuple and owns removal from here on. An
     // orphan timer would otherwise strip that live reaction mid-run.
     queuedAck?.release();
-    await processAgentResponse(services, instance, messages, triggerType, db, eventBus);
+    // Causality scope (#957): every event the agent run publishes — the
+    // message.sent reply above all, however deep in the channel plugin the
+    // publish happens — is stamped as caused by the LAST message.received of
+    // this batch, and continues that message's correlation. A batch whose
+    // messages predate the eventId threading (mid-deploy) threads nothing and
+    // publishes exactly as before.
+    const lastMsg = messages[messages.length - 1] ?? firstMsg;
+    await runWithEventCausality(
+      { correlationId: lastMsg.metadata.correlationId, causationId: lastMsg.metadata.eventId },
+      () => processAgentResponse(services, instance, messages, triggerType, db, eventBus),
+    );
   };
   const debouncer = new MessageDebouncer(onDebouncedFlush, Date.now, {
     // #920: a message queued behind an active run can wait many minutes with
@@ -6243,6 +6296,9 @@ export async function setupAgentDispatcher(
                   platformIdentityId: metadata.platformIdentityId,
                   traceId,
                   correlationId: metadata.correlationId,
+                  // Causality parent for everything this message's agent run
+                  // publishes (#957) — consumed by onDebouncedFlush.
+                  eventId: event.id,
                   journeyTracked: metadata.timings != null,
                   resolvedInstance: resolved,
                   routeId,
@@ -6302,22 +6358,26 @@ export async function setupAgentDispatcher(
 
             const traceId = metadata.traceId ?? generateCorrelationId('trc');
 
-            await processReactionTrigger(
-              services,
-              instance,
-              payload,
-              {
-                instanceId: instance.id,
-                channelType: metadata.channelType,
-                personId: metadata.personId,
-                platformIdentityId: metadata.platformIdentityId,
-                traceId,
-                // Envelope-derived trusted tenant (G5, ADR-0008) — producer
-                // metadata only; throws on quarantine, caught below.
-                trustedTenantId: trustedDispatchTenant(metadata),
-              },
-              event,
-              db,
+            // Causality scope (#957): the agent's reply is caused by this
+            // reaction event and continues its correlation.
+            await runWithEventCausality({ correlationId: metadata.correlationId, causationId: event.id }, () =>
+              processReactionTrigger(
+                services,
+                instance,
+                payload,
+                {
+                  instanceId: instance.id,
+                  channelType: metadata.channelType,
+                  personId: metadata.personId,
+                  platformIdentityId: metadata.platformIdentityId,
+                  traceId,
+                  // Envelope-derived trusted tenant (G5, ADR-0008) — producer
+                  // metadata only; throws on quarantine, caught below.
+                  trustedTenantId: trustedDispatchTenant(metadata),
+                },
+                event,
+                db,
+              ),
             );
           } catch (error) {
             log.error('Error processing reaction for dispatch', {
@@ -6364,22 +6424,26 @@ export async function setupAgentDispatcher(
 
             const traceId = metadata.traceId ?? generateCorrelationId('trc');
 
-            await processReactionTrigger(
-              services,
-              instance,
-              payload,
-              {
-                instanceId: instance.id,
-                channelType: metadata.channelType,
-                personId: metadata.personId,
-                platformIdentityId: metadata.platformIdentityId,
-                traceId,
-                // Envelope-derived trusted tenant (G5, ADR-0008) — producer
-                // metadata only; throws on quarantine, caught below.
-                trustedTenantId: trustedDispatchTenant(metadata),
-              },
-              event,
-              db,
+            // Causality scope (#957): the agent's reply is caused by this
+            // reaction event and continues its correlation.
+            await runWithEventCausality({ correlationId: metadata.correlationId, causationId: event.id }, () =>
+              processReactionTrigger(
+                services,
+                instance,
+                payload,
+                {
+                  instanceId: instance.id,
+                  channelType: metadata.channelType,
+                  personId: metadata.personId,
+                  platformIdentityId: metadata.platformIdentityId,
+                  traceId,
+                  // Envelope-derived trusted tenant (G5, ADR-0008) — producer
+                  // metadata only; throws on quarantine, caught below.
+                  trustedTenantId: trustedDispatchTenant(metadata),
+                },
+                event,
+                db,
+              ),
             );
           } catch (error) {
             log.error('Error processing reaction removal for dispatch', {

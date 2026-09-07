@@ -853,6 +853,18 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     // found", proven in automation-actions-two-tenant-postgres.test.ts).
     // Flips to tenant-boundary when G6 lands, same gate as the
     // agent-dispatcher and session-cleaner `agents` sites.
+    // #958 emit_event idempotency claim (`claimEmittedEvent` /
+    // `releaseEmittedEventClaim`): the insert runs inside
+    // `runTenantWorkDb(db, trustedTenantId, …)` with the tenant the engine
+    // threads from the consumed envelope, through `scopedHandle` — the same
+    // ADR-0008 worker-scope seam as the sibling callbacks. A legacy envelope
+    // (null tenant) claims on the ambient pool; row ownership is the 0041
+    // derivation trigger's job (db-derived).
+    file: 'packages/api/src/plugins/automation-actions.ts',
+    table: 'omni_events',
+    class: 'tenant-boundary',
+  },
+  {
     file: 'packages/api/src/plugins/automation-actions.ts',
     table: 'agents',
     class: 'pending-G5-conversion',
@@ -933,6 +945,15 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     // G5-CONVERTED — see the sibling `chats` entry above.
     file: 'packages/api/src/plugins/event-persistence.ts',
     table: 'omni_events',
+    class: 'tenant-boundary',
+  },
+  {
+    // Same scoping as the sibling `chats` entry above: the #966 best-effort
+    // personId existence check for custom journal rows (FK safety before
+    // stamping person_id) issues on `scopedHandle` inside the consumer's
+    // worker tenant scope. Consumer-only callers.
+    file: 'packages/api/src/plugins/event-persistence.ts',
+    table: 'persons',
     class: 'tenant-boundary',
   },
   {
@@ -1670,6 +1691,17 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'and turns.open fails the INSERT WITH CHECK (the composite FK (tenant_id, agent_id) -> agents cannot ' +
       'be satisfied either). So this flips to tenant-boundary only once BOTH the async callers are converted ' +
       'AND the G6 persons backfill lands — it is a G6-gated site, not still-convertible G5 work.',
+  },
+  {
+    // #958 ingress idempotency claim: `receive()` inserts the journal row
+    // (the claim on `omni_events.idempotency_key`) through the service's
+    // `scopedHandle` getter, so a tenant-scoped request runs it in the
+    // request's tenant transaction and a legacy credential runs ambient —
+    // the same seam as every converted route service. Tenant ownership of
+    // the row itself is the 0041 derivation trigger's job (db-derived).
+    file: 'packages/api/src/services/webhooks.ts',
+    table: 'omni_events',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/webhooks.ts',

@@ -115,6 +115,14 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /chats/:id/disappearing': 'chats:write',
   'POST /chats/sync-names': 'chats:write',
 
+  // --- channel-harness (E2E agent-test harness, #953) ---
+  // say/tap inject inbounds that trigger billed agent dispatches → messages:send;
+  // the transcript is conversation data → messages:read; reset mutates it → messages:write.
+  'POST /channels/harness/:instanceId/say': 'messages:send',
+  'POST /channels/harness/:instanceId/tap': 'messages:send',
+  'GET /channels/harness/:instanceId/transcript': 'messages:read',
+  'DELETE /channels/harness/:instanceId/transcript': 'messages:write',
+
   // --- context ---
   'GET /context': 'context:read',
   'POST /context': 'context:write',
@@ -145,12 +153,18 @@ export const SCOPE_MAP: Record<string, string> = {
   'DELETE /event-ops/replay/:id': 'event-ops:write',
   'POST /event-ops/scheduled': 'event-ops:write',
 
+  // --- event schema registry (mounted at root: /events/schemas, #959) ---
+  'GET /events/schemas': 'events:read',
+  'GET /events/schemas/:eventType': 'events:read',
+  'POST /events/schemas': 'events:write',
+
   // --- events ---
   'GET /events': 'events:read',
   'GET /events/analytics': 'events:read',
   'GET /events/timeline/:personId': 'events:read',
   'POST /events/search': 'events:read',
   'GET /events/:id': 'events:read',
+  'GET /events/:id/trace': 'events:read',
   'GET /events/by-sender/:senderId': 'events:read',
 
   // --- follow-up (idle-chat follow-up config at /follow-up/{agents|instances|chats}/:id — issue #404) ---

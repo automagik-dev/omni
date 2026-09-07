@@ -2,8 +2,11 @@
  * Audio Processor
  *
  * Quality-first transcription for Omni media/backfill:
- * OpenAI gpt-audio-mini primary, OpenAI gpt-4o-transcribe stable fallback,
- * Gemini 3.1 Flash Lite omni-modal fallback, Groq Whisper fast fallback.
+ * OpenAI gpt-4o-transcribe primary (a purpose-built STT endpoint that fails
+ * loudly on bad audio), OpenAI gpt-audio-mini chat-lane fallback, Gemini
+ * omni-modal fallback, Groq Whisper fast fallback. Chat-lane output is
+ * validated before it can stop the chain — chat models reply conversationally
+ * instead of failing when the audio is unusable (issue #942).
  *
  * Uses centralized retry + circuit breaker for resilience.
  */
@@ -19,6 +22,7 @@ import type { Uploadable } from 'openai/uploads';
 
 import { GEMINI_AUDIO_MODEL, GROQ_WHISPER_MODEL, OPENAI_AUDIO_CHAT_MODEL, OPENAI_TRANSCRIBE_MODEL } from '../models';
 import { calculateCost } from '../pricing';
+import { detectInvalidTranscription } from '../transcription-guard';
 import type { ProcessOptions, ProcessingResult } from '../types';
 import { getMediaTimeouts } from '../types';
 import { BaseProcessor } from './base';
@@ -125,15 +129,15 @@ export class AudioProcessor extends BaseProcessor {
     getNormalizedAudio: () => Promise<NormalizedAudioFile>,
   ): Array<() => Promise<ProcessingResult>> {
     if (provider === 'openai') {
+      // Bind the preferred model to the lane that can actually serve it:
+      // gpt-audio-* is a chat model and 400s on /audio/transcriptions, while
+      // transcription models are rejected by /chat/completions.
+      const isChatModel = preferredModel?.startsWith('gpt-audio') ?? false;
+      const transcribeModel = preferredModel && !isChatModel ? preferredModel : OPENAI_TRANSCRIBE_MODEL;
+      const chatModel = preferredModel && isChatModel ? preferredModel : OPENAI_AUDIO_CHAT_MODEL;
       return [
-        () =>
-          this.transcribeWithOpenAiAudioChat(
-            language,
-            options,
-            preferredModel ?? OPENAI_AUDIO_CHAT_MODEL,
-            getNormalizedAudio,
-          ),
-        () => this.transcribeWithOpenAiTranscriptions(language, options, OPENAI_TRANSCRIBE_MODEL, getNormalizedAudio),
+        () => this.transcribeWithOpenAiTranscriptions(language, options, transcribeModel, getNormalizedAudio),
+        () => this.transcribeWithOpenAiAudioChat(language, options, chatModel, getNormalizedAudio),
         () => this.transcribeWithGemini(language, options, this.resolveGeminiAudioModel(undefined), getNormalizedAudio),
         () => this.transcribeWithGroq(language, getNormalizedAudio),
       ];
@@ -148,7 +152,7 @@ export class AudioProcessor extends BaseProcessor {
             this.resolveGeminiAudioModel(options?.model),
             getNormalizedAudio,
           ),
-        () => this.transcribeWithOpenAiAudioChat(language, options, OPENAI_AUDIO_CHAT_MODEL, getNormalizedAudio),
+        () => this.transcribeWithOpenAiTranscriptions(language, options, OPENAI_TRANSCRIBE_MODEL, getNormalizedAudio),
         () => this.transcribeWithGroq(language, getNormalizedAudio),
       ];
     }
@@ -229,6 +233,10 @@ export class AudioProcessor extends BaseProcessor {
         },
         { timeoutMs: timeouts.audioTimeoutMs },
       );
+      // Chat models reply conversationally instead of failing when the audio
+      // is unusable; that must surface as a failure so the chain continues.
+      const rejection = detectInvalidTranscription(text);
+      if (rejection) return this.createFailedResult(rejection, 'openai', model);
       return this.createSuccessResult(text, 'openai', model, language);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -370,9 +378,12 @@ export class AudioProcessor extends BaseProcessor {
   }
 
   private createSuccessResult(text: string, provider: string, model: string, language: string): ProcessingResult {
+    const content = text.trim();
+    // An empty transcript must not become a chain-stopping success.
+    if (!content) return this.createFailedResult('Transcription returned empty text', provider, model);
     return {
       success: true,
-      content: text.trim(),
+      content,
       contentFormat: 'text',
       processingType: 'transcription',
       provider,

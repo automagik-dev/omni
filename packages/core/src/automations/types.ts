@@ -61,6 +61,16 @@ export interface WebhookActionConfig {
   waitForResponse?: boolean;
   timeoutMs?: number;
   responseAs?: string;
+  /**
+   * When no `bodyTemplate` is set, send the FULL OmniEvent envelope
+   * (`id`, `type`, `payload`, `metadata`, `timestamp`) as the default body
+   * instead of the bare payload (#960 — the khal/brain push-ingress
+   * contract). Defaults to true; set false to keep the legacy bare-payload
+   * default body. Ignored when `bodyTemplate` is set (the template contract
+   * is preserved byte-identical) or when no envelope was threaded
+   * (route-side manual execute), where the bare payload is sent as before.
+   */
+  includeEnvelope?: boolean;
 }
 
 /**

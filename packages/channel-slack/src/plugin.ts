@@ -16,6 +16,7 @@ import {
 } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
+  ConnectionStatus,
   DedupeCache,
   FetchHistoryOptions,
   FetchHistoryResult,
@@ -33,7 +34,13 @@ import type { ChannelType, ContentType } from '@omni/core/types';
 import { SLACK_CAPABILITIES } from './capabilities';
 import { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
 import type { BoltConnection } from './connection/bolt-client';
-import { checkBoltHealth, createBoltApp, destroyBoltConnection, startBoltConnection } from './connection/bolt-client';
+import {
+  checkBoltHealth,
+  createBoltApp,
+  destroyBoltConnection,
+  isSocketOpen,
+  startBoltConnection,
+} from './connection/bolt-client';
 import { setupAgentSessionHandlers } from './handlers/agent-sessions';
 import type { CommandPayload } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
@@ -246,6 +253,9 @@ export class SlackPlugin extends BaseChannelPlugin {
         this.logger.warn('Instance already connected', { instanceId });
         return;
       }
+      // The health check is socket-aware (#941): a deaf Socket Mode instance
+      // lands here and is torn down and rebuilt instead of 'already connected'.
+      this.logger.warn('Existing connection failed health check — rebuilding', { instanceId });
       await destroyBoltConnection(existing, this.logger);
       this.connections.delete(instanceId);
       this.disposeInstanceCaches(instanceId);
@@ -327,6 +337,10 @@ export class SlackPlugin extends BaseChannelPlugin {
         ownerIdentifier: connection.botUserId,
       });
 
+      // Runtime detection (#941): from here on, a socket dying drives a real
+      // status transition instead of leaving a stale cached 'connected'.
+      this.watchSocketState(instanceId, config, connection);
+
       this.logger.info('Slack instance connected', {
         instanceId,
         botName: connection.botName,
@@ -385,6 +399,93 @@ export class SlackPlugin extends BaseChannelPlugin {
     this.disposeInstanceCaches(instanceId);
 
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+  }
+
+  /**
+   * Report status from the REAL socket, not just the cached transition (#941).
+   *
+   * BaseChannelPlugin caches the last written status, and 'connected' used to
+   * be written once at connect() and never revisited — a deaf socket reported
+   * connected forever and the instance monitor had nothing to act on. When the
+   * cache says connected but the Socket Mode WebSocket is not open, report a
+   * retryable error instead; needsReconnect() in the instance monitor treats
+   * that as a signal to rebuild the instance automatically.
+   */
+  override async getStatus(instanceId: string): Promise<ConnectionStatus> {
+    const status = await super.getStatus(instanceId);
+    if (status.state !== 'connected') return status;
+
+    const connection = this.connections.get(instanceId);
+    if (!connection || isSocketOpen(connection)) return status;
+
+    return {
+      state: 'error',
+      since: new Date(),
+      message: 'Socket Mode WebSocket is not open despite cached connected state',
+      error: {
+        code: SlackErrorCode.CONNECTION_FAILED,
+        message: 'Socket Mode WebSocket is not open',
+        retryable: true,
+      },
+    };
+  }
+
+  /**
+   * Mirror Socket Mode lifecycle transitions into instance status (#941).
+   *
+   * Each transition maps to a state the instance monitor already knows how to
+   * act on: 'error' → schedule reconnect; a fresh 'reconnecting' → leave
+   * Bolt's own retry loop alone (going stale hands it to the monitor); a
+   * recovered socket → back to 'connected'.
+   */
+  private watchSocketState(instanceId: string, config: InstanceConfig, connection: BoltConnection): void {
+    if (connection.mode !== 'socket') return;
+
+    const setStatus = (status: ConnectionStatus): void => {
+      this.updateInstanceStatus(instanceId, config, status).catch((err) => {
+        this.logger.warn('Failed to update instance status from socket transition', {
+          instanceId,
+          error: String(err),
+        });
+      });
+    };
+
+    connection.onSocketStateChange = (state) => {
+      // A rebuilt instance leaves the old connection's transitions behind.
+      if (this.connections.get(instanceId) !== connection) return;
+
+      if (state === 'connected') {
+        this.logger.info('Slack Socket Mode connection restored', { instanceId });
+        setStatus({
+          state: 'connected',
+          since: new Date(),
+          metadata: {
+            profileName: connection.botName,
+            ownerIdentifier: connection.botUserId,
+          },
+        });
+        return;
+      }
+
+      if (state === 'reconnecting') {
+        this.logger.warn('Slack Socket Mode reconnecting', { instanceId });
+        setStatus({ state: 'reconnecting', since: new Date() });
+        return;
+      }
+
+      if (state === 'disconnected') {
+        this.logger.error('Slack Socket Mode connection lost', { instanceId });
+        setStatus({
+          state: 'error',
+          since: new Date(),
+          error: {
+            code: SlackErrorCode.CONNECTION_FAILED,
+            message: 'Socket Mode WebSocket disconnected',
+            retryable: true,
+          },
+        });
+      }
+    };
   }
 
   /**

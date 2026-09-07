@@ -28,11 +28,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');
 const packagesDir = join(repoRoot, 'packages');
 
+// An interrupted previous run (ctrl-C, a cancelled turbo task) can leave the
+// scratch behind — its afterAll never fired — so clear it BEFORE the baseline
+// scan or the leftover rogue file poisons `found` (#967).
+const scratchDir = join(packagesDir, 'db', 'src', '__g3_access_scratch__');
+rmSync(scratchDir, { recursive: true, force: true });
+afterAll(() => rmSync(scratchDir, { recursive: true, force: true }));
+
 const found = scanDbAccessSites(packagesDir, repoRoot);
 const report = evaluateDbAccessGuard(found);
-
-const scratchDir = join(packagesDir, 'db', 'src', '__g3_access_scratch__');
-afterAll(() => rmSync(scratchDir, { recursive: true, force: true }));
 
 describe('db-access guard', () => {
   test('the scan finds sites at all (guards against a broken scanner)', () => {
@@ -303,6 +307,17 @@ describe('db-access guard', () => {
       // follow-up-sweeper shape. Its `instances` site is the single-column
       // channel lookup reached from inside those same passes.
       'packages/api/src/services/scheduled-messages.ts',
+      // #958: these two files appear here for their `omni_events` ingress/
+      // emission idempotency-claim sites ONLY. `webhooks.ts::receive` claims
+      // through the service's `scopedHandle` getter (request transaction when
+      // scoped, ambient for a legacy credential or the auth-exempt public
+      // ingress — the accepted legacy world); `automation-actions.ts::
+      // claimEmittedEvent` claims inside `runTenantWorkDb` for the
+      // engine-threaded envelope tenant, the same ADR-0008 seam as its
+      // sibling callbacks. Their `webhook_sources` / `agents` sites keep
+      // their own pending entries.
+      'packages/api/src/services/webhooks.ts',
+      'packages/api/src/plugins/automation-actions.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

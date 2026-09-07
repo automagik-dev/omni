@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resetAllCircuitBreakers } from '../src/circuit-breaker';
 import { AudioProcessor, DocumentProcessor, ImageProcessor, VideoProcessor } from '../src/processors';
 import type { ProcessorConfig } from '../src/types';
 
@@ -24,6 +25,7 @@ const originalPath = process.env.PATH;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   process.env.PATH = originalPath;
+  resetAllCircuitBreakers();
 });
 
 describe('processors', () => {
@@ -63,16 +65,13 @@ describe('processors', () => {
       });
     });
 
-    it('falls back from OpenAI audio-chat to OpenAI transcriptions before Gemini/Groq', async () => {
+    it('tries the transcriptions endpoint first and never sends the chat model to it', async () => {
       const audioPath = join(tmpdir(), `omni-audio-processor-${Date.now()}.mp3`);
       await writeFile(audioPath, Buffer.from('fake-audio'));
       const calls: Array<{ url: string; init?: RequestInit }> = [];
       globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
         calls.push({ url: String(url), init });
-        if (String(url).includes('/chat/completions')) {
-          return new Response('audio chat unavailable', { status: 400 });
-        }
-        return new Response(JSON.stringify({ text: 'fallback transcript' }), {
+        return new Response(JSON.stringify({ text: 'real transcript' }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         });
@@ -91,13 +90,175 @@ describe('processors', () => {
         const result = await processorWithOpenAi.process(audioPath, 'audio/mpeg', { language: 'pt-BR' });
 
         expect(result.success).toBe(true);
-        expect(result.content).toBe('fallback transcript');
+        expect(result.content).toBe('real transcript');
         expect(result.provider).toBe('openai');
         expect(result.model).toBe('gpt-4o-transcribe');
+        expect(calls.map((call) => call.url)).toEqual(['https://api.openai.com/v1/audio/transcriptions']);
+        // audioModel gpt-audio-mini is chat-only and would 400 here; the
+        // transcriptions attempt must use the dedicated STT model instead.
+        expect((calls[0]?.init?.body as FormData).get('model')).toBe('gpt-4o-transcribe');
+      } finally {
+        await rm(audioPath, { force: true });
+      }
+    });
+
+    it('falls back from OpenAI transcriptions to the audio-chat lane before Gemini/Groq', async () => {
+      const audioPath = join(tmpdir(), `omni-audio-chat-fallback-${Date.now()}.mp3`);
+      await writeFile(audioPath, Buffer.from('fake-audio'));
+      const calls: Array<{ url: string; init?: RequestInit }> = [];
+      globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), init });
+        if (String(url).includes('/audio/transcriptions')) {
+          return new Response('transcriptions unavailable', { status: 400 });
+        }
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'transcrição do áudio-chat' } }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as unknown as typeof fetch;
+
+      try {
+        const processorWithOpenAi = new AudioProcessor({
+          ...mockConfig,
+          openaiApiKey: 'test-openai-key',
+          audioProvider: 'openai',
+          audioModel: 'gpt-audio-mini',
+        });
+
+        const result = await processorWithOpenAi.process(audioPath, 'audio/mpeg', { language: 'pt-BR' });
+
+        expect(result.success).toBe(true);
+        expect(result.content).toBe('transcrição do áudio-chat');
+        expect(result.model).toBe('gpt-audio-mini');
         expect(calls.map((call) => call.url)).toEqual([
-          'https://api.openai.com/v1/chat/completions',
           'https://api.openai.com/v1/audio/transcriptions',
+          'https://api.openai.com/v1/chat/completions',
         ]);
+      } finally {
+        await rm(audioPath, { force: true });
+      }
+    });
+
+    it('rejects a conversational chat reply and continues down the fallback chain (issue #942)', async () => {
+      const audioPath = join(tmpdir(), `omni-audio-meta-${Date.now()}.mp3`);
+      await writeFile(audioPath, Buffer.from('fake-audio'));
+      const calls: Array<{ url: string }> = [];
+      globalThis.fetch = mock(async (url: string | URL | Request) => {
+        calls.push({ url: String(url) });
+        if (String(url).includes('/audio/transcriptions')) {
+          return new Response('transcriptions unavailable', { status: 400 });
+        }
+        if (String(url).includes('/chat/completions')) {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content:
+                      'Claro, por favor me diga o que você gostaria que fosse transcrito. Se tiver um áudio ou uma fala específica, descreva o conteúdo.',
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'transcrição real' }] } }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as unknown as typeof fetch;
+
+      try {
+        const processorWithOpenAi = new AudioProcessor({
+          ...mockConfig,
+          openaiApiKey: 'test-openai-key',
+          geminiApiKey: 'test-gemini-key',
+          audioProvider: 'openai',
+          audioModel: 'gpt-audio-mini',
+        });
+
+        const result = await processorWithOpenAi.process(audioPath, 'audio/mpeg', { language: 'pt-BR' });
+
+        // A 200 chat reply that is conversation, not a transcript, must not
+        // stop the chain — the Gemini fallback should produce the result.
+        expect(result.success).toBe(true);
+        expect(result.provider).toBe('gemini');
+        expect(result.content).toBe('transcrição real');
+        expect(calls.map((call) => call.url.includes('/chat/completions'))).toEqual([false, true, false]);
+      } finally {
+        await rm(audioPath, { force: true });
+      }
+    });
+
+    it('treats an empty transcription result as a failure, not a chain-stopping success', async () => {
+      const audioPath = join(tmpdir(), `omni-audio-empty-${Date.now()}.mp3`);
+      await writeFile(audioPath, Buffer.from('fake-audio'));
+      const calls: Array<{ url: string }> = [];
+      globalThis.fetch = mock(async (url: string | URL | Request) => {
+        calls.push({ url: String(url) });
+        if (String(url).includes('/audio/transcriptions')) {
+          return new Response(JSON.stringify({ text: '   ' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'transcrição do fallback' } }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as unknown as typeof fetch;
+
+      try {
+        const processorWithOpenAi = new AudioProcessor({
+          ...mockConfig,
+          openaiApiKey: 'test-openai-key',
+          audioProvider: 'openai',
+        });
+
+        const result = await processorWithOpenAi.process(audioPath, 'audio/mpeg', { language: 'pt-BR' });
+
+        expect(result.success).toBe(true);
+        expect(result.content).toBe('transcrição do fallback');
+        expect(result.model).toBe('gpt-audio-mini');
+        expect(calls.map((call) => call.url)).toEqual([
+          'https://api.openai.com/v1/audio/transcriptions',
+          'https://api.openai.com/v1/chat/completions',
+        ]);
+      } finally {
+        await rm(audioPath, { force: true });
+      }
+    });
+
+    it('falls back from Gemini to OpenAI transcriptions, not the chat lane', async () => {
+      const audioPath = join(tmpdir(), `omni-audio-gemini-fallback-${Date.now()}.mp3`);
+      await writeFile(audioPath, Buffer.from('fake-audio'));
+      const calls: Array<{ url: string }> = [];
+      globalThis.fetch = mock(async (url: string | URL | Request) => {
+        calls.push({ url: String(url) });
+        if (String(url).includes('generativelanguage.googleapis.com')) {
+          return new Response('gemini unavailable', { status: 400 });
+        }
+        return new Response(JSON.stringify({ text: 'openai fallback transcript' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as unknown as typeof fetch;
+
+      try {
+        const processorWithGemini = new AudioProcessor({
+          ...mockConfig,
+          openaiApiKey: 'test-openai-key',
+          geminiApiKey: 'test-gemini-key',
+          audioProvider: 'gemini',
+        });
+
+        const result = await processorWithGemini.process(audioPath, 'audio/mpeg', { language: 'pt-BR' });
+
+        expect(result.success).toBe(true);
+        expect(result.provider).toBe('openai');
+        expect(result.model).toBe('gpt-4o-transcribe');
+        expect(calls[1]?.url).toBe('https://api.openai.com/v1/audio/transcriptions');
       } finally {
         await rm(audioPath, { force: true });
       }

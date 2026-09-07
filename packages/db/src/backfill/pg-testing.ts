@@ -10,21 +10,11 @@
  * Not a test file itself; imported by direct path from the G6 postgres suites.
  */
 
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { provisionMigratedDatabase } from '../pg-migrated-template';
 import { type ToolingSql, openToolingConnection } from './db';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const drizzleDir = join(here, '..', '..', 'drizzle');
-
-/** Every committed migration, in order — the real schema, not a hand subset. */
-export const ALL_MIGRATIONS: string = readdirSync(drizzleDir)
-  .filter((f) => f.endsWith('.sql'))
-  .sort()
-  .map((f) => readFileSync(join(drizzleDir, f), 'utf-8'))
-  .join('\n');
 
 /** The disposable superuser URL every G6 suite keys on (via the pg-gate). */
 export function superUrl(): string {
@@ -70,14 +60,15 @@ export function urlFor(base: string, database: string): string {
 }
 
 /**
- * Create a fresh database on the disposable cluster, apply every migration into
- * it, and run an optional fixture script. Returns the database name and its URL.
+ * Create a fresh database on the disposable cluster with every committed
+ * migration applied — a file-level clone of the migrated template (#967), so
+ * the chain is replayed once per cluster instead of once per call — and run an
+ * optional fixture script. Returns the database name and its URL.
  */
 export function provisionDatabase(base: string, fixture?: string): { database: string; url: string } {
   const database = `omni_g6_${crypto.randomUUID().replaceAll('-', '')}`;
-  runSqlOrThrow(base, `CREATE DATABASE "${database}";`);
+  provisionMigratedDatabase({ superUrl: base, psqlBin: psqlBin() }, database);
   const url = urlFor(base, database);
-  runSqlOrThrow(url, ALL_MIGRATIONS);
   if (fixture) runSqlOrThrow(url, fixture);
   return { database, url };
 }

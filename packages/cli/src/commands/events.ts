@@ -3,13 +3,17 @@
  *
  * omni events list --instance <id>
  * omni events stream [flags]
+ * omni events trace <id>
  * omni events search <query>
  * omni events timeline <person-id>
  */
 
 import type { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
+import { type AutomationCondition, evaluateConditions } from '@omni/core';
 import type { Event, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
+import { z } from 'zod';
 import { getClient } from '../client.js';
 import { getOutputFormat, loadConfig } from '../config.js';
 import * as output from '../output.js';
@@ -204,6 +208,225 @@ function displayRecordBreakdown(title: string, record: Record<string, number>, k
 }
 
 // ============================================================================
+// TRACE
+// ============================================================================
+
+/** One journal row as returned inside a trace response. */
+interface TraceEvent {
+  id: string;
+  eventType: string;
+  receivedAt: string;
+  causationId: string | null;
+  metadata?: { correlationId?: string } | null;
+  textContent?: string | null;
+}
+
+interface TraceResponse {
+  data: {
+    event: TraceEvent;
+    ancestors: TraceEvent[];
+    descendants: Array<{ event: TraceEvent; depth: number }>;
+    truncated: boolean;
+  };
+}
+
+/**
+ * Fetch a causality trace from the API. Raw fetch (like `fetchAnalytics`)
+ * because the generated SDK does not expose the trace endpoint yet — the CLI
+ * still only ever talks to the API, never the database.
+ */
+async function fetchTrace(id: string): Promise<TraceResponse['data']> {
+  const config = loadConfig();
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+
+  const resp = await fetch(`${baseUrl}/api/v2/events/${encodeURIComponent(id)}/trace`, {
+    headers: { 'x-api-key': config.apiKey ?? '' },
+  });
+
+  if (!resp.ok) {
+    throw new Error(`API returned ${resp.status}: ${await resp.text()}`);
+  }
+
+  return ((await resp.json()) as TraceResponse).data;
+}
+
+/** One human-readable trace line: type, short id, time, correlation. */
+export function formatTraceLine(event: TraceEvent, marker: string): string {
+  const time = new Date(event.receivedAt).toISOString().replace('T', ' ').slice(0, 19);
+  const corr = event.metadata?.correlationId?.slice(0, 8) ?? '--------';
+  const text = event.textContent ? `  "${event.textContent.slice(0, 40)}"` : '';
+  return `${marker}${event.eventType}  ${event.id.slice(0, 8)}  ${time}  corr=${corr}${text}`;
+}
+
+/**
+ * Render the chain root→focus→fan-out as an indented tree. Answers "why did
+ * this event happen?" (the ancestors) and "what did it cause?" (the
+ * descendants) in one view.
+ */
+function displayTrace(data: TraceResponse['data']): void {
+  if (getOutputFormat() === 'json') {
+    output.data(data);
+    return;
+  }
+
+  let indent = 0;
+  for (const ancestor of data.ancestors) {
+    const label = indent === 0 && !ancestor.causationId ? ' (root)' : '';
+    output.raw(`${'  '.repeat(indent)}${formatTraceLine(ancestor, indent === 0 ? '● ' : '└─ ')}${label}`);
+    indent++;
+  }
+
+  const focusIsRoot = data.ancestors.length === 0 && !data.event.causationId;
+  output.raw(
+    `${'  '.repeat(indent)}${formatTraceLine(data.event, indent === 0 ? '● ' : '└─ ')}${focusIsRoot ? ' (root)' : ''}  ← trace target`,
+  );
+
+  for (const { event, depth } of data.descendants) {
+    output.raw(`${'  '.repeat(indent + depth)}${formatTraceLine(event, '└─ ')}`);
+  }
+
+  if (data.descendants.length === 0) {
+    output.dim('(no descendants — nothing was caused by this event)');
+  }
+  if (data.truncated) {
+    output.warn('Trace truncated (depth/node cap reached)');
+  }
+}
+
+// ============================================================================
+// SCHEMA REGISTRY (issue #959)
+// ============================================================================
+
+/** A registered event schema as returned by the API. */
+interface EventSchemaData {
+  id: string;
+  eventType: string;
+  version: number;
+  schema: Record<string, unknown>;
+  description: string | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Raw CLI→API call for endpoints the generated SDK does not cover yet
+ * (`fetchAnalytics` precedent above; the CLI never queries the DB directly).
+ */
+async function schemaApiRequest<T>(path: string, init: { method?: string; body?: string } = {}): Promise<T> {
+  const config = loadConfig();
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+
+  const resp = await fetch(`${baseUrl}/api/v2/events/schemas${path}`, {
+    method: init.method ?? 'GET',
+    body: init.body,
+    headers: { 'content-type': 'application/json', 'x-api-key': config.apiKey ?? '' },
+  });
+
+  if (!resp.ok) {
+    throw new Error(`API returned ${resp.status}: ${await resp.text()}`);
+  }
+
+  return (await resp.json()) as T;
+}
+
+/** Load the JSON Schema artifact from --file or inline --schema (exactly one). */
+function loadSchemaArtifact(options: { file?: string; schema?: string }): Record<string, unknown> {
+  if ((options.file ? 1 : 0) + (options.schema ? 1 : 0) !== 1) {
+    throw new Error('Provide the JSON Schema via exactly one of --file <path> or --schema <json>');
+  }
+  const raw = options.file ? readFileSync(options.file, 'utf-8') : (options.schema as string);
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('The JSON Schema artifact must be a JSON object');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function summarizeSchemaRow(row: EventSchemaData): Record<string, unknown> {
+  return {
+    eventType: row.eventType,
+    version: row.version,
+    enabled: row.enabled,
+    description: row.description ?? '-',
+    updatedAt: row.updatedAt,
+  };
+}
+
+function createSchemaCommand(): Command {
+  const schema = new Command('schema').description('Manage the event schema registry (per-type payload contracts)');
+
+  schema
+    .command('register <eventType>')
+    .description('Register (or compatibly revise) the JSON Schema for an event type')
+    .option('--file <path>', 'Path to a JSON Schema file')
+    .option('--schema <json>', 'Inline JSON Schema')
+    .option('--description <text>', 'Description for the registration')
+    .option('--disabled', 'Register with the validation gate disabled')
+    .action(
+      async (
+        eventType: string,
+        options: { file?: string; schema?: string; description?: string; disabled?: boolean },
+      ) => {
+        try {
+          const artifact = loadSchemaArtifact(options);
+
+          const result = await schemaApiRequest<{ data: EventSchemaData }>('', {
+            method: 'POST',
+            body: JSON.stringify({
+              eventType,
+              schema: artifact,
+              description: options.description,
+              enabled: options.disabled ? false : undefined,
+            }),
+          });
+
+          output.success(`Schema registered: ${result.data.eventType} (version ${result.data.version})`, {
+            eventType: result.data.eventType,
+            version: result.data.version,
+            enabled: result.data.enabled,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to register schema: ${message}`);
+        }
+      },
+    );
+
+  schema
+    .command('list')
+    .description('List registered event schemas')
+    .option('--enabled', 'Only schemas with an active validation gate')
+    .action(async (options: { enabled?: boolean }) => {
+      try {
+        const query = options.enabled ? '?enabled=true' : '';
+        const result = await schemaApiRequest<{ items: EventSchemaData[] }>(query);
+        output.list(result.items.map(summarizeSchemaRow), { emptyMessage: 'No event schemas registered.' });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to list schemas: ${message}`);
+      }
+    });
+
+  schema
+    .command('get <eventType>')
+    .description('Show the registered schema for an event type')
+    .action(async (eventType: string) => {
+      try {
+        const result = await schemaApiRequest<{ data: EventSchemaData }>(`/${encodeURIComponent(eventType)}`);
+        output.data(result.data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get schema: ${message}`);
+      }
+    });
+
+  return schema;
+}
+
+export const __testables = { schemaApiRequest, loadSchemaArtifact, summarizeSchemaRow };
+
+// ============================================================================
 // STREAM
 // ============================================================================
 
@@ -231,6 +454,16 @@ export function isNoisyEvent(eventType: string): boolean {
   return NOISY_EVENT_TYPES.has(eventType);
 }
 
+/**
+ * Match an event type against a `--type` filter value (#966). A trailing `*`
+ * makes the filter a prefix glob (`custom.*` matches every custom event);
+ * anything else is an exact match. Same contract as the API-side list filter
+ * (EventService.list) — keep the two in sync.
+ */
+export function matchesEventTypeFilter(eventType: string, filter: string): boolean {
+  return filter.endsWith('*') ? eventType.startsWith(filter.slice(0, -1)) : eventType === filter;
+}
+
 /** Filter predicate matrix for `omni events stream`. Exported for unit tests. */
 export interface StreamFilterOptions {
   instanceId?: string;
@@ -250,7 +483,7 @@ export interface StreamFilterOptions {
  */
 export function passesStreamFilters(event: Event, options: StreamFilterOptions): boolean {
   if (options.instanceId && event.instanceId !== options.instanceId) return false;
-  if (options.type && event.eventType !== options.type) return false;
+  if (options.type && !matchesEventTypeFilter(event.eventType, options.type)) return false;
   if (options.chatId && event.chatUuid !== options.chatId) return false;
   if (options.personId && event.personId !== options.personId) return false;
   if (options.errorsOnly && !isErrorEvent(event.eventType)) return false;
@@ -391,8 +624,111 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
   }
 }
 
+// ============================================================================
+// WAIT (issue #966)
+// ============================================================================
+
+/**
+ * The journal row as the API actually returns it: the generated SDK `Event`
+ * type is a projection, but GET /events returns full omni_events rows —
+ * including rawPayload, which is where the `custom.>` journal subscriber puts
+ * the published payload. `wait --filter` matches against those top-level
+ * payload fields.
+ */
+type WaitEventRow = Event & { rawPayload?: Record<string, unknown> | null };
+
+/** `--filter` entries must look like key=value (dot paths allowed on the key). */
+const WaitFilterEntrySchema = z
+  .string()
+  .regex(/^[^=\s]+=/, 'each --filter must look like key=value (dot paths allowed, e.g. --filter user.id=42)');
+
+/** Validated `omni events wait` inputs (Zod on external input, repo contract). */
+const WaitOptionsSchema = z.object({
+  timeout: z.coerce.number().positive().max(86400).optional(),
+  pollMs: z.coerce.number().int().min(250).max(60000).default(2000),
+  filter: z.array(WaitFilterEntrySchema).default([]),
+});
+
+/**
+ * Turn `--filter k=v` entries into automation trigger conditions — the SAME
+ * matcher automations use (`evaluateConditions`, @omni/core), per the issue's
+ * contract. Values parse as JSON when valid (`count=5` → number 5,
+ * `ok=true` → boolean) and fall back to the raw string (`status=open`).
+ */
+export function parseWaitFilters(entries: string[]): AutomationCondition[] {
+  return entries.map((entry) => {
+    const idx = entry.indexOf('=');
+    const raw = entry.slice(idx + 1);
+    let value: unknown;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      value = raw;
+    }
+    return { field: entry.slice(0, idx), operator: 'eq', value };
+  });
+}
+
+interface WaitParams {
+  filters: StreamFilterOptions;
+  conditions: AutomationCondition[];
+  sinceIso: string;
+  pollMs: number;
+  /** Absent = wait forever (until the process is interrupted). */
+  timeoutMs?: number;
+}
+
+/** True when the row passes the envelope filters AND the payload conditions. */
+export function matchesWaitEvent(
+  event: WaitEventRow,
+  filters: StreamFilterOptions,
+  conditions: AutomationCondition[],
+): boolean {
+  if (!passesStreamFilters(event, filters)) return false;
+  return evaluateConditions(conditions, event.rawPayload ?? {});
+}
+
+/**
+ * One-shot blocking subscription (#966): poll the same list endpoint
+ * `omni events stream` uses (`fetchStreamBatch`) and resolve with the FIRST
+ * matching event, or null once the deadline passes. DB polling is the
+ * accepted transport (the issue's non-goal keeps SSE/WS out of scope).
+ */
+export async function waitForEvent(client: OmniClient, params: WaitParams): Promise<WaitEventRow | null> {
+  const deadline = params.timeoutMs === undefined ? undefined : Date.now() + params.timeoutMs;
+  const state: StreamState = { sinceIso: params.sinceIso, seen: new Set<string>() };
+
+  for (;;) {
+    const items = await fetchStreamBatch(
+      client,
+      params.filters,
+      params.filters.channel,
+      params.filters.type,
+      state.sinceIso,
+    );
+    const ascending = [...items].sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
+    for (const ev of ascending) {
+      if (state.seen.has(ev.id)) continue;
+      state.seen.add(ev.id);
+      if (ev.receivedAt > state.sinceIso) state.sinceIso = ev.receivedAt;
+      if (matchesWaitEvent(ev, params.filters, params.conditions)) return ev;
+    }
+    // Same dedupe-set bound as processStreamBatch — an open-ended wait must
+    // not grow memory with every observed-but-unmatched event.
+    if (state.seen.size > 5000 && items.length > 0) {
+      state.seen = new Set(items.map((ev) => ev.id));
+    }
+    const remaining = deadline === undefined ? params.pollMs : deadline - Date.now();
+    if (remaining <= 0) return null;
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(params.pollMs, remaining)));
+  }
+}
+
 export function createEventsCommand(): Command {
   const events = new Command('events').description('Query events');
+
+  // omni events schema register|list|get (issue #959)
+  events.addCommand(createSchemaCommand());
 
   // omni events list
   events
@@ -400,7 +736,7 @@ export function createEventsCommand(): Command {
     .description('List events')
     .option('--instance <id>', 'Filter by instance ID')
     .option('--channel <type>', 'Filter by channel type')
-    .option('--type <type>', 'Filter by event type')
+    .option('--type <type>', 'Filter by event type (trailing * = prefix glob, e.g. custom.*)')
     .option('--chat-id <id>', 'Filter by chat ID')
     .option('--since <time>', 'Events since (e.g., 24h, 7d, or ISO timestamp)')
     .option('--until <time>', 'Events until (ISO timestamp)')
@@ -457,7 +793,7 @@ export function createEventsCommand(): Command {
     .description('Stream events in real-time (tail -f style). Ctrl+C to stop.')
     .option('--instance <id>', 'Filter by instance ID')
     .option('--channel <type>', 'Filter by channel type')
-    .option('--type <type>', 'Filter by event type')
+    .option('--type <type>', 'Filter by event type (trailing * = prefix glob, e.g. custom.*)')
     .option('--chat-id <id>', 'Filter by chat ID')
     .option('--person-id <id>', 'Filter by person ID')
     .option('--since <time>', 'Start cursor (e.g., 5min, 24h, 7d, or ISO timestamp)')
@@ -488,6 +824,81 @@ export function createEventsCommand(): Command {
       },
     );
 
+  // omni events wait (issue #966) — one-shot blocking subscription
+  events
+    .command('wait')
+    .description('Block until the first matching event, print it as JSON, exit 0. Exits non-zero on --timeout.')
+    .option('--instance <id>', 'Filter by instance ID')
+    .option('--channel <type>', 'Filter by channel type')
+    .option('--type <type>', 'Filter by event type (trailing * = prefix glob, e.g. custom.*)')
+    .option('--chat-id <id>', 'Filter by chat ID')
+    .option('--person-id <id>', 'Filter by person ID')
+    .option(
+      '--filter <k=v>',
+      'Payload condition, repeatable (dot paths + JSON values, e.g. --filter user.id=42 --filter status=open)',
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .option('--timeout <seconds>', 'Give up after N seconds: exit non-zero, nothing on stdout')
+    .option('--since <time>', 'Start cursor (e.g., 5min, ISO timestamp; default: now)')
+    .option('--poll-ms <n>', 'Polling interval in milliseconds', (v) => Number.parseInt(v, 10), 2000)
+    .action(
+      async (options: {
+        instance?: string;
+        channel?: string;
+        type?: string;
+        chatId?: string;
+        personId?: string;
+        filter: string[];
+        timeout?: string;
+        since?: string;
+        pollMs?: number;
+      }) => {
+        const client = getClient();
+        try {
+          const parsed = WaitOptionsSchema.parse({
+            timeout: options.timeout,
+            pollMs: options.pollMs,
+            filter: options.filter,
+          });
+          const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
+          const chatId = options.chatId ? await resolveChatId(options.chatId) : undefined;
+
+          const event = await waitForEvent(client, {
+            // all: true — an explicit wait must also see "noisy" types
+            // (message.delivered/read etc.) the stream hides by default.
+            filters: {
+              instanceId,
+              channel: options.channel,
+              type: options.type,
+              chatId,
+              personId: options.personId,
+              all: true,
+            },
+            conditions: parseWaitFilters(parsed.filter),
+            sinceIso: options.since ? parseSinceTime(options.since) : new Date().toISOString(),
+            pollMs: parsed.pollMs,
+            timeoutMs: parsed.timeout === undefined ? undefined : parsed.timeout * 1000,
+          });
+
+          if (event) {
+            output.raw(JSON.stringify(event));
+            await output.flushStdout();
+            return;
+          }
+          output.error(`Timed out after ${parsed.timeout}s waiting for a matching event`);
+        } catch (err) {
+          const message =
+            err instanceof z.ZodError
+              ? err.issues.map((i) => i.message).join('; ')
+              : err instanceof Error
+                ? err.message
+                : 'Unknown error';
+          output.error(`Failed to wait for event: ${message}`);
+        }
+      },
+    );
+
   // omni events get <id>
   events
     .command('get <id>')
@@ -501,6 +912,20 @@ export function createEventsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get event: ${message}`);
+      }
+    });
+
+  // omni events trace <id>
+  events
+    .command('trace <id>')
+    .description('Walk the causality chain around an event: root → parents → this event → everything it caused')
+    .action(async (id: string) => {
+      try {
+        const data = await fetchTrace(id);
+        displayTrace(data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to trace event: ${message}`);
       }
     });
 

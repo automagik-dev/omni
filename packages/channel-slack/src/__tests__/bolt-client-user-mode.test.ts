@@ -38,6 +38,9 @@ function makeConnection(overrides: Partial<BoltConnection> = {}): {
     actingClient: {},
     botToken: 'xoxb-fake',
     mode: 'socket',
+    // The post-start verification (#941) inspects the socket client; report an
+    // open WebSocket so these tests keep exercising the user-mode invariant.
+    socketClient: { websocket: { isActive: () => true } },
     ...overrides,
   } as unknown as BoltConnection;
   return { conn, started: () => startCount };

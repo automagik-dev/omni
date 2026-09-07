@@ -118,6 +118,37 @@ jobs:
       - name: Verify version sync
         run: bun scripts/verify-versions.ts
 
+      - name: Migration contract gate
+        # Static check of packages/db/drizzle/ (journal ↔ files bijection,
+        # deployed-migration immutability, additive-only lint, headers,
+        # schema.ts pairing). No DB.
+        # On pull_request the checkout is GitHub's test merge commit; its FIRST
+        # PARENT is the exact base-branch tip the merge was built against, so
+        # comparing against HEAD^1 is race-free. Fetching the branch tip here
+        # instead can see a NEWER base — parallel merges land between run start
+        # and this step — and blame the PR for changes it never made (false
+        # pairing violations; bit PR #977 during a 6-PR batch).
+        # The contract base is DEV: a migration is "deployed" once it lands on
+        # dev (the API auto-migrates from dev), and dev → main promotion is
+        # carry-exact — so promotion PRs (base main) and push events keep
+        # comparing against origin/dev to avoid re-litigating history that was
+        # vetted when it entered dev. Journal-integrity checks (bijection, idx
+        # sequence, monotonic `when`) are base-independent and still run on
+        # every event, which catches parallel-PR numbering collisions after
+        # auto-merge. Not the same tool as verify-schema-drift.ts (live-DB audit).
+        env:
+          MIGRATION_BASE_BRANCH: ${{ github.base_ref == 'main' && 'dev' || github.base_ref || 'dev' }}
+          USE_MERGE_PARENT: ${{ github.event_name == 'pull_request' && github.base_ref != 'main' }}
+        run: |
+          bun test scripts/verify-migration-contract.test.ts
+          if [ "$USE_MERGE_PARENT" = "true" ]; then
+            git fetch --no-tags --deepen=1 origin
+            bun scripts/verify-migration-contract.ts --base "$(git rev-parse HEAD^1)"
+          else
+            git fetch --no-tags --depth=1 origin "+refs/heads/${MIGRATION_BASE_BRANCH}:refs/remotes/origin/${MIGRATION_BASE_BRANCH}"
+            bun scripts/verify-migration-contract.ts --base "origin/${MIGRATION_BASE_BRANCH}"
+          fi
+
       - name: Setup environment
         run: |
           cp .env.example .env
@@ -185,12 +216,39 @@ jobs:
       - name: Dead code check (knip)
         run: bunx knip
 
-      - name: Test
-        # Scope to omni packages + the ui app; apps/khal-ui is a decoupled
-        # sub-project (private @khal-os deps) with its own test run.
+      - name: Test (pull requests — per-package via the turbo cache)
+        # Per-package `turbo test` (#967), fed by the "Turbo remote cache" step
+        # above: packages a PR does not touch replay their previously proven
+        # green run (byte-identical inputs — package files, dependency sources
+        # via the synthetic `topo` task, and the declared env vars) instead of
+        # re-executing, so an incremental PR pays only for what it changed.
+        # Coverage is identical to the sweep: every workspace with test files
+        # has a `test` script, and the pre-push hook runs this same command.
+        #
+        # Env: per-package runs have no --env-file, so .env is sourced into the
+        # environment here. NODE_ENV=test is re-exported AFTER sourcing (the
+        # .env template says development), matching the old step's env, and
+        # LOG_LEVEL=silent mutes the thousands of intentional warn/error lines
+        # the suites emit — neither is part of the turbo test hash.
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          set -a && . ./.env && set +a
+          export NODE_ENV=test LOG_LEVEL=silent
+          bun run test
+
+      - name: Test (pushes — full single-process sweep)
+        # Pushes to dev/main re-prove everything with the pre-#967 sweep: no
+        # cache replay on the integration branch, and the one-process run is
+        # also the only configuration where cross-file state leaks (e.g.
+        # globalThis.fetch pollution, issue #967 comment) reproduce. Scope to
+        # omni packages + the ui app; apps/khal-ui is a decoupled sub-project
+        # (private @khal-os deps) with its own test run.
+        if: ${{ github.event_name != 'pull_request' }}
         run: bun test packages apps/ui --env-file=.env
         env:
           NODE_ENV: test
+          LOG_LEVEL: silent
 
   pg-isolation-gate:
     name: PostgreSQL Isolation Gate (tenancy/RLS)

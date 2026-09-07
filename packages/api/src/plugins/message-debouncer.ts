@@ -37,6 +37,13 @@ export interface DispatchMetadata {
   trustedTenantId?: string;
   /** Original NATS event correlationId for journey tracking */
   correlationId?: string;
+  /**
+   * Id of the message.received event this buffered message came from (#957).
+   * The flush wraps the agent dispatch in a causality scope keyed on the LAST
+   * buffered message, so everything the agent run publishes (message.sent,
+   * message.failed) is stamped as caused by the message that woke it.
+   */
+  eventId?: string;
   /** Whether this message is being journey-tracked (has timings) */
   journeyTracked?: boolean;
   /** Pre-resolved instance with route overrides applied (avoids double resolution in debounce callback) */

@@ -50,18 +50,28 @@ function dockerAvailable(): boolean {
 /**
  * Whether the MinIO container-integration suites should actually run.
  *
- * They need a real `minio/minio` container. Locally (pre-push) that is fine, but
- * on a shared/loaded CI runner the container's readiness probe intermittently
+ * They need a real `minio/minio` container, and — critically — a Docker daemon
+ * that can actually PUBLISH a container port to the host. `docker info`
+ * succeeding is a weaker condition: rootless Docker without port forwarding, a
+ * host with IPv4 forwarding disabled, a missing default bridge network, or
+ * Docker Desktop under some VPNs all pass `docker info` while `docker run -p`
+ * silently produces an unreachable port. On such a host every suite would burn
+ * the full 120s readiness deadline (#948), so the gate probes publishability
+ * up front (cached per process) and skips with one loud warning instead.
+ *
+ * On a shared/loaded CI runner the container's readiness probe intermittently
  * blows the 120s deadline (~50% flake observed), which would red the whole
  * Quality Gate for entirely unrelated PRs. So in CI these suites are OPT-IN:
  * set `MINIO_INTEGRATION=1` (e.g. a dedicated integration job) to run them;
- * otherwise they skip deterministically. Docker is still required either way,
- * and local runs (no `CI` env) always run when Docker is present.
+ * otherwise they skip deterministically. `MINIO_INTEGRATION=1` also bypasses
+ * the publishability probe (locally too), as the escape hatch for a
+ * false-negative probe on a badly overloaded machine.
  */
 export function minioIntegrationEnabled(): boolean {
   if (!dockerAvailable()) return false;
   if (process.env.CI === 'true' && process.env.MINIO_INTEGRATION !== '1') return false;
-  return true;
+  if (process.env.MINIO_INTEGRATION === '1') return true;
+  return dockerCanPublishPorts();
 }
 
 function sha256hex(data: string): string {
@@ -126,6 +136,12 @@ export interface SharedMinioHarnessDependencies {
   sessionId: string;
   readinessTimeoutMs: number;
   readyRequestTimeoutMs: number;
+  /**
+   * How long an unbroken run of connection-refused probes (with the port never
+   * having answered at all) is tolerated before readiness aborts with a
+   * port-publishing diagnosis instead of waiting out `readinessTimeoutMs`.
+   */
+  connectionRefusedFastFailMs: number;
   reportCleanupFailure(message: string): void;
 }
 
@@ -153,6 +169,125 @@ const processHooks: ProcessHooks = {
   },
 };
 
+/**
+ * The one `docker run` shape this harness ever uses, shared by the real
+ * container launch and the publishability probe so the two cannot drift:
+ * labeled (so `reapStaleContainers` can sweep leaks), resource-bounded, and
+ * publishing `port` on the host.
+ */
+function minioRunCommand(port: number, sessionId: string): string[] {
+  return [
+    'docker',
+    'run',
+    '--rm',
+    '-d',
+    '--label',
+    'com.automagik.omni.test-harness=minio',
+    '--label',
+    `com.automagik.omni.test-session=${sessionId}`,
+    '--cpus',
+    '1',
+    '--memory',
+    '512m',
+    '--pids-limit',
+    '256',
+    '--tmpfs',
+    '/data:rw,noexec,nosuid,size=256m',
+    '-p',
+    `${port}:9000`,
+    '-e',
+    `MINIO_ROOT_USER=${ACCESS_KEY}`,
+    '-e',
+    `MINIO_ROOT_PASSWORD=${SECRET_KEY}`,
+    'minio/minio',
+    'server',
+    '/data',
+  ];
+}
+
+export interface DockerPublishProbeDependencies {
+  runSync(command: string[]): SyncCommandResult;
+  now(): number;
+  sleepSync(ms: number): void;
+  random(): number;
+  /** Path to the bun executable used for the synchronous child-process fetch. */
+  execPath: string;
+  sessionId: string;
+  probeTimeoutMs: number;
+  probePollIntervalMs: number;
+  warn(message: string): void;
+}
+
+/**
+ * The gate must stay synchronous (it feeds module-top-level `describe.skipIf`
+ * in six suites), but proving a published port is reachable requires an HTTP
+ * request. Bridge the gap by spawning a short-lived bun child that does the
+ * fetch and reports via its exit code. ANY HTTP response — even a 503 while
+ * MinIO is still starting — proves end-to-end port publishing works.
+ */
+function probeFetchCommand(execPath: string, port: number): string[] {
+  const script = `const res = await fetch('http://127.0.0.1:${port}/minio/health/ready', { signal: AbortSignal.timeout(1000) }).catch(() => undefined);\nprocess.exit(res ? 0 : 1);`;
+  return [execPath, '--eval', script];
+}
+
+/**
+ * Verify Docker can publish a container port to the host — the condition the
+ * MinIO suites actually depend on, which `docker info` does not establish
+ * (#948). Starts a throwaway labeled MinIO container with `-p` and polls its
+ * published port until it serves ANY HTTP response or the probe deadline
+ * lapses. Every negative outcome emits exactly one loud warning naming the
+ * real cause, so a green-but-skipped run is never mistaken for full coverage.
+ */
+function probeDockerPortPublishing(dependencies: DockerPublishProbeDependencies): boolean {
+  const port = 20000 + Math.floor(dependencies.random() * 20000);
+  const run = dependencies.runSync(minioRunCommand(port, dependencies.sessionId));
+  if (run.exitCode !== 0) {
+    dependencies.warn(
+      `MinIO integration suites SKIPPED: the Docker port-publishability probe could not start a container: ${
+        run.stderr.trim() || `exit ${run.exitCode}`
+      }`,
+    );
+    return false;
+  }
+  const containerId = run.stdout.trim();
+  if (!containerId) {
+    dependencies.warn(
+      'MinIO integration suites SKIPPED: the Docker port-publishability probe got no container ID from docker run',
+    );
+    return false;
+  }
+  try {
+    const deadline = dependencies.now() + dependencies.probeTimeoutMs;
+    while (dependencies.now() < deadline) {
+      if (dependencies.runSync(probeFetchCommand(dependencies.execPath, port)).exitCode === 0) return true;
+      dependencies.sleepSync(dependencies.probePollIntervalMs);
+    }
+    dependencies.warn(
+      `MinIO integration suites SKIPPED: Docker is running but cannot publish container ports — a probe container published 127.0.0.1:${port} and never accepted an HTTP request within ${
+        dependencies.probeTimeoutMs / 1000
+      }s. Likely causes: rootless Docker without port forwarding, IPv4 forwarding disabled, a missing default bridge network, or VPN/firewall interference. Fix Docker networking, or force the suites with MINIO_INTEGRATION=1.`,
+    );
+    return false;
+  } finally {
+    // Best-effort removal; a SIGKILL-orphaned probe container is still labeled
+    // and swept by reapStaleContainers on a later launch.
+    dependencies.runSync(['docker', 'rm', '-f', containerId]);
+  }
+}
+
+/**
+ * Cache the probe verdict per factory (one throwaway container per process for
+ * the module-level instance), so six suites gating on `minioIntegrationEnabled`
+ * pay for — and warn about — exactly one probe.
+ */
+export function createDockerPublishProbe(dependencies: DockerPublishProbeDependencies): () => boolean {
+  let verdict: boolean | undefined;
+  return () => {
+    verdict ??= probeDockerPortPublishing(dependencies);
+    return verdict;
+  };
+}
+
 async function fetchReadyWithTimeout(
   url: string,
   timeoutMs: number,
@@ -177,11 +312,33 @@ async function fetchReadyWithTimeout(
   }
 }
 
+/**
+ * Whether a readiness-probe failure was an immediate connection refusal —
+ * nothing bound on the host port — as opposed to a slow/hung request (which a
+ * starting container legitimately produces). Bun's fetch surfaces this as
+ * code `ConnectionRefused`; Node-style errors use `ECONNREFUSED`.
+ */
+function isConnectionRefused(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as Error & { code?: unknown }).code;
+  if (code === 'ECONNREFUSED' || code === 'ConnectionRefused') return true;
+  return /ECONNREFUSED|ConnectionRefused|connection refused/i.test(error.message);
+}
+
 async function waitForReady(port: number, dependencies: SharedMinioHarnessDependencies): Promise<void> {
   // Single wait for the shared container. Generous deadline: on a loaded CI
   // runner (Blacksmith 4vcpu, full suite hammering the box) MinIO has been
   // observed to need well over 45s to serve its readiness probe.
-  const deadline = dependencies.now() + dependencies.readinessTimeoutMs;
+  const start = dependencies.now();
+  const deadline = start + dependencies.readinessTimeoutMs;
+  // Once the published port has answered in ANY form (an HTTP response, or a
+  // non-refused failure such as a slow request timing out), the container is
+  // wired up and only slowness remains — the full deadline applies. Until
+  // then, an unbroken run of connection-refused longer than
+  // connectionRefusedFastFailMs means nothing is listening on the host port at
+  // all: Docker cannot publish ports (#948), and waiting out the remaining
+  // deadline would only turn a diagnosis into a stall.
+  let portEverAnswered = false;
   while (dependencies.now() < deadline) {
     try {
       const remainingMs = Math.max(1, deadline - dependencies.now());
@@ -192,8 +349,18 @@ async function waitForReady(port: number, dependencies: SharedMinioHarnessDepend
         dependencies,
       );
       if (res.ok) return;
-    } catch {
-      // not up yet
+      portEverAnswered = true;
+    } catch (error) {
+      if (!isConnectionRefused(error)) {
+        portEverAnswered = true;
+      } else if (!portEverAnswered) {
+        const refusedForMs = dependencies.now() - start;
+        if (refusedForMs >= dependencies.connectionRefusedFastFailMs) {
+          throw new Error(
+            `MinIO readiness aborted early: 127.0.0.1:${port} refused every connection for ${refusedForMs}ms — the published container port is not reachable from the host. Docker likely cannot publish ports (rootless Docker without port forwarding, IPv4 forwarding disabled, a missing default bridge network, or VPN/firewall interference).`,
+          );
+        }
+      }
     }
     await dependencies.sleep(500);
   }
@@ -348,6 +515,71 @@ export class MinioContainerLifecycle {
   }
 }
 
+/**
+ * How old a labeled container must be before another session may reap it.
+ * A live suite run holds its container for a few minutes at most (readiness
+ * budget is 120s, the suites themselves finish well inside pre-push), so half
+ * an hour of age means the owning process is long gone — while a concurrent
+ * agent's freshly started container is never touched.
+ */
+export const STALE_CONTAINER_MIN_AGE_MS = 30 * 60 * 1000;
+
+/**
+ * Reap MinIO test containers leaked by PREVIOUS test processes.
+ *
+ * The exit/signal teardown in MinioContainerLifecycle cannot run when the test
+ * process dies to SIGKILL — which is exactly what the OOM killer delivers (the
+ * observed exit-144 incidents when two agents ran the full suite at once).
+ * Each leaked container keeps 512MB reserved and slowly degrades the Docker
+ * daemon until the readiness probe itself starts flaking. So the moment a new
+ * container is about to launch is also the moment to sweep: any RUNNING
+ * container carrying our harness label, from a different session, older than
+ * STALE_CONTAINER_MIN_AGE_MS is unambiguously abandoned and force-removed.
+ * Entirely best-effort — a reap failure is reported and never blocks the
+ * launch.
+ */
+export function reapStaleContainers(dependencies: SharedMinioHarnessDependencies): void {
+  const list = dependencies.runSync([
+    'docker',
+    'ps',
+    '--filter',
+    'label=com.automagik.omni.test-harness=minio',
+    '--format',
+    '{{.ID}}\t{{.Label "com.automagik.omni.test-session"}}',
+  ]);
+  if (list.exitCode !== 0) return;
+
+  for (const line of list.stdout.split('\n')) {
+    const [containerId, session] = line.trim().split('\t');
+    if (!containerId || session === dependencies.sessionId) continue;
+
+    // RFC3339 from inspect (docker ps only offers a locale-shaped CreatedAt).
+    const created = dependencies.runSync(['docker', 'inspect', '-f', '{{.Created}}', containerId]);
+    if (created.exitCode !== 0) continue; // gone already — nothing to reap
+    const createdAtMs = Date.parse(created.stdout.trim());
+    if (Number.isNaN(createdAtMs)) continue; // unparseable — leave it alone
+    if (dependencies.now() - createdAtMs < STALE_CONTAINER_MIN_AGE_MS) continue;
+
+    const removed = dependencies.runSync(['docker', 'rm', '-f', containerId]);
+    if (removed.exitCode !== 0) {
+      dependencies.reportCleanupFailure(
+        `Failed to reap stale MinIO test container ${containerId}: ${removed.stderr.trim() || `exit ${removed.exitCode}`}`,
+      );
+    }
+  }
+}
+
+/** reapStaleContainers with every failure funneled to reportCleanupFailure. */
+function reapStaleContainersGuarded(dependencies: SharedMinioHarnessDependencies): void {
+  try {
+    reapStaleContainers(dependencies);
+  } catch (error) {
+    dependencies.reportCleanupFailure(
+      `Stale-container reap failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 export function createSharedMinioHarness(dependencies: SharedMinioHarnessDependencies): {
   getSharedMinio(): Promise<SharedMinio>;
 } {
@@ -358,6 +590,10 @@ export function createSharedMinioHarness(dependencies: SharedMinioHarnessDepende
     // Register signal/exit cleanup before any blocking Docker operation and
     // fail closed if an earlier container has not been successfully stopped.
     lifecycle.prepareForLaunch();
+
+    // Best-effort sweep of containers leaked by SIGKILLed previous runs —
+    // never allowed to fail or delay this launch.
+    reapStaleContainersGuarded(dependencies);
 
     // Pre-pull explicitly so a cold image cache (fresh CI runner) cannot eat
     // into the readiness budget or fail the run with an opaque timeout.
@@ -371,33 +607,7 @@ export function createSharedMinioHarness(dependencies: SharedMinioHarnessDepende
     lifecycle.beginLaunch();
     let proc: SyncCommandResult;
     try {
-      proc = dependencies.runSync([
-        'docker',
-        'run',
-        '--rm',
-        '-d',
-        '--label',
-        'com.automagik.omni.test-harness=minio',
-        '--label',
-        `com.automagik.omni.test-session=${dependencies.sessionId}`,
-        '--cpus',
-        '1',
-        '--memory',
-        '512m',
-        '--pids-limit',
-        '256',
-        '--tmpfs',
-        '/data:rw,noexec,nosuid,size=256m',
-        '-p',
-        `${port}:9000`,
-        '-e',
-        `MINIO_ROOT_USER=${ACCESS_KEY}`,
-        '-e',
-        `MINIO_ROOT_PASSWORD=${SECRET_KEY}`,
-        'minio/minio',
-        'server',
-        '/data',
-      ]);
+      proc = dependencies.runSync(minioRunCommand(port, dependencies.sessionId));
     } catch (error) {
       lifecycle.abortLaunch();
       throw error;
@@ -439,6 +649,20 @@ export function createSharedMinioHarness(dependencies: SharedMinioHarnessDepende
   };
 }
 
+const harnessSessionId = `${process.pid}-${randomUUID()}`;
+
+const dockerCanPublishPorts = createDockerPublishProbe({
+  runSync,
+  now: Date.now,
+  sleepSync: (ms) => Bun.sleepSync(ms),
+  random: Math.random,
+  execPath: process.execPath,
+  sessionId: harnessSessionId,
+  probeTimeoutMs: 10_000,
+  probePollIntervalMs: 250,
+  warn: (message) => console.warn(message),
+});
+
 const sharedMinioHarness = createSharedMinioHarness({
   runSync,
   process: processHooks,
@@ -446,9 +670,10 @@ const sharedMinioHarness = createSharedMinioHarness({
   now: Date.now,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   random: Math.random,
-  sessionId: `${process.pid}-${randomUUID()}`,
+  sessionId: harnessSessionId,
   readinessTimeoutMs: 120_000,
   readyRequestTimeoutMs: 5_000,
+  connectionRefusedFastFailMs: 5_000,
   reportCleanupFailure: (message) => console.error(message),
 });
 

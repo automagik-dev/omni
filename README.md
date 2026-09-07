@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache 2.0 License" /></a>
   <img src="https://img.shields.io/badge/runtime-Bun-f9f1e1?style=flat-square&logo=bun" alt="Bun" />
   <img src="https://img.shields.io/badge/version-2.260804.3-8b5cf6?style=flat-square" alt="v2.260804.3" />
   <img src="https://img.shields.io/badge/channels-10-25D366?style=flat-square" alt="10 channels" />
@@ -520,5 +520,5 @@ export class MyPlugin extends BaseChannelPlugin {
 ---
 
 <p align="center">
-  <a href="LICENSE">MIT</a> — do whatever you want, just don't blame the octopus. 🐙
+  <a href="LICENSE">Apache-2.0</a> — do whatever you want, just don't blame the octopus. 🐙
 </p>

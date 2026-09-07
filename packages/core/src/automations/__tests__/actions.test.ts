@@ -4,7 +4,7 @@
 
 import { describe, expect, mock, test } from 'bun:test';
 import type { AgentCallContext, AgentRunResult } from '../actions';
-import { executeAction } from '../actions';
+import { executeAction, executeActions } from '../actions';
 import type { TemplateContext } from '../templates';
 import type { CallAgentActionConfig } from '../types';
 
@@ -331,5 +331,113 @@ describe('extractAgentCallContext — threadId (per_thread session keys)', () =>
     expect(result.status).toBe('success');
     const receivedContext = callAgent.mock.calls[0]![0] as AgentCallContext;
     expect(receivedContext.threadId).toBeUndefined();
+  });
+});
+
+/**
+ * emit_event derived-key idempotency (#958): re-running the same automation
+ * over the same event claims the same `derived:{event}:{automation}:{index}`
+ * key and must not duplicate the emission.
+ */
+describe('emit_event derived-key idempotency (#958)', () => {
+  function makeEmitDeps(claimedKeys: Set<string>, published: string[]) {
+    return {
+      eventBus: {
+        publishGeneric: mock(async (type: string) => {
+          published.push(type);
+          return { id: 'evt-1', type, timestamp: Date.now(), metadata: {}, payload: {} };
+        }),
+      } as never,
+      claimEmittedEvent: mock(async (claim: { idempotencyKey: string }) => {
+        if (claimedKeys.has(claim.idempotencyKey)) return false;
+        claimedKeys.add(claim.idempotencyKey);
+        return true;
+      }),
+    };
+  }
+
+  const emitAction = { type: 'emit_event', config: { eventType: 'custom.derived.test' } } as Parameters<
+    typeof executeActions
+  >[0][number];
+
+  test('replaying the same (event, automation) slot emits exactly once', async () => {
+    const claimedKeys = new Set<string>();
+    const published: string[] = [];
+    const deps = makeEmitDeps(claimedKeys, published);
+    const provenance = { parentEventId: 'evt-parent', automationId: 'auto-1' };
+
+    const first = await executeActions([emitAction], makeContext(), deps, null, provenance);
+    const second = await executeActions([emitAction], makeContext(), deps, null, provenance);
+
+    expect(first[0]?.status).toBe('success');
+    expect(second[0]?.status).toBe('success');
+    expect((second[0]?.result as { duplicate?: boolean }).duplicate).toBe(true);
+    expect(published).toEqual(['custom.derived.test']);
+    expect(claimedKeys).toEqual(new Set(['derived:evt-parent:auto-1:0']));
+  });
+
+  test('a different parent event claims a different key and emits again', async () => {
+    const claimedKeys = new Set<string>();
+    const published: string[] = [];
+    const deps = makeEmitDeps(claimedKeys, published);
+
+    await executeActions([emitAction], makeContext(), deps, null, {
+      parentEventId: 'evt-a',
+      automationId: 'auto-1',
+    });
+    await executeActions([emitAction], makeContext(), deps, null, {
+      parentEventId: 'evt-b',
+      automationId: 'auto-1',
+    });
+
+    expect(published).toEqual(['custom.derived.test', 'custom.derived.test']);
+  });
+
+  test('without provenance or claim dep the emission publishes unconditionally', async () => {
+    const published: string[] = [];
+    const deps = {
+      eventBus: {
+        publishGeneric: mock(async (type: string) => {
+          published.push(type);
+          return { id: 'evt-1', type, timestamp: Date.now(), metadata: {}, payload: {} };
+        }),
+      } as never,
+    };
+
+    await executeActions([emitAction], makeContext(), deps);
+    await executeActions([emitAction], makeContext(), deps);
+
+    expect(published).toHaveLength(2);
+  });
+
+  test('a failed publish releases the claim so the retry can emit', async () => {
+    const claimedKeys = new Set<string>();
+    const releaseEmittedEventClaim = mock(async (_eventId: string) => {
+      // The API implementation deletes the journal row; here we just prove
+      // the hook fires. Clearing the key mirrors that delete.
+      claimedKeys.clear();
+    });
+    const deps = {
+      eventBus: {
+        publishGeneric: mock(async () => {
+          throw new Error('NATS down');
+        }),
+      } as never,
+      claimEmittedEvent: mock(async (claim: { idempotencyKey: string }) => {
+        if (claimedKeys.has(claim.idempotencyKey)) return false;
+        claimedKeys.add(claim.idempotencyKey);
+        return true;
+      }),
+      releaseEmittedEventClaim,
+    };
+
+    const result = await executeActions([emitAction], makeContext(), deps, null, {
+      parentEventId: 'evt-parent',
+      automationId: 'auto-1',
+    });
+
+    expect(result[0]?.status).toBe('failed');
+    expect(releaseEmittedEventClaim).toHaveBeenCalledTimes(1);
+    expect(claimedKeys.size).toBe(0);
   });
 });
