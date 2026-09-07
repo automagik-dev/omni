@@ -1,8 +1,11 @@
 /**
  * OpenAI STT provider.
  *
- * Quality lane: gpt-audio-mini via chat input_audio.
- * Stable fallback: gpt-4o-transcribe via /audio/transcriptions.
+ * Primary: gpt-4o-transcribe via /audio/transcriptions (purpose-built STT that
+ * fails loudly on bad audio). Opt-in chat lane: gpt-audio-* via chat
+ * input_audio, whose output is validated and which falls back to the
+ * transcriptions endpoint — chat models reply conversationally instead of
+ * failing when the audio is unusable (issue #942).
  */
 
 import { execFile } from 'node:child_process';
@@ -11,11 +14,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { createLogger } from '@omni/core';
+import { detectInvalidTranscription } from '@omni/media-processing';
 import type { ISttProvider, SttOptions, SttResult, SttSegment } from '../types';
 
 const log = createLogger('provider:openai:stt');
 
-const DEFAULT_AUDIO_CHAT_MODEL = 'gpt-audio-mini';
 const DEFAULT_TRANSCRIBE_MODEL = 'gpt-4o-transcribe';
 const CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
 const TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
@@ -51,12 +54,23 @@ export class OpenAiSttProvider implements ISttProvider {
     const configuredModel = await this.settings.getString(
       'stt.openai.model',
       'OPENAI_STT_MODEL',
-      DEFAULT_AUDIO_CHAT_MODEL,
+      DEFAULT_TRANSCRIBE_MODEL,
     );
-    const model = options?.model ?? configuredModel ?? DEFAULT_AUDIO_CHAT_MODEL;
+    const model = options?.model ?? configuredModel ?? DEFAULT_TRANSCRIBE_MODEL;
 
     if (model.startsWith('gpt-audio') && !options?.timestamps) {
-      return this.transcribeWithAudioChat(apiKey, model, audio, mimeType, options, started);
+      try {
+        return await this.transcribeWithAudioChat(apiKey, model, audio, mimeType, options, started);
+      } catch (error) {
+        // The chat lane has no chain behind it; retry on the real STT endpoint
+        // instead of surfacing (or worse, masking) the chat-lane failure.
+        log.warn('OpenAI audio chat STT failed; falling back to transcriptions endpoint', {
+          model,
+          fallbackModel: DEFAULT_TRANSCRIBE_MODEL,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return this.transcribeWithTranscriptions(apiKey, DEFAULT_TRANSCRIBE_MODEL, audio, mimeType, options, started);
+      }
     }
 
     return this.transcribeWithTranscriptions(
@@ -120,8 +134,15 @@ export class OpenAiSttProvider implements ISttProvider {
     }
 
     const data = (await response.json()) as OpenAiChatResponse;
+    const text = extractAssistantText(data);
+    // Chat models reply conversationally instead of failing on unusable audio;
+    // throw so transcribe() retries on the real transcriptions endpoint.
+    const rejection = detectInvalidTranscription(text);
+    if (rejection) {
+      throw new Error(`OpenAI audio chat STT produced no usable transcript: ${rejection}`);
+    }
     return {
-      text: extractAssistantText(data),
+      text,
       detectedLanguage: options?.language,
       processingMs: Date.now() - started,
     };
