@@ -82,6 +82,7 @@
       "devDependencies": {
         "@asteasolutions/zod-to-openapi": "7.3.4",
         "@omni/channel-a2a": "workspace:*",
+        "@omni/channel-harness": "workspace:*",
         "@types/bun": "1.3.14",
         "@types/qrcode-terminal": "^0.12.2",
         "openapi3-ts": "^4.5.0",

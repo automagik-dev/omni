@@ -115,6 +115,14 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /chats/:id/disappearing': 'chats:write',
   'POST /chats/sync-names': 'chats:write',
 
+  // --- channel-harness (E2E agent-test harness, #953) ---
+  // say/tap inject inbounds that trigger billed agent dispatches → messages:send;
+  // the transcript is conversation data → messages:read; reset mutates it → messages:write.
+  'POST /channels/harness/:instanceId/say': 'messages:send',
+  'POST /channels/harness/:instanceId/tap': 'messages:send',
+  'GET /channels/harness/:instanceId/transcript': 'messages:read',
+  'DELETE /channels/harness/:instanceId/transcript': 'messages:write',
+
   // --- context ---
   'GET /context': 'context:read',
   'POST /context': 'context:write',

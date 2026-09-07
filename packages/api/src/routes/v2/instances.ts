@@ -672,6 +672,19 @@ function applyAscFlowConnectionOptions(
   if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
 }
 
+/**
+ * Harness capability profile — lives in profileMetadata.harnessProfile
+ * (#953, the Slack profileMetadata precedent; generic jsonb, no migration).
+ * The plugin's connect() Zod-parses it, so an invalid profile fails the
+ * connect loudly instead of validating nothing.
+ */
+function applyHarnessConnectionOptions(
+  options: Record<string, unknown>,
+  metadata: Record<string, unknown> | null | undefined,
+): void {
+  if (metadata?.harnessProfile) options.harnessProfile = metadata.harnessProfile;
+}
+
 function applyChannelSpecificConnectionOptions(
   options: Record<string, unknown>,
   input: InstanceConnectionOptionsInput,
@@ -697,6 +710,9 @@ function applyChannelSpecificConnectionOptions(
       return;
     case 'asc-flow':
       applyAscFlowConnectionOptions(options, input);
+      return;
+    case 'harness':
+      applyHarnessConnectionOptions(options, input.profileMetadata);
       return;
   }
 }
@@ -1697,6 +1713,9 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     if (instance.channel === 'asc-flow') {
       applyAscFlowConnectionOptions(restartOptions, instance);
+    }
+    if (instance.channel === 'harness') {
+      applyHarnessConnectionOptions(restartOptions, instance.profileMetadata);
     }
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {

@@ -27,6 +27,7 @@ import { registerRouteSchemas } from '../schemas/openapi/agent-routes';
 import { registerAgentSchemas } from '../schemas/openapi/agents';
 import { CREDENTIAL_EXPOSURE_FIELDS, registerAuthSchemas } from '../schemas/openapi/auth';
 import { registerAutomationSchemas } from '../schemas/openapi/automations';
+import { registerChannelHarnessSchemas } from '../schemas/openapi/channel-harness';
 import { registerCommonSchemas } from '../schemas/openapi/common';
 import { registerConversationSchemas } from '../schemas/openapi/conversations';
 import { registerDeadLetterSchemas } from '../schemas/openapi/dead-letters';
@@ -75,6 +76,7 @@ registerConversationSchemas(registry);
 registerFollowUpSchemas(registry);
 registerVoiceSchemas(registry);
 registerWhatsappFlowsSchemas(registry);
+registerChannelHarnessSchemas(registry);
 // Flag-gated, but still documented: "no REST endpoints without OpenAPI docs"
 // has no exception for a surface that 404s when the flag is off.
 registerPlatformTenantSchemas(registry);
