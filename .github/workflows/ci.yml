@@ -136,6 +136,14 @@ jobs:
         # sequence, monotonic `when`) are base-independent and still run on
         # every event, which catches parallel-PR numbering collisions after
         # auto-merge. Not the same tool as verify-schema-drift.ts (live-DB audit).
+        # HEAD^1 has its own race (#996): if auto-merge lands the PR while this
+        # run is in flight, GitHub deletes refs/pull/N/merge, the deepen fetch
+        # no longer advertises the checked-out merge commit, its parents never
+        # arrive, and `rev-parse HEAD^1` dies — failing the gate on PRs that
+        # touch no migrations (bit PR #991, merged 21s before this step ran).
+        # In that case fall back to the base-branch tip: the run is already
+        # superseded, so re-widening the #977 newer-base window is harmless,
+        # and the base-independent journal checks still run either way.
         env:
           MIGRATION_BASE_BRANCH: ${{ github.base_ref == 'main' && 'dev' || github.base_ref || 'dev' }}
           USE_MERGE_PARENT: ${{ github.event_name == 'pull_request' && github.base_ref != 'main' }}
@@ -143,7 +151,13 @@ jobs:
           bun test scripts/verify-migration-contract.test.ts
           if [ "$USE_MERGE_PARENT" = "true" ]; then
             git fetch --no-tags --deepen=1 origin
-            bun scripts/verify-migration-contract.ts --base "$(git rev-parse HEAD^1)"
+            if BASE=$(git rev-parse --verify -q HEAD^1); then
+              bun scripts/verify-migration-contract.ts --base "$BASE"
+            else
+              echo "::notice::HEAD^1 unresolvable (PR merged mid-run?) — falling back to origin/${MIGRATION_BASE_BRANCH} (#996)"
+              git fetch --no-tags --depth=1 origin "+refs/heads/${MIGRATION_BASE_BRANCH}:refs/remotes/origin/${MIGRATION_BASE_BRANCH}"
+              bun scripts/verify-migration-contract.ts --base "origin/${MIGRATION_BASE_BRANCH}"
+            fi
           else
             git fetch --no-tags --depth=1 origin "+refs/heads/${MIGRATION_BASE_BRANCH}:refs/remotes/origin/${MIGRATION_BASE_BRANCH}"
             bun scripts/verify-migration-contract.ts --base "origin/${MIGRATION_BASE_BRANCH}"
