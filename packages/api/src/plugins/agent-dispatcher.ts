@@ -5583,6 +5583,44 @@ async function listActiveOwnerIdentifiers(db: Database, trustedTenantId?: string
   return cachedActiveOwnerIdentifiers;
 }
 
+/**
+ * #938: baileys echoes the instance's own outbound sends back as
+ * message.received with rawPayload.isFromMe=true. The plugin-level echo
+ * filter (sentMessageIds) is an in-memory TTL cache wiped on reconnect — a
+ * miss lets the echo reach the dispatch gate, where a mode:'all' reply filter
+ * dispatches it and the agent answers itself in a loop. A blanket isFromMe
+ * skip would reintroduce #344 (the owner typing on their own phone also
+ * arrives with isFromMe=true via multi-device sync and MUST dispatch), so
+ * distinguish the two durably: agent outbound sends are persisted with
+ * senderAgentId (message-persistence, message.sent path). If this externalId
+ * already exists as an agent-authored row for this instance, it is our own
+ * echo — one indexed read, only on the isFromMe branch. A missing row fails
+ * open (dispatch proceeds): never silently drop what might be a human message.
+ */
+async function isAgentOutboundEcho(
+  chatsService: Services['chats'],
+  messagesService: Services['messages'],
+  db: Database,
+  payload: MessageReceivedPayload,
+  instanceId: string,
+  trustedTenantId?: string,
+): Promise<boolean> {
+  if (payload.rawPayload?.isFromMe !== true) return false;
+  const priorMessage = await runDispatchDb(db, trustedTenantId, async () => {
+    const chat = await chatsService.findByExternalIdSmart(instanceId, payload.chatId);
+    if (!chat) return null;
+    return messagesService.getByExternalId(chat.id, payload.externalId);
+  });
+  if (!priorMessage?.senderAgentId) return false;
+  log.info('Skipping own outbound echo (agent-authored message received back)', {
+    instanceId,
+    chatId: payload.chatId,
+    externalId: payload.externalId,
+    senderAgentId: priorMessage.senderAgentId,
+  });
+  return true;
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -5600,6 +5638,10 @@ async function shouldProcessMessage(
   }
   if (payload.from === metadata.platformIdentityId) {
     log.debug('Message from self, skipping', { instanceId: metadata.instanceId, from: payload.from });
+    return null;
+  }
+
+  if (await isAgentOutboundEcho(chatsService, messagesService, db, payload, metadata.instanceId, trustedTenantId)) {
     return null;
   }
 
