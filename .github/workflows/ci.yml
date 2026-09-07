@@ -121,22 +121,33 @@ jobs:
       - name: Migration contract gate
         # Static check of packages/db/drizzle/ (journal ↔ files bijection,
         # deployed-migration immutability, additive-only lint, headers,
-        # schema.ts pairing). No DB. On pull_request the checkout is the merge
-        # commit, so comparing against the target branch TIP is exact.
+        # schema.ts pairing). No DB.
+        # On pull_request the checkout is GitHub's test merge commit; its FIRST
+        # PARENT is the exact base-branch tip the merge was built against, so
+        # comparing against HEAD^1 is race-free. Fetching the branch tip here
+        # instead can see a NEWER base — parallel merges land between run start
+        # and this step — and blame the PR for changes it never made (false
+        # pairing violations; bit PR #977 during a 6-PR batch).
         # The contract base is DEV: a migration is "deployed" once it lands on
         # dev (the API auto-migrates from dev), and dev → main promotion is
-        # carry-exact — so promotion PRs and push events compare against
-        # origin/dev to avoid re-litigating history that was vetted when it
-        # entered dev. Journal-integrity checks (bijection, idx sequence,
-        # monotonic `when`) are base-independent and still run on every event,
-        # which catches parallel-PR numbering collisions after auto-merge.
-        # Not the same tool as verify-schema-drift.ts (live-DB audit).
+        # carry-exact — so promotion PRs (base main) and push events keep
+        # comparing against origin/dev to avoid re-litigating history that was
+        # vetted when it entered dev. Journal-integrity checks (bijection, idx
+        # sequence, monotonic `when`) are base-independent and still run on
+        # every event, which catches parallel-PR numbering collisions after
+        # auto-merge. Not the same tool as verify-schema-drift.ts (live-DB audit).
         env:
           MIGRATION_BASE_BRANCH: ${{ github.base_ref == 'main' && 'dev' || github.base_ref || 'dev' }}
+          USE_MERGE_PARENT: ${{ github.event_name == 'pull_request' && github.base_ref != 'main' }}
         run: |
-          git fetch --no-tags --depth=1 origin "+refs/heads/${MIGRATION_BASE_BRANCH}:refs/remotes/origin/${MIGRATION_BASE_BRANCH}"
           bun test scripts/verify-migration-contract.test.ts
-          bun scripts/verify-migration-contract.ts --base "origin/${MIGRATION_BASE_BRANCH}"
+          if [ "$USE_MERGE_PARENT" = "true" ]; then
+            git fetch --no-tags --deepen=1 origin
+            bun scripts/verify-migration-contract.ts --base "$(git rev-parse HEAD^1)"
+          else
+            git fetch --no-tags --depth=1 origin "+refs/heads/${MIGRATION_BASE_BRANCH}:refs/remotes/origin/${MIGRATION_BASE_BRANCH}"
+            bun scripts/verify-migration-contract.ts --base "origin/${MIGRATION_BASE_BRANCH}"
+          fi
 
       - name: Setup environment
         run: |
