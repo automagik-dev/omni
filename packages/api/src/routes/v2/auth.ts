@@ -14,17 +14,31 @@
  * TWO RULES GOVERN THE BLOCK
  * --------------------------
  *   1. It appears only when a tenant auth context exists. A legacy credential
- *      never has one, so a legacy caller's body is byte-for-byte its pre-G4
- *      body — the dual-world invariant, asserted by exact equality in
+ *      never has one, so a legacy caller's body carries no credential block —
+ *      the dual-world invariant, asserted by exact equality in
  *      `__tests__/auth-credential-exposure.test.ts`.
  *   2. It carries only facts about the CALLER'S OWN context, and never a
  *      secret, a hash, key material, the full credential id, or anything about
  *      another principal or tenant. It reads no tenant business data, so it
  *      cannot become an inventory oracle.
+ *
+ * THE SERVER POSTURE BLOCK (issue #982)
+ * -------------------------------------
+ * Alongside the caller's own facts, every AUTHENTICATED caller — legacy and
+ * tenant alike — gets a `server` block naming the deployment's tenancy
+ * posture: multitenancy flag state, whether the platform control plane is
+ * mounted, and the DB enforcement posture. This is the sanctioned, deliberate
+ * extension of the legacy body: an operator holding a legacy key is exactly
+ * who needs to distinguish "flag off" from "server too old" from "wrong
+ * credential class" (#908), so withholding it from legacy callers would defeat
+ * the point. The block is deployment-level and non-enumerating (three flags,
+ * no names, no counts) and appears ONLY here, never on an unauthenticated
+ * surface — `public-surface-privacy.test.ts` pins that.
  */
 
 import { Hono } from 'hono';
 import type { TenantAuthContext } from '../../tenancy/auth-context';
+import { serverTenancyPosture } from '../../tenancy/server-posture';
 import type { AppVariables } from '../../types';
 
 const authRoutes = new Hono<{ Variables: AppVariables }>();
@@ -86,6 +100,10 @@ authRoutes.post('/validate', async (c) => {
       keyName: apiKey.name === '__primary__' ? 'primary' : apiKey.name,
       scopes: apiKey.scopes,
       ...(context ? { credential: publishableCredential(context) } : {}),
+      // Deployment-level tenancy posture, for every authenticated caller
+      // (issue #982). Absent only on servers that predate it — which is
+      // itself the signal an up-to-date CLI uses.
+      server: serverTenancyPosture(),
     },
   });
 });

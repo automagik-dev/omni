@@ -2859,6 +2859,18 @@ export interface components {
                     /** @description Delegation depth: 0 = root key, 1 = child key */
                     delegationDepth: number;
                 };
+                /** @description Deployment tenancy posture; absent only on servers that predate it */
+                server: {
+                    /** @description OMNI_MULTITENANCY_ENABLED flag state (exact-string "true" semantics) */
+                    multitenancyEnabled: boolean;
+                    /** @description Whether the /api/v2/platform control plane is mounted on this server */
+                    controlPlaneMounted: boolean;
+                    /**
+                     * @description Database enforcement posture. "enforced" means forced row-level security is installed; "legacy" with multitenancy enabled means the tenant boundary is advisory only (migration state).
+                     * @enum {string}
+                     */
+                    dbEnforcement: "legacy" | "enforced";
+                };
             };
         };
         HealthCheck: {
@@ -7012,6 +7024,18 @@ export interface operations {
                                 expiresAt: string | null;
                                 /** @description Delegation depth: 0 = root key, 1 = child key */
                                 delegationDepth: number;
+                            };
+                            /** @description Deployment tenancy posture; absent only on servers that predate it */
+                            server: {
+                                /** @description OMNI_MULTITENANCY_ENABLED flag state (exact-string "true" semantics) */
+                                multitenancyEnabled: boolean;
+                                /** @description Whether the /api/v2/platform control plane is mounted on this server */
+                                controlPlaneMounted: boolean;
+                                /**
+                                 * @description Database enforcement posture. "enforced" means forced row-level security is installed; "legacy" with multitenancy enabled means the tenant boundary is advisory only (migration state).
+                                 * @enum {string}
+                                 */
+                                dbEnforcement: "legacy" | "enforced";
                             };
                         };
                     };

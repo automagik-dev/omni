@@ -395,7 +395,9 @@ const CONTROL_PLANE_ROUTE_JUSTIFICATIONS: readonly RouteOwnershipDeclaration[] =
     justification:
       'Credential introspection. Returns ONLY facts about the caller’s own authenticated context — ' +
       'credential class, tenant id/slug, role, scopes, constraints, expiry — and never a secret, hash, or key ' +
-      'material, and never another principal’s context. Reads no tenant business data.',
+      'material, and never another principal’s context. Reads no tenant business data. Also carries the ' +
+      'deployment-level tenancy posture (three flags, nothing tenant-enumerating; issue #982), which is why ' +
+      'this stays the ONE authenticated surface that says which world the server is in.',
   },
 ];
 
