@@ -12,7 +12,7 @@ import { describe, expect, it } from 'bun:test';
 import type { InteractiveButton } from '@omni/channel-sdk';
 
 import { encodeAscEmoji, nonLatin1Left } from '../utils/emoji';
-import { buildUra, foldTitle, splitBubbles } from '../utils/interactive';
+import { buildInteractive, foldTitle, splitBubbles } from '../utils/interactive';
 
 const options = (n: number, label = (i: number) => `Opção ${i}`): InteractiveButton[] =>
   Array.from({ length: n }, (_, i) => ({ text: label(i + 1), data: String(i + 1) }));
@@ -37,97 +37,87 @@ describe('foldTitle', () => {
   });
 });
 
-describe('buildUra', () => {
-  it('renders 3 or fewer options as buttons', () => {
-    expect(buildUra('Escolha:', options(3))).toEqual({
-      ura_opcoes: { '1': 'Opção 1', '2': 'Opção 2', '3': 'Opção 3' },
-      forcar_botoes: true,
+describe('buildInteractive', () => {
+  const params = (...args: Parameters<typeof buildInteractive>) =>
+    buildInteractive(...args) as Record<string, unknown> | null;
+  const rows = (p: Record<string, unknown> | null) =>
+    (p?.list as { secao?: Array<{ linhas?: Array<{ texto: string; descricao: string }> }> } | undefined)?.secao?.[0]
+      ?.linhas ?? [];
+
+  it('renders 3 or fewer options as reply buttons', () => {
+    expect(params('Escolha:', options(3))).toEqual({
+      tipo: 2,
+      mensagem: 'Escolha:',
+      button: ['Opção 1', 'Opção 2', 'Opção 3'],
     });
   });
 
   it('renders 4 options as a list', () => {
-    const ura = buildUra('Escolha:', options(4));
-    expect(ura?.forcar_botoes).toBe(false);
-    expect(Object.keys(ura?.ura_opcoes ?? {})).toHaveLength(4);
+    const p = params('Escolha:', options(4));
+    expect(p?.tipo).toBe(1);
+    expect(rows(p)).toHaveLength(4);
+  });
+
+  it('carries the description under each row — the reason this endpoint exists', () => {
+    // The URA fields on `/mensagem` are a flat `{ordinal: label}` map, so the
+    // clinic never reached the handset: the beneficiary read four clinics by
+    // name and got a menu of bare times (06/09).
+    const p = params('Escolha:', [
+      { text: 'amanhã 07/09 · 08:00', description: 'Teleconsulta · Dr. Francisco' },
+      { text: 'amanhã 07/09 · 19:00', description: 'HAP Conjunto Ceará · Dra. Renata' },
+      ...options(2),
+    ]);
+
+    expect(rows(p)[0]).toEqual({ texto: 'amanhã 07/09 · 08:00', descricao: 'Teleconsulta · Dr. Francisco' });
+    // A row with no description of its own is a row, not a failure.
+    expect(rows(p)[2]?.descricao).toBe('');
+  });
+
+  it('honours the section title and the list button label', () => {
+    const p = params('Escolha:', options(4), { sectionTitle: 'Horários' });
+    const secao = (p?.list as { secao: Array<{ texto: string }>; texto_botao: string }).secao[0];
+    expect(secao?.texto).toBe('Horários');
+    expect((p?.list as { texto_botao: string }).texto_botao).toBeTruthy();
+  });
+
+  it('renders a list when the caller asks for one with few options', () => {
+    // Unlike the URA it replaces, a list DOES render here — so `forceList` is
+    // honoured rather than overridden.
+    expect(params('Escolha:', options(2), { forceList: true })?.tipo).toBe(1);
   });
 
   it('accepts exactly 10 options', () => {
-    expect(Object.keys(buildUra('Escolha:', options(10))?.ura_opcoes ?? {})).toHaveLength(10);
+    expect(rows(params('Escolha:', options(10)))).toHaveLength(10);
   });
 
   it('degrades above 10 options — Meta truncates the overflow silently', () => {
-    expect(buildUra('Escolha:', options(11))).toBeNull();
+    expect(params('Escolha:', options(11))).toBeNull();
   });
 
   it('degrades when the body exceeds 1024 characters', () => {
-    expect(buildUra('x'.repeat(1025), options(3))).toBeNull();
-    expect(buildUra('x'.repeat(1024), options(3))).not.toBeNull();
+    expect(params('x'.repeat(1025), options(3))).toBeNull();
+    expect(params('x'.repeat(1024), options(3))).not.toBeNull();
   });
 
-  it('truncates button labels at 20 and list titles at 24', () => {
+  it('truncates row titles at 24', () => {
     const long = 'Cardiologia com Dr. Fulano de Tal na unidade central';
-    const asButtons = buildUra('Escolha:', [{ text: long }, { text: 'b' }]);
-    expect((asButtons?.ura_opcoes['1'] ?? '').length).toBeLessThanOrEqual(20);
-
-    const asList = buildUra('Escolha:', [{ text: long }, { text: 'b' }, { text: 'c' }, { text: 'd' }]);
-    expect((asList?.ura_opcoes['1'] ?? '').length).toBeLessThanOrEqual(24);
-    expect((asList?.ura_opcoes['1'] ?? '').length).toBeGreaterThan(20);
+    const p = params('Escolha:', [{ text: long }, { text: 'b' }, { text: 'c' }, { text: 'd' }]);
+    expect(rows(p)[0]?.texto.length).toBeLessThanOrEqual(24);
   });
 
   it('degrades when titles collide after truncation', () => {
-    // The tap comes back as the TITLE — an ambiguous pair would book the
+    // The tap comes back as the row TEXT — an ambiguous pair would book the
     // wrong appointment.
     expect(
-      buildUra('Escolha:', [{ text: 'Consulta segunda 13/07 às 08h30' }, { text: 'consulta segunda 13/07 as 08h45' }]),
+      params('Escolha:', [{ text: 'Consulta segunda 13/07 às 08h30' }, { text: 'consulta segunda 13/07 as 08h45' }]),
     ).toBeNull();
   });
 
   it('degrades with no options, no body, or only URL buttons', () => {
-    expect(buildUra('Escolha:', [])).toBeNull();
-    expect(buildUra('Escolha:', undefined)).toBeNull();
-    expect(buildUra('   ', options(3))).toBeNull();
-    expect(buildUra('Escolha:', [{ text: 'Abrir', url: 'https://example.test' }])).toBeNull();
-  });
-
-  // A list does not exist on this platform. Measured on the handset 05/09: the
-  // ASC flattens `forcar_botoes: false` into plain text and appends a numbered
-  // menu of its own, so asking for a list buys the duplicated menu and loses
-  // the taps. Up to three options the answer is always buttons — `forceList`
-  // and `sectionTitle` are honoured only where buttons cannot go.
-  it('takes buttons over a requested list while the options still fit', () => {
-    expect(buildUra('Escolha:', options(2), { forceList: true })?.forcar_botoes).toBe(true);
-    expect(buildUra('Escolha:', options(2), { sectionTitle: 'Horários' })?.forcar_botoes).toBe(true);
-  });
-
-  it('still answers with a list past three options', () => {
-    expect(buildUra('Escolha:', options(5))?.forcar_botoes).toBe(false);
-  });
-
-  // The real case (05/09): two beneficiaries, and the turn went out as a list
-  // because the caller asked for one — so the handset got the duplicated text
-  // menu. Converting it to buttons is what shortens the titles, and it cuts on
-  // a word boundary rather than mid-word.
-  it('shortens a long title on a word boundary when converting to buttons', () => {
-    const ura = buildUra(
-      'Para quem é a consulta?',
-      [{ text: 'ROGERIO AMARO RODRIGUES' }, { text: 'ANELI CAMILO AMARO' }],
-      { forceList: true },
-    );
-
-    expect(ura).toMatchObject({
-      forcar_botoes: true,
-      ura_opcoes: { '1': 'ROGERIO AMARO', '2': 'ANELI CAMILO AMARO' },
-    });
-  });
-
-  // Shortening is what can CREATE the ambiguity, and the tap comes back as the
-  // title — two options that fold together would book the wrong person.
-  it('refuses buttons when shortening makes two titles collide', () => {
-    expect(
-      buildUra('Escolha:', [{ text: 'Consulta cardiologia manhã' }, { text: 'Consulta cardiologia tarde' }], {
-        forceList: true,
-      }),
-    ).toBeNull();
+    expect(params('Escolha:', [])).toBeNull();
+    expect(params('Escolha:', undefined)).toBeNull();
+    expect(params('   ', options(3))).toBeNull();
+    expect(params('Escolha:', [{ text: 'Abrir', url: 'https://example.test' }])).toBeNull();
   });
 });
 

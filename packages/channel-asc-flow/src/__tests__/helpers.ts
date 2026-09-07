@@ -129,13 +129,18 @@ export function stubPlatform(overrides: Record<string, () => Response> = {}): {
     const path = url.pathname.replace('/rest/v2', '');
     calls.push({
       path,
-      body: JSON.parse(String(init?.body ?? '{}')),
+      body: decodeBody(init),
       authorization: new Headers(init?.headers).get('authorization'),
     });
     const override = overrides[path];
     if (override) return override();
     if (path === '/authuser') {
       return jsonResponse({ success: true, result: { token: 'jwt-token', expiry: '1h' } });
+    }
+    // The interactive endpoint addresses the CONTACT, so the channel reads the
+    // account and phone off the atendimento first (`resolveDestino`).
+    if (path === '/atendimento') {
+      return jsonResponse({ id_conta: '18', contato: { telefone: '5551999999999' }, mensagens: [] });
     }
     return jsonResponse(OK_BODY);
   }) as typeof fetch;
@@ -146,6 +151,34 @@ export function stubPlatform(overrides: Record<string, () => Response> = {}): {
       globalThis.fetch = original;
     },
   };
+}
+
+/**
+ * The recorded body, whichever dialect the endpoint speaks: JSON for most, and
+ * PHP-style nested form for `/sendMsgInterativaAvancado` (see
+ * `client.callForm`). Decoding it back to an object here keeps the assertions
+ * written against the shape the caller built, not the wire format.
+ */
+function decodeBody(init?: RequestInit): Record<string, unknown> {
+  const raw = String(init?.body ?? '');
+  const contentType = new Headers(init?.headers).get('content-type') ?? '';
+  if (!contentType.includes('x-www-form-urlencoded')) return JSON.parse(raw || '{}');
+
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of new URLSearchParams(raw)) {
+    const parts = key.split(/\]\[|\[|\]/).filter(Boolean);
+    let node: Record<string, unknown> = out;
+    parts.forEach((part, i) => {
+      if (i === parts.length - 1) {
+        node[part] = value;
+        return;
+      }
+      // A numeric next key means this level is an array.
+      node[part] ??= /^\d+$/.test(parts[i + 1] ?? '') ? [] : {};
+      node = node[part] as Record<string, unknown>;
+    });
+  }
+  return out;
 }
 
 /** The `chatInput` `openTurn` opens the in-flight window with. */

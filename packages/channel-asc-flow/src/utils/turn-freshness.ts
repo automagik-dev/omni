@@ -1,28 +1,28 @@
 /**
- * Telling a beneficiary who repeats themselves from a flow that restarted.
+ * The second half of telling a re-sent input from a real turn.
  *
- * The flow's `aguarda_usuario` node has its own timeout — 10s on flow #225 —
- * and its timeout edge ENDS the atendimento (`fin_1`). The next message the
- * beneficiary sends therefore restarts the flow from `start`, and the restart
- * re-enters `api_rest` carrying the PREVIOUS value of the input variable,
- * because that variable is only written once `aguarda_usuario` validates the
- * new input. Measured on atendimento 22342225 (05/09):
+ * The first half is free and lives in the handler: on a real turn the body's
+ * two fields agree, on a re-send they do not (see `entradaDefasada`). That
+ * covers every re-send whose stale `{#entrada}` differs from the frozen
+ * `{#MENSAGEM}` — which is most of them.
  *
- *   14:46:19  turn answered; aguarda_usuario waits 10s, times out, ends
- *   14:52:46  beneficiary sends "quero falar com um atendente humano"
- *   14:52:53  api_rest calls us with chatInput "🗑️"  ← the 14:46 value
- *   14:53:31  api_rest finally calls with the real text, 45s later
+ * It cannot cover the one where they are the SAME text. Measured on 22344480:
  *
- * The stale call is indistinguishable from a genuine repeat by its shape
- * alone: both carry a `chatInput` equal to the text of the previous turn.
- * ("1" twice in a two-step menu is a real pair of answers, and the suite
- * pins that.) What separates them is whether the PLATFORM recorded a new
- * inbound message — so on that one ambiguous path, and only there, the
- * atendimento is asked.
+ *   23:20:54  chatInput 🗑️  message 🗑️   the beneficiary really sent it
+ *   23:21:11  chatInput 🗑️  message 🗑️   the flow sent it back
  *
- * Fails OPEN: any trouble reaching the platform means the turn is processed
- * as usual. Dropping a real message costs the beneficiary their turn; letting
- * a stale one through costs a repeated answer, which is the lesser harm.
+ * Byte-identical bodies. The 🗑️ opened the cycle, so it is both the current
+ * input and the frozen message, and the re-send reset the session in the
+ * middle of an identification.
+ *
+ * Here the platform's own record IS the discriminator: by 23:21:11 its latest
+ * inbound was already the CPF the beneficiary had typed at 23:21:01. So this
+ * check runs ONLY on that narrow path — fields agreeing on a text we already
+ * answered — and the common turn never pays for it.
+ *
+ * Fails OPEN: any trouble reaching the platform means the turn is processed as
+ * usual. Dropping a real message costs the beneficiary their turn; letting a
+ * re-send through costs a repeated answer.
  */
 
 import type { Logger } from '@omni/core';

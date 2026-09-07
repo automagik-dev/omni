@@ -85,6 +85,22 @@ export interface ParsedAscFlowTurn {
   text: string;
   /** The text came from the frozen `message` fallback, not from `chatInput`. */
   fromFallback: boolean;
+  /**
+   * `chatInput` and `message` disagree — the flow is re-sending an OLD input.
+   *
+   * On a real turn the two fields carry the SAME text: `{#entrada}` is what
+   * the beneficiary just typed and `{#MENSAGEM}` is the message that carried
+   * it. On a re-send `{#entrada}` still holds a previous value while
+   * `{#MENSAGEM}` does not follow it. Verified on 30 calls across atendimentos
+   * 22342225, 22342782 and 22344480, with no counterexample:
+   *
+   *   real     chatInput 'ROGERIO AMARO'  message 'ROGERIO AMARO'
+   *   re-send  chatInput 'ROGERIO AMARO'  message '##1f5d1-fe0f##'
+   *
+   * `false` whenever the comparison cannot be made (either field empty) — a
+   * flow that does not send `message` must keep working.
+   */
+  entradaDefasada: boolean;
   phone: string;
   messageId?: string;
 }
@@ -112,9 +128,47 @@ export function parseInboundTurn(body: AscFlowInboundBody): ParsedAscFlowTurn | 
     codAtendimento,
     text,
     fromFallback: !typed,
+    entradaDefasada: Boolean(typed) && Boolean(fallback) && typed !== fallback,
     phone: firstString(body.phone, body.telefone),
     ...(messageId ? { messageId } : {}),
   };
+}
+
+/**
+ * Is this the flow sending an input BACK, rather than the beneficiary speaking?
+ *
+ * It re-sends the previous input before the current one, on every turn —
+ * measured on 22344480: "ROGERIO AMARO" was answered at 22:36:27 and came back
+ * six times from 22:36:51, each one opening a fresh agent run that re-derived
+ * the same proposal. The beneficiary read the four options twice.
+ *
+ * Two questions, cheapest first, because they catch different re-sends:
+ *
+ *   1. Do the body's two fields disagree? On a real turn they carry the same
+ *      text; on a re-send `{#entrada}` is behind. Free, and it covers most.
+ *   2. They agree, but is the platform's own latest inbound something else?
+ *      That is the re-send the fields cannot show — the input that came back
+ *      IS the message that opened the cycle, so both carry it (a 🗑️ at
+ *      23:20:54 and the same 🗑️ back at 23:21:11, byte for byte, resetting the
+ *      session mid-identification). Narrow by construction: only a text that
+ *      repeats the last turn we answered ever asks.
+ *
+ * Both fail OPEN — an unanswerable question means the turn is processed.
+ */
+async function isReenvioDoFlow(
+  plugin: AscFlowPlugin,
+  instanceId: string,
+  turn: ParsedAscFlowTurn,
+  logger: ReturnType<AscFlowPlugin['getLogger']>,
+): Promise<boolean> {
+  if (turn.entradaDefasada && plugin.hasSeenCod(instanceId, turn.codAtendimento)) {
+    logger.info('[asc-flow] chatInput is behind message — the flow re-sent an old input', {
+      instanceId,
+      codAtendimento: turn.codAtendimento,
+    });
+    return true;
+  }
+  return plugin.isStaleFlowReplay(instanceId, turn);
 }
 
 /**
@@ -200,12 +254,7 @@ export async function handleAscFlowWebhookRequest(
     return pending();
   }
 
-  // A flow that restarted after its own `aguarda_usuario` timeout re-enters
-  // `api_rest` carrying the PREVIOUS input, which reads here as the
-  // beneficiary repeating themselves. Only a text that matches the last turn
-  // we answered gets checked against the platform's own record, so the common
-  // path pays nothing. See `utils/turn-freshness.ts`.
-  if (await plugin.isStaleFlowReplay(instanceId, turn)) {
+  if (await isReenvioDoFlow(plugin, instanceId, turn, logger)) {
     return pending();
   }
 

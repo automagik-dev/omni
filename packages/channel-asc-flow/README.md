@@ -112,8 +112,9 @@ Always HTTP `200`, always JSON. Three states, keyed by `codAtendimento`:
 | the agent answered | `{"pronto":1,"resposta":"…","hand_off":"nao","bolhas":["…"]}` |
 | nobody answered the turn within 60s | `{"pronto":1,"resposta":"","hand_off":"nao","bolhas":[]}` |
 
-The `pronto:1` body may also carry `fila_vq` / `motivo_transf_vq` (handoff only)
-and `ura_opcoes` / `forcar_botoes` (when the last bubble has options). Reading
+The `pronto:1` body may also carry `fila_vq` / `motivo_transf_vq` (handoff
+only). Interactive options never ride the body — they leave through their own
+endpoint, and repeating them here would build a second menu. Reading
 the answer **clears the turn**: the same text on the next call is a new turn.
 
 ### What to configure on the `api_rest` node
@@ -242,29 +243,38 @@ degrades to `[não foi possível enviar o arquivo]` rather than to silence.
 equivalent and is never sent. Stickers and reactions are still out of scope: the
 platform exposes no endpoint for either.
 
-### Interactive (URA)
+### Interactive (list / buttons)
 
-`content.buttons` maps onto `ura_opcoes` + `forcar_botoes` through the SDK's
-shared `planInteractive`, so **Meta's limits are the ceiling** — the ASC
-platform is a BSP on top of Meta, so no limit of theirs can be looser. ≤3
-options render as buttons (label ≤20), 4–10 as a list (title ≤24).
+`content.buttons` maps onto `msg_interativa_parametros` on
+`POST /sendMsgInterativaAvancado` through the SDK's shared `planInteractive`,
+so **Meta's limits are the ceiling** — the ASC platform is a BSP on top of
+Meta, so no limit of theirs can be looser. ≤3 options render as reply buttons
+(label ≤20), 4–10 as a list (title ≤24, description ≤72).
+
+The row **description** is why this endpoint and not the URA fields on
+`/mensagem`. Those are a flat `{ordinal: label}` map with nowhere to put one,
+so a proposal reached a beneficiary as a menu of bare times naming no clinic,
+while the agent had written the clinic and the doctor into the description.
+Probed against the live platform 06/09: a parallel `ura_descricoes` map is
+ignored, an object-shaped option is not delivered, and a `\n` in a title
+flattens the whole bubble to plain text.
 
 The mapping degrades to plain numbered text — never dropping content — when:
 
 - more than 10 options (Meta truncates the overflow silently);
 - the body exceeds 1024 characters;
-- two titles collide after truncation (the tap comes back as the **title**, so
-  a collision would book the wrong appointment).
+- two titles collide after truncation (the tap comes back as the **row text**,
+  so a collision would book the wrong appointment);
+- the atendimento carries no account or phone (the endpoint addresses the
+  contact, not the atendimento — see `resolveDestino`).
 
-The numbered text the agent wrote is the canonical path; the URA is only a tap
-affordance layered on top of it.
+The numbered text the agent wrote is the canonical path; the component is only
+a tap affordance layered on top of it.
 
-The fields ride in the poll body **and** the last bubble goes out through
-`POST /mensagem` with them, which is what makes the buttons/list render without
-a URA node in the flow. When that push succeeds, `resposta` comes back **empty**
-so the flow's message node does not repeat the bubble — `bolhas` still carries
-the full turn. There is no opt-out: a flow that renders the options itself would
-need a URA node consuming `ura_opcoes`, and no tenant runs one.
+The last bubble goes out as the component and `resposta` comes back **empty**,
+so the flow's message node does not repeat it — `bolhas` still carries the full
+turn. One thing is lost against `/mensagem`: there is no reply-quote field on
+the interactive endpoint, so a `replyTo` is not honoured on a turn with options.
 
 ### Handoff
 

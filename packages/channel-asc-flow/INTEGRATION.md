@@ -124,15 +124,35 @@ Endpoints que valem no dia a dia:
 | `GET /atendimento?codigo_atendimento=` | histórico completo, status, agente, todas as mensagens |
 | `GET /RelRequisicoes?dat_inicial=&dat_final=` | **o que o flow mandou e o que recebeu** — request e response do `api_rest` |
 | `GET /flow?limit=5` | lista os flows (só metadados) |
-| `POST /mensagem` | injeta mensagem/mídia/URA no atendimento |
+| `POST /mensagem` | injeta mensagem/mídia no atendimento |
+| `POST /sendMsgInterativaAvancado` | lista/botões nativos do WhatsApp, com descrição por linha |
 | `POST /callbackFlowMsg` | empurra bolha de texto |
 | `POST /transferirHumano` | transfere para serviço da ASC (modo `service`) |
 
 ⚠ `GET /flow?cod_flow=225` devolve **500** (bug da plataforma; `limit` e
 `nom_flow` funcionam). O grafo só sai pelo editor.
 
-⚠ `/sendMsgInterativa` e `/sendMsgInterativaAvancado` **não** servem para injetar
-botões num atendimento em curso — são HSM/campanha, abrem atendimento novo.
+⚠ Correção (06/09) — esta seção afirmava que `/sendMsgInterativaAvancado` só
+servia para HSM/campanha e abria atendimento novo. **É falso**, e a suposição
+custou um dia: com `bol_incluir_atual: 1` ele entrega DENTRO do atendimento em
+curso, e é o único caminho com `descricao` por linha. O `ura_opcoes` do
+`/mensagem` é um mapa plano de rótulos — foi por isso que a proposta chegou no
+beneficiário como `1 - amanhã 07/09 · 08:00`, sem dizer a clínica.
+
+Três armadilhas dele, todas medidas:
+
+1. **lê form, não JSON.** Mandado como JSON responde `400 Faltando identificador
+   da conta` com o `cod_conta` no corpo, porque nem chega a parsear. Em
+   `application/x-www-form-urlencoded` com chave aninhada estilo PHP
+   (`msg_interativa_parametros[list][secao][0][linhas][0][texto]`) passa.
+2. **`envio_direto` é recusado** para os tipos interativos ("Nao e possivel
+   utilizar envio direto para esse tipo de mensagem") — não mandar o campo.
+3. **endereça o CONTATO**, não o atendimento: `cod_conta` + `contato.telefone`
+   são obrigatórios (`cod_atendimento` sozinho → "Faltando identificador da
+   conta"). Os dois saem do `GET /atendimento`.
+
+O percent-encoding é UTF-8 aqui — a regra latin-1 da seção 3 vale para o
+`/mensagem`, não para este: `acentuação · ç ã` voltou intacto do aparelho.
 
 ---
 

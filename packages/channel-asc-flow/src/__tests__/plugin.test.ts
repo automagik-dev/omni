@@ -80,6 +80,7 @@ describe('parseInboundTurn', () => {
       text: 'oi',
       phone: '5551999',
       fromFallback: false,
+      entradaDefasada: false,
     });
   });
 
@@ -160,6 +161,7 @@ describe('inbound', () => {
       text: 'oi',
       phone: '5551999',
       fromFallback: false,
+      entradaDefasada: false,
     });
 
     expect(of('/sendIndicador')[0]?.body).toEqual({ cod: 42, tipo: 1 });
@@ -171,7 +173,13 @@ describe('inbound', () => {
 
   it('falls back to the cod as the sender when the flow sends no phone', async () => {
     await boot();
-    await plugin.handleInboundTurn(instanceId, { codAtendimento: '42', text: 'oi', phone: '', fromFallback: false });
+    await plugin.handleInboundTurn(instanceId, {
+      codAtendimento: '42',
+      text: 'oi',
+      phone: '',
+      fromFallback: false,
+      entradaDefasada: false,
+    });
 
     expect(eventBus.published.find((e) => e.type.includes('received'))?.payload).toMatchObject({ from: '42' });
   });
@@ -200,7 +208,11 @@ describe('outbound turn', () => {
     expect(ready('42')).toMatchObject({ pronto: 1, resposta: '', hand_off: 'nao', bolhas: ['um', 'dois', 'tres'] });
   });
 
-  it('carries the URA of the last bubble in the response body', async () => {
+  it('keeps the URA fields OUT of the response body', async () => {
+    // The component now leaves through `/sendMsgInterativaAvancado`. Repeating
+    // it as URA fields in the poll body would make the flow's URA node build a
+    // SECOND menu under the first — the beneficiary reading the same options
+    // twice, with two numbering systems.
     await boot();
     await send({
       type: 'text',
@@ -208,10 +220,9 @@ describe('outbound turn', () => {
       buttons: [{ text: 'seg 01/09 08:30' }, { text: 'seg 01/09 09:00' }],
     });
 
-    expect(ready('42')).toMatchObject({
-      forcar_botoes: true,
-      ura_opcoes: { '1': 'seg 01/09 08:30', '2': 'seg 01/09 09:00' },
-    });
+    const body = ready('42');
+    expect((body as unknown as Record<string, unknown>)?.ura_opcoes).toBeUndefined();
+    expect((body as unknown as Record<string, unknown>)?.forcar_botoes).toBeUndefined();
   });
 
   it('omits the URA when the options do not fit the component', async () => {
@@ -222,7 +233,7 @@ describe('outbound turn', () => {
       buttons: Array.from({ length: 11 }, (_, i) => ({ text: `Opção ${i + 1}` })),
     });
 
-    expect(ready('42')?.ura_opcoes).toBeUndefined();
+    expect((ready('42') as unknown as Record<string, unknown>)?.ura_opcoes).toBeUndefined();
   });
 
   it('transfers to the configured queue and reports the handoff in the body', async () => {
@@ -246,6 +257,58 @@ describe('outbound turn', () => {
       cod_prioridade: 0,
       msgTransferencia: false,
     });
+  });
+
+  it('carries who the beneficiary IS into the Genesys userdata', async () => {
+    // The flow declares thirteen `userdata` fields and we filled four — phone,
+    // queue, reason and a constant. Measured in production 06/09 19:30 BRT, the
+    // attendant opened with `Bem-vindo (a)  . Meu nome e DAVI.`: the empty
+    // vocative is `u_NomeBeneficiario` with no value, and the person who had
+    // just identified themselves and booked an appointment arrived on the other
+    // side as a phone number and a queue code.
+    await boot();
+    await send(
+      { type: 'text', text: 'Convidamos um especialista.' },
+      {
+        isHandoff: true,
+        handoffFields: {
+          fila_vq: 'VQ_AGENDAMENTO',
+          nome_beneficiario_vq: 'ROGERIO AMARO RODRIGUES',
+          carteirinha_vq: '0001000000011',
+          vinculo_vq: 'TITULAR',
+          filial_vq: 'FORTALEZA',
+        },
+      },
+    );
+
+    expect(ready('42')).toMatchObject({
+      hand_off: 'sim',
+      fila_vq: 'VQ_AGENDAMENTO',
+      nome_beneficiario_vq: 'ROGERIO AMARO RODRIGUES',
+      carteirinha_vq: '0001000000011',
+      vinculo_vq: 'TITULAR',
+      filial_vq: 'FORTALEZA',
+    });
+  });
+
+  it('forwards an empty identity field rather than omitting it', async () => {
+    // The `store` on the flow's `api_rest` node applies the whole mapping or
+    // none of it. A field listed in `returned` and missing from the body left
+    // `{#resposta}` empty with HTTP 200 (measured 05/09, atendimento
+    // 22327328) — so omitting `cpf_vq` because the record has none would take
+    // the agent's own answer down with it.
+    await boot();
+    await send(
+      { type: 'text', text: 'Convidamos um especialista.' },
+      {
+        isHandoff: true,
+        handoffFields: { fila_vq: 'VQ_AGENDAMENTO', nome_beneficiario_vq: '   ', cpf_vq: '' },
+      },
+    );
+
+    const body = ready('42');
+    expect(body?.nome_beneficiario_vq).toBe('');
+    expect(body?.cpf_vq).toBe('');
   });
 
   // `POST /messages/send/handoff` sets `agentPaused: true` unless the send says
