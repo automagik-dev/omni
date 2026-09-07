@@ -6,7 +6,8 @@
         "scripts/test-messaging.ts",
         "scripts/kill-stale-test-daemons.ts",
         "scripts/pg-gate.ts",
-        "scripts/pg-gate-warm.ts"
+        "scripts/pg-gate-warm.ts",
+        "scripts/bootstrap-platform-credential.ts"
       ],
       "project": ["scripts/**/*.ts"],
       "ignore": [
