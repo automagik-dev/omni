@@ -1150,6 +1150,24 @@ export interface AuthCredentialContext {
 }
 
 /**
+ * Deployment-level tenancy posture, as returned by `POST /auth/validate`
+ * (issue #982).
+ *
+ * Present for EVERY authenticated caller on servers that report it, and
+ * absent entirely on older servers — which is why the field is optional on
+ * `AuthValidateResponse`: absence means "this server predates posture
+ * reporting", a state a CLI must render as nothing rather than as defaults.
+ */
+export interface ServerTenancyPosture {
+  /** `OMNI_MULTITENANCY_ENABLED` flag state (exact-string `"true"` semantics). */
+  multitenancyEnabled: boolean;
+  /** Whether the `/api/v2/platform` control plane is mounted on this server. */
+  controlPlaneMounted: boolean;
+  /** Database enforcement posture: forced RLS installed, or legacy. */
+  dbEnforcement: 'legacy' | 'enforced';
+}
+
+/**
  * Auth validation response
  */
 export interface AuthValidateResponse {
@@ -1159,6 +1177,8 @@ export interface AuthValidateResponse {
   scopes: string[];
   /** Present only for a tenant-class credential. */
   credential?: AuthCredentialContext;
+  /** Deployment tenancy posture; absent on servers that predate it. */
+  server?: ServerTenancyPosture;
 }
 
 // ============================================================================

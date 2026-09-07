@@ -71,6 +71,7 @@ export type {
   // Auth types
   AuthCredentialContext,
   AuthValidateResponse,
+  ServerTenancyPosture,
   // A2A types
   A2ADiscoverableAgent,
   A2AJsonRpcResponse,
