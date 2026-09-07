@@ -2560,6 +2560,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/platform/tenants/{id}/keys/root": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a tenant root key
+         * @description Issue the initial tenant-class ROOT key (delegation depth 0) for an active membership of the tenant. All invariants are enforced transactionally: the principal/membership must belong to the tenant and match the requested role, the tenant must be active, expiry/rate-limit/budget must fit the tenant policy ceilings, and platform/wildcard scopes are refused. The plaintext key is returned exactly once and is never retrievable again. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:tenant-keys:write` (the credential must also carry `platform:tenants:write`).
+         */
+        post: operations["issuePlatformTenantRootKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/platform/tenants/{id}/memberships": {
         parameters: {
             query?: never;
@@ -6282,6 +6302,93 @@ export interface components {
              * @example onboarding request OPS-1421
              */
             reason: string;
+        };
+        IssueRootKeyRequest: {
+            /**
+             * Format: uuid
+             * @description Principal the key acts as; must hold the membership
+             */
+            principalId: string;
+            /**
+             * Format: uuid
+             * @description Active membership binding the principal to the tenant
+             */
+            membershipId: string;
+            /**
+             * @description Tenant role
+             * @enum {string}
+             */
+            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+            /** @description Human-readable key name */
+            name: string;
+            /** @description Explicit tenant scopes. Platform and wildcard scopes are refused. */
+            scopes: string[];
+            /**
+             * Format: date-time
+             * @description Expiry (ISO 8601). Must be in the future and within the tenant TTL ceiling
+             */
+            expiresAt: string;
+            /** @description Rate limit; capped by the tenant policy ceiling */
+            rateLimit: number;
+            /** @description Budget; capped by the tenant policy ceiling */
+            budget: number;
+            /** @description Optional resource allowlists (e.g. instanceAllowlist) */
+            resourceConstraints?: {
+                [key: string]: string[];
+            };
+            /**
+             * @description Audited justification for the change
+             * @example onboarding request OPS-1421
+             */
+            reason: string;
+        };
+        IssuedRootKey: {
+            /**
+             * Format: uuid
+             * @description Key lineage id
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Tenant the key is bound to
+             */
+            tenantId: string;
+            /**
+             * Format: uuid
+             * @description Bound principal
+             */
+            principalId: string | null;
+            /**
+             * Format: uuid
+             * @description Bound membership
+             */
+            membershipId: string | null;
+            /** @description Human-readable key name */
+            name: string;
+            /**
+             * @description Tenant role
+             * @enum {string}
+             */
+            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+            /** @description Granted tenant scopes */
+            scopes: string[];
+            /** @description Effective resource constraints */
+            constraints: {
+                [key: string]: string[];
+            };
+            /** @description Always 0 for a root key */
+            delegationDepth: number;
+            /**
+             * Format: date-time
+             * @description Expiry timestamp
+             */
+            expiresAt: string;
+            /** @description Granted rate limit */
+            rateLimit: number;
+            /** @description Granted budget */
+            budget: number;
+            /** @description The plaintext credential. Returned exactly ONCE; it can never be retrieved again. */
+            plainTextKey: string;
         };
     };
     responses: never;
@@ -21488,6 +21595,224 @@ export interface operations {
             };
             /** @description Missing, non-platform, or insufficiently scoped credential */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found. Non-enumerating: an unknown id yields a bare 404 with no metadata. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Lifecycle conflict (e.g. duplicate slug, or a transition out of the terminal archived state) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    issuePlatformTenantRootKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description Principal the key acts as; must hold the membership
+                     */
+                    principalId: string;
+                    /**
+                     * Format: uuid
+                     * @description Active membership binding the principal to the tenant
+                     */
+                    membershipId: string;
+                    /**
+                     * @description Tenant role
+                     * @enum {string}
+                     */
+                    role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+                    /** @description Human-readable key name */
+                    name: string;
+                    /** @description Explicit tenant scopes. Platform and wildcard scopes are refused. */
+                    scopes: string[];
+                    /**
+                     * Format: date-time
+                     * @description Expiry (ISO 8601). Must be in the future and within the tenant TTL ceiling
+                     */
+                    expiresAt: string;
+                    /** @description Rate limit; capped by the tenant policy ceiling */
+                    rateLimit: number;
+                    /** @description Budget; capped by the tenant policy ceiling */
+                    budget: number;
+                    /** @description Optional resource allowlists (e.g. instanceAllowlist) */
+                    resourceConstraints?: {
+                        [key: string]: string[];
+                    };
+                    /**
+                     * @description Audited justification for the change
+                     * @example onboarding request OPS-1421
+                     */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Root key issued. `plainTextKey` is returned once and never again. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Key lineage id
+                             */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description Tenant the key is bound to
+                             */
+                            tenantId: string;
+                            /**
+                             * Format: uuid
+                             * @description Bound principal
+                             */
+                            principalId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Bound membership
+                             */
+                            membershipId: string | null;
+                            /** @description Human-readable key name */
+                            name: string;
+                            /**
+                             * @description Tenant role
+                             * @enum {string}
+                             */
+                            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+                            /** @description Granted tenant scopes */
+                            scopes: string[];
+                            /** @description Effective resource constraints */
+                            constraints: {
+                                [key: string]: string[];
+                            };
+                            /** @description Always 0 for a root key */
+                            delegationDepth: number;
+                            /**
+                             * Format: date-time
+                             * @description Expiry timestamp
+                             */
+                            expiresAt: string;
+                            /** @description Granted rate limit */
+                            rateLimit: number;
+                            /** @description Granted budget */
+                            budget: number;
+                            /** @description The plaintext credential. Returned exactly ONCE; it can never be retrieved again. */
+                            plainTextKey: string;
+                        };
+                    };
+                };
+            };
+            /** @description Request violates root-key invariants (wildcard/platform scope, past expiry, bad limits) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Insufficient platform scope, or the request exceeds the tenant key policy ceiling */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
