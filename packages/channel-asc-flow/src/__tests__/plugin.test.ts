@@ -259,6 +259,53 @@ describe('outbound turn', () => {
     });
   });
 
+  it('carries who the beneficiary IS into the Genesys userdata', async () => {
+    // The flow declares thirteen `userdata` fields and we filled four — phone,
+    // queue, reason and a constant. Measured in production 06/09 19:30 BRT, the
+    // attendant opened with `Bem-vindo (a)  . Meu nome e DAVI.`: the empty
+    // vocative is `u_NomeBeneficiario` with no value, and the person who had
+    // just identified themselves and booked an appointment arrived on the other
+    // side as a phone number and a queue code.
+    await boot();
+    await send(
+      { type: 'text', text: 'Convidamos um especialista.' },
+      {
+        isHandoff: true,
+        handoffFields: {
+          fila_vq: 'VQ_AGENDAMENTO',
+          nome_beneficiario_vq: 'ROGERIO AMARO RODRIGUES',
+          carteirinha_vq: '0001000000011',
+          vinculo_vq: 'TITULAR',
+          filial_vq: 'FORTALEZA',
+        },
+      },
+    );
+
+    expect(ready('42')).toMatchObject({
+      hand_off: 'sim',
+      fila_vq: 'VQ_AGENDAMENTO',
+      nome_beneficiario_vq: 'ROGERIO AMARO RODRIGUES',
+      carteirinha_vq: '0001000000011',
+      vinculo_vq: 'TITULAR',
+      filial_vq: 'FORTALEZA',
+    });
+  });
+
+  it('never writes an empty identity field over one another path filled', async () => {
+    await boot();
+    await send(
+      { type: 'text', text: 'Convidamos um especialista.' },
+      {
+        isHandoff: true,
+        handoffFields: { fila_vq: 'VQ_AGENDAMENTO', nome_beneficiario_vq: '   ', cpf_vq: '' },
+      },
+    );
+
+    const body = ready('42');
+    expect(body?.nome_beneficiario_vq).toBeUndefined();
+    expect(body?.cpf_vq).toBeUndefined();
+  });
+
   // `POST /messages/send/handoff` sets `agentPaused: true` unless the send says
   // otherwise. In `flow` mode that pause is the deadlock: the beneficiary only
   // leaves the bot at the `genesys_mobile_service` node, so the agent must keep

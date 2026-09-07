@@ -52,7 +52,22 @@ export interface HandoffPlan {
    */
   transfer: { codServico: number; codPrioridade: 0 | 1 } | null;
   /** The Genesys userdata fields, present only when they validated. */
-  fields: { fila_vq?: string; motivo_transf_vq?: string };
+  fields: {
+    fila_vq?: string;
+    motivo_transf_vq?: string;
+    /**
+     * Who the beneficiary IS, for the Genesys `userdata`. The flow declares
+     * thirteen fields and until 07/09/2026 four were filled — phone, queue,
+     * reason and a constant — so the attendant opened with `Bem-vindo (a)  .`
+     * and received a phone number where a person should be.
+     */
+    nome_beneficiario_vq?: string;
+    cpf_vq?: string;
+    carteirinha_vq?: string;
+    vinculo_vq?: string;
+    plano_vq?: string;
+    filial_vq?: string;
+  };
 }
 
 /**
@@ -148,6 +163,19 @@ export function planHandoff(
  * In `service` mode the ASC's own queue already holds the atendimento, so a bad
  * value is dropped with a warning rather than costing the transfer.
  */
+/** The `userdata` fields describing the PERSON, forwarded verbatim. */
+const IDENTITY_FIELDS = [
+  'nome_beneficiario_vq',
+  'cpf_vq',
+  'carteirinha_vq',
+  'vinculo_vq',
+  'plano_vq',
+  'filial_vq',
+] as const;
+
+/** Same ceiling as the reason: the platform truncates silently past it. */
+const IDENTITY_MAX_LENGTH = 200;
+
 function buildGenesysFields(
   read: (...keys: string[]) => unknown,
   logger: Logger,
@@ -178,6 +206,17 @@ function buildGenesysFields(
   if (typeof rawMotivo === 'string') {
     const motivo = rawMotivo.replace(/\s+/g, ' ').trim().slice(0, MOTIVO_MAX_LENGTH);
     if (motivo) fields.motivo_transf_vq = motivo;
+  }
+
+  // Who the person is. Pass-through by design: the agent decides what to send
+  // (it owns the identity and the privacy flag behind the CPF), the channel
+  // only carries it. An empty value is NOT forwarded — writing "" over a field
+  // another path filled is worse than leaving it alone.
+  for (const key of IDENTITY_FIELDS) {
+    const raw = read(key);
+    if (typeof raw !== 'string') continue;
+    const value = raw.replace(/\s+/g, ' ').trim().slice(0, IDENTITY_MAX_LENGTH);
+    if (value) fields[key] = value;
   }
 
   return fields;
