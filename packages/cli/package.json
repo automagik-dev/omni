@@ -79,6 +79,7 @@
     "@omni/api": "workspace:*",
     "@omni/channel-a2a": "workspace:*",
     "@omni/channel-asc-flow": "workspace:*",
+    "@omni/channel-harness": "workspace:*",
     "@omni/channel-discord": "workspace:*",
     "@omni/channel-gupshup": "workspace:*",
     "@omni/channel-hermes": "workspace:*",

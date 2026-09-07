@@ -11,6 +11,7 @@ import { type ChannelPlugin, channelRegistry } from '@omni/channel-sdk';
 import ascFlowPlugin from '@omni/channel-asc-flow';
 import discordPlugin from '@omni/channel-discord';
 import gupshupPlugin from '@omni/channel-gupshup';
+import harnessPlugin from '@omni/channel-harness';
 import hermesPlugin from '@omni/channel-hermes';
 import slackPlugin from '@omni/channel-slack';
 import telegramPlugin from '@omni/channel-telegram';
@@ -29,6 +30,7 @@ for (const plugin of [
   gupshupPlugin,
   hermesPlugin,
   ascFlowPlugin,
+  harnessPlugin,
 ] as ChannelPlugin[]) {
   channelRegistry.register(plugin);
 }

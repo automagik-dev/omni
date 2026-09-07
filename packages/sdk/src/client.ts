@@ -96,7 +96,8 @@ export type Channel =
   | 'twilio-whatsapp'
   | 'hermes'
   | 'asc-flow'
-  | 'internal';
+  | 'internal'
+  | 'harness';
 
 // Paginated response helper
 export interface PaginatedResponse<T> {
