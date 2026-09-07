@@ -1,9 +1,10 @@
 /**
  * SDK platform control-plane surface (issue #981).
  *
- * Pins the method → route mapping for all ten tenant/membership operations,
- * and — the part the server audits — WHERE the reason travels: reads send the
- * `x-platform-reason` header, mutations send `reason` in the JSON body.
+ * Pins the method → route mapping for the tenant/membership operations and
+ * root-key issuance, and — the part the server audits — WHERE the reason
+ * travels: reads send the `x-platform-reason` header, mutations send `reason`
+ * in the JSON body.
  * A local Bun server records every request so the assertions are on the actual
  * wire shape, not on mocks of our own code.
  */
@@ -52,6 +53,22 @@ const membership = {
   disabledAt: null,
 };
 
+const rootKey = {
+  id: '44444444-4444-4444-8444-444444444444',
+  tenantId: TENANT_ID,
+  principalId: PRINCIPAL_ID,
+  membershipId: MEMBERSHIP_ID,
+  name: 'acme-root',
+  role: 'tenant-owner',
+  scopes: ['messages:send'],
+  constraints: {},
+  delegationDepth: 0,
+  expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+  rateLimit: 60,
+  budget: 500,
+  plainTextKey: 'omni_root_plaintext_only_once',
+};
+
 describe('platform control plane', () => {
   let server: Server;
   let client: OmniClient;
@@ -71,6 +88,7 @@ describe('platform control plane', () => {
     [`POST ${MEMBERSHIPS}/${MEMBERSHIP_ID}/disable`]: () => Response.json({ data: membership }),
     [`POST ${MEMBERSHIPS}/${MEMBERSHIP_ID}/status`]: () => Response.json({ data: membership }),
     [`POST ${MEMBERSHIPS}/${MEMBERSHIP_ID}/role`]: () => Response.json({ data: membership }),
+    [`POST ${TENANTS}/${TENANT_ID}/keys/root`]: () => Response.json({ data: rootKey }, { status: 201 }),
   };
 
   beforeAll(() => {
@@ -219,6 +237,58 @@ describe('platform control plane', () => {
     expect(req.method).toBe('POST');
     expect(req.path).toBe(`/api/v2/platform/tenants/${TENANT_ID}/memberships/${MEMBERSHIP_ID}/role`);
     expect(req.body).toEqual({ role: 'tenant-admin', reason: 'promotion' });
+  });
+
+  test('tenants.keys.issueRoot → POST /platform/tenants/:id/keys/root with reason in body', async () => {
+    const expiresAt = rootKey.expiresAt;
+    const result = await client.platform.tenants.keys.issueRoot(TENANT_ID, {
+      principalId: PRINCIPAL_ID,
+      membershipId: MEMBERSHIP_ID,
+      role: 'tenant-owner',
+      name: 'acme-root',
+      scopes: ['messages:send'],
+      expiresAt,
+      rateLimit: 60,
+      budget: 500,
+      resourceConstraints: { instanceAllowlist: ['instance-1'] },
+      reason: 'bootstrap tenant OPS-1421',
+    });
+    // The one-shot plaintext comes back to the caller untouched.
+    expect(result.plainTextKey).toBe('omni_root_plaintext_only_once');
+    expect(result.id).toBe(rootKey.id);
+    const req = lastRequest();
+    expect(req.method).toBe('POST');
+    expect(req.path).toBe(`/api/v2/platform/tenants/${TENANT_ID}/keys/root`);
+    expect(req.reasonHeader).toBeNull();
+    expect(req.body).toEqual({
+      principalId: PRINCIPAL_ID,
+      membershipId: MEMBERSHIP_ID,
+      role: 'tenant-owner',
+      name: 'acme-root',
+      scopes: ['messages:send'],
+      expiresAt,
+      rateLimit: 60,
+      budget: 500,
+      resourceConstraints: { instanceAllowlist: ['instance-1'] },
+      reason: 'bootstrap tenant OPS-1421',
+    });
+  });
+
+  test('tenants.keys.issueRoot omits resourceConstraints from the body when not given', async () => {
+    await client.platform.tenants.keys.issueRoot(TENANT_ID, {
+      principalId: PRINCIPAL_ID,
+      membershipId: MEMBERSHIP_ID,
+      role: 'tenant-owner',
+      name: 'acme-root',
+      scopes: ['messages:send'],
+      expiresAt: rootKey.expiresAt,
+      rateLimit: 60,
+      budget: 500,
+      reason: 'bootstrap tenant OPS-1421',
+    });
+    const req = lastRequest();
+    expect(req.body).not.toBeNull();
+    expect(Object.keys(req.body ?? {})).not.toContain('resourceConstraints');
   });
 
   // ── Errors surface as OmniApiError with the server's message ─────────────

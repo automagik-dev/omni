@@ -1278,6 +1278,19 @@ export type AttachPlatformMembershipBody = NonNullable<
   operations['attachPlatformMembership']['requestBody']
 >['content']['application/json'];
 
+/** Body for issuing a tenant ROOT key (includes the audited `reason`) */
+export type IssuePlatformTenantRootKeyBody = NonNullable<
+  operations['issuePlatformTenantRootKey']['requestBody']
+>['content']['application/json'];
+
+/**
+ * An issued tenant ROOT key. `plainTextKey` is present exactly ONCE — in this
+ * response — and can never be retrieved again. Callers must hand it to the
+ * operator immediately and must never persist or log it.
+ */
+export type PlatformTenantRootKey =
+  operations['issuePlatformTenantRootKey']['responses'][201]['content']['application/json']['data'];
+
 // ============================================================================
 // Presence & Read Receipt Types (api-completeness)
 // ============================================================================
@@ -3685,6 +3698,29 @@ export function createOmniClient(config: OmniClientConfig) {
             if (!resp.ok) throw OmniApiError.from(json, resp.status);
             if (!json?.data)
               throw new OmniApiError('Failed to set membership role', 'ROLE_FAILED', undefined, resp.status);
+            return json.data;
+          },
+        },
+
+        keys: {
+          /**
+           * Issue the initial tenant ROOT key for a membership.
+           * `body.reason` is the audited justification.
+           *
+           * The response carries `plainTextKey` exactly ONCE — the server never
+           * returns it again. Hand it to the operator immediately; never
+           * persist or log it.
+           */
+          async issueRoot(tenantId: string, body: IssuePlatformTenantRootKeyBody): Promise<PlatformTenantRootKey> {
+            const resp = await apiFetch(`${baseUrl}/api/v2/platform/tenants/${tenantId}/keys/root`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            const json = (await resp.json()) as { data?: PlatformTenantRootKey };
+            if (!resp.ok) throw OmniApiError.from(json, resp.status);
+            if (!json?.data)
+              throw new OmniApiError('Failed to issue root key', 'ISSUE_ROOT_FAILED', undefined, resp.status);
             return json.data;
           },
         },

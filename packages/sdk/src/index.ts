@@ -163,6 +163,8 @@ export type {
   PlatformMembershipStatus,
   CreatePlatformTenantBody,
   AttachPlatformMembershipBody,
+  IssuePlatformTenantRootKeyBody,
+  PlatformTenantRootKey,
 } from './client';
 
 // Errors
