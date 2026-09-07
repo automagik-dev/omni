@@ -19,6 +19,8 @@ export const CORE_EVENT_TYPES = [
   'message.delivered',
   'message.read',
   'message.failed',
+  'message.pinned',
+  'message.unpinned',
 
   // Interactive UI
   'message.button_click',
@@ -683,6 +685,34 @@ export interface ReactionRemovedPayload {
   isCustomEmoji?: boolean;
 }
 
+/**
+ * Message pin lifecycle payloads (#889)
+ *
+ * Pinning is per-message platform state (Slack `pin_added`/`pin_removed`),
+ * distinct from pinning a whole chat in the sidebar (`ChatSettings.pinned`).
+ */
+export interface MessagePinnedPayload {
+  /** The message that was pinned (platform external id) */
+  messageId: string;
+  /** Chat where the message lives (platform external id) */
+  chatId: string;
+  /** Platform user who pinned it (absent when the platform does not report one) */
+  from?: string;
+  /** Raw platform payload for channel-specific data */
+  rawPayload?: Record<string, unknown>;
+}
+
+export interface MessageUnpinnedPayload {
+  /** The message that was unpinned (platform external id) */
+  messageId: string;
+  /** Chat where the message lives (platform external id) */
+  chatId: string;
+  /** Platform user who unpinned it */
+  from?: string;
+  /** Raw platform payload for channel-specific data */
+  rawPayload?: Record<string, unknown>;
+}
+
 // ─── Session Events ────────────────────────────────────────
 export interface SessionResetPayload {
   /** Instance that the session belongs to */
@@ -1062,6 +1092,8 @@ export interface EventPayloadMap {
   'message.delivered': MessageDeliveredPayload;
   'message.read': MessageReadPayload;
   'message.failed': MessageFailedPayload;
+  'message.pinned': MessagePinnedPayload;
+  'message.unpinned': MessageUnpinnedPayload;
   'message.button_click': MessageButtonClickPayload;
   'message.poll': MessagePollPayload;
   'message.poll_vote': MessagePollVotePayload;
