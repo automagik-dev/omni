@@ -751,6 +751,7 @@ const PLATFORM_ADMIN_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/platform/tenants/:id/memberships',
   'POST /api/v2/platform/tenants',
   'POST /api/v2/platform/tenants/:id/archive',
+  'POST /api/v2/platform/tenants/:id/keys/root',
   'POST /api/v2/platform/tenants/:id/memberships',
   'POST /api/v2/platform/tenants/:id/suspend',
   'POST /api/v2/platform/tenants/:tenantId/memberships/:id/disable',
