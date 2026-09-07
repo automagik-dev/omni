@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  type DockerPublishProbeDependencies,
   MinioContainerLifecycle,
   STALE_CONTAINER_MIN_AGE_MS,
   type SharedMinioHarnessDependencies,
+  createDockerPublishProbe,
   createSharedMinioHarness,
   reapStaleContainers,
 } from './minio-harness';
@@ -197,6 +199,7 @@ function setup(
     sessionId: 'session-123',
     readinessTimeoutMs: 1_000,
     readyRequestTimeoutMs: 100,
+    connectionRefusedFastFailMs: 250,
     reportCleanupFailure: (message) => cleanupFailures.push(message),
   };
   const harness = createSharedMinioHarness(dependencies);
@@ -404,6 +407,230 @@ describe('shared MinIO harness cleanup', () => {
     expect(observedSignal?.aborted).toBe(true);
     expect(fake.docker.operations('stop')).toEqual([['docker', 'stop', '--time', '10', 'container-hung-probe']]);
   }, 250);
+
+  function connectionRefusedError(code: 'ECONNREFUSED' | 'ConnectionRefused'): Error {
+    const error = new Error('Unable to connect. Is the computer able to access the url?');
+    (error as Error & { code?: string }).code = code;
+    return error;
+  }
+
+  for (const code of ['ECONNREFUSED', 'ConnectionRefused'] as const) {
+    test(`aborts readiness early with a port-publishing diagnosis when every probe is ${code}`, async () => {
+      const fake = setup(['container-unpublished']);
+      fake.dependencies.readyFetch = async () => {
+        throw connectionRefusedError(code);
+      };
+
+      await expect(fake.getSharedMinio()).rejects.toThrow(
+        /refused every connection for 500ms.*Docker likely cannot publish ports/s,
+      );
+
+      // Fast-failed at 500ms of fake time, well inside the 1s readiness
+      // deadline, and the container was still stopped synchronously.
+      expect(fake.docker.operations('stop')).toEqual([['docker', 'stop', '--time', '10', 'container-unpublished']]);
+    });
+  }
+
+  test('a brief startup connection-refused window does not trip the fast-fail', async () => {
+    const fake = setup(['container-slow-bind']);
+    let attempts = 0;
+    fake.dependencies.readyFetch = async () => {
+      attempts += 1;
+      if (attempts === 1) throw connectionRefusedError('ConnectionRefused');
+      return { ok: true };
+    };
+
+    await expect(fake.getSharedMinio()).resolves.toMatchObject({ endpoint: 'http://127.0.0.1:30000' });
+    expect(attempts).toBe(2);
+  });
+
+  test('once the port has answered, later refusals get the full readiness deadline, not the fast-fail', async () => {
+    const fake = setup(['container-answered-then-died']);
+    let attempts = 0;
+    fake.dependencies.readyFetch = async () => {
+      attempts += 1;
+      if (attempts === 1) return { ok: false };
+      throw connectionRefusedError('ECONNREFUSED');
+    };
+
+    await expect(fake.getSharedMinio()).rejects.toThrow('MinIO did not become ready within 1s');
+    expect(fake.docker.operations('stop')).toEqual([
+      ['docker', 'stop', '--time', '10', 'container-answered-then-died'],
+    ]);
+  });
+
+  test('non-refused readiness failures still burn the full deadline (slow container, not a wiring problem)', async () => {
+    // The default fake readyFetch throws a generic (non-refused) error, so the
+    // pre-existing timeout path must be unchanged by the fast-fail logic.
+    const fake = setup(['container-slow'], { ready: false });
+
+    await expect(fake.getSharedMinio()).rejects.toThrow('MinIO did not become ready within 1s');
+  });
+});
+
+describe('Docker port-publishability probe', () => {
+  const FAKE_BUN = '/fake/bin/bun';
+
+  function probeSetup(
+    options: {
+      /** Number of failed fetch attempts before one succeeds; omit for never-reachable. */
+      reachableAfterAttempts?: number;
+      runFails?: boolean;
+      emptyRunStdout?: boolean;
+    } = {},
+  ): {
+    probe: () => boolean;
+    warns: string[];
+    calls: string[][];
+    operations(operation: string): string[][];
+    fetchAttempts(): number;
+  } {
+    let clock = 0;
+    let attempts = 0;
+    const warns: string[] = [];
+    const calls: string[][] = [];
+    const handleProbeFetch = (): { exitCode: number; stdout: string; stderr: string } => {
+      attempts += 1;
+      const reachable = options.reachableAfterAttempts !== undefined && attempts > options.reachableAfterAttempts;
+      return { exitCode: reachable ? 0 : 1, stdout: '', stderr: '' };
+    };
+    const handleDockerRun = (): { exitCode: number; stdout: string; stderr: string } => {
+      if (options.runFails) return { exitCode: 125, stdout: '', stderr: 'fake docker run failure' };
+      return { exitCode: 0, stdout: options.emptyRunStdout ? '' : 'probe-container\n', stderr: '' };
+    };
+    const dependencies: DockerPublishProbeDependencies = {
+      runSync: (command) => {
+        calls.push([...command]);
+        if (command[0] === FAKE_BUN) return handleProbeFetch();
+        if (command[1] === 'run') return handleDockerRun();
+        if (command[1] === 'rm') return { exitCode: 0, stdout: 'probe-container\n', stderr: '' };
+        throw new Error(`Unexpected fake probe command: ${command.join(' ')}`);
+      },
+      now: () => clock,
+      sleepSync: (ms) => {
+        clock += ms;
+      },
+      random: () => 0.5,
+      execPath: FAKE_BUN,
+      sessionId: 'session-123',
+      probeTimeoutMs: 1_000,
+      probePollIntervalMs: 250,
+      warn: (message) => warns.push(message),
+    };
+    return {
+      probe: createDockerPublishProbe(dependencies),
+      warns,
+      calls,
+      operations: (operation) => calls.filter((command) => command[0] === 'docker' && command[1] === operation),
+      fetchAttempts: () => attempts,
+    };
+  }
+
+  test('a reachable published port passes: labeled bounded probe container, fetch via child bun, then removal', () => {
+    const fake = probeSetup({ reachableAfterAttempts: 0 });
+
+    expect(fake.probe()).toBe(true);
+    expect(fake.warns).toEqual([]);
+
+    // Same labeled, resource-bounded, port-publishing run shape as the real
+    // harness container — the probe must test exactly what the suites need.
+    expect(fake.operations('run')).toEqual([
+      [
+        'docker',
+        'run',
+        '--rm',
+        '-d',
+        '--label',
+        'com.automagik.omni.test-harness=minio',
+        '--label',
+        'com.automagik.omni.test-session=session-123',
+        '--cpus',
+        '1',
+        '--memory',
+        '512m',
+        '--pids-limit',
+        '256',
+        '--tmpfs',
+        '/data:rw,noexec,nosuid,size=256m',
+        '-p',
+        '30000:9000',
+        '-e',
+        'MINIO_ROOT_USER=minioadmin',
+        '-e',
+        'MINIO_ROOT_PASSWORD=minioadmin',
+        'minio/minio',
+        'server',
+        '/data',
+      ],
+    ]);
+    const fetchCommand = fake.calls.find((command) => command[0] === FAKE_BUN);
+    expect(fetchCommand?.[1]).toBe('--eval');
+    expect(fetchCommand?.[2]).toContain('http://127.0.0.1:30000/minio/health/ready');
+    expect(fake.operations('rm')).toEqual([['docker', 'rm', '-f', 'probe-container']]);
+  });
+
+  test('a slow-to-listen but reachable port still passes without a warning', () => {
+    const fake = probeSetup({ reachableAfterAttempts: 2 });
+
+    expect(fake.probe()).toBe(true);
+    expect(fake.warns).toEqual([]);
+    expect(fake.fetchAttempts()).toBe(3);
+    expect(fake.operations('rm')).toEqual([['docker', 'rm', '-f', 'probe-container']]);
+  });
+
+  test('an unreachable published port fails loudly once and never leaks the probe container', () => {
+    const fake = probeSetup();
+
+    expect(fake.probe()).toBe(false);
+
+    // 1s budget / 250ms poll interval => exactly 4 attempts before giving up.
+    expect(fake.fetchAttempts()).toBe(4);
+    expect(fake.warns).toHaveLength(1);
+    expect(fake.warns[0]).toContain('Docker is running but cannot publish container ports');
+    expect(fake.warns[0]).toContain('127.0.0.1:30000');
+    expect(fake.warns[0]).toContain('MINIO_INTEGRATION=1');
+    expect(fake.operations('rm')).toEqual([['docker', 'rm', '-f', 'probe-container']]);
+  });
+
+  test('the verdict and the warning are cached per process: one probe container for all six suites', () => {
+    const fake = probeSetup();
+
+    expect(fake.probe()).toBe(false);
+    expect(fake.probe()).toBe(false);
+    expect(fake.probe()).toBe(false);
+
+    expect(fake.operations('run')).toHaveLength(1);
+    expect(fake.warns).toHaveLength(1);
+  });
+
+  test('a positive verdict is cached too', () => {
+    const fake = probeSetup({ reachableAfterAttempts: 0 });
+
+    expect(fake.probe()).toBe(true);
+    expect(fake.probe()).toBe(true);
+
+    expect(fake.operations('run')).toHaveLength(1);
+  });
+
+  test('a failed docker run fails the probe loudly with the stderr and removes nothing', () => {
+    const fake = probeSetup({ runFails: true });
+
+    expect(fake.probe()).toBe(false);
+    expect(fake.warns).toEqual([
+      'MinIO integration suites SKIPPED: the Docker port-publishability probe could not start a container: fake docker run failure',
+    ]);
+    expect(fake.operations('rm')).toHaveLength(0);
+  });
+
+  test('an empty container ID from docker run fails the probe loudly', () => {
+    const fake = probeSetup({ emptyRunStdout: true });
+
+    expect(fake.probe()).toBe(false);
+    expect(fake.warns).toEqual([
+      'MinIO integration suites SKIPPED: the Docker port-publishability probe got no container ID from docker run',
+    ]);
+    expect(fake.operations('rm')).toHaveLength(0);
+  });
 });
 
 describe('stale MinIO container reaper', () => {

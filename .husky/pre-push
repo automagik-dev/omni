@@ -40,10 +40,19 @@ set -e
 #         Reach for spyOn/local fixtures over mock.module.
 #
 #   • MinIO suites timing out locally
-#       → The harness needs a healthy Docker daemon. Leaked test containers
-#         from OOM-killed runs degrade it; the harness reaps stale ones at
-#         launch, but `docker ps --filter label=com.automagik.omni.test-harness=minio`
-#         shows anything left to clean by hand.
+#       → Two distinct host problems look identical from the outside:
+#         (a) Docker cannot PUBLISH ports (rootless Docker without port
+#             forwarding, IPv4 forwarding disabled, missing default bridge
+#             network, VPN/firewall interference) — `docker info` passes but
+#             `docker run -p` yields an unreachable port (#948). The harness
+#             now probes publishability up front and SKIPS the MinIO suites
+#             with a loud warning instead of hanging; readiness also aborts
+#             early on persistent connection-refused. If you see the skip
+#             warning, fix Docker networking (or force with MINIO_INTEGRATION=1).
+#         (b) Leaked test containers from OOM-killed runs degrade the daemon;
+#             the harness reaps stale ones at launch, but
+#             `docker ps --filter label=com.automagik.omni.test-harness=minio`
+#             shows anything left to clean by hand.
 #
 #   • Force push to main/master
 #       → Refused by design. Main is production; merge through the
