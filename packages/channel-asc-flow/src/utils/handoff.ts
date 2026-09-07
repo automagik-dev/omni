@@ -210,13 +210,19 @@ function buildGenesysFields(
 
   // Who the person is. Pass-through by design: the agent decides what to send
   // (it owns the identity and the privacy flag behind the CPF), the channel
-  // only carries it. An empty value is NOT forwarded — writing "" over a field
-  // another path filled is worse than leaving it alone.
+  // only carries it.
+  //
+  // An empty value IS forwarded, and that is a requirement of the flow rather
+  // than a preference. The `store` on the `api_rest` node applies the whole
+  // mapping or none of it: measured 05/09 (atendimento 22327328), one field
+  // listed in `returned` and missing from the body left the entire mapping
+  // unapplied and `{#resposta}` rendered EMPTY with HTTP 200. Dropping
+  // `plano_vq` because the record has no plan would take the agent's own
+  // answer down with it, on every handoff turn.
   for (const key of IDENTITY_FIELDS) {
     const raw = read(key);
     if (typeof raw !== 'string') continue;
-    const value = raw.replace(/\s+/g, ' ').trim().slice(0, IDENTITY_MAX_LENGTH);
-    if (value) fields[key] = value;
+    fields[key] = raw.replace(/\s+/g, ' ').trim().slice(0, IDENTITY_MAX_LENGTH);
   }
 
   return fields;

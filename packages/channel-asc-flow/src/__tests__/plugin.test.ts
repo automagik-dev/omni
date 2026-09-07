@@ -221,8 +221,8 @@ describe('outbound turn', () => {
     });
 
     const body = ready('42');
-    expect(body?.ura_opcoes).toBeUndefined();
-    expect(body?.forcar_botoes).toBeUndefined();
+    expect((body as unknown as Record<string, unknown>)?.ura_opcoes).toBeUndefined();
+    expect((body as unknown as Record<string, unknown>)?.forcar_botoes).toBeUndefined();
   });
 
   it('omits the URA when the options do not fit the component', async () => {
@@ -233,7 +233,7 @@ describe('outbound turn', () => {
       buttons: Array.from({ length: 11 }, (_, i) => ({ text: `Opção ${i + 1}` })),
     });
 
-    expect(ready('42')?.ura_opcoes).toBeUndefined();
+    expect((ready('42') as unknown as Record<string, unknown>)?.ura_opcoes).toBeUndefined();
   });
 
   it('transfers to the configured queue and reports the handoff in the body', async () => {
@@ -291,7 +291,12 @@ describe('outbound turn', () => {
     });
   });
 
-  it('never writes an empty identity field over one another path filled', async () => {
+  it('forwards an empty identity field rather than omitting it', async () => {
+    // The `store` on the flow's `api_rest` node applies the whole mapping or
+    // none of it. A field listed in `returned` and missing from the body left
+    // `{#resposta}` empty with HTTP 200 (measured 05/09, atendimento
+    // 22327328) — so omitting `cpf_vq` because the record has none would take
+    // the agent's own answer down with it.
     await boot();
     await send(
       { type: 'text', text: 'Convidamos um especialista.' },
@@ -302,8 +307,8 @@ describe('outbound turn', () => {
     );
 
     const body = ready('42');
-    expect(body?.nome_beneficiario_vq).toBeUndefined();
-    expect(body?.cpf_vq).toBeUndefined();
+    expect(body?.nome_beneficiario_vq).toBe('');
+    expect(body?.cpf_vq).toBe('');
   });
 
   // `POST /messages/send/handoff` sets `agentPaused: true` unless the send says

@@ -235,7 +235,7 @@ describe('outbound interactive through /sendMsgInterativaAvancado', () => {
     // text — and no URA fields either, which would render a SECOND menu.
     const body = ready('42');
     expect(body).toMatchObject({ resposta: '' });
-    expect(body?.ura_opcoes).toBeUndefined();
+    expect((body as unknown as Record<string, unknown>)?.ura_opcoes).toBeUndefined();
   });
 
   it('sends 4-10 options as a list, with the description under each row', async () => {

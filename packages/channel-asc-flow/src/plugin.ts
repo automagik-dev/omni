@@ -98,8 +98,19 @@ export interface AscFlowTurnReady {
   bolhas: string[];
   fila_vq?: string;
   motivo_transf_vq?: string;
-  ura_opcoes?: Record<string, string>;
-  forcar_botoes?: boolean;
+  /**
+   * Who the beneficiary is, for the Genesys `userdata`. All six travel on a
+   * handoff turn, EMPTY INCLUDED: the `store` on the flow's `api_rest` node
+   * applies the whole mapping or none of it, and a field listed in `returned`
+   * but missing from the body left `{#resposta}` empty with HTTP 200
+   * (atendimento 22327328, 05/09).
+   */
+  nome_beneficiario_vq?: string;
+  cpf_vq?: string;
+  carteirinha_vq?: string;
+  vinculo_vq?: string;
+  plano_vq?: string;
+  filial_vq?: string;
 }
 
 /** The body every call gets while the agent is still running. */
