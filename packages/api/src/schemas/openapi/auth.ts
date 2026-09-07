@@ -49,6 +49,29 @@ export const AuthCredentialContextSchema = z.object({
 export const CREDENTIAL_EXPOSURE_FIELDS: readonly string[] = Object.keys(AuthCredentialContextSchema.shape);
 
 /**
+ * Deployment-level tenancy posture (issue #982).
+ *
+ * Present for EVERY authenticated caller — legacy and tenant alike — because
+ * the operator who needs to distinguish "multitenancy flag off" from "server
+ * predates the control plane" from "wrong credential class" is usually holding
+ * a legacy key. Three deployment flags, nothing tenant-enumerating; the same
+ * facts appear nowhere unauthenticated (health-route privacy contract).
+ */
+export const ServerTenancyPostureSchema = z.object({
+  multitenancyEnabled: z
+    .boolean()
+    .openapi({ description: 'OMNI_MULTITENANCY_ENABLED flag state (exact-string "true" semantics)' }),
+  controlPlaneMounted: z
+    .boolean()
+    .openapi({ description: 'Whether the /api/v2/platform control plane is mounted on this server' }),
+  dbEnforcement: z.enum(['legacy', 'enforced']).openapi({
+    description:
+      'Database enforcement posture. "enforced" means forced row-level security is installed; ' +
+      '"legacy" with multitenancy enabled means the tenant boundary is advisory only (migration state).',
+  }),
+});
+
+/**
  * Auth validation response schema
  */
 export const AuthValidateResponseSchema = z.object({
@@ -61,6 +84,9 @@ export const AuthValidateResponseSchema = z.object({
     scopes: z.array(z.string()).openapi({ description: 'Scopes granted to this key', example: ['*'] }),
     credential: AuthCredentialContextSchema.optional().openapi({
       description: 'Tenant credential context; absent for a legacy credential',
+    }),
+    server: ServerTenancyPostureSchema.openapi({
+      description: 'Deployment tenancy posture; absent only on servers that predate it',
     }),
   }),
 });

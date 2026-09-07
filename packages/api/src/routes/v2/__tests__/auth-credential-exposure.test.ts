@@ -13,10 +13,20 @@
  * TWO WORLDS, ONE ROUTE
  * ---------------------
  * The exposure is keyed on the presence of a tenant auth context, not on the
- * feature flag. A legacy credential never has one, so its response body is
- * byte-for-byte what it was before G4 — asserted here by exact object equality
- * rather than by "contains", because an additive field is exactly the kind of
- * change that a `toMatchObject` assertion would wave through.
+ * feature flag. A legacy credential never has one, so its response body carries
+ * no credential block — asserted here by exact object equality rather than by
+ * "contains", because an additive field is exactly the kind of change that a
+ * `toMatchObject` assertion would wave through.
+ *
+ * ONE SANCTIONED ADDITION: THE SERVER POSTURE BLOCK (issue #982)
+ * --------------------------------------------------------------
+ * Every authenticated caller — legacy included, deliberately — now also gets a
+ * `server` block naming the deployment's tenancy posture (flag state, control
+ * plane mounted, DB enforcement). The exact-equality assertions below INCLUDE
+ * it, so any further addition to the legacy body still fails loudly. The
+ * posture suite at the bottom pins all four flag/enforcement combinations
+ * against `mixedTenancyStateWarning` semantics, and pins that an
+ * unauthenticated caller gets none of it.
  *
  * WHAT MUST NEVER APPEAR
  * ----------------------
@@ -26,12 +36,42 @@
  * a field to the context, which a hand-listed allowlist of fields would not.
  */
 
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { Hono } from 'hono';
 import { type TenantAuthContext, freezeContext } from '../../../tenancy/auth-context';
+import { mixedTenancyStateWarning } from '../../../tenancy/enforcement-posture';
+import { MULTITENANCY_FLAG_ENV } from '../../../tenancy/feature-flag';
 import type { ApiKeyData, AppVariables } from '../../../types';
 import { authRoutes } from '../auth';
+
+const ENFORCEMENT_ENV = 'OMNI_DB_ENFORCEMENT';
+
+/**
+ * The posture block reads the live environment, so every suite here pins both
+ * variables to the default world (flag off, legacy enforcement) and restores
+ * whatever the ambient process had. The posture suite overrides per-case.
+ */
+const savedEnv: Record<string, string | undefined> = {};
+beforeEach(() => {
+  savedEnv[MULTITENANCY_FLAG_ENV] = process.env[MULTITENANCY_FLAG_ENV];
+  savedEnv[ENFORCEMENT_ENV] = process.env[ENFORCEMENT_ENV];
+  delete process.env[MULTITENANCY_FLAG_ENV];
+  delete process.env[ENFORCEMENT_ENV];
+});
+afterEach(() => {
+  for (const key of [MULTITENANCY_FLAG_ENV, ENFORCEMENT_ENV]) {
+    if (savedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnv[key];
+  }
+});
+
+/** The posture the default world must report. */
+const DEFAULT_POSTURE = {
+  multitenancyEnabled: false,
+  controlPlaneMounted: false,
+  dbEnforcement: 'legacy',
+} as const;
 
 const CREDENTIAL_ID = '99999999-9999-4999-8999-999999999992';
 const TENANT_ID = '11111111-1111-4111-8111-11111111111a';
@@ -98,18 +138,20 @@ function mount(vars: { apiKey?: ApiKeyData; authContext?: TenantAuthContext }) {
 
 const validate = (app: Hono<{ Variables: AppVariables }>) => app.request('/auth/validate', { method: 'POST' });
 
-describe('POST /auth/validate — legacy world is untouched', () => {
-  test('a legacy credential gets exactly the pre-G4 body, with no credential block', async () => {
+describe('POST /auth/validate — legacy world gains only the sanctioned posture block', () => {
+  test('a legacy credential gets exactly the pre-G4 body plus `server`, with no credential block', async () => {
     const response = await validate(mount({ apiKey: legacyApiKey() }));
     expect(response.status).toBe(200);
-    // Exact equality, not containment: the dual-world invariant is that NOTHING
-    // was added here, and only an exact comparison can assert "nothing".
+    // Exact equality, not containment: the only sanctioned addition to the
+    // legacy body is the `server` posture block (issue #982), and only an
+    // exact comparison can assert that nothing ELSE was added.
     expect(await response.json()).toEqual({
       data: {
         valid: true,
         keyPrefix: 'omni_sk_12345678...',
         keyName: 'ops-key',
         scopes: ['messages:read'],
+        server: DEFAULT_POSTURE,
       },
     });
   });
@@ -203,5 +245,72 @@ describe('POST /auth/validate — no secret, hash, or key material', () => {
     const app = mount({ apiKey: { ...legacyApiKey(), id: CREDENTIAL_ID }, authContext: tenantContext() });
     const body = (await (await validate(app)).json()) as { data: { credential: Record<string, unknown> } };
     expect(Object.values(body.data.credential)).not.toContain(CREDENTIAL_ID);
+  });
+});
+
+describe('POST /auth/validate — server tenancy posture (issue #982)', () => {
+  /**
+   * All four flag/enforcement combinations, named the way
+   * `enforcement-posture.ts` names them. `mixed` marks the one advisory-only
+   * state; the assertion below derives it from the posture the route reports
+   * and requires `mixedTenancyStateWarning` to agree, so the route and the
+   * boot warning can never tell the operator two different stories.
+   */
+  const COMBINATIONS = [
+    { name: 'flag off + legacy (default)', flag: undefined, enforcement: undefined, enabled: false, db: 'legacy' },
+    { name: 'flag off + enforced', flag: undefined, enforcement: 'on', enabled: false, db: 'enforced' },
+    { name: 'flag on + legacy (mixed)', flag: 'true', enforcement: undefined, enabled: true, db: 'legacy' },
+    { name: 'flag on + enforced (finished)', flag: 'true', enforcement: 'on', enabled: true, db: 'enforced' },
+  ] as const;
+
+  const setWorld = (flag: string | undefined, enforcement: string | undefined) => {
+    if (flag === undefined) delete process.env[MULTITENANCY_FLAG_ENV];
+    else process.env[MULTITENANCY_FLAG_ENV] = flag;
+    if (enforcement === undefined) delete process.env[ENFORCEMENT_ENV];
+    else process.env[ENFORCEMENT_ENV] = enforcement;
+  };
+
+  for (const combo of COMBINATIONS) {
+    test(`${combo.name} reports its posture and agrees with the boot warning`, async () => {
+      setWorld(combo.flag, combo.enforcement);
+      const body = (await (await validate(mount({ apiKey: legacyApiKey() }))).json()) as {
+        data: { server: { multitenancyEnabled: boolean; controlPlaneMounted: boolean; dbEnforcement: string } };
+      };
+
+      expect(body.data.server).toEqual({
+        multitenancyEnabled: combo.enabled,
+        controlPlaneMounted: combo.enabled,
+        dbEnforcement: combo.db,
+      });
+
+      // The route's posture and the boot warning must name the same mixed
+      // state: warning fires exactly when the reported pair is advisory-only.
+      const reportedMixed = body.data.server.multitenancyEnabled && body.data.server.dbEnforcement === 'legacy';
+      const warning = mixedTenancyStateWarning(combo.db, process.env);
+      expect(warning !== null).toBe(reportedMixed);
+    });
+  }
+
+  test('a tenant caller gets the same posture block alongside its credential', async () => {
+    setWorld('true', 'on');
+    const app = mount({ apiKey: legacyApiKey(), authContext: tenantContext() });
+    const body = (await (await validate(app)).json()) as { data: Record<string, unknown> };
+    expect(body.data.server).toEqual({
+      multitenancyEnabled: true,
+      controlPlaneMounted: true,
+      dbEnforcement: 'enforced',
+    });
+    expect(body.data.credential).toBeDefined();
+  });
+
+  test('an unauthenticated caller gets no posture, in any world', async () => {
+    // The block exists to make the server legible to its OWN operators, not to
+    // anonymous probes — even the 401 error body says nothing.
+    for (const combo of COMBINATIONS) {
+      setWorld(combo.flag, combo.enforcement);
+      const response = await validate(mount({}));
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } });
+    }
   });
 });
