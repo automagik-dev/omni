@@ -5,8 +5,13 @@
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type ChannelType, type ContentType, type EventType, type OmniEvent, omniEvents } from '@omni/db';
-import { and, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, inArray, like, lte, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
+
+/** Escape LIKE wildcards so a glob prefix matches literally (backslash is postgres's default escape char). */
+function escapeLikePattern(value: string): string {
+  return value.replace(/([\\%_])/g, '\\$1');
+}
 
 export interface ListEventsOptions {
   channel?: ChannelType[];
@@ -115,7 +120,18 @@ export class EventService {
     }
 
     if (eventType?.length) {
-      conditions.push(inArray(omniEvents.eventType, eventType));
+      // #966: a trailing-* entry is a prefix glob (`custom.*` matches every
+      // custom event); everything else stays exact-match. A mixed list ORs
+      // the two together. The CLI-side sieve (matchesEventTypeFilter in
+      // packages/cli) implements the same contract — keep them in sync.
+      const exact = eventType.filter((t) => !t.endsWith('*'));
+      const prefixes = eventType.filter((t) => t.endsWith('*')).map((t) => t.slice(0, -1));
+      const typeClauses = [
+        ...(exact.length ? [inArray(omniEvents.eventType, exact)] : []),
+        ...prefixes.map((p) => like(omniEvents.eventType, `${escapeLikePattern(p)}%`)),
+      ];
+      const combined = typeClauses.length === 1 ? typeClauses[0] : or(...typeClauses);
+      if (combined) conditions.push(combined);
     }
 
     if (contentType?.length) {

@@ -452,6 +452,16 @@ export function isNoisyEvent(eventType: string): boolean {
   return NOISY_EVENT_TYPES.has(eventType);
 }
 
+/**
+ * Match an event type against a `--type` filter value (#966). A trailing `*`
+ * makes the filter a prefix glob (`custom.*` matches every custom event);
+ * anything else is an exact match. Same contract as the API-side list filter
+ * (EventService.list) — keep the two in sync.
+ */
+export function matchesEventTypeFilter(eventType: string, filter: string): boolean {
+  return filter.endsWith('*') ? eventType.startsWith(filter.slice(0, -1)) : eventType === filter;
+}
+
 /** Filter predicate matrix for `omni events stream`. Exported for unit tests. */
 export interface StreamFilterOptions {
   instanceId?: string;
@@ -471,7 +481,7 @@ export interface StreamFilterOptions {
  */
 export function passesStreamFilters(event: Event, options: StreamFilterOptions): boolean {
   if (options.instanceId && event.instanceId !== options.instanceId) return false;
-  if (options.type && event.eventType !== options.type) return false;
+  if (options.type && !matchesEventTypeFilter(event.eventType, options.type)) return false;
   if (options.chatId && event.chatUuid !== options.chatId) return false;
   if (options.personId && event.personId !== options.personId) return false;
   if (options.errorsOnly && !isErrorEvent(event.eventType)) return false;
@@ -624,7 +634,7 @@ export function createEventsCommand(): Command {
     .description('List events')
     .option('--instance <id>', 'Filter by instance ID')
     .option('--channel <type>', 'Filter by channel type')
-    .option('--type <type>', 'Filter by event type')
+    .option('--type <type>', 'Filter by event type (trailing * = prefix glob, e.g. custom.*)')
     .option('--chat-id <id>', 'Filter by chat ID')
     .option('--since <time>', 'Events since (e.g., 24h, 7d, or ISO timestamp)')
     .option('--until <time>', 'Events until (ISO timestamp)')
@@ -681,7 +691,7 @@ export function createEventsCommand(): Command {
     .description('Stream events in real-time (tail -f style). Ctrl+C to stop.')
     .option('--instance <id>', 'Filter by instance ID')
     .option('--channel <type>', 'Filter by channel type')
-    .option('--type <type>', 'Filter by event type')
+    .option('--type <type>', 'Filter by event type (trailing * = prefix glob, e.g. custom.*)')
     .option('--chat-id <id>', 'Filter by chat ID')
     .option('--person-id <id>', 'Filter by person ID')
     .option('--since <time>', 'Start cursor (e.g., 5min, 24h, 7d, or ISO timestamp)')

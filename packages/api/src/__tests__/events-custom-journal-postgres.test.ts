@@ -1,5 +1,6 @@
 /**
- * Custom-event journal row fidelity, over real PostgreSQL (#966).
+ * Custom-event journal row fidelity + type-glob list filtering, over real
+ * PostgreSQL (#966).
  *
  * The `custom.>` subscriber (#957) journals every custom event, but the row
  * it wrote was lossy in ways that broke the CLI event surface:
@@ -8,6 +9,8 @@
  *    `custom.webhook.{source}.{event}` types;
  *  - chatUuid/personId were never populated, so `--chat-id`/`--person-id`
  *    could never match a custom event.
+ * And `--type 'custom.*'` matched nothing anywhere: EventService.list used
+ * strict inArray equality only.
  *
  * These suites drive the REAL subscriber handler (a mock bus captures it —
  * events-trace.test.ts precedent) against a migrated disposable database.
@@ -179,6 +182,47 @@ postgresDescribe('custom event journal fidelity (#966, real PostgreSQL)', () => 
     test('a chatUuid claim with no chats row is dropped, not fatal (FK safety)', async () => {
       const { row } = await journal('custom.identity-966.bogus_chat', { chatUuid: randomUUID() });
       expect(row.chatUuid).toBeNull();
+    });
+  });
+
+  describe('trailing-* glob type filtering', () => {
+    let alphaId: string;
+    let betaId: string;
+    let outsiderId: string;
+
+    beforeAll(async () => {
+      ({ id: alphaId } = await journal('custom.globtest-966.alpha', {}));
+      ({ id: betaId } = await journal('custom.globtest-966.beta', {}));
+      ({ id: outsiderId } = await journal('custom.other-966.gamma', {}));
+    });
+
+    test('`custom.globtest-966.*` matches the prefix and nothing else', async () => {
+      const listed = await service.list({ eventType: ['custom.globtest-966.*' as EventType], limit: 50 });
+      const ids = listed.items.map((e) => e.id);
+      expect(ids).toContain(alphaId);
+      expect(ids).toContain(betaId);
+      expect(ids).not.toContain(outsiderId);
+    });
+
+    test('a mixed exact + glob list ORs the two', async () => {
+      const listed = await service.list({
+        eventType: ['custom.other-966.gamma' as EventType, 'custom.globtest-966.*' as EventType],
+        limit: 50,
+      });
+      const ids = listed.items.map((e) => e.id);
+      expect(ids).toEqual(expect.arrayContaining([alphaId, betaId, outsiderId]));
+    });
+
+    test('LIKE wildcards in the prefix are escaped, not interpreted', async () => {
+      // `custom.glob_est-966.*` must NOT match custom.globtest-966.* rows —
+      // `_` is a literal underscore in the glob contract, not any-one-char.
+      const listed = await service.list({ eventType: ['custom.glob_est-966.*' as EventType], limit: 50 });
+      expect(listed.items.map((e) => e.id)).not.toContain(alphaId);
+    });
+
+    test('an exact type filter still requires the full type', async () => {
+      const listed = await service.list({ eventType: ['custom.globtest-966' as EventType], limit: 50 });
+      expect(listed.items).toHaveLength(0);
     });
   });
 });
