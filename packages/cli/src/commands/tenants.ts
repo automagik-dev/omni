@@ -15,11 +15,19 @@
  * PLATFORM-class credentials are accepted. Both failure modes are rendered as
  * explanations, not raw HTTP dumps.
  *
- * The `keys issue-root` subcommand is intentionally absent — the route ships
- * separately (#979) and the subcommand follows it.
+ * `keys issue-root` issues the initial tenant ROOT credential (#979). The
+ * server returns the plaintext key exactly ONCE; this command prints it to
+ * stdout exactly once (inside the JSON payload in `--json` mode) and never
+ * routes it through logs, config, or files.
  */
 
-import { OmniApiError, type OmniClient, type PlatformTenant, type PlatformTenantMembership } from '@omni/sdk';
+import {
+  type IssuePlatformTenantRootKeyBody,
+  OmniApiError,
+  type OmniClient,
+  type PlatformTenant,
+  type PlatformTenantMembership,
+} from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
@@ -58,6 +66,18 @@ interface MembershipStatusOptions extends ReasonOption {
 
 interface MembershipRoleOptions extends ReasonOption {
   role: string;
+}
+
+interface KeysIssueRootOptions extends ReasonOption {
+  principal: string;
+  membership: string;
+  role: string;
+  name: string;
+  scopes: string;
+  expires: string;
+  rateLimit: number;
+  budget: number;
+  constraints?: string;
 }
 
 // ============================================================================
@@ -112,6 +132,55 @@ function parseStatus(value: string): MembershipStatusFlag {
 }
 
 /**
+ * Parse the mandatory `--scopes` comma-list into explicit scope strings.
+ * The server refuses platform/wildcard authority on root keys; the empty-list
+ * refusal here just keeps that 400 local and immediate.
+ */
+function parseScopes(value: string): string[] {
+  const scopes = value
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (scopes.length === 0) {
+    output.error(
+      '--scopes must list at least one explicit tenant scope (comma-separated), e.g. --scopes "messages:send,chats:read".',
+      undefined,
+      1,
+    );
+  }
+  return scopes;
+}
+
+/**
+ * Parse the optional `--constraints` JSON into resource allowlists
+ * (string-array values only, e.g. {"instanceAllowlist":["uuid"]}).
+ */
+function parseConstraints(value: string): Record<string, string[]> {
+  const invalid = (): never =>
+    output.error(
+      `Invalid --constraints "${value}". Expected a JSON object of string arrays, e.g. '{"instanceAllowlist":["<instance-id>"]}'.`,
+      undefined,
+      1,
+    );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    invalid();
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    invalid();
+  }
+  const record = parsed as Record<string, unknown>;
+  for (const entry of Object.values(record)) {
+    if (!Array.isArray(entry) || entry.some((item) => typeof item !== 'string')) {
+      invalid();
+    }
+  }
+  return record as Record<string, string[]>;
+}
+
+/**
  * Render a control-plane failure as an explanation, not a raw HTTP dump.
  *
  * - An "Endpoint not found" 404 means the surface is unmounted: multitenancy
@@ -136,6 +205,40 @@ function renderPlatformError(err: unknown, action: string): never {
   }
   const message = err instanceof Error ? err.message : 'Unknown error';
   output.error(`Failed to ${action}: ${message}`);
+}
+
+const TENANT_NOT_ACTIVE_409 =
+  'the tenant is not active (409). Root keys can be issued only while the tenant is active — ' +
+  'a suspended or archived tenant refuses new credentials.';
+
+const ROOT_KEY_EXCEEDS_POLICY_403 =
+  'the request exceeds the tenant policy ceilings (403). Keep --expires within the tenant ' +
+  'max-key-ttl and --rate-limit/--budget at or below the tenant ceilings (see: omni tenants get <id>).';
+
+/**
+ * Root-key issuance failures the generic renderer would mislabel:
+ *
+ * - 409 means the tenant exists but is not active — only active tenants accept
+ *   new root credentials.
+ * - 400 reflects the caller's OWN input (scopes/expiry/limits); the server's
+ *   message is relayed as-is, without inventing detail.
+ * - A 403 whose message is the policy-ceiling refusal is about the REQUEST,
+ *   not the credential — explained as such. Any other 403 (and 401/404) falls
+ *   through to `renderPlatformError`.
+ */
+function renderRootKeyError(err: unknown, action: string): never {
+  if (err instanceof OmniApiError) {
+    if (err.status === 409) {
+      output.error(`Failed to ${action}: ${TENANT_NOT_ACTIVE_409}`, undefined, 1);
+    }
+    if (err.status === 400) {
+      output.error(`Failed to ${action}: ${err.message}`, undefined, 1);
+    }
+    if (err.status === 403 && err.message.includes('exceeds tenant policy')) {
+      output.error(`Failed to ${action}: ${ROOT_KEY_EXCEEDS_POLICY_403}`, undefined, 1);
+    }
+  }
+  renderPlatformError(err, action);
 }
 
 function formatTenantRow(tenant: PlatformTenant): Record<string, string | number> {
@@ -272,6 +375,52 @@ async function handleMembershipsRole(
   const role = parseRole(options.role);
   const membership = await client.platform.tenants.memberships.setRole(tenantId, membershipId, role, reason);
   output.success(`Membership ${membership.id} role set to ${membership.role}`);
+}
+
+// ============================================================================
+// HANDLERS — root key issuance
+// ============================================================================
+
+/**
+ * Issue the initial tenant ROOT key. The plaintext credential exists in
+ * exactly one place — the server's 201 response — and this handler prints it
+ * to stdout exactly once: on its own line in human mode, inside the JSON
+ * payload in `--json` mode. It never travels through `info`/`warn`/`success`
+ * (which land on stderr in JSON mode) and is never written anywhere else.
+ */
+async function handleKeysIssueRoot(client: OmniClient, tenantId: string, options: KeysIssueRootOptions): Promise<void> {
+  const reason = requireReason(options.reason, 'issue a root key');
+  const role = parseRole(options.role);
+  const scopes = parseScopes(options.scopes);
+  const constraints = options.constraints === undefined ? undefined : parseConstraints(options.constraints);
+
+  const body: IssuePlatformTenantRootKeyBody = {
+    principalId: options.principal,
+    membershipId: options.membership,
+    role,
+    name: options.name,
+    scopes,
+    expiresAt: options.expires,
+    rateLimit: options.rateLimit,
+    budget: options.budget,
+    ...(constraints ? { resourceConstraints: constraints } : {}),
+    reason,
+  };
+  const result = await client.platform.tenants.keys.issueRoot(tenantId, body);
+
+  if (output.getCurrentFormat() === 'json') {
+    // Warning goes to stderr (warn does that in JSON mode); the plaintext key
+    // appears once, inside the JSON document on stdout.
+    output.warn('plainTextKey is shown once and can never be retrieved again — store it now.');
+    output.data(result);
+    return;
+  }
+
+  const { plainTextKey, ...issued } = result;
+  output.success(`Root key issued: ${issued.name} (${issued.id})`);
+  output.warn('The key below is shown ONCE and can never be retrieved again — store it now.');
+  output.raw(`\n  ${plainTextKey}\n`);
+  output.data(issued);
 }
 
 // ============================================================================
@@ -428,6 +577,32 @@ export function createTenantsCommand(): Command {
 
   tenants.addCommand(memberships);
 
+  const keys = new Command('keys').description('Manage tenant credentials');
+
+  keys
+    .command('issue-root <tenant-id>')
+    .description('Issue the initial tenant ROOT key (the plaintext is shown ONCE and never again)')
+    .requiredOption('--principal <uuid>', 'Principal the key acts as (must hold the membership)')
+    .requiredOption('--membership <uuid>', 'Active membership binding the principal to the tenant')
+    .requiredOption('--role <role>', `Tenant role: ${TENANT_ROLES.join(' | ')}`)
+    .requiredOption('--name <name>', 'Human-readable key name')
+    .requiredOption('--scopes <list>', 'Comma-separated explicit tenant scopes (platform/wildcard scopes are refused)')
+    .requiredOption('--expires <iso>', 'Expiry (ISO 8601); must be in the future and within the tenant TTL ceiling')
+    .requiredOption('--rate-limit <n>', 'Rate limit; capped by the tenant policy ceiling', Number.parseInt)
+    .requiredOption('--budget <n>', 'Budget; capped by the tenant policy ceiling', Number.parseInt)
+    .option('--constraints <json>', 'Optional resource allowlists as JSON, e.g. \'{"instanceAllowlist":["<id>"]}\'')
+    .option('--reason <text>', REASON_HELP)
+    .action(async (tenantId: string, options: KeysIssueRootOptions) => {
+      const client = getClient();
+      try {
+        await handleKeysIssueRoot(client, tenantId, options);
+      } catch (err) {
+        renderRootKeyError(err, 'issue the root key');
+      }
+    });
+
+  tenants.addCommand(keys);
+
   return tenants;
 }
 
@@ -438,6 +613,10 @@ export function createTenantsCommand(): Command {
 export const __testables = {
   requireReason,
   renderPlatformError,
+  renderRootKeyError,
+  parseScopes,
+  parseConstraints,
+  handleKeysIssueRoot,
   handleList,
   handleGet,
   handleCreate,
