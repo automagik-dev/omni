@@ -314,6 +314,8 @@ const CLI_COMMANDS: Record<string, string> = {
   'platform.tenants.memberships.disable': 'tenants memberships disable <tenant-id> <membership-id> --reason <text>',
   'platform.tenants.memberships.setStatus': 'tenants memberships status <tenant-id> <membership-id> --status --reason',
   'platform.tenants.memberships.setRole': 'tenants memberships role <tenant-id> <membership-id> --role --reason',
+  'platform.tenants.keys.issueRoot':
+    'tenants keys issue-root <tenant-id> --principal --membership --role --name --scopes --expires --rate-limit --budget --reason',
 
   // ============================================================================
   // SYSTEM
