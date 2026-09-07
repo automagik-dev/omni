@@ -39,10 +39,18 @@ mock.module('@slack/bolt', () => {
     }
   }
 
+  // SocketModeReceiver mock exposing a client, as createSocketBoltApp now
+  // constructs the receiver itself to reach the SocketModeClient (#941).
+  class MockSocketModeReceiver {
+    client = Object.assign(new EventEmitter(), {
+      websocket: { isActive: () => true },
+    });
+  }
+
   return {
     App: MockApp,
     HTTPReceiver: MockHTTPReceiver,
-    SocketModeReceiver: class {},
+    SocketModeReceiver: MockSocketModeReceiver,
   };
 });
 
@@ -187,6 +195,9 @@ describe('BoltConnection structure', () => {
     expect(conn.app).toBeDefined();
     expect(conn.client).toBeDefined();
     expect(conn.botToken).toBe('xoxb-fake');
+    // #941: the socket client must be reachable for health/startup verification
+    expect(conn.socketClient).toBeDefined();
+    expect(conn.socketState).toBe('pending');
   });
 
   it('HTTP mode connection has app, client, and httpHandler', () => {
