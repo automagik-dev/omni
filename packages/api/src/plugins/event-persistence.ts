@@ -430,7 +430,10 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
     // retention. Each custom event gets a minimal row: identity, causality
     // (causation_id column + correlationId in the metadata jsonb), and the
     // payload for debugging. channel is 'internal' (there is no channel-side
-    // fact here) and the eventType is truncated to the column's 50 chars.
+    // fact here) and the eventType is truncated to the column's 255 chars
+    // (#966 — a stale 50-char cap silently broke exact-match type filters
+    // for longer custom.webhook.{source}.{event} types after #958 widened
+    // the column).
     await eventBus.subscribePattern(
       'custom.>',
       async (event) => {
@@ -442,7 +445,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               ...eventIdInsert(event.id),
               channel: 'internal',
               instanceId: metadata.instanceId && isValidUuid(metadata.instanceId) ? metadata.instanceId : null,
-              eventType: event.type.slice(0, 50) as NewOmniEvent['eventType'],
+              eventType: event.type.slice(0, 255) as NewOmniEvent['eventType'],
               direction: 'internal',
               status: 'completed',
               receivedAt: new Date(event.timestamp),
