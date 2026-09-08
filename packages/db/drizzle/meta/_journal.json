@@ -428,6 +428,13 @@
       "when": 1786000000000,
       "tag": "0060_webhook_source_strict_schemas",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1786100000000,
+      "tag": "0061_agent_event_manifest",
+      "breakpoints": true
     }
   ]
 }
