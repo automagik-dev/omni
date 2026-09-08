@@ -5,7 +5,7 @@
  */
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { EventBus } from '@omni/core';
+import type { AgentEventManifest, EventBus } from '@omni/core';
 import type { Agent, Database, NewAgent } from '@omni/db';
 import { AgentService } from '../agents';
 
@@ -24,6 +24,7 @@ function createMockAgent(overrides: Partial<Agent> = {}): Agent {
     isActive: true,
     metadata: null,
     agentCard: null,
+    eventManifest: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -208,6 +209,43 @@ describe('AgentService', () => {
       })) as unknown as typeof mockDb.update;
 
       await expect(service.update('missing', { name: 'x' })).rejects.toThrow('Agent');
+    });
+  });
+
+  describe('updateManifest()', () => {
+    const manifest: AgentEventManifest = {
+      accepts: [{ event: 'custom.clickup.task.status_changed', filter: { list_id: '901300373349' } }],
+      publishes: [{ event: 'custom.review.parecer.ready' }],
+    };
+
+    test('replaces the manifest and publishes system.agent.manifest.updated', async () => {
+      const agent = createMockAgent({ id: 'm-1', name: 'reviewer', eventManifest: manifest });
+      mockDb = createMockDatabase([agent]);
+      service = new AgentService(mockDb, mockEventBus);
+
+      const result = await service.updateManifest('m-1', manifest);
+
+      expect(mockDb.update).toHaveBeenCalled();
+      expect(result.eventManifest).toEqual(manifest);
+      expect(mockEventBus._publishedEvents).toHaveLength(1);
+      expect(mockEventBus._publishedEvents[0]?.eventType).toBe('system.agent.manifest.updated');
+      expect(mockEventBus._publishedEvents[0]?.payload.agentId).toBe('m-1');
+      expect(mockEventBus._publishedEvents[0]?.payload.manifest).toEqual(manifest);
+    });
+
+    test('works without eventBus (null)', async () => {
+      const agent = createMockAgent({ id: 'm-2', eventManifest: manifest });
+      const serviceNoEvents = new AgentService(createMockDatabase([agent]), null);
+
+      const result = await serviceNoEvents.updateManifest('m-2', manifest);
+
+      expect(result).toBeDefined();
+      expect(mockEventBus._publishedEvents).toHaveLength(0);
+    });
+
+    test('throws NotFoundError when empty returning', async () => {
+      await expect(service.updateManifest('missing', manifest)).rejects.toThrow('Agent');
+      expect(mockEventBus._publishedEvents).toHaveLength(0);
     });
   });
 

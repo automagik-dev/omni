@@ -3,7 +3,7 @@
  */
 
 import { NotFoundError } from '@omni/core';
-import type { EventBus } from '@omni/core';
+import type { AgentEventManifest, EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type Agent, type NewAgent, agentRoutes, agents, instances } from '@omni/db';
 import { and, eq, sql } from 'drizzle-orm';
@@ -145,6 +145,38 @@ export class AgentService {
         for (const instanceId of affected) {
           invalidateProviderCacheForInstance(instanceId);
         }
+      });
+    }
+
+    return updated;
+  }
+
+  /**
+   * Replace the agent's declarative event manifest (RFC #925 G4a, #985).
+   *
+   * Full replacement — apply semantics, not merge: the manifest is one
+   * versioned document (typically applied from a git-tracked file). Publishes
+   * `system.agent.manifest.updated` so future slices (G4b compilation, #986)
+   * can react to declaration changes. Manifest columns are not provider-baked
+   * (see PROVIDER_BAKED_AGENT_COLUMNS), so no dispatcher cache eviction is
+   * needed.
+   */
+  async updateManifest(id: string, manifest: AgentEventManifest): Promise<Agent> {
+    const [updated] = await this.db
+      .update(agents)
+      .set({ eventManifest: manifest, updatedAt: new Date() })
+      .where(eq(agents.id, id))
+      .returning();
+
+    if (!updated) {
+      throw new NotFoundError('Agent', id);
+    }
+
+    if (this.eventBus) {
+      await this.eventBus.publishGeneric('system.agent.manifest.updated', {
+        agentId: updated.id,
+        name: updated.name,
+        manifest,
       });
     }
 
