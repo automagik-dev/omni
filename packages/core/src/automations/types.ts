@@ -204,10 +204,13 @@ export interface Automation {
    */
   transactionalEmissions?: boolean;
   /**
-   * Manifest-compilation provenance (RFC #925 G4b, #986): set when the row
-   * was compiled from an agent's event manifest; null/absent = hand-made.
-   * The engine treats managed and hand-made automations identically — the
-   * marker only gates manual CRUD in the API service layer.
+   * Agent whose event manifest governs this automation (RFC #925 G4).
+   * Stamped by the G4b compiler (#986) when the row is compiled from a
+   * manifest's `accepts` entries; null/absent = hand-authored. Two consumers:
+   * the engine threads it into the emit path so the G4c publish-allowlist
+   * gate (#987) enforces the agent's `publishes` declarations (hand-authored
+   * emissions stay ungoverned), and the API service layer gates manual CRUD
+   * on managed rows (edit the manifest instead).
    */
   managedByAgentId?: string | null;
   createdAt: Date;

@@ -34,7 +34,7 @@
  */
 
 import type { AgentCallContext, AgentRunResult, CallAgentActionConfig } from '@omni/core';
-import { SCHEMA_NOT_REGISTERED, createLogger, generateId } from '@omni/core';
+import { PUBLISH_NOT_DECLARED, SCHEMA_NOT_REGISTERED, checkPublishAllowed, createLogger, generateId } from '@omni/core';
 import type { Database, EventType } from '@omni/db';
 import { agents, omniEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
@@ -93,6 +93,67 @@ async function resolveCallAgentChatIds(
   }
 }
 
+/**
+ * Dead-letter an emission refused by one of the emit gates (#959, #987,
+ * #1000). Manual-retry only — the DLQ row is the refused event's only record.
+ * Failure to file the row is logged, never thrown: the action already fails
+ * with the gate's reason, and a DLQ hiccup must not mask it.
+ */
+async function deadLetterRefusedEmission(
+  services: Services,
+  db: Database,
+  trustedTenantId: string | null,
+  input: { eventType: string; payload: Record<string, unknown>; errors: string[]; reason?: string },
+): Promise<void> {
+  try {
+    await runTenantWorkDb(db, trustedTenantId, () =>
+      services.deadLetters.createSchemaValidationFailure({
+        eventId: generateId(),
+        eventType: input.eventType,
+        subject: input.eventType,
+        payload: input.payload,
+        errors: input.errors,
+        reason: input.reason,
+      }),
+    );
+  } catch (error) {
+    log.error('Failed to dead-letter refused emit_event payload', {
+      eventType: input.eventType,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Publish-allowlist check for an agent-attributed emission (RFC #925 G4c,
+ * issue #987). Reads the RAW `agents.event_manifest` jsonb through the same
+ * `scopedHandle` worker-scope seam as the `call_agent` agents lookup above
+ * (this file's registered `agents` db-access site) and applies
+ * `checkPublishAllowed`: no manifest, or a manifest without a `publishes`
+ * key, is ungoverned; `publishes: []` denies everything; otherwise only
+ * declared types pass. A missing agent row (the managing agent was deleted)
+ * degrades to ungoverned, matching this file's other fail-open resolution
+ * reads. Returns the refusal errors, or `null` when the emission is allowed.
+ */
+async function refusePublishNotDeclared(
+  db: Database,
+  trustedTenantId: string | null,
+  emitterAgentId: string,
+  eventType: string,
+): Promise<string[] | null> {
+  const [row] = await runTenantWorkDb(db, trustedTenantId, () =>
+    scopedHandle(db)
+      .select({ eventManifest: agents.eventManifest })
+      .from(agents)
+      .where(eq(agents.id, emitterAgentId))
+      .limit(1),
+  );
+  if (checkPublishAllowed(row?.eventManifest ?? null, eventType)) {
+    return null;
+  }
+  return [`event type '${eventType}' is not declared in the publishes manifest of agent ${emitterAgentId}`];
+}
+
 /** The dependency shape `AutomationService.startEngine` accepts. */
 export interface AutomationEngineDeps {
   sendMessage: (instanceId: string, to: string, content: string, trustedTenantId?: string | null) => Promise<void>;
@@ -124,7 +185,8 @@ export interface AutomationEngineDeps {
     eventType: string,
     payload: Record<string, unknown>,
     trustedTenantId?: string | null,
-  ) => Promise<{ valid: boolean; errors?: string[] }>;
+    emitterAgentId?: string | null,
+  ) => Promise<{ valid: boolean; errors?: string[]; reason?: string }>;
 }
 
 /** Injectable seams (tests only — production uses the module defaults). */
@@ -320,17 +382,41 @@ export function buildAutomationEngineDeps(
       await scopedHandle(db).delete(omniEvents).where(eq(omniEvents.id, eventId));
     },
 
-    // Schema-registry gate for emit_event (issue #959). The engine calls this
-    // BEFORE publish; an unregistered type reports valid (opt-in per type) —
-    // unless `OMNI_STRICT_EMIT_EVENT_SCHEMAS=true` (issue #1000, the RFC #925
-    // G1 policy switch for internal emitters; default off), in which case an
-    // unregistered type is refused with the distinct reason
-    // `schema_not_registered`. An invalid payload is dead-lettered here
-    // (reason `schema_validation_failed`, manual-retry only — the refused
-    // event's only record) and the action then fails without publishing. Each
-    // DB block runs through `runTenantWorkDb` like every other callback:
-    // scoped in the tenant world, ambient passthrough in legacy.
-    validateEmitEvent: async (eventType, payload, trustedTenantId = null) => {
+    // Emission gates for emit_event, in order (per issue #987):
+    //
+    //   1. Publish allowlist (RFC #925 G4c, issue #987) — only when the
+    //      engine threaded an emitter agent (`automation.managedByAgentId`,
+    //      stamped by the #986 compiler): the type must be declared in the
+    //      agent's manifest `publishes` list or the emission is dead-lettered
+    //      with the distinct reason `publish_not_declared` BEFORE the payload
+    //      is examined. No emitter threaded → the gate is inert.
+    //   2. Schema registry (issue #959) — an unregistered type reports valid
+    //      (opt-in per type) unless `OMNI_STRICT_EMIT_EVENT_SCHEMAS=true`
+    //      (issue #1000; default off) refuses it as `schema_not_registered`;
+    //      an invalid payload is refused as `schema_validation_failed`.
+    //
+    // Every refusal is dead-lettered (manual-retry only — the refused event's
+    // only record) and the action then fails without publishing. Each DB
+    // block runs through `runTenantWorkDb` like every other callback: scoped
+    // in the tenant world, ambient passthrough in legacy.
+    validateEmitEvent: async (eventType, payload, trustedTenantId = null, emitterAgentId = null) => {
+      if (emitterAgentId) {
+        const refusal = await refusePublishNotDeclared(db, trustedTenantId, emitterAgentId, eventType);
+        if (refusal) {
+          log.warn('emit_event refused: type not declared in the agent publishes manifest', {
+            eventType,
+            emitterAgentId,
+          });
+          await deadLetterRefusedEmission(services, db, trustedTenantId, {
+            eventType,
+            payload,
+            errors: refusal,
+            reason: PUBLISH_NOT_DECLARED,
+          });
+          return { valid: false, errors: refusal, reason: PUBLISH_NOT_DECLARED };
+        }
+      }
+
       const verdict = await runTenantWorkDb(db, trustedTenantId, () =>
         services.eventSchemas.validate(eventType, payload),
       );
@@ -349,23 +435,7 @@ export function buildAutomationEngineDeps(
         : verdict.errors;
       const reason = refusedUnregistered ? SCHEMA_NOT_REGISTERED : undefined;
 
-      try {
-        await runTenantWorkDb(db, trustedTenantId, () =>
-          services.deadLetters.createSchemaValidationFailure({
-            eventId: generateId(),
-            eventType,
-            subject: eventType,
-            payload,
-            errors,
-            reason,
-          }),
-        );
-      } catch (error) {
-        log.error('Failed to dead-letter refused emit_event payload', {
-          eventType,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      await deadLetterRefusedEmission(services, db, trustedTenantId, { eventType, payload, errors, reason });
       return { valid: false, errors, reason };
     },
   };

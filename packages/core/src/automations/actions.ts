@@ -181,20 +181,30 @@ export interface ActionDependencies {
     trustedTenantId?: string | null,
   ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
   /**
-   * Optional schema-registry gate for `emit_event` (issue #959). Invoked with
+   * Optional emission gate for `emit_event` (issues #959, #987). Invoked with
    * the resolved event type and payload BEFORE publish; an invalid verdict
    * fails the action and nothing enters the journal. The implementation
-   * (packages/api `automation-actions.ts`) consults the `event_schemas`
-   * registry and dead-letters the refused payload with reason
-   * `schema_validation_failed` — or `schema_not_registered` when the strict
-   * switch (issue #1000) refuses an unregistered type; the verdict's `reason`
-   * carries that token and prefixes the action error. Omitted (existing
-   * tests, route-side manual execute) → no gate, behavior unchanged.
+   * (packages/api `automation-actions.ts`) runs two checks IN ORDER:
+   *
+   *   1. Publish allowlist (RFC #925 G4c, #987) — only when `emitterAgentId`
+   *      is threaded: the type must be declared in that agent's manifest
+   *      `publishes` list or the emission is dead-lettered with reason
+   *      `publish_not_declared`.
+   *   2. Schema registry (#959) — dead-letters an invalid payload with reason
+   *      `schema_validation_failed`, or `schema_not_registered` when the
+   *      strict switch (issue #1000) refuses an unregistered type.
+   *
+   * The verdict's `reason` carries the refusing token and prefixes the action
+   * error. `emitterAgentId` comes from `context.automation.managedByAgentId`
+   * (stamped by the #986 compiler; absent/null → check 1 is inert). Omitted
+   * dep (existing tests, route-side manual execute) → no gate, behavior
+   * unchanged.
    */
   validateEmitEvent?: (
     eventType: string,
     payload: Record<string, unknown>,
     trustedTenantId?: string | null,
+    emitterAgentId?: string | null,
   ) => Promise<{ valid: boolean; errors?: string[]; reason?: string }>;
   /**
    * Release a claim previously granted by `staleIdleTimeoutGate`. The gate
@@ -427,25 +437,28 @@ async function releaseEmissionClaim(
 }
 
 /**
- * Schema-registry gate for emit_event (issue #959): a registered type's
- * payload must satisfy its schema or the emit fails BEFORE publish (the gate
- * impl dead-letters it). Unregistered types pass through — opt-in per type —
- * unless the gate impl enforces the strict switch (issue #1000), in which
- * case the verdict's `reason` (`schema_not_registered`) prefixes the error.
- * Runs BEFORE the idempotency claim (#958): a refused payload must not
- * journal an event or burn the slot's derived key.
+ * Emission gates for emit_event (issues #959, #987): the publish allowlist of
+ * the emitting agent's manifest (checked first, only when the engine threaded
+ * `context.automation.managedByAgentId`) and the schema-registry contract. A
+ * refusal fails the emit BEFORE publish (the gate impl dead-letters it with
+ * its reason — `publish_not_declared`, `schema_validation_failed`, or
+ * `schema_not_registered` under the strict switch, issue #1000) and the
+ * verdict's `reason` prefixes the error. Runs BEFORE the idempotency claim
+ * (#958): a refused payload must not journal an event or burn the slot's
+ * derived key.
  */
-async function enforceEmitEventSchema(
+async function enforceEmitEventGates(
   deps: ActionDependencies,
   eventType: string,
   payload: GenericEventPayload,
   trustedTenantId?: string | null,
+  emitterAgentId?: string | null,
 ): Promise<string | null> {
   if (!deps.validateEmitEvent) return null;
-  const verdict = await deps.validateEmitEvent(eventType, payload, trustedTenantId);
+  const verdict = await deps.validateEmitEvent(eventType, payload, trustedTenantId, emitterAgentId);
   if (verdict.valid) return null;
   const detail = verdict.errors?.length ? `: ${verdict.errors.join('; ')}` : '';
-  logger.warn('Emit event refused by schema registry', { eventType, errors: verdict.errors });
+  logger.warn('Emit event refused by emission gate', { eventType, emitterAgentId, errors: verdict.errors });
   return `${verdict.reason ?? SCHEMA_VALIDATION_FAILED}${detail}`;
 }
 
@@ -500,11 +513,17 @@ async function prepareEmitEvent(
 
   const eventType = substituteTemplate(config.eventType, context) as CustomEventType;
 
-  // Schema-registry gate (issue #959, strict switch #1000) — see
-  // `enforceEmitEventSchema`.
-  const schemaError = await enforceEmitEventSchema(deps, eventType, payload, trustedTenantId);
-  if (schemaError !== null) {
-    return { error: schemaError };
+  // Emission gates (publish allowlist #987, schema registry #959, strict
+  // switch #1000) — see `enforceEmitEventGates`.
+  const gateError = await enforceEmitEventGates(
+    deps,
+    eventType,
+    payload,
+    trustedTenantId,
+    context.automation?.managedByAgentId ?? null,
+  );
+  if (gateError !== null) {
+    return { error: gateError };
   }
 
   // Correlation rides the same threading (#956): the next hop continues the

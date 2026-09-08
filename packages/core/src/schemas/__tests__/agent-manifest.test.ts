@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { AgentEventManifestSchema, ManifestEventTypeSchema } from '../agent-manifest';
+import { AgentEventManifestSchema, ManifestEventTypeSchema, checkPublishAllowed } from '../agent-manifest';
 
 describe('ManifestEventTypeSchema', () => {
   test('accepts core event types', () => {
@@ -89,5 +89,71 @@ describe('AgentEventManifestSchema', () => {
 
   test('rejects plain-string entries (entries are objects, matching the RFC YAML)', () => {
     expect(AgentEventManifestSchema.safeParse({ publishes: ['custom.review.parecer.ready'] }).success).toBe(false);
+  });
+});
+
+/**
+ * Publish-allowlist semantics (RFC #925 G4c — issue #987).
+ *
+ * The decided contract, exhaustively:
+ *   - no manifest → ungoverned (allowed)
+ *   - manifest without a `publishes` key → ungoverned (allowed) — the
+ *     document never spoke about publishing (only reachable for jsonb
+ *     written outside the validated apply path, which defaults absent → [])
+ *   - `publishes: []` → deny ALL (the agent declared "publishes nothing")
+ *   - non-empty `publishes` → exact declared types only
+ */
+describe('checkPublishAllowed', () => {
+  const declared = { publishes: [{ event: 'custom.review.parecer.ready' }, { event: 'custom.alerts.raised' }] };
+
+  test('no manifest (null/undefined) → allowed (ungoverned, no flag day)', () => {
+    expect(checkPublishAllowed(null, 'custom.anything.goes')).toBe(true);
+    expect(checkPublishAllowed(undefined, 'custom.anything.goes')).toBe(true);
+  });
+
+  test('manifest without a publishes key → allowed (the document does not govern publishing)', () => {
+    expect(checkPublishAllowed({}, 'custom.anything.goes')).toBe(true);
+    expect(checkPublishAllowed({ publishes: undefined }, 'custom.anything.goes')).toBe(true);
+    expect(checkPublishAllowed({ publishes: null }, 'custom.anything.goes')).toBe(true);
+  });
+
+  test('malformed publishes (non-array jsonb) → allowed, matching the absent-key stance', () => {
+    expect(checkPublishAllowed({ publishes: 'custom.x.y' } as unknown as { publishes: [] }, 'custom.x.y')).toBe(true);
+  });
+
+  test('empty publishes array → deny ALL (an empty allowlist is an allowlist)', () => {
+    expect(checkPublishAllowed({ publishes: [] }, 'custom.review.parecer.ready')).toBe(false);
+    expect(checkPublishAllowed({ publishes: [] }, 'message.received')).toBe(false);
+  });
+
+  test('declared type → allowed', () => {
+    expect(checkPublishAllowed(declared, 'custom.review.parecer.ready')).toBe(true);
+    expect(checkPublishAllowed(declared, 'custom.alerts.raised')).toBe(true);
+  });
+
+  test('undeclared type → denied', () => {
+    expect(checkPublishAllowed(declared, 'custom.review.parecer.draft')).toBe(false);
+    expect(checkPublishAllowed(declared, 'custom.alerts')).toBe(false);
+  });
+
+  test('matching is exact — no prefix/wildcard semantics', () => {
+    expect(checkPublishAllowed(declared, 'custom.review.parecer.ready.v2')).toBe(false);
+    expect(checkPublishAllowed({ publishes: [{ event: 'custom.review' }] }, 'custom.review.parecer.ready')).toBe(false);
+  });
+
+  test('a parsed full manifest (accepts + publishes) governs by its publishes half only', () => {
+    const manifest = AgentEventManifestSchema.parse({
+      accepts: [{ event: 'custom.clickup.task.status_changed' }],
+      publishes: [{ event: 'custom.review.parecer.ready' }],
+    });
+    expect(checkPublishAllowed(manifest, 'custom.review.parecer.ready')).toBe(true);
+    // Accepting a type does NOT grant the right to publish it.
+    expect(checkPublishAllowed(manifest, 'custom.clickup.task.status_changed')).toBe(false);
+  });
+
+  test('an apply-path manifest that omitted publishes governs as deny-all (Zod defaults absent → [])', () => {
+    const manifest = AgentEventManifestSchema.parse({ accepts: [{ event: 'message.received' }] });
+    expect(manifest.publishes).toEqual([]);
+    expect(checkPublishAllowed(manifest, 'custom.anything.goes')).toBe(false);
   });
 });

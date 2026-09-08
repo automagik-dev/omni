@@ -6,9 +6,12 @@
  * want git history keep a YAML/JSON file in their repo and apply it with
  * `omni agents manifest apply <agent> --file <path>`.
  *
- * This slice is STORAGE + READ SURFACE ONLY:
- *   - G4b (#986) compiles `accepts` entries into automations (routing).
- *   - G4c (#987) enforces `publishes` at emission time.
+ * Slices:
+ *   - G4a (#985) — storage + read surface (the schemas below).
+ *   - G4b (#986) — compiles `accepts` entries into automations (routing).
+ *   - G4c (#987) — enforces `publishes` at emission time
+ *     (`checkPublishAllowed` below; the gate implementation lives in the API's
+ *     emit path, packages/api `automation-actions.ts`).
  * Nothing in this module implements matching or routing behavior.
  */
 
@@ -91,3 +94,48 @@ export const AgentEventManifestSchema = z
   .strict();
 
 export type AgentEventManifest = z.infer<typeof AgentEventManifestSchema>;
+
+/**
+ * Dead-letter reason for an agent-attributed emission refused because its
+ * event type is not declared in the emitting agent's `publishes` manifest
+ * (RFC #925 G4c — issue #987: "Emission outside the manifest → refused +
+ * DLQ"). The DLQ row's `error` column starts with this token so operators can
+ * filter on it, mirroring `schema_validation_failed` / `schema_not_registered`.
+ */
+export const PUBLISH_NOT_DECLARED = 'publish_not_declared';
+
+/**
+ * The slice of a stored manifest the publish gate reads. Deliberately looser
+ * than {@link AgentEventManifest}: the gate consumes the RAW
+ * `agents.event_manifest` jsonb, which may predate the `publishes` concept or
+ * have been written outside the validated PUT path, so `publishes` may be
+ * absent entirely.
+ */
+export type PublishGovernanceManifest = {
+  readonly publishes?: readonly { readonly event: string }[] | null;
+} | null;
+
+/**
+ * Publish-allowlist check (RFC #925 G4c — issue #987). Pure and side-effect
+ * free; callers own refusal (DLQ reason {@link PUBLISH_NOT_DECLARED}).
+ *
+ * Semantics — absent vs empty `publishes`:
+ *   - **No manifest** (`null`/`undefined`) → allowed. Agents without a
+ *     manifest keep today's ungoverned behavior; enforcement has no flag day.
+ *   - **Manifest without a `publishes` key** (or a malformed non-array value)
+ *     → allowed. The document never spoke about publishing, so it does not
+ *     govern it. Only reachable for jsonb written outside the validated
+ *     apply path — `AgentEventManifestSchema` defaults an omitted `publishes`
+ *     to `[]` on PUT, so applying ANY manifest through the API/CLI opts the
+ *     agent into publish governance.
+ *   - **`publishes: []`** → deny ALL emissions. The agent explicitly declared
+ *     "publishes nothing"; an empty allowlist is an allowlist.
+ *   - **Non-empty `publishes`** → allowed only for an exactly-declared type.
+ */
+export function checkPublishAllowed(manifest: PublishGovernanceManifest | undefined, eventType: string): boolean {
+  const publishes = manifest?.publishes;
+  if (!Array.isArray(publishes)) {
+    return true;
+  }
+  return publishes.some((entry) => entry?.event === eventType);
+}

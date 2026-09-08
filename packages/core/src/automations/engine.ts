@@ -554,7 +554,7 @@ export class AutomationEngine {
     // payload fields.
     const context = createTemplateContext(event.payload as Record<string, unknown>, {
       event: { id: event.id, type: event.type, timestamp: event.timestamp, metadata: event.metadata },
-      automation: { id: automation.id },
+      automation: { id: automation.id, managedByAgentId: automation.managedByAgentId ?? null },
     });
 
     await this.queueExecution(automation, event, context, instanceId);
@@ -615,7 +615,7 @@ export class AutomationEngine {
           timestamp: syntheticEvent.timestamp,
           metadata: syntheticEvent.metadata,
         },
-        automation: { id: automation.id },
+        automation: { id: automation.id, managedByAgentId: automation.managedByAgentId ?? null },
       });
 
       await this.queueExecution(automation, syntheticEvent, context, instanceId);
