@@ -72,8 +72,8 @@ export interface PullResult {
 }
 
 const PULL_POLL_INTERVAL_MS = 500;
-export const PULL_MAX_LIMIT = 500;
-export const PULL_MAX_WAIT_MS = 30_000;
+const PULL_MAX_LIMIT = 500;
+const PULL_MAX_WAIT_MS = 30_000;
 
 /** True when the row's payload passes the consumer's conditions (wait/automation matcher). */
 export function matchesConsumerPayload(
