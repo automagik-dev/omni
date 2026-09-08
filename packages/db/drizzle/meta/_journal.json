@@ -433,7 +433,14 @@
       "idx": 61,
       "version": "7",
       "when": 1786100000000,
-      "tag": "0061_agent_event_manifest",
+      "tag": "0061_automation_transactional_emissions",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1786200000000,
+      "tag": "0062_agent_event_manifest",
       "breakpoints": true
     }
   ]

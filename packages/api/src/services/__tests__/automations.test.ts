@@ -41,6 +41,7 @@ function createMockAutomation(overrides: Partial<Automation> = {}): Automation {
     debounce: null,
     enabled: true,
     priority: 0,
+    transactionalEmissions: false,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

@@ -5595,6 +5595,8 @@ export interface components {
             enabled: boolean;
             /** @description Priority */
             priority: number;
+            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+            transactionalEmissions: boolean;
             /**
              * Format: date-time
              * @description Creation timestamp
@@ -5727,6 +5729,11 @@ export interface components {
              * @default 0
              */
             priority: number;
+            /**
+             * @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero. Default false = immediate publishing
+             * @default false
+             */
+            transactionalEmissions: boolean;
         };
         AutomationLog: {
             /**
@@ -17024,6 +17031,8 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -17170,6 +17179,11 @@ export interface operations {
                      * @default 0
                      */
                     priority?: number;
+                    /**
+                     * @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero. Default false = immediate publishing
+                     * @default false
+                     */
+                    transactionalEmissions?: boolean;
                 };
             };
         };
@@ -17300,6 +17314,8 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -17474,6 +17490,8 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -17691,6 +17709,11 @@ export interface operations {
                      * @default 0
                      */
                     priority?: number;
+                    /**
+                     * @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero. Default false = immediate publishing
+                     * @default false
+                     */
+                    transactionalEmissions?: boolean;
                 };
             };
         };
@@ -17821,6 +17844,8 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -17995,6 +18020,8 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -18169,6 +18196,8 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
                             /**
                              * Format: date-time
                              * @description Creation timestamp

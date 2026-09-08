@@ -131,6 +131,13 @@ const createAutomationSchema = z.object({
   debounce: debounceSchema.optional().describe('Message debounce configuration'),
   enabled: z.boolean().default(true).describe('Whether automation is enabled'),
   priority: z.number().int().default(0).describe('Priority (higher runs first)'),
+  transactionalEmissions: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
+        'only when every action succeeded; a failed run publishes zero. Default false = immediate publishing',
+    ),
 });
 
 // Update automation schema

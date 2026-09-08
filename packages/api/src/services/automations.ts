@@ -291,8 +291,20 @@ export class AutomationService {
       ...deps,
     };
 
-    // Execute actions
-    const results = await executeActions(automation.actions as AutomationAction[], context, actionDeps);
+    // Execute actions. Manual execution honors the automation's transactional
+    // publication flag (G5, #988) so a debugging run behaves like the engine's:
+    // emissions buffer and flush only when every action succeeded. No engine
+    // provenance is threaded here (no triggering envelope), matching before.
+    const results = await executeActions(
+      automation.actions as AutomationAction[],
+      context,
+      actionDeps,
+      undefined,
+      undefined,
+      {
+        transactionalEmissions: automation.transactionalEmissions,
+      },
+    );
 
     // Log the execution
     const status = results.every((r) => r.status === 'success') ? 'success' : 'failed';

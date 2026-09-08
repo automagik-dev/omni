@@ -677,6 +677,12 @@ export interface CreateAutomationBody {
   debounce?: Record<string, unknown>;
   enabled?: boolean;
   priority?: number;
+  /**
+   * Transactional publication (G5, #988): buffer the run's emit_event
+   * publishes and flush them in order only when every action succeeded; a
+   * failed run publishes zero. Default false = immediate publishing.
+   */
+  transactionalEmissions?: boolean;
 }
 
 /**

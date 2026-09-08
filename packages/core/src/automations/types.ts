@@ -196,6 +196,13 @@ export interface Automation {
   debounce: DebounceConfig | null;
   enabled: boolean;
   priority: number;
+  /**
+   * Transactional publication (G5, #988): buffer the run's emit_event
+   * publishes and flush in order only on a fully successful run. Optional so
+   * pre-flag callers/tests need no change; absent = false = immediate
+   * publishing.
+   */
+  transactionalEmissions?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
