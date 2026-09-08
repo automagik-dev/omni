@@ -4430,6 +4430,35 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         throwIfError(response, error);
       },
+
+      /**
+       * Get the agent's declarative accepts/publishes event manifest
+       * (RFC #925 G4a, #985). Returns null when the agent never declared one.
+       */
+      async getManifest(id: string): Promise<components['schemas']['AgentEventManifest'] | null> {
+        const { data, error, response } = await client.GET('/agents/{id}/manifest', {
+          params: { path: { id } },
+        });
+        throwIfError(response, error);
+        return data?.data ?? null;
+      },
+
+      /**
+       * Replace the agent's declarative event manifest (full replacement,
+       * apply semantics). Event types must be core types or namespaced
+       * custom.* / system.* tokens.
+       */
+      async updateManifest(
+        id: string,
+        body: components['schemas']['AgentEventManifest'],
+      ): Promise<components['schemas']['AgentEventManifest'] | null> {
+        const { data, error, response } = await client.PUT('/agents/{id}/manifest', {
+          params: { path: { id } },
+          body,
+        });
+        throwIfError(response, error);
+        return data?.data ?? null;
+      },
     },
 
     // ========================================================================

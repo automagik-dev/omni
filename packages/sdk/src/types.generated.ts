@@ -56,6 +56,30 @@ export interface paths {
         patch: operations["updateAgent"];
         trace?: never;
     };
+    "/agents/{id}/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get agent event manifest
+         * @description Read the agent's declarative accepts/publishes event manifest (RFC #925 G4a). Returns null when the agent has never declared one.
+         */
+        get: operations["getAgentManifest"];
+        /**
+         * Replace agent event manifest
+         * @description Replace the agent's declarative accepts/publishes event manifest (full replacement, apply semantics). Event types must be core types or namespaced custom.*\/system.* tokens. Storage only in this slice: accepts is compiled into automations by G4b, publishes enforced by G4c.
+         */
+        put: operations["updateAgentManifest"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/validate": {
         parameters: {
             query?: never;
@@ -2714,6 +2738,35 @@ export interface components {
             agentCard: {
                 [key: string]: unknown;
             } | null;
+            /** @description Declarative accepts/publishes event manifest (RFC #925 G4a) */
+            eventManifest?: {
+                /**
+                 * @description Event types this agent consumes
+                 * @default []
+                 */
+                accepts: {
+                    /**
+                     * @description Event type consumed (core type, custom.*, or system.*)
+                     * @example custom.clickup.task.status_changed
+                     */
+                    event: string;
+                    /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                    filter?: {
+                        [key: string]: unknown;
+                    };
+                }[];
+                /**
+                 * @description Event types this agent declares it may emit
+                 * @default []
+                 */
+                publishes: {
+                    /**
+                     * @description Event type this agent may emit
+                     * @example custom.review.parecer.ready
+                     */
+                    event: string;
+                }[];
+            } | null;
             /**
              * Format: date-time
              * @description Creation timestamp
@@ -2776,6 +2829,34 @@ export interface components {
             agentCard?: {
                 [key: string]: unknown;
             };
+        };
+        AgentEventManifest: {
+            /**
+             * @description Event types this agent consumes
+             * @default []
+             */
+            accepts: {
+                /**
+                 * @description Event type consumed (core type, custom.*, or system.*)
+                 * @example custom.clickup.task.status_changed
+                 */
+                event: string;
+                /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                filter?: {
+                    [key: string]: unknown;
+                };
+            }[];
+            /**
+             * @description Event types this agent declares it may emit
+             * @default []
+             */
+            publishes: {
+                /**
+                 * @description Event type this agent may emit
+                 * @example custom.review.parecer.ready
+                 */
+                event: string;
+            }[];
         };
         Error: {
             error: {
@@ -6506,6 +6587,35 @@ export interface operations {
                             agentCard: {
                                 [key: string]: unknown;
                             } | null;
+                            /** @description Declarative accepts/publishes event manifest (RFC #925 G4a) */
+                            eventManifest?: {
+                                /**
+                                 * @description Event types this agent consumes
+                                 * @default []
+                                 */
+                                accepts: {
+                                    /**
+                                     * @description Event type consumed (core type, custom.*, or system.*)
+                                     * @example custom.clickup.task.status_changed
+                                     */
+                                    event: string;
+                                    /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                    filter?: {
+                                        [key: string]: unknown;
+                                    };
+                                }[];
+                                /**
+                                 * @description Event types this agent declares it may emit
+                                 * @default []
+                                 */
+                                publishes: {
+                                    /**
+                                     * @description Event type this agent may emit
+                                     * @example custom.review.parecer.ready
+                                     */
+                                    event: string;
+                                }[];
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -6639,6 +6749,35 @@ export interface operations {
                             agentCard: {
                                 [key: string]: unknown;
                             } | null;
+                            /** @description Declarative accepts/publishes event manifest (RFC #925 G4a) */
+                            eventManifest?: {
+                                /**
+                                 * @description Event types this agent consumes
+                                 * @default []
+                                 */
+                                accepts: {
+                                    /**
+                                     * @description Event type consumed (core type, custom.*, or system.*)
+                                     * @example custom.clickup.task.status_changed
+                                     */
+                                    event: string;
+                                    /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                    filter?: {
+                                        [key: string]: unknown;
+                                    };
+                                }[];
+                                /**
+                                 * @description Event types this agent declares it may emit
+                                 * @default []
+                                 */
+                                publishes: {
+                                    /**
+                                     * @description Event type this agent may emit
+                                     * @example custom.review.parecer.ready
+                                     */
+                                    event: string;
+                                }[];
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -6739,6 +6878,35 @@ export interface operations {
                             /** @description A2A Agent Card overrides */
                             agentCard: {
                                 [key: string]: unknown;
+                            } | null;
+                            /** @description Declarative accepts/publishes event manifest (RFC #925 G4a) */
+                            eventManifest?: {
+                                /**
+                                 * @description Event types this agent consumes
+                                 * @default []
+                                 */
+                                accepts: {
+                                    /**
+                                     * @description Event type consumed (core type, custom.*, or system.*)
+                                     * @example custom.clickup.task.status_changed
+                                     */
+                                    event: string;
+                                    /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                    filter?: {
+                                        [key: string]: unknown;
+                                    };
+                                }[];
+                                /**
+                                 * @description Event types this agent declares it may emit
+                                 * @default []
+                                 */
+                                publishes: {
+                                    /**
+                                     * @description Event type this agent may emit
+                                     * @example custom.review.parecer.ready
+                                     */
+                                    event: string;
+                                }[];
                             } | null;
                             /**
                              * Format: date-time
@@ -6944,6 +7112,35 @@ export interface operations {
                             agentCard: {
                                 [key: string]: unknown;
                             } | null;
+                            /** @description Declarative accepts/publishes event manifest (RFC #925 G4a) */
+                            eventManifest?: {
+                                /**
+                                 * @description Event types this agent consumes
+                                 * @default []
+                                 */
+                                accepts: {
+                                    /**
+                                     * @description Event type consumed (core type, custom.*, or system.*)
+                                     * @example custom.clickup.task.status_changed
+                                     */
+                                    event: string;
+                                    /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                    filter?: {
+                                        [key: string]: unknown;
+                                    };
+                                }[];
+                                /**
+                                 * @description Event types this agent declares it may emit
+                                 * @default []
+                                 */
+                                publishes: {
+                                    /**
+                                     * @description Event type this agent may emit
+                                     * @example custom.review.parecer.ready
+                                     */
+                                    event: string;
+                                }[];
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -6954,6 +7151,202 @@ export interface operations {
                              * @description Last update timestamp
                              */
                             updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getAgentManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Agent event manifest (null when undeclared) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * @description Event types this agent consumes
+                             * @default []
+                             */
+                            accepts: {
+                                /**
+                                 * @description Event type consumed (core type, custom.*, or system.*)
+                                 * @example custom.clickup.task.status_changed
+                                 */
+                                event: string;
+                                /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                filter?: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                            /**
+                             * @description Event types this agent declares it may emit
+                             * @default []
+                             */
+                            publishes: {
+                                /**
+                                 * @description Event type this agent may emit
+                                 * @example custom.review.parecer.ready
+                                 */
+                                event: string;
+                            }[];
+                        } | null;
+                    };
+                };
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    updateAgentManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Event types this agent consumes
+                     * @default []
+                     */
+                    accepts?: {
+                        /**
+                         * @description Event type consumed (core type, custom.*, or system.*)
+                         * @example custom.clickup.task.status_changed
+                         */
+                        event: string;
+                        /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                        filter?: {
+                            [key: string]: unknown;
+                        };
+                    }[];
+                    /**
+                     * @description Event types this agent declares it may emit
+                     * @default []
+                     */
+                    publishes?: {
+                        /**
+                         * @description Event type this agent may emit
+                         * @example custom.review.parecer.ready
+                         */
+                        event: string;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Stored manifest after replacement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * @description Event types this agent consumes
+                             * @default []
+                             */
+                            accepts: {
+                                /**
+                                 * @description Event type consumed (core type, custom.*, or system.*)
+                                 * @example custom.clickup.task.status_changed
+                                 */
+                                event: string;
+                                /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                filter?: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                            /**
+                             * @description Event types this agent declares it may emit
+                             * @default []
+                             */
+                            publishes: {
+                                /**
+                                 * @description Event type this agent may emit
+                                 * @example custom.review.parecer.ready
+                                 */
+                                event: string;
+                            }[];
+                        } | null;
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
                         };
                     };
                 };
