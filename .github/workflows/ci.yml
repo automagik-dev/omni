@@ -5,6 +5,19 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  # Merge-queue support (#990): when a merge queue is enabled on dev, GitHub
+  # synthesizes gh-readonly-queue/* merge commits (PR + dev + any PRs queued
+  # ahead) and requires the branch-protection checks to pass on THEM before
+  # merging. That is the combined-state test per-PR CI cannot perform: PRs
+  # #964 and #965 were each green in isolation but red merged together (a
+  # suite relying on ambient global fetch met a sibling that replaces it —
+  # fixed after the fact in #963). Every job below runs on merge_group; the
+  # quality gate takes the full single-process sweep path, the one
+  # configuration where such cross-file state leaks reproduce.
+  # Enabling the queue itself is a one-time settings change — see
+  # docs/ci/merge-queue.md.
+  merge_group:
+    branches: [main, dev]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -144,6 +157,10 @@ jobs:
         # In that case fall back to the base-branch tip: the run is already
         # superseded, so re-widening the #977 newer-base window is harmless,
         # and the base-independent journal checks still run either way.
+        # merge_group events have an empty github.base_ref, so both expressions
+        # below fall through to their defaults: the contract base is origin/dev
+        # (correct for a dev queue, and per the carry-exact promotion rule
+        # above, correct even for a main queue).
         env:
           MIGRATION_BASE_BRANCH: ${{ github.base_ref == 'main' && 'dev' || github.base_ref || 'dev' }}
           USE_MERGE_PARENT: ${{ github.event_name == 'pull_request' && github.base_ref != 'main' }}
@@ -251,13 +268,17 @@ jobs:
           export NODE_ENV=test LOG_LEVEL=silent
           bun run test
 
-      - name: Test (pushes — full single-process sweep)
+      - name: Test (pushes and merge groups — full single-process sweep)
         # Pushes to dev/main re-prove everything with the pre-#967 sweep: no
         # cache replay on the integration branch, and the one-process run is
         # also the only configuration where cross-file state leaks (e.g.
         # globalThis.fetch pollution, issue #967 comment) reproduce. Scope to
         # omni packages + the ui app; apps/khal-ui is a decoupled sub-project
         # (private @khal-os deps) with its own test run.
+        # merge_group events (#990) take this same path deliberately: the
+        # queue's speculative merge commit is exactly the state dev would
+        # become, so sweeping it catches green-in-isolation/red-in-combination
+        # PR pairs (the #964+#965 global-fetch clash) BEFORE they land.
         if: ${{ github.event_name != 'pull_request' }}
         run: bun test packages apps/ui --env-file=.env
         env:
