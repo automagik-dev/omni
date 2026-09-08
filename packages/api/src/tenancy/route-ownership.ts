@@ -310,6 +310,18 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'matched — a configuration fact, not tenant data.',
   },
   {
+    route: 'POST /api/v2/channels/msteams/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      "Microsoft Teams (Bot Framework) callback. Auth-exempt for Microsoft's servers, which hold no omni " +
+      'credential — but unlike the token-compare callbacks, every delivery is SIGNED: the Bot Framework ' +
+      "Connector sends a JWT in the Authorization header and the plugin's CloudAdapter validates it against " +
+      "the instance's Azure Bot app credentials (issuer/audience/signature via the Bot Framework OpenID " +
+      'metadata) BEFORE any handler logic runs; invalid tokens are rejected with 401. The tenant comes from ' +
+      'the server-side instance record addressed by the path, never from a body or header claim. Responses ' +
+      'are fixed 200 acks with no row data.',
+  },
+  {
     route: 'POST /api/v2/webhooks/ingress/:source',
     class: 'public-by-contract',
     justification:

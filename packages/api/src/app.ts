@@ -278,22 +278,30 @@ export function createApp(
     return c.json({ ok: true });
   });
 
+  // Shared handler shape for the per-instance public channel webhooks below:
+  // resolve the channel's plugin from the registry and hand it the raw
+  // request. Per-channel authenticity is the PLUGIN's job (see each mount's
+  // comment) — this closure only routes.
+  const makeChannelWebhookHandler =
+    (channelId: Parameters<ChannelRegistry['get']>[0], displayName: string) =>
+    async (c: Context<{ Variables: AppVariables }>) => {
+      const channelRegistry = c.get('channelRegistry');
+
+      if (!channelRegistry) {
+        return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+      }
+
+      const plugin = channelRegistry.get(channelId);
+      if (!plugin?.handleWebhook) {
+        return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `${displayName} plugin not loaded` } }, 503);
+      }
+
+      return plugin.handleWebhook(c.req.raw);
+    };
+
   // Public Gupshup webhook endpoint — auth-exempt, verified by optional ?token= query param.
   // Must be mounted before protectedApp so Gupshup's servers (no x-api-key) can reach it.
-  app.post('/api/v2/channels/gupshup/:instanceId/webhook', async (c) => {
-    const channelRegistry = c.get('channelRegistry');
-
-    if (!channelRegistry) {
-      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
-    }
-
-    const plugin = channelRegistry.get('gupshup');
-    if (!plugin?.handleWebhook) {
-      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Gupshup plugin not loaded' } }, 503);
-    }
-
-    return plugin.handleWebhook(c.req.raw);
-  });
+  app.post('/api/v2/channels/gupshup/:instanceId/webhook', makeChannelWebhookHandler('gupshup', 'Gupshup'));
 
   // Public ASC platform Flow webhook endpoint — auth-exempt.
   // The flow's `api_rest` node calls this with no credential; the platform
@@ -301,40 +309,14 @@ export function createApp(
   // path (unguessable instance UUID, the Gupshup precedent) plus an optional
   // verify token the handler compares when configured on the instance.
   // Must be mounted before protectedApp so ASC's servers can reach it.
-  app.post('/api/v2/channels/asc-flow/:instanceId/webhook', async (c) => {
-    const channelRegistry = c.get('channelRegistry');
-
-    if (!channelRegistry) {
-      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
-    }
-
-    const plugin = channelRegistry.get('asc-flow');
-    if (!plugin?.handleWebhook) {
-      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'ASC Flow plugin not loaded' } }, 503);
-    }
-
-    return plugin.handleWebhook(c.req.raw);
-  });
+  app.post('/api/v2/channels/asc-flow/:instanceId/webhook', makeChannelWebhookHandler('asc-flow', 'ASC Flow'));
 
   // Public Hermes (Mutant WhatsApp gateway) webhook endpoint — auth-exempt.
   // Hermes has no signature mechanism: authenticity rests on the per-instance
   // path (unguessable instance UUID) plus the handler's cross-check of the
   // payload's media_id against the instance's configured hermes_media_id.
   // Must be mounted before protectedApp so Mutant's servers can reach it.
-  app.post('/api/v2/channels/hermes/:instanceId/webhook', async (c) => {
-    const channelRegistry = c.get('channelRegistry');
-
-    if (!channelRegistry) {
-      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
-    }
-
-    const plugin = channelRegistry.get('hermes');
-    if (!plugin?.handleWebhook) {
-      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Hermes plugin not loaded' } }, 503);
-    }
-
-    return plugin.handleWebhook(c.req.raw);
-  });
+  app.post('/api/v2/channels/hermes/:instanceId/webhook', makeChannelWebhookHandler('hermes', 'Hermes'));
 
   // Public ASC Brazil (ASCWhats GW) webhook endpoint — auth-exempt.
   // ASC documents no payload signature: authenticity rests on the per-instance
@@ -343,22 +325,18 @@ export function createApp(
   // - GET: Meta-style verification challenge (hub.challenge echo).
   // - POST: Meta Cloud API-format event delivery.
   // Must be mounted before protectedApp so ASC's servers can reach it.
-  const handleAscWebhook = async (c: Context<{ Variables: AppVariables }>) => {
-    const channelRegistry = c.get('channelRegistry');
-
-    if (!channelRegistry) {
-      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
-    }
-
-    const plugin = channelRegistry.get('asc');
-    if (!plugin?.handleWebhook) {
-      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'ASC plugin not loaded' } }, 503);
-    }
-
-    return plugin.handleWebhook(c.req.raw);
-  };
+  const handleAscWebhook = makeChannelWebhookHandler('asc', 'ASC');
   app.post('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
   app.get('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
+
+  // Public Microsoft Teams (Bot Framework) webhook endpoint — auth-exempt at
+  // the middleware layer because Bot Framework's servers hold no omni
+  // credential, but NOT unauthenticated: every delivery carries a Bot
+  // Framework JWT in the Authorization header, and the plugin's CloudAdapter
+  // validates it against the instance's Azure Bot app credentials before any
+  // handler logic runs (invalid tokens get a 401).
+  // Must be mounted before protectedApp so Microsoft's servers can reach it.
+  app.post('/api/v2/channels/msteams/:instanceId/webhook', makeChannelWebhookHandler('msteams', 'Microsoft Teams'));
 
   // Public WhatsApp Business API (Meta) webhook endpoint — auth-exempt, signed by Meta with HMAC-SHA256.
   // Unlike Gupshup/Twilio, the URL is GLOBAL (no :instanceId in path): instance resolution
@@ -465,20 +443,10 @@ export function createApp(
 
   // Public Twilio WhatsApp webhook endpoint - auth-exempt, verified by X-Twilio-Signature in the plugin.
   // Must be mounted before protectedApp so Twilio's servers (no x-api-key) can reach it.
-  app.post('/api/v2/channels/twilio-whatsapp/:instanceId/webhook', async (c) => {
-    const channelRegistry = c.get('channelRegistry');
-
-    if (!channelRegistry) {
-      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
-    }
-
-    const plugin = channelRegistry.get('twilio-whatsapp');
-    if (!plugin?.handleWebhook) {
-      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Twilio WhatsApp plugin not loaded' } }, 503);
-    }
-
-    return plugin.handleWebhook(c.req.raw);
-  });
+  app.post(
+    '/api/v2/channels/twilio-whatsapp/:instanceId/webhook',
+    makeChannelWebhookHandler('twilio-whatsapp', 'Twilio WhatsApp'),
+  );
 
   // Public generic webhook ingress — auth-exempt, verified EXCLUSIVELY by the
   // source's signature config (issue #928), following the channel-webhook

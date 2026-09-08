@@ -42,6 +42,7 @@ const VALID_CHANNELS: Channel[] = [
   'asc',
   'asc-flow',
   'harness',
+  'msteams',
 ];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 

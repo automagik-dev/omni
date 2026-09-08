@@ -29,6 +29,7 @@ const VALID_CHANNELS: Channel[] = [
   'asc',
   'asc-flow',
   'harness',
+  'msteams',
 ];
 
 /** Build a map of instanceId → instance name for display */

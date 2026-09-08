@@ -598,6 +598,11 @@ type InstanceConnectionOptionsInput = {
   ascFlowChave?: string | null;
   ascFlowHandoffMode?: 'flow' | 'service' | null;
   ascFlowHandoffServico?: number | null;
+  msteamsAppId?: string | null;
+  msteamsAppPassword?: string | null;
+  msteamsAppType?: string | null;
+  msteamsTenantId?: string | null;
+  msteamsAllowAnonymous?: boolean | null;
 };
 
 function applyTelegramConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
@@ -711,6 +716,40 @@ function applyHarnessConnectionOptions(
   if (metadata?.harnessProfile) options.harnessProfile = metadata.harnessProfile;
 }
 
+/**
+ * Microsoft Teams (Bot Framework) connect options.
+ *
+ * Identifiers (appId/appType/tenantId) may be persisted under
+ * `profileMetadata.msteams` (the harness/Slack profileMetadata precedent —
+ * generic jsonb, no migration); connect-body fields override them. The
+ * appPassword is a SECRET with no sealed `instances` column yet, so it is
+ * accepted at connect time only and NEVER persisted — after an API restart
+ * the operator reconnects via POST /instances/:id/connect with the secret.
+ * The plugin's `connect()` Zod-parses the resulting bag, so an incomplete
+ * credential set fails the connect loudly.
+ */
+function applyMsTeamsConnectionOptions(
+  options: Record<string, unknown>,
+  input: {
+    msteamsAppId?: string | null;
+    msteamsAppPassword?: string | null;
+    msteamsAppType?: string | null;
+    msteamsTenantId?: string | null;
+    msteamsAllowAnonymous?: boolean | null;
+    profileMetadata?: Record<string, unknown> | null;
+  },
+): void {
+  const persisted = (input.profileMetadata?.msteams ?? {}) as Record<string, unknown>;
+  const appId = input.msteamsAppId ?? persisted.appId;
+  const appType = input.msteamsAppType ?? persisted.appType;
+  const tenantId = input.msteamsTenantId ?? persisted.tenantId;
+  if (appId) options.msteamsAppId = appId;
+  if (appType) options.msteamsAppType = appType;
+  if (tenantId) options.msteamsTenantId = tenantId;
+  if (input.msteamsAppPassword) options.msteamsAppPassword = input.msteamsAppPassword;
+  if (input.msteamsAllowAnonymous != null) options.msteamsAllowAnonymous = input.msteamsAllowAnonymous;
+}
+
 function applyChannelSpecificConnectionOptions(
   options: Record<string, unknown>,
   input: InstanceConnectionOptionsInput,
@@ -742,6 +781,9 @@ function applyChannelSpecificConnectionOptions(
       return;
     case 'harness':
       applyHarnessConnectionOptions(options, input.profileMetadata);
+      return;
+    case 'msteams':
+      applyMsTeamsConnectionOptions(options, input);
       return;
   }
 }
@@ -1447,6 +1489,20 @@ const connectInstanceSchema = z.object({
       "Handoff destination: 'flow' (default, poll body → Genesys node) or 'service' (/transferirHumano → ASC queue)",
     ),
   ascFlowHandoffServico: z.number().int().optional().describe('cod_servico handed to /transferirHumano (service mode)'),
+  msteamsAppId: z.string().optional().describe('Azure Bot Entra application (client) id'),
+  msteamsAppPassword: z.string().optional().describe('Azure Bot client secret — connect-time only, never persisted'),
+  msteamsAppType: z
+    .enum(['MultiTenant', 'SingleTenant', 'UserAssignedMsi'])
+    .optional()
+    .describe('Azure Bot registration type (default MultiTenant)'),
+  msteamsTenantId: z.string().optional().describe('Entra tenant id (required for SingleTenant bots)'),
+  msteamsAllowAnonymous: z
+    .boolean()
+    .optional()
+    .describe(
+      'LOCAL DEV ONLY: run the adapter with empty credentials so the Bot Framework Emulator / Teams App Test Tool ' +
+        '(which send no JWT) can reach the webhook. Never enable on an internet-reachable instance.',
+    ),
   whatsapp: z
     .object({
       syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
@@ -1524,6 +1580,13 @@ function buildConnectConnectionOptions(
     metaDisplayPhoneNumber: instance.metaDisplayPhoneNumber,
     metaConnectionMethod: instance.metaConnectionMethod,
     ...mergeAscFlowFields(instance, body),
+    // msteams: identifiers fall back to profileMetadata.msteams inside the
+    // apply function; the appPassword only ever exists on the connect body.
+    msteamsAppId: body.msteamsAppId,
+    msteamsAppPassword: body.msteamsAppPassword,
+    msteamsAppType: body.msteamsAppType,
+    msteamsTenantId: body.msteamsTenantId,
+    msteamsAllowAnonymous: body.msteamsAllowAnonymous,
   });
 }
 
@@ -1714,6 +1777,24 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
   }
 
+  // Channels declaring requiresConnectTimeCredentials (msteams: the Azure Bot
+  // appPassword is never persisted) make restart destructive-by-construction:
+  // disconnect would drop the live in-memory state and the rebuild connect can
+  // only fail. Reject BEFORE any damage (#894 "restart bricks the instance"
+  // precedent) — the non-destructive path is POST /instances/:id/connect with
+  // the credentials, which rebuilds the connection in place.
+  if (plugin.capabilities?.requiresConnectTimeCredentials) {
+    return c.json(
+      {
+        error: {
+          code: 'RESTART_UNSUPPORTED',
+          message: `${instance.channel} instances cannot be restarted: their credentials are never persisted, so a restart would drop the live connection state with nothing to rebuild from. Use POST /instances/:id/connect with the channel credentials to re-credential the running instance instead.`,
+        },
+      },
+      400,
+    );
+  }
+
   // omni#906: operators expect restart to re-read config, but disconnect/connect
   // only recycles the channel connection — the dispatcher's cached agent
   // provider lives independently of the channel lifecycle, so evict it here.
@@ -1767,6 +1848,8 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     if (instance.channel === 'harness') {
       applyHarnessConnectionOptions(restartOptions, instance.profileMetadata);
     }
+    // (No msteams branch: msteams restarts are rejected before the disconnect
+    // above — the appPassword is never persisted, so a restart cannot rebuild.)
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
       restartOptions.whatsapp = {

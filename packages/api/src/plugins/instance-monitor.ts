@@ -153,6 +153,22 @@ function wasAuthenticated(instance: InstanceInfo): boolean {
   return !!instance.ownerIdentifier;
 }
 
+/**
+ * Whether the monitor can rebuild this channel's connection on its own.
+ * Channels declaring `requiresConnectTimeCredentials` (msteams: the Azure Bot
+ * appPassword is accepted at connect time only, never persisted) cannot be
+ * auto-reconnected — retrying would just burn the backoff budget and
+ * deactivate the instance, so they are skipped and the operator
+ * re-credentials via POST /instances/:id/connect. The posture is the
+ * PLUGIN's declaration (ChannelCapabilities), not a hardcoded channel list.
+ * An unloaded plugin resolves to reconnectable — the normal reconnect path
+ * already reports "No plugin for channel" loudly for that case.
+ */
+function isAutoReconnectable(registry: ChannelRegistry, channel: string): boolean {
+  const plugin = registry.get(channel as Parameters<ChannelRegistry['get']>[0]);
+  return !plugin?.capabilities?.requiresConnectTimeCredentials;
+}
+
 /** Extract Slack-specific config from profileMetadata into connection options */
 function applySlackMetadata(
   options: Record<string, unknown>,
@@ -694,6 +710,20 @@ export class InstanceMonitor {
       message,
     });
 
+    if (!isAutoReconnectable(this.registry, instance.channel)) {
+      // Recurring at WARN deliberately: this is the one shape where the
+      // condition can only be cleared by an operator (the credentials are
+      // not at rest), so the signal must not be quieter than the ordinary
+      // auto-recovering case.
+      logger.warn('Auto-reconnect skipped — channel credentials are not persisted; re-credential the instance', {
+        instanceId: instance.id,
+        name: instance.name,
+        channel: instance.channel,
+        remediation: 'POST /instances/:id/connect with the channel credentials',
+      });
+      return;
+    }
+
     if (this.config.autoReconnect) {
       this.scheduleReconnect(instance.id, instance.channel, message);
     }
@@ -703,6 +733,7 @@ export class InstanceMonitor {
    * Handle a health check error
    */
   private handleHealthCheckError(instance: InstanceInfo, error: string): void {
+    if (!isAutoReconnectable(this.registry, instance.channel)) return;
     if (this.config.autoReconnect && wasAuthenticated(instance)) {
       this.scheduleReconnect(instance.id, instance.channel, error);
     }
@@ -966,9 +997,11 @@ export async function reconnectWithPool(
     return rows as Array<{ id: string; name: string; channel: string; tenantId: string | null }>;
   };
 
-  // LEGACY WORLD: one ambient scan, then the pre-G5 batching. Unchanged.
+  // LEGACY WORLD: one ambient scan, then the pre-G5 batching. Unchanged
+  // (except that channels with no at-rest credentials are excluded — their
+  // startup connect can only fail; see isAutoReconnectable).
   if (!authPlaneDb) {
-    const activeInstances = await loadActive();
+    const activeInstances = (await loadActive()).filter((i) => isAutoReconnectable(registry, i.channel));
     results.attempted = activeInstances.length;
     logger.info('Starting pooled reconnection', {
       instanceCount: activeInstances.length,
@@ -995,6 +1028,7 @@ export async function reconnectWithPool(
   await runForEachActiveTenantRow(
     { db, authPlaneDb, jobName: 'startup-reconnect', listActive: loadActive, env },
     async (instance) => {
+      if (!isAutoReconnectable(registry, instance.channel)) return;
       pending.push(instance);
     },
   );
