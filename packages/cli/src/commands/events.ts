@@ -724,11 +724,232 @@ export async function waitForEvent(client: OmniClient, params: WaitParams): Prom
   }
 }
 
+// ============================================================================
+// DURABLE CONSUMERS (issue #989, RFC #925 G7)
+// ============================================================================
+
+/** A durable consumer as the API returns it (registration + live lag). */
+interface ConsumerData {
+  id: string;
+  name: string;
+  eventType: string;
+  filters: AutomationCondition[] | null;
+  cursor: number;
+  head: number;
+  lag: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One `pull` page: matching rows + the scanned-cursor to ack. */
+interface ConsumerPullPage {
+  consumer: string;
+  items: WaitEventRow[];
+  cursor: number;
+  head: number;
+  hasMore: boolean;
+}
+
+/**
+ * Raw CLI→API call for the consumer endpoints — the generated SDK does not
+ * cover them yet (`schemaApiRequest` precedent; the CLI only ever talks to
+ * the API, never the database).
+ */
+export async function consumersApiRequest<T>(path: string, init: { method?: string; body?: string } = {}): Promise<T> {
+  const config = loadConfig();
+  const baseUrl = config.apiUrl ?? 'http://localhost:8882';
+
+  const resp = await fetch(`${baseUrl}/api/v2/events/consumers${path}`, {
+    method: init.method ?? 'GET',
+    body: init.body,
+    headers: { 'content-type': 'application/json', 'x-api-key': config.apiKey ?? '' },
+  });
+
+  if (!resp.ok) {
+    throw new Error(`API returned ${resp.status}: ${await resp.text()}`);
+  }
+
+  return (await resp.json()) as T;
+}
+
+export function summarizeConsumerRow(row: ConsumerData): Record<string, unknown> {
+  return {
+    name: row.name,
+    eventType: row.eventType,
+    filters: row.filters?.length
+      ? row.filters.map((f) => `${f.field} ${f.operator} ${JSON.stringify(f.value)}`).join(' AND ')
+      : '-',
+    cursor: row.cursor,
+    lag: row.lag,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export interface FollowParams {
+  consumer: string;
+  /** Max rows scanned per pull page. */
+  limit: number;
+  /** Server-side long-poll window per pull when the journal is idle. */
+  waitMs: number;
+  /** Advance the cursor as pages are printed (default). false = peek one page, exit. */
+  ack: boolean;
+  /** Exit 0 once caught up (no new rows scanned) instead of tailing forever. */
+  untilIdle: boolean;
+  /** External stop signal (SIGINT). */
+  isStopped?: () => boolean;
+  /** Line sink — defaults to output.raw (stdout). Injected by tests. */
+  emit?: (line: string) => void;
+}
+
+/**
+ * The `omni events follow` loop: pull a page from the stored cursor, print
+ * each event as a JSON line, ack the SCANNED cursor (so filtered-out rows are
+ * skipped too), repeat. Resumes exactly-after-cursor across restarts because
+ * progress lives server-side.
+ *
+ * With `ack: false` the stored cursor never moves, so a loop would replay the
+ * same page forever — peek mode prints ONE page and returns.
+ */
+export async function followConsumer(params: FollowParams): Promise<void> {
+  const emit = params.emit ?? output.raw;
+  // Locally tracked last-acked cursor: -1 = "unknown" (before the first pull).
+  let acked = -1;
+  for (;;) {
+    if (params.isStopped?.()) return;
+
+    const page = await consumersApiRequest<ConsumerPullPage>(
+      `/${encodeURIComponent(params.consumer)}/pull?limit=${params.limit}&waitMs=${params.waitMs}`,
+      { method: 'POST' },
+    );
+
+    for (const item of page.items) {
+      emit(JSON.stringify(item));
+    }
+
+    if (!params.ack) {
+      await output.flushStdout();
+      return; // peek mode: one page, cursor untouched
+    }
+
+    if (page.cursor > acked) {
+      // Ack the SCANNED cursor: it also skips rows the payload conditions
+      // rejected, so a sparse filter never re-scans. An ack equal to the
+      // stored cursor is an idempotent no-op server-side (first iteration).
+      await consumersApiRequest(`/${encodeURIComponent(params.consumer)}/ack`, {
+        method: 'POST',
+        body: JSON.stringify({ cursor: page.cursor }),
+      });
+    }
+
+    // Progress = anything printed, a full page (more waiting), or a cursor
+    // bump past filtered-out rows. `acked >= 0` excludes the first
+    // iteration's baseline, which is a position, not progress.
+    const progressed = page.items.length > 0 || page.hasMore || (acked >= 0 && page.cursor > acked);
+    acked = Math.max(acked, page.cursor);
+
+    if (params.untilIdle && !progressed && !page.hasMore) {
+      await output.flushStdout();
+      return;
+    }
+    // Idle pacing floor: the server long-poll (waitMs) is the primary pause,
+    // but a short window must not turn an idle tail into a tight loop.
+    if (!progressed && params.waitMs < 1000) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+}
+
+function createConsumersCommand(): Command {
+  const consumers = new Command('consumers').description(
+    'Manage durable event consumers (named cursors over the event journal)',
+  );
+
+  consumers
+    .command('create <name>')
+    .description('Register a durable consumer')
+    .requiredOption('--type <type>', 'Event type filter (trailing * = prefix glob, e.g. custom.github.*)')
+    .option(
+      '--filter <k=v>',
+      'Payload condition, repeatable (dot paths + JSON values — same matcher as events wait)',
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .option('--from-beginning', 'Start the cursor at 0 (replay the full journal) instead of the current head')
+    .action(async (name: string, options: { type: string; filter: string[]; fromBeginning?: boolean }) => {
+      try {
+        const filters = parseWaitFilters(WaitOptionsSchema.shape.filter.parse(options.filter));
+        const result = await consumersApiRequest<{ data: ConsumerData }>('', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            eventType: options.type,
+            filters: filters.length ? filters : undefined,
+            startFrom: options.fromBeginning ? 'beginning' : undefined,
+          }),
+        });
+        output.success(`Consumer registered: ${result.data.name} (cursor ${result.data.cursor})`, {
+          name: result.data.name,
+          eventType: result.data.eventType,
+          cursor: result.data.cursor,
+          lag: result.data.lag,
+        });
+      } catch (err) {
+        output.error(`Failed to create consumer: ${errorMessage(err)}`);
+      }
+    });
+
+  consumers
+    .command('ls')
+    .description('List durable consumers with their cursor and lag')
+    .action(async () => {
+      try {
+        const result = await consumersApiRequest<{ items: ConsumerData[] }>('');
+        output.list(result.items.map(summarizeConsumerRow), { emptyMessage: 'No durable consumers registered.' });
+      } catch (err) {
+        output.error(`Failed to list consumers: ${errorMessage(err)}`);
+      }
+    });
+
+  consumers
+    .command('inspect <name>')
+    .description('Show one consumer: filter, cursor, journal head, lag')
+    .action(async (name: string) => {
+      try {
+        const result = await consumersApiRequest<{ data: ConsumerData }>(`/${encodeURIComponent(name)}`);
+        output.data(result.data);
+      } catch (err) {
+        output.error(`Failed to inspect consumer: ${errorMessage(err)}`);
+      }
+    });
+
+  consumers
+    .command('rm <name>')
+    .description('Delete a consumer registration (the journal itself is untouched)')
+    .action(async (name: string) => {
+      try {
+        await consumersApiRequest(`/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        output.success(`Consumer removed: ${name}`);
+      } catch (err) {
+        output.error(`Failed to remove consumer: ${errorMessage(err)}`);
+      }
+    });
+
+  return consumers;
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof z.ZodError) return err.issues.map((i) => i.message).join('; ');
+  return err instanceof Error ? err.message : 'Unknown error';
+}
+
 export function createEventsCommand(): Command {
   const events = new Command('events').description('Query events');
 
   // omni events schema register|list|get (issue #959)
   events.addCommand(createSchemaCommand());
+
+  // omni events consumers create|ls|inspect|rm (issue #989)
+  events.addCommand(createConsumersCommand());
 
   // omni events list
   events
@@ -898,6 +1119,48 @@ export function createEventsCommand(): Command {
         }
       },
     );
+
+  // omni events follow (issue #989) — durable tail: resume from the consumer's cursor
+  events
+    .command('follow')
+    .description(
+      'Tail the journal through a durable consumer: resumes from its stored cursor, prints JSON lines, acks as it goes.',
+    )
+    .requiredOption('--consumer <name>', 'Durable consumer to follow (create with: omni events consumers create)')
+    .option('--limit <n>', 'Max journal rows scanned per pull', (v) => Number.parseInt(v, 10), 100)
+    .option(
+      '--wait-ms <n>',
+      'Server-side long-poll window per pull when idle (max 30000)',
+      (v) => Number.parseInt(v, 10),
+      10000,
+    )
+    .option('--no-ack', 'Peek: print one page without advancing the cursor, then exit')
+    .option('--until-idle', 'Exit 0 once caught up with the journal instead of tailing forever')
+    .action(async (options: { consumer: string; limit: number; waitMs: number; ack: boolean; untilIdle?: boolean }) => {
+      let stopped = false;
+      const shutdown = (): void => {
+        stopped = true;
+      };
+      const processEvents: EventEmitter = process;
+      processEvents.on('SIGINT', shutdown);
+      processEvents.on('SIGTERM', shutdown);
+      try {
+        await followConsumer({
+          consumer: options.consumer,
+          limit: Math.min(Math.max(options.limit, 1), 500),
+          waitMs: Math.min(Math.max(options.waitMs, 0), 30000),
+          ack: options.ack,
+          untilIdle: options.untilIdle === true,
+          isStopped: () => stopped,
+        });
+      } catch (err) {
+        output.error(`Failed to follow consumer: ${errorMessage(err)}`);
+      } finally {
+        processEvents.off('SIGINT', shutdown);
+        processEvents.off('SIGTERM', shutdown);
+        await output.flushStdout();
+      }
+    });
 
   // omni events get <id>
   events
