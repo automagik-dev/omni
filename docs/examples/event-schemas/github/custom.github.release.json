@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "custom.github.release",
+  "description": "GitHub release webhook delivery (X-GitHub-Event: release). Minimal-but-real contract: the fields consumers rely on are required; everything else GitHub sends passes through (additionalProperties: true). Evolution rule: revisions must be additive-optional (issue #959).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["action", "release", "repository", "sender"],
+  "properties": {
+    "action": {
+      "type": "string",
+      "description": "What happened: published, created, edited, released, ..."
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["tag_name"],
+      "properties": {
+        "tag_name": { "type": "string", "description": "Git tag of the release, e.g. v2.260907.4" },
+        "name": { "type": "string" },
+        "draft": { "type": "boolean" },
+        "prerelease": { "type": "boolean" },
+        "html_url": { "type": "string" }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["full_name"],
+      "properties": {
+        "full_name": {
+          "type": "string",
+          "description": "owner/repo, e.g. automagik-dev/omni"
+        }
+      }
+    },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["login"],
+      "properties": {
+        "login": {
+          "type": "string",
+          "description": "GitHub username that triggered the delivery"
+        }
+      }
+    }
+  }
+}
