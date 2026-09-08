@@ -176,7 +176,9 @@ export class DeadLetterService {
   /**
    * Dead-letter a payload refused by a schema-registry validation gate
    * (issue #959). The refused event never entered the journal — this row IS
-   * its only record, with `error` starting with `schema_validation_failed`.
+   * its only record, with `error` starting with `schema_validation_failed`
+   * (or, for a strict gate refusing an unregistered type — issue #1000 — the
+   * caller-supplied `schema_not_registered`).
    *
    * `nextAutoRetryAt` stays null: retrying an unchanged invalid payload can
    * never succeed, so these rows are manual-intervention only.
@@ -187,6 +189,8 @@ export class DeadLetterService {
     subject: string;
     payload: Record<string, unknown>;
     errors: string[];
+    /** DLQ reason token prefixing `error`; defaults to `schema_validation_failed`. */
+    reason?: string;
   }): Promise<DeadLetterEntry> {
     const [result] = await this.db
       .insert(deadLetterEvents)
@@ -195,7 +199,7 @@ export class DeadLetterService {
         eventType: input.eventType,
         subject: input.subject,
         payload: input.payload,
-        error: `${SCHEMA_VALIDATION_FAILED}: ${input.errors.join('; ')}`,
+        error: `${input.reason ?? SCHEMA_VALIDATION_FAILED}: ${input.errors.join('; ')}`,
         stack: null,
         autoRetryCount: 0,
         nextAutoRetryAt: null,

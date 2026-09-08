@@ -7,6 +7,7 @@ import {
   ERROR_CODES,
   NotFoundError,
   OmniError,
+  SCHEMA_NOT_REGISTERED,
   SCHEMA_VALIDATION_FAILED,
   ValidationError,
   createLogger,
@@ -369,8 +370,16 @@ export class WebhookService {
     // Schema-registry gate (issue #959): a registered type's payload must
     // satisfy its schema BEFORE anything is published or counted. An invalid
     // payload is dead-lettered with reason `schema_validation_failed` and
-    // never enters the journal; unregistered types pass through (opt-in).
-    await this.enforceRegisteredSchema(eventType, eventPayload, eventId, `webhook '${sourceName}'`);
+    // never enters the journal; unregistered types pass through (opt-in) —
+    // unless the source enforces strict schemas (issue #1000), in which case
+    // an unregistered type is refused with reason `schema_not_registered`.
+    await this.enforceRegisteredSchema(
+      eventType,
+      eventPayload,
+      eventId,
+      `webhook '${sourceName}'`,
+      source.strictSchemas,
+    );
 
     // Ingress idempotency (#958): derive the delivery-identity key from the
     // source's template and CLAIM it by inserting the journal row — the
@@ -529,17 +538,43 @@ export class WebhookService {
    * invalid payload is dead-lettered (reason `schema_validation_failed`,
    * manual-retry only) and the ingress request fails with a 400 — nothing
    * enters the journal.
+   *
+   * `strict` is the per-source policy switch (issue #1000, RFC #925 G1 tail):
+   * when set, an event type with NO enabled registered schema is refused the
+   * same way — dead-lettered with the distinct reason `schema_not_registered`
+   * (manual-retry only) and a 400 to the emitter — instead of passing through.
    */
   private async enforceRegisteredSchema(
     eventType: CustomEventType,
     payload: Record<string, unknown>,
     eventId: string,
     origin: string,
+    strict = false,
   ): Promise<void> {
     if (!this.eventSchemas) {
       return;
     }
     const verdict = await this.eventSchemas.validate(eventType, payload);
+
+    if (strict && !verdict.registered) {
+      const errors = [`no enabled schema is registered for event type '${eventType}'`];
+      await this.deadLetters?.createSchemaValidationFailure({
+        eventId,
+        eventType,
+        subject: eventType,
+        payload,
+        errors,
+        reason: SCHEMA_NOT_REGISTERED,
+      });
+
+      log.warn('Webhook refused by strict schema mode: type not registered', { eventType, origin });
+      throw new ValidationError(
+        `${SCHEMA_NOT_REGISTERED}: '${eventType}' has no enabled registered schema and the source enforces strict schemas (${origin})`,
+        undefined,
+        { eventType, errors },
+      );
+    }
+
     if (verdict.valid) {
       return;
     }

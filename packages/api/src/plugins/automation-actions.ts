@@ -34,7 +34,7 @@
  */
 
 import type { AgentCallContext, AgentRunResult, CallAgentActionConfig } from '@omni/core';
-import { createLogger, generateId } from '@omni/core';
+import { SCHEMA_NOT_REGISTERED, createLogger, generateId } from '@omni/core';
 import type { Database, EventType } from '@omni/db';
 import { agents, omniEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
@@ -321,19 +321,34 @@ export function buildAutomationEngineDeps(
     },
 
     // Schema-registry gate for emit_event (issue #959). The engine calls this
-    // BEFORE publish; an unregistered type reports valid (opt-in per type).
-    // An invalid payload is dead-lettered here (reason
-    // `schema_validation_failed`, manual-retry only — the refused event's only
-    // record) and the action then fails without publishing. Each DB block runs
-    // through `runTenantWorkDb` like every other callback: scoped in the
-    // tenant world, ambient passthrough in legacy.
+    // BEFORE publish; an unregistered type reports valid (opt-in per type) —
+    // unless `OMNI_STRICT_EMIT_EVENT_SCHEMAS=true` (issue #1000, the RFC #925
+    // G1 policy switch for internal emitters; default off), in which case an
+    // unregistered type is refused with the distinct reason
+    // `schema_not_registered`. An invalid payload is dead-lettered here
+    // (reason `schema_validation_failed`, manual-retry only — the refused
+    // event's only record) and the action then fails without publishing. Each
+    // DB block runs through `runTenantWorkDb` like every other callback:
+    // scoped in the tenant world, ambient passthrough in legacy.
     validateEmitEvent: async (eventType, payload, trustedTenantId = null) => {
       const verdict = await runTenantWorkDb(db, trustedTenantId, () =>
         services.eventSchemas.validate(eventType, payload),
       );
-      if (verdict.valid) {
+
+      // Read at call time (not module load) so operators can flip the policy
+      // with a process restart and tests can toggle it per case.
+      const strictEmit = process.env.OMNI_STRICT_EMIT_EVENT_SCHEMAS === 'true';
+      const refusedUnregistered = strictEmit && !verdict.registered;
+
+      if (verdict.valid && !refusedUnregistered) {
         return { valid: true };
       }
+
+      const errors = refusedUnregistered
+        ? [`no enabled schema is registered for event type '${eventType}'`]
+        : verdict.errors;
+      const reason = refusedUnregistered ? SCHEMA_NOT_REGISTERED : undefined;
+
       try {
         await runTenantWorkDb(db, trustedTenantId, () =>
           services.deadLetters.createSchemaValidationFailure({
@@ -341,7 +356,8 @@ export function buildAutomationEngineDeps(
             eventType,
             subject: eventType,
             payload,
-            errors: verdict.errors,
+            errors,
+            reason,
           }),
         );
       } catch (error) {
@@ -350,7 +366,7 @@ export function buildAutomationEngineDeps(
           error: error instanceof Error ? error.message : String(error),
         });
       }
-      return { valid: false, errors: verdict.errors };
+      return { valid: false, errors, reason };
     },
   };
 }
