@@ -761,6 +761,13 @@ export interface CreateWebhookSourceBody {
    * not semantic identity.
    */
   idempotencyKeyTemplate?: string;
+  /**
+   * Strict schema mode (issue #1000, RFC #925 G1 policy switch): when true, a
+   * delivery resolving to an event type with no enabled registered schema is
+   * refused and dead-lettered with reason `schema_not_registered` instead of
+   * passing through. Defaults to false server-side (opt-in pass-through).
+   */
+  strictSchemas?: boolean;
   /** Defaults to true server-side */
   enabled?: boolean;
   /**

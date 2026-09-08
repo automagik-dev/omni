@@ -80,6 +80,11 @@ export const WebhookSourceSchema = z.object({
     .openapi({ description: 'Whether a signature secret is stored (secret is write-only)' }),
   idempotencyKeyTemplate: z.string().openapi({ description: 'Idempotency key derivation template' }),
   totalDuplicates: z.number().int().openapi({ description: 'Redeliveries acked without creating a second event' }),
+  strictSchemas: z.boolean().openapi({
+    description:
+      'Strict schema mode: deliveries resolving to an event type with no enabled registered schema are ' +
+      'refused and dead-lettered with reason schema_not_registered',
+  }),
   enabled: z.boolean().openapi({ description: 'Whether enabled' }),
   lastReceivedAt: z.string().datetime().nullable().openapi({ description: 'When the last webhook was received' }),
   totalReceived: z.number().int().openapi({ description: 'Total webhooks received' }),
@@ -134,6 +139,16 @@ export const CreateWebhookSourceSchema = z.object({
         'without a signatureConfig (given in the same request, or already stored on update); null clears it.',
     }),
   idempotencyKeyTemplate: IdempotencyKeyTemplateSchema.optional(),
+  strictSchemas: z
+    .boolean()
+    .optional()
+    .openapi({
+      description:
+        'Strict schema mode (RFC #925 G1 policy switch): when true, a delivery resolving to an event type ' +
+        'with no enabled registered schema is refused and dead-lettered with reason schema_not_registered ' +
+        '(manual retry only) instead of passing through. Defaults to false (opt-in pass-through). ' +
+        'Recommended true for NEW sources — they have no legacy emitters to grandfather.',
+    }),
   eventTypeMapping: WebhookEventTypeMappingSchema.nullable()
     .optional()
     .openapi({
