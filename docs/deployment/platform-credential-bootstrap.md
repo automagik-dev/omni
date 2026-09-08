@@ -74,11 +74,20 @@ untouched.
 
 ## After bootstrapping
 
-Use the platform credential against the platform control plane (for example
-`POST /api/v2/platform/tenants` with an `x-platform-reason` header) to create
+Use the platform credential against the platform control plane to create
 tenants, attach memberships, and issue tenant root keys — the delegation chain
-the enforcement world expects. Day-to-day work should use tenant-scoped keys
-delegated from this credential, not the platform credential itself.
+the enforcement world expects. The control plane is only mounted when
+`OMNI_MULTITENANCY_ENABLED=true`; without it every `/api/v2/platform/**`
+request returns 404.
+
+The `omni tenants` command group wraps the whole surface (`tenants create`,
+`tenants memberships add`, `tenants keys issue-root`, …); every command takes
+an audited `--reason`. On the raw API, mutations carry a `reason` in the JSON
+body (for example `POST /api/v2/platform/tenants`), while the audited read
+endpoints take an `x-platform-reason` header instead.
+
+Day-to-day work should use tenant-scoped keys delegated from this credential,
+not the platform credential itself.
 
 ## Exit codes
 
