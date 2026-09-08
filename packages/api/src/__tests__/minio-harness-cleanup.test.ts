@@ -51,6 +51,8 @@ interface FakePsRow {
   id: string;
   session: string;
   createdAt: string;
+  /** Docker container state; defaults to 'running'. */
+  state?: 'created' | 'exited' | 'running';
 }
 
 class FakeDocker {
@@ -91,7 +93,7 @@ class FakeDocker {
     if (operation === 'pull') return { exitCode: 0, stdout: '', stderr: '' };
     if (operation === 'run') return this.handleRun();
     if (operation === 'inspect') return this.handleInspect(command);
-    if (operation === 'ps') return this.handlePs();
+    if (operation === 'ps') return this.handlePs(command);
     if (operation === 'rm') return this.handleRm(command.at(-1)!);
     if (operation === 'logs') return { exitCode: 0, stdout: 'fake MinIO log\n', stderr: '' };
     if (operation === 'stop') return this.handleStop(command.at(-1)!);
@@ -115,9 +117,15 @@ class FakeDocker {
       : { exitCode: 1, stdout: '', stderr: 'no such container' };
   }
 
-  private handlePs(): { exitCode: number; stdout: string; stderr: string } {
+  private handlePs(command: string[]): { exitCode: number; stdout: string; stderr: string } {
     if (this.psFails) return { exitCode: 1, stdout: '', stderr: 'fake docker ps failure' };
-    const rows = this.psRows.map((row) => `${row.id}\t${row.session}`).join('\n');
+    // Real `docker ps` hides non-running containers unless `-a` is passed —
+    // the exact blindness that made Created-state leaks permanent (#999), so
+    // the fake must model it for the reaper tests to prove anything.
+    const visible = command.includes('-a')
+      ? this.psRows
+      : this.psRows.filter((row) => (row.state ?? 'running') === 'running');
+    const rows = visible.map((row) => `${row.id}\t${row.session}`).join('\n');
     return { exitCode: 0, stdout: rows ? `${rows}\n` : '', stderr: '' };
   }
 
@@ -170,6 +178,7 @@ function setup(
   events: string[];
   setReady(ready: boolean): void;
   getSharedMinio: ReturnType<typeof createSharedMinioHarness>['getSharedMinio'];
+  releaseSharedMinio: ReturnType<typeof createSharedMinioHarness>['releaseSharedMinio'];
 } {
   let clock = options.initialClockMs ?? 0;
   let ready = options.ready ?? true;
@@ -213,6 +222,7 @@ function setup(
       ready = value;
     },
     getSharedMinio: harness.getSharedMinio,
+    releaseSharedMinio: harness.releaseSharedMinio,
   };
 }
 
@@ -262,6 +272,36 @@ describe('shared MinIO harness cleanup', () => {
       expect(ps).toContain('label=com.automagik.omni.test-harness=minio');
     }
     expect(fake.docker.operations('rm')).toHaveLength(0);
+  });
+
+  test('bun:test lifecycle teardown stops the tracked container when process exit never fires, and the next suite file restarts on demand', async () => {
+    const fake = setup(['container-file-one', 'container-file-two']);
+
+    await fake.getSharedMinio();
+    // Simulate the per-file afterAll — the ONLY teardown a normal green
+    // `bun test` run ever fires, since bun never emits process 'exit' there
+    // (#999). Note: no exit or signal event is emitted in this test.
+    fake.releaseSharedMinio();
+
+    expect(fake.docker.operations('stop')).toEqual([['docker', 'stop', '--time', '10', 'container-file-one']]);
+
+    // A later MinIO suite file in the same process must get a FRESH container,
+    // not a cached handle to the stopped one.
+    await expect(fake.getSharedMinio()).resolves.toMatchObject({ endpoint: 'http://127.0.0.1:30000' });
+    expect(fake.docker.operations('run')).toHaveLength(2);
+    // The image pull verdict is remembered across the per-file restart.
+    expect(fake.docker.operations('pull')).toHaveLength(1);
+
+    // That file's own afterAll stops the second container; further firings and
+    // a plain-bun process 'exit' are no-ops — nothing is tracked any more.
+    fake.releaseSharedMinio();
+    fake.releaseSharedMinio();
+    fake.process.emit('exit');
+
+    expect(fake.docker.operations('stop')).toEqual([
+      ['docker', 'stop', '--time', '10', 'container-file-one'],
+      ['docker', 'stop', '--time', '10', 'container-file-two'],
+    ]);
   });
 
   test('registers handlers before launch and closes a SIGTERM race around the blocking run command', async () => {
@@ -657,6 +697,37 @@ describe('stale MinIO container reaper', () => {
       .filter((command) => command[3]?.includes('.Created'))
       .map((command) => command.at(-1));
     expect(inspectedIds).toEqual(['leaked-old', 'fresh-foreign']);
+    expect(fake.cleanupFailures).toEqual([]);
+  });
+
+  test('lists with -a and reaps an old foreign-session Created container that plain docker ps never shows', async () => {
+    const fake = setup(['container-normal'], {
+      initialClockMs: STALE_CLOCK,
+      psRows: [
+        { id: 'leaked-created', session: 'session-dead', createdAt: EPOCH, state: 'created' },
+        { id: 'fresh-created-foreign', session: 'session-live', createdAt: THIRTY_MIN, state: 'created' },
+        { id: 'own-created', session: 'session-123', createdAt: EPOCH, state: 'created' },
+      ],
+    });
+
+    await fake.getSharedMinio();
+
+    // The exact listing shape matters: without `-a` every one of these
+    // Created-state rows would be invisible and the leak permanent (#999).
+    expect(fake.docker.operations('ps')).toEqual([
+      [
+        'docker',
+        'ps',
+        '-a',
+        '--filter',
+        'label=com.automagik.omni.test-harness=minio',
+        '--format',
+        '{{.ID}}\t{{.Label "com.automagik.omni.test-session"}}',
+      ],
+    ]);
+    // Same guards as for running containers: only the old foreign-session
+    // leak goes; the young foreign one and this session's own are untouched.
+    expect(fake.docker.operations('rm')).toEqual([['docker', 'rm', '-f', 'leaked-created']]);
     expect(fake.cleanupFailures).toEqual([]);
   });
 
