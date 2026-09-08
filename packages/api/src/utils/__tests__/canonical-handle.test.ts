@@ -50,8 +50,8 @@ describe('canonicalizeHandle — Twilio / Gupshup / Hermes phone extraction', ()
     expect(twilio.phone).toBe('+5511999990000');
   });
 
-  test('Gupshup / Hermes bare wa_id digits yield a phone and the canonical JID', () => {
-    for (const channel of ['gupshup', 'hermes'] as const) {
+  test('Gupshup / Hermes / ASC bare wa_id digits yield a phone and the canonical JID', () => {
+    for (const channel of ['gupshup', 'hermes', 'asc'] as const) {
       const c = canonicalizeHandle(channel, '5511999990000');
       expect(c.platformUserId).toBe('5511999990000@s.whatsapp.net');
       expect(c.phone).toBe('+5511999990000');
@@ -113,7 +113,14 @@ describe('canonicalizeHandle — non-WhatsApp channels are untouched', () => {
 
 describe('channel classification helpers', () => {
   test('isWhatsAppFamily covers every WhatsApp transport', () => {
-    for (const channel of ['whatsapp-baileys', 'whatsapp-business', 'twilio-whatsapp', 'gupshup', 'hermes'] as const) {
+    for (const channel of [
+      'whatsapp-baileys',
+      'whatsapp-business',
+      'twilio-whatsapp',
+      'gupshup',
+      'hermes',
+      'asc',
+    ] as const) {
       expect(isWhatsAppFamily(channel)).toBe(true);
     }
     expect(isWhatsAppFamily('discord')).toBe(false);

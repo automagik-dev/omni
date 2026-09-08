@@ -39,6 +39,7 @@ const VALID_CHANNELS: Channel[] = [
   'gupshup',
   'twilio-whatsapp',
   'hermes',
+  'asc',
   'asc-flow',
   'harness',
 ];

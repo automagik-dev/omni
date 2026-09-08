@@ -44,6 +44,7 @@ const WHATSAPP_FAMILY_CHANNELS: ReadonlySet<ChannelType> = new Set<ChannelType>(
   'twilio-whatsapp',
   'gupshup',
   'hermes',
+  'asc',
 ]);
 
 /**
