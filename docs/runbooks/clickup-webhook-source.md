@@ -105,8 +105,7 @@ Field by field:
 | `eventTypeMapping` | Reads the body's `event` field and emits `custom.clickup.{event}` after token normalization (lowercase): `taskStatusUpdated` → `custom.clickup.taskstatusupdated`, `taskCreated` → `custom.clickup.taskcreated`, `taskUpdated` → `custom.clickup.taskupdated`, `taskDeleted` → `custom.clickup.taskdeleted`. Deliveries without a usable `event` field fall back to `custom.webhook.clickup`. |
 | `expectedIntervalSeconds` | Declared liveness cadence (#961): "≥1 event **or heartbeat** per 24 h". See step 5. |
 
-CLI alternative (everything except `eventTypeMapping`, which has no CLI flag
-yet — add it with the `PATCH` below):
+CLI alternative:
 
 ```bash
 omni webhooks create --name clickup \
@@ -115,8 +114,16 @@ omni webhooks create --name clickup \
   --signature-header X-Signature \
   --signature-secret-env CLICKUP_WEBHOOK_SECRET \
   --idempotency-key-template 'clickup:{payload.history_items.0.id}' \
+  --event-type-mapping '{"source":"body","path":"event"}' \
   --expected-interval 86400
+```
 
+The flag also takes `@path/to/mapping.json`, and `omni webhooks update <id>
+--event-type-mapping ...` retrofits an existing source
+(`--clear-event-type-mapping` removes the mapping). Raw-API fallback for the
+same retrofit:
+
+```bash
 curl -sS -X PATCH https://omni.example.com/api/v2/webhook-sources/<id> \
   -H "x-api-key: $OMNI_API_KEY" -H 'Content-Type: application/json' \
   -d '{"eventTypeMapping":{"source":"body","path":"event"}}'
@@ -237,7 +244,7 @@ omni webhooks get clickup                # totalReceived vs totalDuplicates
 |---|---|
 | Every delivery 401 | Secret mismatch — the omni row must hold the `webhook.secret` ClickUp returned at creation (recreate the ClickUp webhook = new secret), or the source has no `signatureConfig`, or it is disabled. All collapse into the same 401 intentionally; the real reason is in the API log (`Webhook ingress rejected`). |
 | Delivery 400 `VALIDATION` | The payload violates a registered schema — check `omni dead-letters list` for `schema_validation_failed`. |
-| Events land as `custom.webhook.clickup` | `eventTypeMapping` missing on the source row (the CLI cannot set it yet — use the `PATCH` from step 2), or the delivery had no usable `event` field. |
+| Events land as `custom.webhook.clickup` | `eventTypeMapping` missing on the source row — retrofit it with `omni webhooks update clickup --event-type-mapping '{"source":"body","path":"event"}'` — or the delivery had no usable `event` field. |
 | Duplicate events on retry | `idempotencyKeyTemplate` not set to `clickup:{payload.history_items.0.id}` (check `omni webhooks get clickup`). |
 | Warn log "idempotency template placeholder unresolved" | Expected for `taskDeleted` (no `history_items`): the key falls back to the body hash, which still dedups byte-identical retries. |
 | Events stop arriving entirely | ClickUp auto-suspends persistently failing webhooks — check `health.status` (step 4). The liveness stall (#961) is the designed alarm for this. |

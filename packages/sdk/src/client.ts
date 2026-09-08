@@ -739,6 +739,13 @@ export interface ListWebhookSourcesParams {
 export type WebhookSignatureConfigBody = components['schemas']['WebhookSignatureConfig'];
 
 /**
+ * Semantic event-type extraction contract for a webhook source (#959/#984):
+ * header-source or body-source. Derived from the generated OpenAPI component
+ * so it cannot drift from the API.
+ */
+export type WebhookEventTypeMappingBody = components['schemas']['WebhookEventTypeMapping'];
+
+/**
  * Body for creating a webhook source.
  *
  * Hand-written on purpose: the generated `CreateWebhookSourceRequest` marks
@@ -774,6 +781,13 @@ export interface CreateWebhookSourceBody {
    * passing through. Defaults to false server-side (opt-in pass-through).
    */
   strictSchemas?: boolean;
+  /**
+   * Semantic event-type extraction (#959/#984): a mapped source emits
+   * `custom.{source}.{event}` (event name read from a header or a body
+   * dot-path) instead of the collapsed `custom.webhook.{source}`. Null or
+   * absent keeps the collapsed type; null clears it on update.
+   */
+  eventTypeMapping?: WebhookEventTypeMappingBody | null;
   /** Defaults to true server-side */
   enabled?: boolean;
   /**
