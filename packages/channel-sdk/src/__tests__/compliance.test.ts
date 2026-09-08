@@ -38,6 +38,12 @@ import {
 // Use relative imports to avoid circular workspace dependencies
 // (channel packages depend on channel-sdk; adding them as devDeps creates a turbo cycle)
 import { HERMES_CAPABILITIES, HermesApiError, HermesErrorCode, HermesPlugin } from '../../../channel-hermes/src/index';
+import {
+  MSTEAMS_CAPABILITIES,
+  MsTeamsApiError,
+  MsTeamsErrorCode,
+  MsTeamsPlugin,
+} from '../../../channel-msteams/src/index';
 import { SLACK_CAPABILITIES, SlackError, SlackErrorCode, SlackPlugin } from '../../../channel-slack/src/index';
 import {
   TELEGRAM_CAPABILITIES,
@@ -186,6 +192,18 @@ const channels: ChannelDescriptor[] = [
     handlerSourcePaths: [channelPath('twilio-whatsapp', 'handlers', 'webhooks.ts')],
     errorSourcePath: channelPath('twilio-whatsapp', 'utils', 'errors.ts'),
   },
+  {
+    name: 'msteams',
+    packageName: '@omni/channel-msteams',
+    pluginClass: MsTeamsPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: MsTeamsApiError,
+    capabilities: MSTEAMS_CAPABILITIES,
+    pluginSourcePath: channelPath('msteams', 'plugin.ts'),
+    // Text-only scaffold — webhook handling lives inside plugin.ts, so there
+    // are no separate handler modules to scan yet.
+    handlerSourcePaths: [],
+    errorSourcePath: channelPath('msteams', 'utils', 'errors.ts'),
+  },
 ];
 
 function readSource(path: string): string {
@@ -254,6 +272,7 @@ const errorConstructorArgs: Record<string, unknown[]> = {
   'whatsapp-business': [MetaErrorCode.INVALID_REQUEST, 'compliance test'],
   hermes: [HermesErrorCode.INVALID_REQUEST, 'compliance test'],
   asc: [AscErrorCode.INVALID_REQUEST, 'compliance test'],
+  msteams: [MsTeamsErrorCode.INVALID_CONFIG, 'compliance test'],
 };
 
 // Group 1: Infrastructure
@@ -266,6 +285,7 @@ describe('SDK compliance test infrastructure', () => {
       'asc-flow',
       'discord',
       'hermes',
+      'msteams',
       'slack',
       'telegram',
       'twilio-whatsapp',
@@ -518,8 +538,7 @@ describe('channel coverage', () => {
           e.name !== 'channel-internal' &&
           e.name !== 'channel-harness' && // Transport-less E2E test harness (#953) — no webhooks/media/dedupe, same category as internal
           e.name !== 'channel-linkedin' && // Placeholder package — no source yet
-          e.name !== 'channel-gupshup' && // In progress — PR #334
-          e.name !== 'channel-msteams', // Scaffold — text path only, PR #916
+          e.name !== 'channel-gupshup', // In progress — PR #334
       )
       .map((e) => e.name.replace('channel-', ''));
 

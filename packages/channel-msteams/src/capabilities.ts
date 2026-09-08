@@ -1,45 +1,31 @@
 /**
- * Microsoft Teams channel capabilities declaration
+ * Microsoft Teams channel capabilities declaration.
+ *
+ * HONEST scaffold values (issue #433 / PR #916): only what the plugin
+ * actually implements today is declared. Teams itself supports media,
+ * reactions, message edits, Adaptive Cards and typing indicators — those are
+ * follow-up work and stay `false` here until the code exists, because the
+ * runtime adapts behavior (e.g. follow-up typing bursts, media pipelines) to
+ * these flags.
  */
 
+import { DEFAULT_CAPABILITIES } from '@omni/channel-sdk';
 import type { ChannelCapabilities } from '@omni/channel-sdk';
 
 export const MSTEAMS_CAPABILITIES: ChannelCapabilities = {
+  ...DEFAULT_CAPABILITIES,
   canSendText: true,
-  canSendMedia: true,
-  canSendReaction: true,
-  canSendTyping: true,
 
-  canReceiveReadReceipts: false,
-  canReceiveDeliveryReceipts: false,
-
-  canEditMessage: true,
-  canDeleteMessage: true,
-  canReplyToMessage: true,
-  canForwardMessage: false,
-
-  canSendContact: false,
-  canSendLocation: false,
-  canSendSticker: false,
-
-  canHandleGroups: true,
-  canHandleBroadcast: false,
-
-  canSendEmbed: true,
-  canSendPoll: false,
-  canSendButtons: true,
-  canSendSelectMenu: false,
-  canShowModal: false,
-  canUseSlashCommands: false,
-  canUseContextMenu: false,
+  // Inbound activities arrive from personal (DM), group chat and channel
+  // conversations alike; replies continue whatever conversation the
+  // ConversationReference points at, so both are genuinely handled.
   canHandleDMs: true,
-  canHandleThreads: true,
-  canCreateWebhooks: false,
-  canSendViaWebhook: false,
-  canHandleVoice: false,
-  canStreamResponse: false,
+  canHandleGroups: true,
 
-  maxMessageLength: 28000,
+  // Teams caps a message at ~28 KB of content.
+  maxMessageLength: 28_000,
+  // Text-only scaffold: no media path yet (an empty list is the honest
+  // declaration — same as asc-flow before its media support landed).
   supportedMediaTypes: [],
   maxFileSize: 0,
 };

@@ -4,31 +4,77 @@
  * Provides Microsoft Teams messaging via the Bot Framework SDK (`botbuilder`).
  *
  * Scaffold scope (issue #433):
- * - `connect()` creates a CloudAdapter from Azure Bot credentials.
- * - `disconnect()` releases the adapter and clears stored conversation references.
+ * - `connect()` Zod-validates the Azure Bot credentials and creates a
+ *   CloudAdapter from them. Construction is local — the credentials are not
+ *   exercised against Entra until the first send or inbound activity.
+ * - `disconnect()` releases the adapter, disposes the dedupe cache and clears
+ *   stored conversation references.
  * - `sendMessage()` uses `adapter.continueConversationAsync` with a stored
- *   ConversationReference keyed by conversation ID.
- * - `handleWebhook()` forwards the incoming activity into `adapter.process`,
- *   captures the ConversationReference, and emits `message.received`.
+ *   ConversationReference keyed by conversation ID. Bot Framework bots can
+ *   only continue conversations they have seen — the user messages first.
+ * - `handleWebhook()` forwards the incoming activity into
+ *   `adapter.processActivityDirect`, which validates the Bot Framework JWT in
+ *   the Authorization header against the instance's app credentials before
+ *   any handler runs; the handler then captures the ConversationReference,
+ *   dedupes, sanitizes and emits `message.received`.
  *
- * Media, reactions, streaming, and richer Teams features are declared in
- * capabilities but left for follow-up work — this plugin only wires the
- * text-messaging path end-to-end.
+ * Media, reactions, typing, Adaptive Cards and streaming are follow-up work —
+ * this plugin only wires the text-messaging path end-to-end, and
+ * `capabilities.ts` declares exactly that.
  */
 
-import { BaseChannelPlugin } from '@omni/channel-sdk';
-import type { ChannelCapabilities, InstanceConfig, OutgoingMessage, SendResult } from '@omni/channel-sdk';
+import { BaseChannelPlugin, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
+import type {
+  ChannelCapabilities,
+  DedupeCache,
+  FetchHistoryOptions,
+  FetchHistoryResult,
+  InstanceConfig,
+  OutgoingMessage,
+  PluginContext,
+  SendResult,
+} from '@omni/channel-sdk';
 import type { ChannelType } from '@omni/core/types';
 import { CloudAdapter, ConfigurationBotFrameworkAuthentication, TurnContext } from 'botbuilder';
 import type { Activity, ConversationReference } from 'botbuilder';
+import { z } from 'zod';
 
 import { MSTEAMS_CAPABILITIES } from './capabilities';
 import type { MsTeamsConfig } from './types';
+import { MsTeamsConfigSchema } from './types';
+import { MsTeamsApiError, MsTeamsErrorCode } from './utils/errors';
+
+/**
+ * Cap on remembered conversations per instance — oldest insertion evicted
+ * beyond it (re-inserting on every inbound activity keeps active
+ * conversations near the young end; same bounded-FIFO pattern as asc's
+ * lastInboundWamid map).
+ */
+const MAX_CONVERSATION_REFS = 1000;
+
+/**
+ * Minimal shape an inbound POST body must have to be handed to the adapter.
+ * The full Activity contract is botbuilder's to enforce; this boundary check
+ * exists so garbage JSON is rejected with a 400 instead of surfacing as an
+ * opaque adapter throw. `.passthrough()` keeps every other field intact.
+ */
+const InboundActivitySchema = z
+  .object({
+    type: z.string().min(1),
+    id: z.string().optional(),
+    text: z.string().optional(),
+    timestamp: z.union([z.string(), z.date()]).optional(),
+    channelId: z.string().optional(),
+    conversation: z.object({ id: z.string() }).passthrough().optional(),
+    from: z.object({ id: z.string().optional(), name: z.string().optional() }).passthrough().optional(),
+  })
+  .passthrough();
 
 interface InstanceState {
   adapter: CloudAdapter;
   appId: string;
   conversationRefs: Map<string, Partial<ConversationReference>>;
+  dedupeCache: DedupeCache;
 }
 
 export class MsTeamsPlugin extends BaseChannelPlugin {
@@ -39,10 +85,45 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
 
   private readonly instanceStates = new Map<string, InstanceState>();
 
+  protected override async onInitialize(_context: PluginContext): Promise<void> {
+    this.logger.info('Microsoft Teams plugin initialized');
+  }
+
+  protected override async onDestroy(): Promise<void> {
+    for (const [, state] of this.instanceStates) {
+      state.dedupeCache.dispose();
+    }
+    this.instanceStates.clear();
+    this.logger.info('Microsoft Teams plugin destroyed');
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Connection
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Connect an instance from Azure Bot credentials.
+   *
+   * `config.credentials` (fallback `config.options`) is expected to carry:
+   *   - appId / msteamsAppId (required — Entra application id)
+   *   - appPassword / msteamsAppPassword (required — client secret; SECRET,
+   *     accepted at connect time only and held in memory, never persisted)
+   *   - appType / msteamsAppType (optional — default MultiTenant)
+   *   - tenantId / msteamsTenantId (optional — required for SingleTenant)
+   */
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
     if (this.instanceStates.has(instanceId)) {
       this.logger.warn('Instance already connected', { instanceId });
       return;
+    }
+
+    const credentials = readMsTeamsConfig(config);
+
+    if (credentials.allowAnonymous) {
+      this.logger.warn(
+        'Teams instance connecting in ANONYMOUS local-dev mode — the webhook will accept unsigned activities',
+        { instanceId },
+      );
     }
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -50,16 +131,7 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
       since: new Date(),
     });
 
-    const credentials = this.resolveCredentials(config);
-
-    const auth = new ConfigurationBotFrameworkAuthentication({
-      MicrosoftAppId: credentials.appId,
-      MicrosoftAppPassword: credentials.appPassword,
-      MicrosoftAppType: credentials.appType ?? 'MultiTenant',
-      MicrosoftAppTenantId: credentials.tenantId,
-    });
-
-    const adapter = new CloudAdapter(auth);
+    const adapter = this.createAdapter(credentials);
 
     adapter.onTurnError = async (context, error) => {
       this.logger.error('Teams turn error', {
@@ -77,6 +149,7 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
       adapter,
       appId: credentials.appId,
       conversationRefs: new Map(),
+      dedupeCache: createInboundDedupeCache(),
     });
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -84,8 +157,33 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
       since: new Date(),
     });
     await this.emitInstanceConnected(instanceId, {
-      ownerIdentifier: credentials.appId,
+      profileName: 'Microsoft Teams',
+      ownerIdentifier: credentials.appId || 'anonymous-local',
     });
+
+    this.logger.info('Teams instance connected', { instanceId, appId: credentials.appId });
+  }
+
+  /**
+   * Adapter factory — the single seam between this plugin and botbuilder's
+   * network stack. Tests override it with a faked CloudAdapter so every path
+   * (JWT rejection, Connector failures, successful sends) runs without any
+   * real Bot Framework traffic.
+   */
+  protected createAdapter(credentials: MsTeamsConfig): CloudAdapter {
+    // Anonymous local-dev mode (Bot Framework Emulator / Teams App Test
+    // Tool): an EMPTY configuration makes botbuilder's auth accept
+    // unauthenticated traffic. Only reachable behind the explicit
+    // allowAnonymous flag validated in readMsTeamsConfig.
+    const auth = credentials.allowAnonymous
+      ? new ConfigurationBotFrameworkAuthentication({})
+      : new ConfigurationBotFrameworkAuthentication({
+          MicrosoftAppId: credentials.appId,
+          MicrosoftAppPassword: credentials.appPassword,
+          MicrosoftAppType: credentials.appType,
+          MicrosoftAppTenantId: credentials.tenantId,
+        });
+    return new CloudAdapter(auth);
   }
 
   async disconnect(instanceId: string): Promise<void> {
@@ -95,6 +193,7 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
       return;
     }
 
+    state.dedupeCache.dispose();
     state.conversationRefs.clear();
     this.instanceStates.delete(instanceId);
 
@@ -109,26 +208,44 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
     await this.emitInstanceDisconnected(instanceId, 'disconnect requested');
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // Outbound
+  // ─────────────────────────────────────────────────────────────
+
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const state = this.instanceStates.get(instanceId);
     if (!state) {
-      const error = `Instance ${instanceId} is not connected`;
+      const error = `Teams instance ${instanceId} is not connected`;
       await this.emitMessageFailed({
         instanceId,
         chatId: message.to,
         error,
+        errorCode: MsTeamsErrorCode.NOT_CONNECTED,
         retryable: false,
       });
       return { success: false, error, retryable: false, timestamp: Date.now() };
     }
 
+    // Scaffold is text-only; richer content types are declared false in
+    // capabilities, so the runtime should never route them here. Reject
+    // without emitting — nothing was attempted against the Connector.
+    if (message.content.type !== 'text') {
+      return {
+        success: false,
+        error: `Unsupported content.type=${message.content.type} for msteams (text-only scaffold)`,
+        retryable: false,
+        timestamp: Date.now(),
+      };
+    }
+
     const reference = state.conversationRefs.get(message.to);
     if (!reference) {
-      const error = `No ConversationReference stored for ${message.to}`;
+      const error = `No ConversationReference stored for ${message.to} — the user must message the bot first`;
       await this.emitMessageFailed({
         instanceId,
         chatId: message.to,
         error,
+        errorCode: MsTeamsErrorCode.NO_CONVERSATION_REFERENCE,
         retryable: false,
       });
       return { success: false, error, retryable: false, timestamp: Date.now() };
@@ -137,12 +254,13 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
     const text = message.content.text ?? '';
     let sentId: string | undefined;
 
+    // Journey timing: T10 (pluginSentAt) right before the Connector call.
+    const correlationId = message.metadata?.correlationId as string | undefined;
+    if (correlationId) this.captureT10(correlationId);
+
     try {
       await state.adapter.continueConversationAsync(state.appId, reference, async (context) => {
-        const response = await context.sendActivity({
-          type: 'message',
-          text,
-        });
+        const response = await context.sendActivity({ type: 'message', text });
         sentId = response?.id;
       });
     } catch (err) {
@@ -151,10 +269,14 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
         instanceId,
         chatId: message.to,
         error,
+        errorCode: MsTeamsErrorCode.SEND_FAILED,
         retryable: true,
       });
-      return { success: false, error, retryable: true, timestamp: Date.now() };
+      return { success: false, error, errorCode: MsTeamsErrorCode.SEND_FAILED, retryable: true, timestamp: Date.now() };
     }
+
+    // Journey timing: T11 (platformDeliveredAt) once the Connector acknowledged.
+    if (correlationId) this.captureT11(correlationId);
 
     await this.emitMessageSent({
       instanceId,
@@ -163,29 +285,53 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
       to: message.to,
       content: { type: 'text', text },
       replyToId: message.replyTo,
+      senderAgentId: message.metadata?.senderAgentId as string | undefined,
     });
 
-    return {
-      success: true,
-      messageId: sentId,
-      timestamp: Date.now(),
-    };
+    return { success: true, messageId: sentId, timestamp: Date.now() };
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // Inbound webhook
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Per-instance webhook entry point
+   * (`POST /api/v2/channels/msteams/:instanceId/webhook`).
+   *
+   * Authenticity: unlike the token-compare channels, Bot Framework signs
+   * every delivery — `adapter.processActivityDirect` validates the JWT in
+   * the Authorization header against the Bot Framework metadata + this
+   * instance's app credentials BEFORE the handler logic runs. A request
+   * without a valid service token never reaches `handleIncomingActivity`.
+   */
   async handleWebhook(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const match = /\/msteams\/([^/]+)\/?$/.exec(url.pathname);
-    const instanceId = match?.[1];
-    if (!instanceId) {
-      return new Response('Not found', { status: 404 });
-    }
+    const pathParts = url.pathname.split('/');
+    const instanceId = pathParts[pathParts.indexOf('msteams') + 1] ?? '';
 
     const state = this.instanceStates.get(instanceId);
     if (!state) {
-      return new Response('Instance not connected', { status: 404 });
+      return new Response('Instance not found', { status: 404 });
     }
 
-    const activity = (await request.json()) as Activity;
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response('Invalid JSON', { status: 400 });
+    }
+
+    const parsed = InboundActivitySchema.safeParse(body);
+    if (!parsed.success) {
+      this.logger.warn('Rejected malformed Teams activity', {
+        instanceId,
+        issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
+      });
+      return new Response('Invalid activity', { status: 400 });
+    }
+
+    const activity = parsed.data as unknown as Activity;
     const authHeader = request.headers.get('authorization') ?? '';
 
     try {
@@ -193,10 +339,14 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
         await this.handleIncomingActivity(instanceId, state, context);
       });
     } catch (err) {
-      this.logger.error('Failed to process Teams activity', {
-        instanceId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      const message = err instanceof Error ? err.message : String(err);
+      // The adapter throws on JWT validation failure — surface that as 401
+      // so Bot Framework's delivery report distinguishes auth from crashes.
+      if (/unauthorized|authentication|jwt|token/i.test(message)) {
+        this.logger.warn('Teams activity rejected: authentication failed', { instanceId, error: message });
+        return new Response('Unauthorized', { status: 401 });
+      }
+      this.logger.error('Failed to process Teams activity', { instanceId, error: message });
       return new Response('Internal error', { status: 500 });
     }
 
@@ -209,43 +359,119 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
     const chatId = reference.conversation?.id ?? activity.conversation?.id ?? '';
 
     if (chatId) {
-      state.conversationRefs.set(chatId, reference);
+      this.rememberConversationReference(state, chatId, reference);
     }
 
     if (activity.type !== 'message') {
       return;
     }
 
-    const cleanText = TurnContext.removeRecipientMention(activity) ?? activity.text ?? '';
-
-    await this.emitMessageReceived({
-      instanceId,
-      externalId: activity.id ?? '',
-      chatId,
-      from: activity.from?.id ?? '',
-      content: {
-        type: 'text',
-        text: cleanText,
-      },
-      rawPayload: activity as unknown as Record<string, unknown>,
-    });
-  }
-
-  private resolveCredentials(config: InstanceConfig): MsTeamsConfig {
-    const source = {
-      ...(config.credentials ?? {}),
-      ...(config.options ?? {}),
-    } as Record<string, unknown>;
-
-    const appId = String(source.appId ?? '');
-    const appPassword = String(source.appPassword ?? '');
-    const appType = (source.appType as MsTeamsConfig['appType']) ?? undefined;
-    const tenantId = source.tenantId ? String(source.tenantId) : undefined;
-
-    if (!appId || !appPassword) {
-      throw new Error('Microsoft Teams instance requires appId and appPassword');
+    const externalId = activity.id ?? '';
+    if (externalId && state.dedupeCache.isDuplicate(instanceId, externalId, 'msteams', this.logger)) {
+      this.logger.debug('[msteams] duplicate inbound dropped', { instanceId, externalId });
+      return;
     }
 
-    return { appId, appPassword, appType, tenantId };
+    const rawText = TurnContext.removeRecipientMention(activity) ?? activity.text ?? '';
+    const sanitized = sanitizeMessage(rawText, this.logger, { instanceId, messageId: externalId });
+    if (!sanitized.ok) {
+      this.logger.warn('[msteams] inbound text rejected by sanitizer', {
+        instanceId,
+        externalId,
+        rejected: sanitized.rejected,
+      });
+      return;
+    }
+
+    // Journey timing: T0 (platformReceivedAt) + T1 (pluginReceivedAt), then
+    // T2 (eventPublishedAt) after the event is on the bus.
+    const platformTimestampMs = resolveActivityTimestampMs(activity);
+    const timings = this.captureInboundTimings(platformTimestampMs);
+
+    const correlationId = await this.emitMessageReceived({
+      instanceId,
+      externalId,
+      chatId,
+      from: activity.from?.id ?? '',
+      senderName: activity.from?.name,
+      content: {
+        type: 'text',
+        text: sanitized.text,
+      },
+      replyToId: activity.replyToId,
+      rawPayload: activity as unknown as Record<string, unknown>,
+      timings,
+    });
+    if (timings) this.captureT2(correlationId, timings);
   }
+
+  /**
+   * Remember the ConversationReference for a conversation so `sendMessage`
+   * can continue it later. Bounded FIFO per instance (re-insertion keeps
+   * active conversations near the young end).
+   */
+  private rememberConversationReference(
+    state: InstanceState,
+    chatId: string,
+    reference: Partial<ConversationReference>,
+  ): void {
+    state.conversationRefs.delete(chatId);
+    state.conversationRefs.set(chatId, reference);
+    if (state.conversationRefs.size > MAX_CONVERSATION_REFS) {
+      const oldest = state.conversationRefs.keys().next().value;
+      if (oldest !== undefined) state.conversationRefs.delete(oldest);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // History (not supported — the Bot Framework offers no backfill API).
+  // ─────────────────────────────────────────────────────────────
+
+  async fetchHistory(_instanceId: string, _options: FetchHistoryOptions): Promise<FetchHistoryResult> {
+    return { totalFetched: 0, messages: [] };
+  }
+}
+
+/**
+ * Read + Zod-validate the Azure Bot credential bag from an InstanceConfig.
+ *
+ * Accepts both the plain keys (`appId`, direct SDK use) and the
+ * `msteams`-prefixed keys the API connect route forwards
+ * (`msteamsAppId`, ...), body-over-plain when both are present.
+ */
+function readMsTeamsConfig(config: InstanceConfig): MsTeamsConfig {
+  const source = {
+    ...(config.credentials ?? {}),
+    ...(config.options ?? {}),
+  } as Record<string, unknown>;
+
+  const parsed = MsTeamsConfigSchema.safeParse({
+    appId: source.msteamsAppId ?? source.appId ?? undefined,
+    appPassword: source.msteamsAppPassword ?? source.appPassword ?? undefined,
+    appType: source.msteamsAppType ?? source.appType ?? undefined,
+    tenantId: source.msteamsTenantId ?? source.tenantId ?? undefined,
+    allowAnonymous: source.msteamsAllowAnonymous ?? source.allowAnonymous ?? undefined,
+  });
+
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+    throw new MsTeamsApiError(
+      MsTeamsErrorCode.INVALID_CONFIG,
+      `Microsoft Teams instance credentials are invalid — ${issues}`,
+      { operation: 'connect' },
+    );
+  }
+
+  return parsed.data;
+}
+
+/** Activity timestamps arrive as ISO strings on the wire (Date once parsed). */
+function resolveActivityTimestampMs(activity: Activity): number {
+  const ts = activity.timestamp;
+  if (ts instanceof Date) return ts.getTime();
+  if (typeof ts === 'string') {
+    const ms = Date.parse(ts);
+    if (Number.isFinite(ms)) return ms;
+  }
+  return Date.now();
 }
