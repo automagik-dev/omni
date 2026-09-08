@@ -55,14 +55,25 @@ export const WebhookSignatureConfigSchema = z
 // Semantic event-type extraction (issue #959). Like the signature contract
 // above, this is the ONE Zod definition: the route validator imports it, so
 // the published OpenAPI document and the runtime validation cannot drift.
-export const WebhookEventTypeMappingSchema = z.object({
-  source: z.literal('header').openapi({
-    description: 'Where the semantic event name is read from (only headers for now)',
+export const WebhookEventTypeMappingSchema = z.discriminatedUnion('source', [
+  z.object({
+    source: z.literal('header').openapi({
+      description: 'Read the semantic event name from a request header',
+    }),
+    header: z.string().min(1).max(200).openapi({
+      description: 'Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters',
+    }),
   }),
-  header: z.string().min(1).max(200).openapi({
-    description: 'Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters',
+  z.object({
+    source: z.literal('body').openapi({
+      description: 'Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)',
+    }),
+    path: z.string().min(1).max(200).openapi({
+      description:
+        'Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters',
+    }),
   }),
-});
+]);
 
 // Webhook source schema
 export const WebhookSourceSchema = z.object({

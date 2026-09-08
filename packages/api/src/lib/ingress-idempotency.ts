@@ -20,11 +20,12 @@
  *   {source}          the webhook source name
  *   {sha256(body)}    hex SHA-256 of the raw request body bytes
  *   {headers.<name>}  a request header (case-insensitive)
- *   {payload.<path>}  a dot-path into the JSON payload; scalars only
+ *   {payload.<path>}  a dot-path into the JSON payload; numeric segments
+ *                     index arrays (#984); scalars only
  *
  * Examples:
  *   github:  "github:{headers.x-github-delivery}"
- *   clickup: "clickup:{payload.event_id}"
+ *   clickup: "clickup:{payload.history_items.0.id}"
  *   slack:   "slack:{payload.team_id}:{payload.event.channel}:{payload.event.event_ts}"
  *   default: "{source}:{sha256(body)}"  (existing sources migrate onto this)
  *
@@ -56,11 +57,23 @@ function sha256Hex(input: string): string {
   return createHash('sha256').update(input).digest('hex');
 }
 
-/** Resolve a dot-path into the payload; only non-empty scalars are usable. */
-function resolvePayloadPath(payload: Record<string, unknown>, path: string): string | undefined {
+/**
+ * Resolve a dot-path into the payload; only non-empty scalars are usable.
+ * Numeric segments index arrays (#984 — providers like ClickUp carry the
+ * stable delivery identity inside an array, e.g. `history_items.0.id`).
+ *
+ * Shared with the semantic event-type mapping (`resolveWebhookEventType`),
+ * which reads body-sourced event names through the same grammar.
+ */
+export function resolvePayloadPath(payload: Record<string, unknown>, path: string): string | undefined {
   let current: unknown = payload;
   for (const part of path.split('.')) {
-    if (current === null || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    if (current === null || typeof current !== 'object') return undefined;
+    if (Array.isArray(current)) {
+      if (!/^(0|[1-9]\d*)$/.test(part)) return undefined;
+      current = current[Number(part)];
+      continue;
+    }
     current = (current as Record<string, unknown>)[part];
   }
   if (typeof current === 'string') return current.length > 0 ? current : undefined;

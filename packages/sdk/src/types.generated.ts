@@ -4178,12 +4178,20 @@ export interface components {
         };
         WebhookEventTypeMapping: {
             /**
-             * @description Where the semantic event name is read from (only headers for now)
+             * @description Read the semantic event name from a request header
              * @enum {string}
              */
             source: "header";
             /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
             header: string;
+        } | {
+            /**
+             * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+             * @enum {string}
+             */
+            source: "body";
+            /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+            path: string;
         };
         WebhookSource: {
             /**
@@ -4214,13 +4222,21 @@ export interface components {
             /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
             eventTypeMapping: {
                 /**
-                 * @description Where the semantic event name is read from (only headers for now)
+                 * @description Read the semantic event name from a request header
                  * @enum {string}
                  */
                 source: "header";
                 /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
                 header: string;
-            } | null;
+            } | {
+                /**
+                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                 * @enum {string}
+                 */
+                source: "body";
+                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                path: string;
+            } | unknown;
             /** @description Whether a signature secret is stored (secret is write-only) */
             hasSignatureSecret: boolean;
             /** @description Idempotency key derivation template */
@@ -4313,13 +4329,21 @@ export interface components {
             /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
             eventTypeMapping?: {
                 /**
-                 * @description Where the semantic event name is read from (only headers for now)
+                 * @description Read the semantic event name from a request header
                  * @enum {string}
                  */
                 source: "header";
                 /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
                 header: string;
-            } | null;
+            } | {
+                /**
+                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                 * @enum {string}
+                 */
+                source: "body";
+                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                path: string;
+            } | unknown;
             /**
              * @description Whether enabled
              * @default true
@@ -11472,13 +11496,21 @@ export interface operations {
                             /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
                             eventTypeMapping: {
                                 /**
-                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @description Read the semantic event name from a request header
                                  * @enum {string}
                                  */
                                 source: "header";
                                 /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
                                 header: string;
-                            } | null;
+                            } | {
+                                /**
+                                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                                 * @enum {string}
+                                 */
+                                source: "body";
+                                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                                path: string;
+                            } | unknown;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */
@@ -11585,13 +11617,21 @@ export interface operations {
                     /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
                     eventTypeMapping?: {
                         /**
-                         * @description Where the semantic event name is read from (only headers for now)
+                         * @description Read the semantic event name from a request header
                          * @enum {string}
                          */
                         source: "header";
                         /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
                         header: string;
-                    } | null;
+                    } | {
+                        /**
+                         * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                         * @enum {string}
+                         */
+                        source: "body";
+                        /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                        path: string;
+                    } | unknown;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -11649,13 +11689,21 @@ export interface operations {
                             /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
                             eventTypeMapping: {
                                 /**
-                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @description Read the semantic event name from a request header
                                  * @enum {string}
                                  */
                                 source: "header";
                                 /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
                                 header: string;
-                            } | null;
+                            } | {
+                                /**
+                                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                                 * @enum {string}
+                                 */
+                                source: "body";
+                                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                                path: string;
+                            } | unknown;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */
@@ -11791,13 +11839,21 @@ export interface operations {
                             /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
                             eventTypeMapping: {
                                 /**
-                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @description Read the semantic event name from a request header
                                  * @enum {string}
                                  */
                                 source: "header";
                                 /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
                                 header: string;
-                            } | null;
+                            } | {
+                                /**
+                                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                                 * @enum {string}
+                                 */
+                                source: "body";
+                                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                                path: string;
+                            } | unknown;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */
@@ -11975,13 +12031,21 @@ export interface operations {
                     /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
                     eventTypeMapping?: {
                         /**
-                         * @description Where the semantic event name is read from (only headers for now)
+                         * @description Read the semantic event name from a request header
                          * @enum {string}
                          */
                         source: "header";
                         /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
                         header: string;
-                    } | null;
+                    } | {
+                        /**
+                         * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                         * @enum {string}
+                         */
+                        source: "body";
+                        /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                        path: string;
+                    } | unknown;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -12039,13 +12103,21 @@ export interface operations {
                             /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
                             eventTypeMapping: {
                                 /**
-                                 * @description Where the semantic event name is read from (only headers for now)
+                                 * @description Read the semantic event name from a request header
                                  * @enum {string}
                                  */
                                 source: "header";
                                 /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
                                 header: string;
-                            } | null;
+                            } | {
+                                /**
+                                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                                 * @enum {string}
+                                 */
+                                source: "body";
+                                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                                path: string;
+                            } | unknown;
                             /** @description Whether a signature secret is stored (secret is write-only) */
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */

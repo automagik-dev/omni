@@ -32,7 +32,7 @@ import {
   webhookSources,
 } from '@omni/db';
 import { and, eq, isNotNull, sql } from 'drizzle-orm';
-import { deriveIdempotencyKey } from '../lib/ingress-idempotency';
+import { deriveIdempotencyKey, resolvePayloadPath } from '../lib/ingress-idempotency';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import type { DeadLetterService } from './dead-letters';
@@ -99,19 +99,26 @@ function sanitizeEventToken(raw: string | undefined): string | null {
  * Source→semantic-type mapping (issue #959). A source configured with an
  * `eventTypeMapping` emits `custom.{source}.{event}` (e.g. `X-GitHub-Event:
  * push` → `custom.github.push`) instead of collapsing every delivery into
- * `custom.webhook.{source}`. No mapping, or a delivery the mapping cannot
- * resolve (header absent/empty), falls back to the legacy collapsed type.
+ * `custom.webhook.{source}`. The event name comes from a header
+ * (`source: 'header'`) or, for body-first providers like ClickUp, from a
+ * dot-path into the JSON payload (`source: 'body'`, issue #984 — e.g.
+ * `event: taskStatusUpdated` → `custom.clickup.taskstatusupdated`). No
+ * mapping, or a delivery the mapping cannot resolve (header/path
+ * absent/empty), falls back to the legacy collapsed type.
  */
 export function resolveWebhookEventType(
   sourceName: string,
   mapping: WebhookEventTypeMapping | null,
   headers: Record<string, string>,
+  payload: Record<string, unknown> = {},
 ): CustomEventType {
   const fallback = `custom.webhook.${sourceName}` as CustomEventType;
-  if (!mapping || mapping.source !== 'header') {
+  if (!mapping) {
     return fallback;
   }
-  const token = sanitizeEventToken(headers[mapping.header.toLowerCase()]);
+  const raw =
+    mapping.source === 'header' ? headers[mapping.header.toLowerCase()] : resolvePayloadPath(payload, mapping.path);
+  const token = sanitizeEventToken(raw);
   return token ? (`custom.${sourceName}.${token}` as CustomEventType) : fallback;
 }
 
@@ -356,7 +363,7 @@ export class WebhookService {
 
     // Semantic type extraction (issue #959): a mapped source emits
     // custom.{source}.{event}; unmapped keeps the legacy collapsed type.
-    const eventType = resolveWebhookEventType(sourceName, source.eventTypeMapping, headers);
+    const eventType = resolveWebhookEventType(sourceName, source.eventTypeMapping, headers, payload);
     const eventPayload = {
       source: sourceName,
       ...payload,
