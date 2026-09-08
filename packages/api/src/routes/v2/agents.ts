@@ -3,7 +3,7 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import { LinkIdentityToAgentSchema } from '@omni/core';
+import { AgentEventManifestSchema, LinkIdentityToAgentSchema } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppVariables } from '../../types';
@@ -101,6 +101,40 @@ agentsRoutes.delete('/:id', zValidator('param', idParamSchema), async (c) => {
 
   return c.json({ success: true });
 });
+
+/**
+ * GET /agents/:id/manifest - Read the agent's declarative event manifest
+ * (accepts/publishes — RFC #925 G4a, #985). `data` is null when the agent has
+ * never declared one.
+ */
+agentsRoutes.get('/:id/manifest', zValidator('param', idParamSchema), async (c) => {
+  const { id } = c.req.valid('param');
+  const services = c.get('services');
+
+  const agent = await services.agents.getById(id);
+
+  return c.json({ data: agent.eventManifest ?? null });
+});
+
+/**
+ * PUT /agents/:id/manifest - Replace the agent's declarative event manifest.
+ * Full replacement (apply semantics) validated by AgentEventManifestSchema;
+ * publishes `system.agent.manifest.updated`.
+ */
+agentsRoutes.put(
+  '/:id/manifest',
+  zValidator('param', idParamSchema),
+  zValidator('json', AgentEventManifestSchema),
+  async (c) => {
+    const { id } = c.req.valid('param');
+    const manifest = c.req.valid('json');
+    const services = c.get('services');
+
+    const agent = await services.agents.updateManifest(id, manifest);
+
+    return c.json({ data: agent.eventManifest ?? null });
+  },
+);
 
 /**
  * GET /agents/:id/identities - List platform identities for this agent

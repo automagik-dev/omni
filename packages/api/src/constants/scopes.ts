@@ -62,6 +62,8 @@ export const SCOPE_MAP: Record<string, string> = {
   'DELETE /agents/:id': 'agents:write',
   'GET /agents/:id/identities': 'agents:read',
   'POST /agents/:id/identities': 'agents:write',
+  'GET /agents/:id/manifest': 'agents:read',
+  'PUT /agents/:id/manifest': 'agents:write',
   'GET /agents/:id/tasks': 'agents:read',
 
   // --- auth ---

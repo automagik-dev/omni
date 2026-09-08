@@ -277,6 +277,8 @@ const CLI_COMMANDS: Record<string, string> = {
   'agents.create': 'agents create --name <name> --provider <id> --instance <id>',
   'agents.update': 'agents update <id> [--name <name>] [--model <model>] [--provider <p>] [--active|--inactive]',
   'agents.delete': 'agents delete <id>',
+  'agents.getManifest': 'agents manifest get <id>',
+  'agents.updateManifest': 'agents manifest apply <id> --file <path>',
 
   // ============================================================================
   // FOLLOW-UP (idle-chat follow-up config — issue #404)

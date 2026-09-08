@@ -9,7 +9,7 @@
  * @see /home/cezar/dev/omni/src/db/models.py (v1 reference)
  */
 
-import type { ProviderSchema as CoreProviderSchema, FollowUpSequenceConfig } from '@omni/core';
+import type { AgentEventManifest, ProviderSchema as CoreProviderSchema, FollowUpSequenceConfig } from '@omni/core';
 import { CORE_EVENT_TYPES, type CoreEventType, type SyncJobConfig as CoreSyncJobConfig } from '@omni/core/events';
 import { CONTENT_TYPES, type ContentType as CoreContentType } from '@omni/core/types';
 import { relations, sql } from 'drizzle-orm';
@@ -397,6 +397,13 @@ export const agents = pgTable(
     agentCard: jsonb('agent_card').$type<Record<string, unknown>>(),
     /** Idle-chat follow-up config at the agent scope (broadest). @see issue #404 */
     followUpConfig: jsonb('follow_up_config').$type<FollowUpSequenceConfig>(),
+    /**
+     * Declarative accepts/publishes event subscription manifest (RFC #925 G4a,
+     * issue #985). Storage only in this slice — G4b (#986) compiles `accepts`
+     * into automations, G4c (#987) enforces `publishes` at emission time.
+     * Shape validated by `AgentEventManifestSchema` in @omni/core.
+     */
+    eventManifest: jsonb('event_manifest').$type<AgentEventManifest>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     /** G2 additive tenant ownership. Nullable through the additive phase. */
