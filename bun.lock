@@ -221,7 +221,7 @@
     },
     "packages/channel-msteams": {
       "name": "@omni/channel-msteams",
-      "version": "2.260908.18",
+      "version": "2.260908.20",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",

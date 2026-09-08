@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-msteams",
-  "version": "2.260908.18",
+  "version": "2.260908.20",
   "description": "Microsoft Teams channel plugin for Omni using Bot Framework (botbuilder)",
   "type": "module",
   "main": "src/index.ts",
