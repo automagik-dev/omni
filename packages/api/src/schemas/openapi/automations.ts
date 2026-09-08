@@ -108,6 +108,11 @@ export const AutomationSchema = z.object({
   debounce: DebounceSchema.nullable().openapi({ description: 'Debounce config' }),
   enabled: z.boolean().openapi({ description: 'Whether enabled' }),
   priority: z.number().int().openapi({ description: 'Priority' }),
+  transactionalEmissions: z.boolean().openapi({
+    description:
+      "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
+      'only when every action succeeded; a failed run publishes zero',
+  }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
 });
@@ -126,6 +131,14 @@ export const CreateAutomationSchema = z.object({
   debounce: DebounceSchema.optional().openapi({ description: 'Debounce config' }),
   enabled: z.boolean().default(true).openapi({ description: 'Whether enabled' }),
   priority: z.number().int().default(0).openapi({ description: 'Priority' }),
+  transactionalEmissions: z
+    .boolean()
+    .default(false)
+    .openapi({
+      description:
+        "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
+        'only when every action succeeded; a failed run publishes zero. Default false = immediate publishing',
+    }),
 });
 
 // Automation log schema
