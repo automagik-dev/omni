@@ -136,6 +136,9 @@ export function createAutomationsCommand(): Command {
           trigger: a.triggerEventType,
           enabled: a.enabled ? 'yes' : 'no',
           priority: a.priority,
+          // Compiled from an agent manifest (#986) — managed rows reject
+          // manual mutation; edit the owning agent's manifest instead.
+          managed: a.managedByAgentId ? 'manifest' : '-',
         }));
 
         output.list(items, { emptyMessage: 'No automations found.' });
