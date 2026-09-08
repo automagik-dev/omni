@@ -203,6 +203,13 @@ export interface Automation {
    * publishing.
    */
   transactionalEmissions?: boolean;
+  /**
+   * Manifest-compilation provenance (RFC #925 G4b, #986): set when the row
+   * was compiled from an agent's event manifest; null/absent = hand-made.
+   * The engine treats managed and hand-made automations identically — the
+   * marker only gates manual CRUD in the API service layer.
+   */
+  managedByAgentId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -5598,6 +5598,11 @@ export interface components {
             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
             transactionalEmissions: boolean;
             /**
+             * Format: uuid
+             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+             */
+            managedByAgentId: string | null;
+            /**
              * Format: date-time
              * @description Creation timestamp
              */
@@ -17034,6 +17039,11 @@ export interface operations {
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
                             /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
+                            /**
                              * Format: date-time
                              * @description Creation timestamp
                              */
@@ -17317,6 +17327,11 @@ export interface operations {
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
                             /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
+                            /**
                              * Format: date-time
                              * @description Creation timestamp
                              */
@@ -17492,6 +17507,11 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -17847,6 +17867,11 @@ export interface operations {
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
                             /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
+                            /**
                              * Format: date-time
                              * @description Creation timestamp
                              */
@@ -18023,6 +18048,11 @@ export interface operations {
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
                             /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
+                            /**
                              * Format: date-time
                              * @description Creation timestamp
                              */
@@ -18198,6 +18228,11 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
