@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "custom.clickup.taskdeleted",
+  "description": "ClickUp taskDeleted webhook delivery (body field event: taskDeleted). NOTE: unlike other task events this payload carries NO history_items — just event, task_id and webhook_id — so its idempotency key falls back to the body hash (see the runbook). Minimal-but-real contract with additionalProperties: true; revisions must be additive-optional (issue #959).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["event", "task_id", "webhook_id"],
+  "properties": {
+    "event": {
+      "const": "taskDeleted",
+      "description": "ClickUp event name (also the source of the semantic type via eventTypeMapping)"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Id of the deleted task"
+    },
+    "webhook_id": {
+      "type": "string",
+      "description": "Id of the ClickUp webhook configuration that fired"
+    }
+  }
+}
