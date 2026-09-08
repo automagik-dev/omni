@@ -760,6 +760,8 @@ export class AutomationEngine {
       // causal links never point at the synthetic flush id.
       // Emit provenance (#958) rides along so emit_event re-publishes derive
       // a stable idempotency key for this (event, automation, action) slot.
+      // Transactional publication (G5, #988): the per-automation flag buffers
+      // the run's emissions and flushes only on a fully successful run.
       const actionsExecuted = await runWithEventCausality(
         {
           correlationId: context.event?.metadata.correlationId ?? event.metadata.correlationId,
@@ -772,6 +774,7 @@ export class AutomationEngine {
             this.deps,
             trustedTenantId,
             { parentEventId: event.id, automationId: automation.id },
+            { transactionalEmissions: automation.transactionalEmissions ?? false },
           ),
       );
 
