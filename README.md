@@ -1,13 +1,13 @@
 <p align="center">
   <picture>
-    <img src=".github/assets/omni-header-2.png" alt="Omni — One API, Every Channel" width="800" />
+    <img src=".github/assets/omni-header-multichannel.png" alt="Omni — One API, Every Channel" width="800" />
   </picture>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache 2.0 License" /></a>
   <img src="https://img.shields.io/badge/runtime-Bun-f9f1e1?style=flat-square&logo=bun" alt="Bun" />
-  <img src="https://img.shields.io/badge/version-2.260804.3-8b5cf6?style=flat-square" alt="v2.260804.3" />
+  <img src="https://img.shields.io/badge/version-2.260908.13-8b5cf6?style=flat-square" alt="v2.260908.13" />
   <img src="https://img.shields.io/badge/channels-11-25D366?style=flat-square" alt="11 channels" />
   <img src="https://img.shields.io/badge/event%20bus-NATS%20JetStream-27AAE1?style=flat-square" alt="NATS JetStream" />
 </p>
@@ -46,8 +46,8 @@ Think of Omni as a deep-sea octopus. Each **channel** is a tentacle reaching int
 |---------|--------|------------|
 | **WhatsApp** (Baileys) | ✅ Stable | QR/phone pairing, media, reactions, groups, contacts, presence |
 | **WhatsApp Cloud API** (Meta) | ✅ Available | Embedded Signup OAuth, templates HSM, webhook (HMAC-SHA256), media, location, reactions |
-| **Discord** | ✅ Stable | Bots, embeds, polls, buttons, threads, slash commands |
-| **Slack** | ✅ Available | Bot/App token support |
+| **Discord** | ✅ Stable | Bots, embeds, polls, buttons, threads, slash commands, voice channels |
+| **Slack** | ✅ Available | Socket Mode or HTTP, bot & user (xoxp) token modes, threads, scheduled messages, permalinks, pins, message search |
 | **Telegram** | ✅ Available | Bot API, inline keyboards, groups, channels, threads, polls |
 | **A2A** | ✅ Available | Agent-to-agent channel integrations |
 | **Gupshup** | ✅ Available | Custom Integration webhook support |
@@ -55,6 +55,8 @@ Think of Omni as a deep-sea octopus. Each **channel** is a tentacle reaching int
 | **ASC Brazil** | ✅ Available | Brazilian WhatsApp BSP — Cloud API mirror, Meta-format webhooks, typing indicator, templates, interactive |
 | **ASC Flow** | ✅ Available | Brazilian BSP via the ASC platform Flow — REST callbacks, URA buttons/lists, Genesys handoff |
 | **Twilio WhatsApp** | ✅ Available | Twilio sender, webhook, and signature validation support |
+
+Also in the box: **Harness** (`--channel harness`), an E2E agent-testing channel that captures outgoing messages verbatim so you can drive and assert on agent conversations from tests, and an internal channel used for agent-to-agent routing.
 
 ## Install
 
@@ -185,6 +187,28 @@ omni automations create --name "priority-route" \
 
 </details>
 
+## Event Backbone
+
+Every state change lands in a total-ordered PostgreSQL journal and is published over NATS. The journal is the source of truth — you can filter it, trace it, wait on it, and consume it durably:
+
+```bash
+omni events list --type "message.*" --since 2h        # trailing-* glob type filters
+omni events trace <event-id>                          # causation chain, rendered as a tree
+omni events wait --type "custom.github.*" --timeout 60  # block until a matching event arrives
+
+# Durable named consumers — resumable cursors over the journal
+omni events consumers create deploy-watcher --type "custom.github.*"
+omni events follow --consumer deploy-watcher          # at-least-once, acks as it goes
+```
+
+**Webhook sources** turn external systems into event emitters with configuration only — no code: raw-body signature verification (HMAC-SHA256/SHA1 or token match), per-source idempotency key templates, event-type mapping to `custom.<source>.<event>`, optional strict schema validation, and heartbeat-based connector liveness (`system.connector.stalled` / `recovered`). Working recipes: [GitHub](docs/runbooks/github-webhook-source.md) and [ClickUp](docs/runbooks/clickup-webhook-source.md).
+
+**Event schemas** are registered once (`omni events schema register`) and enforced at webhook ingress and automation `emit_event` — invalid payloads dead-letter instead of entering the journal.
+
+**Agent manifests** declare what each agent consumes and publishes (`omni agents manifest apply`, `omni agents graph`): the `publishes` list is enforced at emission time, and `accepts` compiles into managed routing automations. Automations can also buffer their emitted events and flush them in order only when the whole run succeeds (`--transactional-emissions`).
+
+Deep dives: [event system](docs/architecture/event-system.md) · [durable consumers](docs/runbooks/durable-consumers.md) · [agent publish governance](docs/runbooks/agent-publish-governance.md)
+
 ## Architecture
 
 ```text
@@ -222,8 +246,13 @@ packages/
 ├── channel-hermes/          # H3rmes (Brazilian WhatsApp gateway)
 ├── channel-twilio-whatsapp/ # Twilio WhatsApp
 ├── channel-a2a/             # A2A channel
+├── channel-asc-flow/        # ASC platform Flow (Brazilian BSP)
+├── channel-harness/         # E2E agent-testing channel
+├── channel-internal/        # In-process agent-to-agent routing
 ├── cli/                     # `omni` command
 ├── media-processing/        # Media sync and extraction
+├── plugin-openclaw/         # Omni as a channel inside OpenClaw
+├── voice-client/            # Voice transport/codec library (Discord voice)
 ├── sdk/                     # TypeScript SDK
 ├── sdk-go/                  # Go SDK
 └── sdk-python/              # Python SDK
@@ -294,7 +323,7 @@ omni persons presence <id>
 </details>
 
 <details>
-<summary><strong>Management</strong> — keys, providers, automations, access, webhooks</summary>
+<summary><strong>Management</strong> — keys, providers, automations, access, webhooks, schedule, tenants</summary>
 
 #### `keys` — API key management
 
@@ -338,9 +367,37 @@ Modes: `disabled` · `blocklist` · `allowlist`
 #### `webhooks` — External event sources
 
 ```bash
-omni webhooks create --name "github-events"
+omni webhooks create --name "github-events" \
+  --signature-algorithm hmac-sha256 --signature-header "X-Hub-Signature-256" --signature-prefix "sha256=" \
+  --signature-secret-env GITHUB_WEBHOOK_SECRET \
+  --event-type-mapping '{"source":"header","header":"X-GitHub-Event"}' \
+  --idempotency-key-template "github:{headers.x-github-delivery}"
+omni webhooks heartbeat github-events            # connector liveness check-in
 omni webhooks trigger --type "custom.event" --payload '{"key":"value"}'
 ```
+
+Sources receive on the public `POST /api/v2/webhooks/ingress/:source` endpoint (signature required). See the [GitHub](docs/runbooks/github-webhook-source.md) and [ClickUp](docs/runbooks/clickup-webhook-source.md) recipes.
+
+#### `schedule` — Scheduled messages
+
+```bash
+omni schedule send <instance> <chat-id> "Stand-up in 10" --at 2h   # ISO timestamp or 30m/2h/3d
+omni schedule list <instance>
+omni schedule cancel <id>
+```
+
+Delivery is native where the channel supports it (Slack, text-only); everywhere else a local sweeper sends at the scheduled time.
+
+#### `tenants` — Platform tenant control plane
+
+```bash
+omni tenants create --slug acme --name "Acme" --max-key-ttl 7776000 --max-key-rate 100 --max-key-budget 1000 --reason "onboarding"
+omni tenants keys issue-root <tenant-id> --principal <uuid> --membership <uuid> --role tenant-owner \
+  --name root --scopes "tenant:*" --expires 2026-12-01 --rate-limit 100 --budget 1000 --reason "bootstrap"
+omni multitenancy status
+```
+
+Requires a PLATFORM-class credential and `OMNI_MULTITENANCY_ENABLED=true`; every command takes an audited `--reason`. Omni runs single-tenant by default — see [platform credential bootstrap](docs/deployment/platform-credential-bootstrap.md).
 
 </details>
 
@@ -355,8 +412,14 @@ omni doctor                                     # diagnose embedded runtime issu
 omni doctor --fix                               # repair safe runtime drift in-place
 omni auth login --api-key <your-api-key>        # authenticate
 omni config set defaultInstance <id>            # CLI settings
-omni events list --type "message.*" --since 2h  # event history
+omni events list --type "message.*" --since 2h  # event history (trailing-* globs)
+omni events trace <event-id>                    # causation chain
+omni events wait --type "custom.x.*" --timeout 60  # block until a matching event
+omni events schema register <type> --file s.json   # register a payload schema
+omni events consumers create <name> --type "custom.x.*"  # durable cursor
+omni events follow --consumer <name>            # durable tail
 omni events replay --start --since 2024-01-01   # replay events
+omni journey show <correlation-id>              # per-message latency timeline
 omni batch create --instance <id> --type targeted_chat_sync --chat <chat-id>
 omni resync --instance <id>                     # history backfill
 omni logs list --level error --limit 50         # server logs
@@ -378,7 +441,7 @@ omni dead-letters list --limit 20               # failed events
 | **OpenAPI** | `/api/v2/openapi.json` |
 | **Auth** | `x-api-key` header |
 
-Main API groups include: `/auth`, `/instances`, `/messages`, `/chats`, `/events`, `/persons`, `/access`, `/settings`, `/providers`, `/automations`, `/webhooks`, `/keys`, `/logs`, `/batch-jobs`, `/dead-letters`, `/media`, `/metrics`, `/event-ops`, `/payloads`, `/agents`, `/agent-state`, `/agent-tasks`, `/conversations`, `/context`, `/turns`, `/trust`, `/voice`, `/follow-up`, and `/handoffs`.
+Main API groups include: `/auth`, `/instances`, `/messages`, `/chats`, `/events` (plus `/events/schemas`, `/events/consumers`, and per-event `/trace`), `/persons`, `/access`, `/settings`, `/providers`, `/automations`, `/webhooks`, `/scheduled-messages`, `/keys`, `/logs`, `/batch-jobs`, `/dead-letters`, `/media`, `/metrics`, `/event-ops`, `/payloads`, `/agents`, `/agent-state`, `/agent-tasks`, `/conversations`, `/context`, `/turns`, `/trust`, `/voice`, `/follow-up`, `/handoffs`, `/journeys`, `/instances/:id/whatsapp-templates`, and `/platform` (multitenancy control plane, flag-gated).
 
 ## SDKs
 
@@ -416,7 +479,7 @@ make dev-ui    # Dev → http://localhost:5173
 make build-ui  # Prod → served by API on :8882
 ```
 
-Pages: Dashboard · Instances · Chats · Chat View · Contacts · Persons · Providers · Automations · Access Rules · Batch Jobs · Dead Letters · Events · Logs · Settings
+Pages: Dashboard · Instances · Chats · Chat View · Contacts · Persons · Providers · Automations · Access Rules · Batch Jobs · Dead Letters · Events · Logs · Voices · Settings
 
 <details>
 <summary>🔐 API Keys & Security</summary>
@@ -447,11 +510,11 @@ Namespaces include: `messages`, `chats`, `instances`, `persons`, `events`, `acce
 
 Set `*_MANAGED=false` for external services. Full list: `.env.example`.
 
-| Service | PM2 Name | Port |
-|---------|----------|------|
-| PostgreSQL | `omni-pgserve` | 8432 |
-| NATS | `omni-nats` | 4222 |
-| API | `omni-api` | 8882 |
+| Service | PM2 Name (installer / source checkout) | Port |
+|---------|----------------------------------------|------|
+| API | `omni-api` / `omni-v2-api` | 8882 |
+| NATS | `omni-nats` / `omni-v2-nats` | 4222 |
+| PostgreSQL | `autopg-server` (canonical pgserve, managed by `omni install`) | 8432 |
 
 </details>
 
@@ -478,11 +541,11 @@ make sdk-generate  # Regenerate SDKs from OpenAPI
 
 Set `*_MANAGED=false` for external services. Full list in `.env.example`.
 
-| Service | PM2 Name | Port |
-|---------|----------|------|
-| PostgreSQL | `omni-pgserve` | 8432 |
-| NATS | `omni-nats` | 4222 |
-| API | `omni-api` | 8882 |
+| Service | PM2 Name (installer / source checkout) | Port |
+|---------|----------------------------------------|------|
+| API | `omni-api` / `omni-v2-api` | 8882 |
+| NATS | `omni-nats` / `omni-v2-nats` | 4222 |
+| PostgreSQL | `autopg-server` (canonical pgserve, managed by `omni install`) | 8432 |
 
 </details>
 

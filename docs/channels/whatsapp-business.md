@@ -114,8 +114,9 @@ omni instances connect <instance-id> \
 
 For numbers added via Embedded Signup, Meta requires a 6-digit PIN registration before the number can send:
 
-```bash
-omni instances whatsapp-business:register <instance-id> --pin 123456
+```http
+POST /api/v2/instances/:id/whatsapp-business/register
+{ "pin": "123456" }
 ```
 
 The PIN is one you set during onboarding — it's also required if you ever de-register and re-register.
@@ -131,8 +132,8 @@ omni send --to +5511999998888 --text "Hi!" --instance <instance-id>
 Or via REST:
 
 ```http
-POST /api/v2/messages
-{ "instanceId": "...", "to": "+5511999998888", "content": { "type": "text", "text": "Hi!" } }
+POST /api/v2/messages/send
+{ "instanceId": "...", "to": "+5511999998888", "text": "Hi!" }
 ```
 
 ### Templates (outside 24h window or first contact)

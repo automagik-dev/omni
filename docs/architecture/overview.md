@@ -1,7 +1,7 @@
 ---
 title: "Architecture Overview"
 created: 2025-01-29
-updated: 2026-02-09
+updated: 2026-09-08
 tags: [architecture, overview]
 status: current
 ---
@@ -10,15 +10,15 @@ status: current
 
 > Omni v2 is built on event-driven, plugin-based architecture designed for extensibility, reliability, and AI-native consumption.
 
-> Related: [[event-system|Event System]], [[plugin-system|Plugin System]], [[identity-graph|Identity Graph]], [[provider-system|Provider System]]
+> Related: [[event-system|Event System]], [[connector-contract|Connector Contract]], [[plugin-system|Plugin System]], [[identity-graph|Identity Graph]], [[provider-system|Provider System]]
 
 ## Design Principles
 
 ### 1. Event Sourcing Hybrid
 - All state changes are captured as events
-- Events are the source of truth for audit/replay
+- Events are journaled to PostgreSQL in a total order (`journal_seq`); NATS is the transport
+- The journal is the source of truth for audit, replay, tracing (`causationId`), and durable consumption
 - Materialized views provide fast queries
-- Can rebuild state from events if needed
 
 ### 2. Plugin-First Channels
 - Channels are external plugins, not core code
@@ -34,7 +34,7 @@ status: current
 ### 4. Type Safety End-to-End
 - TypeScript everywhere (no Python/JS split)
 - Drizzle ORM for type-safe database access
-- tRPC for type-safe API calls
+- OpenAPI-generated SDKs for type-safe API calls
 - Zod for runtime validation
 
 ## System Components
@@ -43,8 +43,8 @@ status: current
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                                 CLIENTS                                      │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │  Dashboard  │  │   Omni SDK  │  │  Omni CLI   │  │  MCP Tools  │        │
-│  │  (React)    │  │ (TypeScript)│  │   (LLM)     │  │  (Claude)   │        │
+│  │  Dashboard  │  │   Omni SDK  │  │  Omni CLI   │  │  Webhook    │        │
+│  │  (React)    │  │ (TypeScript)│  │   (LLM)     │  │  Sources    │        │
 │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │
 └─────────┼────────────────┼────────────────┼────────────────┼────────────────┘
           │                │                │                │
@@ -54,8 +54,8 @@ status: current
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │                         Hono HTTP Server                               │  │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │  │
-│  │  │  REST API   │  │  tRPC API   │  │  WebSocket  │  │  Webhooks   │  │  │
-│  │  │ /api/v1/*   │  │  /trpc/*    │  │   /ws/*     │  │ /webhook/*  │  │  │
+│  │  │  REST API   │  │  OpenAPI    │  │  Channel    │  │  Ingress    │  │  │
+│  │  │ /api/v2/*   │  │/api/v2/docs │  │  webhooks   │  │ /ingress/*  │  │  │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘  │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 │                                    │                                         │
@@ -73,8 +73,10 @@ status: current
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                             EVENT BUS (NATS)                                 │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │  Streams: MESSAGES | IDENTITY | MEDIA | AGENT | ACCESS | CHANNEL      │  │
-│  │  Features: Persistence | Exactly-once | Replay | Key-Value Store      │  │
+│  │  Streams: MESSAGE | REACTION | INSTANCE | IDENTITY | MEDIA | ACCESS  │  │
+│  │           SESSION | CUSTOM | SYSTEM | AGENT                           │  │
+│  │  Features: Persistence | At-least-once | Replay | Key-Value Store    │  │
+│  │  Journaled to PostgreSQL (omni_events) — the source of truth         │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └───────────┬───────────────────┬───────────────────┬───────────────────┬─────┘
             │                   │                   │                   │
@@ -99,9 +101,11 @@ status: current
 │  └───────────────────────────────────────────────────────────────────────┘  │
 │                                    │                                         │
 │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐  │
-│  │WhatsApp │ │WhatsApp │ │ Discord │ │  Slack  │ │Telegram │ │ Custom  │  │
+│  │WhatsApp │ │WhatsApp │ │ Discord │ │  Slack  │ │Telegram │ │ +7 more │  │
 │  │Baileys  │ │ Cloud   │ │         │ │         │ │         │ │         │  │
 │  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘  │
+│   (also: Gupshup, H3rmes, ASC Flow, Twilio WhatsApp, A2A, Harness,         │
+│    Internal — see the README channel table)                                │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -173,7 +177,7 @@ status: current
 ### Outbound Message Flow (API/CLI)
 
 ```
-1. API Request: POST /api/v1/messages
+1. API Request: POST /api/v2/messages/send
          │
          ▼
 2. Validation & Auth
@@ -205,108 +209,54 @@ status: current
 ```
 packages/
 ├── core/                          # Core domain logic
-│   ├── src/
-│   │   ├── events/               # Event bus, types, streams
-│   │   │   ├── bus.ts            # NATS JetStream wrapper
-│   │   │   ├── types.ts          # Event type definitions
-│   │   │   └── streams.ts        # Stream configuration
-│   │   │
-│   │   ├── identity/             # Identity graph
-│   │   │   ├── service.ts        # IdentityService
-│   │   │   ├── resolver.ts       # Identity resolution logic
-│   │   │   └── merger.ts         # Identity merging
-│   │   │
-│   │   ├── access/               # Access control
-│   │   │   ├── service.ts        # AccessControlService
-│   │   │   ├── rules.ts          # Rule engine
-│   │   │   └── patterns.ts       # Pattern matching
-│   │   │
-│   │   ├── media/                # Media processing
-│   │   │   ├── pipeline.ts       # Processing orchestration
-│   │   │   ├── processors/       # Processor implementations
-│   │   │   │   ├── whisper.ts    # Audio transcription
-│   │   │   │   ├── gemini.ts     # Image/video description
-│   │   │   │   └── document.ts   # Document extraction
-│   │   │   └── storage.ts        # Media storage
-│   │   │
-│   │   ├── router/               # Message routing
-│   │   │   ├── router.ts         # MessageRouter
-│   │   │   ├── agent-client.ts   # Agent API client
-│   │   │   └── splitter.ts       # Message splitting
-│   │   │
-│   │   ├── oauth/                # OAuth management
-│   │   │   ├── manager.ts        # OAuthManager
-│   │   │   └── providers/        # Provider implementations
-│   │   │
-│   │   └── db/                   # Database
-│   │       ├── schema.ts         # Drizzle schema
-│   │       ├── migrations/       # SQL migrations
-│   │       └── client.ts         # Database client
-│   │
-│   └── package.json
+│   └── src/
+│       ├── events/               # Event bus, causality, schema registry
+│       │   ├── bus.ts            # NATS JetStream wrapper
+│       │   ├── causality.ts      # correlationId/causationId propagation
+│       │   ├── schema-registry.ts # Event payload schema validation
+│       │   ├── replay.ts         # Journal replay
+│       │   ├── payload-store.ts  # Large payload offloading
+│       │   ├── dead-letter.ts    # DLQ handling
+│       │   ├── nats/             # Streams, consumers, registry
+│       │   └── types.ts          # Event type definitions
+│       ├── automations/          # Automation engine + actions
+│       ├── providers/            # Agent provider factory (webhook, openclaw, …)
+│       ├── schemas/              # Zod schemas (messages, agents, manifests, …)
+│       ├── connectors/           # Connector liveness contract
+│       ├── sessions/ scheduler/ secrets/ egress/ observability/ …
+│       └── types/                # Shared TypeScript types
 │
 ├── api/                           # HTTP API
-│   ├── src/
-│   │   ├── routes/               # Route handlers
-│   │   │   ├── instances.ts      # Instance CRUD
-│   │   │   ├── messages.ts       # Message operations
-│   │   │   ├── events.ts         # Event queries
-│   │   │   ├── identity.ts       # Identity management
-│   │   │   ├── access.ts         # Access rules
-│   │   │   ├── settings.ts       # Global settings
-│   │   │   └── webhooks.ts       # Webhook receivers
-│   │   │
-│   │   ├── trpc/                 # tRPC router
-│   │   │   ├── router.ts         # Main router
-│   │   │   └── procedures/       # Procedure definitions
-│   │   │
-│   │   ├── middleware/           # Middleware
-│   │   │   ├── auth.ts           # API key auth
-│   │   │   ├── rate-limit.ts     # Rate limiting
-│   │   │   └── logging.ts        # Request logging
-│   │   │
-│   │   ├── websocket/            # WebSocket handlers
-│   │   │   ├── server.ts         # WS server
-│   │   │   └── handlers.ts       # Event handlers
-│   │   │
-│   │   └── index.ts              # Server entry point
-│   │
-│   └── package.json
+│   └── src/
+│       ├── routes/v2/            # All /api/v2 route modules (~40)
+│       ├── services/             # Domain services (events, webhooks, tenants, …)
+│       ├── plugins/              # Agent dispatcher, event persistence, loader
+│       ├── middleware/           # Auth, rate limiting, webhook auth
+│       ├── tenancy/              # Multitenancy flags, posture, auth plane
+│       ├── ws/                   # Scoped WebSocket handlers (chats, logs, voice)
+│       └── index.ts              # Server entry point (auto-migrates on boot)
 │
-├── channel-sdk/                   # Plugin SDK
-│   ├── src/
-│   │   ├── types.ts              # Plugin interfaces
-│   │   ├── base-plugin.ts        # Base class
-│   │   ├── normalizer.ts         # Normalizer interface
-│   │   ├── testing/              # Test utilities
-│   │   └── index.ts              # Public API
-│   │
-│   └── package.json
-│
-├── channel-whatsapp/               # WhatsApp (Baileys)
-├── channel-discord/               # Discord
-│
-├── db/                            # Database package (Drizzle schema + migrations)
-│   └── package.json
-│
-├── media-processing/              # Media handling (transcription, vision, extraction)
-│   └── package.json
-│
+├── db/                            # Drizzle schema + hand-written SQL migrations
+├── channel-sdk/                   # Plugin SDK (interfaces, base class, discovery)
+├── channel-whatsapp/              # WhatsApp (Baileys)
+├── channel-whatsapp-business/     # WhatsApp Cloud API (Meta)
+├── channel-discord/               # Discord (incl. voice)
+├── channel-slack/                 # Slack
+├── channel-telegram/              # Telegram
+├── channel-gupshup/               # Gupshup
+├── channel-hermes/                # H3rmes (Brazilian WhatsApp gateway)
+├── channel-twilio-whatsapp/       # Twilio WhatsApp
+├── channel-a2a/                   # A2A protocol server
+├── channel-asc-flow/              # ASC platform Flow (Brazilian BSP)
+├── channel-harness/               # E2E agent-testing channel
+├── channel-internal/              # In-process agent-to-agent routing
+├── media-processing/              # Transcription, vision, extraction
+├── plugin-openclaw/               # Omni as a channel inside OpenClaw
+├── voice-client/                  # Voice transport/codec library
+├── cli/                           # LLM-optimized CLI (`omni`)
 ├── sdk/                           # Auto-generated TypeScript SDK
-│   └── package.json
-│
 ├── sdk-go/                        # Go SDK
-│   └── go.mod
-│
-├── sdk-python/                    # Python SDK
-│   └── pyproject.toml
-│
-└── cli/                           # LLM-optimized CLI
-    ├── src/
-    │   ├── commands/             # Command implementations
-    │   └── index.ts              # CLI entry point
-    │
-    └── package.json
+└── sdk-python/                    # Python SDK
 ```
 
 ## Configuration
@@ -315,12 +265,13 @@ packages/
 
 ```bash
 # Server
-OMNI_HOST=0.0.0.0
-OMNI_PORT=8881
-OMNI_API_KEY=sk-...
+API_HOST=0.0.0.0
+API_PORT=8882
+OMNI_API_KEY=omni_sk_...  # Override primary key (auto-generated on first boot)
 
-# Database
-DATABASE_URL=postgresql://user:pass@localhost:5432/omni
+# Database (the CLI installer manages PostgreSQL via canonical pgserve and
+# writes the URL; source checkouts read .env — see .env.example)
+DATABASE_URL=postgresql://postgres:postgres@localhost:8432/omni
 
 # NATS
 NATS_URL=nats://localhost:4222
@@ -330,16 +281,14 @@ GROQ_API_KEY=...          # Audio transcription (primary)
 OPENAI_API_KEY=...        # Fallback for audio + images
 GEMINI_API_KEY=...        # Images and video (primary)
 
-# OAuth (for channels that need it)
-SLACK_CLIENT_ID=...
-SLACK_CLIENT_SECRET=...
-WHATSAPP_BUSINESS_APP_ID=...
-WHATSAPP_BUSINESS_APP_SECRET=...
-
 # Feature Flags
-OMNI_EVENTS_REALTIME=true
-OMNI_LEGACY_WRITE=false   # Enable during migration
+A2A_ENABLED=true                     # Mount the A2A channel
+OMNI_MULTITENANCY_ENABLED=true       # Mount the /api/v2/platform control plane
+OMNI_DB_ENFORCEMENT=on               # Tenant isolation enforcement (RLS)
+OMNI_STRICT_EMIT_EVENT_SCHEMAS=true  # Refuse emit_event for unregistered types
 ```
+
+Set `*_MANAGED=false` for externally managed services. Full list in `.env.example`.
 
 ### Instance Configuration
 
@@ -450,72 +399,35 @@ interface InstanceConfig {
 
 ## Deployment (PM2)
 
-We use PM2 for production deployment. No containers required.
+We use PM2 for deployment. No containers required.
 
-### Prerequisites
+The easiest path is the CLI installer, which bootstraps the whole runtime
+(PostgreSQL via pgserve, NATS, and the API) under PM2:
 
 ```bash
-# Install NATS binary (one-time)
-curl -L https://github.com/nats-io/nats-server/releases/download/v2.10.22/nats-server-v2.10.22-linux-amd64.tar.gz | tar xz
-sudo mv nats-server-v2.10.22-linux-amd64/nats-server /usr/local/bin/
-
-# Create NATS data directory
-sudo mkdir -p /var/lib/nats
-sudo chown $USER:$USER /var/lib/nats
+bun add -g @automagik/omni
+omni install
 ```
 
-### PM2 Configuration
+The installer registers `omni-api` and `omni-nats` under PM2 and provisions
+PostgreSQL through the canonical pgserve backbone (its own PM2-supervised
+process, e.g. `autopg-server`).
 
-```javascript
-// ecosystem.config.js
-module.exports = {
-  apps: [
-    // NATS JetStream (message broker)
-    {
-      name: 'nats',
-      script: 'nats-server',
-      args: '--jetstream --store_dir /var/lib/nats',
-      interpreter: 'none',
-      autorestart: true,
-      watch: false,
-    },
+For source deployments, the repo ships `ecosystem.config.cjs`, which defines
+`omni-v2-nats` and `omni-v2-api` (PostgreSQL is external or pgserve-managed,
+per your `.env`):
 
-    // Omni API Server
-    {
-      name: 'omni-api',
-      script: 'bun',
-      args: 'run start:api',
-      cwd: '/path/to/omni-v2',
-      env: {
-        NODE_ENV: 'production',
-        PORT: 8881,
-      },
-      autorestart: true,
-      max_memory_restart: '500M',
-    },
-
-    // Media Processing Workers
-    {
-      name: 'omni-workers',
-      script: 'bun',
-      args: 'run start:workers',
-      cwd: '/path/to/omni-v2',
-      instances: 2,  // Scale based on load
-      env: {
-        NODE_ENV: 'production',
-      },
-      autorestart: true,
-      max_memory_restart: '1G',
-    },
-  ],
-};
-```
+| Service | PM2 Name (installer / source checkout) | Port |
+|---------|----------------------------------------|------|
+| API | `omni-api` / `omni-v2-api` | 8882 |
+| NATS | `omni-nats` / `omni-v2-nats` | 4222 |
+| PostgreSQL | `autopg-server` (canonical pgserve, via `omni install`) | 8432 |
 
 ### Commands
 
 ```bash
-# Start all services
-pm2 start ecosystem.config.js
+# Start all services (from a source checkout)
+pm2 start ecosystem.config.cjs
 
 # View status
 pm2 status
@@ -572,45 +484,18 @@ curl http://localhost:8882/api/v2/health
 - Immutable event log
 - Retention policies configurable
 
-## MCP Integration (Model Context Protocol)
+## LLM / Agent Integration
 
-Omni v2 includes an MCP server that enables AI assistants (Claude, Cursor, Windsurf, etc.) to interact with the platform.
+There is no MCP server in this repository. AI assistants and agents integrate
+with Omni through:
 
-### Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `omni_list_instances` | List all instances with status |
-| `omni_get_instance` | Get instance details |
-| `omni_send_message` | Send text/media message |
-| `omni_search_messages` | Search message history |
-| `omni_search_persons` | Find persons across channels |
-| `omni_get_person_presence` | Get cross-channel presence |
-| `omni_get_timeline` | Get conversation timeline |
-| `omni_create_instance` | Create new instance |
-| `omni_restart_instance` | Restart connection |
-
-### Running the MCP Server
-
-```bash
-# HTTP mode (for web clients)
-bun run mcp:http
-
-# Stdio mode (for Claude Desktop)
-bun run mcp:stdio
-```
-
-### Client Installation
-
-```bash
-# Claude Desktop
-npx @anthropic/install-mcp omni --url http://localhost:8882/mcp
-
-# Cursor / VSCode
-# Add to settings.json:
-{
-  "mcp.servers": {
-    "omni": { "url": "http://localhost:8882/mcp" }
-  }
-}
-```
+- **The CLI** (`omni`) — designed to be LLM-operable: grouped help, `--json`
+  output on every command, and one-shot verbs (`omni say`, `omni open`,
+  `omni events wait`)
+- **The REST API + SDKs** — OpenAPI-described, so agents can consume the spec
+  directly
+- **Agent providers** — bind an agent (webhook, OpenClaw, Claude Code, A2A,
+  and more) to an instance so it responds to messages; see
+  [[provider-system|Provider System]]
+- **Agent event manifests** — declare what an agent consumes/publishes and let
+  Omni compile the routing; see [[event-system|Event System]]

@@ -210,23 +210,34 @@ pm2 save
 
 ## CLI Usage Per Instance
 
-The `omni` CLI defaults to `http://localhost:8882`. When managing a non-default instance, specify the API URL and key:
+The `omni` CLI defaults to `http://localhost:8882`. To manage multiple deployments, register each one in the CLI's server registry and switch between them:
 
 ```bash
-# Talk to the staging instance
-omni instances list --api-url http://localhost:8883
+# Register each deployment once (verifies reachability and key before saving)
+omni server add prod http://localhost:8882
+omni server add staging http://localhost:8883
 
-# Set a per-instance API key for auth
-omni instances list --api-url http://localhost:8883 --api-key <staging-key>
+# List registered servers (keys are masked) and see which one is active
+omni server list
+omni server current
+
+# Target a server for a single command with the global --server flag
+omni --server staging instances list
+
+# Or switch the active server for all subsequent commands
+omni server use staging
+omni instances list
 
 # Tip: use shell aliases for convenience
-alias omni-prod='omni --api-url http://localhost:8882 --api-key $PROD_KEY'
-alias omni-staging='omni --api-url http://localhost:8883 --api-key $STAGING_KEY'
+alias omni-prod='omni --server prod'
+alias omni-staging='omni --server staging'
 
 # Then use naturally
 omni-staging instances list
 omni-prod routes list --instance <id>
 ```
+
+> There is no global `--api-url`/`--api-key` flag — those exist only on `omni auth login` / `omni auth recover`. The server registry above is the supported way to address multiple deployments.
 
 ## Environment Variable Reference
 
@@ -246,6 +257,13 @@ omni-prod routes list --instance <id>
 | `LOG_LEVEL` | Log verbosity | `debug` |
 
 ## Known Limitations
+
+### Independent Event Journals
+
+Each deployment has its own PostgreSQL event journal, so durable event
+consumers (`omni events consumers`) and their cursors are scoped to one
+deployment — a consumer registered on staging knows nothing about prod's
+journal.
 
 ### Multi-Device Routing Unpredictability
 

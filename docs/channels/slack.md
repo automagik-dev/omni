@@ -39,6 +39,8 @@ February 2027**; new Slack apps can only use `agent_view`, and the switch from
 3. For Socket Mode (default): an **app-level token** (`xapp-...`) with
    `connections:write`.
 4. A **bot token** (`xoxb-...`) issued on install.
+5. Optional: a **user token** (`xoxp-...`) if you want user-token mode —
+   required for message search (see below).
 
 ## Setup
 
@@ -98,8 +100,33 @@ Provide the tokens as instance credentials:
 ```
 
 See `SlackConfig` (`packages/channel-slack/src/types.ts`) for every option:
-DM policy, channel allow/blocklists, stream mode, reply-to mode, slash
-commands, and user-token mode (`authMode: 'user'`, #889).
+DM policy (`dmPolicy`, `dmAllowlist`), channel allow/blocklists, stream mode
+(`streamMode`, `streamThrottleMs`), reply-to mode, ack reactions
+(`ackReaction`, `removeAckAfterReply`), display defaults (`defaultUsername`,
+`defaultIconUrl`/`defaultIconEmoji`), HTTP mode (`httpPort`, `signingSecret`),
+retry config, and user-token mode (below).
+
+### User-token (`xoxp`) mode (#889)
+
+Set `authMode: 'user'` and provide a `userToken` (`xoxp-...`) to have the
+instance act as a user instead of (only) a bot:
+
+```jsonc
+{
+  "channel": "slack",
+  "config": {
+    "botToken": "xoxb-...",   // still required — Bolt authenticates with it
+    "appToken": "xapp-...",
+    "authMode": "user",
+    "userToken": "xoxp-..."   // prefix-validated; an xoxb here is rejected
+  }
+}
+```
+
+The **bot token stays mandatory** in user mode: it authenticates the Socket
+Mode connection and is the fallback for scopes the user token lacks. User mode
+is required for `search.messages` (the `search:read` scope only exists as a
+user scope).
 
 ### 3. Verify
 
@@ -111,6 +138,34 @@ configured. You should see:
   clears),
 - the streamed reply rendered word-by-word (native `chat.startStream` when the
   workspace supports it).
+
+## Messaging features (#889)
+
+Beyond send/receive, the Slack plugin supports:
+
+- **Threads** — `thread_ts` resolution via `replyToMode`, thread history
+  through `conversations.replies`, and thread roots/reply counters recorded on
+  messages.
+- **Scheduled messages** — native `chat.scheduleMessage` (text-only), surfaced
+  as `omni schedule send <instance> <chat> "..." --at 2h` and
+  `POST /api/v2/scheduled-messages`. Cancel with `omni schedule cancel <id>`.
+- **Permalinks** — `GET /api/v2/messages/:id/permalink` resolves via
+  `chat.getPermalink` and caches on the message row.
+- **Pins** — `pin_added`/`pin_removed` events populate `pinnedAt`/`pinnedBy`
+  on messages; agents get `pins.add`/`pins.remove` tools.
+- **Message search** — `omni slack search <instance> <query>` wraps
+  `search.messages`. Requires user-token mode (`search:read` is a user scope);
+  results are from the authorizing user's perspective.
+- **DM open** — `omni slack dm <instance> <userId>` resolves/opens the DM
+  channel for a `U…` user id and prints the follow-up send command.
+
+## Socket health (#941)
+
+A Slack instance can look "connected" while its WebSocket is deaf —
+`auth.test` is HTTPS and stays `ok` even when the Socket Mode WSS never
+opened. Omni therefore verifies the real WebSocket `readyState` on connect
+(waiting for the `connected` event with a timeout) and health checks fail
+first on a dead socket rather than trusting `app.start()`.
 
 ## Status & stop internals
 

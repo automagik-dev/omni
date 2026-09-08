@@ -43,7 +43,8 @@ half-deactivate a security boundary.
 
 With both flags in their default state:
 
-- **No new control-plane surface.** The ten platform tenant/membership endpoints
+- **No new control-plane surface.** The eleven platform control-plane endpoints
+  (tenant/membership management plus tenant root-key issuance)
   are documented in the OpenAPI spec (tagged `Platform`) but are not mounted;
   a request to them returns 404, not 401.
 - **Master-key auth is unchanged.** A legacy key carries no tenant context.
@@ -97,6 +98,12 @@ check reading the removed fields will now see them missing. Migrate as follows:
   `freshness != "current"`.
 
 - **Per-consumer detail** → the authenticated event-ops surface.
+
+  Note: `/health/consumers` reports the **NATS processing offsets**
+  (`consumer_offsets`), not the named durable consumers registry
+  (`durable_consumers`). Lag for named consumers is per-consumer via
+  `omni events consumers ls` / `inspect` — see the
+  [durable consumers runbook](../runbooks/durable-consumers.md).
 
 A failing consumer health check now returns `{"status":"error"}` with HTTP 500
 and nothing else; the driver detail (host, port, database, role) goes to the
@@ -168,7 +175,7 @@ Run the online phase **before** upgrading:
 ```bash
 # 1. Preflight: which high-volume tables still need indexes, and how big are they.
 #    Reports and exits without changing anything.
-bun run db:online-ddl --url "postgres://…" --check
+cd packages/db && bun run db:online-ddl --url "postgres://…" --check
 
 # 2. Online phase: adds the nullable columns (catalog-only, instant) and builds
 #    every index with CREATE INDEX CONCURRENTLY — no long lock, and resumable.

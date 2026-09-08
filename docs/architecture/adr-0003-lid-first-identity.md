@@ -268,8 +268,9 @@ pass `isValidE164Phone` **and not** `isLidFormat` (`packages/api/src/utils/phone
 All schema edits land **with** their generated migration in the same commit
 (AGENTS.md; `.claude/CLAUDE.md` §Database). The latest migration is
 `packages/db/drizzle/0051_message_pin_star.sql`; the first new file here is
-`0052_identity_links.sql` (generate with `bunx drizzle-kit generate`, **never**
-`drizzle-kit push`). No already-deployed migration is edited.
+`0052_identity_links.sql` (hand-written following the additive/idempotent
+migration precedent — `drizzle-kit generate` is broken in this repo and
+`drizzle-kit push` is forbidden). No already-deployed migration is edited.
 
 ### 3.1 `platform_identities` — add a stable *anchor* concept, keep the raw handle
 
@@ -573,7 +574,7 @@ run repeatedly while the API serves traffic. Ordering matters:
 1. **Schema migration `0052_identity_links.sql`** — create `identity_links`; add
    `anchor_type` / `anchor_id` / `phone_e164` / `phone_verified` to
    `platform_identities`; add the new indexes. Additive only; no data moves.
-   (`bunx drizzle-kit generate`, commit SQL + schema together.)
+   (Hand-written SQL plus a journal entry; commit SQL + schema together.)
 2. **Normalize + collapse key-fragmentation (D6, ~1164 cases) FIRST.**
    Canonicalize `platform_user_id` (strip `whatsapp:` prefix / JID suffix /
    device `:NN`) and merge the bare-digits vs `<n>@s.whatsapp.net` twins in the
