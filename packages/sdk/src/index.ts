@@ -99,6 +99,7 @@ export type {
   WebhookSource,
   ListWebhookSourcesParams,
   WebhookSignatureConfigBody,
+  WebhookEventTypeMappingBody,
   CreateWebhookSourceBody,
   TriggerEventBody,
   WebhookHeartbeatResponse,

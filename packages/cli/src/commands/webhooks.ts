@@ -13,7 +13,8 @@
  * or stdin (`--signature-secret-stdin`, for `pass show ... | omni webhooks ...`).
  */
 
-import type { WebhookSignatureConfigBody } from '@omni/sdk';
+import { readFileSync } from 'node:fs';
+import type { WebhookEventTypeMappingBody, WebhookSignatureConfigBody } from '@omni/sdk';
 import { Command } from 'commander';
 import { z } from 'zod';
 import { getClient } from '../client.js';
@@ -114,6 +115,59 @@ function buildSignatureConfig(options: {
   return { algorithm, header: signatureHeader, prefix: signaturePrefix };
 }
 
+/**
+ * Same shape the API enforces on `eventTypeMapping`
+ * (schemas/openapi/webhooks.ts, #959/#984): header-source or body-source.
+ */
+const eventTypeMappingSchema = z.discriminatedUnion('source', [
+  z.object({
+    source: z.literal('header'),
+    header: z.string().min(1, 'header must be 1-200 characters').max(200, 'header must be 1-200 characters'),
+  }),
+  z.object({
+    source: z.literal('body'),
+    path: z.string().min(1, 'path must be 1-200 characters').max(200, 'path must be 1-200 characters'),
+  }),
+]);
+
+const EVENT_TYPE_MAPPING_HINT =
+  'expected {"source":"header","header":"X-GitHub-Event"} or {"source":"body","path":"event"}';
+
+/**
+ * Parse `--event-type-mapping` — inline JSON, or `@path/to/file.json` (the
+ * repo's existing @file convention, cf. follow-up's JSON args) — and validate
+ * it against the API's mapping schema. Returns undefined when the flag was
+ * not given; throws (caught by the command's error path) BEFORE any request
+ * is sent on an unreadable file, invalid JSON, or a schema-invalid mapping.
+ */
+function resolveEventTypeMapping(raw: string | undefined): WebhookEventTypeMappingBody | undefined {
+  if (raw === undefined) return undefined;
+  let text = raw;
+  if (raw.startsWith('@')) {
+    const path = raw.slice(1);
+    try {
+      text = readFileSync(path, 'utf-8');
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Unknown error';
+      throw new Error(`Cannot read --event-type-mapping file '${path}': ${reason}`);
+    }
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(`Invalid JSON for --event-type-mapping; ${EVENT_TYPE_MAPPING_HINT}`);
+  }
+  const result = eventTypeMappingSchema.safeParse(parsed);
+  if (!result.success) {
+    const reason = result.error.issues
+      .map((issue) => (issue.path.length > 0 ? `${issue.path.join('.')}: ${issue.message}` : issue.message))
+      .join('; ');
+    throw new Error(`Invalid --event-type-mapping: ${reason}; ${EVENT_TYPE_MAPPING_HINT}`);
+  }
+  return result.data;
+}
+
 interface UpdateSourceOptions extends SignatureSecretOptions {
   name?: string;
   description?: string;
@@ -127,6 +181,10 @@ interface UpdateSourceOptions extends SignatureSecretOptions {
   // Strict schema mode (#1000): commander negatable pair — true from
   // --strict-schemas, false from --no-strict-schemas, undefined = untouched.
   strictSchemas?: boolean;
+  // Semantic event-type extraction (#1011): set vs clear vs untouched,
+  // following the --clear-signature / --clear-cadence precedent.
+  eventTypeMapping?: string;
+  clearEventTypeMapping?: boolean;
   // Connector lifecycle contract (#961)
   expectedInterval?: string;
   clearCadence?: boolean;
@@ -142,6 +200,7 @@ interface UpdateSourcePatch {
   signatureSecret?: string;
   idempotencyKeyTemplate?: string;
   strictSchemas?: boolean;
+  eventTypeMapping?: WebhookEventTypeMappingBody | null;
   expectedIntervalSeconds?: number | null;
   windowSemantics?: (typeof WINDOW_SEMANTICS)[number];
   mutationPolicy?: (typeof MUTATION_POLICIES)[number];
@@ -154,6 +213,12 @@ async function buildUpdateSourcePatch(options: UpdateSourceOptions): Promise<Upd
   if (options.description) updates.description = options.description;
   if (options.idempotencyKeyTemplate) updates.idempotencyKeyTemplate = options.idempotencyKeyTemplate;
   if (options.strictSchemas !== undefined) updates.strictSchemas = options.strictSchemas;
+  if (options.clearEventTypeMapping && options.eventTypeMapping !== undefined) {
+    throw new Error('Use only one of --event-type-mapping and --clear-event-type-mapping');
+  }
+  if (options.clearEventTypeMapping) updates.eventTypeMapping = null;
+  const eventTypeMapping = resolveEventTypeMapping(options.eventTypeMapping);
+  if (eventTypeMapping !== undefined) updates.eventTypeMapping = eventTypeMapping;
   if (options.enable) updates.enabled = true;
   if (options.disable) updates.enabled = false;
   if (options.clearSignature) {
@@ -327,6 +392,12 @@ export function createWebhooksCommand(): Command {
         'schema_not_registered, #1000). Recommended for new sources. Defaults to off',
     )
     .option(
+      '--event-type-mapping <json>',
+      'Semantic event-type extraction (#959): inline JSON or @path/to/file.json, e.g. ' +
+        '\'{"source":"header","header":"X-GitHub-Event"}\' or \'{"source":"body","path":"event"}\'. ' +
+        'A mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source}',
+    )
+    .option(
       '--expected-interval <seconds>',
       'Declared cadence: >=1 event or heartbeat per N seconds. Arms liveness supervision (#961)',
     )
@@ -346,6 +417,7 @@ export function createWebhooksCommand(): Command {
         signatureSecretStdin?: boolean;
         idempotencyKeyTemplate?: string;
         strictSchemas?: boolean;
+        eventTypeMapping?: string;
         expectedInterval?: string;
         windowSemantics?: string;
         mutationPolicy?: string;
@@ -375,6 +447,7 @@ export function createWebhooksCommand(): Command {
             signatureSecret,
             idempotencyKeyTemplate: options.idempotencyKeyTemplate,
             strictSchemas: options.strictSchemas,
+            eventTypeMapping: resolveEventTypeMapping(options.eventTypeMapping),
             expectedIntervalSeconds: parseExpectedInterval(options.expectedInterval),
             windowSemantics: parseWindowSemantics(options.windowSemantics),
             mutationPolicy: parseMutationPolicy(options.mutationPolicy),
@@ -426,6 +499,15 @@ export function createWebhooksCommand(): Command {
         'schema_not_registered, #1000)',
     )
     .option('--no-strict-schemas', 'Return the source to opt-in pass-through for unregistered event types')
+    .option(
+      '--event-type-mapping <json>',
+      'Semantic event-type extraction (#959): inline JSON or @path/to/file.json, e.g. ' +
+        '\'{"source":"header","header":"X-GitHub-Event"}\' or \'{"source":"body","path":"event"}\'',
+    )
+    .option(
+      '--clear-event-type-mapping',
+      'Remove the mapping (deliveries fall back to the collapsed custom.webhook.{source} type)',
+    )
     .option(
       '--expected-interval <seconds>',
       'Declared cadence: >=1 event or heartbeat per N seconds. (Re)arms liveness supervision (#961)',
@@ -530,4 +612,10 @@ export function createWebhooksCommand(): Command {
 }
 
 /** Test-only surface — not part of the CLI contract. */
-export const __testables = { resolveSignatureSecret, buildSignatureConfig, assertPairedSignatureOnCreate };
+export const __testables = {
+  resolveSignatureSecret,
+  buildSignatureConfig,
+  assertPairedSignatureOnCreate,
+  resolveEventTypeMapping,
+  buildUpdateSourcePatch,
+};
