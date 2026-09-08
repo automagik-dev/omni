@@ -22,6 +22,15 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
  */
 export const SCHEMA_VALIDATION_FAILED = 'schema_validation_failed';
 
+/**
+ * Dead-letter reason for events refused by a STRICT gate because their type
+ * has no enabled registered schema (issue #1000, the RFC #925 G1 policy
+ * switch). Strict mode is opt-in — per webhook source, or via
+ * `OMNI_STRICT_EMIT_EVENT_SCHEMAS` for automation `emit_event` — so this
+ * reason only ever appears for emitters that were explicitly tightened.
+ */
+export const SCHEMA_NOT_REGISTERED = 'schema_not_registered';
+
 /** A JSON Schema artifact as stored in `event_schemas.schema`. */
 export type EventJsonSchema = Record<string, unknown>;
 

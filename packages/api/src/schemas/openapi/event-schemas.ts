@@ -91,7 +91,10 @@ export function registerEventSchemaSchemas(registry: OpenAPIRegistry): void {
     description:
       'Register a JSON Schema for an event type. Once registered, the webhook ingress and automation ' +
       'emit_event validate payloads of this type before publishing; invalid payloads are dead-lettered with ' +
-      'reason schema_validation_failed. Revising an existing registration must be additive-optional ' +
+      'reason schema_validation_failed. Unregistered types pass through unless the emitter is strict ' +
+      '(webhook_sources.strictSchemas, or OMNI_STRICT_EMIT_EVENT_SCHEMAS for emit_event), in which case ' +
+      'they are dead-lettered with reason schema_not_registered. ' +
+      'Revising an existing registration must be additive-optional ' +
       '(the evolution rule) — an incompatible change is refused with 409 and must ship as a new versioned ' +
       'event type (e.g. custom.github.push.v2).',
     request: { body: { content: { 'application/json': { schema: RegisterEventSchemaSchema } } } },

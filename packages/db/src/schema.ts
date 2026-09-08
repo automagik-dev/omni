@@ -2819,6 +2819,15 @@ export const webhookSources = pgTable(
     // `custom.webhook.{source}` type for every delivery.
     eventTypeMapping: jsonb('event_type_mapping').$type<WebhookEventTypeMapping>(),
 
+    /**
+     * Per-source strict schema mode (issue #1000, RFC #925 G1 policy switch).
+     * When true, a delivery resolving to an event type with NO enabled
+     * registered schema is refused and dead-lettered with reason
+     * `schema_not_registered` instead of passing through. Default false:
+     * existing sources keep the opt-in pass-through until opted in.
+     */
+    strictSchemas: boolean('strict_schemas').notNull().default(false),
+
     // State
     enabled: boolean('enabled').notNull().default(true),
 

@@ -1635,7 +1635,7 @@ export interface paths {
         put?: never;
         /**
          * Register or revise an event schema
-         * @description Register a JSON Schema for an event type. Once registered, the webhook ingress and automation emit_event validate payloads of this type before publishing; invalid payloads are dead-lettered with reason schema_validation_failed. Revising an existing registration must be additive-optional (the evolution rule) — an incompatible change is refused with 409 and must ship as a new versioned event type (e.g. custom.github.push.v2).
+         * @description Register a JSON Schema for an event type. Once registered, the webhook ingress and automation emit_event validate payloads of this type before publishing; invalid payloads are dead-lettered with reason schema_validation_failed. Unregistered types pass through unless the emitter is strict (webhook_sources.strictSchemas, or OMNI_STRICT_EMIT_EVENT_SCHEMAS for emit_event), in which case they are dead-lettered with reason schema_not_registered. Revising an existing registration must be additive-optional (the evolution rule) — an incompatible change is refused with 409 and must ship as a new versioned event type (e.g. custom.github.push.v2).
          */
         post: operations["registerEventSchema"];
         delete?: never;
@@ -4227,6 +4227,8 @@ export interface components {
             idempotencyKeyTemplate: string;
             /** @description Redeliveries acked without creating a second event */
             totalDuplicates: number;
+            /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
+            strictSchemas: boolean;
             /** @description Whether enabled */
             enabled: boolean;
             /**
@@ -4306,6 +4308,8 @@ export interface components {
             signatureSecret?: string | null;
             /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
             idempotencyKeyTemplate?: string;
+            /** @description Strict schema mode (RFC #925 G1 policy switch): when true, a delivery resolving to an event type with no enabled registered schema is refused and dead-lettered with reason schema_not_registered (manual retry only) instead of passing through. Defaults to false (opt-in pass-through). Recommended true for NEW sources — they have no legacy emitters to grandfather. */
+            strictSchemas?: boolean;
             /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
             eventTypeMapping?: {
                 /**
@@ -11481,6 +11485,8 @@ export interface operations {
                             idempotencyKeyTemplate: string;
                             /** @description Redeliveries acked without creating a second event */
                             totalDuplicates: number;
+                            /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
+                            strictSchemas: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -11574,6 +11580,8 @@ export interface operations {
                     signatureSecret?: string | null;
                     /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
                     idempotencyKeyTemplate?: string;
+                    /** @description Strict schema mode (RFC #925 G1 policy switch): when true, a delivery resolving to an event type with no enabled registered schema is refused and dead-lettered with reason schema_not_registered (manual retry only) instead of passing through. Defaults to false (opt-in pass-through). Recommended true for NEW sources — they have no legacy emitters to grandfather. */
+                    strictSchemas?: boolean;
                     /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
                     eventTypeMapping?: {
                         /**
@@ -11654,6 +11662,8 @@ export interface operations {
                             idempotencyKeyTemplate: string;
                             /** @description Redeliveries acked without creating a second event */
                             totalDuplicates: number;
+                            /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
+                            strictSchemas: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -11794,6 +11804,8 @@ export interface operations {
                             idempotencyKeyTemplate: string;
                             /** @description Redeliveries acked without creating a second event */
                             totalDuplicates: number;
+                            /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
+                            strictSchemas: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**
@@ -11958,6 +11970,8 @@ export interface operations {
                     signatureSecret?: string | null;
                     /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
                     idempotencyKeyTemplate?: string;
+                    /** @description Strict schema mode (RFC #925 G1 policy switch): when true, a delivery resolving to an event type with no enabled registered schema is refused and dead-lettered with reason schema_not_registered (manual retry only) instead of passing through. Defaults to false (opt-in pass-through). Recommended true for NEW sources — they have no legacy emitters to grandfather. */
+                    strictSchemas?: boolean;
                     /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
                     eventTypeMapping?: {
                         /**
@@ -12038,6 +12052,8 @@ export interface operations {
                             idempotencyKeyTemplate: string;
                             /** @description Redeliveries acked without creating a second event */
                             totalDuplicates: number;
+                            /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
+                            strictSchemas: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
                             /**

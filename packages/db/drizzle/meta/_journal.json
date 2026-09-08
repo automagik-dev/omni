@@ -421,6 +421,13 @@
       "when": 1785900000000,
       "tag": "0059_ingress_idempotency",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1786000000000,
+      "tag": "0060_webhook_source_strict_schemas",
+      "breakpoints": true
     }
   ]
 }

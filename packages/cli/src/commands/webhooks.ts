@@ -124,6 +124,9 @@ interface UpdateSourceOptions extends SignatureSecretOptions {
   signaturePrefix?: string;
   clearSignature?: boolean;
   idempotencyKeyTemplate?: string;
+  // Strict schema mode (#1000): commander negatable pair — true from
+  // --strict-schemas, false from --no-strict-schemas, undefined = untouched.
+  strictSchemas?: boolean;
   // Connector lifecycle contract (#961)
   expectedInterval?: string;
   clearCadence?: boolean;
@@ -138,6 +141,7 @@ interface UpdateSourcePatch {
   signatureConfig?: WebhookSignatureConfigBody | null;
   signatureSecret?: string;
   idempotencyKeyTemplate?: string;
+  strictSchemas?: boolean;
   expectedIntervalSeconds?: number | null;
   windowSemantics?: (typeof WINDOW_SEMANTICS)[number];
   mutationPolicy?: (typeof MUTATION_POLICIES)[number];
@@ -149,6 +153,7 @@ async function buildUpdateSourcePatch(options: UpdateSourceOptions): Promise<Upd
   if (options.name) updates.name = options.name;
   if (options.description) updates.description = options.description;
   if (options.idempotencyKeyTemplate) updates.idempotencyKeyTemplate = options.idempotencyKeyTemplate;
+  if (options.strictSchemas !== undefined) updates.strictSchemas = options.strictSchemas;
   if (options.enable) updates.enabled = true;
   if (options.disable) updates.enabled = false;
   if (options.clearSignature) {
@@ -317,6 +322,11 @@ export function createWebhooksCommand(): Command {
         "{headers.<name>}, {payload.<dot.path>}. Defaults to '{source}:{sha256(body)}'",
     )
     .option(
+      '--strict-schemas',
+      'Refuse deliveries whose event type has no enabled registered schema (dead-lettered as ' +
+        'schema_not_registered, #1000). Recommended for new sources. Defaults to off',
+    )
+    .option(
       '--expected-interval <seconds>',
       'Declared cadence: >=1 event or heartbeat per N seconds. Arms liveness supervision (#961)',
     )
@@ -335,6 +345,7 @@ export function createWebhooksCommand(): Command {
         signatureSecretEnv?: string;
         signatureSecretStdin?: boolean;
         idempotencyKeyTemplate?: string;
+        strictSchemas?: boolean;
         expectedInterval?: string;
         windowSemantics?: string;
         mutationPolicy?: string;
@@ -363,6 +374,7 @@ export function createWebhooksCommand(): Command {
             signatureConfig,
             signatureSecret,
             idempotencyKeyTemplate: options.idempotencyKeyTemplate,
+            strictSchemas: options.strictSchemas,
             expectedIntervalSeconds: parseExpectedInterval(options.expectedInterval),
             windowSemantics: parseWindowSemantics(options.windowSemantics),
             mutationPolicy: parseMutationPolicy(options.mutationPolicy),
@@ -408,6 +420,12 @@ export function createWebhooksCommand(): Command {
       'Delivery-identity key template for redelivery dedup (#958). Placeholders: {source}, {sha256(body)}, ' +
         '{headers.<name>}, {payload.<dot.path>}',
     )
+    .option(
+      '--strict-schemas',
+      'Refuse deliveries whose event type has no enabled registered schema (dead-lettered as ' +
+        'schema_not_registered, #1000)',
+    )
+    .option('--no-strict-schemas', 'Return the source to opt-in pass-through for unregistered event types')
     .option(
       '--expected-interval <seconds>',
       'Declared cadence: >=1 event or heartbeat per N seconds. (Re)arms liveness supervision (#961)',
