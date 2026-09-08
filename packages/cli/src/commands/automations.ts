@@ -40,6 +40,9 @@ interface CreateOptions {
   description?: string;
   priority?: number;
   disabled?: boolean;
+  // Transactional publication (G5, #988): true from --transactional-emissions,
+  // undefined when the flag is not given (server default false applies).
+  transactionalEmissions?: boolean;
   agentId?: string;
   providerId?: string;
   responseAs?: string;
@@ -133,6 +136,9 @@ export function createAutomationsCommand(): Command {
           trigger: a.triggerEventType,
           enabled: a.enabled ? 'yes' : 'no',
           priority: a.priority,
+          // Compiled from an agent manifest (#986) — managed rows reject
+          // manual mutation; edit the owning agent's manifest instead.
+          managed: a.managedByAgentId ? 'manifest' : '-',
         }));
 
         output.list(items, { emptyMessage: 'No automations found.' });
@@ -172,6 +178,11 @@ export function createAutomationsCommand(): Command {
     .option('--description <desc>', 'Automation description')
     .option('--priority <n>', 'Priority (higher = runs first)', (v) => Number.parseInt(v, 10))
     .option('--disabled', 'Create in disabled state')
+    .option(
+      '--transactional-emissions',
+      "Buffer the run's emit_event publishes and flush them in order only when every action succeeded; " +
+        'a failed run publishes zero (#988). Defaults to off (immediate publishing)',
+    )
     // call_agent specific options
     .option('--agent-id <id>', 'Agent ID (for call_agent action)')
     .option('--provider-id <id>', 'Provider ID (for call_agent action)')
@@ -208,6 +219,7 @@ export function createAutomationsCommand(): Command {
           ],
           priority: options.priority,
           enabled: !options.disabled,
+          transactionalEmissions: options.transactionalEmissions,
         });
 
         output.success(`Automation created: ${automation.id}`, {
@@ -229,26 +241,42 @@ export function createAutomationsCommand(): Command {
     .option('--name <name>', 'New name')
     .option('--description <desc>', 'New description')
     .option('--priority <n>', 'New priority', (v) => Number.parseInt(v, 10))
-    .action(async (id: string, options: { name?: string; description?: string; priority?: number }) => {
-      const client = getClient();
+    .option(
+      '--transactional-emissions',
+      "Buffer the run's emit_event publishes and flush them in order only when every action succeeded; " +
+        'a failed run publishes zero (#988)',
+    )
+    .option('--no-transactional-emissions', 'Return the automation to immediate mid-sequence publishing')
+    .action(
+      async (
+        id: string,
+        // Commander negatable pair (#988, mirrors --strict-schemas from #1000):
+        // true from --transactional-emissions, false from
+        // --no-transactional-emissions, undefined when neither flag is given —
+        // the field is then omitted from the PATCH and stays untouched.
+        options: { name?: string; description?: string; priority?: number; transactionalEmissions?: boolean },
+      ) => {
+        const client = getClient();
 
-      try {
-        const automationId = await resolveAutomationId(id);
-        const automation = await client.automations.update(automationId, {
-          name: options.name,
-          description: options.description,
-          priority: options.priority,
-        });
+        try {
+          const automationId = await resolveAutomationId(id);
+          const automation = await client.automations.update(automationId, {
+            name: options.name,
+            description: options.description,
+            priority: options.priority,
+            transactionalEmissions: options.transactionalEmissions,
+          });
 
-        output.success(`Automation updated: ${automation.id}`, {
-          id: automation.id,
-          name: automation.name,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to update automation: ${message}`);
-      }
-    });
+          output.success(`Automation updated: ${automation.id}`, {
+            id: automation.id,
+            name: automation.name,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to update automation: ${message}`);
+        }
+      },
+    );
 
   // omni automations delete <id>
   automations

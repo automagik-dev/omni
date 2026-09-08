@@ -9,6 +9,7 @@
  * - message.received (history-sync) → find/create chat → create message (source: 'sync')
  * - message.sent → find/create chat → create message (source: 'realtime', isFromMe: true)
  * - message.delivered/read → update message delivery status
+ * - message.pinned/unpinned → update per-message pin state (#889)
  *
  * @see unified-messages wish
  *
@@ -16,7 +17,7 @@
  * -----------------------------
  * This is the dominant inbound consumer: every message on every channel lands
  * here and writes `chats`, `messages`, `chat_participants`, `chat_id_mappings`,
- * `platform_identities` and `instances`. All five handlers are consumer-only —
+ * `platform_identities` and `instances`. All of its handlers are consumer-only —
  * a NATS subscription, no request, no credential — so until this leg every one
  * of those writes reached the ambient pool, which is why nine db-access-guard
  * sites stayed `pending-G5-conversion` long after their route callers were
@@ -55,7 +56,7 @@
  * byte-identical down to the call order.
  */
 
-import type { EventBus, MessageReceivedPayload, MessageSentPayload } from '@omni/core';
+import type { EventBus, MessageReceivedPayload, MessageSentPayload, TypedOmniEvent } from '@omni/core';
 import { classifyEnvelope, createLogger } from '@omni/core';
 import type { ChannelType, ChatType, MessageType } from '@omni/db';
 import * as Sentry from '@sentry/bun';
@@ -66,6 +67,7 @@ import {
   runConsumerInTenantContext,
   runTenantWorkDb,
 } from '../tenancy/worker-tenant-context';
+import { canonicalizeHandle, isPersonlessChannel } from '../utils/canonical-handle';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
 import { getPlugin } from './loader';
 
@@ -296,6 +298,7 @@ export function buildSentMessageContentFields(payload: MessageSentPayload): {
   mediaMetadata?: Record<string, unknown>;
   rawPayload?: Record<string, unknown>;
 } {
+  const sanitizedRawPayload = payload.rawPayload ? deepSanitize(payload.rawPayload) : undefined;
   return {
     textContent: sanitizeText(payload.content.text ?? payload.content.caption),
     hasMedia: isSentMediaContent(payload.content),
@@ -303,7 +306,10 @@ export function buildSentMessageContentFields(payload: MessageSentPayload): {
     mediaUrl: payload.content.mediaUrl,
     mediaLocalPath: payload.content.localPath,
     mediaMetadata: buildSentMediaMetadata(payload.content, payload.rawPayload),
-    rawPayload: payload.rawPayload ? deepSanitize(payload.rawPayload) : undefined,
+    // omniSystemNotice: queried by AgentReplayService's answered-turn guard —
+    // a procedural courtesy send (auto-ack, error feedback) must not look
+    // like an answer to the turn (#912 review)
+    rawPayload: payload.systemNotice ? { ...(sanitizedRawPayload ?? {}), omniSystemNotice: true } : sanitizedRawPayload,
   };
 }
 
@@ -312,31 +318,6 @@ function buildSentChatPreview(payload: MessageSentPayload): string {
   const badge =
     payload.content.type !== 'text' ? (MEDIA_BADGES[payload.content.type] ?? `[${payload.content.type}]`) : '';
   return badge ? (text ? `${badge} ${text}` : badge) : text;
-}
-
-/**
- * Extract and validate phone from sender ID.
- * Returns E.164 phone (+digits) or undefined for non-phone IDs.
- *
- * Filters out:
- * - Group IDs (contain dashes, e.g. "120363123-1234567@g.us")
- * - LID references (numeric but not phone numbers)
- * - Meta IDs (non-numeric platform identifiers)
- * - IDs that are too short (<7 digits) or too long (>15 digits)
- */
-function extractPhoneFromSender(senderId: string, channel: string): string | undefined {
-  if (!channel.startsWith('whatsapp')) return undefined;
-
-  // Strip @suffix if still present (defensive)
-  const bare = senderId.split('@')[0] || senderId;
-
-  // Must be only digits (filters out group IDs with dashes, meta IDs, LIDs with letters)
-  if (!/^\d+$/.test(bare)) return undefined;
-
-  // E.164 validation: 7-15 digits
-  if (bare.length < 7 || bare.length > 15) return undefined;
-
-  return `+${bare}`;
 }
 
 // ============================================================================
@@ -367,19 +348,30 @@ async function processSenderIdentity(
     return { personId: metadata.personId, platformIdentityId: undefined };
   }
 
+  // System/agent channels are excluded from the human person graph. `internal`
+  // emits `from = sourceInstanceId` (an instance UUID); `a2a` keys on an agent
+  // subject and its customer context is resolved from the execution context by
+  // the dispatcher — neither is a human. The message still persists (sender
+  // identity FKs are nullable); we simply mint no person here.
+  if (isPersonlessChannel(channel)) {
+    return { personId: metadata.personId, platformIdentityId: metadata.platformIdentityId };
+  }
+
   const displayName = truncate(payload.senderName ?? (payload.rawPayload?.pushName as string | undefined), 255);
-  const platformUserId = truncate(payload.from, 255) ?? payload.from;
+  // Canonicalize the sender handle ONCE before keying: bare `5511...`,
+  // `5511...@s.whatsapp.net` and device-suffixed `5511...:3@s.whatsapp.net` all
+  // collapse to one identity; Twilio's `whatsapp:+E164` and Gupshup/Hermes bare
+  // digits now yield a phone. (`findOrCreateIdentity` re-canonicalizes
+  // idempotently; doing it here also fixes `matchByPhone` for those channels.)
+  const canonical = canonicalizeHandle(channel, payload.from);
+  const platformUserId = truncate(canonical.platformUserId, 255) ?? canonical.platformUserId;
   // LID-addressed senders have numeric IDs that look like phones but are NOT E.164 numbers.
   // Skip phone extraction to prevent misidentifying LID IDs as phone numbers and linking to wrong people.
   // Check both: addressingMode (DM where the chat itself is @lid) and senderIsLid (group chats where
   // the chat is @g.us but individual participants can be @lid — addressingMode stays unset in that case).
   const isLidAddressed = payload.rawPayload?.addressingMode === 'lid' || payload.rawPayload?.senderIsLid === true;
   const resolvedPhone = isLidAddressed ? (payload.rawPayload?.resolvedSenderPhone as string | undefined) : undefined;
-  const phoneNumber = isLidAddressed
-    ? resolvedPhone
-      ? `+${resolvedPhone}`
-      : undefined
-    : extractPhoneFromSender(platformUserId, channel);
+  const phoneNumber = isLidAddressed ? (resolvedPhone ? `+${resolvedPhone}` : undefined) : canonical.phone;
 
   const { identity, person, isNew } = await services.persons.findOrCreateIdentity(
     { channel, instanceId: metadata.instanceId, platformUserId, platformUsername: displayName },
@@ -795,6 +787,45 @@ async function linkReplyTarget(
 }
 
 /**
+ * Link a thread reply to its root and bump the root's denormalized reply
+ * bookkeeping (#889).
+ *
+ * 0048 added `thread_root_message_id` / `reply_count` / `latest_reply_at`
+ * alongside `thread_external_id`, but only the external id ever got a writer.
+ * This resolves the root by external id (Slack's `thread_ts` is the root's own
+ * ts) and fills in the other three.
+ *
+ * Best-effort, like linkReplyTarget: 0048 deliberately shipped without a
+ * backfill, so a reply can reference a root that predates the column — and a
+ * history sync can deliver the reply before the root. Neither may fail the
+ * persist. Called only when the row was just created, so a redelivered event
+ * cannot double-count.
+ */
+export async function linkThreadRoot(
+  services: Services,
+  chatId: string,
+  messageId: string,
+  messageExternalId: string,
+  threadExternalId: string | undefined,
+  repliedAt: Date,
+): Promise<void> {
+  // The root carries its own ts as thread_ts once it has replies — not a reply.
+  if (!threadExternalId || threadExternalId === messageExternalId) return;
+  try {
+    const rootMessageId = await services.messages.resolveReplyToMessage(chatId, threadExternalId);
+    if (!rootMessageId) return;
+    await services.messages.setThreadRoot(messageId, rootMessageId);
+    await services.messages.recordThreadReply(rootMessageId, repliedAt);
+  } catch (error) {
+    log.debug('Could not link thread root', {
+      chatId,
+      threadExternalId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * Handle message.received event - main processing logic
  */
 async function handleMessageReceived(
@@ -932,6 +963,14 @@ async function handleMessageReceived(
     log.debug('Created message', { externalId: payload.externalId, chatId: chat.id });
 
     await linkReplyTarget(services, chat.id, message.id, payload.replyToId);
+    await linkThreadRoot(
+      services,
+      chat.id,
+      message.id,
+      messageExternalId,
+      truncate(payload.threadId, 255),
+      platformTimestamp ?? new Date(eventTimestamp),
+    );
   }
 
   // Step 6: Record participant activity
@@ -972,6 +1011,42 @@ function logMessageReceivedError(payload: MessageReceivedPayload, error: unknown
     },
     longFields: Object.keys(longFields).length > 0 ? longFields : undefined,
   });
+}
+
+/**
+ * Handle message.pinned / message.unpinned — record per-message pin state (#889).
+ *
+ * Non-critical like delivery status: a failed update leaves the pin column
+ * stale, never a message missing, so errors are logged and not re-thrown.
+ */
+async function handleMessagePinState(
+  services: Services,
+  event: TypedOmniEvent<'message.pinned' | 'message.unpinned'>,
+  pinned: boolean,
+): Promise<void> {
+  const payload = event.payload;
+  const metadata = event.metadata;
+  if (!metadata.instanceId) return;
+  const instanceId = metadata.instanceId;
+
+  try {
+    // Lookup + pin update are one work item: one worker transaction.
+    await runConsumerInTenantContext(services.db, event, async () => {
+      const chat = await services.chats.findByExternalIdSmart(instanceId, payload.chatId);
+      if (!chat) {
+        log.debug('Chat not found for pin update', { chatId: payload.chatId });
+        return;
+      }
+
+      await services.messages.setPinned(chat.id, payload.messageId, pinned, payload.from);
+      log.debug('Updated message pin state', { chatId: chat.id, messageId: payload.messageId, pinned });
+    });
+  } catch (error) {
+    log.error('Failed to update pin state', {
+      messageId: payload.messageId,
+      error: String(error),
+    });
+  }
 }
 
 // ============================================================================
@@ -1116,6 +1191,17 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               // our own thread replies read back as top-level channel messages.
               threadExternalId: truncate(payload.threadId, 255),
             });
+
+            if (created) {
+              await linkThreadRoot(
+                services,
+                chat.id,
+                message.id,
+                messageExternalId,
+                truncate(payload.threadId, 255),
+                new Date(event.timestamp),
+              );
+            }
 
             return { chat, message, created };
           });
@@ -1271,6 +1357,25 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         concurrency: 10,
       },
     );
+
+    // Subscribe to message.pinned / message.unpinned — per-message pin state (#889)
+    await eventBus.subscribe('message.pinned', (event) => handleMessagePinState(services, event, true), {
+      durable: 'message-persistence-pinned',
+      queue: 'message-persistence',
+      maxRetries: 2,
+      retryDelayMs: 500,
+      startFrom: 'first',
+      concurrency: 10,
+    });
+
+    await eventBus.subscribe('message.unpinned', (event) => handleMessagePinState(services, event, false), {
+      durable: 'message-persistence-unpinned',
+      queue: 'message-persistence',
+      maxRetries: 2,
+      retryDelayMs: 500,
+      startFrom: 'first',
+      concurrency: 10,
+    });
 
     // Subscribe to instance.connected for post-reconnect backfill detection
     await eventBus.subscribe(

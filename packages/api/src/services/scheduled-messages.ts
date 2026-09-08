@@ -13,16 +13,19 @@
  * only returns what the SAME token scheduled, so the platform can never be our
  * source of truth for "what is pending".
  *
- * Concurrency is the DB's job: the sweeper selects due rows with
- * `FOR UPDATE SKIP LOCKED` inside a transaction, so overlapping ticks cannot
- * double-send a row. Same approach as follow-up-sweeper (#404).
+ * Concurrency is the DB's job: the sweeper CLAIMS due rows by locking them
+ * (`FOR UPDATE SKIP LOCKED`) and flipping `pending → sending` inside the SAME
+ * transaction. Because the claim commits before delivery, a concurrent sweep
+ * in another process (prod runs replicaCount:2 with no leader election) can no
+ * longer re-select a row that is already being sent. A crash-stranded
+ * `sending` row is reclaimed after a lease window so at-least-once holds.
  */
 
 import type { ChannelPlugin, OutgoingMessage } from '@omni/channel-sdk';
-import { type Logger, createLogger } from '@omni/core';
+import { ERROR_CODES, type Logger, OmniError, createLogger } from '@omni/core';
 import type { Database, ScheduledMessage, ScheduledMessageDeliveryMode } from '@omni/db';
 import { instances, resolveEnforcementMode, scheduledMessages } from '@omni/db';
-import { type SQL, and, asc, eq, lte, sql } from 'drizzle-orm';
+import { type SQL, and, asc, eq, inArray, lte, or, sql } from 'drizzle-orm';
 import { isMultitenancyEnabled } from '../tenancy/feature-flag';
 import { enumerateActiveWorkTenants } from '../tenancy/periodic-tenant-work';
 
@@ -31,6 +34,15 @@ const MAX_PER_TICK = 50;
 
 /** Give up after this many failed delivery attempts. */
 const MAX_ATTEMPTS = 3;
+
+/**
+ * How long a CLAIMED (`status='sending'`) row may sit before a sweep is allowed
+ * to reclaim it. Covers the one case the claim cannot: a process that crashes
+ * between claiming a row and finalizing it would otherwise strand the message
+ * in `sending` forever. Comfortably larger than any single send so a healthy
+ * in-flight delivery is never reclaimed under it.
+ */
+const CLAIM_LEASE_MS = 5 * 60_000;
 
 export interface ScheduleMessageInput {
   instanceId: string;
@@ -73,13 +85,22 @@ export type PluginResolver = (instanceId: string) => Promise<ChannelPlugin | nul
  */
 function parseOutgoingContent(raw: unknown, scheduledMessageId: string): OutgoingMessage['content'] {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new Error(`Scheduled message ${scheduledMessageId} has non-object content`);
+    throw callerError(`Scheduled message ${scheduledMessageId} has non-object content`);
   }
   const type = (raw as { type?: unknown }).type;
   if (typeof type !== 'string' || type.length === 0) {
-    throw new Error(`Scheduled message ${scheduledMessageId} has content without a 'type' discriminant`);
+    throw callerError(`Scheduled message ${scheduledMessageId} has content without a 'type' discriminant`);
   }
   return raw as OutgoingMessage['content'];
+}
+
+/**
+ * A mistake in the caller's request (bad date, over-limit lead time, malformed
+ * content) — a 400, not a server fault. Typed so the route can tell it apart
+ * from a genuine fault (plugin/network/DB), which must surface as a 5xx.
+ */
+function callerError(message: string): OmniError {
+  return new OmniError({ code: ERROR_CODES.VALIDATION, message, recoverable: false });
 }
 
 export class ScheduledMessageService {
@@ -106,7 +127,7 @@ export class ScheduledMessageService {
    */
   async schedule(input: ScheduleMessageInput): Promise<ScheduledMessage> {
     if (input.sendAt.getTime() <= Date.now()) {
-      throw new Error(`sendAt must be in the future (got ${input.sendAt.toISOString()})`);
+      throw callerError(`sendAt must be in the future (got ${input.sendAt.toISOString()})`);
     }
 
     // Validate up front for BOTH modes. In local mode nothing would touch this
@@ -124,7 +145,7 @@ export class ScheduledMessageService {
 
     const maxAhead = plugin.capabilities.maxScheduleAheadMs;
     if (native && typeof maxAhead === 'number' && input.sendAt.getTime() - Date.now() > maxAhead) {
-      throw new Error(
+      throw callerError(
         `sendAt exceeds what ${plugin.id} accepts natively (${Math.round(maxAhead / 86_400_000)} days ahead).`,
       );
     }
@@ -138,24 +159,42 @@ export class ScheduledMessageService {
       );
     }
 
-    const [row] = await this.db
-      .insert(scheduledMessages)
-      .values({
-        instanceId: input.instanceId,
-        chatExternalId: input.chatExternalId,
-        threadExternalId: input.threadExternalId,
-        isThreadBroadcast: input.isThreadBroadcast ?? false,
-        content: input.content,
-        sendAt: input.sendAt,
-        deliveryMode,
-        status: 'pending',
-        externalScheduledId,
-        createdByAgentId: input.createdByAgentId,
-      })
-      .returning();
+    // The native schedule already put a message on the platform's timer. If the
+    // row insert now fails we must UNDO it — a platform message with no row to
+    // hold its externalScheduledId is uncancelable, and a retry double-schedules.
+    try {
+      const [row] = await this.db
+        .insert(scheduledMessages)
+        .values({
+          instanceId: input.instanceId,
+          chatExternalId: input.chatExternalId,
+          threadExternalId: input.threadExternalId,
+          isThreadBroadcast: input.isThreadBroadcast ?? false,
+          content: input.content,
+          sendAt: input.sendAt,
+          deliveryMode,
+          status: 'pending',
+          externalScheduledId,
+          createdByAgentId: input.createdByAgentId,
+        })
+        .returning();
 
-    if (!row) throw new Error('Failed to persist scheduled message');
-    return row;
+      if (!row) throw new Error('Failed to persist scheduled message');
+      return row;
+    } catch (error) {
+      if (native && externalScheduledId) {
+        try {
+          await plugin.cancelScheduledMessage?.(input.instanceId, input.chatExternalId, externalScheduledId);
+        } catch (cancelError) {
+          this.logger.warn('Failed to roll back native schedule after a row-insert failure', {
+            instanceId: input.instanceId,
+            externalScheduledId,
+            error: cancelError instanceof Error ? cancelError.message : String(cancelError),
+          });
+        }
+      }
+      throw error;
+    }
   }
 
   /**
@@ -288,23 +327,49 @@ export class ScheduledMessageService {
   /** One sweep pass over a single world. */
   private async sweepWorld(world: SweepWorld): Promise<SweepStats> {
     const stats: SweepStats = { scanned: 0, sent: 0, failed: 0 };
+    const now = new Date();
+    const claimCutoff = new Date(now.getTime() - CLAIM_LEASE_MS);
 
-    const due = await this.db.transaction(async (tx) =>
-      tx
-        .select()
+    // CLAIM due rows atomically. We lock them with `FOR UPDATE SKIP LOCKED` and,
+    // in the SAME transaction, flip `pending → sending`. The transaction commits
+    // with the rows already marked `sending`, so a concurrent sweep — whose
+    // predicate matches only `pending` rows (plus `sending` rows abandoned past
+    // the lease) — cannot re-select and re-deliver a row we are mid-sending.
+    // This is what makes delivery safe across processes; the single-process
+    // overlap is already prevented by the scheduler's `protect:true` guard.
+    const due = await this.db.transaction(async (tx) => {
+      const locked = await tx
+        .select({ id: scheduledMessages.id })
         .from(scheduledMessages)
         .where(
           and(
-            eq(scheduledMessages.status, 'pending'),
             eq(scheduledMessages.deliveryMode, 'local'),
-            lte(scheduledMessages.sendAt, new Date()),
+            lte(scheduledMessages.sendAt, now),
+            or(
+              eq(scheduledMessages.status, 'pending'),
+              // Reclaim a row a crashed sweep left stranded in `sending`.
+              and(eq(scheduledMessages.status, 'sending'), lte(scheduledMessages.updatedAt, claimCutoff)),
+            ),
             ...this.worldPredicate(world),
           ),
         )
         .orderBy(asc(scheduledMessages.sendAt))
         .limit(MAX_PER_TICK)
-        .for('update', { skipLocked: true }),
-    );
+        .for('update', { skipLocked: true });
+
+      if (locked.length === 0) return [];
+
+      return tx
+        .update(scheduledMessages)
+        .set({ status: 'sending', updatedAt: now })
+        .where(
+          inArray(
+            scheduledMessages.id,
+            locked.map((r) => r.id),
+          ),
+        )
+        .returning();
+    });
 
     stats.scanned = due.length;
 
@@ -324,6 +389,9 @@ export class ScheduledMessageService {
           throw new Error(result.error ?? 'sendMessage reported failure without an error');
         }
 
+        // Finalize only while WE still hold the claim (`status = 'sending'`). If
+        // a lease reclaim handed the row to another sweep, this update no-ops
+        // rather than clobbering the new owner's state.
         await this.db
           .update(scheduledMessages)
           .set({
@@ -333,14 +401,15 @@ export class ScheduledMessageService {
             attemptCount: row.attemptCount + 1,
             updatedAt: new Date(),
           })
-          .where(eq(scheduledMessages.id, row.id));
+          .where(and(eq(scheduledMessages.id, row.id), eq(scheduledMessages.status, 'sending')));
 
         stats.sent++;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const attempts = row.attemptCount + 1;
         // Only give up once we're out of attempts — a transient outage should
-        // not discard a message the user asked us to send.
+        // not discard a message the user asked us to send. Releasing the claim
+        // back to `pending` re-arms the row for the next tick.
         const exhausted = attempts >= MAX_ATTEMPTS;
 
         await this.db
@@ -352,7 +421,7 @@ export class ScheduledMessageService {
             attemptCount: attempts,
             updatedAt: new Date(),
           })
-          .where(eq(scheduledMessages.id, row.id));
+          .where(and(eq(scheduledMessages.id, row.id), eq(scheduledMessages.status, 'sending')));
 
         stats.failed++;
         this.logger.warn('Scheduled message delivery failed', {

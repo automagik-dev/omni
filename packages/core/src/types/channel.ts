@@ -12,8 +12,10 @@ export const CHANNEL_TYPES = [
   'gupshup',
   'hermes',
   'asc',
+  'asc-flow',
   'twilio-whatsapp',
   'internal',
+  'harness',
 ] as const;
 export type ChannelType = (typeof CHANNEL_TYPES)[number];
 

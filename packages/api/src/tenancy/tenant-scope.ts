@@ -61,6 +61,8 @@ export interface TenantScopeState {
   readonly tx: TenantTx;
   /** The one tenant this request may touch. Resolved by the G3 boundary. */
   readonly tenantId: string;
+  /** Callbacks queued by `runAfterTenantCommit`; run after COMMIT, dropped on rollback. */
+  readonly postCommit: Array<() => void>;
 }
 
 /**
@@ -106,7 +108,43 @@ export async function runInTenantScope<T>(db: Database, context: AuthContext, fn
   if (storage.getStore()) {
     throw new Error('tenant-scope: a tenant scope is already active for this request');
   }
-  return withTenantTransaction(db, context, async (tx, tenantId) => storage.run({ tx, tenantId }, fn));
+  const postCommit: Array<() => void> = [];
+  const result = await withTenantTransaction(db, context, async (tx, tenantId) =>
+    storage.run({ tx, tenantId, postCommit }, fn),
+  );
+  // withTenantTransaction resolved → the transaction COMMITTED. A throw above
+  // (rollback) skips this, so queued callbacks never observe a write that
+  // didn't land. Best-effort by design: a callback failure must not turn a
+  // committed request into an error response.
+  for (const cb of postCommit) {
+    try {
+      cb();
+    } catch {
+      // Swallowed — same stance as the services' best-effort cache invalidation.
+    }
+  }
+  return result;
+}
+
+/**
+ * Run `fn` after the active tenant transaction commits — or immediately when no
+ * scope is active, where the ambient pool autocommits per statement and "after
+ * the write" already means "after commit".
+ *
+ * For in-memory side effects of a DB write (cache eviction, invalidation) that
+ * must not fire while the write is still uncommitted: inside the transaction a
+ * concurrent reader on another connection still sees the OLD row, so an
+ * eviction now could be refilled from pre-commit state and the write would land
+ * with the side effect already undone. Queued callbacks are dropped on
+ * rollback, matching the write they belong to.
+ */
+export function runAfterTenantCommit(fn: () => void): void {
+  const scope = storage.getStore();
+  if (scope) {
+    scope.postCommit.push(fn);
+  } else {
+    fn();
+  }
 }
 
 /**

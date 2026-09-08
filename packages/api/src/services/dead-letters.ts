@@ -12,6 +12,7 @@ import {
   type EventBus,
   type EventType,
   NotFoundError,
+  SCHEMA_VALIDATION_FAILED,
   calculateNextAutoRetryAt,
   createDeadLetterSystemPayload,
   createLogger,
@@ -142,8 +143,17 @@ export class DeadLetterService {
     subject: string;
     error: Error;
     retryCount: number;
+    /**
+     * `false` files a manual-resolution-only entry (no auto-retry schedule).
+     * Used for entries where republishing the event would be wrong — e.g. a
+     * connector stall marker (#961), whose event is emitted-once by contract.
+     */
+    autoRetry?: boolean;
   }): Promise<DeadLetterEntry> {
     const insertData = prepareDeadLetterInsert(options);
+    if (options.autoRetry === false) {
+      insertData.nextAutoRetryAt = null;
+    }
 
     const [result] = await this.db.insert(deadLetterEvents).values(insertData).returning();
 
@@ -158,23 +168,82 @@ export class DeadLetterService {
       nextAutoRetryAt: result.nextAutoRetryAt?.toISOString(),
     });
 
-    // Publish system event
-    if (this.eventBus) {
-      try {
-        const systemPayload = createDeadLetterSystemPayload(result.id, result);
-        await this.eventBus.publishGeneric(
-          'system.dead_letter',
-          { ...systemPayload },
-          {
-            source: 'dead-letter-service',
-          },
-        );
-      } catch (err) {
-        log.error('Failed to publish dead letter system event', { error: String(err) });
-      }
-    }
+    await this.publishSystemEvent(result as DeadLetterEntry);
 
     return result as DeadLetterEntry;
+  }
+
+  /**
+   * Dead-letter a payload refused by an emission/ingress governance gate.
+   * The refused event never entered the journal — this row IS its only
+   * record, with `error` starting with the refusing reason token:
+   * `schema_validation_failed` (issue #959, the default), the strict gate's
+   * `schema_not_registered` (issue #1000), or the publish-allowlist gate's
+   * `publish_not_declared` (RFC #925 G4c, issue #987).
+   *
+   * `nextAutoRetryAt` stays null: retrying an unchanged refused payload can
+   * never succeed, so these rows are manual-intervention only.
+   */
+  async createSchemaValidationFailure(input: {
+    eventId: string;
+    eventType: string;
+    subject: string;
+    payload: Record<string, unknown>;
+    errors: string[];
+    /**
+     * DLQ reason token prefixing `error`; defaults to
+     * `schema_validation_failed` (`SCHEMA_NOT_REGISTERED` and
+     * `PUBLISH_NOT_DECLARED` are the caller-supplied siblings).
+     */
+    reason?: string;
+  }): Promise<DeadLetterEntry> {
+    const [result] = await this.db
+      .insert(deadLetterEvents)
+      .values({
+        eventId: input.eventId,
+        eventType: input.eventType,
+        subject: input.subject,
+        payload: input.payload,
+        error: `${input.reason ?? SCHEMA_VALIDATION_FAILED}: ${input.errors.join('; ')}`,
+        stack: null,
+        autoRetryCount: 0,
+        nextAutoRetryAt: null,
+        status: 'pending',
+      })
+      .returning();
+
+    if (!result) {
+      throw new Error('Failed to create dead letter entry');
+    }
+
+    log.warn('Payload refused by schema registry, dead-lettered', {
+      deadLetterId: result.id,
+      eventId: result.eventId,
+      eventType: result.eventType,
+    });
+
+    await this.publishSystemEvent(result as DeadLetterEntry);
+
+    return result as DeadLetterEntry;
+  }
+
+  /** Announce a new DLQ row on the bus; failures are logged, never thrown. */
+  private async publishSystemEvent(result: DeadLetterEntry): Promise<void> {
+    if (!this.eventBus) {
+      return;
+    }
+    try {
+      const systemPayload = createDeadLetterSystemPayload(result.id, result);
+      await this.eventBus.publishGeneric(
+        'system.dead_letter',
+        { ...systemPayload },
+        {
+          source: 'dead-letter-service',
+        },
+      );
+    } catch (err) {
+      log.error('Failed to publish dead letter system event', { error: String(err) });
+    }
   }
 
   /**

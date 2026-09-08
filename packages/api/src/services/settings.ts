@@ -235,8 +235,9 @@ const DEFAULT_SETTINGS: Array<{
     category: 'providers',
     valueType: 'string',
     isSecret: false,
-    description: 'Default OpenAI STT model. Quality candidate: gpt-audio-mini; stable fallback: gpt-4o-transcribe.',
-    defaultValue: 'gpt-audio-mini',
+    description:
+      'Default OpenAI STT model. Primary: gpt-4o-transcribe (dedicated STT); gpt-audio-* models use the chat lane, whose output is validated with a transcriptions-endpoint fallback.',
+    defaultValue: 'gpt-4o-transcribe',
   },
   {
     key: 'stt.gemini.model',

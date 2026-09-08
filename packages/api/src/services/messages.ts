@@ -963,4 +963,32 @@ export class MessageService {
   async updateReplyToReference(id: string, replyToMessageId: string): Promise<void> {
     await this.db.update(messages).set({ replyToMessageId, updatedAt: new Date() }).where(eq(messages.id, id));
   }
+
+  /**
+   * Point a thread reply at its root row (#889).
+   *
+   * 0048 added `thread_root_message_id` with nothing writing it — replies
+   * carried only the platform `threadExternalId`, so joining a thread to its
+   * root needed a second lookup by external id.
+   */
+  async setThreadRoot(id: string, threadRootMessageId: string): Promise<void> {
+    await this.db.update(messages).set({ threadRootMessageId, updatedAt: new Date() }).where(eq(messages.id, id));
+  }
+
+  /**
+   * Bump the denormalized reply bookkeeping on a thread root (#889).
+   *
+   * GREATEST guards out-of-order arrival: history sync can deliver an old
+   * reply after a newer one, and it must not drag latestReplyAt backwards.
+   */
+  async recordThreadReply(rootMessageId: string, repliedAt: Date): Promise<void> {
+    await this.db
+      .update(messages)
+      .set({
+        replyCount: sql`${messages.replyCount} + 1`,
+        latestReplyAt: sql`GREATEST(COALESCE(${messages.latestReplyAt}, ${repliedAt}), ${repliedAt})`,
+        updatedAt: new Date(),
+      })
+      .where(eq(messages.id, rootMessageId));
+  }
 }

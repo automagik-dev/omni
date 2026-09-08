@@ -32,7 +32,8 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: admin-ui
-          # image.tag "" → v<Chart.appVersion>, the tag image-publish.yml pushes.
+          # image.tag "" → v<Chart.appVersion>. No public workflow builds or
+          # pushes this image today; an operator supplies it.
           image: "{{ .Values.adminUi.image.repository }}:{{ .Values.adminUi.image.tag | default (printf "v%s" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.adminUi.image.pullPolicy }}
           securityContext:

@@ -26,6 +26,23 @@ Fully qualified app name.
 {{- end }}
 
 {{/*
+Immutable omni-api image reference. A non-empty digest wins over tag and must
+be one lowercase sha256 digest; empty preserves the historical tag/appVersion
+rendering byte-for-byte.
+*/}}
+{{- define "omni.image" -}}
+{{- $digest := default "" .Values.image.digest -}}
+{{- if $digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $digest) -}}
+{{- fail "image.digest must be a lowercase sha256 digest (sha256 followed by 64 hexadecimal characters)" -}}
+{{- end -}}
+{{- printf "%s@%s" .Values.image.repository $digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default (printf "v%s" .Chart.AppVersion)) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Common labels.
 */}}
 {{- define "omni.labels" -}}

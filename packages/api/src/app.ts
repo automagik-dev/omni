@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { WhatsAppBusinessPlugin } from '@omni/channel-whatsapp-business';
-import { type EventBus, createLogger } from '@omni/core';
+import { type EventBus, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
 import { type Database, type Instance, whatsappFlowKeys } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -76,7 +76,7 @@ import { tenancyMiddleware } from './middleware/tenancy';
 
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
-import { rateLimitMiddleware } from './middleware/rate-limit';
+import { rateLimitMiddleware, webhookIngressRateLimitMiddleware } from './middleware/rate-limit';
 import { defaultTimeoutMiddleware } from './middleware/timeout';
 import { versionHeadersMiddleware } from './middleware/version-headers';
 import { createWebhookAuthMiddleware } from './middleware/webhook-auth';
@@ -88,6 +88,7 @@ import type { Services } from './services';
 import { resolveA2AAgentCard } from './services/a2a-discovery';
 import { isMultitenancyEnabled } from './tenancy/feature-flag';
 import type { AppVariables } from './types';
+import { parseJsonObjectBody } from './utils/json-body';
 
 /**
  * Create app result with app and services
@@ -294,6 +295,27 @@ export function createApp(
     return plugin.handleWebhook(c.req.raw);
   });
 
+  // Public ASC platform Flow webhook endpoint — auth-exempt.
+  // The flow's `api_rest` node calls this with no credential; the platform
+  // documents no signature mechanism. Authenticity rests on the per-instance
+  // path (unguessable instance UUID, the Gupshup precedent) plus an optional
+  // verify token the handler compares when configured on the instance.
+  // Must be mounted before protectedApp so ASC's servers can reach it.
+  app.post('/api/v2/channels/asc-flow/:instanceId/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('asc-flow');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'ASC Flow plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Public Hermes (Mutant WhatsApp gateway) webhook endpoint — auth-exempt.
   // Hermes has no signature mechanism: authenticity rests on the per-instance
   // path (unguessable instance UUID) plus the handler's cross-check of the
@@ -456,6 +478,57 @@ export function createApp(
     }
 
     return plugin.handleWebhook(c.req.raw);
+  });
+
+  // Public generic webhook ingress — auth-exempt, verified EXCLUSIVELY by the
+  // source's signature config (issue #928), following the channel-webhook
+  // precedent (Telegram/Meta/Twilio above). A source is reachable here only
+  // when an admin has configured `signatureConfig` + secret on it; verification
+  // runs over the raw body BEFORE anything is published. Sources are never
+  // auto-created on this surface. All rejections (unknown source, disabled,
+  // unconfigured, bad signature) collapse into one 401 shape so the public
+  // endpoint is not a source-name existence oracle; the real reason is logged.
+  // The authenticated POST /api/v2/webhooks/:source route remains for internal
+  // callers. A non-empty body that is not a JSON object is a 400 — silently
+  // publishing an empty payload would fire automations on a hollow event.
+  // Must be mounted before protectedApp.
+  app.post('/api/v2/webhooks/ingress/:source', webhookIngressRateLimitMiddleware, async (c) => {
+    const sourceName = c.req.param('source');
+    const services = c.get('services');
+
+    const rawBody = await c.req.text();
+    let payload: Record<string, unknown>;
+    try {
+      payload = parseJsonObjectBody(rawBody);
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        return c.json({ error: { code: 'VALIDATION', message: error.message } }, 400);
+      }
+      throw error;
+    }
+
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(c.req.header())) {
+      headers[key.toLowerCase()] = value ?? '';
+    }
+
+    try {
+      const result = await services.webhooks.receive(sourceName, payload, headers, {
+        autoCreate: false,
+        rawBody,
+        requireSignature: true,
+      });
+      return c.json(result);
+    } catch (error) {
+      const rejected =
+        error instanceof NotFoundError ||
+        (error instanceof OmniError && (error.code === 'UNAUTHORIZED' || error.code === 'FORBIDDEN'));
+      if (rejected) {
+        httpLog.warn('Webhook ingress rejected', { sourceName, reason: (error as Error).message });
+        return c.json({ error: { code: 'UNAUTHORIZED', message: 'Webhook verification failed' } }, 401);
+      }
+      throw error;
+    }
   });
 
   // ── Multitenancy control plane — feature-flagged, OFF by default ────────────

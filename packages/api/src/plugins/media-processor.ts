@@ -749,7 +749,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
     services.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
     services.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
-    services.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-audio-mini'),
+    services.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-4o-transcribe'),
     services.settings.getString('stt.gemini.model', 'GEMINI_STT_MODEL', GEMINI_AUDIO_MODEL),
     services.settings.getString('prompt.audio_transcription'),
     services.settings.getString('prompt.image_description'),
@@ -763,7 +763,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     geminiApiKey,
     defaultLanguage,
     audioProvider: audioProvider ?? 'openai',
-    audioModel: audioModel ?? 'gpt-audio-mini',
+    audioModel: audioModel ?? 'gpt-4o-transcribe',
     geminiAudioModel: geminiAudioModel ?? GEMINI_AUDIO_MODEL,
     audioPrompt: audioPrompt ?? undefined,
   });

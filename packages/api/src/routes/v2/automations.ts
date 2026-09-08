@@ -33,6 +33,10 @@ const webhookActionSchema = z.object({
     waitForResponse: z.boolean().default(false).describe('Wait for response before continuing'),
     timeoutMs: z.number().int().min(1000).max(120000).default(30000).describe('Request timeout'),
     responseAs: z.string().optional().describe('Store response as variable name'),
+    includeEnvelope: z
+      .boolean()
+      .optional()
+      .describe('Send the full OmniEvent envelope as the default body when no bodyTemplate is set (default true)'),
   }),
 });
 
@@ -127,6 +131,13 @@ const createAutomationSchema = z.object({
   debounce: debounceSchema.optional().describe('Message debounce configuration'),
   enabled: z.boolean().default(true).describe('Whether automation is enabled'),
   priority: z.number().int().default(0).describe('Priority (higher runs first)'),
+  transactionalEmissions: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
+        'only when every action succeeded; a failed run publishes zero. Default false = immediate publishing',
+    ),
 });
 
 // Update automation schema

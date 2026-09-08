@@ -105,6 +105,13 @@ export interface EmitMessageSentParams {
 
   /** agents.id UUID — set by agent-dispatcher when agent sends */
   senderAgentId?: string;
+
+  /**
+   * Procedural courtesy send (pre-dispatch auto-ack, dispatch-error feedback)
+   * rather than a substantive reply. Echo `metadata?.systemNotice` here so
+   * agent replay does not treat the row as evidence a turn was answered.
+   */
+  systemNotice?: boolean;
 }
 
 /**
@@ -214,6 +221,46 @@ export interface EmitReactionReceivedParams {
 
   /** Whether emoji is platform-custom */
   isCustomEmoji?: boolean;
+
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
+}
+
+/**
+ * Parameters for emitMessagePinned (#889)
+ */
+export interface EmitMessagePinnedParams {
+  /** Instance where the pin happened */
+  instanceId: string;
+
+  /** The message that was pinned (platform external id) */
+  messageId: string;
+
+  /** Chat where the message lives (platform external id) */
+  chatId: string;
+
+  /** Platform user who pinned it */
+  from?: string;
+
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
+}
+
+/**
+ * Parameters for emitMessageUnpinned (#889)
+ */
+export interface EmitMessageUnpinnedParams {
+  /** Instance where the unpin happened */
+  instanceId: string;
+
+  /** The message that was unpinned (platform external id) */
+  messageId: string;
+
+  /** Chat where the message lives (platform external id) */
+  chatId: string;
+
+  /** Platform user who unpinned it */
+  from?: string;
 
   /** Raw platform payload */
   rawPayload?: Record<string, unknown>;

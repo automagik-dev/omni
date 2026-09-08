@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "custom.clickup.taskupdated",
+  "description": "ClickUp taskUpdated webhook delivery (body field event: taskUpdated — also sent alongside more specific updates such as taskStatusUpdated). Minimal-but-real contract: the fields consumers rely on are required; everything else ClickUp sends passes through (additionalProperties: true). Evolution rule: revisions must be additive-optional (issue #959).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["event", "task_id", "webhook_id", "history_items"],
+  "properties": {
+    "event": {
+      "const": "taskUpdated",
+      "description": "ClickUp event name (also the source of the semantic type via eventTypeMapping)"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Id of the updated task"
+    },
+    "webhook_id": {
+      "type": "string",
+      "description": "Id of the ClickUp webhook configuration that fired"
+    },
+    "history_items": {
+      "type": "array",
+      "description": "The change(s) that triggered the event",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable per-event history id — the delivery identity used by the idempotency key template"
+          },
+          "date": { "type": "string" },
+          "field": { "type": "string", "description": "Changed attribute, e.g. name, description, assignee" }
+        }
+      }
+    }
+  }
+}

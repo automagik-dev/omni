@@ -1471,6 +1471,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       replyToId: originalMessage.replyTo,
       rawPayload: this.buildSentRawPayload(externalId, originalMessage, processedMessage),
       senderAgentId: originalMessage.metadata?.senderAgentId as string | undefined,
+      systemNotice: originalMessage.metadata?.systemNotice as boolean | undefined,
     };
   }
 

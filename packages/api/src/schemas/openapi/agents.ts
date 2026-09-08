@@ -6,6 +6,45 @@ import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, SuccessSchema } from './common';
 
+/**
+ * Agent event manifest (RFC #925 G4a, #985) — OpenAPI mirror of
+ * `AgentEventManifestSchema` in @omni/core (the boundary validator on the
+ * route). `filter` uses the same payload-field matcher semantics as
+ * automation conditions: dot-notation payload path → expected value.
+ */
+export const AgentEventManifestSchema = z.object({
+  accepts: z
+    .array(
+      z.object({
+        event: z.string().openapi({
+          description: 'Event type consumed (core type, custom.*, or system.*)',
+          example: 'custom.clickup.task.status_changed',
+        }),
+        filter: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .openapi({
+            description:
+              'Payload filter: dot-notation payload path → expected value (equals semantics, ' +
+              'shared with automation conditions). All entries must match.',
+          }),
+      }),
+    )
+    .default([])
+    .openapi({ description: 'Event types this agent consumes' }),
+  publishes: z
+    .array(
+      z.object({
+        event: z.string().openapi({
+          description: 'Event type this agent may emit',
+          example: 'custom.review.parecer.ready',
+        }),
+      }),
+    )
+    .default([])
+    .openapi({ description: 'Event types this agent declares it may emit' }),
+});
+
 // Agent schema
 export const AgentSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Agent UUID' }),
@@ -23,6 +62,9 @@ export const AgentSchema = z.object({
   isActive: z.boolean().openapi({ description: 'Whether agent is active' }),
   metadata: z.record(z.string(), z.unknown()).nullable().openapi({ description: 'Arbitrary metadata' }),
   agentCard: z.record(z.string(), z.unknown()).nullable().openapi({ description: 'A2A Agent Card overrides' }),
+  eventManifest: AgentEventManifestSchema.nullable()
+    .optional()
+    .openapi({ description: 'Declarative accepts/publishes event manifest (RFC #925 G4a)' }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
 });
@@ -51,6 +93,7 @@ export const CreateAgentSchema = z.object({
 export function registerAgentSchemas(registry: OpenAPIRegistry): void {
   registry.register('Agent', AgentSchema);
   registry.register('CreateAgentRequest', CreateAgentSchema);
+  registry.register('AgentEventManifest', AgentEventManifestSchema);
 
   registry.registerPath({
     method: 'get',
@@ -128,6 +171,49 @@ export function registerAgentSchemas(registry: OpenAPIRegistry): void {
         description: 'Agent updated',
         content: { 'application/json': { schema: z.object({ data: AgentSchema }) } },
       },
+      404: { description: 'Agent not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'get',
+    path: '/agents/{id}/manifest',
+    operationId: 'getAgentManifest',
+    tags: ['Agents'],
+    summary: 'Get agent event manifest',
+    description:
+      "Read the agent's declarative accepts/publishes event manifest (RFC #925 G4a). " +
+      'Returns null when the agent has never declared one.',
+    request: { params: z.object({ id: z.string().uuid().openapi({ description: 'Agent UUID' }) }) },
+    responses: {
+      200: {
+        description: 'Agent event manifest (null when undeclared)',
+        content: { 'application/json': { schema: z.object({ data: AgentEventManifestSchema.nullable() }) } },
+      },
+      404: { description: 'Agent not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'put',
+    path: '/agents/{id}/manifest',
+    operationId: 'updateAgentManifest',
+    tags: ['Agents'],
+    summary: 'Replace agent event manifest',
+    description:
+      "Replace the agent's declarative accepts/publishes event manifest (full replacement, apply semantics). " +
+      'Event types must be core types or namespaced custom.*/system.* tokens. ' +
+      'Storage only in this slice: accepts is compiled into automations by G4b, publishes enforced by G4c.',
+    request: {
+      params: z.object({ id: z.string().uuid().openapi({ description: 'Agent UUID' }) }),
+      body: { content: { 'application/json': { schema: AgentEventManifestSchema } } },
+    },
+    responses: {
+      200: {
+        description: 'Stored manifest after replacement',
+        content: { 'application/json': { schema: z.object({ data: AgentEventManifestSchema.nullable() }) } },
+      },
+      400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
       404: { description: 'Agent not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });

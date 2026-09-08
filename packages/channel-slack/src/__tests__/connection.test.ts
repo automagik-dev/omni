@@ -157,6 +157,30 @@ describe('App Manifest', () => {
     expect(manifest.features.slash_commands).toHaveLength(1);
     expect(manifest.features.slash_commands?.[0]?.command).toBe('/omni');
   });
+
+  it('enables the Agent messaging experience (#914)', () => {
+    const manifest = buildSlackManifest();
+
+    // agent_view (not the deprecated assistant_view) with a description
+    expect(manifest.features.agent_view).toBeDefined();
+    expect(manifest.features.agent_view?.agent_description.length).toBeGreaterThan(0);
+    expect(manifest.features.agent_view?.agent_description.length).toBeLessThanOrEqual(300);
+
+    // Subscribing to agent_session_stopped is what makes Slack show the
+    // native stop button while a session is processing.
+    expect(manifest.settings.event_subscriptions.bot_events).toContain('agent_session_stopped');
+  });
+
+  it('carries custom agent description and suggested prompts', () => {
+    const manifest = buildSlackManifest({
+      agentDescription: 'Reviews code in Slack threads',
+      suggestedPrompts: [{ title: 'Review PR', message: 'Review the open PR' }],
+    });
+    expect(manifest.features.agent_view?.agent_description).toBe('Reviews code in Slack threads');
+    expect(manifest.features.agent_view?.suggested_prompts).toEqual([
+      { title: 'Review PR', message: 'Review the open PR' },
+    ]);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────

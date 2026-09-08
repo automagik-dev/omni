@@ -107,6 +107,28 @@ export interface MessageMetadata {
    */
   isThreadBroadcast?: boolean;
 
+  /**
+   * Procedural courtesy send (pre-dispatch auto-ack, dispatch-error feedback)
+   * rather than a substantive reply. Plugins echo this into the
+   * `message.sent` payload so agent replay does not treat the row as evidence
+   * a turn was answered.
+   */
+  systemNotice?: boolean;
+
+  /**
+   * Position of this send inside ONE agent reply, when the caller split that
+   * reply into several messages (the agent dispatcher does: the provider
+   * splits on blank lines, then each part is sent separately).
+   * `partIndex` is 0-based; the last part is `partCount - 1`.
+   *
+   * Most channels ignore this — N messages is exactly what they want. It
+   * exists for a channel whose transport carries ONE answer per turn
+   * (asc-flow answers a poll), which holds the earlier parts and answers once
+   * on the last. Absent means "a send that stands alone".
+   */
+  partIndex?: number;
+  partCount?: number;
+
   /** Additional plugin-specific metadata */
   [key: string]: unknown;
 }
@@ -152,4 +174,19 @@ export interface SendResult {
 
   /** Timestamp of send attempt */
   timestamp: number;
+
+  /**
+   * Handoff sends only. `false` means this channel's handoff does NOT take the
+   * conversation away from the agent, so the caller must NOT set
+   * `agentPaused: true` on the chat.
+   *
+   * The pause is right for a handoff that parks the conversation in a human
+   * queue (Gupshup, asc-flow in `service` mode). It is a DEADLOCK for a channel
+   * whose handoff only routes a running flow: with the agent paused the next
+   * inbound turn is never dispatched, and a channel that resolves its turn from
+   * `sendMessage` never resolves it. Measured on asc-flow atendimento 22289496.
+   *
+   * Left `undefined` by every other channel, which keeps the pause the default.
+   */
+  pauseAgent?: boolean;
 }

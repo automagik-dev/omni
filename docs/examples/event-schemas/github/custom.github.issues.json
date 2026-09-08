@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "custom.github.issues",
+  "description": "GitHub issues webhook delivery (X-GitHub-Event: issues). Minimal-but-real contract: the fields consumers rely on are required; everything else GitHub sends passes through (additionalProperties: true). Evolution rule: revisions must be additive-optional (issue #959).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["action", "issue", "repository", "sender"],
+  "properties": {
+    "action": {
+      "type": "string",
+      "description": "What happened: opened, closed, edited, labeled, ..."
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["number"],
+      "properties": {
+        "number": { "type": "integer", "description": "Issue number" },
+        "title": { "type": "string" },
+        "state": { "type": "string" },
+        "html_url": { "type": "string" }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["full_name"],
+      "properties": {
+        "full_name": {
+          "type": "string",
+          "description": "owner/repo, e.g. automagik-dev/omni"
+        }
+      }
+    },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["login"],
+      "properties": {
+        "login": {
+          "type": "string",
+          "description": "GitHub username that triggered the delivery"
+        }
+      }
+    }
+  }
+}

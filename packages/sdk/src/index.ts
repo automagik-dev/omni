@@ -48,6 +48,7 @@ export type {
   ListInstancesParams,
   CreateInstanceBody,
   SendMessageBody,
+  SentBy,
   ListEventsParams,
   SearchPersonsParams,
   ListAccessRulesParams,
@@ -70,6 +71,7 @@ export type {
   // Auth types
   AuthCredentialContext,
   AuthValidateResponse,
+  ServerTenancyPosture,
   // A2A types
   A2ADiscoverableAgent,
   A2AJsonRpcResponse,
@@ -96,8 +98,11 @@ export type {
   // Webhook types
   WebhookSource,
   ListWebhookSourcesParams,
+  WebhookSignatureConfigBody,
+  WebhookEventTypeMappingBody,
   CreateWebhookSourceBody,
   TriggerEventBody,
+  WebhookHeartbeatResponse,
   // Payload types
   PayloadConfig,
   UpdatePayloadConfigBody,
@@ -152,6 +157,15 @@ export type {
   UpdateApiKeyBody,
   RevokeApiKeyBody,
   ListApiKeysParams,
+  // Platform control plane types (tenants + memberships)
+  PlatformTenant,
+  PlatformTenantMembership,
+  PlatformTenantRole,
+  PlatformMembershipStatus,
+  CreatePlatformTenantBody,
+  AttachPlatformMembershipBody,
+  IssuePlatformTenantRootKeyBody,
+  PlatformTenantRootKey,
 } from './client';
 
 // Errors

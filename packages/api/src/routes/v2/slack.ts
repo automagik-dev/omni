@@ -15,7 +15,8 @@ import type { ChannelType } from '@omni/core';
 import { ERROR_CODES, OmniError } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { AppVariables } from '../../types';
+import { ApiKeyService } from '../../services/api-keys';
+import type { ApiKeyData, AppVariables } from '../../types';
 
 export const slackRoutes = new Hono<{ Variables: AppVariables }>();
 
@@ -40,11 +41,28 @@ interface SlackCapablePlugin {
   ) => Promise<unknown[]>;
 }
 
+/**
+ * Check if an API key has access to a specific instance.
+ * Throws FORBIDDEN error if access is denied.
+ */
+function checkInstanceAccess(apiKey: ApiKeyData | undefined, instanceId: string): void {
+  if (apiKey && !ApiKeyService.instanceAllowed(apiKey.instanceIds, instanceId)) {
+    throw new OmniError({
+      code: ERROR_CODES.FORBIDDEN,
+      message: 'API key does not have access to this instance',
+      context: { instanceId },
+      recoverable: false,
+    });
+  }
+}
+
 /** Resolve the Slack plugin, refusing early when the instance is not Slack. */
 async function getSlackPlugin(
-  c: { get: (k: 'services' | 'channelRegistry') => unknown },
+  c: { get: (k: 'services' | 'channelRegistry' | 'apiKey') => unknown },
   instanceId: string,
 ): Promise<SlackCapablePlugin> {
+  checkInstanceAccess(c.get('apiKey') as ApiKeyData | undefined, instanceId);
+
   const services = c.get('services') as { instances: { getById: (id: string) => Promise<{ channel: string }> } };
   const registry = c.get('channelRegistry') as { get: (ch: ChannelType) => unknown } | null | undefined;
 

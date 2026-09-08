@@ -116,3 +116,6 @@ deploy/helm/omni/values-local.yaml
 
 # Local #889 test env (contains DB password)
 .env.889
+
+# pg-gate keep-warm cluster state (#967)
+.pg-gate-warm.json

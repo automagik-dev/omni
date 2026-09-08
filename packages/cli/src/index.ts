@@ -39,6 +39,7 @@ import { createListenCommand } from './commands/listen.js';
 import { createLogsCommand } from './commands/logs.js';
 import { createMediaCommand } from './commands/media.js';
 import { createMessagesCommand } from './commands/messages.js';
+import { createMultitenancyCommand } from './commands/multitenancy.js';
 import { createMusicCommand } from './commands/music.js';
 import { createOpenCommand } from './commands/open.js';
 import { createPayloadsCommand } from './commands/payloads.js';
@@ -56,11 +57,13 @@ import { createSeeCommand } from './commands/see.js';
 import { createSendCommand } from './commands/send.js';
 import { createServerCommand } from './commands/server.js';
 import { createSettingsCommand } from './commands/settings.js';
+import { createTopLevelSetupCommand } from './commands/setup.js';
 import { createSlackCommand } from './commands/slack.js';
 import { createSpeakCommand } from './commands/speak.js';
 import { createStartCommand } from './commands/start.js';
 import { createStatusCommand } from './commands/status.js';
 import { createStopCommand } from './commands/stop.js';
+import { createTenantsCommand } from './commands/tenants.js';
 import { createTrustCommand } from './commands/trust.js';
 import { createTtsCommand } from './commands/tts.js';
 import { createTurnsCommand } from './commands/turns.js';
@@ -339,6 +342,12 @@ const COMMANDS: CommandDef[] = [
     helpDescription: 'Connect instance to genie agent via NATS',
   },
   {
+    create: createTopLevelSetupCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'Compound setup (agent → provider → instance, any schema)',
+  },
+  {
     create: createRoutesCommand,
     category: 'standard',
     helpGroup: 'Management',
@@ -349,6 +358,12 @@ const COMMANDS: CommandDef[] = [
     category: 'core',
     helpGroup: 'Management',
     helpDescription: 'API key management',
+  },
+  {
+    create: createTenantsCommand,
+    category: 'advanced',
+    helpGroup: 'Management',
+    helpDescription: 'Platform tenant control plane (multitenancy)',
   },
   {
     create: createTrustCommand,
@@ -390,6 +405,12 @@ const COMMANDS: CommandDef[] = [
   },
   { create: createEventsCommand, category: 'standard', helpGroup: 'System', helpDescription: 'Query message history' },
   { create: createAuthCommand, category: 'core', helpGroup: 'System', helpDescription: 'Authentication management' },
+  {
+    create: createMultitenancyCommand,
+    category: 'advanced',
+    helpGroup: 'System',
+    helpDescription: 'Server multitenancy posture (read-only)',
+  },
   {
     create: createServerCommand,
     category: 'core',

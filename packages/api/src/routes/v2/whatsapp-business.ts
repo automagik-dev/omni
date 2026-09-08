@@ -43,6 +43,7 @@ import {
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import * as oauthTokenCache from '../../lib/oauth-token-cache';
+import { resolveMetaApiVersion } from '../../lib/whatsapp-business-connection';
 import { requireInstanceAccess } from '../../middleware/auth';
 import type { AppVariables } from '../../types';
 
@@ -62,7 +63,7 @@ function readMetaAppEnv(): { appId: string | undefined; appSecret: string | unde
   return {
     appId: process.env.META_APP_ID,
     appSecret: process.env.META_APP_SECRET,
-    apiVersion: process.env.META_GRAPH_API_VERSION ?? 'v25.0',
+    apiVersion: resolveMetaApiVersion(undefined) ?? 'v25.0',
   };
 }
 

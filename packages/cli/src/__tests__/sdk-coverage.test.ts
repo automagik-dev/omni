@@ -209,6 +209,7 @@ const CLI_COMMANDS: Record<string, string> = {
   'webhooks.updateSource': 'webhooks update',
   'webhooks.deleteSource': 'webhooks delete',
   'webhooks.trigger': 'webhooks trigger',
+  'webhooks.heartbeat': 'webhooks heartbeat',
 
   // ============================================================================
   // PAYLOADS (event payload storage)
@@ -276,6 +277,8 @@ const CLI_COMMANDS: Record<string, string> = {
   'agents.create': 'agents create --name <name> --provider <id> --instance <id>',
   'agents.update': 'agents update <id> [--name <name>] [--model <model>] [--provider <p>] [--active|--inactive]',
   'agents.delete': 'agents delete <id>',
+  'agents.getManifest': 'agents manifest get <id>',
+  'agents.updateManifest': 'agents manifest apply <id> --file <path>',
 
   // ============================================================================
   // FOLLOW-UP (idle-chat follow-up config — issue #404)
@@ -299,6 +302,22 @@ const CLI_COMMANDS: Record<string, string> = {
   'scheduledMessages.cancel': 'schedule cancel',
   'slack.openDm': 'slack dm',
   'slack.search': 'slack search',
+
+  // ============================================================================
+  // PLATFORM CONTROL PLANE (tenants + memberships — issue #981)
+  // ============================================================================
+  'platform.tenants.list': 'tenants list --reason <text>',
+  'platform.tenants.get': 'tenants get <id> --reason <text>',
+  'platform.tenants.create': 'tenants create --slug --name --max-key-ttl --max-key-rate --max-key-budget --reason',
+  'platform.tenants.suspend': 'tenants suspend <id> --reason <text>',
+  'platform.tenants.archive': 'tenants archive <id> --reason <text>',
+  'platform.tenants.memberships.list': 'tenants memberships list <tenant-id> --reason <text>',
+  'platform.tenants.memberships.attach': 'tenants memberships add <tenant-id> --principal --role --reason',
+  'platform.tenants.memberships.disable': 'tenants memberships disable <tenant-id> <membership-id> --reason <text>',
+  'platform.tenants.memberships.setStatus': 'tenants memberships status <tenant-id> <membership-id> --status --reason',
+  'platform.tenants.memberships.setRole': 'tenants memberships role <tenant-id> <membership-id> --role --reason',
+  'platform.tenants.keys.issueRoot':
+    'tenants keys issue-root <tenant-id> --principal --membership --role --name --scopes --expires --rate-limit --budget --reason',
 
   // ============================================================================
   // SYSTEM

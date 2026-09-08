@@ -34,9 +34,9 @@
  */
 
 import type { AgentCallContext, AgentRunResult, CallAgentActionConfig } from '@omni/core';
-import { createLogger } from '@omni/core';
-import type { Database } from '@omni/db';
-import { agents } from '@omni/db';
+import { PUBLISH_NOT_DECLARED, SCHEMA_NOT_REGISTERED, checkPublishAllowed, createLogger, generateId } from '@omni/core';
+import type { Database, EventType } from '@omni/db';
+import { agents, omniEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import type { Services } from '../services';
 import { releaseIdleTimeoutClaim } from '../services/follow-up-lifecycle';
@@ -47,6 +47,82 @@ import { getPlugin } from './loader';
 const log = createLogger('automation-actions');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** agents.agent_type (entity taxonomy) → provider dispatch type. */
+const AGENT_TYPE_MAP: Record<string, 'agent' | 'team' | 'workflow'> = {
+  assistant: 'agent',
+  tool: 'agent',
+  workflow: 'workflow',
+  team: 'team',
+};
+
+/**
+ * Chatless `call_agent` dispatch (#1010, RFC #925 G4 runtime half): the
+ * triggering event resolved no instance and no chat, so the provider is
+ * resolved from the AGENT row alone and the run is keyed by the core action's
+ * event-scoped `sessionKey`. Same discrete-read-block discipline as the
+ * chat-ful path: the `agents` lookup runs in its own short worker tenant
+ * scope, and the agent run executes strictly AFTER the scope closed.
+ *
+ * There is NO implicit reply: nothing is sent to any chat; the response only
+ * feeds `responseAs` variable chaining. The agent acts via its own tools.
+ */
+async function runChatlessCallAgent(
+  services: Services,
+  db: Database,
+  ctx: AgentCallContext,
+  cfg: CallAgentActionConfig,
+  trustedTenantId: string | null,
+): Promise<AgentRunResult> {
+  const agentFkId = ctx.agentId;
+  if (!agentFkId) throw new Error('chatless call_agent requires config.agentId');
+
+  // Discrete read block: the agents row (provider coordinates + persisted
+  // tenant ownership — the chatless analogue of `instance.tenantId`).
+  const [agentRow] = await runTenantWorkDb(db, trustedTenantId, () =>
+    scopedHandle(db)
+      .select({
+        name: agents.name,
+        agentProviderId: agents.agentProviderId,
+        agentType: agents.agentType,
+        metadata: agents.metadata,
+        configPath: agents.configPath,
+        tenantId: agents.tenantId,
+      })
+      .from(agents)
+      .where(eq(agents.id, agentFkId))
+      .limit(1),
+  );
+  if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
+  if (!agentRow.agentProviderId) {
+    throw new Error(`Agent ${agentFkId} has no agent provider configured (required for chatless call_agent)`);
+  }
+
+  const providerAgentId =
+    ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??
+    agentRow.configPath ??
+    agentRow.name;
+
+  // Agent run strictly OUTSIDE the resolution scope (the G4 leg-2 trap).
+  const result = await services.agentRunner.runChatless({
+    agentProviderId: agentRow.agentProviderId,
+    agentInternalId: providerAgentId,
+    agentType: cfg.agentType ?? AGENT_TYPE_MAP[agentRow.agentType] ?? 'agent',
+    tenantId: agentRow.tenantId ?? trustedTenantId ?? null,
+    sessionKey: ctx.sessionKey ?? ctx.chatId,
+    messages: ctx.messages,
+    timeoutSeconds: cfg.timeoutMs ? Math.ceil(cfg.timeoutMs / 1000) : undefined,
+  });
+  return {
+    parts: result.parts,
+    fullResponse: result.parts.join('\n'),
+    metadata: {
+      runId: result.metadata.runId,
+      sessionId: result.metadata.sessionId,
+      status: result.metadata.status,
+    },
+  };
+}
 
 /**
  * Resolve chat UUID → channel-native external_id for a call_agent invocation.
@@ -93,6 +169,67 @@ async function resolveCallAgentChatIds(
   }
 }
 
+/**
+ * Dead-letter an emission refused by one of the emit gates (#959, #987,
+ * #1000). Manual-retry only — the DLQ row is the refused event's only record.
+ * Failure to file the row is logged, never thrown: the action already fails
+ * with the gate's reason, and a DLQ hiccup must not mask it.
+ */
+async function deadLetterRefusedEmission(
+  services: Services,
+  db: Database,
+  trustedTenantId: string | null,
+  input: { eventType: string; payload: Record<string, unknown>; errors: string[]; reason?: string },
+): Promise<void> {
+  try {
+    await runTenantWorkDb(db, trustedTenantId, () =>
+      services.deadLetters.createSchemaValidationFailure({
+        eventId: generateId(),
+        eventType: input.eventType,
+        subject: input.eventType,
+        payload: input.payload,
+        errors: input.errors,
+        reason: input.reason,
+      }),
+    );
+  } catch (error) {
+    log.error('Failed to dead-letter refused emit_event payload', {
+      eventType: input.eventType,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Publish-allowlist check for an agent-attributed emission (RFC #925 G4c,
+ * issue #987). Reads the RAW `agents.event_manifest` jsonb through the same
+ * `scopedHandle` worker-scope seam as the `call_agent` agents lookup above
+ * (this file's registered `agents` db-access site) and applies
+ * `checkPublishAllowed`: no manifest, or a manifest without a `publishes`
+ * key, is ungoverned; `publishes: []` denies everything; otherwise only
+ * declared types pass. A missing agent row (the managing agent was deleted)
+ * degrades to ungoverned, matching this file's other fail-open resolution
+ * reads. Returns the refusal errors, or `null` when the emission is allowed.
+ */
+async function refusePublishNotDeclared(
+  db: Database,
+  trustedTenantId: string | null,
+  emitterAgentId: string,
+  eventType: string,
+): Promise<string[] | null> {
+  const [row] = await runTenantWorkDb(db, trustedTenantId, () =>
+    scopedHandle(db)
+      .select({ eventManifest: agents.eventManifest })
+      .from(agents)
+      .where(eq(agents.id, emitterAgentId))
+      .limit(1),
+  );
+  if (checkPublishAllowed(row?.eventManifest ?? null, eventType)) {
+    return null;
+  }
+  return [`event type '${eventType}' is not declared in the publishes manifest of agent ${emitterAgentId}`];
+}
+
 /** The dependency shape `AutomationService.startEngine` accepts. */
 export interface AutomationEngineDeps {
   sendMessage: (instanceId: string, to: string, content: string, trustedTenantId?: string | null) => Promise<void>;
@@ -108,6 +245,24 @@ export interface AutomationEngineDeps {
     trustedTenantId?: string | null,
   ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
   releaseIdleTimeoutClaim: (claimToken: string) => void | Promise<void>;
+  claimEmittedEvent: (
+    claim: {
+      idempotencyKey: string;
+      eventId: string;
+      eventType: string;
+      payload: Record<string, unknown>;
+      correlationId?: string;
+      causationId?: string;
+    },
+    trustedTenantId?: string | null,
+  ) => Promise<boolean>;
+  releaseEmittedEventClaim: (eventId: string) => Promise<void>;
+  validateEmitEvent: (
+    eventType: string,
+    payload: Record<string, unknown>,
+    trustedTenantId?: string | null,
+    emitterAgentId?: string | null,
+  ) => Promise<{ valid: boolean; errors?: string[]; reason?: string }>;
 }
 
 /** Injectable seams (tests only — production uses the module defaults). */
@@ -158,6 +313,12 @@ export function buildAutomationEngineDeps(
     },
 
     callAgent: async (ctx, cfg, trustedTenantId = null) => {
+      // Chatless dispatch (#1010): no instance and no chat resolved from the
+      // triggering event — provider comes from the agent row instead.
+      if (ctx.chatless) {
+        return runChatlessCallAgent(services, db, ctx, cfg, trustedTenantId);
+      }
+
       // Discrete read block #1: the instance row.
       const instance = await runTenantWorkDb(db, trustedTenantId, () => services.instances.getById(ctx.instanceId));
       if (!instance) throw new Error(`Instance not found: ${ctx.instanceId}`);
@@ -195,12 +356,6 @@ export function buildAutomationEngineDeps(
       );
       if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
 
-      const typeMap: Record<string, 'agent' | 'team' | 'workflow'> = {
-        assistant: 'agent',
-        tool: 'agent',
-        workflow: 'workflow',
-        team: 'team',
-      };
       const providerAgentId =
         ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??
         agentRow.configPath ??
@@ -209,7 +364,7 @@ export function buildAutomationEngineDeps(
       const runInstance = {
         ...instance,
         agentProviderId: agentRow.agentProviderId ?? null,
-        agentType: cfg.agentType ?? typeMap[agentRow.agentType] ?? 'agent',
+        agentType: cfg.agentType ?? AGENT_TYPE_MAP[agentRow.agentType] ?? 'agent',
         agentInternalId: providerAgentId,
         agentSessionStrategy: cfg.sessionStrategy ?? instance.agentSessionStrategy,
         agentPrefixSenderName: cfg.prefixSenderName ?? instance.agentPrefixSenderName,
@@ -223,6 +378,7 @@ export function buildAutomationEngineDeps(
       const result = await services.agentRunner.runOrStream({
         instance: runInstance,
         chatId: resolvedChatId,
+        threadId: ctx.threadId,
         senderId: resolvedSenderId,
         senderName: ctx.senderName,
         chatType: 'dm',
@@ -257,5 +413,106 @@ export function buildAutomationEngineDeps(
     // so the NATS redelivery is a first delivery and not a "duplicate". The
     // claim registry is in-memory (no DB), so no tenant scope applies.
     releaseIdleTimeoutClaim: (claimToken) => releaseIdleTimeoutClaim(claimToken),
+
+    // Derived-key emission idempotency (#958). The claim IS the journal row:
+    // inserting it makes the `omni_events.idempotency_key` unique index the
+    // dedup authority for automation re-publishes, exactly as webhook ingress
+    // does in `WebhookService.receive`. An empty RETURNING means the key was
+    // already journaled — a NATS redelivery/replay of the same
+    // (event, automation, action) slot — and the emission is skipped. The
+    // emission then publishes UNDER this row's id, so the #957 `custom.>`
+    // journal consumer's insert lands here (ON CONFLICT (id) DO NOTHING) —
+    // one row, carrying the causality fields `omni events trace` walks
+    // (causation_id column + correlationId in the metadata jsonb).
+    claimEmittedEvent: async (claim, trustedTenantId = null) => {
+      const claimed = await runTenantWorkDb(db, trustedTenantId, () =>
+        scopedHandle(db)
+          .insert(omniEvents)
+          .values({
+            id: claim.eventId,
+            channel: 'internal',
+            eventType: claim.eventType.slice(0, 255) as EventType,
+            direction: 'internal',
+            status: 'completed',
+            rawPayload: claim.payload,
+            idempotencyKey: claim.idempotencyKey,
+            causationId: claim.causationId ?? null,
+            receivedAt: new Date(),
+            metadata: {
+              correlationId: claim.correlationId ?? claim.eventId,
+              source: 'automation',
+              fullEventType: claim.eventType,
+              idempotencyKey: claim.idempotencyKey,
+            },
+          })
+          .onConflictDoNothing({ target: omniEvents.idempotencyKey })
+          .returning({ id: omniEvents.id }),
+      );
+      return claimed.length > 0;
+    },
+
+    // Release a claim whose publish then failed — leaving it would drop the
+    // retry's emission as a "duplicate" of an event that never reached the
+    // bus. Best-effort ambient delete (additive tenancy phase).
+    releaseEmittedEventClaim: async (eventId) => {
+      await scopedHandle(db).delete(omniEvents).where(eq(omniEvents.id, eventId));
+    },
+
+    // Emission gates for emit_event, in order (per issue #987):
+    //
+    //   1. Publish allowlist (RFC #925 G4c, issue #987) — only when the
+    //      engine threaded an emitter agent (`automation.managedByAgentId`,
+    //      stamped by the #986 compiler): the type must be declared in the
+    //      agent's manifest `publishes` list or the emission is dead-lettered
+    //      with the distinct reason `publish_not_declared` BEFORE the payload
+    //      is examined. No emitter threaded → the gate is inert.
+    //   2. Schema registry (issue #959) — an unregistered type reports valid
+    //      (opt-in per type) unless `OMNI_STRICT_EMIT_EVENT_SCHEMAS=true`
+    //      (issue #1000; default off) refuses it as `schema_not_registered`;
+    //      an invalid payload is refused as `schema_validation_failed`.
+    //
+    // Every refusal is dead-lettered (manual-retry only — the refused event's
+    // only record) and the action then fails without publishing. Each DB
+    // block runs through `runTenantWorkDb` like every other callback: scoped
+    // in the tenant world, ambient passthrough in legacy.
+    validateEmitEvent: async (eventType, payload, trustedTenantId = null, emitterAgentId = null) => {
+      if (emitterAgentId) {
+        const refusal = await refusePublishNotDeclared(db, trustedTenantId, emitterAgentId, eventType);
+        if (refusal) {
+          log.warn('emit_event refused: type not declared in the agent publishes manifest', {
+            eventType,
+            emitterAgentId,
+          });
+          await deadLetterRefusedEmission(services, db, trustedTenantId, {
+            eventType,
+            payload,
+            errors: refusal,
+            reason: PUBLISH_NOT_DECLARED,
+          });
+          return { valid: false, errors: refusal, reason: PUBLISH_NOT_DECLARED };
+        }
+      }
+
+      const verdict = await runTenantWorkDb(db, trustedTenantId, () =>
+        services.eventSchemas.validate(eventType, payload),
+      );
+
+      // Read at call time (not module load) so operators can flip the policy
+      // with a process restart and tests can toggle it per case.
+      const strictEmit = process.env.OMNI_STRICT_EMIT_EVENT_SCHEMAS === 'true';
+      const refusedUnregistered = strictEmit && !verdict.registered;
+
+      if (verdict.valid && !refusedUnregistered) {
+        return { valid: true };
+      }
+
+      const errors = refusedUnregistered
+        ? [`no enabled schema is registered for event type '${eventType}'`]
+        : verdict.errors;
+      const reason = refusedUnregistered ? SCHEMA_NOT_REGISTERED : undefined;
+
+      await deadLetterRefusedEmission(services, db, trustedTenantId, { eventType, payload, errors, reason });
+      return { valid: false, errors, reason };
+    },
   };
 }

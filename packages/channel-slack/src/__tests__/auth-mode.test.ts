@@ -44,6 +44,14 @@ describe('buildSlackManifest — user scopes', () => {
     expect(manifest.oauth_config.scopes.bot).not.toContain('search:read');
   });
 
+  it('requests files:write so user-mode media uploads work (files.uploadV2)', () => {
+    // In user mode sendMediaContent uploads via the xoxp acting client, which
+    // needs files:write — without it every user-mode media send fails with
+    // missing_scope. Bot mode already has it via REQUIRED_BOT_SCOPES.
+    const manifest = buildSlackManifest({ includeUserScopes: true });
+    expect(manifest.oauth_config.scopes.user).toContain('files:write');
+  });
+
   it('requests im:write so DMs can be opened, and subscribes to user events', () => {
     const manifest = buildSlackManifest({ includeUserScopes: true });
     expect(manifest.oauth_config.scopes.user).toContain('im:write');

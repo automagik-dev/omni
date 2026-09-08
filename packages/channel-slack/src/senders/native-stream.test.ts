@@ -237,6 +237,91 @@ describe('createNativeStreamSender', () => {
   });
 });
 
+describe('markStoppedByPlatform (#914 L2)', () => {
+  function makeStreamerWithTs(ts: string) {
+    const streamer = makeStreamer();
+    // Mirror the SDK ChatStreamer: the message ts is known once chat.startStream ran.
+    return Object.assign(streamer, { streamTs: ts });
+  }
+
+  it('skips chat.stopStream on cancel when Slack already halted this stream', async () => {
+    const streamer = makeStreamerWithTs('1782234987.693923');
+    const client = { chatStream: mock(() => streamer) };
+    const logger = makeLogger();
+    const sender = createNativeStreamSender({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      throttleMs: 1000,
+      logger,
+    });
+
+    await sender.onContentDelta({ phase: 'content', content: 'Hello' });
+    expect(sender.markStoppedByPlatform(['1782234987.693923', '1782234999.000000'])).toBe(true);
+
+    await sender.cancel?.();
+    await sender.onFinal({ phase: 'final', content: 'Hello world' });
+
+    expect(streamer.stop).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('still stops the stream when its ts is not in the halted list', async () => {
+    const streamer = makeStreamerWithTs('1782234987.693923');
+    const client = { chatStream: mock(() => streamer) };
+    const sender = createNativeStreamSender({
+      client: client as never,
+      channelId: 'C12345',
+      throttleMs: 1000,
+      logger: makeLogger(),
+    });
+
+    await sender.onContentDelta({ phase: 'content', content: 'Hello' });
+    expect(sender.markStoppedByPlatform(['9999999999.000000'])).toBe(false);
+
+    await sender.cancel?.();
+    expect(streamer.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('learns the ts from a flushed chat.startStream response', async () => {
+    const streamer = {
+      append: mock(async (_args: { markdown_text: string }) => ({ ok: true, ts: '1782234987.111111' })),
+      stop: mock(async () => {}),
+    };
+    const client = { chatStream: mock(() => streamer) };
+    const sender = createNativeStreamSender({
+      client: client as never,
+      channelId: 'C12345',
+      throttleMs: 1000,
+      logger: makeLogger(),
+    });
+
+    await sender.onContentDelta({ phase: 'content', content: 'Hello' });
+    expect(sender.markStoppedByPlatform(['1782234987.111111'])).toBe(true);
+  });
+
+  it('returns false before the stream started and on the replace-mode fallback', async () => {
+    const { client } = makeClient();
+    const idle = createNativeStreamSender({
+      client: client as never,
+      channelId: 'C1',
+      throttleMs: 1,
+      logger: makeLogger(),
+    });
+    expect(idle.markStoppedByPlatform(['1782234987.693923'])).toBe(false);
+
+    const { client: noNative } = makeClient(false);
+    const fallback = createNativeStreamSender({
+      client: noNative as never,
+      channelId: 'C1',
+      throttleMs: 1,
+      logger: makeLogger(),
+    });
+    await fallback.onContentDelta({ phase: 'content', content: 'Hello' });
+    expect(fallback.markStoppedByPlatform(['1234567890.123456'])).toBe(false);
+  });
+});
+
 describe('STREAM_MODES includes native', () => {
   it('native is in STREAM_MODES', async () => {
     const { STREAM_MODES } = await import('../types');

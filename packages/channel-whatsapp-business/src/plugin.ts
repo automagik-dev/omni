@@ -302,6 +302,7 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
         },
         replyToId: replyTo,
         senderAgentId: metadata?.senderAgentId as string | undefined,
+        systemNotice: metadata?.systemNotice as boolean | undefined,
       });
 
       return { success: true, messageId, timestamp: Date.now() };

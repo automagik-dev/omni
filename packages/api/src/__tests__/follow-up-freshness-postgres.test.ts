@@ -17,12 +17,12 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import type { EventBus, FollowUpSequenceConfig } from '@omni/core';
 import { type Database, chatFollowUpState, chats, createDbHandle, instances } from '@omni/db';
+import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { and, eq } from 'drizzle-orm';
 import {
   FollowUpLifecycleService,
@@ -33,9 +33,6 @@ import {
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const drizzleDir = join(here, '..', '..', '..', 'db', 'drizzle');
 
 function runSqlOn(url: string, script: string): { exitCode: number; stderr: string } {
   const file = join(tmpdir(), `omni-followup-${crypto.randomUUID()}.sql`);
@@ -89,17 +86,8 @@ postgresDescribe('evaluateIdleTimeoutFreshness (real PostgreSQL)', () => {
   } as unknown as EventBus;
 
   beforeAll(async () => {
-    const created = runSqlOn(superUrl, `CREATE DATABASE "${dbName}";`);
-    if (created.exitCode !== 0) throw new Error(`could not create database: ${created.stderr}`);
-
-    const migrations = readdirSync(drizzleDir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort()
-      .map((f) => readFileSync(join(drizzleDir, f), 'utf-8'))
-      .join('\n');
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
     const dbUrl = urlFor(superUrl, dbName);
-    const migrated = runSqlOn(dbUrl, migrations);
-    if (migrated.exitCode !== 0) throw new Error(`migrations failed: ${migrated.stderr}`);
 
     const handle = createDbHandle({ url: dbUrl, maxConnections: 3 });
     db = handle.db;

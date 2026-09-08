@@ -25,6 +25,9 @@ const VALID_CHANNELS: Channel[] = [
   'slack',
   'telegram',
   'twilio-whatsapp',
+  'hermes',
+  'asc-flow',
+  'harness',
 ];
 
 /** Build a map of instanceId → instance name for display */

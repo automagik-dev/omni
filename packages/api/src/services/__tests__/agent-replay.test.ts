@@ -8,6 +8,8 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { AgentReplayService } from '../agent-replay';
 
 // ---------------------------------------------------------------------------
@@ -398,6 +400,45 @@ describe('AgentReplayService', () => {
       expect(eventBus.publish).toHaveBeenCalledTimes(1003);
       // until should be now (the query upper bound), not last-row timestamp
       expect(result.until.getTime()).toBeGreaterThan(page2Timestamp.getTime());
+    });
+
+    test('answered-turn guard is provenance-agnostic — keyed on is_from_me, not sender_agent_id (#912)', async () => {
+      // Turns answered out-of-band via POST /api/v2/messages/send are stored
+      // with sender_agent_id = NULL. The guard must treat ANY outbound row
+      // after the inbound as "answered", or those turns replay on every
+      // reconnect. Capture the messages-query where clause and render it.
+      let capturedWhere: SQL | undefined;
+      const mockSelect = mock(() => ({
+        from: mock(() => ({
+          innerJoin: mock(() => ({
+            where: mock((condition: SQL) => {
+              capturedWhere = condition;
+              return { orderBy: mock(() => ({ limit: mock(() => Promise.resolve([])) })) };
+            }),
+          })),
+        })),
+      }));
+      const db = { select: mockSelect } as unknown as Database;
+
+      const service = new AgentReplayService(db, eventBus);
+      await service.replayMissedMessages({ instanceId: 'inst-1' });
+
+      expect(capturedWhere).toBeDefined();
+      const rendered = new PgDialect().sqlToQuery(capturedWhere as SQL).sql;
+
+      const notExistsIdx = rendered.indexOf('NOT EXISTS');
+      expect(notExistsIdx).toBeGreaterThan(-1);
+      const guard = rendered.slice(notExistsIdx);
+      expect(guard).toContain('reply.is_from_me = true');
+      expect(guard).not.toContain('reply.sender_agent_id');
+      // Procedural courtesy sends (auto-ack, dispatch-error feedback) are
+      // persisted with rawPayload.omniSystemNotice=true and must NOT count as
+      // an answer — otherwise a crash between the ack and the real reply
+      // permanently drops the turn (#912 review).
+      // Compared as jsonb so a foreign non-boolean value under that key can
+      // never make a `::boolean` cast raise and abort the replay.
+      expect(guard).toContain("(reply.raw_payload -> 'omniSystemNotice') IS DISTINCT FROM 'true'::jsonb");
+      expect(guard).not.toContain('::boolean');
     });
 
     test('uses cutoff when since is undefined', async () => {

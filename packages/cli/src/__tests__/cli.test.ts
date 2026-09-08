@@ -454,6 +454,53 @@ describe('CLI Integration Tests', () => {
       expect(status.instanceId).toBe(testInstanceId);
     });
 
+    test('instances update --gupshup-handoff-options forwards the parsed JSON object', async () => {
+      if (!testInstanceId) return;
+
+      const handoffOptions = {
+        defaultFields: { queue: 'SALES' },
+        fieldsByPhonePrefix: [{ prefixes: ['5511', '5521'], fields: { queue: 'SALES-SOUTHEAST' } }],
+        customerFields: [
+          { apiKey: 'Queue', from: 'queue' },
+          { apiKey: 'Handled By', value: 'assistant' },
+        ],
+      };
+      const result = await runCli(
+        ['instances', 'update', testInstanceId, '--gupshup-handoff-options', JSON.stringify(handoffOptions)],
+        { OMNI_FORMAT: 'json' },
+      );
+
+      assertSuccess(result, 'instances update --gupshup-handoff-options');
+      // The body the CLI built carries the object, not the raw string...
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.data.gupshupHandoffOptions).toEqual(handoffOptions);
+
+      // ...and that is what reached the API's PATCH /instances/:id.
+      const stored = await fetch(`${MOCK_URL}/api/v2/instances/${testInstanceId}`, {
+        headers: { 'x-api-key': MOCK_API_KEY },
+      });
+      const instance = (await stored.json()) as { data: { gupshupHandoffOptions?: unknown } };
+      expect(instance.data.gupshupHandoffOptions).toEqual(handoffOptions);
+    });
+
+    test('instances update --gupshup-handoff-options null clears the field', async () => {
+      if (!testInstanceId) return;
+
+      const result = await runCli(['instances', 'update', testInstanceId, '--gupshup-handoff-options', 'null'], {
+        OMNI_FORMAT: 'json',
+      });
+
+      assertSuccess(result, 'instances update --gupshup-handoff-options null');
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.data).toHaveProperty('gupshupHandoffOptions', null);
+
+      const stored = await fetch(`${MOCK_URL}/api/v2/instances/${testInstanceId}`, {
+        headers: { 'x-api-key': MOCK_API_KEY },
+      });
+      const instance = (await stored.json()) as { data: { gupshupHandoffOptions?: unknown } };
+      expect(instance.data).toHaveProperty('gupshupHandoffOptions', null);
+    });
+
     test('instances delete removes instance', async () => {
       if (!testInstanceId) {
         return;

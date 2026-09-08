@@ -3,7 +3,7 @@ title: "V1 Features Analysis"
 created: 2025-01-29
 updated: 2026-02-09
 tags: [migration, features, analysis]
-status: current
+status: historical
 ---
 
 # V1 Features Analysis
