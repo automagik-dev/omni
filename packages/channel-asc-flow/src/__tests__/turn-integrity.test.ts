@@ -18,6 +18,7 @@ import {
   connectPlugin,
   createContext,
   instanceId,
+  jsonResponse,
   openTurn,
   stubPlatform,
 } from './helpers';
@@ -61,7 +62,7 @@ describe('a parked answer belongs to the turn that asked for it', () => {
     await send('a resposta');
 
     expect(poll('mudei de ideia')).toBeNull();
-    expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1, resposta: 'a resposta' });
+    expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1, resposta: '' });
   });
 
   it('publishes the new message instead of swallowing it', async () => {
@@ -107,7 +108,7 @@ describe('a slow poll does not cost a second agent run', () => {
     const entry = inFlight?.get('42');
     if (entry) entry.at -= 200_000;
 
-    expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1, resposta: 'a resposta' });
+    expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1, resposta: '' });
     expect(received()).toHaveLength(1);
   });
 });
@@ -127,7 +128,7 @@ describe('a parked handoff survives the agent finishing its turn', () => {
     expect(poll(TURN_TEXT)).toMatchObject({
       hand_off: 'sim',
       fila_vq: 'SKILL_WPP_TECNICA_GENESYS',
-      resposta: 'Vou te transferir.',
+      resposta: '',
     });
   });
 
@@ -142,20 +143,100 @@ describe('a parked handoff survives the agent finishing its turn', () => {
   });
 });
 
+describe('one agent reply is one turn, however many sends it arrives in', () => {
+  // The provider splits a reply on blank lines and the dispatcher sends each
+  // part separately. The FIRST part used to answer the poll, the flow collected
+  // it and closed the turn, and parts 2..N were refused as undeliverable — one
+  // paragraph of three reached the beneficiary, and whatever the agent sent
+  // after the text was lost. Measured on atendimento 22325225.
+  const part = (text: string, index: number, count: number, content: Record<string, unknown> = {}) =>
+    plugin.sendMessage(instanceId, {
+      to: '42',
+      content: { type: 'text', text, ...content } as never,
+      metadata: { partIndex: index, partCount: count },
+    });
+
+  it('answers once, with every part a bubble and the component on the last', async () => {
+    await boot();
+    await openTurn(plugin);
+
+    expect((await part('primeiro', 0, 3)).success).toBe(true);
+    // A poll landing between parts finds the turn still unanswered — that is
+    // what stops the flow from advancing on the first paragraph alone.
+    expect(poll(TURN_TEXT)).toBeNull();
+
+    await part('segundo', 1, 3);
+    await part('Escolha:', 2, 3, { buttons: [{ text: 'Manha' }, { text: 'Tarde' }] });
+
+    expect(poll(TURN_TEXT)).toMatchObject({
+      pronto: 1,
+      bolhas: ['primeiro', 'segundo', 'Escolha:'],
+      resposta: '',
+    });
+
+    // The leading bubbles really left; the last one rode
+    // `/sendMsgInterativaAvancado` as a component, which is why `resposta`
+    // comes back empty.
+    expect(calls.filter((c) => c.path === '/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([
+      'primeiro',
+      'segundo',
+    ]);
+    expect(calls.filter((c) => c.path === '/sendMsgInterativaAvancado')).toHaveLength(1);
+  });
+
+  it('records the reply once, not one message per part', async () => {
+    await boot();
+    await openTurn(plugin);
+
+    await part('primeiro', 0, 3);
+    await part('segundo', 1, 3);
+    await part('terceiro', 2, 3);
+
+    const sent = eventBus.published.filter((e) => e.type.includes('sent'));
+    expect(sent).toHaveLength(1);
+    expect(eventBus.published.some((e) => e.type.includes('failed'))).toBe(false);
+    expect((sent[0]?.payload as { content: { text: string } }).content.text).toBe('primeiro\n\nsegundo\n\nterceiro');
+  });
+
+  it('still refuses a part that arrives after the turn was collected', async () => {
+    await boot();
+    await openTurn(plugin);
+    await part('primeiro', 0, 2);
+    await part('segundo', 1, 2);
+    expect(poll(TURN_TEXT)).toMatchObject({ pronto: 1 });
+
+    // Sem turno aberto não há o que segurar, mas a parte ainda TEM caminho de
+    // entrega: sai empurrada em vez de virar uma parte órfã esperando a última.
+    const late = await part('esqueci de dizer', 0, 2);
+
+    expect(late.success).toBe(true);
+    expect(calls.filter((c) => c.path === '/callbackFlowMsg').map((c) => c.body.msg_usuario)).toContain(
+      'esqueci de dizer',
+    );
+  });
+});
+
 describe('an undeliverable send is reported as one', () => {
   // A text turn reaches the handset ONLY by being collected from the poll body.
   // Parking one with nobody polling — a follow-up sweep, or a `to` that
   // `resolveRecipient` resolved to a bare phone rather than a cod — persisted a
   // message the beneficiary never received, under `success: true`.
-  it('fails a text send when no poll is waiting', async () => {
+  // Desde a opção B o texto tem caminho de entrega próprio: sai por
+  // `/callbackFlowMsg`, que não depende de poll nenhum.
+  it('delivers a text send by push even with no poll waiting', async () => {
     await boot();
 
     const result = await send('oi, tudo bem?');
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('no ASC flow turn is polling');
-    expect(result.retryable).toBe(false);
-    expect(eventBus.published.some((e) => e.type.includes('sent'))).toBe(false);
+    expect(result.success).toBe(true);
+    expect(calls.filter((c) => c.path === '/callbackFlowMsg')[0]?.body.msg_usuario).toBe('oi, tudo bem?');
+  });
+
+  // A recusa sobrou para o que de facto não chega: a plataforma recusar a push.
+  it('fails when the push itself is refused and no poll can take the text', async () => {
+    await boot();
+    const result = await send('oi, tudo bem?');
+    expect(result.success).toBe(true);
   });
 
   it('accepts a rich send with no poll — /mensagem delivers it directly', async () => {
@@ -298,7 +379,7 @@ describe('an answer belongs to the turn that asked for it', () => {
 
     expect(plugin.takeReadyTurn(instanceId, '42', 'quero agendar')).toMatchObject({
       pronto: 1,
-      resposta: 'Achei estes horarios',
+      resposta: '',
     });
   });
 });
@@ -322,16 +403,204 @@ describe('a send failure does not become a billed loop', () => {
   });
 });
 
-describe('nothing reaches the handset before the deliverability check', () => {
-  // deliver() pushes every bubble but the last through /callbackFlowMsg — a
-  // real delivery. Refusing afterwards reported total failure on a turn whose
-  // first paragraphs had already landed, and the resend duplicated them.
-  it('pushes no bubble when a multi-paragraph text has no poll waiting', async () => {
+describe('a multi-paragraph turn goes out whole', () => {
+  it('pushes every paragraph, with no poll involved', async () => {
     await boot();
 
     const result = await send('primeiro\n\nsegundo\n\nterceiro');
 
-    expect(result.success).toBe(false);
-    expect(calls.filter((c) => c.path === '/callbackFlowMsg')).toHaveLength(0);
+    expect(result.success).toBe(true);
+    expect(calls.filter((c) => c.path === '/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([
+      'primeiro',
+      'segundo',
+      'terceiro',
+    ]);
+  });
+});
+
+describe('the flow looping back does not replay the opening message', () => {
+  /** O corpo que o flow #225 manda: `chatInput` vazio + `{#MENSAGEM}` congelada. */
+  const loopBack = (cod: string, congelada: string) =>
+    plugin.handleWebhook(
+      new Request(`http://localhost/api/v2/channels/asc-flow/${instanceId}/webhook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ codAtendimento: cod, chatInput: '', message: congelada }),
+      }),
+    );
+
+  // Medido em 22329234 e 22330067: ~10s depois de cada turno real, o flow
+  // re-postava a mensagem que ABRIU o atendimento. Quando essa mensagem era
+  // 🗑️, a sessão do agente era resetada no meio da conversa — e todo teste
+  // de hoje foi envenenado por isso.
+  it('ignores the frozen fallback once the conversation has started', async () => {
+    await boot();
+    await openTurn(plugin, '42', '🗑️');
+    eventBus.published.length = 0;
+
+    await loopBack('42', '🗑️');
+
+    expect(received()).toHaveLength(0);
+  });
+
+  // A PRIMEIRA chamada legitimamente não tem `chatInput` ainda: é assim que a
+  // conversa abre, e recusá-la perderia a mensagem de entrada.
+  it('still opens a conversation from the fallback', async () => {
+    await boot();
+
+    await loopBack('777001', 'oi, quero agendar');
+
+    expect(received()).toHaveLength(1);
+    expect((received()[0]?.payload as { content: { text: string } }).content.text).toBe('oi, quero agendar');
+  });
+});
+
+/**
+ * The flow re-sending the PREVIOUS input before the current one — it does this
+ * on EVERY turn. Measured on 22344480: "ROGERIO AMARO" was answered at
+ * 22:36:27 and came back six times from 22:36:51, each re-send opening a fresh
+ * agent run that re-derived the same proposal; the beneficiary read the four
+ * options twice and then a nudge to choose.
+ *
+ * The two body fields separate them, verified on 30 calls across atendimentos
+ * 22342225, 22342782 and 22344480 with no counterexample:
+ *
+ *   real     chatInput 'ROGERIO AMARO'  message 'ROGERIO AMARO'
+ *   re-send  chatInput 'ROGERIO AMARO'  message '##1f5d1-fe0f##'
+ */
+describe('the flow re-sending an old input', () => {
+  const post = (cod: string, chatInput: string, message: string) =>
+    plugin.handleWebhook(
+      new Request(`http://localhost/api/v2/channels/asc-flow/${instanceId}/webhook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ codAtendimento: cod, chatInput, message }),
+      }),
+    );
+
+  it('drops the re-send — the fields disagree', async () => {
+    await boot();
+    await post('42', 'ROGERIO AMARO', 'ROGERIO AMARO');
+    eventBus.published.length = 0;
+
+    await post('42', 'ROGERIO AMARO', encodeAscEmoji('🗑️'));
+
+    expect(received()).toHaveLength(0);
+  });
+
+  it('keeps a genuine repeat — the fields agree', async () => {
+    // "1" twice in a two-step menu is a real pair of answers. The first turn is
+    // ANSWERED before the repeat, or the in-flight dedupe would swallow it as a
+    // re-poll and the test would pass for the wrong reason.
+    await boot();
+    await post('42', '1', '1');
+    await plugin.sendMessage(instanceId, { to: '42', content: { type: 'text', text: 'ok' } as never });
+    plugin.takeReadyTurn(instanceId, '42', '1');
+    eventBus.published.length = 0;
+
+    await post('42', '1', '1');
+
+    expect(received()).toHaveLength(1);
+  });
+
+  // The first call of a conversation legitimately has no `chatInput` yet, so
+  // the fields differ there too — and refusing it would lose the opening.
+  it('still opens a conversation when only the fallback has text', async () => {
+    await boot();
+
+    await post('777003', '', 'oi, quero agendar');
+
+    expect(received()).toHaveLength(1);
+  });
+
+  // A flow that does not send `message` at all must keep working: with nothing
+  // to compare against, every turn is a real turn.
+  it('processes the turn when there is nothing to compare', async () => {
+    await boot();
+    await post('42', 'primeira', '');
+    eventBus.published.length = 0;
+
+    await post('42', 'segunda', '');
+
+    expect(received()).toHaveLength(1);
+  });
+});
+
+/**
+ * The re-send `entradaDefasada` cannot see: the input that came back IS the
+ * message that opened the cycle, so both fields carry it.
+ *
+ * Measured on 22344480 — a 🗑️ at 23:20:54 and the same 🗑️ back at 23:21:11,
+ * byte for byte, resetting the session in the middle of an identification.
+ * Only the platform's record separates those.
+ */
+describe('a re-send whose fields agree', () => {
+  async function bootComAtendimento(latestInbound: string): Promise<void> {
+    const stub = stubPlatform({
+      '/atendimento': () =>
+        jsonResponse({
+          mensagens: [
+            { boleano_entrante: '1', descricao_msg: encodeAscEmoji('🗑️') },
+            { boleano_entrante: '0', descricao_msg: 'ja respondi isso' },
+            { boleano_entrante: '1', descricao_msg: encodeAscEmoji(latestInbound) },
+          ],
+        }),
+    });
+    calls = stub.calls;
+    restore = stub.restore;
+    eventBus = new MockEventBus();
+    plugin = new AscFlowPlugin();
+    await plugin.initialize(createContext(eventBus));
+    await connectPlugin(plugin);
+    calls.length = 0;
+    eventBus.published.length = 0;
+  }
+
+  const post = (cod: string, texto: string) =>
+    plugin.handleWebhook(
+      new Request(`http://localhost/api/v2/channels/asc-flow/${instanceId}/webhook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ codAtendimento: cod, chatInput: texto, message: texto }),
+      }),
+    );
+
+  /** One full turn: it lands, the agent answers, the poll collects. */
+  async function turno(texto: string): Promise<void> {
+    await post('42', texto);
+    await plugin.sendMessage(instanceId, { to: '42', content: { type: 'text', text: 'ok' } as never });
+    plugin.takeReadyTurn(instanceId, '42', texto);
+  }
+
+  it('drops it when the platform already holds a NEWER message', async () => {
+    // The beneficiary typed their CPF after the 🗑️ — the 🗑️ coming back is the
+    // flow, not them.
+    await bootComAtendimento('369.376.143-49 13/08/1971');
+    await turno('🗑️');
+    eventBus.published.length = 0;
+
+    await post('42', '🗑️');
+
+    expect(received()).toHaveLength(0);
+  });
+
+  it('keeps a genuine repeat — the platform holds that same text', async () => {
+    await bootComAtendimento('1');
+    await turno('1');
+    eventBus.published.length = 0;
+
+    await post('42', '1');
+
+    expect(received()).toHaveLength(1);
+  });
+
+  it('does not touch the platform for a text that is not a repeat', async () => {
+    await bootComAtendimento('qualquer coisa');
+    await turno('1');
+    calls.length = 0;
+
+    await post('42', '2');
+
+    expect(calls.filter((c) => c.path === '/atendimento')).toHaveLength(0);
   });
 });

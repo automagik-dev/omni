@@ -8,7 +8,7 @@ import type { OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { getOptionalClient } from '../client.js';
 import { getConfigDir, hasAuth, loadConfig } from '../config.js';
-import { credentialStatusFields } from '../lib/credential-status.js';
+import { credentialStatusFields, serverPostureFields } from '../lib/credential-status.js';
 import * as output from '../output.js';
 import { capturePm2, isPm2Available } from '../pm2.js';
 import { CLI_VERSION_HEADER, SERVER_VERSION_HEADER, VERSION, formatStatusVersionHint } from '../version.js';
@@ -133,6 +133,9 @@ async function validateAuthKey(statusInfo: Record<string, unknown>, client: Omni
     // Empty for a legacy credential, so legacy output keeps exactly its
     // pre-G4 fields (wish: omni-full-multitenancy, Group G4).
     Object.assign(statusInfo, credentialStatusFields(auth));
+    // Empty when the server reports no posture (older server), so output
+    // against an old server stays field-for-field unchanged (issue #982).
+    Object.assign(statusInfo, serverPostureFields(auth));
   } catch {
     statusInfo.keyValid = false;
   }

@@ -61,6 +61,16 @@ export interface WebhookActionConfig {
   waitForResponse?: boolean;
   timeoutMs?: number;
   responseAs?: string;
+  /**
+   * When no `bodyTemplate` is set, send the FULL OmniEvent envelope
+   * (`id`, `type`, `payload`, `metadata`, `timestamp`) as the default body
+   * instead of the bare payload (#960 — the khal/brain push-ingress
+   * contract). Defaults to true; set false to keep the legacy bare-payload
+   * default body. Ignored when `bodyTemplate` is set (the template contract
+   * is preserved byte-identical) or when no envelope was threaded
+   * (route-side manual execute), where the bare payload is sent as before.
+   */
+  includeEnvelope?: boolean;
 }
 
 /**
@@ -186,6 +196,23 @@ export interface Automation {
   debounce: DebounceConfig | null;
   enabled: boolean;
   priority: number;
+  /**
+   * Transactional publication (G5, #988): buffer the run's emit_event
+   * publishes and flush in order only on a fully successful run. Optional so
+   * pre-flag callers/tests need no change; absent = false = immediate
+   * publishing.
+   */
+  transactionalEmissions?: boolean;
+  /**
+   * Agent whose event manifest governs this automation (RFC #925 G4).
+   * Stamped by the G4b compiler (#986) when the row is compiled from a
+   * manifest's `accepts` entries; null/absent = hand-authored. Two consumers:
+   * the engine threads it into the emit path so the G4c publish-allowlist
+   * gate (#987) enforces the agent's `publishes` declarations (hand-authored
+   * emissions stay ungoverned), and the API service layer gates manual CRUD
+   * on managed rows (edit the manifest instead).
+   */
+  managedByAgentId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

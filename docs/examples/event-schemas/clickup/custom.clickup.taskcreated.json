@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "custom.clickup.taskcreated",
+  "description": "ClickUp taskCreated webhook delivery (body field event: taskCreated). Minimal-but-real contract: the fields consumers rely on are required; everything else ClickUp sends passes through (additionalProperties: true). Evolution rule: revisions must be additive-optional (issue #959).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["event", "task_id", "webhook_id"],
+  "properties": {
+    "event": {
+      "const": "taskCreated",
+      "description": "ClickUp event name (also the source of the semantic type via eventTypeMapping)"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Id of the created task"
+    },
+    "webhook_id": {
+      "type": "string",
+      "description": "Id of the ClickUp webhook configuration that fired"
+    },
+    "history_items": {
+      "type": "array",
+      "description": "Creation history entries (statuses, assignees, ...)",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string" },
+          "date": { "type": "string" },
+          "field": { "type": "string" }
+        }
+      }
+    }
+  }
+}

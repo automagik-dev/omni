@@ -30,6 +30,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDbHandle } from '../../packages/db/src/client';
 import { applyMigrations } from '../../packages/db/src/migrate';
+import {
+  createDatabaseFromTemplate,
+  ensureSqlTemplate,
+  sqlTemplateName,
+} from '../../packages/db/src/pg-migrated-template';
 import { RLS_TENANT_TABLES, contextFunctionStatements, tablePolicyStatements } from '../../packages/db/src/tenancy-rls';
 
 const postgresUrl = process.env.OMNI_G2_POSTGRES_URL ?? '';
@@ -279,8 +284,16 @@ postgresDescribe('v2.260830.2 -> v2.260902.5 release rehearsal (real PostgreSQL)
 
   beforeAll(() => {
     database = `omni_release_upgrade_${crypto.randomUUID().replaceAll('-', '')}`;
-    const created = runSqlOn(postgresUrl, `CREATE DATABASE "${database}";`);
-    if (created.exitCode !== 0) throw new Error(`could not create disposable database: ${created.stderr}`);
+    // The v2.260830.2 boundary (0000-0051) is frozen by definition — its bytes
+    // are pinned by PREVIOUS_RELEASE_MIGRATIONS_SHA256 above — so its migrated
+    // state is cached once per cluster as a template database and cloned here
+    // (#967). The template name embeds a digest of the same bytes, so any
+    // drift builds a fresh template (and fails the pinning test regardless).
+    const access = { superUrl: postgresUrl, psqlBin };
+    const previousReleaseSql = previousReleaseMigrations.map(migrationSql).join('\n');
+    const template = sqlTemplateName('omni_rel_tmpl', previousReleaseSql);
+    ensureSqlTemplate(access, template, previousReleaseSql);
+    createDatabaseFromTemplate(access, database, template);
     databaseUrl = urlFor(postgresUrl, database);
     handle = createDbHandle({ url: databaseUrl, maxConnections: 2 });
     candidateDrizzleDir = materializeCandidateMigrations();
@@ -296,8 +309,9 @@ postgresDescribe('v2.260830.2 -> v2.260902.5 release rehearsal (real PostgreSQL)
     if (!handle) throw new Error('database handle was not created');
     const db = handle.db;
 
-    // The v2.260830.2 boundary: every migration through 0051, applied in order.
-    for (const migration of previousReleaseMigrations) runOrThrow(migrationSql(migration));
+    // The v2.260830.2 boundary: every migration through 0051 — the database is
+    // a clone of the pinned-boundary template built in beforeAll, and the
+    // assertions below prove the cloned state is exactly that boundary.
     expect(columnCount()).toBe('10');
     expect(signatureColumns()).toBe('');
 

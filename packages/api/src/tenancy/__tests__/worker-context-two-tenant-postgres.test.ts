@@ -18,10 +18,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import type { EventBus, OmniEvent } from '@omni/core';
 import {
   DEFAULT_ROLE_NAMES,
@@ -31,6 +30,7 @@ import {
   createDbHandle,
   omniEvents,
 } from '@omni/db';
+import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { setupEventPersistence } from '../../plugins/event-persistence';
 import { InstanceService } from '../../services/instances';
@@ -40,9 +40,6 @@ import { runInWorkerTenantScope } from '../worker-tenant-context';
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const drizzleDir = join(here, '..', '..', '..', '..', 'db', 'drizzle');
 
 const TENANT_A = '11111111-1111-4111-8111-11111111111a';
 const TENANT_B = '22222222-2222-4222-8222-22222222222b';
@@ -136,17 +133,8 @@ postgresDescribe('two-tenant worker-context containment (real PostgreSQL)', () =
     );
 
   beforeAll(async () => {
-    const created = runSqlOn(superUrl, `CREATE DATABASE "${dbName}";`);
-    if (created.exitCode !== 0) throw new Error(`could not create database: ${created.stderr}`);
-
-    const migrations = readdirSync(drizzleDir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort()
-      .map((f) => readFileSync(join(drizzleDir, f), 'utf-8'))
-      .join('\n');
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
     const superDbUrl = urlFor(superUrl, dbName);
-    const migrated = runSqlOn(superDbUrl, migrations);
-    if (migrated.exitCode !== 0) throw new Error(`migrations failed: ${migrated.stderr}`);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -183,6 +171,10 @@ postgresDescribe('two-tenant worker-context containment (real PostgreSQL)', () =
     const captureBus = {
       subscribe: async (type: string, handler: (event: unknown) => Promise<void>) => {
         handlers.set(type, handler);
+      },
+      // The custom-event journal consumer (#957) registers via a pattern.
+      subscribePattern: async (pattern: string, handler: (event: unknown) => Promise<void>) => {
+        handlers.set(pattern, handler);
       },
     } as unknown as EventBus;
     await setupEventPersistence(captureBus, runtimeDb);
@@ -227,6 +219,40 @@ postgresDescribe('two-tenant worker-context containment (real PostgreSQL)', () =
       expect((await eventsForTenant(TENANT_B, extA)).length).toBe(0);
       expect((await eventsForTenant(TENANT_B, extB)).length).toBe(1);
       expect((await eventsForTenant(TENANT_A, extB)).length).toBe(0);
+    });
+
+    test('the custom-event journal consumer (#957) isolates by envelope tenant the same way', async () => {
+      const custom = handlers.get('custom.>');
+      if (!custom) throw new Error('custom.> handler not captured');
+
+      const customEvent = (instanceId: string, tenantId: string): OmniEvent =>
+        ({
+          id: crypto.randomUUID(),
+          type: 'custom.webhook.g5-isolation',
+          timestamp: Date.now(),
+          payload: { source: 'g5-isolation' },
+          metadata: {
+            correlationId: crypto.randomUUID(),
+            instanceId,
+            envelopeVersion: 1,
+            tenantId,
+          },
+        }) as OmniEvent;
+
+      const eventA = customEvent(INSTANCE_A, TENANT_A);
+      const eventB = customEvent(INSTANCE_B, TENANT_B);
+      await custom(eventA);
+      await custom(eventB);
+
+      const rowsById = (tenantId: string, id: string): Promise<{ id: string }[]> =>
+        runInWorkerTenantScope(runtimeDb, tenantId, async () =>
+          scopedHandle(runtimeDb).select({ id: omniEvents.id }).from(omniEvents).where(eq(omniEvents.id, id)),
+        );
+
+      expect((await rowsById(TENANT_A, eventA.id)).length).toBe(1);
+      expect((await rowsById(TENANT_B, eventA.id)).length).toBe(0);
+      expect((await rowsById(TENANT_B, eventB.id)).length).toBe(1);
+      expect((await rowsById(TENANT_A, eventB.id)).length).toBe(0);
     });
 
     test('a producer LYING about tenant is rejected by server-side ownership, not trusted', async () => {

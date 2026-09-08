@@ -1,0 +1,27 @@
+{
+  "name": "@omni/channel-harness",
+  "version": "2.260908.12",
+  "description": "E2E agent-testing channel for Omni — drives conversations, captures outbound verbatim, simulates taps",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@omni/channel-sdk": "workspace:*",
+    "@omni/core": "workspace:*",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

@@ -38,12 +38,15 @@ import { ChatService } from './chats';
 import { ConsumerOffsetService } from './consumer-offsets';
 import { ConversationService } from './conversations';
 import { DeadLetterService } from './dead-letters';
+import { EventConsumerService } from './event-consumers';
 import { EventOpsService } from './event-ops';
+import { EventSchemaService } from './event-schemas';
 import { EventService } from './events';
 import { FollowUpLifecycleService } from './follow-up-lifecycle';
 import { FollowUpSweeperService } from './follow-up-sweeper';
 import { GenieHostsService } from './genie-hosts';
 import { InstanceService } from './instances';
+import { ManifestCompilerService } from './manifest-compiler';
 import { MediaStorageService } from './media-storage';
 import { MessageService } from './messages';
 import { PayloadStoreService } from './payload-store';
@@ -80,8 +83,24 @@ export interface Services {
   deadLetters: DeadLetterService;
   payloadStore: PayloadStoreService;
   eventOps: EventOpsService;
+  /**
+   * Event schema registry (issue #959): per-type payload contracts consulted
+   * by the webhook ingress and the automation emit_event gate before publish.
+   */
+  eventSchemas: EventSchemaService;
+  /**
+   * Durable event consumers (#989, RFC #925 G7): named consumers with their
+   * own journal cursors — register/pull/ack/lag behind /v2/events/consumers.
+   */
+  eventConsumers: EventConsumerService;
   webhooks: WebhookService;
   automations: AutomationService;
+  /**
+   * G4b manifest compiler (RFC #925, #986): compiles `agents.event_manifest`
+   * `accepts` entries into MANAGED routing automations and reconciles them on
+   * manifest apply/update and agent deletion (wired into `agents` below).
+   */
+  manifestCompiler: ManifestCompilerService;
   chats: ChatService;
   messages: MessageService;
   syncJobs: SyncJobService;
@@ -145,6 +164,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   const apiKeys = new ApiKeyService(db);
   const deadLetters = new DeadLetterService(db, eventBus);
   const payloadStore = new PayloadStoreService(db);
+  const eventSchemas = new EventSchemaService(db);
 
   const settings = new SettingsService(db);
   const routeResolver = new RouteResolver(db);
@@ -213,8 +233,16 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   const agentRunner = new AgentRunnerService(db);
   providers.onProviderChanged((providerId) => agentRunner.clearCache(providerId));
 
+  // G4b (#986): manifest apply/update and agent deletion reconcile the
+  // agent's COMPILED automations through the compiler (a direct service call,
+  // not a bus subscription — apply + compile share the request's transaction).
+  const automationsService = new AutomationService(db, eventBus);
+  const manifestCompiler = new ManifestCompilerService(eventBus, automationsService);
+  const agentsService = new AgentService(db, eventBus);
+  agentsService.setManifestReconciler(manifestCompiler);
+
   return {
-    agents: new AgentService(db, eventBus),
+    agents: agentsService,
     agentState: new AgentStateService(eventBus),
     agentTasks: new AgentTaskService(db, eventBus),
     apiKeys,
@@ -231,8 +259,11 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     deadLetters,
     payloadStore,
     eventOps,
-    webhooks: new WebhookService(db, eventBus),
-    automations: new AutomationService(db, eventBus),
+    eventSchemas,
+    eventConsumers: new EventConsumerService(db, eventBus),
+    webhooks: new WebhookService(db, eventBus, eventSchemas, deadLetters),
+    automations: automationsService,
+    manifestCompiler,
     chats: new ChatService(db, eventBus),
     messages: new MessageService(db, eventBus),
     syncJobs: new SyncJobService(db, eventBus),

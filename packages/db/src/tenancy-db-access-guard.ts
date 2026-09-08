@@ -114,11 +114,29 @@ function isTestFile(path: string): boolean {
   return path.includes('/__tests__/') || /\.(test|spec)\.ts$/.test(path);
 }
 
+/**
+ * Sibling suites create and delete scratch sources inside the scanned tree
+ * while this scan runs (the egress guard's `__g5_egress_scratch__` under the
+ * parallel test runner), so any path listed by the walk may be gone by the
+ * time it is stat'ed or read. A vanished path has no call sites: skip it.
+ * Every other error still throws.
+ */
+function isEnoent(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
 function walk(dir: string, out: string[]): void {
   for (const entry of readdirSync(dir)) {
     if (SKIP_DIRS.has(entry)) continue;
     const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, out);
+    let isDirectory: boolean;
+    try {
+      isDirectory = statSync(full).isDirectory();
+    } catch (error) {
+      if (isEnoent(error)) continue;
+      throw error;
+    }
+    if (isDirectory) walk(full, out);
     else if (full.endsWith('.ts') && !isTestFile(full)) out.push(full);
   }
 }
@@ -203,7 +221,14 @@ export function scanDbAccessSites(packagesDir: string, repoRoot: string): DbAcce
   for (const file of files) {
     const rel = relative(repoRoot, file);
     if (SKIP_FILES.has(rel)) continue;
-    const source = stripComments(readFileSync(file, 'utf-8'));
+    let raw: string;
+    try {
+      raw = readFileSync(file, 'utf-8');
+    } catch (error) {
+      if (isEnoent(error)) continue;
+      throw error;
+    }
+    const source = stripComments(raw);
 
     for (const match of source.matchAll(builder)) {
       const table = RLS_DRIZZLE_TO_TABLE.get(match[1] as string);
@@ -853,6 +878,18 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     // found", proven in automation-actions-two-tenant-postgres.test.ts).
     // Flips to tenant-boundary when G6 lands, same gate as the
     // agent-dispatcher and session-cleaner `agents` sites.
+    // #958 emit_event idempotency claim (`claimEmittedEvent` /
+    // `releaseEmittedEventClaim`): the insert runs inside
+    // `runTenantWorkDb(db, trustedTenantId, …)` with the tenant the engine
+    // threads from the consumed envelope, through `scopedHandle` — the same
+    // ADR-0008 worker-scope seam as the sibling callbacks. A legacy envelope
+    // (null tenant) claims on the ambient pool; row ownership is the 0041
+    // derivation trigger's job (db-derived).
+    file: 'packages/api/src/plugins/automation-actions.ts',
+    table: 'omni_events',
+    class: 'tenant-boundary',
+  },
+  {
     file: 'packages/api/src/plugins/automation-actions.ts',
     table: 'agents',
     class: 'pending-G5-conversion',
@@ -933,6 +970,15 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     // G5-CONVERTED — see the sibling `chats` entry above.
     file: 'packages/api/src/plugins/event-persistence.ts',
     table: 'omni_events',
+    class: 'tenant-boundary',
+  },
+  {
+    // Same scoping as the sibling `chats` entry above: the #966 best-effort
+    // personId existence check for custom journal rows (FK safety before
+    // stamping person_id) issues on `scopedHandle` inside the consumer's
+    // worker tenant scope. Consumer-only callers.
+    file: 'packages/api/src/plugins/event-persistence.ts',
+    table: 'persons',
     class: 'tenant-boundary',
   },
   {
@@ -1399,6 +1445,14 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'tenant-boundary',
   },
   {
+    // Durable consumers (#989): pull/head read the journal through
+    // `scopedHandle`, so a tenant-scoped request pages only its own tenant's
+    // rows under enforcement; legacy paths read ambient byte-identically.
+    file: 'packages/api/src/services/event-consumers.ts',
+    table: 'omni_events',
+    class: 'tenant-boundary',
+  },
+  {
     file: 'packages/api/src/services/events.ts',
     table: 'omni_events',
     class: 'tenant-boundary',
@@ -1670,6 +1724,17 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'and turns.open fails the INSERT WITH CHECK (the composite FK (tenant_id, agent_id) -> agents cannot ' +
       'be satisfied either). So this flips to tenant-boundary only once BOTH the async callers are converted ' +
       'AND the G6 persons backfill lands — it is a G6-gated site, not still-convertible G5 work.',
+  },
+  {
+    // #958 ingress idempotency claim: `receive()` inserts the journal row
+    // (the claim on `omni_events.idempotency_key`) through the service's
+    // `scopedHandle` getter, so a tenant-scoped request runs it in the
+    // request's tenant transaction and a legacy credential runs ambient —
+    // the same seam as every converted route service. Tenant ownership of
+    // the row itself is the 0041 derivation trigger's job (db-derived).
+    file: 'packages/api/src/services/webhooks.ts',
+    table: 'omni_events',
+    class: 'tenant-boundary',
   },
   {
     file: 'packages/api/src/services/webhooks.ts',

@@ -234,7 +234,22 @@ function buildInstanceConnectOptions(instance: {
   if (instance.channel === 'asc-flow') {
     applyAscFlowOptions(options, instance);
   }
+  if (instance.channel === 'harness') {
+    applyHarnessMetadata(options, instance.profileMetadata);
+  }
   return options;
+}
+
+/**
+ * Harness capability profile — lives in profileMetadata.harnessProfile
+ * (#953, the Slack profileMetadata precedent; generic jsonb, no migration).
+ * The plugin's connect() Zod-parses it.
+ */
+function applyHarnessMetadata(
+  options: Record<string, unknown>,
+  metadata: Record<string, unknown> | null | undefined,
+): void {
+  if (metadata?.harnessProfile) options.harnessProfile = metadata.harnessProfile;
 }
 
 /**

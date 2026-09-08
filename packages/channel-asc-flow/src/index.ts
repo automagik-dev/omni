@@ -23,11 +23,11 @@ export { handleAscFlowWebhookRequest, parseInboundTurn } from './handlers/webhoo
 export type { ParsedAscFlowTurn } from './handlers/webhook';
 
 // Utils
-export { buildUra, foldTitle, splitBubbles } from './utils/interactive';
+export { buildInteractive, foldTitle, splitBubbles } from './utils/interactive';
 
 // Errors
 export { AscFlowApiError, AscFlowErrorCode, mapHttpStatusToAscFlowError, isRetryable } from './utils/errors';
 export type { AscFlowErrorCodeType } from './utils/errors';
 
 // Types
-export type { AscFlowConfig, AscFlowInboundBody, AscFlowResponse, AscFlowUra } from './types';
+export type { AscFlowConfig, AscFlowInboundBody, AscFlowResponse } from './types';

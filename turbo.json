@@ -12,8 +12,12 @@
     "lint": {
       "outputs": []
     },
+    "topo": {
+      "dependsOn": ["^topo"]
+    },
     "test": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "^topo"],
+      "env": ["CI", "NODE_ENV", "MINIO_INTEGRATION", "DATABASE_URL", "TEST_DATABASE_URL", "ENABLE_DB_TESTS", "OMNI_*"],
       "outputs": []
     },
     "dev": {

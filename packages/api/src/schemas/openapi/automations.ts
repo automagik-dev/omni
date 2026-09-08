@@ -26,6 +26,10 @@ const WebhookActionSchema = z.object({
     waitForResponse: z.boolean().default(false),
     timeoutMs: z.number().int().default(30000),
     responseAs: z.string().optional(),
+    includeEnvelope: z
+      .boolean()
+      .optional()
+      .openapi({ description: 'Send the full OmniEvent envelope as the default body (default true)' }),
   }),
 });
 
@@ -104,6 +108,20 @@ export const AutomationSchema = z.object({
   debounce: DebounceSchema.nullable().openapi({ description: 'Debounce config' }),
   enabled: z.boolean().openapi({ description: 'Whether enabled' }),
   priority: z.number().int().openapi({ description: 'Priority' }),
+  transactionalEmissions: z.boolean().openapi({
+    description:
+      "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
+      'only when every action succeeded; a failed run publishes zero',
+  }),
+  managedByAgentId: z
+    .string()
+    .uuid()
+    .nullable()
+    .openapi({
+      description:
+        'Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); ' +
+        'null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead',
+    }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
 });
@@ -122,6 +140,14 @@ export const CreateAutomationSchema = z.object({
   debounce: DebounceSchema.optional().openapi({ description: 'Debounce config' }),
   enabled: z.boolean().default(true).openapi({ description: 'Whether enabled' }),
   priority: z.number().int().default(0).openapi({ description: 'Priority' }),
+  transactionalEmissions: z
+    .boolean()
+    .default(false)
+    .openapi({
+      description:
+        "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
+        'only when every action succeeded; a failed run publishes zero. Default false = immediate publishing',
+    }),
 });
 
 // Automation log schema

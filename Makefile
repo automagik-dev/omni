@@ -2,7 +2,8 @@
 # Universal Event-Driven Omnichannel Platform
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
-        test test-watch test-api test-db test-pg-gate typecheck typecheck-ui lint lint-fix lint-ui format check dead-code \
+        test test-sweep test-watch test-api test-db test-pg-gate test-pg-gate-warm pg-gate-warm-stop \
+        typecheck typecheck-ui lint lint-fix lint-ui format check check-all dead-code verify-migrations \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -27,18 +28,23 @@ help:
 	@echo "  make dev-stop      Stop PM2 dev services"
 	@echo ""
 	@echo "Quality:"
-	@echo "  make check         Run all quality checks (typecheck + lint + dead-code + test)"
+	@echo "  make check         Run all quality checks (typecheck + lint + dead-code + migrations + test)"
+	@echo "  make check-all     Run check AND the pg-gate concurrently (fastest full validation)"
+	@echo "  make verify-migrations  Static migration contract gate (journal/immutability/lint)"
 	@echo "  make typecheck     TypeScript type checking"
 	@echo "  make lint          Run Biome linter"
 	@echo "  make lint-fix      Fix auto-fixable lint issues"
 	@echo "  make lint-api      Lint API package only"
 	@echo "  make format        Format code with Biome"
 	@echo "  make dead-code     Run knip dead code detection"
-	@echo "  make test          Run all tests"
+	@echo "  make test          Run all tests (per-package, turbo-cached)"
+	@echo "  make test-sweep    Run all tests in one process (CI parity, leak hunting)"
 	@echo "  make test-watch    Run tests in watch mode"
 	@echo "  make test-api      Run API package tests only"
 	@echo "  make test-db       Run DB package tests only"
 	@echo "  make test-pg-gate  Run every real-PostgreSQL suite (fails loudly, never skips)"
+	@echo "  make test-pg-gate-warm  Same gate against a kept-warm cluster (fast dev loop)"
+	@echo "  make pg-gate-warm-stop  Destroy the kept-warm pg-gate cluster"
 	@echo "  make test-file F=<path>  Run a specific test file"
 	@echo "  make kill-stale-test-daemons  Sweep leaked PM2 god daemons from CLI tests (#413)"
 	@echo ""
@@ -214,8 +220,25 @@ lint-core:
 format:
 	bunx biome format --write .
 
+# Per-package tests via turbo (#967): unchanged packages replay their cached
+# green run instead of re-executing, so an incremental `make check` pays only
+# for the packages the change touched. The turbo `test` task hashes
+# DATABASE_URL / TEST_DATABASE_URL / ENABLE_DB_TESTS / OMNI_* on top of each
+# package's files, so pointing at a different database invalidates the cache.
+# Env is loaded into the environment here because per-package `bun test` runs
+# have no --env-file. Workspaces only — apps/khal-ui stays out (private
+# @khal-os deps, own test run).
+# LOG_LEVEL is forced to 'silent' AFTER .env loads (which sets debug): suites
+# intentionally exercise thousands of warn/error paths and the JSON flood is
+# pure I/O + noise (#967). Override: make test TEST_LOG_LEVEL=debug
 test: _build-dist _sync-db
-	bun test --env-file=.env
+	@set -a && . ./.env && set +a && LOG_LEVEL=$(or $(TEST_LOG_LEVEL),silent) bun run test
+
+# The pre-#967 single-process sweep, kept for CI parity and for hunting
+# cross-file state leaks (e.g. globalThis.fetch pollution) that only reproduce
+# when every suite shares one process.
+test-sweep: _build-dist _sync-db
+	bun test --env-file=.env packages apps/ui
 
 test-watch: _build-dist
 	bun test --env-file=.env --watch
@@ -248,6 +271,16 @@ test-db:
 test-pg-gate:
 	bun scripts/pg-gate.ts
 
+# Keep-warm variant (#967): first run creates the disposable cluster and
+# remembers it in .pg-gate-warm.json; later runs reuse it via --url, skipping
+# the ~15-20s initdb + role setup per iteration. Same gate, same zero-skip
+# contract. `make pg-gate-warm-stop` destroys the kept cluster.
+test-pg-gate-warm:
+	bun scripts/pg-gate-warm.ts run
+
+pg-gate-warm-stop:
+	bun scripts/pg-gate-warm.ts stop
+
 # Run a specific test file (usage: make test-file F=packages/api/src/__tests__/foo.test.ts)
 test-file:
 	@if [ -z "$(F)" ]; then echo "Usage: make test-file F=<path-to-test-file>"; exit 1; fi
@@ -256,10 +289,35 @@ test-file:
 dead-code:
 	bunx knip
 
+# Static migration contract gate (journal ↔ files, immutability, additive-only
+# lint, headers, schema.ts pairing). No DB — see scripts/verify-migration-contract.ts.
+# Base ref defaults to origin/dev; override: make verify-migrations BASE=origin/main
+verify-migrations:
+	bun test scripts/verify-migration-contract.test.ts
+	bun scripts/verify-migration-contract.ts $(if $(BASE),--base $(BASE),)
+
 # Run all quality checks
-check: typecheck lint dead-code test
+check: typecheck lint dead-code verify-migrations test
 	@echo ""
 	@echo "All checks passed!"
+
+# Run `make check` and the real-PostgreSQL gate CONCURRENTLY (#967). Safe
+# because the pg-gate stands up its own disposable cluster on a random
+# loopback port and never reads .env, so it cannot collide with check's
+# database. pg-gate output is spooled to a temp file and replayed after
+# check's, so the two streams never interleave.
+check-all:
+	@pg_out=$$(mktemp -t omni-pg-gate-out); \
+	( $(MAKE) test-pg-gate >"$$pg_out" 2>&1 ) & pg_pid=$$!; \
+	check_status=0; $(MAKE) check || check_status=$$?; \
+	pg_status=0; wait $$pg_pid || pg_status=$$?; \
+	echo ""; echo "===== pg-gate (ran concurrently) ====="; \
+	cat "$$pg_out"; rm -f "$$pg_out"; \
+	if [ $$check_status -ne 0 ] || [ $$pg_status -ne 0 ]; then \
+		echo ""; echo "check-all: FAILED (check=$$check_status, pg-gate=$$pg_status)"; \
+		exit 1; \
+	fi; \
+	echo ""; echo "check-all: PASSED — check and pg-gate both green"
 
 # ============================================================================
 # Database (Drizzle)

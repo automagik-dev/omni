@@ -5,6 +5,19 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  # Merge-queue support (#990): when a merge queue is enabled on dev, GitHub
+  # synthesizes gh-readonly-queue/* merge commits (PR + dev + any PRs queued
+  # ahead) and requires the branch-protection checks to pass on THEM before
+  # merging. That is the combined-state test per-PR CI cannot perform: PRs
+  # #964 and #965 were each green in isolation but red merged together (a
+  # suite relying on ambient global fetch met a sibling that replaces it —
+  # fixed after the fact in #963). Every job below runs on merge_group; the
+  # quality gate takes the full single-process sweep path, the one
+  # configuration where such cross-file state leaks reproduce.
+  # Enabling the queue itself is a one-time settings change — see
+  # docs/ci/merge-queue.md.
+  merge_group:
+    branches: [main, dev]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -118,6 +131,55 @@ jobs:
       - name: Verify version sync
         run: bun scripts/verify-versions.ts
 
+      - name: Migration contract gate
+        # Static check of packages/db/drizzle/ (journal ↔ files bijection,
+        # deployed-migration immutability, additive-only lint, headers,
+        # schema.ts pairing). No DB.
+        # On pull_request the checkout is GitHub's test merge commit; its FIRST
+        # PARENT is the exact base-branch tip the merge was built against, so
+        # comparing against HEAD^1 is race-free. Fetching the branch tip here
+        # instead can see a NEWER base — parallel merges land between run start
+        # and this step — and blame the PR for changes it never made (false
+        # pairing violations; bit PR #977 during a 6-PR batch).
+        # The contract base is DEV: a migration is "deployed" once it lands on
+        # dev (the API auto-migrates from dev), and dev → main promotion is
+        # carry-exact — so promotion PRs (base main) and push events keep
+        # comparing against origin/dev to avoid re-litigating history that was
+        # vetted when it entered dev. Journal-integrity checks (bijection, idx
+        # sequence, monotonic `when`) are base-independent and still run on
+        # every event, which catches parallel-PR numbering collisions after
+        # auto-merge. Not the same tool as verify-schema-drift.ts (live-DB audit).
+        # HEAD^1 has its own race (#996): if auto-merge lands the PR while this
+        # run is in flight, GitHub deletes refs/pull/N/merge, the deepen fetch
+        # no longer advertises the checked-out merge commit, its parents never
+        # arrive, and `rev-parse HEAD^1` dies — failing the gate on PRs that
+        # touch no migrations (bit PR #991, merged 21s before this step ran).
+        # In that case fall back to the base-branch tip: the run is already
+        # superseded, so re-widening the #977 newer-base window is harmless,
+        # and the base-independent journal checks still run either way.
+        # merge_group events have an empty github.base_ref, so both expressions
+        # below fall through to their defaults: the contract base is origin/dev
+        # (correct for a dev queue, and per the carry-exact promotion rule
+        # above, correct even for a main queue).
+        env:
+          MIGRATION_BASE_BRANCH: ${{ github.base_ref == 'main' && 'dev' || github.base_ref || 'dev' }}
+          USE_MERGE_PARENT: ${{ github.event_name == 'pull_request' && github.base_ref != 'main' }}
+        run: |
+          bun test scripts/verify-migration-contract.test.ts
+          if [ "$USE_MERGE_PARENT" = "true" ]; then
+            git fetch --no-tags --deepen=1 origin
+            if BASE=$(git rev-parse --verify -q HEAD^1); then
+              bun scripts/verify-migration-contract.ts --base "$BASE"
+            else
+              echo "::notice::HEAD^1 unresolvable (PR merged mid-run?) — falling back to origin/${MIGRATION_BASE_BRANCH} (#996)"
+              git fetch --no-tags --depth=1 origin "+refs/heads/${MIGRATION_BASE_BRANCH}:refs/remotes/origin/${MIGRATION_BASE_BRANCH}"
+              bun scripts/verify-migration-contract.ts --base "origin/${MIGRATION_BASE_BRANCH}"
+            fi
+          else
+            git fetch --no-tags --depth=1 origin "+refs/heads/${MIGRATION_BASE_BRANCH}:refs/remotes/origin/${MIGRATION_BASE_BRANCH}"
+            bun scripts/verify-migration-contract.ts --base "origin/${MIGRATION_BASE_BRANCH}"
+          fi
+
       - name: Setup environment
         run: |
           cp .env.example .env
@@ -185,12 +247,43 @@ jobs:
       - name: Dead code check (knip)
         run: bunx knip
 
-      - name: Test
-        # Scope to omni packages + the ui app; apps/khal-ui is a decoupled
-        # sub-project (private @khal-os deps) with its own test run.
+      - name: Test (pull requests — per-package via the turbo cache)
+        # Per-package `turbo test` (#967), fed by the "Turbo remote cache" step
+        # above: packages a PR does not touch replay their previously proven
+        # green run (byte-identical inputs — package files, dependency sources
+        # via the synthetic `topo` task, and the declared env vars) instead of
+        # re-executing, so an incremental PR pays only for what it changed.
+        # Coverage is identical to the sweep: every workspace with test files
+        # has a `test` script, and the pre-push hook runs this same command.
+        #
+        # Env: per-package runs have no --env-file, so .env is sourced into the
+        # environment here. NODE_ENV=test is re-exported AFTER sourcing (the
+        # .env template says development), matching the old step's env, and
+        # LOG_LEVEL=silent mutes the thousands of intentional warn/error lines
+        # the suites emit — neither is part of the turbo test hash.
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          set -a && . ./.env && set +a
+          export NODE_ENV=test LOG_LEVEL=silent
+          bun run test
+
+      - name: Test (pushes and merge groups — full single-process sweep)
+        # Pushes to dev/main re-prove everything with the pre-#967 sweep: no
+        # cache replay on the integration branch, and the one-process run is
+        # also the only configuration where cross-file state leaks (e.g.
+        # globalThis.fetch pollution, issue #967 comment) reproduce. Scope to
+        # omni packages + the ui app; apps/khal-ui is a decoupled sub-project
+        # (private @khal-os deps) with its own test run.
+        # merge_group events (#990) take this same path deliberately: the
+        # queue's speculative merge commit is exactly the state dev would
+        # become, so sweeping it catches green-in-isolation/red-in-combination
+        # PR pairs (the #964+#965 global-fetch clash) BEFORE they land.
+        if: ${{ github.event_name != 'pull_request' }}
         run: bun test packages apps/ui --env-file=.env
         env:
           NODE_ENV: test
+          LOG_LEVEL: silent
 
   pg-isolation-gate:
     name: PostgreSQL Isolation Gate (tenancy/RLS)

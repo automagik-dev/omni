@@ -115,6 +115,20 @@ export interface MessageMetadata {
    */
   systemNotice?: boolean;
 
+  /**
+   * Position of this send inside ONE agent reply, when the caller split that
+   * reply into several messages (the agent dispatcher does: the provider
+   * splits on blank lines, then each part is sent separately).
+   * `partIndex` is 0-based; the last part is `partCount - 1`.
+   *
+   * Most channels ignore this — N messages is exactly what they want. It
+   * exists for a channel whose transport carries ONE answer per turn
+   * (asc-flow answers a poll), which holds the earlier parts and answers once
+   * on the last. Absent means "a send that stands alone".
+   */
+  partIndex?: number;
+  partCount?: number;
+
   /** Additional plugin-specific metadata */
   [key: string]: unknown;
 }

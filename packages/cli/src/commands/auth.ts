@@ -20,7 +20,7 @@ import {
   saveConfig,
   saveLocalRuntimeConfig,
 } from '../config.js';
-import { credentialStatusFields } from '../lib/credential-status.js';
+import { credentialStatusFields, serverPostureFields } from '../lib/credential-status.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
@@ -406,6 +406,8 @@ one, or the entry named by the global flag:
           scopes: result.scopes,
           // Empty for a legacy credential (wish: omni-full-multitenancy, G4).
           ...credentialStatusFields(result),
+          // Empty when the server reports no tenancy posture (issue #982).
+          ...serverPostureFields(result),
           configDir: getConfigDir(),
         });
       } catch (err) {

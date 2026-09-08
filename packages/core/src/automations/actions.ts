@@ -7,7 +7,9 @@
 import { brokeredFetch } from '../egress';
 import type { EventBus } from '../events/bus';
 import { resolveAmbientTenantId } from '../events/envelope';
+import { SCHEMA_VALIDATION_FAILED } from '../events/schema-registry';
 import type { CustomEventType, GenericEventPayload } from '../events/types';
+import { generateId } from '../ids';
 import { createLogger } from '../logger';
 import { type TemplateContext, substituteTemplate, substituteTemplateObject } from './templates';
 import type {
@@ -58,6 +60,41 @@ export interface AgentCallContext {
   senderName?: string;
   /** The message(s) to send to the agent */
   messages: string[];
+  /**
+   * Envelope of the event that woke this agent (#960) — threaded from the
+   * engine's TemplateContext so the agent (and the callAgent implementation)
+   * knows which event it is responding to. Absent for envelope-less
+   * invocations (route-side manual execute, legacy tests).
+   */
+  event?: {
+    id: string;
+    type: string;
+    correlationId?: string;
+  };
+  /**
+   * Chatless dispatch (#1010, RFC #925 G4 runtime half): the triggering event
+   * carried no resolvable chat context (no instanceId and/or no chatId), and
+   * `config.agentId` names the agent to wake anyway. In this mode:
+   *   - `instanceId` is the EMPTY STRING — there is no instance; the callAgent
+   *     implementation must resolve the provider from the agent row instead;
+   *   - `chatId`/`senderId` carry the synthesized `sessionKey` (stable
+   *     event-scoped identifiers, never channel-native ids);
+   *   - `messages` carries the full OmniEvent envelope as JSON (the #960
+   *     envelope-forwarding shape), or the rendered `promptOverride`;
+   *   - there is NO implicit reply — the agent acts through its own
+   *     tools/actions; any response routing is the agent's job.
+   */
+  chatless?: boolean;
+  /**
+   * Session scoping key for chatless runs: `automation:{automationId}:{scope}`
+   * where scope is the triggering envelope's correlationId (falling back to
+   * the event id, or a fresh id for envelope-less invocations). Consecutive
+   * unrelated events therefore never collide into one conversation; a causal
+   * chain (shared correlationId) hitting the same automation shares one key.
+   */
+  sessionKey?: string;
+  /** Id of the automation that dispatched this chatless run ('manual' when unthreaded). */
+  automationId?: string;
 }
 
 /**
@@ -72,8 +109,48 @@ export interface AgentCallContext {
  * caller that threads nothing (the route-side manual `execute`, existing
  * tests) leaves it `undefined` and the callbacks behave exactly as before.
  */
+/**
+ * Where a re-published event came from (#958): the triggering event and the
+ * automation/action slot that emitted it. Threaded by the engine so
+ * `emit_event` can derive the deterministic idempotency key
+ * `derived:{parent_event_id}:{automation_id}:{action_index}` — re-running the
+ * same automation over the same event (NATS redelivery, replay) claims the
+ * same key and does not duplicate the emission.
+ */
+export interface EmitProvenance {
+  /** Id of the event that triggered the automation. */
+  parentEventId: string;
+  /** Id of the automation whose action is emitting. */
+  automationId: string;
+}
+
 export interface ActionDependencies {
   eventBus: EventBus | null;
+  /**
+   * Claim an emission's idempotency key BEFORE publishing (#958). Returns
+   * true when this is the first claim (publish proceeds) and false when the
+   * key is already journaled (a redelivery/replay — the publish is skipped
+   * and the action reports `duplicate: true`). Backed by the
+   * `omni_events.idempotency_key` unique index in the API; when absent (older
+   * wiring, tests) emissions publish unconditionally as before.
+   */
+  claimEmittedEvent?: (
+    claim: {
+      idempotencyKey: string;
+      eventId: string;
+      eventType: string;
+      payload: Record<string, unknown>;
+      /** Flow/tree identity (#956/#957) journaled on the claim row. */
+      correlationId?: string;
+      causationId?: string;
+    },
+    trustedTenantId?: string | null,
+  ) => Promise<boolean>;
+  /**
+   * Release a claim taken by `claimEmittedEvent` whose publish then failed —
+   * leaving it would suppress the retry's emission forever.
+   */
+  releaseEmittedEventClaim?: (eventId: string) => Promise<void>;
   sendMessage?: (instanceId: string, to: string, content: string, trustedTenantId?: string | null) => Promise<void>;
   /**
    * Call an AI agent and return the response.
@@ -128,6 +205,32 @@ export interface ActionDependencies {
     trustedTenantId?: string | null,
   ) => Promise<{ skip: boolean; reason?: string; claimToken?: string }>;
   /**
+   * Optional emission gate for `emit_event` (issues #959, #987). Invoked with
+   * the resolved event type and payload BEFORE publish; an invalid verdict
+   * fails the action and nothing enters the journal. The implementation
+   * (packages/api `automation-actions.ts`) runs two checks IN ORDER:
+   *
+   *   1. Publish allowlist (RFC #925 G4c, #987) — only when `emitterAgentId`
+   *      is threaded: the type must be declared in that agent's manifest
+   *      `publishes` list or the emission is dead-lettered with reason
+   *      `publish_not_declared`.
+   *   2. Schema registry (#959) — dead-letters an invalid payload with reason
+   *      `schema_validation_failed`, or `schema_not_registered` when the
+   *      strict switch (issue #1000) refuses an unregistered type.
+   *
+   * The verdict's `reason` carries the refusing token and prefixes the action
+   * error. `emitterAgentId` comes from `context.automation.managedByAgentId`
+   * (stamped by the #986 compiler; absent/null → check 1 is inert). Omitted
+   * dep (existing tests, route-side manual execute) → no gate, behavior
+   * unchanged.
+   */
+  validateEmitEvent?: (
+    eventType: string,
+    payload: Record<string, unknown>,
+    trustedTenantId?: string | null,
+    emitterAgentId?: string | null,
+  ) => Promise<{ valid: boolean; errors?: string[]; reason?: string }>;
+  /**
    * Release a claim previously granted by `staleIdleTimeoutGate`. The gate
    * records the claim before the event is executed, so a delivery that throws
    * (queue full → `nak`, dispatcher error) must give the claim back or its own
@@ -138,16 +241,53 @@ export interface ActionDependencies {
 }
 
 /**
- * Build headers for webhook request
+ * Build headers for webhook request.
+ *
+ * Envelope headers (#960, the khal/brain push-ingress contract):
+ *   - `X-Omni-Event-Id`: the triggering event's id.
+ *   - `X-Omni-Delivery-Id`: `{event.id}:{automation.id}:{actionIndex}` —
+ *     stable across retries of the SAME delivery attempt chain, so a receiver
+ *     can dedupe on an id Omni minted. `manual` stands in for the automation
+ *     id on route-side manual executions that still thread an envelope.
+ * Both are only stamped when the engine threaded a triggering envelope;
+ * envelope-less invocations send exactly the headers they always did.
+ * Config-declared headers are applied last so an operator can override.
  */
-function buildWebhookHeaders(config: WebhookActionConfig, context: TemplateContext): Record<string, string> {
+function buildWebhookHeaders(
+  config: WebhookActionConfig,
+  context: TemplateContext,
+  actionIndex: number,
+): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (context.event) {
+    headers['X-Omni-Event-Id'] = context.event.id;
+    headers['X-Omni-Delivery-Id'] = `${context.event.id}:${context.automation?.id ?? 'manual'}:${actionIndex}`;
+  }
   if (config.headers) {
     for (const [key, value] of Object.entries(config.headers)) {
       headers[key] = substituteTemplate(value, context);
     }
   }
   return headers;
+}
+
+/**
+ * Default webhook body (#960): the FULL OmniEvent envelope when one was
+ * threaded and `includeEnvelope` is not explicitly false; the bare payload
+ * otherwise (legacy default, and always the fallback for envelope-less
+ * invocations). A configured `bodyTemplate` bypasses this entirely.
+ */
+function buildDefaultWebhookBody(config: WebhookActionConfig, context: TemplateContext): string {
+  if (context.event && config.includeEnvelope !== false) {
+    return JSON.stringify({
+      id: context.event.id,
+      type: context.event.type,
+      payload: context.payload,
+      metadata: context.event.metadata,
+      timestamp: context.event.timestamp,
+    });
+  }
+  return JSON.stringify(context.payload);
 }
 
 /**
@@ -166,14 +306,15 @@ async function executeWebhookAction(
   context: TemplateContext,
   _deps: ActionDependencies,
   trustedTenantId?: string | null,
+  actionIndex = 0,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
     const url = substituteTemplate(config.url, context);
     const method = config.method ?? 'POST';
-    const headers = buildWebhookHeaders(config, context);
+    const headers = buildWebhookHeaders(config, context, actionIndex);
     const body = config.bodyTemplate
       ? substituteTemplate(config.bodyTemplate, context)
-      : JSON.stringify(context.payload);
+      : buildDefaultWebhookBody(config, context);
 
     logger.debug(`Webhook ${method} ${url}`, { method, url, waitForResponse: config.waitForResponse });
 
@@ -271,31 +412,200 @@ async function executeSendMessageAction(
 }
 
 /**
- * Execute an emit_event action
+ * Claim the (event, automation, action) slot's derived idempotency key
+ * (#958) before an emission publishes. `duplicate: true` means the key is
+ * already journaled — a replay/redelivery of the slot — and the emission
+ * must be skipped. Without the dep or provenance the claim is a no-op.
  */
-async function executeEmitEventAction(
+async function claimEmissionSlot(
+  deps: ActionDependencies,
+  eventType: string,
+  payload: GenericEventPayload,
+  trustedTenantId: string | null | undefined,
+  provenance: (EmitProvenance & { actionIndex: number }) | undefined,
+  causality: { correlationId?: string; causationId?: string },
+): Promise<{ duplicate: boolean; claimedEventId?: string }> {
+  if (!deps.claimEmittedEvent || !provenance) {
+    return { duplicate: false };
+  }
+  const idempotencyKey = `derived:${provenance.parentEventId}:${provenance.automationId}:${provenance.actionIndex}`;
+  const claimedEventId = generateId();
+  const claimed = await deps.claimEmittedEvent(
+    { idempotencyKey, eventId: claimedEventId, eventType, payload, ...causality },
+    trustedTenantId,
+  );
+  if (!claimed) {
+    logger.info('Skipping duplicate emission (idempotency key already journaled)', { eventType, idempotencyKey });
+    return { duplicate: true };
+  }
+  return { duplicate: false, claimedEventId };
+}
+
+/**
+ * A claim must not outlive a failed publish — leaving it would drop the
+ * retry's emission as a "duplicate" of an event that never existed.
+ */
+async function releaseEmissionClaim(
+  deps: ActionDependencies,
+  claimedEventId: string | undefined,
+  eventType: string,
+): Promise<void> {
+  if (!claimedEventId || !deps.releaseEmittedEventClaim) return;
+  await deps.releaseEmittedEventClaim(claimedEventId).catch((releaseError: unknown) => {
+    logger.error('Failed to release emission idempotency claim', {
+      eventType,
+      claimedEventId,
+      error: String(releaseError),
+    });
+  });
+}
+
+/**
+ * Emission gates for emit_event (issues #959, #987): the publish allowlist of
+ * the emitting agent's manifest (checked first, only when the engine threaded
+ * `context.automation.managedByAgentId`) and the schema-registry contract. A
+ * refusal fails the emit BEFORE publish (the gate impl dead-letters it with
+ * its reason — `publish_not_declared`, `schema_validation_failed`, or
+ * `schema_not_registered` under the strict switch, issue #1000) and the
+ * verdict's `reason` prefixes the error. Runs BEFORE the idempotency claim
+ * (#958): a refused payload must not journal an event or burn the slot's
+ * derived key.
+ */
+async function enforceEmitEventGates(
+  deps: ActionDependencies,
+  eventType: string,
+  payload: GenericEventPayload,
+  trustedTenantId?: string | null,
+  emitterAgentId?: string | null,
+): Promise<string | null> {
+  if (!deps.validateEmitEvent) return null;
+  const verdict = await deps.validateEmitEvent(eventType, payload, trustedTenantId, emitterAgentId);
+  if (verdict.valid) return null;
+  const detail = verdict.errors?.length ? `: ${verdict.errors.join('; ')}` : '';
+  logger.warn('Emit event refused by emission gate', { eventType, emitterAgentId, errors: verdict.errors });
+  return `${verdict.reason ?? SCHEMA_VALIDATION_FAILED}${detail}`;
+}
+
+/**
+ * An emission with everything the publish needs, resolved at PREPARE time.
+ *
+ * Transactional publication (G5, #988) splits emit_event into prepare and
+ * publish phases so a buffered emission is byte-identical to an immediate one:
+ * templates, the schema gate, correlation/causation and the #958 slot
+ * provenance (idempotency-key ingredients, INCLUDING the enqueue-time
+ * actionIndex) are all captured here — a DLQ-retried run re-prepares the same
+ * values and therefore claims the same derived keys.
+ */
+interface PreparedEmission {
+  eventBus: EventBus;
+  eventType: CustomEventType;
+  payload: GenericEventPayload;
+  correlationId?: string;
+  /** Claim-row causality (#957): `context.event?.id ?? provenance?.parentEventId`. */
+  causationId?: string;
+  /** What `publishGeneric` is handed as causationId today: `context.event?.id`. */
+  publishCausationId?: string;
+  /** #958 slot identity, actionIndex stamped at prepare/enqueue time. */
+  slotProvenance?: EmitProvenance & { actionIndex: number };
+  trustedTenantId?: string | null;
+}
+
+/**
+ * Resolve an emit_event action into a {@link PreparedEmission} — everything
+ * up to (but excluding) the idempotency claim and the publish. May throw on
+ * template errors; callers wrap it in the action-level try/catch.
+ */
+async function prepareEmitEvent(
   config: EmitEventActionConfig,
   context: TemplateContext,
   deps: ActionDependencies,
-  trustedTenantId?: string | null,
+  trustedTenantId: string | null | undefined,
+  actionIndex: number,
+  provenance: EmitProvenance | undefined,
+): Promise<{ prepared: PreparedEmission } | { error: string }> {
+  if (!deps.eventBus) {
+    return { error: 'eventBus not available' };
+  }
+
+  // Build payload
+  let payload: GenericEventPayload;
+  if (config.payloadTemplate) {
+    payload = substituteTemplateObject(config.payloadTemplate, context) as GenericEventPayload;
+  } else {
+    payload = context.payload;
+  }
+
+  const eventType = substituteTemplate(config.eventType, context) as CustomEventType;
+
+  // Emission gates (publish allowlist #987, schema registry #959, strict
+  // switch #1000) — see `enforceEmitEventGates`.
+  const gateError = await enforceEmitEventGates(
+    deps,
+    eventType,
+    payload,
+    trustedTenantId,
+    context.automation?.managedByAgentId ?? null,
+  );
+  if (gateError !== null) {
+    return { error: gateError };
+  }
+
+  // Correlation rides the same threading (#956): the next hop continues the
+  // TRIGGERING event's envelope correlation, never a payload claim. The
+  // payload fallback only applies to envelope-less invocations (route-side
+  // manual execute), which is the pre-#956 behavior unchanged.
+  // causationId (#957): the emitted event's immediate parent IS the event
+  // that triggered this automation — stamped explicitly (more precise than
+  // the ambient causality scope, same value).
+  const correlationId = context.event?.metadata.correlationId ?? (context.payload.correlationId as string) ?? undefined;
+  const causationId = context.event?.id ?? provenance?.parentEventId;
+
+  // Derived-key idempotency (#958): the slot identity is fixed here — at
+  // enqueue time for a transactional run — so re-running the same automation
+  // over the same event derives the same key. This dedupes REPLAY of the same
+  // (event, automation, action) slot only — two different parent events
+  // legitimately emit twice. The parent id prefers `context.event.id` (a
+  // debounced execution's LAST REAL event — stable across replay, unlike the
+  // synthetic flush id).
+  const slotProvenance = provenance
+    ? { ...provenance, parentEventId: context.event?.id ?? provenance.parentEventId, actionIndex }
+    : undefined;
+
+  return {
+    prepared: {
+      eventBus: deps.eventBus,
+      eventType,
+      payload,
+      correlationId,
+      causationId,
+      publishCausationId: context.event?.id,
+      slotProvenance,
+      trustedTenantId,
+    },
+  };
+}
+
+/**
+ * Claim the emission's #958 slot and publish it. Shared verbatim between the
+ * immediate path (flag off) and the transactional flush (flag on) so both
+ * produce identical envelopes, claim rows, and derived idempotency keys.
+ */
+async function publishPreparedEmission(
+  prepared: PreparedEmission,
+  deps: ActionDependencies,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
+  const { eventType, payload, correlationId, causationId, trustedTenantId } = prepared;
   try {
-    if (!deps.eventBus) {
-      return {
-        success: false,
-        error: 'eventBus not available',
-      };
+    // The claim row is journaled with the emission's causality so the #957
+    // `custom.>` consumer's insert lands on it (same id, ON CONFLICT DO
+    // NOTHING) and `omni events trace` walks through it.
+    const claim = await claimEmissionSlot(deps, eventType, payload, trustedTenantId, prepared.slotProvenance, {
+      correlationId,
+      causationId,
+    });
+    if (claim.duplicate) {
+      return { success: true, result: { eventType, duplicate: true } };
     }
-
-    // Build payload
-    let payload: GenericEventPayload;
-    if (config.payloadTemplate) {
-      payload = substituteTemplateObject(config.payloadTemplate, context) as GenericEventPayload;
-    } else {
-      payload = context.payload;
-    }
-
-    const eventType = substituteTemplate(config.eventType, context) as CustomEventType;
 
     logger.debug('Emitting event', { eventType });
 
@@ -305,11 +615,21 @@ async function executeEmitEventAction(
     // hop's envelope — a consumer chain never silently drops back to the
     // legacy world. With nothing threaded the metadata is unchanged and the
     // publish stays byte-identical.
-    const result = await deps.eventBus.publishGeneric(eventType, payload, {
-      correlationId: (context.payload.correlationId as string) ?? undefined,
-      source: 'automation',
-      ...(trustedTenantId ? { tenantId: trustedTenantId } : {}),
-    });
+    let result: { id: string };
+    try {
+      result = await prepared.eventBus.publishGeneric(eventType, payload, {
+        correlationId,
+        causationId: prepared.publishCausationId,
+        // A claimed emission publishes UNDER the claim row's id (#958) so the
+        // journal row and the event share one identity.
+        ...(claim.claimedEventId ? { publishEventId: claim.claimedEventId } : {}),
+        source: 'automation',
+        ...(trustedTenantId ? { tenantId: trustedTenantId } : {}),
+      });
+    } catch (error) {
+      await releaseEmissionClaim(deps, claim.claimedEventId, eventType);
+      throw error;
+    }
 
     return {
       success: true,
@@ -323,6 +643,32 @@ async function executeEmitEventAction(
       error: errorMessage,
     };
   }
+}
+
+/**
+ * Execute an emit_event action (immediate path — flag off, and every direct
+ * `executeAction` call). Prepare + publish in one step, semantics unchanged.
+ */
+async function executeEmitEventAction(
+  config: EmitEventActionConfig,
+  context: TemplateContext,
+  deps: ActionDependencies,
+  trustedTenantId?: string | null,
+  actionIndex = 0,
+  provenance?: EmitProvenance,
+): Promise<{ success: boolean; result?: unknown; error?: string }> {
+  let preparation: { prepared: PreparedEmission } | { error: string };
+  try {
+    preparation = await prepareEmitEvent(config, context, deps, trustedTenantId, actionIndex, provenance);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('Emit event action failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+  if ('error' in preparation) {
+    return { success: false, error: preparation.error };
+  }
+  return publishPreparedEmission(preparation.prepared, deps);
 }
 
 /**
@@ -393,6 +739,79 @@ function extractMessages(context: TemplateContext, promptOverride?: string): str
 }
 
 /**
+ * Messages for a chatless run: the rendered `promptOverride` when configured,
+ * otherwise the FULL OmniEvent envelope as JSON — the same shape the webhook
+ * action's default body sends (#960: id, type, payload, metadata, timestamp).
+ * Envelope-less invocations (route-side manual execute) fall back to the bare
+ * payload, mirroring `buildDefaultWebhookBody`.
+ */
+function buildChatlessMessages(context: TemplateContext, promptOverride?: string): string[] | { error: string } {
+  if (promptOverride !== undefined) {
+    const rendered = substituteTemplate(promptOverride, context);
+    if (!rendered) return { error: 'promptOverride rendered to an empty string' };
+    return [rendered];
+  }
+  if (context.event) {
+    return [
+      JSON.stringify({
+        id: context.event.id,
+        type: context.event.type,
+        payload: context.payload,
+        metadata: context.event.metadata,
+        timestamp: context.event.timestamp,
+      }),
+    ];
+  }
+  return [JSON.stringify(context.payload)];
+}
+
+/**
+ * Build the chatless AgentCallContext (#1010): dispatch with only an agent id
+ * plus the triggering event. The session scope is
+ * `automation:{automationId}:{correlationId}` — correlationId falls back to
+ * the event id, and to a freshly minted id for envelope-less invocations (each
+ * manual execute is its own conversation). Consequence: unrelated events get
+ * separate sessions by default; a causal chain (same correlationId) hitting
+ * the same automation shares one.
+ */
+function buildChatlessAgentCallContext(
+  config: CallAgentActionConfig,
+  context: TemplateContext,
+  agentId: string,
+): { context: AgentCallContext } | { error: string } {
+  const messagesResult = buildChatlessMessages(context, config.promptOverride);
+  if ('error' in messagesResult) return messagesResult;
+
+  const automationId = context.automation?.id ?? 'manual';
+  const scope = context.event?.metadata.correlationId ?? context.event?.id ?? generateId();
+  const sessionKey = `automation:${automationId}:${scope}`;
+
+  return {
+    context: {
+      chatless: true,
+      // No instance exists for a chatless run — the callAgent implementation
+      // resolves the provider from the agent row.
+      instanceId: '',
+      agentId,
+      sessionKey,
+      automationId,
+      // Stable synthesized identifiers (never channel-native ids) so
+      // downstream logging/session code has non-empty values to key on.
+      chatId: sessionKey,
+      senderId: sessionKey,
+      messages: messagesResult,
+      event: context.event
+        ? {
+            id: context.event.id,
+            type: context.event.type,
+            correlationId: context.event.metadata.correlationId,
+          }
+        : undefined,
+    },
+  };
+}
+
+/**
  * Extract agent call context from automation payload
  * Returns extracted context or error string
  */
@@ -405,10 +824,6 @@ function extractAgentCallContext(
     ? substituteTemplate(config.providerId, context)
     : (context.payload.instanceId as string);
 
-  if (!instanceId) {
-    return { error: 'instanceId is required (from payload or config.providerId template)' };
-  }
-
   // Extract chat and sender info from payload
   const fromObj = context.payload.from as { id?: string; name?: string } | undefined;
   const chatId = (context.payload.chatId as string) ?? fromObj?.id;
@@ -418,6 +833,20 @@ function extractAgentCallContext(
   const senderName =
     fromObj?.name ?? (context.payload.senderName as string) ?? (context.payload.chatName as string | undefined);
 
+  // Chatless fallback (#1010): a chat-less external event (custom.github.push
+  // et al.) resolves neither an instance nor a chat. When the config names an
+  // agent, dispatch it anyway with the event envelope as the run's input.
+  // Chat-ful events resolve both fields and take the unchanged path below.
+  if (!instanceId || !chatId) {
+    const chatlessAgentId = config.agentId ? substituteTemplate(config.agentId, context) : '';
+    if (chatlessAgentId) {
+      return buildChatlessAgentCallContext(config, context, chatlessAgentId);
+    }
+  }
+
+  if (!instanceId) {
+    return { error: 'instanceId is required (from payload or config.providerId template)' };
+  }
   if (!chatId) return { error: 'chatId not found in payload' };
   if (!senderId) return { error: 'senderId not found in payload' };
 
@@ -443,6 +872,15 @@ function extractAgentCallContext(
       senderId,
       senderName,
       messages: messagesResult,
+      // Envelope of the triggering event (#960) — lets the agent know which
+      // event woke it. Derived from engine-threaded metadata, never payload.
+      event: context.event
+        ? {
+            id: context.event.id,
+            type: context.event.type,
+            correlationId: context.event.metadata.correlationId,
+          }
+        : undefined,
     },
   };
 }
@@ -512,6 +950,12 @@ export async function executeAction(
   context: TemplateContext,
   deps: ActionDependencies,
   trustedTenantId?: string | null,
+  /** Position of this action in its automation's action list — part of the
+   * webhook delivery-id derivation (#960) and of the emit_event derived
+   * idempotency key (#958). Defaults to 0 for direct calls. */
+  actionIndex = 0,
+  /** Triggering event + automation identity for emit_event dedup (#958). */
+  provenance?: EmitProvenance,
 ): Promise<ActionExecutionResult> {
   const start = Date.now();
 
@@ -519,13 +963,13 @@ export async function executeAction(
 
   switch (action.type) {
     case 'webhook':
-      result = await executeWebhookAction(action.config, context, deps, trustedTenantId);
+      result = await executeWebhookAction(action.config, context, deps, trustedTenantId, actionIndex);
       break;
     case 'send_message':
       result = await executeSendMessageAction(action.config, context, deps, trustedTenantId);
       break;
     case 'emit_event':
-      result = await executeEmitEventAction(action.config, context, deps, trustedTenantId);
+      result = await executeEmitEventAction(action.config, context, deps, trustedTenantId, actionIndex, provenance);
       break;
     case 'log':
       result = await executeLogAction(action.config, context, deps);
@@ -550,43 +994,200 @@ export async function executeAction(
 }
 
 /**
+ * Options for {@link executeActions}.
+ */
+export interface ExecuteActionsOptions {
+  /**
+   * Transactional publication (G5, #988): when true, `emit_event` actions
+   * enqueue their fully-prepared emissions into a run-scoped buffer instead
+   * of publishing mid-sequence. The buffer is flushed IN ORDER only when the
+   * run completes with zero failed actions; otherwise every buffered emission
+   * is discarded (and the discard is logged). Non-emission actions keep the
+   * continue-on-failure semantics either way. Default false = today's
+   * immediate publishing, byte-for-byte.
+   */
+  transactionalEmissions?: boolean;
+}
+
+/**
+ * One enqueued emission of a transactional run: the prepared publish plus the
+ * action's result entry (mutated in place when the buffer settles).
+ */
+interface BufferedEmission {
+  prepared: PreparedEmission;
+  result: ActionExecutionResult;
+}
+
+/**
+ * Enqueue an emit_event action into the run's emission buffer instead of
+ * publishing (G5, #988). Everything the eventual publish needs — including
+ * the #958 idempotency-key ingredients with THIS actionIndex — is resolved
+ * now, so a retried run reproduces byte-identical keys. Prepare failures
+ * (missing bus, schema-gate refusal, template errors) fail the action
+ * exactly as the immediate path would.
+ */
+async function bufferEmitEventAction(
+  config: EmitEventActionConfig,
+  context: TemplateContext,
+  deps: ActionDependencies,
+  trustedTenantId: string | null | undefined,
+  actionIndex: number,
+  provenance: EmitProvenance | undefined,
+  buffer: BufferedEmission[],
+): Promise<ActionExecutionResult> {
+  const start = Date.now();
+  let preparation: { prepared: PreparedEmission } | { error: string };
+  try {
+    preparation = await prepareEmitEvent(config, context, deps, trustedTenantId, actionIndex, provenance);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('Emit event action failed', { error: errorMessage });
+    preparation = { error: errorMessage };
+  }
+  if ('error' in preparation) {
+    return {
+      action: 'emit_event',
+      status: 'failed',
+      error: preparation.error,
+      durationMs: Date.now() - start,
+    };
+  }
+  const result: ActionExecutionResult = {
+    action: 'emit_event',
+    status: 'success',
+    result: { eventType: preparation.prepared.eventType, buffered: true },
+    durationMs: Date.now() - start,
+  };
+  buffer.push({ prepared: preparation.prepared, result });
+  return result;
+}
+
+/**
+ * Discard buffered emissions of a run that did not complete cleanly.
+ * Observability contract (#988): the discard is logged with the count and the
+ * event types, and each entry's action result is marked failed so the run log
+ * shows the emission never reached the bus.
+ */
+function discardBufferedEmissions(entries: BufferedEmission[], reason: string): void {
+  if (entries.length === 0) return;
+  logger.warn('Discarding buffered emissions (transactional run did not complete cleanly)', {
+    discardedCount: entries.length,
+    eventTypes: entries.map((entry) => entry.prepared.eventType),
+    reason,
+  });
+  for (const entry of entries) {
+    entry.result.status = 'failed';
+    entry.result.error = `emission discarded (${reason})`;
+    entry.result.result = { eventType: entry.prepared.eventType, buffered: true, discarded: true };
+  }
+}
+
+/**
+ * Settle a transactional run's emission buffer: discard everything when any
+ * action failed, otherwise flush in order through the SAME publish path as
+ * immediate emissions. A publish failure mid-flush fails that action, stops
+ * the flush, and discards the rest — published events stay an exact prefix of
+ * the buffer, and the DLQ retry re-derives the same keys: already-published
+ * slots dedupe as duplicates, the failed slot's released claim publishes.
+ */
+async function settleBufferedEmissions(
+  buffer: BufferedEmission[],
+  deps: ActionDependencies,
+  results: ActionExecutionResult[],
+): Promise<void> {
+  if (results.some((result) => result.status === 'failed')) {
+    discardBufferedEmissions(buffer, 'an action in the run failed');
+    return;
+  }
+  for (const [index, entry] of buffer.entries()) {
+    const outcome = await publishPreparedEmission(entry.prepared, deps);
+    if (!outcome.success) {
+      entry.result.status = 'failed';
+      entry.result.error = outcome.error;
+      entry.result.result = { eventType: entry.prepared.eventType, buffered: true, flushed: false };
+      discardBufferedEmissions(buffer.slice(index + 1), 'an earlier buffered emission failed to publish');
+      return;
+    }
+    entry.result.result = outcome.result;
+  }
+}
+
+/**
+ * Store a webhook/call_agent response as a variable for subsequent actions.
+ */
+function storeResponseVariable(
+  action: AutomationAction,
+  result: ActionExecutionResult,
+  variables: Record<string, unknown>,
+): void {
+  if (action.type === 'webhook' && action.config.responseAs && result.status === 'success' && result.result) {
+    variables[action.config.responseAs] = result.result;
+  }
+  if (action.type === 'call_agent' && action.config.responseAs && result.status === 'success' && result.result) {
+    // Store the full response for chaining
+    const agentResult = result.result as { response: string };
+    variables[action.config.responseAs] = agentResult.response;
+  }
+}
+
+/**
  * Execute a sequence of actions
  *
  * Actions are executed sequentially. If an action with waitForResponse: true
  * succeeds, its response is stored in variables[responseAs] for subsequent actions.
+ *
+ * With `options.transactionalEmissions` (G5, #988) the run's `emit_event`
+ * publishes are buffered and settle only after the last action — see
+ * {@link ExecuteActionsOptions}. All other actions behave identically in both
+ * modes.
  */
 export async function executeActions(
   actions: AutomationAction[],
   context: TemplateContext,
   deps: ActionDependencies,
   trustedTenantId?: string | null,
+  provenance?: EmitProvenance,
+  options?: ExecuteActionsOptions,
 ): Promise<ActionExecutionResult[]> {
+  const buffer: BufferedEmission[] | undefined = options?.transactionalEmissions ? [] : undefined;
   const results: ActionExecutionResult[] = [];
   const variables = { ...context.variables };
 
-  for (const action of actions) {
-    // Create context with updated variables
-    const actionContext: TemplateContext = {
-      ...context,
-      variables,
-    };
+  try {
+    for (const [actionIndex, action] of actions.entries()) {
+      // Create context with updated variables
+      const actionContext: TemplateContext = {
+        ...context,
+        variables,
+      };
 
-    const result = await executeAction(action, actionContext, deps, trustedTenantId);
-    results.push(result);
+      const result =
+        buffer && action.type === 'emit_event'
+          ? await bufferEmitEventAction(
+              action.config,
+              actionContext,
+              deps,
+              trustedTenantId,
+              actionIndex,
+              provenance,
+              buffer,
+            )
+          : await executeAction(action, actionContext, deps, trustedTenantId, actionIndex, provenance);
+      results.push(result);
 
-    // Store response as variable if configured (for webhook and call_agent)
-    if (action.type === 'webhook' && action.config.responseAs && result.status === 'success' && result.result) {
-      variables[action.config.responseAs] = result.result;
+      // Store response as variable if configured (for webhook and call_agent)
+      storeResponseVariable(action, result, variables);
+
+      // Note: We don't stop on failure - just log and continue
+      // This matches the wish requirement: "failures logged but don't stop sequence"
     }
-    if (action.type === 'call_agent' && action.config.responseAs && result.status === 'success' && result.result) {
-      // Store the full response for chaining
-      const agentResult = result.result as { response: string };
-      variables[action.config.responseAs] = agentResult.response;
-    }
-
-    // Note: We don't stop on failure - just log and continue
-    // This matches the wish requirement: "failures logged but don't stop sequence"
+  } catch (error) {
+    // A thrown/cancelled run is a failed run: nothing buffered may publish.
+    if (buffer) discardBufferedEmissions(buffer, 'run threw before completion');
+    throw error;
   }
+
+  if (buffer) await settleBufferedEmissions(buffer, deps, results);
 
   return results;
 }

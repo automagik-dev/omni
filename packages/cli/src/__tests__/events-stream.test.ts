@@ -6,7 +6,13 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { Event } from '@omni/sdk';
-import { formatEventLine, isErrorEvent, isNoisyEvent, passesStreamFilters } from '../commands/events';
+import {
+  formatEventLine,
+  isErrorEvent,
+  isNoisyEvent,
+  matchesEventTypeFilter,
+  passesStreamFilters,
+} from '../commands/events';
 
 function makeEvent(overrides: Partial<Event> = {}): Event {
   return {
@@ -45,10 +51,18 @@ describe('events stream filters', () => {
     expect(passesStreamFilters(ev, { instanceId: '00000000-0000-0000-0000-000000000222' })).toBe(false);
   });
 
-  test('type filter is exact match', () => {
+  test('type filter is exact match without a glob', () => {
     const ev = makeEvent({ eventType: 'message.sent' });
     expect(passesStreamFilters(ev, { type: 'message.sent' })).toBe(true);
     expect(passesStreamFilters(ev, { type: 'message.received' })).toBe(false);
+  });
+
+  test('type filter with a trailing * is a prefix glob (#966)', () => {
+    const ev = makeEvent({ eventType: 'custom.github.push' });
+    expect(passesStreamFilters(ev, { type: 'custom.*' })).toBe(true);
+    expect(passesStreamFilters(ev, { type: 'custom.github.*' })).toBe(true);
+    expect(passesStreamFilters(ev, { type: 'custom.gitlab.*' })).toBe(false);
+    expect(passesStreamFilters(ev, { type: 'custom.github.push' })).toBe(true);
   });
 
   test('chat-id filter matches chatUuid', () => {
@@ -73,6 +87,23 @@ describe('events stream filters', () => {
     const ev = makeEvent({ eventType: 'message.sent', chatUuid: 'chat-1' });
     expect(passesStreamFilters(ev, { type: 'message.sent', chatId: 'chat-1' })).toBe(true);
     expect(passesStreamFilters(ev, { type: 'message.sent', chatId: 'chat-OTHER' })).toBe(false);
+  });
+});
+
+describe('matchesEventTypeFilter (#966)', () => {
+  test('exact match without a trailing *', () => {
+    expect(matchesEventTypeFilter('custom.github.push', 'custom.github.push')).toBe(true);
+    expect(matchesEventTypeFilter('custom.github.push', 'custom.github')).toBe(false);
+  });
+
+  test('trailing * matches the prefix', () => {
+    expect(matchesEventTypeFilter('custom.github.push', 'custom.*')).toBe(true);
+    expect(matchesEventTypeFilter('message.received', 'custom.*')).toBe(false);
+    expect(matchesEventTypeFilter('custom.github.push', 'custom.github.*')).toBe(true);
+  });
+
+  test('a bare * matches everything', () => {
+    expect(matchesEventTypeFilter('message.received', '*')).toBe(true);
   });
 });
 

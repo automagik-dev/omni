@@ -5,8 +5,13 @@
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type ChannelType, type ContentType, type EventType, type OmniEvent, omniEvents } from '@omni/db';
-import { and, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, inArray, like, lte, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
+
+/** Escape LIKE wildcards so a glob prefix matches literally (backslash is postgres's default escape char). */
+export function escapeLikePattern(value: string): string {
+  return value.replace(/([\\%_])/g, '\\$1');
+}
 
 export interface ListEventsOptions {
   channel?: ChannelType[];
@@ -21,6 +26,28 @@ export interface ListEventsOptions {
   search?: string;
   limit?: number;
   cursor?: string;
+}
+
+/** Caps for the trace walk — see EventService.trace. */
+const TRACE_MAX_ANCESTORS = 50;
+const TRACE_MAX_DEPTH = 10;
+const TRACE_MAX_NODES = 200;
+
+export interface EventTraceDescendant {
+  event: OmniEvent;
+  /** Distance below the focus event (1 = direct child). */
+  depth: number;
+}
+
+export interface EventTraceResult {
+  /** The event the trace was requested for. */
+  event: OmniEvent;
+  /** Chain above the focus event, ROOT FIRST, ending at the immediate parent. */
+  ancestors: OmniEvent[];
+  /** Fan-out below the focus event, breadth-first. */
+  descendants: EventTraceDescendant[];
+  /** True when an ancestor/depth/node cap cut the walk short. */
+  truncated: boolean;
 }
 
 export interface EventAnalytics {
@@ -93,7 +120,18 @@ export class EventService {
     }
 
     if (eventType?.length) {
-      conditions.push(inArray(omniEvents.eventType, eventType));
+      // #966: a trailing-* entry is a prefix glob (`custom.*` matches every
+      // custom event); everything else stays exact-match. A mixed list ORs
+      // the two together. The CLI-side sieve (matchesEventTypeFilter in
+      // packages/cli) implements the same contract — keep them in sync.
+      const exact = eventType.filter((t) => !t.endsWith('*'));
+      const prefixes = eventType.filter((t) => t.endsWith('*')).map((t) => t.slice(0, -1));
+      const typeClauses = [
+        ...(exact.length ? [inArray(omniEvents.eventType, exact)] : []),
+        ...prefixes.map((p) => like(omniEvents.eventType, `${escapeLikePattern(p)}%`)),
+      ];
+      const combined = typeClauses.length === 1 ? typeClauses[0] : or(...typeClauses);
+      if (combined) conditions.push(combined);
     }
 
     if (contentType?.length) {
@@ -161,6 +199,62 @@ export class EventService {
     }
 
     return result;
+  }
+
+  /**
+   * Walk the causality chain around one event (#957, RFC #925 G3).
+   *
+   * UP: follows `causation_id` parent-by-parent to the root (or to the first
+   * parent that was never persisted / was pruned — the chain is best-effort
+   * by design, causation_id is not an FK). DOWN: breadth-first over children
+   * (`causation_id = id`) through fan-out. Iterative queries, bounded by
+   * depth/node caps so a pathological chain cannot run away; `truncated`
+   * reports when a cap was hit.
+   */
+  async trace(id: string): Promise<EventTraceResult> {
+    const focus = await this.getById(id);
+
+    const seen = new Set<string>([focus.id]);
+
+    // Walk UP to the root.
+    const ancestors: OmniEvent[] = [];
+    let current: OmniEvent = focus;
+    let truncated = false;
+    while (current.causationId && ancestors.length < TRACE_MAX_ANCESTORS) {
+      if (seen.has(current.causationId)) break; // cycle guard — malformed data must not loop forever
+      const [parent] = await this.db.select().from(omniEvents).where(eq(omniEvents.id, current.causationId)).limit(1);
+      if (!parent) break; // parent never persisted or pruned — chain ends here
+      seen.add(parent.id);
+      ancestors.unshift(parent);
+      current = parent;
+    }
+    if (current.causationId && ancestors.length >= TRACE_MAX_ANCESTORS) truncated = true;
+
+    // Walk DOWN through fan-out (children = events whose causation_id = this id).
+    const descendants: EventTraceDescendant[] = [];
+    let frontier = [focus.id];
+    let depth = 0;
+    while (frontier.length > 0 && depth < TRACE_MAX_DEPTH && descendants.length < TRACE_MAX_NODES) {
+      depth++;
+      const children = await this.db
+        .select()
+        .from(omniEvents)
+        .where(inArray(omniEvents.causationId, frontier))
+        .orderBy(omniEvents.receivedAt)
+        .limit(TRACE_MAX_NODES + 1);
+      const fresh = children.filter((c) => !seen.has(c.id));
+      for (const child of fresh) seen.add(child.id);
+      for (const child of fresh) descendants.push({ event: child, depth });
+      if (descendants.length > TRACE_MAX_NODES) {
+        descendants.length = TRACE_MAX_NODES;
+        truncated = true;
+        break;
+      }
+      frontier = fresh.map((c) => c.id);
+    }
+    if (frontier.length > 0 && depth >= TRACE_MAX_DEPTH) truncated = true;
+
+    return { event: focus, ancestors, descendants, truncated };
   }
 
   /**

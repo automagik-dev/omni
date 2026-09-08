@@ -5,18 +5,19 @@
  * WHY THESE ARE DOCUMENTED AT ALL
  * -------------------------------
  * The repository rule is "no REST endpoints without OpenAPI docs", and it has no
- * exception for flag-gated surfaces: `routes/v2/platform-tenants.ts` serves ten
- * real endpoints, so ten operations belong in the document. Gating changes WHEN
+ * exception for flag-gated surfaces: `routes/v2/platform-tenants.ts` serves eleven
+ * real endpoints, so eleven operations belong in the document. Gating changes WHEN
  * they answer, not WHETHER they exist. Every operation below therefore states
  * the flag gate in its description, so a reader of the document knows a 404
  * here means "flag off", not "wrong URL".
  *
  * WHAT IS DELIBERATELY ABSENT
  * ---------------------------
- * Nothing credential-class is documented, because nothing credential-class is
- * returned. The routes return `tenants` and `tenant_memberships` rows, which
- * hold policy/lifecycle metadata and principal references — no key material, no
- * digests, no auth-plane secrets. `__tests__/openapi-credential-exposure.test.ts`
+ * The lifecycle/membership routes return `tenants` and `tenant_memberships`
+ * rows, which hold policy/lifecycle metadata and principal references — no key
+ * material, no digests, no auth-plane secrets. The ONE exception is root-key
+ * issuance (#979): its response carries `plainTextKey` exactly once, by design,
+ * and nothing else credential-class (never a hash, never a stored secret). `__tests__/openapi-credential-exposure.test.ts`
  * pins the exposure contract on `POST /auth/validate`; the schemas here stay on
  * the safe side of it by construction, and the `platformApiKeyId` /
  * `principalId` values that appear are opaque identifiers the caller already
@@ -144,6 +145,46 @@ export const MembershipRoleRequestSchema = z.object({ role: tenantRoleEnum, reas
 
 const ReasonRequestSchema = z.object({ reason: reasonField });
 
+export const IssueRootKeyRequestSchema = z.object({
+  principalId: z.string().uuid().openapi({ description: 'Principal the key acts as; must hold the membership' }),
+  membershipId: z.string().uuid().openapi({ description: 'Active membership binding the principal to the tenant' }),
+  role: tenantRoleEnum,
+  name: z.string().min(1).max(255).openapi({ description: 'Human-readable key name' }),
+  scopes: z
+    .array(z.string().min(1))
+    .min(1)
+    .openapi({ description: 'Explicit tenant scopes. Platform and wildcard scopes are refused.' }),
+  expiresAt: z
+    .string()
+    .datetime({ offset: true })
+    .openapi({ description: 'Expiry (ISO 8601). Must be in the future and within the tenant TTL ceiling' }),
+  rateLimit: z.number().int().positive().openapi({ description: 'Rate limit; capped by the tenant policy ceiling' }),
+  budget: z.number().int().positive().openapi({ description: 'Budget; capped by the tenant policy ceiling' }),
+  resourceConstraints: z
+    .record(z.array(z.string()))
+    .optional()
+    .openapi({ description: 'Optional resource allowlists (e.g. instanceAllowlist)' }),
+  reason: reasonField,
+});
+
+export const IssuedRootKeySchema = z.object({
+  id: z.string().uuid().openapi({ description: 'Key lineage id' }),
+  tenantId: z.string().uuid().openapi({ description: 'Tenant the key is bound to' }),
+  principalId: z.string().uuid().nullable().openapi({ description: 'Bound principal' }),
+  membershipId: z.string().uuid().nullable().openapi({ description: 'Bound membership' }),
+  name: z.string().openapi({ description: 'Human-readable key name' }),
+  role: tenantRoleEnum,
+  scopes: z.array(z.string()).openapi({ description: 'Granted tenant scopes' }),
+  constraints: z.record(z.array(z.string())).openapi({ description: 'Effective resource constraints' }),
+  delegationDepth: z.number().int().openapi({ description: 'Always 0 for a root key' }),
+  expiresAt: z.string().datetime().openapi({ description: 'Expiry timestamp' }),
+  rateLimit: z.number().int().openapi({ description: 'Granted rate limit' }),
+  budget: z.number().int().openapi({ description: 'Granted budget' }),
+  plainTextKey: z
+    .string()
+    .openapi({ description: 'The plaintext credential. Returned exactly ONCE; it can never be retrieved again.' }),
+});
+
 /**
  * `x-platform-reason` is a REQUIRED header on the read operations.
  *
@@ -182,6 +223,8 @@ export function registerPlatformTenantSchemas(registry: OpenAPIRegistry): void {
   registry.register('PlatformMembership', PlatformMembershipSchema);
   registry.register('CreateTenantRequest', CreateTenantRequestSchema);
   registry.register('AttachMembershipRequest', AttachMembershipRequestSchema);
+  registry.register('IssueRootKeyRequest', IssueRootKeyRequestSchema);
+  registry.register('IssuedRootKey', IssuedRootKeySchema);
 
   // ── Tenant lifecycle ──────────────────────────────────────────────────────
 
@@ -272,6 +315,45 @@ export function registerPlatformTenantSchemas(registry: OpenAPIRegistry): void {
         content: { 'application/json': { schema: z.object({ data: PlatformTenantSchema }) } },
       },
       401: unauthorized,
+      404: notFound,
+      409: conflict,
+    },
+  });
+
+  // ── Root key issuance ─────────────────────────────────────────────────────
+
+  const ISSUE_ROOT_KEY_PROSE =
+    'Issue the initial tenant-class ROOT key (delegation depth 0) for an active membership of the tenant. ' +
+    'All invariants are enforced transactionally: the principal/membership must belong to the tenant and match ' +
+    'the requested role, the tenant must be active, expiry/rate-limit/budget must fit the tenant policy ' +
+    'ceilings, and platform/wildcard scopes are refused. The plaintext key is returned exactly once and is ' +
+    'never retrievable again.';
+
+  registry.registerPath({
+    method: 'post',
+    path: '/platform/tenants/{id}/keys/root',
+    operationId: 'issuePlatformTenantRootKey',
+    tags: [TAG],
+    summary: 'Issue a tenant root key',
+    description: `${ISSUE_ROOT_KEY_PROSE} ${GATE_NOTE} Scope: \`platform:tenant-keys:write\` (the credential must also carry \`platform:tenants:write\`).`,
+    request: {
+      params: tenantIdParam,
+      body: { content: { 'application/json': { schema: IssueRootKeyRequestSchema } } },
+    },
+    responses: {
+      201: {
+        description: 'Root key issued. `plainTextKey` is returned once and never again.',
+        content: { 'application/json': { schema: z.object({ data: IssuedRootKeySchema }) } },
+      },
+      400: {
+        description: 'Request violates root-key invariants (wildcard/platform scope, past expiry, bad limits)',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+      401: unauthorized,
+      403: {
+        description: 'Insufficient platform scope, or the request exceeds the tenant key policy ceiling',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
       404: notFound,
       409: conflict,
     },

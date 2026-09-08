@@ -68,3 +68,6 @@ export {
 
 // Pricing
 export { calculateCost, getPricingRate, PRICING_REGISTRY } from './pricing';
+
+// Transcription guard
+export { detectInvalidTranscription } from './transcription-guard';

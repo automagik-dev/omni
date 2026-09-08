@@ -40,6 +40,7 @@ const VALID_CHANNELS: Channel[] = [
   'twilio-whatsapp',
   'hermes',
   'asc-flow',
+  'harness',
 ];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
 

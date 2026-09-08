@@ -117,3 +117,37 @@ describe('the x-omni-credential-exposure extension is a checkable contract', () 
     expect(validateOperation()['x-omni-scope']).toBe('auth:validate');
   });
 });
+
+describe('OpenAPI documents the server tenancy posture (issue #982)', () => {
+  /** The `server` sub-schema, or a hard failure — never a silent undefined. */
+  function postureSchema(): Record<string, unknown> {
+    const properties = successDataSchema().properties as Record<string, Record<string, unknown>> | undefined;
+    const server = properties?.server;
+    if (!server) throw new Error('the validate response schema has no `server` object');
+    return server;
+  }
+
+  test('the documented posture fields are exactly the ones the route returns', () => {
+    const fields = Object.keys((postureSchema().properties ?? {}) as Record<string, unknown>);
+    expect(fields.sort()).toEqual(['controlPlaneMounted', 'dbEnforcement', 'multitenancyEnabled']);
+  });
+
+  test('the posture block is REQUIRED, because this server always reports it', () => {
+    // Absence is the OLD-server signal, and this document describes THIS
+    // server. A generated client for this version may rely on the block.
+    const data = successDataSchema();
+    expect((data.required as string[] | undefined) ?? []).toContain('server');
+  });
+
+  test('dbEnforcement documents exactly the two posture values', () => {
+    const properties = postureSchema().properties as Record<string, Record<string, unknown>>;
+    expect((properties.dbEnforcement?.enum as string[]).sort()).toEqual(['enforced', 'legacy']);
+  });
+
+  test('no posture field name reads like key material or tenant inventory', () => {
+    const fields = Object.keys((postureSchema().properties ?? {}) as Record<string, unknown>);
+    for (const field of fields) {
+      expect(field).not.toMatch(/secret|hash|keyMaterial|plainText|password|token|tenantId|slug|count/i);
+    }
+  });
+});

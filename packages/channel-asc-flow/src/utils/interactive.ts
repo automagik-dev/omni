@@ -1,6 +1,7 @@
 /**
- * Map Omni's channel-agnostic `content.buttons` onto the ASC platform's URA
- * fields (`ura_opcoes` + `forcar_botoes` on `POST /mensagem`).
+ * Map Omni's channel-agnostic `content.buttons` onto the ASC platform's
+ * interactive message (`msg_interativa_parametros` on
+ * `POST /sendMsgInterativaAvancado`).
  *
  * Shaping is delegated to the SDK's `planInteractive`, so the button-vs-list
  * decision and the title truncation are the SAME ones whatsapp-business and
@@ -27,10 +28,14 @@
 import { planInteractive } from '@omni/channel-sdk';
 import type { InteractiveButton, InteractiveListOptions } from '@omni/channel-sdk';
 
-import type { AscFlowUra } from '../types';
-
 const MAX_OPTIONS = 10;
 const MAX_BODY_TEXT = 1024;
+
+/** `msg_interativa_parametros.tipo` — 1 is a list, 2 reply buttons. */
+const TIPO_LISTA = 1;
+const TIPO_BOTOES = 2;
+/** Label on the button that opens the list, when the caller sets none. */
+const LIST_BUTTON_LABEL = 'Opções';
 
 /**
  * Identity key for a title — accents, case and repeated spaces folded away, so
@@ -58,41 +63,6 @@ function titlesOf(interactive: Record<string, unknown>): string[] {
 }
 
 /**
- * Build the URA fields, or `null` when the payload must degrade to plain text.
- *
- * `body` is the text of the bubble the URA rides on — it is what Meta measures
- * against the 1024 limit, not the raw agent output.
- */
-export function buildUra(
-  body: string,
-  buttons: InteractiveButton[] | undefined,
-  listOptions: InteractiveListOptions = {},
-): AscFlowUra | null {
-  const trimmed = body.trim();
-  if (!trimmed || trimmed.length > MAX_BODY_TEXT) return null;
-
-  const replyButtons = (buttons ?? []).filter((b) => !b.url && b.text?.trim());
-  if (replyButtons.length === 0 || replyButtons.length > MAX_OPTIONS) return null;
-
-  // The list button label is irrelevant here (the URA has no such field), but
-  // planInteractive requires one; pass a constant.
-  const plan = planInteractive(trimmed, replyButtons, 'Opções', listOptions);
-  if (!plan.interactive || plan.droppedRows > 0) return null;
-
-  const type = plan.interactive.type;
-  if (type !== 'button' && type !== 'list') return null;
-
-  const titles = titlesOf(plan.interactive);
-  if (titles.length !== replyButtons.length || titles.some((t) => !t)) return null;
-  if (new Set(titles.map(foldTitle)).size !== titles.length) return null;
-
-  return {
-    ura_opcoes: Object.fromEntries(titles.map((title, i) => [String(i + 1), title])),
-    forcar_botoes: type === 'button',
-  };
-}
-
-/**
  * Split a turn into the bubbles that go out as separate WhatsApp messages.
  * A blank line is the separator — the convention the scheduling agent already
  * writes to, and the one the adapter proved in the ASC emulator.
@@ -103,4 +73,87 @@ export function splitBubbles(text: string): string[] {
     .split(/\n\s*\n/)
     .map((b) => b.trim())
     .filter(Boolean);
+}
+
+/**
+ * `msg_interativa_parametros` for `POST /sendMsgInterativaAvancado` — the
+ * endpoint that renders a REAL WhatsApp interactive message, with a
+ * description under every row.
+ *
+ * This is the one the channel should use. The URA fields on `/mensagem`
+ * (`buildUra` above) are a flat `{ordinal: label}` map with nowhere to put a
+ * description, so a proposal arrived on the handset reading
+ *
+ *     1 - amanhã 07/09 · 08:00
+ *     2 - amanhã 07/09 · 19:00
+ *
+ * naming no clinic, while the agent had put the clinic and the doctor in the
+ * row description. Probed against the live platform 06/09: `ura_descricoes`
+ * is ignored, an object-shaped option is not delivered, and a `\n` in a title
+ * flattens the whole bubble to plain text. `/sendMsgInterativaAvancado` has
+ * the field:
+ *
+ *     {"rowId": "0_0", "title": "amanhã 07/09 · 08:00",
+ *      "description": "Teleconsulta · Dr. Francisco Assis"}
+ *
+ * Two platform quirks, both measured, both load-bearing:
+ *   - the body is FORM-encoded, not JSON (see `client.callForm`);
+ *   - `envio_direto` is refused for this type ("Nao e possivel utilizar envio
+ *     direto para esse tipo de mensagem"), so it is never sent.
+ *
+ * The tap still comes back as the row TEXT, so the same shaping rules apply
+ * and `null` still means "send the bubble as plain text".
+ */
+export function buildInteractive(
+  body: string,
+  buttons: InteractiveButton[] | undefined,
+  listOptions: InteractiveListOptions = {},
+): Record<string, unknown> | null {
+  const trimmed = body.trim();
+  if (!trimmed || trimmed.length > MAX_BODY_TEXT) return null;
+
+  const replyButtons = (buttons ?? []).filter((b) => !b.url && b.text?.trim());
+  if (replyButtons.length === 0 || replyButtons.length > MAX_OPTIONS) return null;
+
+  const plan = planInteractive(trimmed, replyButtons, LIST_BUTTON_LABEL, listOptions);
+  if (!plan.interactive || plan.droppedRows > 0) return null;
+
+  const type = plan.interactive.type;
+  if (type !== 'button' && type !== 'list') return null;
+
+  const titles = titlesOf(plan.interactive);
+  if (titles.length !== replyButtons.length || titles.some((t) => !t)) return null;
+  // The tap comes back as the row text: two titles that fold together are an
+  // ambiguous choice, and in scheduling that books the wrong appointment.
+  if (new Set(titles.map(foldTitle)).size !== titles.length) return null;
+
+  if (type === 'button') {
+    return { tipo: TIPO_BOTOES, mensagem: trimmed, button: titles };
+  }
+
+  const action = plan.interactive.action as Record<string, unknown> | undefined;
+  const sections = (action?.sections ?? []) as Array<{
+    title?: string;
+    rows?: Array<{ title?: string; description?: string }>;
+  }>;
+  const rows = sections[0]?.rows ?? [];
+
+  return {
+    tipo: TIPO_LISTA,
+    mensagem: trimmed,
+    list: {
+      texto_botao: (action?.button as string) || LIST_BUTTON_LABEL,
+      secao: [
+        {
+          texto: sections[0]?.title ?? '',
+          linhas: rows.map((row) => ({
+            texto: row.title ?? '',
+            // Empty rather than absent: the platform reads the key either way,
+            // and a row with no description is a row, not a failure.
+            descricao: row.description ?? '',
+          })),
+        },
+      ],
+    },
+  };
 }

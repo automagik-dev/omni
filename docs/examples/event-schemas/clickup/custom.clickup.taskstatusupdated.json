@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "custom.clickup.taskstatusupdated",
+  "description": "ClickUp taskStatusUpdated webhook delivery (body field event: taskStatusUpdated — the RFC #925 motivating case: card status changes replace pollers). Minimal-but-real contract: the fields consumers rely on are required; everything else ClickUp sends passes through (additionalProperties: true). Evolution rule: revisions must be additive-optional (issue #959).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["event", "task_id", "webhook_id", "history_items"],
+  "properties": {
+    "event": {
+      "const": "taskStatusUpdated",
+      "description": "ClickUp event name (also the source of the semantic type via eventTypeMapping)"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Id of the task whose status changed"
+    },
+    "webhook_id": {
+      "type": "string",
+      "description": "Id of the ClickUp webhook configuration that fired"
+    },
+    "history_items": {
+      "type": "array",
+      "description": "The change that triggered the event; before/after carry the old and new status",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable per-event history id — the delivery identity used by the idempotency key template"
+          },
+          "date": { "type": "string", "description": "Unix timestamp in milliseconds, as a string" },
+          "field": { "type": "string", "description": "Changed attribute, e.g. status" },
+          "user": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "id": { "type": "integer" },
+              "username": { "type": "string" },
+              "email": { "type": "string" }
+            }
+          },
+          "before": {
+            "type": ["object", "null"],
+            "additionalProperties": true,
+            "properties": {
+              "status": { "type": "string" },
+              "type": { "type": "string" },
+              "color": { "type": "string" }
+            }
+          },
+          "after": {
+            "type": ["object", "null"],
+            "additionalProperties": true,
+            "properties": {
+              "status": { "type": "string" },
+              "type": { "type": "string" },
+              "color": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

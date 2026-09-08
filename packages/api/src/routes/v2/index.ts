@@ -15,11 +15,14 @@ import { agentsRoutes } from './agents';
 import { authRoutes } from './auth';
 import { automationsRoutes } from './automations';
 import { batchJobsRoutes } from './batch-jobs';
+import { harnessRoutes } from './channel-harness';
 import { chatsRoutes } from './chats';
 import { contextRoutes } from './context';
 import { conversationsRoutes } from './conversations';
 import { deadLettersRoutes } from './dead-letters';
+import { eventConsumersRoutes } from './event-consumers';
 import { eventOpsRoutes } from './event-ops';
+import { eventSchemasRoutes } from './event-schemas';
 import { eventsRoutes } from './events';
 import { followUpRoutes } from './follow-up';
 import { handoffsRoutes } from './handoffs';
@@ -58,6 +61,8 @@ v2Routes.route('/logs', logsRoutes);
 v2Routes.route('/messages', messagesRoutes); // Message CRUD + send operations
 v2Routes.route('/scheduled-messages', scheduledMessagesRoutes); // Deferred sends (#889)
 v2Routes.route('/slack', slackRoutes); // Slack-only: DM open + search (#889)
+v2Routes.route('/', eventSchemasRoutes); // Event schema registry at /api/v2/events/schemas (#959) - must be before /events, whose /:id catch-all would swallow 'schemas'
+v2Routes.route('/', eventConsumersRoutes); // Durable consumers at /api/v2/events/consumers (#989) - same before-/events invariant as schemas
 v2Routes.route('/events', eventsRoutes);
 v2Routes.route('/journeys', journeysRoutes); // Journey tracing endpoints
 v2Routes.route('/persons', personsRoutes);
@@ -70,6 +75,7 @@ v2Routes.route('/processed-events', processedEventsRoutes); // Placeholder until
 v2Routes.route('/metrics', metricsRoutes);
 v2Routes.route('/conversations', conversationsRoutes); // Cross-channel conversation continuity
 v2Routes.route('/chats', chatsRoutes); // Unified chat model - must be before root mounts with /:id
+v2Routes.route('/channels/harness', harnessRoutes); // E2E agent-test harness driving/inspection (#953) — auth-required, unlike the public channel webhooks
 v2Routes.route('/media', mediaRoutes); // Media file serving - must be before root mounts with /:id
 v2Routes.route('/batch-jobs', batchJobsRoutes); // Batch job routes - must be before root mounts with /:id
 v2Routes.route('/keys', keysRoutes); // API key management

@@ -227,6 +227,46 @@ export interface EmitReactionReceivedParams {
 }
 
 /**
+ * Parameters for emitMessagePinned (#889)
+ */
+export interface EmitMessagePinnedParams {
+  /** Instance where the pin happened */
+  instanceId: string;
+
+  /** The message that was pinned (platform external id) */
+  messageId: string;
+
+  /** Chat where the message lives (platform external id) */
+  chatId: string;
+
+  /** Platform user who pinned it */
+  from?: string;
+
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
+}
+
+/**
+ * Parameters for emitMessageUnpinned (#889)
+ */
+export interface EmitMessageUnpinnedParams {
+  /** Instance where the unpin happened */
+  instanceId: string;
+
+  /** The message that was unpinned (platform external id) */
+  messageId: string;
+
+  /** Chat where the message lives (platform external id) */
+  chatId: string;
+
+  /** Platform user who unpinned it */
+  from?: string;
+
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
+}
+
+/**
  * Parameters for emitReactionRemoved
  */
 export interface EmitReactionRemovedParams {

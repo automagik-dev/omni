@@ -31,15 +31,15 @@
  * Always HTTP 200. The flow is configured with `async = 1` and
  * `async_condition = {#BODY.pronto} = 1`.
  *
- * Turn boundary. One `sendMessage` is one flow turn. A turn's paragraphs
- * (blank-line separated) become separate bubbles, which is how the scheduling
- * agent writes and what the adapter proved against the ASC emulator. The
- * bubbles before the last one are PUSHED through `callbackFlowMsg` (with typing
- * between them, for rhythm); the LAST one rides back in `resposta`, which is
- * the single slot the flow's `message` node renders.
- * ponytail: if an agent ever emits two `sendMessage` calls for one user turn,
- * the flow advances twice. Upgrade path is a per-`cod` turn buffer flushed on
- * an end-of-turn signal — not built until a dispatcher actually does that.
+ * Turn boundary. One agent REPLY is one flow turn — not one `sendMessage`. A
+ * turn's paragraphs (blank-line separated) become separate bubbles, which is
+ * how the scheduling agent writes and what the adapter proved against the ASC
+ * emulator. The bubbles before the last one are PUSHED through
+ * `callbackFlowMsg` (with typing between them, for rhythm); the LAST one rides
+ * back in `resposta`, which is the single slot the flow's `message` node
+ * renders. The dispatcher does split one reply across several `sendMessage`
+ * calls, so the parts before the last are HELD on the turn window and the last
+ * one answers with all of them — see `collectTurnParts`.
  *
  * Handoff. Detected from `metadata.isHandoff` (the Gupshup precedent), not by
  * sniffing the agent's prose: the adapter only regex-matched the invitation
@@ -73,13 +73,14 @@ import type { ChannelType } from '@omni/core/types';
 import { ASC_FLOW_CAPABILITIES } from './capabilities';
 import { AscFlowClient } from './client';
 import { type ParsedAscFlowTurn, handleAscFlowWebhookRequest } from './handlers/webhook';
-import type { AscFlowConfig, AscFlowUra } from './types';
-import { encodeAscEmoji } from './utils/emoji';
+import type { AscFlowConfig } from './types';
+import { encodeAscEmoji, nonLatin1Left } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
 import { type AscFlowHandoffMode, type HandoffPlan, planHandoff } from './utils/handoff';
-import { buildUra, splitBubbles } from './utils/interactive';
+import { buildInteractive, splitBubbles } from './utils/interactive';
 import { isAscMediaFilename, mediaFallbackText, resolveAscInboundMedia } from './utils/media';
 import { OUTBOUND_MEDIA_FALLBACK_TEXT, buildReplyField, buildRichFields, isRichContent } from './utils/outbound';
+import { isStaleFlowReplay } from './utils/turn-freshness';
 
 /** Platform default — the NotreDame tenant this channel was built against. */
 export const DEFAULT_ASC_FLOW_BASE_URL = 'https://sac-notredame.ascbrazil.com.br';
@@ -97,8 +98,19 @@ export interface AscFlowTurnReady {
   bolhas: string[];
   fila_vq?: string;
   motivo_transf_vq?: string;
-  ura_opcoes?: Record<string, string>;
-  forcar_botoes?: boolean;
+  /**
+   * Who the beneficiary is, for the Genesys `userdata`. All six travel on a
+   * handoff turn, EMPTY INCLUDED: the `store` on the flow's `api_rest` node
+   * applies the whole mapping or none of it, and a field listed in `returned`
+   * but missing from the body left `{#resposta}` empty with HTTP 200
+   * (atendimento 22327328, 05/09).
+   */
+  nome_beneficiario_vq?: string;
+  cpf_vq?: string;
+  carteirinha_vq?: string;
+  vinculo_vq?: string;
+  plano_vq?: string;
+  filial_vq?: string;
 }
 
 /** The body every call gets while the agent is still running. */
@@ -115,6 +127,11 @@ interface AscFlowTurnState {
    * sends.
    */
   correlationId?: string;
+  /**
+   * The parts of one agent reply that arrived before its last one. They ride
+   * the window so they share its TTL and its identity — see `collectTurnParts`.
+   */
+  parts?: string[];
   /** Set by `sendMessage`; the next poll takes it and the turn is over. */
   ready?: AscFlowTurnReady;
 }
@@ -127,6 +144,30 @@ interface AscFlowInstanceState {
   inFlight: Map<string, AscFlowTurnState>;
   /** When `sweepInFlight` last ran, so it runs at most once per interval. */
   lastSweepAt: number;
+  /**
+   * Every `cod_atendimento` this instance has published a turn for, newest
+   * last. Read by `hasSeenCod` to tell a conversation's FIRST call (which
+   * legitimately arrives with no `chatInput`) from the flow looping back with
+   * the frozen `{#MENSAGEM}` fallback.
+   */
+  seenCods: Set<string>;
+
+  /**
+   * The text of the last turn ANSWERED for each `cod_atendimento`.
+   *
+   * A re-send whose fields AGREE can only be told from a real repeat by asking
+   * the platform, and this is what narrows that to almost never: only a text
+   * that matches the entry here pays for the round trip. See
+   * `utils/turn-freshness.ts`.
+   */
+  lastAnswered: Map<string, string>;
+
+  /**
+   * `cod_atendimento` → the account and phone the interactive endpoint
+   * addresses. Neither changes while the atendimento runs, and reading them
+   * costs a `GET /atendimento`. See `resolveDestino`.
+   */
+  destinos: Map<string, { codConta: string; telefone: string }>;
 }
 
 /**
@@ -187,15 +228,69 @@ const IN_FLIGHT_MAX_ENTRIES = 5_000;
  * the agent's `**bold**` arrives raw and WhatsApp pairs the asterisks wrong.
  * Measured on the live number 01/09.
  */
-function resolveOutboundText(message: OutgoingMessage): string {
+function resolveOutboundText(message: OutgoingMessage, logger?: Logger): string {
   const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const text = message.content.text ?? message.content.caption ?? '';
   const formatted = formatMode === 'passthrough' ? text : markdownToWhatsApp(text);
-  // The platform carries emoji only as `##codepoint##` markers — a raw `✅`
-  // reached the handset as `?` (measured 01/09 on the session-cleared
-  // confirmation). Encoding is the mirror of the inbound decode and runs even
-  // in passthrough: it is transport, not formatting.
-  return encodeAscEmoji(formatted);
+  // The platform is latin-1: emoji ride as `##codepoint##` markers and the
+  // punctuation it cannot hold is transliterated. Both run even in passthrough
+  // — they are transport, not formatting. See `utils/emoji.ts`.
+  const encoded = encodeAscEmoji(formatted);
+  // Whatever is still outside latin-1 will reach the handset as `?`. Naming it
+  // here is what turns the next unknown character into a log line instead of a
+  // mystery on someone's screen — the em dashes went out for days unnoticed.
+  const restante = nonLatin1Left(encoded);
+  if (restante.length > 0) {
+    logger?.warn('[asc-flow] characters the platform cannot carry — they will arrive as "?"', {
+      chars: restante.join(' '),
+      codepoints: restante.map((c) => (c.codePointAt(0) ?? 0).toString(16)).join(' '),
+    });
+  }
+  return encoded;
+}
+
+/**
+ * The message that answers the turn — or `null` while its earlier parts are
+ * still being held.
+ *
+ * One agent reply reaches a channel as MANY `sendMessage` calls: the provider
+ * splits it on blank lines (`agno-provider.ts`, `enableAutoSplit`) and the
+ * dispatcher sends each part on its own. Every other channel just shows N
+ * messages. Here the FIRST part answered the poll, the flow's next poll
+ * collected it and closed the turn, and parts 2..N found nothing polling and
+ * were refused as undeliverable — the beneficiary read one paragraph of three
+ * and lost whatever the agent sent after the text. Measured on atendimento
+ * 22325225: "Agno agent responded parts:3", then two undeliverable warnings.
+ *
+ * So the turn is the whole reply, not its first part. The dispatcher stamps
+ * `partIndex`/`partCount`; the parts before the last are held and the last one
+ * answers with all of them joined by a blank line — which `splitBubbles` turns
+ * back into the same bubbles, with the URA on the last one.
+ *
+ * Holding is only ever done on a turn that is really being polled, and the
+ * held parts live ON that window, so they inherit its TTL and its identity: a
+ * window that closes mid-reply takes its held parts with it rather than
+ * leaking them or answering the next turn. A part that arrives with no window
+ * falls through to the usual undeliverable refusal, unchanged.
+ */
+function collectTurnParts(message: OutgoingMessage, turn: AscFlowTurnState | undefined): OutgoingMessage | null {
+  const meta = message.metadata ?? {};
+  const partCount = Number(meta.partCount ?? 1);
+  const partIndex = Number(meta.partIndex ?? 0);
+  // Nothing to collect: no turn to hold on to, a send that stands alone, or a
+  // hint that is not a hint (NaN fails both comparisons). Rich content never
+  // takes this path — it leaves through `/mensagem` and needs no poll.
+  if (!turn || message.content.type !== 'text' || !(partCount > 1) || !(partIndex >= 0)) return message;
+
+  const part = message.content.text ?? '';
+  if (partIndex < partCount - 1) {
+    turn.parts = [...(turn.parts ?? []), part];
+    return null;
+  }
+
+  const text = [...(turn.parts ?? []), part].join('\n\n');
+  turn.parts = undefined;
+  return { ...message, content: { ...message.content, text } };
 }
 
 /** The list presentation hints `buildUra` accepts, when the caller set any. */
@@ -233,20 +328,41 @@ export function normalizeBaseUrl(raw: string): string {
  * show the same bubble twice. A refused `/mensagem` with no caption would leave
  * the turn silent, so it says so instead of nothing.
  */
+/** `'buttons' | 'list' | 'text'`, for the `message.sent` payload. */
+function interactiveKindOf(params: Record<string, unknown> | null): string {
+  if (!params) return 'text';
+  return params.tipo === 2 ? 'buttons' : 'list';
+}
+
+/** How many options the component carried, 0 when the turn went out as text. */
+function interactiveRowsOf(params: Record<string, unknown> | null): number {
+  if (!params) return 0;
+  if (Array.isArray(params.button)) return params.button.length;
+  const list = params.list as { secao?: Array<{ linhas?: unknown[] }> } | undefined;
+  return list?.secao?.[0]?.linhas?.length ?? 0;
+}
+
 function buildReadyBody(turn: {
   delivered: boolean;
   lastBubble: string;
   bubbles: string[];
   handoff: HandoffPlan['fields'] | null;
-  ura: AscFlowUra | null;
 }): AscFlowTurnReady {
   return {
     pronto: 1,
     resposta: turn.delivered ? '' : turn.lastBubble || OUTBOUND_MEDIA_FALLBACK_TEXT,
     hand_off: turn.handoff ? 'sim' : 'nao',
     bolhas: turn.bubbles,
+    // The handoff fields are ALWAYS present, empty when the turn does not hand
+    // off. The `api_rest` node's `store` lists every field it maps, and a body
+    // missing one of them left the whole mapping unapplied: measured on
+    // atendimento 22327328, the flow received `resposta` filled and HTTP 200
+    // (its own Requisições report proves it) and still rendered `{#resposta}`
+    // empty, because the store also listed `fila_vq`/`motivo_transf_vq` and the
+    // body carried neither. A stable shape costs two empty strings.
+    fila_vq: '',
+    motivo_transf_vq: '',
     ...(turn.handoff ?? {}),
-    ...(turn.ura ?? {}),
   };
 }
 
@@ -323,6 +439,9 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       dedupeCache: createInboundDedupeCache(),
       inFlight: new Map(),
       lastSweepAt: Date.now(),
+      seenCods: new Set(),
+      lastAnswered: new Map(),
+      destinos: new Map(),
     });
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -379,9 +498,8 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       return { success: false, error: 'ASC Flow instance not connected', retryable: false, timestamp: Date.now() };
     }
 
-    const { content, to } = message;
+    const { to } = message;
     const meta = message.metadata ?? {};
-    const text = resolveOutboundText(message);
 
     const correlationId = meta.correlationId as string | undefined;
     if (correlationId) this.captureT10(correlationId);
@@ -402,7 +520,17 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       const answering = state.inFlight.get(to.trim());
       const polling = answering !== undefined && answering.text !== '';
 
-      const { rich, bubbles } = await this.prepareTurn(message, text);
+      // One agent reply, many sends. Hold every part but the last so ONE turn
+      // answers with all of them — see `collectTurnParts`. A held part reached
+      // nobody yet and produced no message, hence no id: the dispatcher does
+      // not read this result, and nothing else stamps the hint.
+      const turnMessage = collectTurnParts(message, polling ? answering : undefined);
+      if (!turnMessage) return { success: true, timestamp: Date.now() };
+
+      const content = turnMessage.content;
+      const text = resolveOutboundText(turnMessage, this.logger);
+
+      const { rich, bubbles } = await this.prepareTurn(turnMessage, text);
 
       // The URA rides on the LAST bubble — the options attach to the last thing
       // the beneficiary read, and that bubble is the one that goes back in
@@ -410,18 +538,21 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // a URA node) and on the `/mensagem` that delivers that bubble (which is
       // what actually renders buttons today).
       const lastBubble = bubbles[bubbles.length - 1] ?? '';
-      const ura = rich ? null : buildUra(lastBubble, content.buttons, listOptionsOf(content));
+      const interativa = rich ? null : buildInteractive(lastBubble, content.buttons, listOptionsOf(content));
 
-      // Refuse BEFORE anything reaches the handset. `deliver` pushes every
-      // bubble but the last through `/callbackFlowMsg` — a real delivery, not a
-      // parked one — so refusing afterwards reported total failure on a turn
-      // whose first paragraphs had already landed, and the operator's resend
-      // then duplicated them. Rich content and interactives go out through
-      // `/mensagem`, which needs no poll; a plain-text turn is delivered ONLY by
-      // being collected from the poll body.
-      if (!rich && !ura && !polling) return this.refuseUndeliverable(instanceId, to, content.type);
+      const { delivered } = await this.deliver(state, cod, {
+        text,
+        bubbles,
+        lastBubble,
+        rich,
+        interativa,
+        message: turnMessage,
+      });
 
-      const { delivered } = await this.deliver(state, cod, { text, bubbles, lastBubble, rich, ura, message });
+      // Nothing reached the handset and no poll is waiting for the text either:
+      // undeliverable, and it must not be recorded as sent. Every content type
+      // now has a push path, so this only fires on an outright platform refusal.
+      if (!delivered && !polling) return this.refuseUndeliverable(instanceId, to, content.type);
 
       // The farewell only needs pushing when `/mensagem` did not already put it
       // on the handset (`delivered`); in flow mode it rides `resposta` as usual.
@@ -438,7 +569,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       this.resolveTurn(
         state,
         to,
-        buildReadyBody({ delivered, lastBubble, bubbles, handoff, ura }),
+        buildReadyBody({ delivered, lastBubble, bubbles, handoff }),
         answering,
         correlationId,
       );
@@ -450,10 +581,10 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // The platform returns no per-message id, so Omni's UUID stays canonical.
       const messageId = crypto.randomUUID();
 
-      await this.emitTurnSent(instanceId, message, messageId, {
+      await this.emitTurnSent(instanceId, turnMessage, messageId, {
         cod,
         bubbles: bubbles.length,
-        ura,
+        interativa,
         delivered,
         handoff: handoff !== null,
       });
@@ -500,7 +631,13 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     instanceId: string,
     message: OutgoingMessage,
     messageId: string,
-    turn: { cod: number; bubbles: number; ura: AscFlowUra | null; delivered: boolean; handoff: boolean },
+    turn: {
+      cod: number;
+      bubbles: number;
+      interativa: Record<string, unknown> | null;
+      delivered: boolean;
+      handoff: boolean;
+    },
   ): Promise<void> {
     const { content, to } = message;
     await this.emitMessageSent({
@@ -517,8 +654,8 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         ascFlow: {
           codAtendimento: turn.cod,
           bubbles: turn.bubbles,
-          interactive: turn.ura ? (turn.ura.forcar_botoes ? 'buttons' : 'list') : 'text',
-          uraOptions: turn.ura ? Object.keys(turn.ura.ura_opcoes).length : 0,
+          interactive: interactiveKindOf(turn.interativa),
+          interactiveRows: interactiveRowsOf(turn.interativa),
           /** Rich content left through `/mensagem` rather than the poll body. */
           viaMensagem: turn.delivered,
           handoff: turn.handoff,
@@ -743,32 +880,129 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       bubbles: string[];
       lastBubble: string;
       rich: Record<string, unknown> | null;
-      ura: AscFlowUra | null;
+      interativa: Record<string, unknown> | null;
       message: OutgoingMessage;
     },
   ): Promise<{ delivered: boolean }> {
     const reply = buildReplyField(turn.message.replyTo);
 
-    // One `/mensagem` carries the file/pin/card plus its caption.
+    // One `/mensagem` carries the file/pin/card plus its caption. When the
+    // platform refuses it, the turn degrades to text — and that text is PUSHED
+    // like any other, so the beneficiary is not left with nothing while the
+    // poll body carries no text of its own.
     if (turn.rich) {
-      return { delivered: await this.sendMensagem(state, cod, turn.text, { ...turn.rich, ...reply }) };
+      if (await this.sendMensagem(state, cod, turn.text, { ...turn.rich, ...reply })) return { delivered: true };
+      // A file with no caption has no bubble of its own: say what happened
+      // rather than leave the beneficiary looking at nothing.
+      const texto = turn.bubbles.length > 0 ? turn.bubbles : [OUTBOUND_MEDIA_FALLBACK_TEXT];
+      return { delivered: (await this.pushBubbles(state, cod, texto)) > 0 };
     }
 
-    // Everything except the last bubble is PUSHED now, so the handset shows the
-    // turn with rhythm while the flow is still polling. Best-effort: a refused
-    // push must not cost the beneficiary the answer, which is the canonical one
-    // in `resposta`.
-    await this.pushLeadingBubbles(state, cod, turn.bubbles);
-
-    // The URA rides in the poll body too, but that only renders once the flow
-    // has a URA node consuming it. `/mensagem` is the endpoint that injects
-    // real buttons/list into the running atendimento, so the last bubble goes
-    // out there as well — the numbered text it carries stays the canonical
-    // fallback either way.
-    if (turn.ura) {
-      return { delivered: await this.sendMensagem(state, cod, turn.lastBubble, { ...turn.ura, ...reply }) };
+    // `/sendMsgInterativaAvancado` is the endpoint that renders a real
+    // WhatsApp list or buttons INSIDE the running atendimento — with a
+    // description under every row, which the URA fields on `/mensagem` cannot
+    // express (see `utils/interactive.ts`). The last bubble goes out there;
+    // the numbered text it carries stays the canonical fallback.
+    if (turn.interativa) {
+      await this.pushBubbles(state, cod, turn.bubbles.slice(0, -1));
+      if (await this.sendInterativa(state, cod, turn.interativa)) return { delivered: true };
+      // The component was refused. The bubble it carried holds the numbered
+      // options as text, so it still has to reach the handset — pushed like
+      // any other, never left to `resposta` (which the flow reads a cycle
+      // late). Without this the beneficiary reads the lead-up and never the
+      // question itself.
+      return { delivered: (await this.pushBubbles(state, cod, [turn.lastBubble])) > 0 };
     }
-    return { delivered: false };
+
+    // EVERY bubble is pushed, and `resposta` goes back empty.
+    //
+    // The turn used to keep its last bubble for the poll body, on the premise
+    // that the `api_rest` node waits for `{#BODY.pronto} = 1` before advancing.
+    // It does not: measured on flow #225 in BOTH modes (async with the
+    // condition, and synchronous with a 45s timeout), the flow rendered
+    // `{#resposta}` about a second after the inbound — carrying the value from
+    // the PREVIOUS cycle — while the agent was still running. The platform's
+    // own Requisições report shows the node receiving the finished body with
+    // HTTP 200 (atendimento 22327328), so the data arrives; the flow has simply
+    // moved on. `/callbackFlowMsg` is the path that demonstrably reaches the
+    // handset in ~1s and is recorded delivered (status 3), so the whole turn
+    // goes out there and the poll body carries no text at all.
+    //
+    // `hand_off` and the two Genesys variables still ride the body: those are
+    // read by `dec_handoff` on a LATER cycle, which the lag does not break.
+    const pushed = await this.pushBubbles(state, cod, turn.bubbles);
+    return { delivered: pushed > 0 };
+  }
+
+  /**
+   * `POST /sendMsgInterativaAvancado` — a native WhatsApp list or reply
+   * buttons inside the running atendimento.
+   *
+   * The endpoint addresses the CONTACT, not the atendimento: `cod_conta` plus
+   * `contato.telefone` are both mandatory (probed 06/09 — with a
+   * `cod_atendimento` alone it answers "Faltando identificador da conta", and
+   * with the account but no contact "Contato com telefone é obrigatório").
+   * `bol_incluir_atual: 1` is what lands the message in the conversation the
+   * beneficiary is already in instead of opening a new one.
+   *
+   * Best-effort, like every other push: `false` means the caller falls back to
+   * the numbered text, never that the turn fails.
+   */
+  private async sendInterativa(
+    state: AscFlowInstanceState,
+    cod: number,
+    params: Record<string, unknown>,
+  ): Promise<boolean> {
+    try {
+      const destino = await this.resolveDestino(state, cod);
+      if (!destino) return false;
+      await state.client.callForm('/sendMsgInterativaAvancado', {
+        cod_conta: destino.codConta,
+        // 1 = automatic service: the atendimento is already running under the
+        // bot, and this rides in it rather than queueing or notifying.
+        tipo_envio: 1,
+        bol_incluir_atual: 1,
+        contato: { telefone: destino.telefone },
+        msg_interativa_parametros: params,
+      });
+      return true;
+    } catch (err) {
+      this.logger.warn('[asc-flow] interactive message refused — degrading to the numbered text', {
+        cod,
+        err: String(err),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * The account and phone behind a `cod_atendimento`, cached for the life of
+   * the atendimento — neither can change while it runs, and the interactive
+   * endpoint needs both on every send.
+   */
+  private async resolveDestino(
+    state: AscFlowInstanceState,
+    cod: number,
+  ): Promise<{ codConta: string; telefone: string } | null> {
+    const chave = String(cod);
+    const cacheado = state.destinos.get(chave);
+    if (cacheado) return cacheado;
+
+    const { status, body } = await state.client.get('/atendimento', { codigo_atendimento: cod });
+    if (status !== 200 || typeof body !== 'object' || body === null) return null;
+
+    const dados = body as Record<string, unknown>;
+    const contato = (dados.contato ?? {}) as Record<string, unknown>;
+    const codConta = String(dados.id_conta ?? '').trim();
+    const telefone = String(contato.telefone ?? '').trim();
+    if (!codConta || !telefone) {
+      this.logger.warn('[asc-flow] atendimento carries no account/phone — no interactive message for it', { cod });
+      return null;
+    }
+
+    const destino = { codConta, telefone };
+    state.destinos.set(chave, destino);
+    return destino;
   }
 
   /**
@@ -811,8 +1045,9 @@ export class AscFlowPlugin extends BaseChannelPlugin {
    * the answer, which the flow will render from `resposta` anyway. Stop at the
    * first failure — the remaining bubbles would arrive out of order.
    */
-  private async pushLeadingBubbles(state: AscFlowInstanceState, cod: number, bubbles: string[]): Promise<void> {
-    for (const bubble of bubbles.slice(0, -1)) {
+  private async pushBubbles(state: AscFlowInstanceState, cod: number, bubbles: string[]): Promise<number> {
+    let enviadas = 0;
+    for (const bubble of bubbles) {
       try {
         await state.client.call('/callbackFlowMsg', {
           cod_atendimento: cod,
@@ -820,15 +1055,22 @@ export class AscFlowPlugin extends BaseChannelPlugin {
           msg_usuario: bubble,
           entrante: 0,
         });
-        await state.client.call('/sendIndicador', { cod, tipo: 1 });
+        enviadas++;
+        // Typing between bubbles, for rhythm — never after the last one.
+        if (enviadas < bubbles.length) {
+          await state.client.call('/sendIndicador', { cod, tipo: 1 });
+        }
       } catch (err) {
-        this.logger.warn('[asc-flow] leading bubble push failed — degrading to resposta', {
+        this.logger.warn('[asc-flow] bubble push failed — stopping so the rest do not arrive out of order', {
           cod,
+          enviadas,
+          total: bubbles.length,
           err: String(err),
         });
-        return;
+        return enviadas;
       }
     }
+    return enviadas;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -864,6 +1106,13 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     if (inboundState) {
       this.sweepInFlight(instanceId, inboundState);
       inboundState.inFlight.set(turn.codAtendimento, { text: turn.text, at: Date.now() });
+      // Bounded the same way the turn window is: a Set of ids is small, but it
+      // must not grow for the life of the process either.
+      if (inboundState.seenCods.size >= IN_FLIGHT_MAX_ENTRIES) {
+        const oldest = inboundState.seenCods.values().next().value;
+        if (oldest !== undefined) inboundState.seenCods.delete(oldest);
+      }
+      inboundState.seenCods.add(turn.codAtendimento);
     }
 
     // Raise "digitando…" as soon as the turn lands: the agent run is the slow
@@ -940,6 +1189,11 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
   getLogger(): Logger {
     return this.logger;
+  }
+
+  /** Whether a turn was already published for this `cod_atendimento`. */
+  hasSeenCod(instanceId: string, codAtendimento: string): boolean {
+    return this.ascFlowInstances.get(instanceId)?.seenCods.has(codAtendimento) ?? false;
   }
 
   /**
@@ -1053,7 +1307,66 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         ageMs,
       });
     }
+    // Remember what this turn answered: a re-send repeats exactly this text,
+    // and that is the trigger for the freshness check.
+    if (state.lastAnswered.size >= IN_FLIGHT_MAX_ENTRIES) {
+      const oldest = state.lastAnswered.keys().next().value;
+      if (oldest !== undefined) state.lastAnswered.delete(oldest);
+    }
+    state.lastAnswered.set(codAtendimento, text.trim());
     return entry.ready;
+  }
+
+  /**
+   * Whether a body whose two fields AGREE is still a re-send — the one shape
+   * `entradaDefasada` cannot see. Narrow by construction: only a text that
+   * repeats the last turn we answered for this cod reaches the platform.
+   */
+  async isStaleFlowReplay(instanceId: string, turn: ParsedAscFlowTurn): Promise<boolean> {
+    const state = this.ascFlowInstances.get(instanceId);
+    if (!state) return false;
+    if (state.lastAnswered.get(turn.codAtendimento) !== turn.text.trim()) return false;
+    return isStaleFlowReplay({
+      client: state.client,
+      instanceId,
+      codAtendimento: turn.codAtendimento,
+      text: turn.text,
+      logger: this.logger,
+    });
+  }
+
+  /**
+   * Wait for the agent's answer to THIS turn, up to `timeoutMs`.
+   *
+   * The inbound request is held open while the agent runs, so the node gets the
+   * finished turn on its first call instead of a `pronto:0` it is supposed to
+   * poll past. Returns `null` on timeout, which falls back to the old polling
+   * behaviour rather than failing the turn.
+   *
+   * Polling the map (rather than waking on an event) keeps this to one small
+   * loop with no listener to leak: `sendMessage` already parks the answer, and
+   * a 250ms tick is far below the agent latency it is waiting on.
+   */
+  async waitForTurn(
+    instanceId: string,
+    codAtendimento: string,
+    text: string,
+    timeoutMs: number,
+  ): Promise<AscFlowTurnReady | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      // The instance can disconnect while we hold: stop rather than spin.
+      if (!this.ascFlowInstances.has(instanceId)) return null;
+      const ready = this.takeReadyTurn(instanceId, codAtendimento, text);
+      if (ready) return ready;
+    }
+    this.logger.warn('[asc-flow] held the request to its deadline with no agent answer', {
+      instanceId,
+      codAtendimento,
+      timeoutMs,
+    });
+    return null;
   }
 
   /**

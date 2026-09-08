@@ -142,6 +142,24 @@ webhooksRoutes.post('/webhooks/:source', async (c) => {
   return c.json(result);
 });
 
+/**
+ * POST /webhooks/:source/heartbeat - Connector heartbeat (#961)
+ *
+ * A supervised connector's cheap "I ran, zero events found": resets the
+ * liveness window (distinguishing quiet from dead) without creating a journal
+ * event per heartbeat — the source row's lastHeartbeatAt/heartbeatCount is
+ * the compacted trace, and only the stalled/recovered TRANSITIONS are
+ * journaled (by the liveness sweeper). Authenticated route only; no body.
+ */
+webhooksRoutes.post('/webhooks/:source/heartbeat', async (c) => {
+  const sourceName = c.req.param('source');
+  const services = c.get('services');
+
+  const result = await services.webhooks.heartbeat(sourceName);
+
+  return c.json(result);
+});
+
 // ============================================================================
 // Manual Event Trigger
 // ============================================================================

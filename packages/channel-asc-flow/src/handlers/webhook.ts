@@ -41,6 +41,26 @@ import { type AscFlowPlugin, TURN_PENDING } from '../plugin';
 import type { AscFlowInboundBody } from '../types';
 import { decodeAscEmoji } from '../utils/emoji';
 
+/**
+ * How long the inbound request is held waiting for the agent's answer.
+ *
+ * Sits under the `api_rest` node's own `timeout`, read off the live flow #225
+ * on 05/09: `{"method":"1","async":"0","async_condition":"","timeout":"45"}`.
+ * Holding past that is worthless — the node has already given up, so the
+ * answer is parked for a poll that never comes.
+ *
+ * 40s clears the measured agent latency at p90 (p50 14.7s / p90 30.2s) but not
+ * the worst run seen (42s). That is the node's ceiling, not a choice of ours:
+ * a run slower than the node's timeout cannot be answered in-band whatever we
+ * do, and its bubbles still reach the handset through `/callbackFlowMsg`.
+ *
+ * `ASC_FLOW_HOLD_MS=0` turns the hold off and restores the pure poll contract.
+ * Read per CALL, not at module load: the suite sets it from `helpers.ts`, and a
+ * constant would freeze whatever the value was when the module first imported —
+ * which import order decides, not the test.
+ */
+const holdTimeoutMs = () => Number(process.env.ASC_FLOW_HOLD_MS ?? 40_000);
+
 /** The flow node posts a small JSON object; 64 KB is generous headroom. */
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -63,6 +83,24 @@ function firstString(...values: Array<string | number | undefined>): string {
 export interface ParsedAscFlowTurn {
   codAtendimento: string;
   text: string;
+  /** The text came from the frozen `message` fallback, not from `chatInput`. */
+  fromFallback: boolean;
+  /**
+   * `chatInput` and `message` disagree — the flow is re-sending an OLD input.
+   *
+   * On a real turn the two fields carry the SAME text: `{#entrada}` is what
+   * the beneficiary just typed and `{#MENSAGEM}` is the message that carried
+   * it. On a re-send `{#entrada}` still holds a previous value while
+   * `{#MENSAGEM}` does not follow it. Verified on 30 calls across atendimentos
+   * 22342225, 22342782 and 22344480, with no counterexample:
+   *
+   *   real     chatInput 'ROGERIO AMARO'  message 'ROGERIO AMARO'
+   *   re-send  chatInput 'ROGERIO AMARO'  message '##1f5d1-fe0f##'
+   *
+   * `false` whenever the comparison cannot be made (either field empty) — a
+   * flow that does not send `message` must keep working.
+   */
+  entradaDefasada: boolean;
   phone: string;
   messageId?: string;
 }
@@ -73,16 +111,64 @@ export interface ParsedAscFlowTurn {
  */
 export function parseInboundTurn(body: AscFlowInboundBody): ParsedAscFlowTurn | null {
   const codAtendimento = firstString(body.codAtendimento, body.cod_atendimento);
-  const text = decodeAscEmoji(firstString(body.chatInput, body.message));
+  // `chatInput` is what the beneficiary just typed; `message` is the flow's
+  // fallback, and on flow #225 that is `{#MENSAGEM}` — which stays FROZEN on
+  // the message that opened the atendimento. Keeping them apart is what lets
+  // the handler use the fallback ONLY to open a conversation, never to
+  // republish the opening text on every loop (measured: a 🗑️ that opened the
+  // atendimento came back ~10s after each real turn and reset the session
+  // mid-conversation, on 22329234 and 22330067).
+  const typed = decodeAscEmoji(firstString(body.chatInput));
+  const fallback = decodeAscEmoji(firstString(body.message));
+  const text = typed || fallback;
   if (!codAtendimento || !text) return null;
 
   const messageId = firstString(body.messageId, body.idMensagem);
   return {
     codAtendimento,
     text,
+    fromFallback: !typed,
+    entradaDefasada: Boolean(typed) && Boolean(fallback) && typed !== fallback,
     phone: firstString(body.phone, body.telefone),
     ...(messageId ? { messageId } : {}),
   };
+}
+
+/**
+ * Is this the flow sending an input BACK, rather than the beneficiary speaking?
+ *
+ * It re-sends the previous input before the current one, on every turn —
+ * measured on 22344480: "ROGERIO AMARO" was answered at 22:36:27 and came back
+ * six times from 22:36:51, each one opening a fresh agent run that re-derived
+ * the same proposal. The beneficiary read the four options twice.
+ *
+ * Two questions, cheapest first, because they catch different re-sends:
+ *
+ *   1. Do the body's two fields disagree? On a real turn they carry the same
+ *      text; on a re-send `{#entrada}` is behind. Free, and it covers most.
+ *   2. They agree, but is the platform's own latest inbound something else?
+ *      That is the re-send the fields cannot show — the input that came back
+ *      IS the message that opened the cycle, so both carry it (a 🗑️ at
+ *      23:20:54 and the same 🗑️ back at 23:21:11, byte for byte, resetting the
+ *      session mid-identification). Narrow by construction: only a text that
+ *      repeats the last turn we answered ever asks.
+ *
+ * Both fail OPEN — an unanswerable question means the turn is processed.
+ */
+async function isReenvioDoFlow(
+  plugin: AscFlowPlugin,
+  instanceId: string,
+  turn: ParsedAscFlowTurn,
+  logger: ReturnType<AscFlowPlugin['getLogger']>,
+): Promise<boolean> {
+  if (turn.entradaDefasada && plugin.hasSeenCod(instanceId, turn.codAtendimento)) {
+    logger.info('[asc-flow] chatInput is behind message — the flow re-sent an old input', {
+      instanceId,
+      codAtendimento: turn.codAtendimento,
+    });
+    return true;
+  }
+  return plugin.isStaleFlowReplay(instanceId, turn);
 }
 
 /**
@@ -156,6 +242,22 @@ export async function handleAscFlowWebhookRequest(
     return json(ready);
   }
 
+  // A body whose `chatInput` is EMPTY is the flow looping back, not the
+  // beneficiary speaking: the only text it carries is the frozen fallback. It
+  // may OPEN a conversation (the first call legitimately has no `chatInput`
+  // yet), but once this cod has been seen it is a poll and nothing more.
+  if (turn.fromFallback && plugin.hasSeenCod(instanceId, turn.codAtendimento)) {
+    logger.debug('[asc-flow] loop-back with no chatInput — treating as a poll', {
+      instanceId,
+      codAtendimento: turn.codAtendimento,
+    });
+    return pending();
+  }
+
+  if (await isReenvioDoFlow(plugin, instanceId, turn, logger)) {
+    return pending();
+  }
+
   // `messageId` wins when the flow supplies one (60s SDK cache). Otherwise fall
   // back to the in-flight window, which is the REAL case: the flow body we
   // author carries no message id.
@@ -167,5 +269,25 @@ export async function handleAscFlowWebhookRequest(
   }
 
   await plugin.handleInboundTurn(instanceId, turn);
-  return pending();
+
+  // HOLD the request until the agent answers, instead of returning `pronto:0`
+  // and trusting the node to poll again.
+  //
+  // Measured on flow #225 (atendimentos 22327328 and 22327711) while the node
+  // was configured `async=1` with `async_condition = {#BODY.pronto} = 1`: the
+  // platform's own Requisições report shows it receiving `pronto:1` with the
+  // answer filled — yet the flow rendered `{#resposta}` from the PREVIOUS
+  // cycle, one turn late. Whatever the node did with the condition, it did not
+  // wait for it. The node is synchronous today, which the hold suits either
+  // way: the finished turn rides the first and only response.
+  //
+  // Answering the FIRST call with the finished turn removes the question: the
+  // condition holds on the only response there is. It works the same if the
+  // node is switched to synchronous, so the flow needs no edit either way.
+  // The deadline sits under the node's own `timeout` (180s), and falling back
+  // to `pronto:0` keeps the old polling behaviour for anything slower.
+  const holdMs = holdTimeoutMs();
+  if (holdMs <= 0) return pending();
+  const held = await plugin.waitForTurn(instanceId, turn.codAtendimento, turn.text, holdMs);
+  return held ? json(held) : pending();
 }

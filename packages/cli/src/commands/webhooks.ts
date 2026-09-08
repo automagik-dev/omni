@@ -13,7 +13,8 @@
  * or stdin (`--signature-secret-stdin`, for `pass show ... | omni webhooks ...`).
  */
 
-import type { WebhookSignatureConfigBody } from '@omni/sdk';
+import { readFileSync } from 'node:fs';
+import type { WebhookEventTypeMappingBody, WebhookSignatureConfigBody } from '@omni/sdk';
 import { Command } from 'commander';
 import { z } from 'zod';
 import { getClient } from '../client.js';
@@ -115,6 +116,123 @@ function buildSignatureConfig(options: {
 }
 
 /**
+ * Same shape the API enforces on `eventTypeMapping`
+ * (schemas/openapi/webhooks.ts, #959/#984): header-source or body-source.
+ */
+const eventTypeMappingSchema = z.discriminatedUnion('source', [
+  z.object({
+    source: z.literal('header'),
+    header: z.string().min(1, 'header must be 1-200 characters').max(200, 'header must be 1-200 characters'),
+  }),
+  z.object({
+    source: z.literal('body'),
+    path: z.string().min(1, 'path must be 1-200 characters').max(200, 'path must be 1-200 characters'),
+  }),
+]);
+
+const EVENT_TYPE_MAPPING_HINT =
+  'expected {"source":"header","header":"X-GitHub-Event"} or {"source":"body","path":"event"}';
+
+/**
+ * Parse `--event-type-mapping` — inline JSON, or `@path/to/file.json` (the
+ * repo's existing @file convention, cf. follow-up's JSON args) — and validate
+ * it against the API's mapping schema. Returns undefined when the flag was
+ * not given; throws (caught by the command's error path) BEFORE any request
+ * is sent on an unreadable file, invalid JSON, or a schema-invalid mapping.
+ */
+function resolveEventTypeMapping(raw: string | undefined): WebhookEventTypeMappingBody | undefined {
+  if (raw === undefined) return undefined;
+  let text = raw;
+  if (raw.startsWith('@')) {
+    const path = raw.slice(1);
+    try {
+      text = readFileSync(path, 'utf-8');
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Unknown error';
+      throw new Error(`Cannot read --event-type-mapping file '${path}': ${reason}`);
+    }
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(`Invalid JSON for --event-type-mapping; ${EVENT_TYPE_MAPPING_HINT}`);
+  }
+  const result = eventTypeMappingSchema.safeParse(parsed);
+  if (!result.success) {
+    const reason = result.error.issues
+      .map((issue) => (issue.path.length > 0 ? `${issue.path.join('.')}: ${issue.message}` : issue.message))
+      .join('; ');
+    throw new Error(`Invalid --event-type-mapping: ${reason}; ${EVENT_TYPE_MAPPING_HINT}`);
+  }
+  return result.data;
+}
+
+interface UpdateSourceOptions extends SignatureSecretOptions {
+  name?: string;
+  description?: string;
+  enable?: boolean;
+  disable?: boolean;
+  signatureAlgorithm?: string;
+  signatureHeader?: string;
+  signaturePrefix?: string;
+  clearSignature?: boolean;
+  idempotencyKeyTemplate?: string;
+  // Strict schema mode (#1000): commander negatable pair — true from
+  // --strict-schemas, false from --no-strict-schemas, undefined = untouched.
+  strictSchemas?: boolean;
+  // Semantic event-type extraction (#1011): set vs clear vs untouched,
+  // following the --clear-signature / --clear-cadence precedent.
+  eventTypeMapping?: string;
+  clearEventTypeMapping?: boolean;
+  // Connector lifecycle contract (#961)
+  expectedInterval?: string;
+  clearCadence?: boolean;
+  windowSemantics?: string;
+  mutationPolicy?: string;
+}
+
+interface UpdateSourcePatch {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  signatureConfig?: WebhookSignatureConfigBody | null;
+  signatureSecret?: string;
+  idempotencyKeyTemplate?: string;
+  strictSchemas?: boolean;
+  eventTypeMapping?: WebhookEventTypeMappingBody | null;
+  expectedIntervalSeconds?: number | null;
+  windowSemantics?: (typeof WINDOW_SEMANTICS)[number];
+  mutationPolicy?: (typeof MUTATION_POLICIES)[number];
+}
+
+/** Assemble the PATCH body from the update flags (only touched fields). */
+async function buildUpdateSourcePatch(options: UpdateSourceOptions): Promise<UpdateSourcePatch> {
+  const updates: UpdateSourcePatch = buildLifecycleUpdates(options);
+  if (options.name) updates.name = options.name;
+  if (options.description) updates.description = options.description;
+  if (options.idempotencyKeyTemplate) updates.idempotencyKeyTemplate = options.idempotencyKeyTemplate;
+  if (options.strictSchemas !== undefined) updates.strictSchemas = options.strictSchemas;
+  if (options.clearEventTypeMapping && options.eventTypeMapping !== undefined) {
+    throw new Error('Use only one of --event-type-mapping and --clear-event-type-mapping');
+  }
+  if (options.clearEventTypeMapping) updates.eventTypeMapping = null;
+  const eventTypeMapping = resolveEventTypeMapping(options.eventTypeMapping);
+  if (eventTypeMapping !== undefined) updates.eventTypeMapping = eventTypeMapping;
+  if (options.enable) updates.enabled = true;
+  if (options.disable) updates.enabled = false;
+  if (options.clearSignature) {
+    updates.signatureConfig = null;
+    return updates;
+  }
+  const signatureConfig = buildSignatureConfig(options);
+  if (signatureConfig) updates.signatureConfig = signatureConfig;
+  const signatureSecret = await resolveSignatureSecret(options);
+  if (signatureSecret) updates.signatureSecret = signatureSecret;
+  return updates;
+}
+
+/**
  * Create-only pairing: the API rejects a `signatureConfig` without a secret
  * and a secret without a config (CreateWebhookSourceSchema). Fail here, before
  * the request, the same way the secret bounds do. Update is deliberately not
@@ -131,6 +249,64 @@ function assertPairedSignatureOnCreate(
     );
   }
   throw new Error(`--signature-algorithm and --signature-header require a signature secret (${SECRET_SOURCE_FLAGS})`);
+}
+
+// Connector lifecycle contract (#961) — declared semantics values, mirroring
+// the API's enums (schemas/openapi/webhooks.ts).
+const WINDOW_SEMANTICS = ['future_only', 'includes_in_progress'] as const;
+const MUTATION_POLICIES = ['same_id', 'new_id'] as const;
+
+/** Positive integer seconds, or undefined when the flag was not given. */
+function parseExpectedInterval(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const seconds = Number(raw);
+  if (!Number.isInteger(seconds) || seconds < 1) {
+    output.error('--expected-interval must be a positive integer number of seconds');
+  }
+  return seconds;
+}
+
+function parseWindowSemantics(raw: string | undefined): (typeof WINDOW_SEMANTICS)[number] | undefined {
+  if (raw === undefined) return undefined;
+  const value = WINDOW_SEMANTICS.find((v) => v === raw);
+  if (!value) {
+    output.error(`Invalid --window-semantics; expected one of: ${WINDOW_SEMANTICS.join(', ')}`);
+  }
+  return value;
+}
+
+function parseMutationPolicy(raw: string | undefined): (typeof MUTATION_POLICIES)[number] | undefined {
+  if (raw === undefined) return undefined;
+  const value = MUTATION_POLICIES.find((v) => v === raw);
+  if (!value) {
+    output.error(`Invalid --mutation-policy; expected one of: ${MUTATION_POLICIES.join(', ')}`);
+  }
+  return value;
+}
+
+/** The lifecycle-contract portion of a source update, from the (#961) flags. */
+function buildLifecycleUpdates(options: {
+  expectedInterval?: string;
+  clearCadence?: boolean;
+  windowSemantics?: string;
+  mutationPolicy?: string;
+}): {
+  expectedIntervalSeconds?: number | null;
+  windowSemantics?: (typeof WINDOW_SEMANTICS)[number];
+  mutationPolicy?: (typeof MUTATION_POLICIES)[number];
+} {
+  if (options.clearCadence && options.expectedInterval !== undefined) {
+    output.error('Use only one of --expected-interval and --clear-cadence');
+  }
+  const updates: ReturnType<typeof buildLifecycleUpdates> = {};
+  if (options.clearCadence) updates.expectedIntervalSeconds = null;
+  const expectedIntervalSeconds = parseExpectedInterval(options.expectedInterval);
+  if (expectedIntervalSeconds !== undefined) updates.expectedIntervalSeconds = expectedIntervalSeconds;
+  const windowSemantics = parseWindowSemantics(options.windowSemantics);
+  if (windowSemantics !== undefined) updates.windowSemantics = windowSemantics;
+  const mutationPolicy = parseMutationPolicy(options.mutationPolicy);
+  if (mutationPolicy !== undefined) updates.mutationPolicy = mutationPolicy;
+  return updates;
 }
 
 export function createWebhooksCommand(): Command {
@@ -158,6 +334,9 @@ export function createWebhooksCommand(): Command {
           id: w.id,
           name: w.name,
           enabled: w.enabled ? 'yes' : 'no',
+          // Liveness (#961): '-' = unsupervised (no declared cadence).
+          health: w.livenessStatus ?? '-',
+          cadence: w.expectedIntervalSeconds != null ? `${w.expectedIntervalSeconds}s` : '-',
           createdAt: w.createdAt,
         }));
 
@@ -202,6 +381,28 @@ export function createWebhooksCommand(): Command {
     )
     .option('--signature-secret-env <VAR>', 'Read the shared secret from environment variable VAR')
     .option('--signature-secret-stdin', 'Read the shared secret from stdin (trailing newline stripped)')
+    .option(
+      '--idempotency-key-template <template>',
+      'Delivery-identity key template for redelivery dedup (#958). Placeholders: {source}, {sha256(body)}, ' +
+        "{headers.<name>}, {payload.<dot.path>}. Defaults to '{source}:{sha256(body)}'",
+    )
+    .option(
+      '--strict-schemas',
+      'Refuse deliveries whose event type has no enabled registered schema (dead-lettered as ' +
+        'schema_not_registered, #1000). Recommended for new sources. Defaults to off',
+    )
+    .option(
+      '--event-type-mapping <json>',
+      'Semantic event-type extraction (#959): inline JSON or @path/to/file.json, e.g. ' +
+        '\'{"source":"header","header":"X-GitHub-Event"}\' or \'{"source":"body","path":"event"}\'. ' +
+        'A mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source}',
+    )
+    .option(
+      '--expected-interval <seconds>',
+      'Declared cadence: >=1 event or heartbeat per N seconds. Arms liveness supervision (#961)',
+    )
+    .option('--window-semantics <value>', `Declared window semantics: ${WINDOW_SEMANTICS.join(' or ')}`)
+    .option('--mutation-policy <value>', `Declared mutation re-emit policy: ${MUTATION_POLICIES.join(' or ')}`)
     .action(
       async (options: {
         name: string;
@@ -214,6 +415,12 @@ export function createWebhooksCommand(): Command {
         signatureSecret?: string;
         signatureSecretEnv?: string;
         signatureSecretStdin?: boolean;
+        idempotencyKeyTemplate?: string;
+        strictSchemas?: boolean;
+        eventTypeMapping?: string;
+        expectedInterval?: string;
+        windowSemantics?: string;
+        mutationPolicy?: string;
       }) => {
         const client = getClient();
 
@@ -238,6 +445,12 @@ export function createWebhooksCommand(): Command {
             expectedHeaders,
             signatureConfig,
             signatureSecret,
+            idempotencyKeyTemplate: options.idempotencyKeyTemplate,
+            strictSchemas: options.strictSchemas,
+            eventTypeMapping: resolveEventTypeMapping(options.eventTypeMapping),
+            expectedIntervalSeconds: parseExpectedInterval(options.expectedInterval),
+            windowSemantics: parseWindowSemantics(options.windowSemantics),
+            mutationPolicy: parseMutationPolicy(options.mutationPolicy),
           });
 
           const details: Record<string, unknown> = {
@@ -275,59 +488,50 @@ export function createWebhooksCommand(): Command {
     .option('--signature-secret-env <VAR>', 'Read the shared secret from environment variable VAR')
     .option('--signature-secret-stdin', 'Read the shared secret from stdin (trailing newline stripped)')
     .option('--clear-signature', 'Remove the signature config and stored secret')
-    .action(
-      async (
-        id: string,
-        options: {
-          name?: string;
-          description?: string;
-          enable?: boolean;
-          disable?: boolean;
-          signatureAlgorithm?: string;
-          signatureHeader?: string;
-          signaturePrefix?: string;
-          signatureSecret?: string;
-          signatureSecretEnv?: string;
-          signatureSecretStdin?: boolean;
-          clearSignature?: boolean;
-        },
-      ) => {
-        const resolvedId = await resolveWebhookId(id);
-        const client = getClient();
+    .option(
+      '--idempotency-key-template <template>',
+      'Delivery-identity key template for redelivery dedup (#958). Placeholders: {source}, {sha256(body)}, ' +
+        '{headers.<name>}, {payload.<dot.path>}',
+    )
+    .option(
+      '--strict-schemas',
+      'Refuse deliveries whose event type has no enabled registered schema (dead-lettered as ' +
+        'schema_not_registered, #1000)',
+    )
+    .option('--no-strict-schemas', 'Return the source to opt-in pass-through for unregistered event types')
+    .option(
+      '--event-type-mapping <json>',
+      'Semantic event-type extraction (#959): inline JSON or @path/to/file.json, e.g. ' +
+        '\'{"source":"header","header":"X-GitHub-Event"}\' or \'{"source":"body","path":"event"}\'',
+    )
+    .option(
+      '--clear-event-type-mapping',
+      'Remove the mapping (deliveries fall back to the collapsed custom.webhook.{source} type)',
+    )
+    .option(
+      '--expected-interval <seconds>',
+      'Declared cadence: >=1 event or heartbeat per N seconds. (Re)arms liveness supervision (#961)',
+    )
+    .option('--clear-cadence', 'Remove the declared cadence (disarms liveness supervision)')
+    .option('--window-semantics <value>', `Declared window semantics: ${WINDOW_SEMANTICS.join(' or ')}`)
+    .option('--mutation-policy <value>', `Declared mutation re-emit policy: ${MUTATION_POLICIES.join(' or ')}`)
+    .action(async (id: string, options: UpdateSourceOptions) => {
+      const resolvedId = await resolveWebhookId(id);
+      const client = getClient();
 
-        try {
-          const updates: {
-            name?: string;
-            description?: string;
-            enabled?: boolean;
-            signatureConfig?: WebhookSignatureConfigBody | null;
-            signatureSecret?: string;
-          } = {};
-          if (options.name) updates.name = options.name;
-          if (options.description) updates.description = options.description;
-          if (options.enable) updates.enabled = true;
-          if (options.disable) updates.enabled = false;
-          if (options.clearSignature) {
-            updates.signatureConfig = null;
-          } else {
-            const signatureConfig = buildSignatureConfig(options);
-            if (signatureConfig) updates.signatureConfig = signatureConfig;
-            const signatureSecret = await resolveSignatureSecret(options);
-            if (signatureSecret) updates.signatureSecret = signatureSecret;
-          }
-
-          const source = await client.webhooks.updateSource(resolvedId, updates);
-          output.success(`Webhook source updated: ${source.id}`, {
-            id: source.id,
-            name: source.name,
-            enabled: source.enabled,
-          });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          output.error(`Failed to update webhook source: ${message}`);
-        }
-      },
-    );
+      try {
+        const updates = await buildUpdateSourcePatch(options);
+        const source = await client.webhooks.updateSource(resolvedId, updates);
+        output.success(`Webhook source updated: ${source.id}`, {
+          id: source.id,
+          name: source.name,
+          enabled: source.enabled,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to update webhook source: ${message}`);
+      }
+    });
 
   // omni webhooks delete <id>
   webhooks
@@ -383,8 +587,35 @@ export function createWebhooksCommand(): Command {
       }
     });
 
+  // omni webhooks heartbeat <source-name>
+  webhooks
+    .command('heartbeat <source>')
+    .description('Record a connector heartbeat ("ran, zero events found") — resets the liveness window (#961)')
+    .action(async (source: string) => {
+      const client = getClient();
+
+      try {
+        // Keyed on the source NAME (like the receiver URL), not the id.
+        const result = await client.webhooks.heartbeat(source);
+        output.success(`Heartbeat recorded for '${result.source}'`, {
+          heartbeatAt: result.heartbeatAt,
+          livenessStatus: result.livenessStatus ?? 'unsupervised',
+          expectedIntervalSeconds: result.expectedIntervalSeconds,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to record heartbeat: ${message}`);
+      }
+    });
+
   return webhooks;
 }
 
 /** Test-only surface — not part of the CLI contract. */
-export const __testables = { resolveSignatureSecret, buildSignatureConfig, assertPairedSignatureOnCreate };
+export const __testables = {
+  resolveSignatureSecret,
+  buildSignatureConfig,
+  assertPairedSignatureOnCreate,
+  resolveEventTypeMapping,
+  buildUpdateSourcePatch,
+};

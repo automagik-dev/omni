@@ -3,6 +3,13 @@ name: Commitlint
 on:
   pull_request:
     branches: [main, dev]
+  # Merge-queue support (#990): a required check that never reports on
+  # merge_group stalls every queue entry until the queue times it out. The
+  # job below skips itself on merge groups (skipped satisfies a required
+  # check) — the commits were already linted on the pull_request event, and
+  # the queue's synthesized merge commits are not conventional-commit input.
+  merge_group:
+    branches: [main, dev]
 
 concurrency:
   group: commitlint-${{ github.ref }}
@@ -17,6 +24,9 @@ jobs:
     name: Commit Messages
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
+    # Skipped (= passing, for required checks) on merge_group — see the
+    # trigger comment above.
+    if: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:

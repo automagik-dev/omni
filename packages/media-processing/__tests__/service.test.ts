@@ -3,6 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
+import { configureLogging, getLogConfig } from '@omni/core';
 import { MediaProcessingService, createMediaProcessingService } from '../src/service';
 
 describe('MediaProcessingService', () => {
@@ -23,13 +24,19 @@ describe('MediaProcessingService', () => {
 
   describe('missing vision API key warning', () => {
     let stdoutSpy: ReturnType<typeof spyOn>;
+    let previousLogConfig: ReturnType<typeof getLogConfig>;
 
     beforeEach(() => {
+      // These tests assert the warning is actually WRITTEN, so they must not
+      // depend on the ambient threshold (test runs default to LOG_LEVEL=silent).
+      previousLogConfig = getLogConfig();
+      configureLogging({ level: 'warn', format: 'json' });
       stdoutSpy = spyOn(process.stdout, 'write');
     });
 
     afterEach(() => {
       stdoutSpy.mockRestore();
+      configureLogging(previousLogConfig);
     });
 
     it('logs warning when no vision API keys are configured', () => {

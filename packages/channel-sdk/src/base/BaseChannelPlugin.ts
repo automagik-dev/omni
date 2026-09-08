@@ -17,9 +17,11 @@ import type {
   EmitMediaReceivedParams,
   EmitMessageDeliveredParams,
   EmitMessageFailedParams,
+  EmitMessagePinnedParams,
   EmitMessageReadParams,
   EmitMessageReceivedParams,
   EmitMessageSentParams,
+  EmitMessageUnpinnedParams,
   EmitPollParams,
   EmitPollVoteParams,
   EmitReactionReceivedParams,
@@ -435,6 +437,22 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
   protected async emitReactionRemoved(params: EmitReactionRemovedParams): Promise<void> {
     const { instanceId, ...payload } = params;
     await this.publishEventInternal('reaction.removed', payload, instanceId);
+  }
+
+  /**
+   * Emit message.pinned event (#889)
+   */
+  protected async emitMessagePinned(params: EmitMessagePinnedParams): Promise<void> {
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('message.pinned', payload, instanceId);
+  }
+
+  /**
+   * Emit message.unpinned event (#889)
+   */
+  protected async emitMessageUnpinned(params: EmitMessageUnpinnedParams): Promise<void> {
+    const { instanceId, ...payload } = params;
+    await this.publishEventInternal('message.unpinned', payload, instanceId);
   }
 
   /**

@@ -19,6 +19,8 @@ export const CORE_EVENT_TYPES = [
   'message.delivered',
   'message.read',
   'message.failed',
+  'message.pinned',
+  'message.unpinned',
 
   // Interactive UI
   'message.button_click',
@@ -173,6 +175,28 @@ export interface OmniEvent<T extends EventType = EventType, P = unknown> {
 
 export interface EventMetadata {
   correlationId: string;
+  /**
+   * Id of the IMMEDIATE parent event — the event whose consumption caused
+   * this publish (#957, RFC #925 G3). `correlationId` groups a flow;
+   * `causationId` gives the tree. Stamped by the publisher from the consumed
+   * envelope (explicit metadata or the ambient causality context — see
+   * `events/causality.ts`), never from a payload claim. Absent/null for root
+   * events (external ingress) and for every pre-#957 producer — additive-
+   * optional, following the pattern `tenantId` landed with (G5, ADR-0008):
+   * a publish that threads nothing produces a byte-identical envelope.
+   */
+  causationId?: string | null;
+  /**
+   * Publish-time DIRECTIVE, not envelope data (#958): when set, the factory
+   * uses this as the published event's id instead of minting one, then
+   * DROPS the field — it never appears on the wire. Lets an ingress/emission
+   * idempotency claim (`omni_events.idempotency_key`, inserted BEFORE the
+   * publish) share the published event's identity, so the #957 `custom.>`
+   * journal consumer lands on the claim row (`ON CONFLICT (id) DO NOTHING`)
+   * instead of writing a second row, and `omni events trace` finds the root/
+   * hop by the same id its children's `causation_id` points at.
+   */
+  publishEventId?: string;
   instanceId?: string;
   channelType?: ChannelType;
   personId?: string;
@@ -661,6 +685,34 @@ export interface ReactionRemovedPayload {
   isCustomEmoji?: boolean;
 }
 
+/**
+ * Message pin lifecycle payloads (#889)
+ *
+ * Pinning is per-message platform state (Slack `pin_added`/`pin_removed`),
+ * distinct from pinning a whole chat in the sidebar (`ChatSettings.pinned`).
+ */
+export interface MessagePinnedPayload {
+  /** The message that was pinned (platform external id) */
+  messageId: string;
+  /** Chat where the message lives (platform external id) */
+  chatId: string;
+  /** Platform user who pinned it (absent when the platform does not report one) */
+  from?: string;
+  /** Raw platform payload for channel-specific data */
+  rawPayload?: Record<string, unknown>;
+}
+
+export interface MessageUnpinnedPayload {
+  /** The message that was unpinned (platform external id) */
+  messageId: string;
+  /** Chat where the message lives (platform external id) */
+  chatId: string;
+  /** Platform user who unpinned it */
+  from?: string;
+  /** Raw platform payload for channel-specific data */
+  rawPayload?: Record<string, unknown>;
+}
+
 // ─── Session Events ────────────────────────────────────────
 export interface SessionResetPayload {
   /** Instance that the session belongs to */
@@ -1040,6 +1092,8 @@ export interface EventPayloadMap {
   'message.delivered': MessageDeliveredPayload;
   'message.read': MessageReadPayload;
   'message.failed': MessageFailedPayload;
+  'message.pinned': MessagePinnedPayload;
+  'message.unpinned': MessageUnpinnedPayload;
   'message.button_click': MessageButtonClickPayload;
   'message.poll': MessagePollPayload;
   'message.poll_vote': MessagePollVotePayload;

@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "custom.github.push",
+  "description": "GitHub push webhook delivery (X-GitHub-Event: push). Minimal-but-real contract: the fields consumers rely on are required; everything else GitHub sends passes through (additionalProperties: true). Evolution rule: revisions must be additive-optional (issue #959).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["ref", "repository", "sender"],
+  "properties": {
+    "ref": {
+      "type": "string",
+      "description": "Full git ref that was pushed, e.g. refs/heads/main"
+    },
+    "before": {
+      "type": "string",
+      "description": "SHA of the most recent commit on ref before the push"
+    },
+    "after": {
+      "type": "string",
+      "description": "SHA of the most recent commit on ref after the push"
+    },
+    "commits": {
+      "type": "array",
+      "description": "Commits in the push (GitHub caps this at 2048 entries)",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string" },
+          "message": { "type": "string" },
+          "url": { "type": "string" }
+        }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["full_name"],
+      "properties": {
+        "full_name": {
+          "type": "string",
+          "description": "owner/repo, e.g. automagik-dev/omni"
+        }
+      }
+    },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["login"],
+      "properties": {
+        "login": {
+          "type": "string",
+          "description": "GitHub username that triggered the delivery"
+        }
+      }
+    }
+  }
+}
