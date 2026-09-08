@@ -6,12 +6,25 @@
  * whole suite in ONE `bun test` process, so four `beforeAll`s racing to start
  * four containers concurrently starve Docker and blow the readiness deadline.
  *
- * This module starts exactly ONE container per test process (a cached Promise
- * shared across every importing file) and hands each file its own bucket via
- * `uniqueBucket`, so they never clobber each other. The container is stopped
- * exactly once on process exit — no per-file teardown races.
+ * This module starts at most ONE container at a time (a cached Promise shared
+ * across every suite in the current test file) and hands each file its own
+ * bucket via `uniqueBucket`, so suites never clobber each other. Teardown is
+ * layered, because no single hook covers every way a bun process ends (#999):
+ *
+ *  - Under `bun test` the PRIMARY teardown is a per-file `afterAll` armed by
+ *    `minioIntegrationEnabled`: it stops the container when the file finishes,
+ *    and the next MinIO suite file lazily starts a fresh one. Bun runs test
+ *    files strictly sequentially, so at most one container is ever alive.
+ *    This hook exists because `bun test` NEVER emits process 'exit' (verified
+ *    on Bun 1.3.x: a plain `bun` script runs 'exit' handlers, `bun test` does
+ *    not) — before #999 every normal green run leaked the container.
+ *  - Under plain `bun`, and on SIGINT/SIGTERM/SIGHUP, the 'exit' and signal
+ *    handlers in MinioContainerLifecycle DO fire and stop tracked IDs.
+ *  - On SIGKILL/OOM nothing in-process can run; `reapStaleContainers` sweeps
+ *    the leak from a later launch instead.
  */
 
+import { afterAll } from 'bun:test';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 
 /**
@@ -66,12 +79,36 @@ function dockerAvailable(): boolean {
  * otherwise they skip deterministically. `MINIO_INTEGRATION=1` also bypasses
  * the publishability probe (locally too), as the escape hatch for a
  * false-negative probe on a badly overloaded machine.
+ *
+ * Every MinIO suite calls this at module top level (to feed `describe.skipIf`),
+ * which is exactly bun's collection phase for that file — so a positive verdict
+ * also arms the per-file `afterAll` teardown here. That placement is
+ * load-bearing: an `afterAll` registered at collection time fires after the
+ * registering FILE's tests, while one registered later (inside a running hook)
+ * fires at the wrong time entirely (before the file's tests, verified on Bun
+ * 1.3.x).
  */
 export function minioIntegrationEnabled(): boolean {
   if (!dockerAvailable()) return false;
   if (process.env.CI === 'true' && process.env.MINIO_INTEGRATION !== '1') return false;
-  if (process.env.MINIO_INTEGRATION === '1') return true;
-  return dockerCanPublishPorts();
+  const enabled = process.env.MINIO_INTEGRATION === '1' || dockerCanPublishPorts();
+  if (enabled) armTestFileTeardown();
+  return enabled;
+}
+
+/**
+ * Register the container stop with the bun:test lifecycle, scoped to whichever
+ * test file is currently being collected. This is the only teardown that runs
+ * on a normal green `bun test` exit (see the module header); the stop itself
+ * is idempotent, so six suites arming six hooks is harmless.
+ */
+function armTestFileTeardown(): void {
+  try {
+    afterAll(() => sharedMinioHarness.releaseSharedMinio());
+  } catch {
+    // Outside the bun test runner afterAll() throws — and there the process
+    // 'exit' handler DOES fire, so teardown is covered without this hook.
+  }
 }
 
 function sha256hex(data: string): string {
@@ -437,7 +474,9 @@ export class MinioContainerLifecycle {
     if (!this.liveContainerIds.has(containerId)) return true;
 
     // Synchronous stop is intentional: exit and signal handlers cannot await,
-    // and `--rm` removes exactly this tracked container after it stops.
+    // and the bun:test afterAll teardown reuses the same path so every caller
+    // gets identical semantics. `--rm` removes exactly this tracked container
+    // after it stops.
     let result: SyncCommandResult;
     try {
       result = this.dependencies.runSync(['docker', 'stop', '--time', '10', containerId]);
@@ -460,7 +499,13 @@ export class MinioContainerLifecycle {
     return false;
   }
 
-  private cleanup = (): void => {
+  /**
+   * Stop every tracked container. Shared by all three teardown paths — the
+   * per-file bun:test afterAll (via releaseSharedMinio), the process 'exit'
+   * handler (plain `bun` only; `bun test` never emits it), and the signal
+   * handlers — and idempotent, so overlapping registrations are harmless.
+   */
+  cleanup = (): void => {
     for (const containerId of [...this.liveContainerIds]) {
       try {
         this.stop(containerId);
@@ -496,6 +541,8 @@ export class MinioContainerLifecycle {
   private registerHandlers(): void {
     if (this.handlersRegistered) return;
     this.handlersRegistered = true;
+    // 'exit' only ever fires under plain `bun` — `bun test` skips it (#999).
+    // Kept for that path; under `bun test` the per-file afterAll is primary.
     this.dependencies.process.once('exit', this.cleanup);
 
     for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
@@ -520,21 +567,30 @@ export class MinioContainerLifecycle {
  * A live suite run holds its container for a few minutes at most (readiness
  * budget is 120s, the suites themselves finish well inside pre-push), so half
  * an hour of age means the owning process is long gone — while a concurrent
- * agent's freshly started container is never touched.
+ * agent's freshly started container is never touched. Deliberately KEPT at
+ * 30 min after #999: with the afterAll teardown in place, leaks only come
+ * from SIGKILL/OOM, so a tighter window would buy little while raising the
+ * odds of reaping a live foreign-session container on a badly loaded machine.
  */
 export const STALE_CONTAINER_MIN_AGE_MS = 30 * 60 * 1000;
 
 /**
  * Reap MinIO test containers leaked by PREVIOUS test processes.
  *
- * The exit/signal teardown in MinioContainerLifecycle cannot run when the test
+ * The in-process teardown in MinioContainerLifecycle cannot run when the test
  * process dies to SIGKILL — which is exactly what the OOM killer delivers (the
  * observed exit-144 incidents when two agents ran the full suite at once).
  * Each leaked container keeps 512MB reserved and slowly degrades the Docker
  * daemon until the readiness probe itself starts flaking. So the moment a new
- * container is about to launch is also the moment to sweep: any RUNNING
- * container carrying our harness label, from a different session, older than
- * STALE_CONTAINER_MIN_AGE_MS is unambiguously abandoned and force-removed.
+ * container is about to launch is also the moment to sweep: any container
+ * carrying our harness label — in ANY state, hence `ps -a` — from a different
+ * session, older than STALE_CONTAINER_MIN_AGE_MS is unambiguously abandoned
+ * and force-removed. `-a` matters (#999): a `docker run` interrupted between
+ * create and start leaves a Created container that plain `docker ps` never
+ * lists, so such leaks were previously invisible forever (a week-old one was
+ * observed during #948). `docker rm -f` handles every state, and the
+ * session + age guards keep a concurrent agent's fresh container — including
+ * one briefly visible in Created or `--rm` Removing state — untouchable.
  * Entirely best-effort — a reap failure is reported and never blocks the
  * launch.
  */
@@ -542,6 +598,7 @@ export function reapStaleContainers(dependencies: SharedMinioHarnessDependencies
   const list = dependencies.runSync([
     'docker',
     'ps',
+    '-a',
     '--filter',
     'label=com.automagik.omni.test-harness=minio',
     '--format',
@@ -582,9 +639,25 @@ function reapStaleContainersGuarded(dependencies: SharedMinioHarnessDependencies
 
 export function createSharedMinioHarness(dependencies: SharedMinioHarnessDependencies): {
   getSharedMinio(): Promise<SharedMinio>;
+  releaseSharedMinio(): void;
 } {
   const lifecycle = new MinioContainerLifecycle(dependencies);
   let sharedMinioPromise: Promise<SharedMinio> | undefined;
+  let imagePulled = false;
+
+  // Pre-pull explicitly so a cold image cache (fresh CI runner) cannot eat
+  // into the readiness budget or fail the run with an opaque timeout. One
+  // successful pull is remembered for the whole process: the per-file
+  // teardown makes later suite files restart the container, and re-checking
+  // the registry on every restart would add a network round-trip apiece.
+  function ensureImagePulled(): void {
+    if (imagePulled) return;
+    const pull = dependencies.runSync(['docker', 'pull', 'minio/minio']);
+    if (pull.exitCode !== 0) {
+      throw new Error(`docker pull minio/minio failed: ${pull.stderr}`);
+    }
+    imagePulled = true;
+  }
 
   async function startSharedMinio(): Promise<SharedMinio> {
     // Register signal/exit cleanup before any blocking Docker operation and
@@ -595,12 +668,7 @@ export function createSharedMinioHarness(dependencies: SharedMinioHarnessDepende
     // never allowed to fail or delay this launch.
     reapStaleContainersGuarded(dependencies);
 
-    // Pre-pull explicitly so a cold image cache (fresh CI runner) cannot eat
-    // into the readiness budget or fail the run with an opaque timeout.
-    const pull = dependencies.runSync(['docker', 'pull', 'minio/minio']);
-    if (pull.exitCode !== 0) {
-      throw new Error(`docker pull minio/minio failed: ${pull.stderr}`);
-    }
+    ensureImagePulled();
 
     // Random high port avoids collisions with a locally running MinIO.
     const port = 20000 + Math.floor(dependencies.random() * 20000);
@@ -646,6 +714,14 @@ export function createSharedMinioHarness(dependencies: SharedMinioHarnessDepende
       });
       return sharedMinioPromise;
     },
+    // The per-file afterAll teardown: stop whatever is tracked and forget the
+    // cached promise, so a LATER MinIO suite file in the same process lazily
+    // starts a fresh container instead of receiving a handle to a dead one.
+    // Idempotent — with nothing tracked it is a no-op.
+    releaseSharedMinio() {
+      lifecycle.cleanup();
+      sharedMinioPromise = undefined;
+    },
   };
 }
 
@@ -678,8 +754,11 @@ const sharedMinioHarness = createSharedMinioHarness({
 });
 
 /**
- * Lazily start ONE shared `minio/minio` container for this test process and
- * return its connection info. Every importing file gets the same container.
+ * Lazily start ONE shared `minio/minio` container and return its connection
+ * info. Every suite in the current test file gets the same container; the
+ * per-file afterAll armed by `minioIntegrationEnabled` stops it when the file
+ * finishes, and the next MinIO suite file starts a fresh one (files run
+ * sequentially, so there is never more than one alive).
  *
  * A FAILED start is not cached: the next suite retries with a fresh container
  * (and a fresh random port). Without this, one transient startup failure
