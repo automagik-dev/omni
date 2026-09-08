@@ -3109,6 +3109,17 @@ export const automations = pgTable(
      */
     transactionalEmissions: boolean('transactional_emissions').notNull().default(false),
 
+    /**
+     * G4b manifest-compilation provenance (RFC #925, issue #986): set when
+     * this automation was COMPILED from `agents.event_manifest` by the
+     * manifest compiler; NULL = hand-made. Managed rows reject manual
+     * create/update/delete through AutomationService — the agent's manifest
+     * is the source of truth and this table is the compiled plan. ON DELETE
+     * CASCADE covers hard agent deletes at the DB level; the service-level
+     * soft delete reconciles compiled rows away explicitly.
+     */
+    managedByAgentId: uuid('managed_by_agent_id').references((): AnyPgColumn => agents.id, { onDelete: 'cascade' }),
+
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -3122,6 +3133,7 @@ export const automations = pgTable(
     triggerIdx: index('automations_trigger_idx').on(table.triggerEventType),
     enabledIdx: index('automations_enabled_idx').on(table.enabled),
     priorityIdx: index('automations_priority_idx').on(table.priority),
+    managedByAgentIdx: index('automations_managed_by_agent_idx').on(table.managedByAgentId),
   }),
 );
 

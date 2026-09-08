@@ -442,6 +442,13 @@
       "when": 1786200000000,
       "tag": "0062_agent_event_manifest",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1786300000000,
+      "tag": "0063_automation_manifest_provenance",
+      "breakpoints": true
     }
   ]
 }
