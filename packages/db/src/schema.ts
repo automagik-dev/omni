@@ -3094,6 +3094,14 @@ export const automations = pgTable(
     enabled: boolean('enabled').notNull().default(true),
     priority: integer('priority').notNull().default(0), // Higher = runs first
 
+    /**
+     * G5 transactional publication (RFC #925, issue #988): when true, the
+     * run's `emit_event` publishes are buffered and flushed IN ORDER only
+     * when every action succeeded — a failed/cancelled run publishes zero.
+     * Default false = today's immediate mid-sequence publishing.
+     */
+    transactionalEmissions: boolean('transactional_emissions').notNull().default(false),
+
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
