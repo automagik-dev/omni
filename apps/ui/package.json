@@ -1,6 +1,6 @@
 {
   "name": "@omni/ui",
-  "version": "2.260804.3",
+  "version": "2.260908.18",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/"
   },

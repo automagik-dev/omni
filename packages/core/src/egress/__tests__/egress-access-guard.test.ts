@@ -23,12 +23,16 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..', '..', '..');
 
+// Seed rogue files under a real scanned root so the scanner actually walks
+// them. An interrupted previous run (ctrl-C, a cancelled turbo task) can leave
+// the scratch behind — its afterAll never fired — so clear it BEFORE the
+// baseline scan or the leftover rogue file poisons `found` (#967).
+const scratchDir = join(repoRoot, 'packages', 'core', 'src', '__g5_egress_scratch__');
+rmSync(scratchDir, { recursive: true, force: true });
+afterAll(() => rmSync(scratchDir, { recursive: true, force: true }));
+
 const found = scanEgressSites(repoRoot);
 const report = evaluateEgressGuard(found);
-
-// Seed rogue files under a real scanned root so the scanner actually walks them.
-const scratchDir = join(repoRoot, 'packages', 'core', 'src', '__g5_egress_scratch__');
-afterAll(() => rmSync(scratchDir, { recursive: true, force: true }));
 
 describe('egress-access guard', () => {
   test('the scan finds egress sites at all (guards against a broken scanner)', () => {

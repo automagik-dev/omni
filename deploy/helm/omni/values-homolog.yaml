@@ -7,7 +7,8 @@
 # Realm shape (shared with values-prod.yaml — separate clusters, one shape):
 #   - NO bundled datastores: autopg + MinIO are OFF. Postgres is external RDS
 #     (database.existingSecret), media is real AWS S3 (media.s3.existingSecret).
-#   - image.tag "" → v<Chart.appVersion>, the tag image-publish.yml publishes.
+#   - image.tag inherits the chart default: the pinned public candidate from
+#     .well-known/latest.json (values.yaml).
 #   - ingress.host is intentionally EMPTY: the chart fail-fasts unless the
 #     realm FQDN is passed via --set ingress.host=… (see templates/ingress.yaml).
 # HML differs from prod only in sizing (lighter resources / JetStream stores)
@@ -23,9 +24,9 @@
 
 image:
   repository: ghcr.io/automagik-dev/omni-api
-  # "" → v<Chart.appVersion>: the latest PUBLISHED release (image-publish.yml
-  # pushes v<packages/cli version> on merges to main).
-  tag: ""
+  # tag is NOT overridden here: the chart default (values.yaml) is the pinned
+  # public candidate from .well-known/latest.json. Do not set tag "" — that
+  # falls back to v<Chart.appVersion>, which is not guaranteed to exist.
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -38,6 +39,15 @@ autoscaling:
 config:
   LOG_LEVEL: "info"
   NODE_ENV: "production"
+  # Every realm below terminates client TLS at a reverse proxy (nginx-ingress
+  # here; the ALB delta layered after this file swaps the controller but keeps
+  # the same shape), so the socket peer the API sees is the proxy, not the
+  # caller. Without this the auth-exempt webhook ingress buckets every caller
+  # under one shared key. resolveClientIp() reads the RIGHTMOST hop — the one
+  # this realm's own proxy appends — so a client-forged prefix cannot pick its
+  # own bucket. Set ONLY where a trusted proxy really fronts the pod: with the
+  # pod directly reachable, the whole header is caller-controlled.
+  TRUSTED_PROXY_HEADER: "X-Forwarded-For"
 
 ingress:
   enabled: true

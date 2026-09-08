@@ -3,7 +3,7 @@ title: "UI Reuse Strategy"
 created: 2025-01-29
 updated: 2026-02-09
 tags: [migration, ui, react]
-status: current
+status: historical
 ---
 
 # UI Reuse Strategy

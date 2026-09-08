@@ -16,6 +16,7 @@ import {
   type CompiledPattern,
   REDACTION_MARKER,
   compilePatterns,
+  hashPattern,
   outputRedactorMiddleware,
   parsePresetMap,
   redactBodyInPlace,
@@ -286,10 +287,13 @@ describe('outputRedactorMiddleware (HTTP)', () => {
       keyId: 'k-1',
       profile: 'coworker',
       presetKey: 'khal-os-core',
-      pattern: 'khal-secret',
+      patternHash: hashPattern('khal-secret'),
       field: 'text',
       count: 1,
     });
+    // Defence-in-depth: the literal pattern MUST NOT appear in the event payload.
+    expect((calls[0]!.payload as Record<string, unknown>).pattern).toBeUndefined();
+    expect(JSON.stringify(calls[0]!.payload)).not.toContain('khal-secret');
   });
 
   test('admin profile: bypasses redactor (body untouched, no event)', async () => {
@@ -352,8 +356,13 @@ describe('outputRedactorMiddleware (HTTP)', () => {
     });
     const json = (await res.json()) as { received: { text: string } };
     expect(json.received.text).toBe(`${REDACTION_MARKER} and ${REDACTION_MARKER} here`);
-    const patterns = calls.map((c) => c.payload.pattern).sort();
-    expect(patterns).toEqual(['extra-word', 'khal-secret']);
+    const hashes = calls.map((c) => c.payload.patternHash).sort();
+    expect(hashes).toEqual([hashPattern('extra-word'), hashPattern('khal-secret')].sort());
+    // No literal pattern source should appear in emitted payloads.
+    for (const call of calls) {
+      expect(JSON.stringify(call.payload)).not.toContain('khal-secret');
+      expect(JSON.stringify(call.payload)).not.toContain('extra-word');
+    }
   });
 
   test('non-JSON body: middleware passes through unchanged', async () => {

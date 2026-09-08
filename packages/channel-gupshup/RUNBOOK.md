@@ -58,3 +58,43 @@ Handled enum:
 A healthy instance shows almost all traffic under `processed` +
 `dropped_known_non_message`. Any sustained volume under `dropped_unknown_fail_open`
 or `dropped_unrecognized_shape` is an incident.
+
+## Handoff options
+
+Per-instance, stored in `instances.gupshup_handoff_options` (jsonb) and validated
+on connect — a malformed object fails the connect with the offending path in the
+error, it never surfaces as a broken handoff later.
+
+```json
+{
+  "defaultFields": { "queue": "SALES" },
+  "fieldsByPhonePrefix": [
+    { "prefixes": ["5511", "5521"], "fields": { "queue": "SALES-SOUTHEAST" } }
+  ],
+  "customerFields": [
+    { "apiKey": "Queue", "from": "queue" },
+    { "apiKey": "Handled By", "value": "assistant" },
+    { "apiKey": "Full Name", "from": "name" }
+  ]
+}
+```
+
+- `defaultFields` / `fieldsByPhonePrefix` — routing fields merged **under** whatever the
+  emitter sent. Explicit fields always win; an empty or `"undefined"`/`"null"` value from the
+  emitter counts as not sent. This is what keeps a system-initiated handoff (agent dispatch
+  error, silence watchdog) inside a queue: those paths never carry `handoff_fields`.
+- `customerFields` — ordered template for the Custom Integration `customerFields` array.
+  Entries whose source resolves empty are dropped. The `apiKey` set is whatever your Journey
+  reads; the channel does not assume any.
+
+Set it at creation with `omni instances create ... --gupshup-handoff-options '<json>'`, later
+with `omni instances update <id> --gupshup-handoff-options '<json>'` (`'null'` clears it), or
+through `POST /api/v2/instances` / `PATCH /api/v2/instances/:id` (`"gupshupHandoffOptions": null`
+clears it) and the dashboard's instance Config tab. Instances without the column set behave
+exactly as before.
+
+A `PATCH` or Config-tab save only persists the row. The plugin reads the options once, at
+connect, so a running instance keeps the template it connected with until it is restarted:
+`omni instances restart <id>` or `POST /api/v2/instances/:id/restart`. The API rejects a bad
+shape with a 400 before it is stored; anything that still reaches the plugin fails that
+connect/restart with the offending path, and the instance stays down until it is corrected.

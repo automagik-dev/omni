@@ -1,0 +1,26 @@
+-- Agent event subscription manifest (#985, RFC #925 G4a).
+--
+-- Adds `agents.event_manifest` jsonb: the declarative accepts/publishes
+-- contract for an agent, e.g.
+--
+--   { "accepts":   [{ "event": "custom.clickup.task.status_changed",
+--                     "filter": { "list_id": "901300373349" } }],
+--     "publishes": [{ "event": "custom.review.parecer.ready" }] }
+--
+-- The DB is the source of truth (RFC open question 3); git-versioned files
+-- are applied via `omni agents manifest apply`. Shape is validated by
+-- `AgentEventManifestSchema` in @omni/core at every write boundary. This
+-- slice is storage + read surface only — G4b (#986) compiles `accepts` into
+-- automations, G4c (#987) enforces `publishes` at emission time.
+--
+-- A jsonb column on the existing `agents` row (rather than a dedicated
+-- table) keeps RLS/tenancy untouched: `agents` is already a G2 tenant table
+-- with its policies in place, while a new table would need ownership specs,
+-- RLS policies, and tenant triggers of its own.
+--
+-- Hand-written following the 0043/0044/0052 precedent (additive, idempotent).
+--
+-- NOTE: no explicit BEGIN/COMMIT — the boot migrator executes this file on a
+-- pooled postgres-js connection, which rejects raw transaction control.
+
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "event_manifest" jsonb;

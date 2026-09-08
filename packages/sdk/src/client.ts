@@ -94,7 +94,11 @@ export type Channel =
   | 'a2a'
   | 'gupshup'
   | 'twilio-whatsapp'
-  | 'internal';
+  | 'hermes'
+  | 'asc'
+  | 'asc-flow'
+  | 'internal'
+  | 'harness';
 
 // Paginated response helper
 export interface PaginatedResponse<T> {
@@ -303,7 +307,15 @@ export interface CreateInstanceBody {
   twilioStatusCallbackUrl?: string;
   twilioWebhookUrl?: string;
   twilioValidateSignature?: boolean;
+  gupshupHandoffOptions?: components['schemas']['CreateInstanceRequest']['gupshupHandoffOptions'];
 }
+
+/**
+ * Authorship marker accepted by the send routes (#912). 'agent' attributes the
+ * message to the instance's configured agent server-side — the agent id is
+ * never taken from the caller.
+ */
+export type SentBy = 'agent' | 'user';
 
 /**
  * Body for sending a message
@@ -314,6 +326,12 @@ export interface SendMessageBody {
   text: string;
   replyTo?: string;
   threadId?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -660,6 +678,12 @@ export interface CreateAutomationBody {
   debounce?: Record<string, unknown>;
   enabled?: boolean;
   priority?: number;
+  /**
+   * Transactional publication (G5, #988): buffer the run's emit_event
+   * publishes and flush them in order only when every action succeeded; a
+   * failed run publishes zero. Default false = immediate publishing.
+   */
+  transactionalEmissions?: boolean;
 }
 
 /**
@@ -710,14 +734,80 @@ export interface ListWebhookSourcesParams {
 }
 
 /**
- * Body for creating a webhook source
+ * Signature verification contract for a webhook source (issue #928).
+ * Derived from the generated OpenAPI component so it cannot drift from the API.
+ */
+export type WebhookSignatureConfigBody = components['schemas']['WebhookSignatureConfig'];
+
+/**
+ * Semantic event-type extraction contract for a webhook source (#959/#984):
+ * header-source or body-source. Derived from the generated OpenAPI component
+ * so it cannot drift from the API.
+ */
+export type WebhookEventTypeMappingBody = components['schemas']['WebhookEventTypeMapping'];
+
+/**
+ * Body for creating a webhook source.
+ *
+ * Hand-written on purpose: the generated `CreateWebhookSourceRequest` marks
+ * `enabled` as required because the API schema gives it a default, while for
+ * a caller it is optional. Field set and semantics mirror that component.
  */
 export interface CreateWebhookSourceBody {
   name: string;
   description?: string;
   expectedHeaders?: Record<string, boolean>;
+  /**
+   * Required for the source to be reachable on the public ingress route.
+   * Always paired with `signatureSecret`: a config without a stored secret is
+   * rejected, and clearing the config (null) also clears the stored secret.
+   */
+  signatureConfig?: WebhookSignatureConfigBody | null;
+  /**
+   * Shared secret used by signatureConfig (write-only, never returned; 8-512
+   * chars). Cannot be set without a signatureConfig; null clears it.
+   */
+  signatureSecret?: string | null;
+  /**
+   * How the delivery-identity idempotency key is derived (#958). Placeholders:
+   * {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. Defaults
+   * to "{source}:{sha256(body)}" server-side. Dedupes provider REDELIVERY,
+   * not semantic identity.
+   */
+  idempotencyKeyTemplate?: string;
+  /**
+   * Strict schema mode (issue #1000, RFC #925 G1 policy switch): when true, a
+   * delivery resolving to an event type with no enabled registered schema is
+   * refused and dead-lettered with reason `schema_not_registered` instead of
+   * passing through. Defaults to false server-side (opt-in pass-through).
+   */
+  strictSchemas?: boolean;
+  /**
+   * Semantic event-type extraction (#959/#984): a mapped source emits
+   * `custom.{source}.{event}` (event name read from a header or a body
+   * dot-path) instead of the collapsed `custom.webhook.{source}`. Null or
+   * absent keeps the collapsed type; null clears it on update.
+   */
+  eventTypeMapping?: WebhookEventTypeMappingBody | null;
+  /** Defaults to true server-side */
   enabled?: boolean;
+  /**
+   * Connector lifecycle contract (#961): declared cadence — the connector
+   * promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it arms
+   * liveness supervision; null disarms it.
+   */
+  expectedIntervalSeconds?: number | null;
+  /** Declared window semantics; null = undeclared. */
+  windowSemantics?: 'future_only' | 'includes_in_progress' | null;
+  /** Declared upstream-mutation re-emit policy; null = undeclared. */
+  mutationPolicy?: 'same_id' | 'new_id' | null;
 }
+
+/**
+ * Response of the connector heartbeat verb (#961).
+ * Derived from the generated OpenAPI component so it cannot drift from the API.
+ */
+export type WebhookHeartbeatResponse = components['schemas']['WebhookHeartbeatResponse'];
 
 /**
  * Body for triggering a custom event
@@ -775,10 +865,16 @@ export interface SendMediaBody {
   caption?: string;
   voiceNote?: boolean;
   threadId?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
- * Body for sending a reaction
+ * Body for sending a reaction (no `sentBy`: reactions are not attributable sends)
  */
 export interface SendReactionBody {
   instanceId: string;
@@ -803,6 +899,12 @@ export interface SendForwardBody {
   to: string;
   messageId: string;
   fromChatId: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -813,6 +915,12 @@ export interface SendStickerBody {
   to: string;
   url?: string;
   base64?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -827,6 +935,12 @@ export interface SendContactBody {
     email?: string;
     organization?: string;
   };
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -841,6 +955,12 @@ export interface SendTtsBody {
   stability?: number;
   similarityBoost?: number;
   presenceDelay?: number;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -862,6 +982,8 @@ export interface TtsResponse {
   audioSizeKb: number;
   durationMs: number;
   timestamp: number;
+  /** Present when the request set `sentBy: 'agent'`; null when the instance has no configured agent */
+  senderAgentId?: string | null;
 }
 
 /**
@@ -874,6 +996,12 @@ export interface SendLocationBody {
   longitude: number;
   name?: string;
   address?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -887,6 +1015,12 @@ export interface SendPollBody {
   durationHours?: number;
   multiSelect?: boolean;
   replyTo?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -906,6 +1040,12 @@ export interface SendEmbedBody {
   image?: string;
   fields?: Array<{ name: string; value: string; inline?: boolean }>;
   replyTo?: string;
+  /**
+   * Authorship of this send. 'agent' attributes the message to the instance's
+   * configured agent (the response echoes the resolved `senderAgentId`, null
+   * when the instance has no configured agent). Default: unattributed.
+   */
+  sentBy?: SentBy;
 }
 
 /**
@@ -1038,6 +1178,24 @@ export interface AuthCredentialContext {
 }
 
 /**
+ * Deployment-level tenancy posture, as returned by `POST /auth/validate`
+ * (issue #982).
+ *
+ * Present for EVERY authenticated caller on servers that report it, and
+ * absent entirely on older servers — which is why the field is optional on
+ * `AuthValidateResponse`: absence means "this server predates posture
+ * reporting", a state a CLI must render as nothing rather than as defaults.
+ */
+export interface ServerTenancyPosture {
+  /** `OMNI_MULTITENANCY_ENABLED` flag state (exact-string `"true"` semantics). */
+  multitenancyEnabled: boolean;
+  /** Whether the `/api/v2/platform` control plane is mounted on this server. */
+  controlPlaneMounted: boolean;
+  /** Database enforcement posture: forced RLS installed, or legacy. */
+  dbEnforcement: 'legacy' | 'enforced';
+}
+
+/**
  * Auth validation response
  */
 export interface AuthValidateResponse {
@@ -1047,6 +1205,8 @@ export interface AuthValidateResponse {
   scopes: string[];
   /** Present only for a tenant-class credential. */
   credential?: AuthCredentialContext;
+  /** Deployment tenancy posture; absent on servers that predate it. */
+  server?: ServerTenancyPosture;
 }
 
 // ============================================================================
@@ -1113,6 +1273,51 @@ export interface ListApiKeysParams {
 export interface CreateApiKeyResult extends ApiKeyRecord {
   plainTextKey: string;
 }
+
+// ============================================================================
+// PLATFORM CONTROL PLANE TYPES (tenants + memberships)
+// ============================================================================
+//
+// Derived from the generated OpenAPI operations so they can never drift from
+// the API contract. Every read sends the audited reason as the
+// `x-platform-reason` header; every mutation carries `reason` in the body.
+
+/** A platform tenant, as returned by the control plane */
+export type PlatformTenant =
+  operations['listPlatformTenants']['responses'][200]['content']['application/json']['items'][number];
+
+/** A tenant membership, as returned by the control plane */
+export type PlatformTenantMembership =
+  operations['listPlatformMemberships']['responses'][200]['content']['application/json']['items'][number];
+
+/** Tenant role a membership acts under */
+export type PlatformTenantRole = PlatformTenantMembership['role'];
+
+/** Membership status */
+export type PlatformMembershipStatus = PlatformTenantMembership['status'];
+
+/** Body for creating a tenant (includes the audited `reason`) */
+export type CreatePlatformTenantBody = NonNullable<
+  operations['createPlatformTenant']['requestBody']
+>['content']['application/json'];
+
+/** Body for attaching a membership (includes the audited `reason`) */
+export type AttachPlatformMembershipBody = NonNullable<
+  operations['attachPlatformMembership']['requestBody']
+>['content']['application/json'];
+
+/** Body for issuing a tenant ROOT key (includes the audited `reason`) */
+export type IssuePlatformTenantRootKeyBody = NonNullable<
+  operations['issuePlatformTenantRootKey']['requestBody']
+>['content']['application/json'];
+
+/**
+ * An issued tenant ROOT key. `plainTextKey` is present exactly ONCE — in this
+ * response — and can never be retrieved again. Callers must hand it to the
+ * operator immediately and must never persist or log it.
+ */
+export type PlatformTenantRootKey =
+  operations['issuePlatformTenantRootKey']['responses'][201]['content']['application/json']['data'];
 
 // ============================================================================
 // Presence & Read Receipt Types (api-completeness)
@@ -3058,6 +3263,19 @@ export function createOmniClient(config: OmniClientConfig) {
         throwIfError(response, error);
         return data ?? { eventId: '', eventType: body.eventType };
       },
+
+      /**
+       * Record a connector heartbeat: "I ran, zero events found" (#961).
+       * Resets the source's liveness window without creating a journal event.
+       * Keyed on the source NAME (like the receiver), not the id.
+       */
+      async heartbeat(source: string): Promise<WebhookHeartbeatResponse> {
+        const { data, error, response } = await client.POST('/webhooks/{source}/heartbeat', {
+          params: { path: { source } },
+        });
+        throwIfError(response, error);
+        return data;
+      },
     },
 
     // ========================================================================
@@ -3319,6 +3537,221 @@ export function createOmniClient(config: OmniClientConfig) {
           method: 'DELETE',
         });
         if (!resp.ok) throw OmniApiError.from(await resp.json(), resp.status);
+      },
+    },
+
+    // ========================================================================
+    // PLATFORM CONTROL PLANE (tenants + memberships)
+    // ========================================================================
+
+    /**
+     * Platform tenant control plane.
+     *
+     * Mounted by the server only when `OMNI_MULTITENANCY_ENABLED=true`; when
+     * the flag is off the whole surface 404s. Requires a PLATFORM-class
+     * credential — tenant and legacy data-plane keys are denied (401/403).
+     *
+     * Every call carries an audited `reason`: reads send it as the
+     * `x-platform-reason` header, mutations send it in the JSON body. The
+     * server rejects calls without it; these methods make it non-optional so
+     * the requirement is visible at the type level.
+     */
+    platform: {
+      tenants: {
+        /**
+         * List tenants, newest first. The read itself is audited.
+         */
+        async list(reason: string): Promise<{ items: PlatformTenant[] }> {
+          const resp = await apiFetch(`${baseUrl}/api/v2/platform/tenants`, {
+            headers: { 'x-platform-reason': reason },
+          });
+          const json = (await resp.json()) as { items?: PlatformTenant[] };
+          if (!resp.ok) throw OmniApiError.from(json, resp.status);
+          return { items: json?.items ?? [] };
+        },
+
+        /**
+         * Fetch one tenant. The read itself is audited.
+         */
+        async get(id: string, reason: string): Promise<PlatformTenant> {
+          const resp = await apiFetch(`${baseUrl}/api/v2/platform/tenants/${id}`, {
+            headers: { 'x-platform-reason': reason },
+          });
+          const json = (await resp.json()) as { data?: PlatformTenant };
+          if (!resp.ok) throw OmniApiError.from(json, resp.status);
+          if (!json?.data) throw new OmniApiError('Tenant not found', 'NOT_FOUND', undefined, 404);
+          return json.data;
+        },
+
+        /**
+         * Create a tenant with its mandatory credential ceilings.
+         * `body.reason` is the audited justification.
+         */
+        async create(body: CreatePlatformTenantBody): Promise<PlatformTenant> {
+          const resp = await apiFetch(`${baseUrl}/api/v2/platform/tenants`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const json = (await resp.json()) as { data?: PlatformTenant };
+          if (!resp.ok) throw OmniApiError.from(json, resp.status);
+          if (!json?.data) throw new OmniApiError('Failed to create tenant', 'CREATE_FAILED', undefined, resp.status);
+          return json.data;
+        },
+
+        /**
+         * Suspend a tenant and bump its revocation epoch (invalidates the
+         * tenant's credentials on their next auth-bootstrap lookup).
+         */
+        async suspend(id: string, reason: string): Promise<PlatformTenant> {
+          const resp = await apiFetch(`${baseUrl}/api/v2/platform/tenants/${id}/suspend`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason }),
+          });
+          const json = (await resp.json()) as { data?: PlatformTenant };
+          if (!resp.ok) throw OmniApiError.from(json, resp.status);
+          if (!json?.data) throw new OmniApiError('Failed to suspend tenant', 'SUSPEND_FAILED', undefined, resp.status);
+          return json.data;
+        },
+
+        /**
+         * Archive a tenant. Archived is TERMINAL — there is no un-archive and
+         * no hard delete anywhere on this surface.
+         */
+        async archive(id: string, reason: string): Promise<PlatformTenant> {
+          const resp = await apiFetch(`${baseUrl}/api/v2/platform/tenants/${id}/archive`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason }),
+          });
+          const json = (await resp.json()) as { data?: PlatformTenant };
+          if (!resp.ok) throw OmniApiError.from(json, resp.status);
+          if (!json?.data) throw new OmniApiError('Failed to archive tenant', 'ARCHIVE_FAILED', undefined, resp.status);
+          return json.data;
+        },
+
+        memberships: {
+          /**
+           * List the memberships of one tenant. The read itself is audited.
+           */
+          async list(tenantId: string, reason: string): Promise<{ items: PlatformTenantMembership[] }> {
+            const resp = await apiFetch(`${baseUrl}/api/v2/platform/tenants/${tenantId}/memberships`, {
+              headers: { 'x-platform-reason': reason },
+            });
+            const json = (await resp.json()) as { items?: PlatformTenantMembership[] };
+            if (!resp.ok) throw OmniApiError.from(json, resp.status);
+            return { items: json?.items ?? [] };
+          },
+
+          /**
+           * Grant a principal a role in the tenant.
+           * `body.reason` is the audited justification.
+           */
+          async attach(tenantId: string, body: AttachPlatformMembershipBody): Promise<PlatformTenantMembership> {
+            const resp = await apiFetch(`${baseUrl}/api/v2/platform/tenants/${tenantId}/memberships`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            const json = (await resp.json()) as { data?: PlatformTenantMembership };
+            if (!resp.ok) throw OmniApiError.from(json, resp.status);
+            if (!json?.data)
+              throw new OmniApiError('Failed to attach membership', 'ATTACH_FAILED', undefined, resp.status);
+            return json.data;
+          },
+
+          /**
+           * Detach a principal from the tenant by disabling the membership.
+           * Memberships are never hard-deleted.
+           */
+          async disable(tenantId: string, membershipId: string, reason: string): Promise<PlatformTenantMembership> {
+            const resp = await apiFetch(
+              `${baseUrl}/api/v2/platform/tenants/${tenantId}/memberships/${membershipId}/disable`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reason }),
+              },
+            );
+            const json = (await resp.json()) as { data?: PlatformTenantMembership };
+            if (!resp.ok) throw OmniApiError.from(json, resp.status);
+            if (!json?.data)
+              throw new OmniApiError('Failed to disable membership', 'DISABLE_FAILED', undefined, resp.status);
+            return json.data;
+          },
+
+          /**
+           * Activate or disable an existing membership.
+           */
+          async setStatus(
+            tenantId: string,
+            membershipId: string,
+            status: PlatformMembershipStatus,
+            reason: string,
+          ): Promise<PlatformTenantMembership> {
+            const resp = await apiFetch(
+              `${baseUrl}/api/v2/platform/tenants/${tenantId}/memberships/${membershipId}/status`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status, reason }),
+              },
+            );
+            const json = (await resp.json()) as { data?: PlatformTenantMembership };
+            if (!resp.ok) throw OmniApiError.from(json, resp.status);
+            if (!json?.data)
+              throw new OmniApiError('Failed to set membership status', 'STATUS_FAILED', undefined, resp.status);
+            return json.data;
+          },
+
+          /**
+           * Change the role an existing membership acts under.
+           */
+          async setRole(
+            tenantId: string,
+            membershipId: string,
+            role: PlatformTenantRole,
+            reason: string,
+          ): Promise<PlatformTenantMembership> {
+            const resp = await apiFetch(
+              `${baseUrl}/api/v2/platform/tenants/${tenantId}/memberships/${membershipId}/role`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ role, reason }),
+              },
+            );
+            const json = (await resp.json()) as { data?: PlatformTenantMembership };
+            if (!resp.ok) throw OmniApiError.from(json, resp.status);
+            if (!json?.data)
+              throw new OmniApiError('Failed to set membership role', 'ROLE_FAILED', undefined, resp.status);
+            return json.data;
+          },
+        },
+
+        keys: {
+          /**
+           * Issue the initial tenant ROOT key for a membership.
+           * `body.reason` is the audited justification.
+           *
+           * The response carries `plainTextKey` exactly ONCE — the server never
+           * returns it again. Hand it to the operator immediately; never
+           * persist or log it.
+           */
+          async issueRoot(tenantId: string, body: IssuePlatformTenantRootKeyBody): Promise<PlatformTenantRootKey> {
+            const resp = await apiFetch(`${baseUrl}/api/v2/platform/tenants/${tenantId}/keys/root`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            const json = (await resp.json()) as { data?: PlatformTenantRootKey };
+            if (!resp.ok) throw OmniApiError.from(json, resp.status);
+            if (!json?.data)
+              throw new OmniApiError('Failed to issue root key', 'ISSUE_ROOT_FAILED', undefined, resp.status);
+            return json.data;
+          },
+        },
       },
     },
 
@@ -4017,6 +4450,35 @@ export function createOmniClient(config: OmniClientConfig) {
           params: { path: { id } },
         });
         throwIfError(response, error);
+      },
+
+      /**
+       * Get the agent's declarative accepts/publishes event manifest
+       * (RFC #925 G4a, #985). Returns null when the agent never declared one.
+       */
+      async getManifest(id: string): Promise<components['schemas']['AgentEventManifest'] | null> {
+        const { data, error, response } = await client.GET('/agents/{id}/manifest', {
+          params: { path: { id } },
+        });
+        throwIfError(response, error);
+        return data?.data ?? null;
+      },
+
+      /**
+       * Replace the agent's declarative event manifest (full replacement,
+       * apply semantics). Event types must be core types or namespaced
+       * custom.* / system.* tokens.
+       */
+      async updateManifest(
+        id: string,
+        body: components['schemas']['AgentEventManifest'],
+      ): Promise<components['schemas']['AgentEventManifest'] | null> {
+        const { data, error, response } = await client.PUT('/agents/{id}/manifest', {
+          params: { path: { id } },
+          body,
+        });
+        throwIfError(response, error);
+        return data?.data ?? null;
       },
     },
 

@@ -168,6 +168,30 @@ describe('Reaction Acknowledgment System', () => {
       expect(provider.removeAckCalls.length).toBe(1);
     });
 
+    it('release() disarms the timer without removing the reaction (#920)', async () => {
+      const provider = createMockAckProvider();
+      const plugin = createMockPlugin();
+      const config: ReactionAckConfig = {
+        reactionAck: 'on',
+        ackTimeoutMs: 50, // Short timeout for test
+      };
+
+      // Distinct instance: the singleton rate limiter allows 10 acks/min per
+      // instance and the rest of the suite already spends inst-1's budget.
+      const handle = startAck(plugin, provider, 'inst-release', 'chat-1', 'msg-1', 'discord', config);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(provider.ackCalls.length).toBe(1);
+
+      handle.release();
+      // Neither the timeout nor a later remove() may strip the reaction —
+      // ownership has passed to a successor handle on the same tuple.
+      await new Promise((r) => setTimeout(r, 100));
+      handle.remove();
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(provider.removeAckCalls.length).toBe(0);
+    });
+
     it('should default to "off" when reactionAck is not set', async () => {
       const provider = createMockAckProvider();
       const plugin = createMockPlugin();

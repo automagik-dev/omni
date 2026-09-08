@@ -256,6 +256,20 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'header tenant claim.',
   },
   {
+    route: 'POST /api/v2/channels/asc-flow/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      "ASC platform Flow callback — the flow's api_rest node calls Omni. Auth-exempt because the node sends no " +
+      'credential and the platform documents no HMAC/signature mechanism. Authenticity rests on the per-instance ' +
+      'path (an unguessable instance UUID, the Gupshup precedent) plus an optional verify token the handler ' +
+      'compares when one is configured on the instance. The tenant comes from the server-side instance record ' +
+      'addressed by the path, never from a body or header claim. NOTE: unlike the other callbacks here, this ' +
+      'route is a POLL — the response body carries the agent reply (resposta/bolhas/hand_off), not a fixed ack. ' +
+      'So on an instance with no verify token, possession of the instance UUID is enough to send an arbitrary ' +
+      'chatInput and read the agent answer back, each novel input being a billed dispatch. Configure ' +
+      'webhookVerifyToken (and echo it from the flow node) on any instance carrying tenant data.',
+  },
+  {
     route: 'POST /api/v2/channels/twilio-whatsapp/:instanceId/webhook',
     class: 'public-by-contract',
     justification:
@@ -274,6 +288,42 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'server-side on that instance — a mismatch is dropped with a warn log. The tenant comes from the ' +
       'server-side instance record addressed by the path, never from a body or header claim. Responses are ' +
       'fixed 200 acks with no row data.',
+  },
+  {
+    route: 'POST /api/v2/channels/asc/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      "ASC Brazil (ASCWhats GW) gateway callback. Auth-exempt for ASC's servers, which send no credential — " +
+      'the ASC API documents no HMAC/signature mechanism. Authenticity rests on the per-instance path (an ' +
+      'unguessable instance UUID, the Gupshup precedent) plus an optional verify token (the `chave` registered ' +
+      'via ASC setWebhook) that the handler compares when configured on the instance. The tenant comes from the ' +
+      'server-side instance record addressed by the path, never from a body or header claim. Responses are ' +
+      'fixed 200 acks with no row data.',
+  },
+  {
+    route: 'GET /api/v2/channels/asc/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      'ASC webhook verification challenge (Meta-style). Auth-exempt because the gateway sends no credential; ' +
+      'the handler compares hub.verify_token against the instance-held webhook verify token (when configured) ' +
+      'and echoes back the hub.challenge nonce the caller itself supplied. It reveals only whether the token ' +
+      'matched — a configuration fact, not tenant data.',
+  },
+  {
+    route: 'POST /api/v2/webhooks/ingress/:source',
+    class: 'public-by-contract',
+    justification:
+      'Generic webhook ingress (issue #928). Auth-exempt because third-party senders (GitHub/Stripe-class) hold ' +
+      'no omni credential; authenticity is the per-source signature contract (HMAC over the raw body or token ' +
+      'match) verified against the server-held, per-tenant-sealed secret BEFORE anything is published. A source ' +
+      'is reachable here only after an administrative act configured its signature_config — sources are never ' +
+      'auto-created on this surface. All rejections (unknown source, disabled, unconfigured, bad signature) ' +
+      'collapse into a single 401 shape so the endpoint is not a source-name existence oracle, and the surface ' +
+      'is IP-rate-limited. The tenant, when one applies, comes from the server-side webhook_sources row, never ' +
+      'from a request claim. Responses carry only the generated event id and echo of the source name. ' +
+      'ACCEPTED LIMITATION: the signature covers the body only — no timestamp tolerance or delivery-id dedupe — ' +
+      'so a captured signed request can be replayed within the rate limit; consumers of custom.webhook.* events ' +
+      'must treat deliveries as at-least-once, exactly as they already must for provider-side webhook retries.',
   },
   {
     route: 'GET /api/v2/channels/whatsapp-business/webhook',
@@ -365,7 +415,9 @@ const CONTROL_PLANE_ROUTE_JUSTIFICATIONS: readonly RouteOwnershipDeclaration[] =
     justification:
       'Credential introspection. Returns ONLY facts about the caller’s own authenticated context — ' +
       'credential class, tenant id/slug, role, scopes, constraints, expiry — and never a secret, hash, or key ' +
-      'material, and never another principal’s context. Reads no tenant business data.',
+      'material, and never another principal’s context. Reads no tenant business data. Also carries the ' +
+      'deployment-level tenancy posture (three flags, nothing tenant-enumerating; issue #982), which is why ' +
+      'this stays the ONE authenticated surface that says which world the server is in.',
   },
 ];
 
@@ -394,6 +446,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'DELETE /api/v2/agent-tasks/:id',
   'DELETE /api/v2/agents/:id',
   'DELETE /api/v2/automations/:id',
+  'DELETE /api/v2/channels/harness/:instanceId/transcript',
   'DELETE /api/v2/chats/:id',
   'DELETE /api/v2/chats/:id/label',
   'DELETE /api/v2/chats/:id/participants/:platformUserId',
@@ -401,6 +454,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'DELETE /api/v2/conversations/:id',
   'DELETE /api/v2/event-ops/replay/:id',
   'DELETE /api/v2/events/:eventId/payloads',
+  'DELETE /api/v2/events/consumers/:name',
   'DELETE /api/v2/follow-up/agents/:id',
   'DELETE /api/v2/follow-up/chats/:id',
   'DELETE /api/v2/follow-up/instances/:id',
@@ -434,6 +488,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/agents',
   'GET /api/v2/agents/:id',
   'GET /api/v2/agents/:id/identities',
+  'GET /api/v2/agents/:id/manifest',
   'GET /api/v2/agents/:id/tasks',
   'GET /api/v2/automation-logs',
   'GET /api/v2/automation-metrics',
@@ -445,6 +500,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/batch-jobs',
   'GET /api/v2/batch-jobs/:id',
   'GET /api/v2/batch-jobs/:id/status',
+  'GET /api/v2/channels/harness/:instanceId/transcript',
   'GET /api/v2/chats',
   'GET /api/v2/chats/:id',
   'GET /api/v2/chats/:id/messages',
@@ -465,8 +521,13 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/events/:eventId/payloads',
   'GET /api/v2/events/:eventId/payloads/:stage',
   'GET /api/v2/events/:id',
+  'GET /api/v2/events/:id/trace',
   'GET /api/v2/events/analytics',
   'GET /api/v2/events/by-sender/:senderId',
+  'GET /api/v2/events/consumers',
+  'GET /api/v2/events/consumers/:name',
+  'GET /api/v2/events/schemas',
+  'GET /api/v2/events/schemas/:eventType',
   'GET /api/v2/events/timeline/:personId',
   'GET /api/v2/follow-up/agents/:id',
   'GET /api/v2/follow-up/chats/:id',
@@ -580,6 +641,8 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/batch-jobs',
   'POST /api/v2/batch-jobs/:id/cancel',
   'POST /api/v2/batch-jobs/estimate',
+  'POST /api/v2/channels/harness/:instanceId/say',
+  'POST /api/v2/channels/harness/:instanceId/tap',
   'POST /api/v2/chats',
   'POST /api/v2/chats/:id/archive',
   'POST /api/v2/chats/:id/disappearing',
@@ -604,6 +667,10 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/dead-letters/:id/retry',
   'POST /api/v2/event-ops/replay',
   'POST /api/v2/event-ops/scheduled',
+  'POST /api/v2/events/consumers',
+  'POST /api/v2/events/consumers/:name/ack',
+  'POST /api/v2/events/consumers/:name/pull',
+  'POST /api/v2/events/schemas',
   'POST /api/v2/events/search',
   'POST /api/v2/events/trigger',
   'POST /api/v2/instances',
@@ -688,7 +755,9 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/voice/leave',
   'POST /api/v2/webhook-sources',
   'POST /api/v2/webhooks/:source',
+  'POST /api/v2/webhooks/:source/heartbeat',
   'PUT /api/v2/agent-state/:agentId/:chatId',
+  'PUT /api/v2/agents/:id/manifest',
   'PUT /api/v2/follow-up/agents/:id',
   'PUT /api/v2/follow-up/chats/:id',
   'PUT /api/v2/follow-up/instances/:id',
@@ -712,6 +781,7 @@ const PLATFORM_ADMIN_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/platform/tenants/:id/memberships',
   'POST /api/v2/platform/tenants',
   'POST /api/v2/platform/tenants/:id/archive',
+  'POST /api/v2/platform/tenants/:id/keys/root',
   'POST /api/v2/platform/tenants/:id/memberships',
   'POST /api/v2/platform/tenants/:id/suspend',
   'POST /api/v2/platform/tenants/:tenantId/memberships/:id/disable',

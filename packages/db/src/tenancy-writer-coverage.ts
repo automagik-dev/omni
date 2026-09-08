@@ -139,8 +139,23 @@ export const REGISTERED_WRITERS: readonly RegisteredWriter[] = [
   { file: 'packages/api/scripts/migrate-events-to-messages.ts', table: 'chat_participants', coverage: 'db-derived' },
   { file: 'packages/api/scripts/migrate-events-to-messages.ts', table: 'chats', coverage: 'db-derived' },
   { file: 'packages/api/scripts/migrate-events-to-messages.ts', table: 'messages', coverage: 'db-derived' },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'chat_participants',
+    coverage: 'db-derived',
+  },
+  { file: 'packages/api/scripts/reconcile-identity-fragmentation.ts', table: 'messages', coverage: 'db-derived' },
+  { file: 'packages/api/scripts/reconcile-identity-fragmentation.ts', table: 'omni_events', coverage: 'db-derived' },
+  { file: 'packages/api/scripts/reconcile-identity-fragmentation.ts', table: 'persons', coverage: 'db-unowned' },
+  {
+    file: 'packages/api/scripts/reconcile-identity-fragmentation.ts',
+    table: 'platform_identities',
+    coverage: 'db-derived',
+  },
   { file: 'packages/api/src/lib/idempotency.ts', table: 'processed_events', coverage: 'db-unowned' },
   { file: 'packages/api/src/plugins/agent-dispatcher.ts', table: 'agent_sessions', coverage: 'db-derived' },
+  // #958: emit_event idempotency claim — the journal row IS the claim.
+  { file: 'packages/api/src/plugins/automation-actions.ts', table: 'omni_events', coverage: 'db-derived' },
   { file: 'packages/api/src/plugins/agent-dispatcher.ts', table: 'handoff_logs', coverage: 'db-derived' },
   { file: 'packages/api/src/plugins/event-listeners.ts', table: 'chat_id_mappings', coverage: 'db-derived' },
   { file: 'packages/api/src/plugins/event-listeners.ts', table: 'chats', coverage: 'db-derived' },
@@ -179,6 +194,8 @@ export const REGISTERED_WRITERS: readonly RegisteredWriter[] = [
   { file: 'packages/api/src/services/routes.ts', table: 'agent_routes', coverage: 'db-derived' },
   { file: 'packages/api/src/services/sync-jobs.ts', table: 'sync_jobs', coverage: 'db-derived' },
   { file: 'packages/api/src/services/turns.ts', table: 'turns', coverage: 'db-derived' },
+  // #958: webhook ingress idempotency claim — the journal row IS the claim.
+  { file: 'packages/api/src/services/webhooks.ts', table: 'omni_events', coverage: 'db-derived' },
   { file: 'packages/api/src/services/webhooks.ts', table: 'webhook_sources', coverage: 'db-unowned' },
   { file: 'packages/api/src/tenancy/tenant-repository.ts', table: 'instances', coverage: 'trusted-root' },
   { file: 'packages/db/scripts/backfill-chat-names.ts', table: 'chats', coverage: 'db-derived' },

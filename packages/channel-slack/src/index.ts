@@ -38,6 +38,7 @@ export { setupMessageHandlers, extractMessageMeta } from './handlers/messages';
 export { setupReactionHandlers } from './handlers/reactions';
 export { setupInteractionHandlers } from './handlers/interactions';
 export { setupCommandHandlers } from './handlers/commands';
+export { setupAgentSessionHandlers } from './handlers/agent-sessions';
 
 // Senders
 export { sendTextMessage, editSlackMessage, deleteSlackMessage, readMessages } from './senders/text';

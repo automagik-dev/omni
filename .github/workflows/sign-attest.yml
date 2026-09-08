@@ -1,18 +1,27 @@
 name: Sign + Attest Tarballs
 
 # Group 2 of v3-prerelease-trust-loop G2 (mirror of genie pattern) — signs
-# every tarball produced by build-tarballs.yml with cosign keyless OIDC,
-# registers a GitHub-native build-provenance attestation, and emits a SLSA
-# Level 3 provenance via the upstream slsa-github-generator reusable workflow.
-# Each tarball is then self-verified by cosign + slsa-verifier +
-# gh-attestation-verify, and a byte-flip tamper-detection self-test asserts
-# all three verifiers REJECT a mutated copy. Per-platform
-# `omni-${VERSION}-<platform>-signed` artifacts are uploaded for Group 3
-# (release-publish) to consume.
+# every tarball produced by build-tarballs.yml with cosign keyless OIDC and
+# registers a GitHub-native build-provenance attestation for it
+# (actions/attest-build-provenance, the same action image-build.yml uses for
+# the OCI image). The attestation's Sigstore bundle is shipped next to the
+# tarball as `<tarball>.provenance.json` so consumers can verify provenance
+# offline with `gh attestation verify --bundle`. Each tarball is then
+# self-verified by cosign + the offline bundle + the online Attestations API,
+# and a byte-flip tamper-detection self-test asserts all three verifiers
+# REJECT a mutated copy. Per-platform `omni-${VERSION}-<platform>-signed`
+# artifacts are uploaded for Group 3 (release-publish) to consume.
 #
-# Trigger: orchestrated from release.yml via workflow_call on tag push
-# (refs/tags/v*); also dispatchable manually via workflow_dispatch with the
-# upstream build-tarballs run-id.
+# Provenance is produced in-repo on purpose: the repository enforces
+# "Require actions to be pinned to a full-length commit SHA", and a remote
+# reusable workflow carries its own nested action refs that this policy
+# rejects. Only local `./.github/workflows/*.yml` calls and SHA-pinned actions
+# are allowed here (scripts/release/stable-release-order.test.sh).
+#
+# Trigger: orchestrated from release.yml via workflow_call (release.yml
+# passes `orchestrated: true`); also dispatchable manually via
+# workflow_dispatch with the upstream build-tarballs run-id, in which case the
+# manual-recovery guards below authorize the tag and the upstream run first.
 #
 # Signing model is cosign KEYLESS — the OIDC identity is bound to this
 # workflow file path + ref (Fulcio SAN URI). There is no long-lived key.
@@ -20,17 +29,18 @@ name: Sign + Attest Tarballs
 #
 # IMPORTANT — pgserve trust-list anchors on this filename literally:
 #   src/cosign/trust-list.js has:
-#     identityRegexp: '^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@refs/tags/v.*$'
+#     identityRegexp: '^https://github.com/automagik-dev/omni/.github/workflows/sign-attest.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
 # Renaming or relocating this file breaks `pgserve verify --slug omni`.
 #
 # Outputs (per platform, uploaded as `omni-${VERSION}-<platform>-signed`):
-#   omni-${VERSION}-<platform>.tar.gz                 (lifted from build-tarballs)
-#   omni-${VERSION}-<platform>.tar.gz.bundle          (cosign keyless sigstore bundle)
-#   omni-${VERSION}-<platform>.tar.gz.intoto.jsonl    (SLSA L3 DSSE envelope)
+#   omni-${VERSION}-<platform>.tar.gz                  (lifted from build-tarballs)
+#   omni-${VERSION}-<platform>.tar.gz.bundle           (cosign keyless sigstore bundle)
+#   omni-${VERSION}-<platform>.tar.gz.provenance.json  (GitHub-native build-provenance
+#                                                       attestation, Sigstore bundle JSON)
 #
-# The GitHub-native attestation produced by actions/attest-build-provenance
-# is NOT a separate file — it is registered in the GitHub Attestations API
-# and looked up by digest via `gh attestation verify`.
+# The same attestation is also registered in the GitHub Attestations API and
+# can be looked up online by digest via `gh attestation verify` without the
+# bundle file.
 
 on:
   workflow_call:
@@ -39,6 +49,15 @@ on:
         description: 'Version (derivable from artifact filenames if omitted)'
         required: false
         type: string
+      orchestrated:
+        # release.yml is itself workflow_dispatch-triggered (version.yml
+        # dispatches it), so github.event_name alone cannot distinguish the
+        # orchestrated call from an operator recovery dispatch. Callers set
+        # this to true so the manual-recovery guards below stay off.
+        description: 'Set only by release.yml reusable orchestration'
+        required: false
+        type: boolean
+        default: false
     outputs:
       version:
         description: 'Resolved version (parsed from upstream tarball filenames)'
@@ -62,53 +81,93 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   # ---------------------------------------------------------------------------
-  # prepare — resolve version + upstream run-id, download every tarball,
-  # build the multi-subject base64 input the SLSA generator consumes.
+  # prepare — resolve version + upstream run-id, download every tarball, and
+  # record the full digest set once so the per-platform sign jobs share one
+  # resolved version.
   # ---------------------------------------------------------------------------
   prepare:
-    name: Prepare hashes for SLSA
+    name: Prepare tarballs
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       version: ${{ steps.hash.outputs.version }}
       run_id:  ${{ steps.runid.outputs.run_id }}
-      hashes:  ${{ steps.hash.outputs.hashes }}
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Authorize manual recovery release tag
+        if: github.event_name == 'workflow_dispatch' && !inputs.orchestrated
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          scripts/release/verify-sign-attest-entry.sh \
+            --remote origin \
+            --version "${INPUT_VERSION}" \
+            --source-ref "${GITHUB_REF}" \
+            --source-sha "${GITHUB_SHA}"
+
+      - name: Authorize manual recovery source run
+        if: github.event_name == 'workflow_dispatch' && !inputs.orchestrated
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          [[ "${RUN_ID}" =~ ^[0-9]+$ ]]
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" > "${RUNNER_TEMP}/upstream-run.json"
+          scripts/release/verify-orchestrator-run.py \
+            --run-json "${RUNNER_TEMP}/upstream-run.json" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --source-sha "${GITHUB_SHA}" \
+            --expected-workflow .github/workflows/build-tarballs.yml \
+            --required-status completed \
+            --allowed-event workflow_dispatch
+
       - name: Resolve upstream run-id
         id: runid
         shell: bash
+        env:
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          if [[ -n "${{ inputs.run_id }}" ]]; then
-            RUN_ID="${{ inputs.run_id }}"
+          if [[ -n "${INPUT_RUN_ID}" ]]; then
+            RUN_ID="${INPUT_RUN_ID}"
           else
-            RUN_ID="${{ github.run_id }}"
+            RUN_ID="${CURRENT_RUN_ID}"
           fi
           echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
           echo "Upstream run-id: ${RUN_ID}"
 
       - name: Download all tarball artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: omni-*-tarball
           merge-multiple: true
           path: dist
           run-id: ${{ steps.runid.outputs.run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
 
-      - name: Resolve version + compute base64 subjects
+      - name: Resolve version + record tarball digests
         id: hash
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          UPSTREAM_RUN_ID: ${{ steps.runid.outputs.run_id }}
         run: |
           set -euo pipefail
           cd dist
           shopt -s nullglob
           TARBALLS=( omni-*.tar.gz )
           if [[ ${#TARBALLS[@]} -eq 0 ]]; then
-            echo "::error::no omni-*.tar.gz tarballs downloaded from upstream run-id ${{ steps.runid.outputs.run_id }}"
+            echo "::error::no omni-*.tar.gz tarballs downloaded from upstream run-id ${UPSTREAM_RUN_ID}"
             ls -la
             exit 1
           fi
@@ -118,51 +177,37 @@ jobs:
             echo "::error::could not parse VERSION from filename '${FIRST}'"
             exit 1
           fi
-          if [[ -n "${{ inputs.version }}" && "${{ inputs.version }}" != "${VERSION}" ]]; then
-            echo "::error::workflow_dispatch input version='${{ inputs.version }}' does not match upstream artifact version='${VERSION}'"
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::upstream artifact version is invalid"
+            exit 1
+          }
+          if [[ -n "${INPUT_VERSION}" && "${INPUT_VERSION}" != "${VERSION}" ]]; then
+            echo "::error::workflow_dispatch input version='${INPUT_VERSION}' does not match upstream artifact version='${VERSION}'"
             exit 1
           fi
           echo "Resolved version: ${VERSION}"
           echo "Tarballs to sign: ${#TARBALLS[@]}"
           printf '  %s\n' "${TARBALLS[@]}"
-          HASHES=$(sha256sum "${TARBALLS[@]}" | base64 -w0)
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "hashes=${HASHES}" >> "$GITHUB_OUTPUT"
-          echo "Computed multi-subject digest set:"
+          echo "Upstream tarball digest set:"
           sha256sum "${TARBALLS[@]}"
 
   # ---------------------------------------------------------------------------
-  # provenance — SLSA L3 generator (reusable workflow). Produces ONE
-  # .intoto.jsonl covering every tarball subject. The per-platform sign job
-  # downloads it and copies it to <tarball>.intoto.jsonl.
-  # ---------------------------------------------------------------------------
-  provenance:
-    name: SLSA Provenance (Level 3)
-    needs: [prepare]
-    permissions:
-      id-token: write    # OIDC for SLSA provenance signing
-      contents: write    # Required by nested `upload-assets` job static check
-      actions: read      # read upstream workflow run metadata
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
-    with:
-      base64-subjects: ${{ needs.prepare.outputs.hashes }}
-      provenance-name: omni-${{ needs.prepare.outputs.version }}.intoto.jsonl
-      upload-assets: false
-
-  # ---------------------------------------------------------------------------
   # sign — per-platform: cosign keyless sign-blob + GitHub-native
-  # attest-build-provenance + self-verify (3 verifiers) + tamper-detection
-  # self-test + per-platform signed artifact upload.
+  # attest-build-provenance (bundle staged as <tarball>.provenance.json) +
+  # self-verify (3 verifiers) + tamper-detection self-test + per-platform
+  # signed artifact upload.
   # ---------------------------------------------------------------------------
   sign:
     name: Sign ${{ matrix.platform }}
-    needs: [prepare, provenance]
+    needs: [prepare]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
+      actions: read        # cross-run tarball artifact download
       id-token: write       # OIDC for cosign keyless + attest-build-provenance
-      attestations: write   # actions/attest-build-provenance@v1 registration
+      attestations: write   # actions/attest-build-provenance registration
     strategy:
       fail-fast: false
       matrix:
@@ -173,45 +218,22 @@ jobs:
           - darwin-arm64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Download tarball artifact (${{ matrix.platform }})
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}-tarball
           path: dist
           run-id: ${{ needs.prepare.outputs.run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download SLSA provenance artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.provenance.outputs.provenance-name }}
-          path: dist
-
-      - name: Stage provenance per-platform
-        shell: bash
-        env:
-          VERSION:  ${{ needs.prepare.outputs.version }}
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          set -euo pipefail
-          SRC="dist/omni-${VERSION}.intoto.jsonl"
-          DEST="dist/omni-${VERSION}-${PLATFORM}.tar.gz.intoto.jsonl"
-          if [[ ! -s "${SRC}" ]]; then
-            echo "::error::missing or empty SLSA provenance ${SRC}"
-            exit 1
-          fi
-          cp "${SRC}" "${DEST}"
-          ls -la "${DEST}"
+          github-token: ${{ github.token }}
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         with:
           cosign-release: 'v2.4.1'
-
-      - name: Install slsa-verifier
-        uses: slsa-framework/slsa-verifier/actions/installer@v2.7.1
 
       - name: cosign sign-blob (keyless OIDC, sigstore bundle)
         shell: bash
@@ -239,13 +261,64 @@ jobs:
 
       - name: GitHub-native build-provenance attestation
         id: attest
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: dist/omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.tar.gz
+
+      # The action writes the attestation's Sigstore bundle (one JSON object
+      # per subject) to a temp file and exposes it as `bundle-path`. Ship it
+      # next to the tarball so provenance verifies offline from release assets.
+      - name: Stage provenance bundle as <tarball>.provenance.json
+        shell: bash
+        env:
+          ATTEST_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          VERSION:  ${{ needs.prepare.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
+          PROVENANCE="${TARBALL}.provenance.json"
+          if [[ -z "${ATTEST_BUNDLE_PATH}" || ! -s "${ATTEST_BUNDLE_PATH}" ]]; then
+            echo "::error::attest-build-provenance produced no bundle file (bundle-path='${ATTEST_BUNDLE_PATH}')"
+            exit 1
+          fi
+          cp "${ATTEST_BUNDLE_PATH}" "${PROVENANCE}"
+          python3 - "${PROVENANCE}" "${TARBALL}" <<'PY'
+          import base64
+          import hashlib
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              lines = [line for line in handle.read().splitlines() if line.strip()]
+          if len(lines) != 1:
+              raise SystemExit(f"provenance bundle must hold exactly one Sigstore bundle, found {len(lines)} lines")
+          bundle = json.loads(lines[0])
+          if not isinstance(bundle, dict):
+              raise SystemExit("provenance bundle is not a JSON object")
+          if not isinstance(bundle.get("verificationMaterial"), dict):
+              raise SystemExit("provenance bundle has no verificationMaterial")
+          envelope = bundle.get("dsseEnvelope")
+          if not isinstance(envelope, dict):
+              raise SystemExit("provenance bundle has no dsseEnvelope")
+          if envelope.get("payloadType") != "application/vnd.in-toto+json":
+              raise SystemExit(f"unexpected DSSE payloadType {envelope.get('payloadType')!r}")
+          statement = json.loads(base64.b64decode(envelope["payload"]))
+          with open(sys.argv[2], "rb") as handle:
+              digest = hashlib.sha256(handle.read()).hexdigest()
+          subjects = statement.get("subject")
+          if not isinstance(subjects, list) or len(subjects) != 1:
+              raise SystemExit("provenance statement must name exactly one subject")
+          if subjects[0].get("digest", {}).get("sha256") != digest:
+              raise SystemExit("provenance statement subject digest does not match the tarball")
+          print(f"provenance bundle bound to sha256:{digest}")
+          PY
+          ls -la "${PROVENANCE}"
 
       - name: Verify cosign bundle (self-check)
         shell: bash
         env:
+          REPOSITORY: ${{ github.repository }}
           VERSION:  ${{ needs.prepare.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
         run: |
@@ -253,23 +326,11 @@ jobs:
           TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
           cosign verify-blob \
             --bundle "${TARBALL}.bundle" \
-            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/sign-attest.yml@" \
+            --certificate-identity "https://github.com/${REPOSITORY}/.github/workflows/sign-attest.yml@refs/tags/v${VERSION}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${TARBALL}"
 
-      - name: Verify SLSA provenance (self-check)
-        shell: bash
-        env:
-          VERSION:  ${{ needs.prepare.outputs.version }}
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          set -euo pipefail
-          TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
-          slsa-verifier verify-artifact "${TARBALL}" \
-            --provenance-path "${TARBALL}.intoto.jsonl" \
-            --source-uri "github.com/${{ github.repository }}"
-
-      - name: Verify GitHub-native attestation (self-check)
+      - name: Verify provenance bundle offline (self-check)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -278,25 +339,42 @@ jobs:
         run: |
           set -euo pipefail
           TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
-          OWNER="${{ github.repository_owner }}"
+          gh attestation verify "${TARBALL}" \
+            --bundle "${TARBALL}.provenance.json" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --source-digest "${GITHUB_SHA}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/sign-attest.yml"
+
+      - name: Verify GitHub-native attestation (self-check)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          VERSION:  ${{ needs.prepare.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
           gh attestation verify "${TARBALL}" --owner "${OWNER}"
 
       - name: Tamper-detection self-test (all 3 verifiers must REJECT)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORY: ${{ github.repository }}
           VERSION:  ${{ needs.prepare.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
           TARBALL="dist/omni-${VERSION}-${PLATFORM}.tar.gz"
           MUTATED="dist/tampered-omni-${VERSION}-${PLATFORM}.tar.gz"
-          OWNER="${{ github.repository_owner }}"
           cp "${TARBALL}" "${MUTATED}"
 
           # Flip the last byte. Any single-byte mutation invalidates the
-          # SHA-256 subject that cosign signed AND the SLSA subject hash
-          # AND the GitHub Attestations API digest lookup.
+          # SHA-256 subject that cosign signed AND the attested provenance
+          # subject digest in the shipped bundle AND the GitHub Attestations
+          # API digest lookup.
           SIZE=$(stat -c '%s' "${MUTATED}")
           OFFSET=$((SIZE - 1))
           ORIG_BYTE=$(xxd -p -s "${OFFSET}" -l 1 "${MUTATED}")
@@ -310,7 +388,7 @@ jobs:
           echo "-> Expecting cosign verify-blob to REJECT mutated tarball"
           if cosign verify-blob \
               --bundle "${TARBALL}.bundle" \
-              --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/sign-attest.yml@" \
+              --certificate-identity "https://github.com/${REPOSITORY}/.github/workflows/sign-attest.yml@refs/tags/v${VERSION}" \
               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
               "${MUTATED}" > /tmp/cosign-tamper.log 2>&1; then
             echo "::error::cosign verify-blob accepted a mutated tarball — signing contract broken"
@@ -319,15 +397,17 @@ jobs:
           fi
           echo "OK: cosign rejected mutated tarball"
 
-          echo "-> Expecting slsa-verifier verify-artifact to REJECT mutated tarball"
-          if slsa-verifier verify-artifact "${MUTATED}" \
-              --provenance-path "${TARBALL}.intoto.jsonl" \
-              --source-uri "github.com/${{ github.repository }}" > /tmp/slsa-tamper.log 2>&1; then
-            echo "::error::slsa-verifier accepted a mutated tarball — provenance contract broken"
-            cat /tmp/slsa-tamper.log >&2 || true
+          echo "-> Expecting offline provenance bundle verification to REJECT mutated tarball"
+          if gh attestation verify "${MUTATED}" \
+              --bundle "${TARBALL}.provenance.json" \
+              --repo "${REPOSITORY}" \
+              --source-digest "${GITHUB_SHA}" \
+              --signer-workflow "${REPOSITORY}/.github/workflows/sign-attest.yml" > /tmp/bundle-tamper.log 2>&1; then
+            echo "::error::offline provenance bundle accepted a mutated tarball — provenance contract broken"
+            cat /tmp/bundle-tamper.log >&2 || true
             exit 1
           fi
-          echo "OK: slsa-verifier rejected mutated tarball"
+          echo "OK: offline provenance bundle rejected mutated tarball"
 
           echo "-> Expecting gh attestation verify to REJECT mutated tarball"
           if gh attestation verify "${MUTATED}" --owner "${OWNER}" > /tmp/gh-tamper.log 2>&1; then
@@ -340,12 +420,12 @@ jobs:
           rm -f "${MUTATED}"
 
       - name: Upload signed artifact (${{ matrix.platform }})
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}-signed
           path: |
             dist/omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.tar.gz
             dist/omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.tar.gz.bundle
-            dist/omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.tar.gz.intoto.jsonl
+            dist/omni-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.tar.gz.provenance.json
           retention-days: 30
           if-no-files-found: error

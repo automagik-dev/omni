@@ -2,7 +2,14 @@
   "$schema": "https://unpkg.com/knip@5.85.0/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["scripts/test-messaging.ts", "scripts/kill-stale-test-daemons.ts", "scripts/pg-gate.ts"],
+      "entry": [
+        "scripts/test-messaging.ts",
+        "scripts/kill-stale-test-daemons.ts",
+        "scripts/pg-gate.ts",
+        "scripts/pg-gate-warm.ts",
+        "scripts/bootstrap-platform-credential.ts",
+        "scripts/release/generate-release-notes.test.ts"
+      ],
       "project": ["scripts/**/*.ts"],
       "ignore": [
         "scripts/backfill-*.ts",

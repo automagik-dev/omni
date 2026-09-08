@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "custom.github.pull_request",
+  "description": "GitHub pull_request webhook delivery (X-GitHub-Event: pull_request). Minimal-but-real contract: the fields consumers rely on are required; everything else GitHub sends passes through (additionalProperties: true). Evolution rule: revisions must be additive-optional (issue #959).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["action", "number", "repository", "sender"],
+  "properties": {
+    "action": {
+      "type": "string",
+      "description": "What happened: opened, closed, synchronize, reopened, ..."
+    },
+    "number": {
+      "type": "integer",
+      "description": "Pull request number"
+    },
+    "pull_request": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "title": { "type": "string" },
+        "state": { "type": "string" },
+        "merged": { "type": "boolean" },
+        "html_url": { "type": "string" }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["full_name"],
+      "properties": {
+        "full_name": {
+          "type": "string",
+          "description": "owner/repo, e.g. automagik-dev/omni"
+        }
+      }
+    },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["login"],
+      "properties": {
+        "login": {
+          "type": "string",
+          "description": "GitHub username that triggered the delivery"
+        }
+      }
+    }
+  }
+}

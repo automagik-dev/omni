@@ -14,7 +14,7 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "lib": ["ES2022"],
-    "types": ["bun-types", "node"]
+    "types": ["bun", "node"]
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/bundled-server-entry.ts"]

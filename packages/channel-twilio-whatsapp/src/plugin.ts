@@ -253,6 +253,7 @@ export class TwilioWhatsAppPlugin extends BaseChannelPlugin {
         },
         replyToId: message.replyTo,
         senderAgentId: message.metadata?.senderAgentId as string | undefined,
+        systemNotice: message.metadata?.systemNotice as boolean | undefined,
       });
 
       return { success: true, messageId, timestamp: Date.now() };

@@ -35,6 +35,7 @@ import { instances } from '@omni/db';
 import {
   type DispatcherCleanup,
   __test__,
+  cancelActiveAgentRun,
   isFirstPartyInstanceSender,
   resolveQuotedMessage,
   setupAgentDispatcher,
@@ -382,7 +383,7 @@ describe('agent-dispatcher', () => {
   // setupAgentDispatcher — subscribes to correct NATS subjects
   // ======================================================================
   describe('setupAgentDispatcher', () => {
-    it('subscribes to message.received, reaction.received, reaction.removed, presence.typing, and media.processed', async () => {
+    it('subscribes to message.received, reaction.received, reaction.removed, presence.typing, media.processed, and agent.run.cancel_requested', async () => {
       const eventBus = createMockEventBus();
       const services = createMockServices();
 
@@ -392,7 +393,7 @@ describe('agent-dispatcher', () => {
         mockDb,
       );
 
-      expect(eventBus.subscribe).toHaveBeenCalledTimes(5);
+      expect(eventBus.subscribe).toHaveBeenCalledTimes(6);
 
       // Verify event types subscribed
       const subscribedTypes = eventBus.subscribe.mock.calls.map((call: unknown[]) => call[0]);
@@ -401,8 +402,198 @@ describe('agent-dispatcher', () => {
       expect(subscribedTypes).toContain('reaction.removed');
       expect(subscribedTypes).toContain('presence.typing');
       expect(subscribedTypes).toContain('media.processed');
+      expect(subscribedTypes).toContain('agent.run.cancel_requested');
 
       cleanup();
+    });
+
+    it('cancelActiveAgentRun resolves false when nothing is in flight (#914)', async () => {
+      await expect(cancelActiveAgentRun('inst-none', 'chat-none', 'user_stop')).resolves.toBe(false);
+    });
+
+    it('cancelActiveAgentRun aborts only the targeted thread (#914)', async () => {
+      const { activeRunAborts, runAbortKey } = __test__;
+      const runA = { controller: new AbortController(), startedAt: Date.now() - 5_000 };
+      const runB = { controller: new AbortController(), startedAt: Date.now() - 5_000 };
+      activeRunAborts.set(runAbortKey('inst-1', 'C1', 'thread-A'), runA);
+      activeRunAborts.set(runAbortKey('inst-1', 'C1', 'thread-B'), runB);
+
+      try {
+        await expect(cancelActiveAgentRun('inst-1', 'C1', 'user_stop', { threadId: 'thread-A' })).resolves.toBe(true);
+        expect(runA.controller.signal.aborted).toBe(true);
+        expect(runB.controller.signal.aborted).toBe(false);
+      } finally {
+        activeRunAborts.clear();
+      }
+    });
+
+    it('cancelActiveAgentRun falls back to the threadless run for the same chat (#914)', async () => {
+      const { activeRunAborts, runAbortKey } = __test__;
+      // Top-level mention / DM: the run registered without a threadId, but
+      // Slack's stop event carries the thread_ts of the reply thread.
+      const run = { controller: new AbortController(), startedAt: Date.now() - 5_000 };
+      activeRunAborts.set(runAbortKey('inst-1', 'C1'), run);
+
+      try {
+        await expect(cancelActiveAgentRun('inst-1', 'C1', 'user_stop', { threadId: '1234.5678' })).resolves.toBe(true);
+        expect(run.controller.signal.aborted).toBe(true);
+      } finally {
+        activeRunAborts.clear();
+      }
+    });
+
+    it('cancelActiveAgentRun ignores a run that started after the stop press (#914)', async () => {
+      const { activeRunAborts, runAbortKey } = __test__;
+      const stopPressedAt = Date.now() - 10_000;
+      const newerRun = { controller: new AbortController(), startedAt: Date.now() };
+      activeRunAborts.set(runAbortKey('inst-1', 'C1', 'thread-A'), newerRun);
+
+      try {
+        await expect(
+          cancelActiveAgentRun('inst-1', 'C1', 'user_stop', { threadId: 'thread-A', requestedAt: stopPressedAt }),
+        ).resolves.toBe(false);
+        expect(newerRun.controller.signal.aborted).toBe(false);
+      } finally {
+        activeRunAborts.clear();
+      }
+    });
+
+    it('cancelActiveAgentRun prefers sender.cancel (halt-and-keep) over abort (#914)', async () => {
+      const { activeRunAborts, runAbortKey } = __test__;
+      const cancelMock = mock(async () => {});
+      const abortMock = mock(async () => {});
+      const run = {
+        controller: new AbortController(),
+        startedAt: Date.now() - 5_000,
+        sender: {
+          onThinkingDelta: mock(async () => {}),
+          onContentDelta: mock(async () => {}),
+          onFinal: mock(async () => {}),
+          onError: mock(async () => {}),
+          abort: abortMock,
+          cancel: cancelMock,
+        },
+      };
+      activeRunAborts.set(runAbortKey('inst-1', 'C1', 'thread-A'), run);
+
+      try {
+        await expect(cancelActiveAgentRun('inst-1', 'C1', 'user_stop', { threadId: 'thread-A' })).resolves.toBe(true);
+        expect(cancelMock).toHaveBeenCalledTimes(1);
+        expect(abortMock).not.toHaveBeenCalled();
+      } finally {
+        activeRunAborts.clear();
+      }
+    });
+
+    it('extractCancelThreadId prefers rawPayload.cancelThreadId over the session threadId (#914 M2)', () => {
+      const { extractCancelThreadId } = __test__;
+      const withBoth = [{ payload: { rawPayload: { threadId: 'session-thread', cancelThreadId: '1700.0001' } } }];
+      const dmOnly = [{ payload: { rawPayload: { threadId: undefined, cancelThreadId: '1700.0002' } } }];
+      const legacy = [{ payload: { rawPayload: { threadId: 'session-thread' } } }];
+      const malformed = [{ payload: { rawPayload: { threadId: 'session-thread', cancelThreadId: 42 } } }];
+      type Buffered = Parameters<typeof extractCancelThreadId>[0];
+
+      expect(extractCancelThreadId(withBoth as unknown as Buffered)).toBe('1700.0001');
+      expect(extractCancelThreadId(dmOnly as unknown as Buffered)).toBe('1700.0002');
+      expect(extractCancelThreadId(legacy as unknown as Buffered)).toBe('session-thread');
+      expect(extractCancelThreadId(malformed as unknown as Buffered)).toBe('session-thread');
+      expect(extractCancelThreadId([] as unknown as Buffered)).toBeUndefined();
+    });
+
+    /**
+     * Stage a provider whose trigger() stays in flight until the test resolves
+     * it, and honours abortSignal the way the real providers do.
+     */
+    function makeInFlightProvider() {
+      let finish: ((value: { runId: string }) => void) | undefined;
+      const provider = {
+        id: 'prov-1',
+        name: 'in-flight',
+        schema: 'agno',
+        mode: 'round-trip',
+        trigger: mock(
+          (t: { abortSignal?: AbortSignal }) =>
+            new Promise<{ runId: string }>((resolve, reject) => {
+              finish = resolve;
+              t.abortSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+            }),
+        ),
+      };
+      return {
+        provider: provider as unknown as Parameters<typeof __test__.triggerProviderWithCancellation>[0],
+        finish: (runId: string) => finish?.({ runId }),
+      };
+    }
+
+    function runWithCancellation(
+      provider: Parameters<typeof __test__.triggerProviderWithCancellation>[0],
+      chatId: string,
+      cancelThreadId: string | undefined,
+    ) {
+      const trigger = {
+        traceId: 'trace',
+        type: 'message',
+        source: { channelType: 'slack', instanceId: 'inst-dm', chatId, messageId: 'm', threadId: undefined },
+        content: { text: 'hi' },
+      } as unknown as Parameters<typeof __test__.triggerProviderWithCancellation>[1];
+      return __test__.triggerProviderWithCancellation(
+        provider,
+        trigger,
+        {},
+        'inst-dm',
+        chatId,
+        'trace',
+        cancelThreadId,
+      );
+    }
+
+    it('a stop in DM thread B does not abort the concurrent DM thread A run (#914 M2)', async () => {
+      const { activeRunAborts } = __test__;
+      const a = makeInFlightProvider();
+      const b = makeInFlightProvider();
+      // Both runs are Slack DMs: session threadId is undefined for both, but
+      // the raw thread_ts (cancelThreadId) differs — that is what keys them.
+      const runA = runWithCancellation(a.provider, 'D1', '1700.000A');
+      const runB = runWithCancellation(b.provider, 'D1', '1700.000B');
+      await Promise.resolve();
+
+      try {
+        expect(activeRunAborts.size).toBe(2);
+        await expect(cancelActiveAgentRun('inst-dm', 'D1', 'user_stop', { threadId: '1700.000B' })).resolves.toBe(true);
+        await expect(runB).resolves.toBeNull();
+
+        // Thread A is still in flight and still cancellable.
+        expect(activeRunAborts.size).toBe(1);
+        a.finish('run-a');
+        await expect(runA).resolves.toMatchObject({ result: { runId: 'run-a' }, cancelled: false });
+        expect(activeRunAborts.size).toBe(0);
+      } finally {
+        activeRunAborts.clear();
+      }
+    });
+
+    it('a stop after the first run finished still finds the overlapping second run (#914 M2 / LOW)', async () => {
+      const { activeRunAborts, runAbortKey } = __test__;
+      const first = makeInFlightProvider();
+      const second = makeInFlightProvider();
+      // Same abort key twice (overlapping runs on one thread): the second
+      // registration replaces the first, and the first's cleanup must NOT
+      // delete the second's entry.
+      const run1 = runWithCancellation(first.provider, 'D2', '1700.0001');
+      const run2 = runWithCancellation(second.provider, 'D2', '1700.0001');
+      await Promise.resolve();
+
+      try {
+        first.finish('run-1');
+        await expect(run1).resolves.toMatchObject({ result: { runId: 'run-1' }, cancelled: false });
+        expect(activeRunAborts.has(runAbortKey('inst-dm', 'D2', '1700.0001'))).toBe(true);
+
+        await expect(cancelActiveAgentRun('inst-dm', 'D2', 'user_stop', { threadId: '1700.0001' })).resolves.toBe(true);
+        await expect(run2).resolves.toBeNull();
+        expect(activeRunAborts.size).toBe(0);
+      } finally {
+        activeRunAborts.clear();
+      }
     });
 
     it('returns a cleanup function that can be called without error', async () => {

@@ -72,16 +72,25 @@ throw new OmniError({
 
 ## Database Schema Changes
 
-**The API auto-migrates on startup.** Schema changes use Drizzle migrations, not push.
+**The API auto-migrates on startup.** Schema changes are **hand-written SQL
+migrations** — do NOT run `drizzle-kit generate` (it is broken here; see the
+comprehensive reference below for why).
 
 ```bash
-# 1. Edit schema
+# 1. Edit schema source of truth
 vim packages/db/src/schema.ts
 
-# 2. Generate migration
-cd packages/db && bunx drizzle-kit generate
+# 2. Hand-write an additive, idempotent migration with a header comment
+#    (copy the style of 0043/0044/0052 in packages/db/drizzle/)
+vim packages/db/drizzle/NNNN_short_name.sql
 
-# 3. Commit migration + schema together
+# 3. Append a journal entry by hand (idx = prev + 1, when = prev + 100000000)
+vim packages/db/drizzle/meta/_journal.json
+
+# 4. Verify against the contract gate
+make verify-migrations
+
+# 5. Commit migration + journal + schema together
 git add packages/db/drizzle/ packages/db/src/schema.ts
 ```
 
@@ -90,8 +99,9 @@ Push creates tables without journal entries. The API's auto-migrate then crashes
 with "relation already exists". Never use push in CI or production.
 
 **Never:**
-- Delete deployed migration files
-- Hand-edit migration SQL (hash must match)
+- Edit, delete, or renumber a migration file that exists on the base branch
+  (deployed migrations are immutable — the migrator tracks them by content hash)
+- Add a migration without a journal entry, or vice versa
 - Squash migrations without a journal fix script
 - Use `drizzle-kit push` in CI (use `pg_isready` for readiness)
 
@@ -191,8 +201,7 @@ omni-v2/
 │   ├── channel-sdk/    # Plugin SDK for channel developers
 │   ├── channel-*/      # Official channel implementations
 │   ├── cli/            # LLM-optimized CLI
-│   ├── sdk/            # Auto-generated TypeScript SDK
-│   └── mcp/            # MCP Server for AI assistants
+│   └── sdk/            # Auto-generated TypeScript SDK
 ├── apps/
 │   └── ui/             # React dashboard
 ├── docs/               # Documentation
@@ -248,13 +257,23 @@ make dev-services # Start PostgreSQL + NATS + API via PM2
 
 ```bash
 make check        # All checks: typecheck + lint + test
+make check-all    # check + the real-PostgreSQL gate, run CONCURRENTLY (fastest full validation)
 make typecheck    # TypeScript only
 make lint         # Biome linter
 make lint-fix     # Auto-fix lint issues
-make test         # All tests
+make test         # All tests (per-package via turbo — unchanged packages replay their cached green run)
+make test-sweep   # All tests in ONE process (CI parity; use to hunt cross-file state leaks)
 make test-api     # API package tests only
 make test-file F=<path>  # Specific test file
+make test-pg-gate       # Every real-PostgreSQL suite on a fresh disposable cluster (never skips)
+make test-pg-gate-warm  # Same gate against a kept-warm cluster (fast dev loop; state in .pg-gate-warm.json)
+make pg-gate-warm-stop  # Destroy the kept-warm cluster
 ```
+
+Test runs default to `LOG_LEVEL=silent` (suites intentionally exercise noisy
+warn/error paths). Re-enable logs for a run with `make test TEST_LOG_LEVEL=debug`.
+Tests that assert on log output must `configureLogging({ level: ... })`
+themselves rather than rely on the ambient threshold.
 
 ### Individual Services
 
@@ -293,32 +312,78 @@ migration journal entries. Migrate then crashes with "relation already exists". 
 use `drizzle-kit push` in CI, production, or any pipeline that also runs `migrateDb()`.
 `db-push` is a local dev convenience ONLY.
 
-### Schema Change Workflow
+### Why migrations are hand-written (do not "fix" this)
+
+`drizzle-kit generate` is **dead in this repo**: the `meta/*_snapshot.json`
+files stop at `0026` while migrations continue past `0055`. Generate diffs
+`schema.ts` against the LAST snapshot, so it compares against a ~30-migration-old
+state and proposes recreating the world (or hangs on interactive rename
+prompts). Regenerating snapshots is riskier than living without them — the API
+auto-migrates on boot and is intolerant of journal drift, and 12+ deployed
+migrations already follow the hand-written precedent. Do not attempt to
+resurrect generate or add new snapshots.
+
+### Schema Change Workflow (hand-written precedent — 0043/0044/0052)
 
 ```bash
 # 1. Edit schema source of truth
 vim packages/db/src/schema.ts
 
-# 2. Generate migration (creates SQL + updates journal)
-cd packages/db && bunx drizzle-kit generate
+# 2. Hand-write the migration SQL (next free number, snake_case name)
+vim packages/db/drizzle/0056_short_name.sql
 
-# 3. Review generated SQL
-cat packages/db/drizzle/NNNN_<name>.sql
+# 3. Append a journal entry to packages/db/drizzle/meta/_journal.json:
+#    {"idx": 56, "version": "7", "when": <prev when + 100000000>,
+#     "tag": "0056_short_name", "breakpoints": true}
 
-# 4. Test — restart API (auto-migrates on boot)
+# 4. Verify against the contract gate (also runs in make check and CI)
+make verify-migrations
+
+# 5. Test — restart API (auto-migrates on boot)
 pm2 restart omni-v2-api
 
-# 5. Commit migration + schema together
+# 6. Commit migration + journal + schema together
 git add packages/db/drizzle/ packages/db/src/schema.ts
 git commit -m "feat(db): add <description>"
 ```
 
+**Migration SQL rules** (enforced by `scripts/verify-migration-contract.ts`):
+
+- **Header comment first.** Open with a `--` comment block: what the migration
+  adds, why, the issue/PR reference, and a line like
+  `-- Hand-written following the 0043/0044/0052 precedent (additive, idempotent).`
+- **Additive + idempotent.** `ADD COLUMN IF NOT EXISTS`,
+  `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`. The boot migrator
+  may race across replicas and re-run against half-migrated databases.
+- **No destructive statements** — `DROP TABLE`, `DROP COLUMN`,
+  `ALTER COLUMN ... TYPE`, `TRUNCATE` fail the gate. If one is genuinely
+  required, add a header line `-- destructive: <justification>`; the gate then
+  passes and the justification lands in the diff for review.
+- **No explicit `BEGIN`/`COMMIT`.** The boot migrator runs each file on a
+  pooled postgres-js connection that rejects raw transaction control.
+- **`when` timestamps must strictly increase** — the migrator SILENTLY SKIPS
+  entries whose `when` is out of order (see `packages/db/src/migrate.ts`).
+- **schema.ts and the migration ship in the same PR.** Escape hatches for the
+  rare exceptions: `// no-migration-needed: <why>` on a changed schema.ts line
+  (type-only change), or `-- no-schema-change: <why>` in the migration header
+  (data-only/backfill migration).
+
+### Parallel-worktree numbering collisions
+
+Multiple in-flight branches will often claim the same next number (e.g. two
+PRs both adding `0056_*`). The contract gate fails the merge with a duplicate
+`idx` / non-sequential journal. **Whoever merges second renumbers their OWN
+migration**: rename the `.sql` file to the next free number, update the journal
+entry's `tag` + `idx`, and bump `when` above the new previous entry. Never
+renumber the migration that already landed.
+
 ### Make Targets
 
 ```bash
-make db-push          # Push schema directly (DEV ONLY, no journal)
-make db-studio        # Open Drizzle Studio
-make db-fix-journal   # Fix journal after migration consolidation
+make verify-migrations  # Static migration contract gate (also in make check + CI)
+make db-push            # Push schema directly (DEV ONLY, no journal)
+make db-studio          # Open Drizzle Studio
+make db-fix-journal     # Fix journal after migration consolidation
 ```
 
 ### Key Files
@@ -330,12 +395,16 @@ make db-fix-journal   # Fix journal after migration consolidation
 | `packages/db/drizzle/meta/_journal.json` | Migration journal |
 | `packages/db/src/migrate.ts` | Programmatic runner |
 | `packages/api/src/index.ts:302` | Auto-migrate on startup |
+| `scripts/verify-migration-contract.ts` | Static contract gate (make check + CI) |
+| `scripts/verify-schema-drift.ts` | Live-DB drift audit — a DIFFERENT tool |
 
 ### NEVER
 
 - Use `drizzle-kit push` in CI or production
-- Delete migration files that have been deployed
-- Hand-edit migration SQL without recomputing the SHA256 hash
+- Edit, delete, or renumber migration files that have been deployed (they are
+  immutable once on the base branch — the gate enforces byte-identity)
+- Run `drizzle-kit generate` or regenerate `meta/` snapshots (frozen at 0026;
+  see "Why migrations are hand-written")
 - Squash migrations without a journal fix script
 - Mix push and migrate in the same environment
 
@@ -348,37 +417,35 @@ make migrate-messages      # Live migration
 
 ---
 
-## Git Workflow — AI-First with Rolling Promotion
+## Git Workflow — AI-First with Public Verification
 
 ### The Simple Rule
 
 > **New work = PR to dev. Fixes = direct commit to dev.**
 
 ```
-main <── dev <── feature PRs (auto-merge)
-  ▲       |
-promote   └── direct commits (fixes/hotfixes)
-(human)
+main (public verification) <── dev <── feature PRs (auto-merge)
+              ▲               |
+          human PR             └── direct commits (fixes/hotfixes)
 ```
 
-Promotion is a **single carry-exact hop**: `dev → main`. `dev` is integration;
-`main` is production. The hop is a PR a human merges — the version carries
-exactly (bump on `dev` only, never re-bumped on promotion).
+Promotion is a carry-exact, direct `dev` → `main` PR that a human merges. `dev`
+is the integration branch; `main` is the protected public verification branch,
+and the version is never re-bumped during promotion.
 
-The `homolog` branch and its two-hop flow were retired on 2026-07-29: every
-promotion had been going `dev → main` directly anyway, leaving `homolog` 83
-commits stale, and the extra gate cost more than it caught at omni's current
-maturity. Its release-channel plumbing (`homolog` npm dist-tag,
-`.well-known/homolog.json`, HML image builds) is left dormant in the workflows
-rather than deleted, so restoring the gate later is re-creating one branch.
-The `omni-hml` Kubernetes namespace and `values-homolog.yaml` are the *staging
-environment* and are unaffected — they were never the same thing as the branch.
+The `main` workflow is verification-only and checks the already-published
+immutable candidate without building, publishing, retagging, or changing a
+runtime. `hml.omni.khal.ai` is the legacy HML endpoint.
+This change neither mutates nor cleans it up. The endpoint and its HML runtime
+and configuration files remain legacy/reference-only, not an active public
+branch, tag, channel, or gate. Production authority is separate/private and
+lives outside this public repository.
 
 ### Branch Roles
 
 | Branch | Purpose | Who commits | Protection |
 |--------|---------|-------------|------------|
-| `main` | Production | Human merges `dev → main` promotion PR | PR-only, all checks required |
+| `main` | Read-only verification of the reviewed public candidate | Human merges `dev → main` promotion PR | PR-only, all checks required |
 | `dev` | Integration | Agent + PRs | Direct commits OK, PRs need checks |
 | `feat/*` | New features | Worktrees, PR to `dev` | Auto-merge when green |
 | `fix/*` | Bug fixes | Direct on `dev` or worktree | — |
@@ -386,7 +453,8 @@ environment* and are unaffected — they were never the same thing as the branch
 ### Promotion (dev → main)
 
 Open when `dev` is ahead of `main` and green. Carry-exact (no version re-bump).
-A human merges after CI passes; the `main` merge triggers release-please.
+A human merges after CI passes; the protected `main` path then verifies the
+fixed candidate and existing public artifacts without publishing anything.
 
 ### Conventional Commits (Required)
 
@@ -425,17 +493,21 @@ ci(rolling-pr): update workflow permissions
 3. **Resolve conflicts** — `git merge origin/main` (merge commits, not rebase)
 4. **Notify human** — label + channel message when rolling PR is green
 
-### Automated Releases
+### Public Release Boundary
 
-- **release-please** runs on main merge
-- Single repo-wide version (all packages together)
-- CHANGELOG.md auto-updated
+- Integration versioning happens on `dev`.
+- The reviewed version carries unchanged into `main`.
+- The public `main` path only verifies existing immutable artifacts.
+- Production release and runtime decisions belong to the separate/private
+  authority.
 
 ---
 
 ## Technical Never Do
 
-- **Don't code on main** — main is production, rolling PR only. Use `dev` for development, `feat/*` for features. If `git branch --show-current` returns `main`, STOP immediately.
+- **Don't code on main** — it is the protected public verification branch,
+  rolling PR only. Use `dev` for development, `feat/*` for features. If
+  `git branch --show-current` returns `main`, STOP immediately.
 - Don't use non-conventional commit messages (all commits must be `type(scope): description`)
 - Don't create nightly branches (deprecated — use feature PR to dev flow)
 - Don't use npm/yarn/pnpm (use Bun exclusively)

@@ -1,6 +1,6 @@
 {
   "name": "@omni/db",
-  "version": "2.260804.3",
+  "version": "2.260908.18",
   "type": "module",
   "exports": {
     ".": {
@@ -14,6 +14,10 @@
     "./client": {
       "types": "./src/client.ts",
       "default": "./src/client.ts"
+    },
+    "./pg-migrated-template": {
+      "types": "./src/pg-migrated-template.ts",
+      "default": "./src/pg-migrated-template.ts"
     }
   },
   "scripts": {
@@ -32,7 +36,7 @@
     "postgres": "^3.4.5"
   },
   "devDependencies": {
-    "bun-types": "^1.1.42",
+    "@types/bun": "1.3.14",
     "drizzle-kit": "^0.30.1",
     "typescript": "^5.7.3"
   }

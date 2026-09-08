@@ -9,9 +9,10 @@
  * It cannot prove that a request ever GETS one — its own header note records
  * that gap and defers it here.
  *
- * This suite closes it. Nothing is synthesised: the credentials are minted by
- * `TenantKeyService.issueRootKey` against a real platform actor, presented as a
- * plaintext `x-api-key` header over `app.request(...)`, and resolved by the
+ * This suite closes it. Nothing is synthesised: the credentials are minted over
+ * HTTP through `POST /platform/tenants/:id/keys/root` (#979) by a real platform
+ * credential, presented as a plaintext `x-api-key` header over
+ * `app.request(...)`, and resolved by the
  * real `tenancyMiddleware` → `authMiddleware` → `scopeEnforcerMiddleware` chain
  * in the same order `app.ts` mounts it, against real route modules, over a real
  * PostgreSQL database with RLS enforced and the runtime role's grants applied.
@@ -37,10 +38,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import {
   DEFAULT_ROLE_NAMES,
   type Database,
@@ -48,6 +48,7 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
+import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { Hono } from 'hono';
 import { authMiddleware } from '../../middleware/auth';
 import { errorHandler } from '../../middleware/error';
@@ -58,6 +59,7 @@ import { instancesRoutes } from '../../routes/v2/instances';
 import { keysRoutes } from '../../routes/v2/keys';
 import { messagesRoutes } from '../../routes/v2/messages';
 import { personsRoutes } from '../../routes/v2/persons';
+import { platformTenantRoutes } from '../../routes/v2/platform-tenants';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { AuthBootstrapService } from '../../services/auth-bootstrap';
@@ -68,7 +70,6 @@ import { MessageService } from '../../services/messages';
 import { PersonService } from '../../services/persons';
 import { TenantKeyService } from '../../services/tenant-keys';
 import type { AppVariables } from '../../types';
-import { type PlatformAuthContext, bindPlatformOperation, freezeContext } from '../auth-context';
 import { MULTITENANCY_FLAG_ENV } from '../feature-flag';
 import { generateSecret, hashSecret, secretPrefix } from '../hash';
 import { MembershipSelectionService, RequestAuthenticator } from '../request-auth';
@@ -77,11 +78,10 @@ const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const drizzleDir = join(here, '..', '..', '..', '..', 'db', 'drizzle');
-
 const TENANT_A = '11111111-1111-4111-8111-11111111111a';
 const TENANT_B = '22222222-2222-4222-8222-22222222222b';
+/** Seeded SUSPENDED — exists only so root issuance against an inactive tenant can be probed. */
+const TENANT_C_SUSPENDED = '22222222-2222-4222-8222-22222222222c';
 const PRINCIPAL_A = '33333333-3333-4333-8333-33333333333a';
 const PRINCIPAL_B = '33333333-3333-4333-8333-33333333333b';
 /** Holds an ACTIVE membership in BOTH tenants — the header-confusion case that matters. */
@@ -91,6 +91,8 @@ const MEMBERSHIP_A = '44444444-4444-4444-8444-44444444444a';
 const MEMBERSHIP_B = '44444444-4444-4444-8444-44444444444b';
 const MEMBERSHIP_DUAL_A = '44444444-4444-4444-8444-4444444444d1';
 const MEMBERSHIP_DUAL_B = '44444444-4444-4444-8444-4444444444d2';
+/** PRINCIPAL_A's membership in the suspended tenant C. */
+const MEMBERSHIP_C = '44444444-4444-4444-8444-44444444444c';
 const PLATFORM_KEY_ID = '4444aaaa-4444-4444-8444-4444444444f0';
 const PLATFORM_CREDENTIAL_ID = '4444bbbb-4444-4444-8444-4444444444f1';
 const INSTANCE_A = '55555555-5555-4555-8555-55555555555a';
@@ -160,7 +162,7 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
 
   let app: Hono<{ Variables: AppVariables }>;
   /** Plaintext secrets, minted once in `beforeAll`. Never logged or persisted. */
-  const keys = { a: '', b: '', dualA: '', legacy: '' };
+  const keys = { a: '', b: '', dualA: '', legacy: '', platform: '' };
 
   function openDb(url: string, maxConnections: number): Database {
     const handle = createDbHandle({ url, maxConnections });
@@ -173,17 +175,8 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
     app.request(path, { headers: { 'x-api-key': key, ...headers } });
 
   beforeAll(async () => {
-    const created = runSqlOn(superUrl, `CREATE DATABASE "${dbName}";`);
-    if (created.exitCode !== 0) throw new Error(`could not create database: ${created.stderr}`);
-
-    const migrations = readdirSync(drizzleDir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort()
-      .map((f) => readFileSync(join(drizzleDir, f), 'utf-8'))
-      .join('\n');
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
     const superDbUrl = urlFor(superUrl, dbName);
-    const migrated = runSqlOn(superDbUrl, migrations);
-    if (migrated.exitCode !== 0) throw new Error(`migrations failed: ${migrated.stderr}`);
 
     // The platform actor that ISSUES the tenant root keys. Its credential and
     // its source key must agree field-for-field or
@@ -192,7 +185,11 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
     const platformSecret = generateSecret();
     const platformHash = await hashSecret(platformSecret);
     const platformPrefix = secretPrefix(platformSecret);
-    const platformScopes = ['platform:tenants:write'];
+    // Root issuance over HTTP needs BOTH: the route guard checks
+    // `platform:tenant-keys:write`, and `issueRootKey` itself re-checks
+    // `platform:tenants:write` inside the transaction.
+    const platformScopes = ['platform:tenants:write', 'platform:tenant-keys:write'];
+    keys.platform = platformSecret;
 
     // A REAL legacy key, in the exact storage form `ApiKeyService.validate`
     // expects: the `omni_sk_` prefix its format check requires, and the SHA-256
@@ -213,6 +210,12 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
         ('${TENANT_A}', 'tenant-a', 'Tenant A', 86400, 1000, 1000),
         ('${TENANT_B}', 'tenant-b', 'Tenant B', 86400, 1000, 1000);
 
+      -- Suspended from birth: exists solely so the root-issuance probes can
+      -- show an inactive tenant refusing issuance, without suspending A or B
+      -- (which would bump their revocation epochs and break every minted key).
+      INSERT INTO tenants (id, slug, display_name, status, max_key_ttl_seconds, max_key_rate_limit, max_key_budget)
+      VALUES ('${TENANT_C_SUSPENDED}', 'tenant-c', 'Tenant C', 'suspended', 86400, 1000, 1000);
+
       INSERT INTO principals (id, type, subject) VALUES
         ('${PRINCIPAL_A}', 'human', 'subject-a'),
         ('${PRINCIPAL_B}', 'human', 'subject-b'),
@@ -224,7 +227,9 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
         ('${MEMBERSHIP_B}', '${TENANT_B}', '${PRINCIPAL_B}', 'tenant-admin'),
         -- The dual-membership principal: genuinely entitled in BOTH tenants.
         ('${MEMBERSHIP_DUAL_A}', '${TENANT_A}', '${PRINCIPAL_DUAL}', 'tenant-admin'),
-        ('${MEMBERSHIP_DUAL_B}', '${TENANT_B}', '${PRINCIPAL_DUAL}', 'tenant-admin');
+        ('${MEMBERSHIP_DUAL_B}', '${TENANT_B}', '${PRINCIPAL_DUAL}', 'tenant-admin'),
+        -- A perfectly valid membership in the SUSPENDED tenant C.
+        ('${MEMBERSHIP_C}', '${TENANT_C_SUSPENDED}', '${PRINCIPAL_A}', 'tenant-admin');
 
       INSERT INTO platform_api_keys (id, name, key_prefix, key_hash, scopes, principal_id) VALUES
         ('${PLATFORM_KEY_ID}', 'g4-http-issuer', '${platformPrefix}', '${platformHash}',
@@ -327,47 +332,6 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
     await applyTenantRlsEnforcement(provisioner);
     await applyTenancyRoles(provisioner, passwords, DEFAULT_ROLE_NAMES, dbName);
 
-    // Mint the tenant credentials through the REAL issuance path, on the
-    // provisioning identity — issuance is a control-plane act that happens
-    // before any request exists, so it is fixture setup, not part of what is
-    // under test. What is under test is what those credentials can then do.
-    const issuer = new TenantKeyService(provisioner);
-    // The UNBOUND platform identity. It deliberately carries no action and no
-    // target tenant: `bindPlatformOperation` below is what narrows it to one
-    // operation against one tenant, which is the same call the platform routes
-    // make. `issueRootKey` refuses an actor whose binding does not match the
-    // tenant being minted, so a fixture that reused one binding across both
-    // tenants would fail — the binding is proven per mint, not asserted once.
-    const platformIdentity: PlatformAuthContext = freezeContext({
-      credentialClass: 'platform',
-      requestId: 'fixture-issuance',
-      principalId: PLATFORM_PRINCIPAL,
-      credentialId: PLATFORM_CREDENTIAL_ID,
-      scopes: platformScopes,
-      platformApiKeyId: PLATFORM_KEY_ID,
-      platformAction: null,
-      targetTenantId: null,
-    });
-    const expiresAt = new Date(Date.now() + 3_600_000);
-    const mint = (tenantId: string, principalId: string, membershipId: string, name: string) =>
-      issuer.issueRootKey({
-        actor: bindPlatformOperation(platformIdentity, 'tenant_key.issue_root', tenantId),
-        tenantId,
-        actorRole: 'tenant-admin',
-        name,
-        reason: 'g4 http two-tenant acceptance fixture',
-        scopes: ['tenant:*', 'keys:delegate'],
-        principalId,
-        membershipId,
-        expiresAt,
-        rateLimit: 1000,
-        budget: 1000,
-      });
-
-    keys.a = (await mint(TENANT_A, PRINCIPAL_A, MEMBERSHIP_A, 'tenant-a-root')).plainTextKey;
-    keys.b = (await mint(TENANT_B, PRINCIPAL_B, MEMBERSHIP_B, 'tenant-b-root')).plainTextKey;
-    keys.dualA = (await mint(TENANT_A, PRINCIPAL_DUAL, MEMBERSHIP_DUAL_A, 'dual-a-root')).plainTextKey;
-
     // ONE physical runtime connection, shared by every request: cross-request
     // scope bleed shows up here rather than being hidden by pool luck.
     const runtimeDb = openDb(
@@ -411,6 +375,10 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
       c.set('channelRegistry', null);
       await next();
     });
+    // Mounted BEFORE the tenancy/auth/scope chain, exactly as `app.ts` mounts
+    // it on the root app outside `protectedApp`: the control plane carries its
+    // own platform-class guard and the legacy middleware never sees it.
+    app.route('/api/v2/platform', platformTenantRoutes);
     // The production order, from `app.ts`: the tenancy edge decides the world,
     // then legacy auth, then scope enforcement.
     app.use('*', tenancyMiddleware);
@@ -421,6 +389,44 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
     app.route('/api/v2/messages', messagesRoutes);
     app.route('/api/v2/persons', personsRoutes);
     app.route('/api/v2/keys', keysRoutes);
+
+    // Mint the tenant credentials through the REAL issuance path — over HTTP,
+    // through `POST /platform/tenants/:id/keys/root` (#979), with the seeded
+    // platform credential presented as `x-api-key`. Issuance is a control-plane
+    // act that happens before any tenant request exists, so it is fixture
+    // setup; but reaching it through the route means the whole supported
+    // bootstrap chain (platform guard → action/tenant binding → transactional
+    // `issueRootKey`) is what mints every credential this suite then probes.
+    const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+    const mint = async (tenantId: string, principalId: string, membershipId: string, name: string) => {
+      const res = await app.request(`/api/v2/platform/tenants/${tenantId}/keys/root`, {
+        method: 'POST',
+        headers: { 'x-api-key': keys.platform, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          principalId,
+          membershipId,
+          role: 'tenant-admin',
+          name,
+          scopes: ['tenant:*', 'keys:delegate'],
+          expiresAt,
+          rateLimit: 1000,
+          budget: 1000,
+          reason: 'g4 http two-tenant acceptance fixture',
+        }),
+      });
+      if (res.status !== 201) throw new Error(`fixture root issuance failed for ${name}: ${res.status}`);
+      const { data } = (await res.json()) as {
+        data: { tenantId: string; delegationDepth: number; plainTextKey: string };
+      };
+      if (data.tenantId !== tenantId || data.delegationDepth !== 0) {
+        throw new Error(`fixture root issuance returned a mis-bound credential for ${name}`);
+      }
+      return data.plainTextKey;
+    };
+
+    keys.a = await mint(TENANT_A, PRINCIPAL_A, MEMBERSHIP_A, 'tenant-a-root');
+    keys.b = await mint(TENANT_B, PRINCIPAL_B, MEMBERSHIP_B, 'tenant-b-root');
+    keys.dualA = await mint(TENANT_A, PRINCIPAL_DUAL, MEMBERSHIP_DUAL_A, 'dual-a-root');
   }, 180_000);
 
   afterAll(async () => {
@@ -675,6 +681,95 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
       // No `keys:delegate`, so `keys:write` is never projected and the scope
       // enforcer refuses the route outright.
       expect((await post({ name: 'grandchild', scopes: ['tenant:read'] }, data.plainTextKey)).status).toBe(403);
+    });
+  });
+
+  describe('root key issuance over HTTP (#979)', () => {
+    const issueBody = (overrides: Record<string, unknown> = {}) => ({
+      principalId: PRINCIPAL_A,
+      membershipId: MEMBERSHIP_A,
+      role: 'tenant-admin',
+      name: `root-probe-${crypto.randomUUID().slice(0, 8)}`,
+      scopes: ['tenant:*', 'keys:delegate'],
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      rateLimit: 100,
+      budget: 100,
+      reason: 'root issuance adversarial probe',
+      ...overrides,
+    });
+    const issue = (tenantId: string, body: Record<string, unknown>, key: string) =>
+      app.request(`/api/v2/platform/tenants/${tenantId}/keys/root`, {
+        method: 'POST',
+        headers: { 'x-api-key': key, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    test('the platform credential issues a working tenant-class root over HTTP', async () => {
+      const res = await issue(TENANT_A, issueBody({ name: 'extra-root-a' }), keys.platform);
+      expect(res.status).toBe(201);
+      const { data } = (await res.json()) as {
+        data: { tenantId: string; delegationDepth: number; plainTextKey: string };
+      };
+      expect(data.tenantId).toBe(TENANT_A);
+      expect(data.delegationDepth).toBe(0);
+
+      // The issued credential authenticates as tenant A and is contained to it.
+      const own = await get('/api/v2/instances', data.plainTextKey);
+      expect(own.status).toBe(200);
+      expect(((await own.json()) as { items: { id: string }[] }).items.map((i) => i.id)).toEqual([INSTANCE_A]);
+      expect((await get(`/api/v2/instances/${INSTANCE_B}`, data.plainTextKey)).status).toBe(404);
+
+      // And it can mint a strictly narrower child through POST /keys.
+      const child = await app.request('/api/v2/keys', {
+        method: 'POST',
+        headers: { 'x-api-key': data.plainTextKey, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'child-of-extra-root', scopes: ['tenant:read'], reason: 'probe' }),
+      });
+      expect(child.status).toBe(201);
+      expect(((await child.json()) as { data: { tenantId: string } }).data.tenantId).toBe(TENANT_A);
+    });
+
+    test('a tenant credential cannot reach the surface (403), a legacy key is a uniform 401', async () => {
+      expect((await issue(TENANT_A, issueBody(), keys.a)).status).toBe(403);
+      expect((await issue(TENANT_A, issueBody(), keys.legacy)).status).toBe(401);
+      expect((await issue(TENANT_A, issueBody(), 'not-a-key-at-all')).status).toBe(401);
+    });
+
+    test('a cross-tenant subject is indistinguishable from one that never existed', async () => {
+      // MEMBERSHIP_B genuinely exists — in tenant B. Issuing under tenant A
+      // must answer exactly as if it did not exist at all.
+      const foreign = await issue(
+        TENANT_A,
+        issueBody({ principalId: PRINCIPAL_B, membershipId: MEMBERSHIP_B }),
+        keys.platform,
+      );
+      const absent = await issue(TENANT_A, issueBody({ membershipId: NEVER_EXISTED }), keys.platform);
+      expect(foreign.status).toBe(404);
+      expect(absent.status).toBe(404);
+      expect(await foreign.text()).toBe(await absent.text());
+    });
+
+    test('an inactive tenant refuses issuance even for its own valid membership', async () => {
+      const res = await issue(
+        TENANT_C_SUSPENDED,
+        issueBody({ principalId: PRINCIPAL_A, membershipId: MEMBERSHIP_C }),
+        keys.platform,
+      );
+      expect(res.status).toBe(409);
+      // The lifecycle state itself is not echoed.
+      expect(await res.text()).not.toContain('suspended');
+    });
+
+    test('a request above the tenant policy ceiling is refused', async () => {
+      const res = await issue(TENANT_A, issueBody({ rateLimit: 1_000_000 }), keys.platform);
+      expect(res.status).toBe(403);
+    });
+
+    test('wildcard and platform scopes fail closed', async () => {
+      expect((await issue(TENANT_A, issueBody({ scopes: ['*'] }), keys.platform)).status).toBe(400);
+      expect((await issue(TENANT_A, issueBody({ scopes: ['platform:tenants:write'] }), keys.platform)).status).toBe(
+        400,
+      );
     });
   });
 

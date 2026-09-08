@@ -56,6 +56,8 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
   let pendingContent: string | undefined;
   /** Throttle timer handle */
   let throttleTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Cumulative content received so far — what cancel() keeps (#914) */
+  let lastContent = '';
 
   function formatText(text: string): string {
     return formatMode === 'passthrough' ? text : markdownToMrkdwn(text);
@@ -132,6 +134,9 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
    * (or becomes the initial message), overflow chunks are posted as new messages.
    */
   async function finalize(text: string): Promise<void> {
+    // A cancelled/aborted stream must not resurrect: late onFinal/onError
+    // deltas from a provider that ignored the abort are dropped here.
+    if (finalized) return;
     finalized = true;
     if (throttleTimer) {
       clearTimeout(throttleTimer);
@@ -164,6 +169,35 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
     }
   }
 
+  /**
+   * Shared abort cleanup: delete the draft (a fallback message will replace
+   * it) and stop accepting deltas.
+   */
+  async function deleteDraft(): Promise<void> {
+    if (draftTs && !finalized) {
+      try {
+        await client.chat.delete({ channel: channelId, ts: draftTs });
+      } catch {
+        // Best effort cleanup
+      }
+    }
+    finalized = true;
+  }
+
+  /**
+   * User-requested stop (#914): keep what was already streamed. Finalizes the
+   * draft with the partial content when any exists; when only a thinking
+   * placeholder (or nothing) was shown, cleans up like abort().
+   */
+  async function cancelKeepingPartial(): Promise<void> {
+    if (finalized) return;
+    if (lastContent.trim()) {
+      await finalize(lastContent);
+      return;
+    }
+    await deleteDraft();
+  }
+
   // Different behavior based on stream mode
   if (streamMode === 'off') {
     // Off mode: collect everything, send once on final
@@ -175,14 +209,20 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
         // No-op: wait for final
       },
       async onFinal(delta: StreamDelta & { phase: 'final' }) {
-        await sendInitial(delta.content);
+        if (finalized) return;
         finalized = true;
+        await sendInitial(delta.content);
       },
       async onError(delta: StreamDelta & { phase: 'error' }) {
-        await sendInitial(`Error: ${delta.error}`);
+        if (finalized) return;
         finalized = true;
+        await sendInitial(`Error: ${delta.error}`);
       },
       async abort() {
+        finalized = true;
+      },
+      async cancel() {
+        // Nothing was shown yet in off mode — nothing to keep
         finalized = true;
       },
     };
@@ -192,11 +232,14 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
     // Status-final mode: show "thinking..." then replace with final
     return {
       async onThinkingDelta(_delta: StreamDelta & { phase: 'thinking' }) {
+        if (finalized) return;
         if (!draftTs) {
           await sendInitial('_Thinking..._');
         }
       },
-      async onContentDelta(_delta: StreamDelta & { phase: 'content' }) {
+      async onContentDelta(delta: StreamDelta & { phase: 'content' }) {
+        if (finalized) return;
+        lastContent = delta.content;
         if (!draftTs) {
           await sendInitial('_Thinking..._');
         }
@@ -208,14 +251,13 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
         await finalize(`Error: ${delta.error}`);
       },
       async abort() {
-        if (draftTs && !finalized) {
-          try {
-            await client.chat.delete({ channel: channelId, ts: draftTs });
-          } catch {
-            // Best effort cleanup
-          }
-        }
-        finalized = true;
+        await deleteDraft();
+      },
+      async cancel() {
+        // The draft only ever showed "_Thinking..._"; on stop, reveal the
+        // partial answer the provider had produced (halt-and-keep), or clean
+        // up the placeholder when there is none.
+        await cancelKeepingPartial();
       },
     };
   }
@@ -223,6 +265,7 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
   // Replace mode (default): send initial → edit progressively → finalize
   return {
     async onThinkingDelta(delta: StreamDelta & { phase: 'thinking' }) {
+      if (finalized) return;
       const text = `_${delta.thinking}_`;
       if (!draftTs) {
         await sendInitial(text);
@@ -231,7 +274,9 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
       }
     },
     async onContentDelta(delta: StreamDelta & { phase: 'content' }) {
+      if (finalized) return;
       const text = delta.content;
+      lastContent = text;
       if (!draftTs) {
         await sendInitial(text);
       } else {
@@ -245,14 +290,10 @@ export function createSlackStreamSender(options: StreamSenderOptions): StreamSen
       await finalize(`Error: ${delta.error}`);
     },
     async abort() {
-      if (draftTs && !finalized) {
-        try {
-          await client.chat.delete({ channel: channelId, ts: draftTs });
-        } catch {
-          // Best effort cleanup
-        }
-      }
-      finalized = true;
+      await deleteDraft();
+    },
+    async cancel() {
+      await cancelKeepingPartial();
     },
   };
 }

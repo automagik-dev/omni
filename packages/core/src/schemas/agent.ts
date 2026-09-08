@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod';
+import { AgentEventManifestSchema } from './agent-manifest';
 import { MetadataSchema, UuidSchema } from './common';
 
 /**
@@ -44,6 +45,8 @@ export const AgentSchema = z.object({
   isActive: z.boolean(),
   metadata: MetadataSchema.nullable(),
   agentCard: AgentCardSchema.nullable().optional(),
+  /** Declarative accepts/publishes event manifest (RFC #925 G4a, #985). */
+  eventManifest: AgentEventManifestSchema.nullable().optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });

@@ -29,11 +29,16 @@
  *   redacted body. `bodyCache.json` (if any adapter set it) is cleared.
  *
  * Event emission:
- *   One `secret.redacted` event per matched pattern per request, with the
- *   pattern source, field path, hit count, key id, and request id in the
- *   payload. Events are best-effort (errors are logged, not raised).
+ *   One `secret.redacted` event per matched pattern per request, with a
+ *   `patternHash` (sha256 truncated to 12 hex chars) instead of the literal
+ *   pattern — the pattern source IS the secret we redacted, so logging it
+ *   into the audit stream would re-introduce the leak. Operators can still
+ *   correlate hits against a known preset by comparing hashes.
+ *   Also included: field path, hit count, key id, and request id. Events are
+ *   best-effort (errors are logged, not raised).
  */
 
+import { createHash } from 'node:crypto';
 import { createLogger } from '@omni/core';
 import type { EventType } from '@omni/core';
 import type { Context } from 'hono';
@@ -77,6 +82,17 @@ let presetRegistry: Map<string, CompiledPattern[]> | null = null;
 /** Escape a literal string for safe use inside a RegExp. */
 function escapeRegex(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Hash a denylist pattern source for audit logs/events. Since the pattern
+ * source IS the secret being redacted, logging it verbatim re-introduces the
+ * leak we are trying to close. SHA-256 truncated to 12 hex chars gives enough
+ * entropy to correlate hits across events without exposing the plaintext.
+ * @public
+ */
+export function hashPattern(source: string): string {
+  return createHash('sha256').update(source).digest('hex').slice(0, 12);
 }
 
 /** Compile a list of literal strings into case-insensitive regexes. */
@@ -306,7 +322,7 @@ async function emitRedactionEvents(
         keyId: apiKey.id,
         profile: apiKey.profile ?? null,
         presetKey,
-        pattern: hit.pattern,
+        patternHash: hashPattern(hit.pattern),
         field: hit.field,
         count: hit.count,
         route: c.req.path,
@@ -315,7 +331,7 @@ async function emitRedactionEvents(
     } catch (err) {
       log.warn('output-redactor: failed to publish secret.redacted', {
         keyId: apiKey.id,
-        pattern: hit.pattern,
+        patternHash: hashPattern(hit.pattern),
         error: String(err),
       });
     }

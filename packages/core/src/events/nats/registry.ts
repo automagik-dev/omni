@@ -261,6 +261,36 @@ export const SystemEventSchemas = {
     }),
     { description: 'System health degradation detected' },
   ),
+
+  // Connector lifecycle contract (#961). Emitted ONCE per transition by the
+  // liveness sweeper (guarded status updates), never per tick — see
+  // `connectors/liveness.ts`.
+  connectorStalled: createEventSchema(
+    'system.connector.stalled',
+    z.object({
+      sourceId: z.string(),
+      sourceName: z.string(),
+      expectedIntervalSeconds: z.number(),
+      lastReceivedAt: z.number().nullable(),
+      lastHeartbeatAt: z.number().nullable(),
+      silentForSeconds: z.number(),
+      stalledAt: z.number(),
+    }),
+    { description: 'A supervised connector went silent beyond its declared cadence' },
+  ),
+
+  connectorRecovered: createEventSchema(
+    'system.connector.recovered',
+    z.object({
+      sourceId: z.string(),
+      sourceName: z.string(),
+      expectedIntervalSeconds: z.number(),
+      stalledForSeconds: z.number(),
+      recoveredBy: z.enum(['event', 'heartbeat', 'rearmed']),
+      recoveredAt: z.number(),
+    }),
+    { description: 'A stalled connector signalled again (event, heartbeat, or re-declared cadence)' },
+  ),
 };
 
 /**

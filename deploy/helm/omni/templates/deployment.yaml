@@ -74,9 +74,9 @@ spec:
       {{- end }}
       containers:
         - name: omni-api
-          # image.tag "" → v<Chart.appVersion>, the tag scheme image-publish.yml
-          # actually pushes (v<packages/cli version>).
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "v%s" .Chart.AppVersion) }}"
+          # image.digest wins for immutable GitOps deploys; otherwise tag ""
+          # preserves the historical v<Chart.appVersion> default.
+          image: {{ include "omni.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}

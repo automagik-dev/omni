@@ -42,6 +42,37 @@ const replyFilterSchema = z
   })
   .optional();
 
+/**
+ * Mirrors `gupshupHandoffOptionsSchema` in the API (packages/api/src/routes/v2/
+ * instances.ts) minus the cross-field refinement on `customerFields` entries —
+ * the API still enforces "exactly one of value/from"; the form only needs the
+ * shape to render editable fields.
+ */
+const gupshupHandoffOptionsSchema = z
+  .object({
+    defaultFields: z.record(z.string()).optional().describe('Handoff fields used when the agent sends none'),
+    fieldsByPhonePrefix: z
+      .array(
+        z.object({
+          prefixes: z.array(z.string()).describe('Digit-only phone prefixes (country and area code)'),
+          fields: z.record(z.string()).describe('Fields for numbers matching one of the prefixes'),
+        }),
+      )
+      .optional()
+      .describe('First matching rule overrides the defaults'),
+    customerFields: z
+      .array(
+        z.object({
+          apiKey: z.string().describe('Customer field key in the Custom Integration'),
+          value: z.string().optional().describe('Literal value'),
+          from: z.string().optional().describe('Handoff field to copy the value from'),
+        }),
+      )
+      .optional()
+      .describe('customerFields template sent with every HANDOFF'),
+  })
+  .optional();
+
 const sections: ConfigSection[] = [
   {
     id: 'identity',
@@ -224,6 +255,15 @@ const sections: ConfigSection[] = [
       webhookVerifyToken: z.string().optional().describe('Webhook verify token'),
     }),
     keys: ['gupshupCallbackUrl', 'gupshupAuthToken', 'gupshupEventId', 'webhookVerifyToken'],
+  },
+  {
+    id: 'handoff-gupshup',
+    title: 'Gupshup handoff',
+    description:
+      'Routing defaults and customer fields applied to HANDOFF messages. Explicit fields from the agent always win.',
+    channels: ['gupshup'],
+    schema: z.object({ gupshupHandoffOptions: gupshupHandoffOptionsSchema }),
+    keys: ['gupshupHandoffOptions'],
   },
   {
     id: 'creds-twilio',

@@ -165,6 +165,11 @@ export interface SlackConnectionOptions {
   mode?: SlackConnectionMode;
   /** Port for the built-in HTTP receiver (HTTP mode only, default: 3001) */
   httpPort?: number;
+  /**
+   * How long to wait for the Socket Mode WebSocket to be verifiably open after
+   * `app.start()` resolves before failing the start (#941). Default: 10s.
+   */
+  socketConnectTimeoutMs?: number;
 }
 
 /**
@@ -320,6 +325,17 @@ export interface SlackManifest {
     bot_user: {
       display_name: string;
       always_online: boolean;
+    };
+    /**
+     * Agent messaging experience (#914). Replaces the deprecated
+     * `assistant_view` (gone February 2027); the switch is one-way per app.
+     */
+    agent_view?: {
+      agent_description: string;
+      suggested_prompts?: Array<{
+        title: string;
+        message: string;
+      }>;
     };
     slash_commands?: Array<{
       command: string;

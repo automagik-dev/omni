@@ -54,7 +54,11 @@ export const DEFAULT_TYPING_INDICATOR_MS = 2500;
 const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<ChannelType>([
   'whatsapp-business',
   'hermes',
+  'asc',
   'twilio-whatsapp',
+  // ASC is a Meta BSP: the far end of the flow is WhatsApp, so Meta's window
+  // applies exactly as it does to the other BSPs above.
+  'asc-flow',
 ]);
 
 /**
@@ -71,6 +75,9 @@ const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<Channel
 const CHANNELS_WITH_TYPING_INDICATOR: ReadonlySet<ChannelType> = new Set<ChannelType>([
   'whatsapp-baileys',
   'whatsapp-business',
+  // asc mirrors the whatsapp-business mechanism (typing via the newest
+  // inbound wamid) — same silent no-op when no wamid is remembered.
+  'asc',
   'twilio-whatsapp',
   'discord',
   'slack',

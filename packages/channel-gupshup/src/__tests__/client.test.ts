@@ -157,3 +157,53 @@ describe('GupshupClient — validateCredentials', () => {
     fetchSpy.mockRestore();
   });
 });
+
+describe('GupshupClient — send HANDOFF customerFields', () => {
+  function postedBody(fetchSpy: ReturnType<typeof spyOn>): Record<string, unknown> {
+    const init = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    return JSON.parse(String(init?.body)) as Record<string, unknown>;
+  }
+
+  it('omits customerFields from the wire when not provided', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(makeOkResponse({ status: 'ok' }));
+    const client = makeClient();
+
+    await client.send('5511999990000', { type: 'HANDOFF', text: 'hi', handoff_fields: { queue: 'X' } });
+
+    const body = postedBody(fetchSpy);
+    expect(body).not.toHaveProperty('customerFields');
+    expect(body.handoff_fields).toEqual({ queue: 'X' });
+    fetchSpy.mockRestore();
+  });
+
+  it('posts customerFields verbatim, in order, when provided', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(makeOkResponse({ status: 'ok' }));
+    const client = makeClient();
+
+    await client.send('5511999990000', {
+      type: 'HANDOFF',
+      text: 'hi',
+      handoff_fields: { queue: 'X' },
+      customer_fields: [
+        { apiKey: 'Queue', value: 'X' },
+        { apiKey: 'Source', value: 'assistant' },
+      ],
+    });
+
+    expect(postedBody(fetchSpy).customerFields).toEqual([
+      { apiKey: 'Queue', value: 'X' },
+      { apiKey: 'Source', value: 'assistant' },
+    ]);
+    fetchSpy.mockRestore();
+  });
+
+  it('omits customerFields when the array is empty', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(makeOkResponse({ status: 'ok' }));
+    const client = makeClient();
+
+    await client.send('5511999990000', { type: 'HANDOFF', text: 'hi', customer_fields: [] });
+
+    expect(postedBody(fetchSpy)).not.toHaveProperty('customerFields');
+    fetchSpy.mockRestore();
+  });
+});

@@ -89,6 +89,17 @@ function isTestFile(path: string): boolean {
   return path.includes('/__tests__/') || /\.(test|spec)\.ts$/.test(path);
 }
 
+/**
+ * Sibling suites create and delete scratch sources inside the scanned tree
+ * while a scan runs (this guard's own test scratch, the db guard's parallel
+ * scan), so any path listed by the walk may be gone by the time it is
+ * stat'ed or read. A vanished path has no call sites: skip it. Every other
+ * error still throws.
+ */
+function isEnoent(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
 function walk(dir: string, out: string[]): void {
   let entries: string[];
   try {
@@ -99,7 +110,14 @@ function walk(dir: string, out: string[]): void {
   for (const entry of entries) {
     if (SKIP_DIRS.has(entry)) continue;
     const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, out);
+    let isDirectory: boolean;
+    try {
+      isDirectory = statSync(full).isDirectory();
+    } catch (error) {
+      if (isEnoent(error)) continue;
+      throw error;
+    }
+    if (isDirectory) walk(full, out);
     else if (full.endsWith('.ts') && !isTestFile(full)) out.push(full);
   }
 }
@@ -128,7 +146,14 @@ export function scanEgressSites(repoRoot: string, roots: readonly string[] = EGR
   for (const file of files) {
     const rel = relative(repoRoot, file).split('\\').join('/');
     if (SKIP_FILES.has(rel)) continue;
-    const source = stripComments(readFileSync(file, 'utf-8'));
+    let raw: string;
+    try {
+      raw = readFileSync(file, 'utf-8');
+    } catch (error) {
+      if (isEnoent(error)) continue;
+      throw error;
+    }
+    const source = stripComments(raw);
     const matches = source.match(EGRESS_CALL);
     EGRESS_CALL.lastIndex = 0;
     if (matches && matches.length > 0) out.push({ file: rel, sites: matches.length });

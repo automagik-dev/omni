@@ -23,6 +23,13 @@ import type { ChannelCapabilities } from '../types/capabilities';
 
 import { ChannelError } from '@omni/core';
 import {
+  ASC_FLOW_CAPABILITIES,
+  AscFlowApiError,
+  AscFlowErrorCode,
+  AscFlowPlugin,
+} from '../../../channel-asc-flow/src/index';
+import { ASC_CAPABILITIES, AscApiError, AscErrorCode, AscPlugin } from '../../../channel-asc/src/index';
+import {
   DISCORD_CAPABILITIES,
   DiscordError,
   ErrorCode as DiscordErrorCode,
@@ -76,6 +83,20 @@ function channelPath(channel: string, ...segments: string[]): string {
 
 const channels: ChannelDescriptor[] = [
   {
+    name: 'asc-flow',
+    packageName: '@omni/channel-asc-flow',
+    pluginClass: AscFlowPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: AscFlowApiError,
+    capabilities: ASC_FLOW_CAPABILITIES,
+    pluginSourcePath: channelPath('asc-flow', 'plugin.ts'),
+    handlerSourcePaths: [
+      channelPath('asc-flow', 'handlers', 'webhook.ts'),
+      // Inbound media resolution (the `/atendimento` base64 fetch) lives here.
+      channelPath('asc-flow', 'utils', 'media.ts'),
+    ],
+    errorSourcePath: channelPath('asc-flow', 'utils', 'errors.ts'),
+  },
+  {
     name: 'whatsapp',
     packageName: '@omni/channel-whatsapp',
     pluginClass: WhatsAppPlugin as unknown as typeof BaseChannelPlugin,
@@ -124,6 +145,16 @@ const channels: ChannelDescriptor[] = [
     pluginSourcePath: channelPath('slack', 'plugin.ts'),
     handlerSourcePaths: [channelPath('slack', 'handlers', 'messages.ts'), channelPath('slack', 'handlers', 'files.ts')],
     errorSourcePath: channelPath('slack', 'types.ts'),
+  },
+  {
+    name: 'asc',
+    packageName: '@omni/channel-asc',
+    pluginClass: AscPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: AscApiError,
+    capabilities: ASC_CAPABILITIES,
+    pluginSourcePath: channelPath('asc', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('asc', 'handlers', 'webhook.ts')],
+    errorSourcePath: channelPath('asc', 'utils', 'errors.ts'),
   },
   {
     name: 'hermes',
@@ -214,6 +245,7 @@ const REQUIRED_BOOLEAN_FIELDS: (keyof ChannelCapabilities)[] = [
 ];
 
 const errorConstructorArgs: Record<string, unknown[]> = {
+  'asc-flow': [AscFlowErrorCode.INVALID_REQUEST, 'compliance test'],
   whatsapp: [WhatsAppErrorCode.SEND_FAILED, 'compliance test'],
   telegram: [TelegramErrorCode.SEND_FAILED, 'compliance test'],
   discord: [DiscordErrorCode.SEND_FAILED, 'compliance test'],
@@ -221,14 +253,17 @@ const errorConstructorArgs: Record<string, unknown[]> = {
   'twilio-whatsapp': [TwilioWhatsAppErrorCode.SEND_FAILED, 'compliance test'],
   'whatsapp-business': [MetaErrorCode.INVALID_REQUEST, 'compliance test'],
   hermes: [HermesErrorCode.INVALID_REQUEST, 'compliance test'],
+  asc: [AscErrorCode.INVALID_REQUEST, 'compliance test'],
 };
 
 // Group 1: Infrastructure
 
 describe('SDK compliance test infrastructure', () => {
-  it('has descriptors for all 7 channels', () => {
+  it('has descriptors for all 10 channels', () => {
     const names = channels.map((c) => c.name).sort();
     expect(names).toEqual([
+      'asc',
+      'asc-flow',
       'discord',
       'hermes',
       'slack',
@@ -314,6 +349,9 @@ for (const channel of channels) {
       });
 
       it('uses createDownloadGuard for media downloads', () => {
+        // Text-only channels never download inbound bytes, so there is nothing
+        // to guard.
+        if (channel.capabilities.supportedMediaTypes.length === 0) return;
         const allPaths = [channel.pluginSourcePath, ...channel.handlerSourcePaths];
         expect(anySourceContainsCall(allPaths, 'createDownloadGuard')).toBe(true);
       });
@@ -452,7 +490,9 @@ for (const channel of channels) {
       it('has valid supportedMediaTypes', () => {
         const { supportedMediaTypes } = channel.capabilities;
         expect(Array.isArray(supportedMediaTypes)).toBe(true);
-        expect(supportedMediaTypes.length).toBeGreaterThan(0);
+        // An empty list is the honest declaration for a text-only channel
+        // (asc-flow); a media-capable one must enumerate what it accepts.
+        if (channel.capabilities.canSendMedia) expect(supportedMediaTypes.length).toBeGreaterThan(0);
         for (const mediaType of supportedMediaTypes) {
           expect(typeof mediaType.mimeType).toBe('string');
           expect(mediaType.mimeType.length).toBeGreaterThan(0);
@@ -465,7 +505,7 @@ for (const channel of channels) {
 // Discovery guard
 
 describe('channel coverage', () => {
-  it('covers all channel-* packages (excluding a2a, internal, and linkedin)', () => {
+  it('covers all channel-* packages (excluding a2a, internal, harness, and linkedin)', () => {
     const entries = readdirSync(packagesRoot, { withFileTypes: true });
     const channelPackages = entries
       .filter(
@@ -476,6 +516,7 @@ describe('channel coverage', () => {
           e.name !== 'channel-sdk' &&
           e.name !== 'channel-a2a' &&
           e.name !== 'channel-internal' &&
+          e.name !== 'channel-harness' && // Transport-less E2E test harness (#953) — no webhooks/media/dedupe, same category as internal
           e.name !== 'channel-linkedin' && // Placeholder package — no source yet
           e.name !== 'channel-gupshup' && // In progress — PR #334
           e.name !== 'channel-msteams', // Scaffold — text path only, PR #916

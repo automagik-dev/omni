@@ -3,6 +3,7 @@
  */
 
 import type { GupshupClient } from '../client';
+import type { GupshupCustomerField } from '../handoff-options';
 import type { GupshupSendResponse } from '../types';
 
 export async function sendHandoff(
@@ -12,6 +13,7 @@ export async function sendHandoff(
   dadosLead?: string,
   motivoHandoff?: string,
   handoffFields?: Record<string, unknown>,
+  customerFields?: GupshupCustomerField[],
 ): Promise<GupshupSendResponse> {
   return client.send(to, {
     type: 'HANDOFF',
@@ -19,5 +21,6 @@ export async function sendHandoff(
     dados_lead: dadosLead,
     motivo_handoff: motivoHandoff,
     handoff_fields: handoffFields,
+    ...(customerFields ? { customer_fields: customerFields } : {}),
   });
 }

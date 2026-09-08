@@ -53,6 +53,14 @@ export interface ReactionAckConfig {
 export interface AckHandle {
   /** Remove the ack reaction (call after agent responds) */
   remove(): void;
+  /**
+   * Disarm the handle WITHOUT removing the reaction: clears the auto-removal
+   * timer and makes any later remove() a no-op. Use when another ack handle
+   * takes over ownership of the same (instance, chat, message, emoji) reaction
+   * — e.g. the dispatch-time ack superseding an enqueue-time ack (#920) —
+   * so this handle's hard timeout cannot strip the successor's live reaction.
+   */
+  release(): void;
 }
 
 // ============================================================================
@@ -142,7 +150,7 @@ export function startAck(
   channel: string,
   config: ReactionAckConfig,
 ): AckHandle {
-  const noopHandle: AckHandle = { remove() {} };
+  const noopHandle: AckHandle = { remove() {}, release() {} };
 
   // DEC-5: Missing config defaults to 'off'
   if (config.reactionAck !== 'on') {
@@ -196,6 +204,11 @@ export function startAck(
       if (ackProvider) {
         ackProvider.removeAck(instanceId, chatId, messageId, emoji).catch(() => {});
       }
+    },
+    release() {
+      if (removed) return;
+      removed = true;
+      clearTimeout(timer);
     },
   };
 }

@@ -3,8 +3,77 @@
  */
 
 import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
+import {
+  connectorLivenessStatuses,
+  connectorMutationPolicies,
+  connectorWindowSemanticsValues,
+  webhookSignatureAlgorithms,
+} from '@omni/db';
+import { DEFAULT_IDEMPOTENCY_KEY_TEMPLATE, isValidIdempotencyKeyTemplate } from '../../lib/ingress-idempotency';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, SuccessSchema } from './common';
+
+// Ingress idempotency key template (#958). Validated at the boundary: a pure
+// literal (no placeholder) would collide EVERY delivery of the source into
+// one "duplicate", so at least one `{...}` placeholder is required.
+const IdempotencyKeyTemplateSchema = z
+  .string()
+  .min(1)
+  .max(500)
+  .refine(isValidIdempotencyKeyTemplate, {
+    message:
+      'Template must contain at least one placeholder: {source}, {sha256(body)}, {headers.<name>} or {payload.<path>}',
+  })
+  .openapi({
+    description: `How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "${DEFAULT_IDEMPOTENCY_KEY_TEMPLATE}". This dedupes provider REDELIVERY, not semantic identity.`,
+  });
+
+// Signature verification contract (issue #928). This is the ONE Zod
+// definition: the route validator (`routes/v2/webhooks.ts`) imports it, so the
+// published OpenAPI document and the runtime validation cannot drift. The
+// bounds and the token-match/prefix refinement are enforced at the boundary;
+// the config/secret pairing is enforced by `WebhookService` (create/update).
+// The secret itself is write-only — it never appears in any response schema.
+export const WebhookSignatureConfigSchema = z
+  .object({
+    algorithm: z.enum(webhookSignatureAlgorithms).openapi({
+      description: 'How to verify: HMAC over the raw request body, or direct token match',
+    }),
+    header: z.string().min(1).max(200).openapi({
+      description: 'Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters',
+    }),
+    prefix: z.string().max(50).optional().openapi({
+      description:
+        'Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match',
+    }),
+  })
+  .refine((config) => config.algorithm !== 'token-match' || config.prefix === undefined, {
+    message: "prefix is not applicable to algorithm 'token-match'",
+    path: ['prefix'],
+  });
+
+// Semantic event-type extraction (issue #959). Like the signature contract
+// above, this is the ONE Zod definition: the route validator imports it, so
+// the published OpenAPI document and the runtime validation cannot drift.
+export const WebhookEventTypeMappingSchema = z.discriminatedUnion('source', [
+  z.object({
+    source: z.literal('header').openapi({
+      description: 'Read the semantic event name from a request header',
+    }),
+    header: z.string().min(1).max(200).openapi({
+      description: 'Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters',
+    }),
+  }),
+  z.object({
+    source: z.literal('body').openapi({
+      description: 'Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)',
+    }),
+    path: z.string().min(1).max(200).openapi({
+      description:
+        'Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters',
+    }),
+  }),
+]);
 
 // Webhook source schema
 export const WebhookSourceSchema = z.object({
@@ -12,17 +81,137 @@ export const WebhookSourceSchema = z.object({
   name: z.string().openapi({ description: 'Source name' }),
   description: z.string().nullable().openapi({ description: 'Description' }),
   expectedHeaders: z.record(z.string(), z.boolean()).nullable().openapi({ description: 'Expected headers' }),
+  signatureConfig: WebhookSignatureConfigSchema.nullable().openapi({ description: 'Signature verification config' }),
+  eventTypeMapping: WebhookEventTypeMappingSchema.nullable().openapi({
+    description:
+      'Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source}',
+  }),
+  hasSignatureSecret: z
+    .boolean()
+    .openapi({ description: 'Whether a signature secret is stored (secret is write-only)' }),
+  idempotencyKeyTemplate: z.string().openapi({ description: 'Idempotency key derivation template' }),
+  totalDuplicates: z.number().int().openapi({ description: 'Redeliveries acked without creating a second event' }),
+  strictSchemas: z.boolean().openapi({
+    description:
+      'Strict schema mode: deliveries resolving to an event type with no enabled registered schema are ' +
+      'refused and dead-lettered with reason schema_not_registered',
+  }),
   enabled: z.boolean().openapi({ description: 'Whether enabled' }),
+  lastReceivedAt: z.string().datetime().nullable().openapi({ description: 'When the last webhook was received' }),
+  totalReceived: z.number().int().openapi({ description: 'Total webhooks received' }),
+  // Connector lifecycle contract (#961)
+  expectedIntervalSeconds: z
+    .number()
+    .int()
+    .nullable()
+    .openapi({ description: 'Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised' }),
+  lastHeartbeatAt: z.string().datetime().nullable().openapi({ description: 'Last heartbeat ("ran, zero events")' }),
+  heartbeatCount: z.number().int().openapi({ description: 'Total heartbeats received' }),
+  livenessStatus: z
+    .enum(connectorLivenessStatuses)
+    .nullable()
+    .openapi({ description: 'Liveness state; null = unsupervised. Transitions emit system.connector.* events' }),
+  livenessArmedAt: z.string().datetime().nullable().openapi({ description: 'When the cadence was (re)declared' }),
+  stalledAt: z.string().datetime().nullable().openapi({ description: 'When the current stall began' }),
+  windowSemantics: z
+    .enum(connectorWindowSemanticsValues)
+    .nullable()
+    .openapi({ description: 'Declared window semantics; null = undeclared' }),
+  mutationPolicy: z
+    .enum(connectorMutationPolicies)
+    .nullable()
+    .openapi({ description: 'Declared upstream-mutation re-emit policy; null = undeclared' }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
 });
 
 // Create webhook source request
 export const CreateWebhookSourceSchema = z.object({
-  name: z.string().min(1).max(100).openapi({ description: 'Unique source name' }),
+  name: z.string().min(1).max(100).openapi({ description: 'Unique source name (e.g., github, stripe, agno)' }),
   description: z.string().optional().openapi({ description: 'Description' }),
   expectedHeaders: z.record(z.string(), z.boolean()).optional().openapi({ description: 'Headers to validate' }),
+  signatureConfig: WebhookSignatureConfigSchema.nullable()
+    .optional()
+    .openapi({
+      description:
+        'Signature verification config; required for the source to be reachable on the public ingress. ' +
+        'Always paired with signatureSecret: a config without a stored secret is rejected (400), and clearing ' +
+        'the config (null) also clears the stored secret.',
+    }),
+  signatureSecret: z
+    .string()
+    .min(8)
+    .max(512)
+    .nullable()
+    .optional()
+    .openapi({
+      description:
+        'Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set ' +
+        'without a signatureConfig (given in the same request, or already stored on update); null clears it.',
+    }),
+  idempotencyKeyTemplate: IdempotencyKeyTemplateSchema.optional(),
+  strictSchemas: z
+    .boolean()
+    .optional()
+    .openapi({
+      description:
+        'Strict schema mode (RFC #925 G1 policy switch): when true, a delivery resolving to an event type ' +
+        'with no enabled registered schema is refused and dead-lettered with reason schema_not_registered ' +
+        '(manual retry only) instead of passing through. Defaults to false (opt-in pass-through). ' +
+        'Recommended true for NEW sources — they have no legacy emitters to grandfather.',
+    }),
+  eventTypeMapping: WebhookEventTypeMappingSchema.nullable()
+    .optional()
+    .openapi({
+      description:
+        'Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). ' +
+        'Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery.',
+    }),
   enabled: z.boolean().default(true).openapi({ description: 'Whether enabled' }),
+  // Connector lifecycle contract (#961)
+  expectedIntervalSeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(2_592_000)
+    .nullable()
+    .optional()
+    .openapi({
+      description:
+        'Declared cadence: the connector promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it ' +
+        'arms liveness supervision (silence beyond the window emits system.connector.stalled and marks the ' +
+        'source unhealthy); null disarms it.',
+    }),
+  windowSemantics: z
+    .enum(connectorWindowSemanticsValues)
+    .nullable()
+    .optional()
+    .openapi({
+      description:
+        "Declared time-window semantics: 'future_only' (only not-yet-started items) or 'includes_in_progress'. " +
+        'Informational contract for consumers; null = undeclared.',
+    }),
+  mutationPolicy: z
+    .enum(connectorMutationPolicies)
+    .nullable()
+    .optional()
+    .openapi({
+      description:
+        "How the source re-emits a changed upstream item: 'same_id' (reschedule case — consumers must key on " +
+        "id+content) or 'new_id'. Feeds the idempotency key template choice; null = undeclared.",
+    }),
+});
+
+// Heartbeat response (#961)
+export const WebhookHeartbeatResponseSchema = z.object({
+  ok: z.literal(true).openapi({ description: 'Heartbeat recorded' }),
+  source: z.string().openapi({ description: 'Webhook source name' }),
+  heartbeatAt: z.string().datetime().openapi({ description: 'When the heartbeat was recorded' }),
+  livenessStatus: z
+    .enum(connectorLivenessStatuses)
+    .nullable()
+    .openapi({ description: 'Status before this heartbeat (a stalled source recovers on the next sweep tick)' }),
+  expectedIntervalSeconds: z.number().int().nullable().openapi({ description: 'Declared cadence, if any' }),
 });
 
 // Trigger event request
@@ -35,16 +224,23 @@ export const TriggerEventSchema = z.object({
 
 // Webhook receive response
 export const WebhookReceiveResponseSchema = z.object({
-  eventId: z.string().uuid().openapi({ description: 'Created event ID' }),
+  eventId: z.string().uuid().openapi({ description: 'Created event ID (the ORIGINAL event on a duplicate)' }),
   source: z.string().openapi({ description: 'Webhook source name' }),
   eventType: z.string().openapi({ description: 'Event type' }),
+  duplicate: z
+    .boolean()
+    .optional()
+    .openapi({ description: 'True when the delivery was a redelivery: acked, but no second event was created' }),
 });
 
 export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
+  registry.register('WebhookSignatureConfig', WebhookSignatureConfigSchema);
+  registry.register('WebhookEventTypeMapping', WebhookEventTypeMappingSchema);
   registry.register('WebhookSource', WebhookSourceSchema);
   registry.register('CreateWebhookSourceRequest', CreateWebhookSourceSchema);
   registry.register('TriggerEventRequest', TriggerEventSchema);
   registry.register('WebhookReceiveResponse', WebhookReceiveResponseSchema);
+  registry.register('WebhookHeartbeatResponse', WebhookHeartbeatResponseSchema);
 
   registry.registerPath({
     method: 'get',
@@ -136,7 +332,9 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
     operationId: 'receiveWebhook',
     tags: ['Webhooks'],
     summary: 'Receive webhook',
-    description: 'Receive webhook from external system. Creates a custom event.',
+    description:
+      'Receive webhook from external system. Creates a custom event. An empty body is accepted as an empty ' +
+      'payload; a non-empty body that is not a JSON object (malformed, array, scalar) is rejected.',
     request: {
       params: z.object({ source: z.string().openapi({ description: 'Source name' }) }),
       body: { content: { 'application/json': { schema: z.record(z.string(), z.unknown()) } } },
@@ -146,6 +344,56 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
         description: 'Webhook received',
         content: { 'application/json': { schema: WebhookReceiveResponseSchema } },
       },
+      400: { description: 'Body is not a JSON object', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
+    path: '/webhooks/{source}/heartbeat',
+    operationId: 'heartbeatWebhookSource',
+    tags: ['Webhooks'],
+    summary: 'Connector heartbeat',
+    description:
+      'Record a connector heartbeat: "I ran, zero events found". Resets the liveness window of a supervised ' +
+      'source (one declaring expectedIntervalSeconds) so silence-beyond-window detection can tell quiet from ' +
+      'dead. Creates NO journal event — only the stalled/recovered transitions are journaled. No request body.',
+    request: {
+      params: z.object({ source: z.string().openapi({ description: 'Source name' }) }),
+    },
+    responses: {
+      200: {
+        description: 'Heartbeat recorded',
+        content: { 'application/json': { schema: WebhookHeartbeatResponseSchema } },
+      },
+      403: { description: 'Source disabled', content: { 'application/json': { schema: ErrorSchema } } },
+      404: { description: 'Source not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
+    path: '/webhooks/ingress/{source}',
+    operationId: 'receiveWebhookIngress',
+    tags: ['Webhooks'],
+    summary: 'Public webhook ingress',
+    description:
+      'Auth-exempt receiver for third-party webhook senders. Requires the source to have a signature ' +
+      'configuration; the request is verified against it (HMAC over the raw body, or token match) before any ' +
+      'event is published. Unknown, disabled, unconfigured, or badly signed requests all return the same 401. ' +
+      'A non-empty body that is not a JSON object (malformed, array, scalar) is rejected with 400.',
+    security: [],
+    request: {
+      params: z.object({ source: z.string().openapi({ description: 'Source name' }) }),
+      body: { content: { 'application/json': { schema: z.record(z.string(), z.unknown()) } } },
+    },
+    responses: {
+      200: {
+        description: 'Webhook received',
+        content: { 'application/json': { schema: WebhookReceiveResponseSchema } },
+      },
+      400: { description: 'Body is not a JSON object', content: { 'application/json': { schema: ErrorSchema } } },
+      401: { description: 'Verification failed', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
 

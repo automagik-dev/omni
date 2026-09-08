@@ -135,6 +135,15 @@ const FORBIDDEN_COUNTS: readonly number[] = [
  */
 const BENIGN_FIELDS: ReadonlySet<string> = new Set(['uptime', 'timestamp', 'version']);
 
+/**
+ * The server tenancy posture (issue #982) is an AUTHENTICATED exposure only:
+ * it lives on `POST /auth/validate` and nowhere else. These are its field
+ * names; none of them may ever appear on a public surface, in either world —
+ * an anonymous caller learning a deployment's enforcement posture is doing
+ * reconnaissance, not liveness checking.
+ */
+const POSTURE_KEYS: readonly string[] = ['multitenancyEnabled', 'controlPlaneMounted', 'dbEnforcement'];
+
 const WORLDS: readonly (string | undefined)[] = [undefined, 'true'];
 
 describe.each(WORLDS.map((flag) => [flag === 'true' ? 'tenant mode on' : 'legacy mode (flag off)', flag] as const))(
@@ -165,7 +174,7 @@ describe.each(WORLDS.map((flag) => [flag === 'true' ? 'tenant mode on' : 'legacy
       // Structural guard: a leak arriving under one of the aggregation keys is
       // caught by shape alone. (`connected` is intentionally NOT checked here —
       // it is a legitimate key on the NATS check, `checks.nats.details.connected`.)
-      for (const key of ['instances', 'byChannel', 'total', 'active']) {
+      for (const key of ['instances', 'byChannel', 'total', 'active', ...POSTURE_KEYS]) {
         expect(keysDeep(body)).not.toContain(key);
       }
       // Value guard for a leak arriving under some OTHER key: the seeded counts
@@ -185,7 +194,7 @@ describe.each(WORLDS.map((flag) => [flag === 'true' ? 'tenant mode on' : 'legacy
       expect(body.version).toBeDefined();
       expect(body.instances).toBeUndefined();
       // /info carries no NATS check, so every aggregation key is unambiguous here.
-      for (const key of ['instances', 'byChannel', 'total', 'active', 'connected']) {
+      for (const key of ['instances', 'byChannel', 'total', 'active', 'connected', ...POSTURE_KEYS]) {
         expect(keysDeep(body)).not.toContain(key);
       }
       const values = scalars(body, BENIGN_FIELDS);
@@ -209,6 +218,7 @@ describe.each(WORLDS.map((flag) => [flag === 'true' ? 'tenant mode on' : 'legacy
       expect(keysDeep(body)).not.toContain('consumers');
       expect(keysDeep(body)).not.toContain('lastSequence');
       expect(keysDeep(body)).not.toContain('lastEventId');
+      for (const key of POSTURE_KEYS) expect(keysDeep(body)).not.toContain(key);
       // Even the count is inventory: it tells an anonymous caller how many
       // consumers — and therefore how much pipeline — a deployment runs.
       expect(keysDeep(body)).not.toContain('totalTracked');

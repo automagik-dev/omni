@@ -1,7 +1,7 @@
 ---
 title: "API Endpoints Reference"
 created: 2025-01-29
-updated: 2026-02-09
+updated: 2026-09-08
 tags: [api, endpoints, reference]
 status: current
 ---
@@ -18,25 +18,48 @@ All v2 routes are defined in `packages/api/src/routes/v2/` and mounted in `index
 
 | Module | Mount Point | Description |
 |--------|-------------|-------------|
+| `a2a` | `/a2a` | A2A discovery: authenticated multi-agent catalog + Agent Card resolution |
+| `agents` | `/agents` | First-class agent entities, event manifests, identity links |
+| `agent-state` | `/agent-state` | Ephemeral agent state machine (SSE streams + one-shot get/set) |
+| `agent-tasks` | `/agent-tasks` | Persistent agent task history |
 | `auth` | `/auth` | API key validation |
 | `instances` | `/instances` | Instance CRUD, connection, sync, profile, groups |
 | `logs` | `/logs` | System log streaming |
 | `messages` | `/messages` | Message CRUD, send operations, TTS, presence |
-| `events` | `/events` | Event queries, analytics, timeline |
+| `scheduled-messages` | `/scheduled-messages` | Deferred sends (platform-native or local sweeper) |
+| `slack` | `/slack` | Slack-only: DM open + full-text message search |
+| `event-schemas` | `/` (routes at `/events/schemas`) | Event schema registry (draft-07 JSON Schema, validated at publish gates) |
+| `event-consumers` | `/` (routes at `/events/consumers`) | Durable pull consumers with Postgres journal cursors |
+| `events` | `/events` | Event queries, analytics, timeline, causality traces |
+| `journeys` | `/journeys` | Message journey tracing (per-correlation traces + aggregate metrics) |
 | `persons` | `/persons` | Identity search, presence, linking |
 | `access` | `/access` | Access control rules |
 | `settings` | `/settings` | Server settings management |
 | `providers` | `/providers` | AI agent provider management |
 | `dead-letters` | `/dead-letters` | Failed event management |
 | `event-ops` | `/event-ops` | Event replay, metrics |
+| `processed-events` | `/processed-events` | Placeholder reserving the path (clean 404 until #411 lands) |
 | `metrics` | `/metrics` | System metrics |
+| `conversations` | `/conversations` | Cross-channel conversation continuity |
 | `chats` | `/chats` | Chat CRUD, participants, archive/pin/mute |
+| `channel-harness` | `/channels/harness` | E2E agent-test harness driving/inspection (auth-required, unlike channel webhooks) |
 | `media` | `/media` | Media file serving |
 | `batch-jobs` | `/batch-jobs` | Batch operations |
 | `keys` | `/keys` | API key management |
+| `context` | `/context` | Per-API-key conversation context (active instance/chat/message) |
+| `turns` | `/turns` | Turn lifecycle for turn-based agents (close, admin list/stats) |
+| `trust` | `/trust` | Host fingerprint trust registration (idempotent handshake) |
+| `voice` | `/voice` | Voice session management (join/leave/sessions, any VoiceCapable channel) |
+| `follow-up` | `/follow-up` | Idle-chat follow-up config at agent/instance/chat scopes |
+| `handoffs` | `/handoffs` | Handoff audit log |
+| `whatsapp-business` | `/instances` (routes at `/instances/:id/whatsapp-business/*`) | WhatsApp Cloud (Meta) connection lifecycle, profile, analytics |
+| `templates` | `/` (routes at `/instances/:id/whatsapp-templates/*`) | WhatsApp Cloud HSM template management |
+| `whatsapp-flows` | `/` (routes at `/instances/:id/whatsapp-flows/*`) | WhatsApp Flows management + send |
 | `payloads` | `/` | Event payload storage and config |
-| `webhooks` | `/` | Webhook sources and event triggers |
-| `automations` | `/automations` | Event-driven automation workflows |
+| `webhooks` | `/` | Webhook sources, ingress, heartbeats, event triggers |
+| `automations` | `/automations` + `/` | Event-driven automation workflows (root mount for `/automation-logs`, `/automation-metrics`) |
+| `agent-routes` | `/` (routes at `/instances/:instanceId/routes`, `/routes/metrics`) | Agent routing configuration |
+| `platform-tenants` | `/platform` (mounted in `app.ts`, only when `OMNI_MULTITENANCY_ENABLED=true`) | Tenant lifecycle control plane (platform-class credentials only) |
 
 ---
 
@@ -213,11 +236,12 @@ PATCH  /api/v2/messages/:id/document-extraction # Update document extraction
 
 ```yaml
 POST   /api/v2/messages/send                  # Send text message
-  Body: { instanceId, to, text, replyTo?, mentions?[] }
+  Body: { instanceId, to, text, replyTo?, threadId?, mentions?[] }
+  Note: `threadId` targets a thread/topic (e.g. Telegram forum topic, Slack thread_ts)
 
 POST   /api/v2/messages/send/media            # Send media
   Body: { instanceId, to, type: image|audio|video|document,
-          url?, base64?, filename?, caption?, voiceNote? }
+          url?, base64?, filename?, caption?, voiceNote?, threadId? }
 
 POST   /api/v2/messages/send/reaction         # Send reaction
   Body: { instanceId, to, messageId, emoji }
@@ -240,7 +264,7 @@ POST   /api/v2/messages/send/forward          # Forward a message (WhatsApp)
   Body: { instanceId, to, messageId, fromChatId }
 
 POST   /api/v2/messages/send/presence         # Send typing/recording indicator
-  Body: { instanceId, to, type: typing|recording|paused, duration? }
+  Body: { instanceId, to, type: typing|recording|paused, duration?, threadId? }
 
 POST   /api/v2/messages/send/poll             # Send poll (Discord)
   Body: { instanceId, to, question, answers[], durationHours?, multiSelect?, replyTo? }
@@ -278,6 +302,45 @@ POST   /api/v2/messages/:id/star             # Star a message
 
 DELETE /api/v2/messages/:id/star             # Unstar a message
   Body: { instanceId, channelId, fromMe? }
+```
+
+### Permalink
+
+```yaml
+GET    /api/v2/messages/:id/permalink        # Resolve a stable deep link to the message
+  Query: instanceId, channelId
+  Response: { messageId, permalink, cached }
+  Note: Resolved lazily via the channel plugin and cached on the message row.
+        400 if the channel cannot resolve permalinks.
+```
+
+> Message-level **pin** state is populated from inbound platform events only —
+> there is no invokable pin endpoint (chat-level pin lives under `/chats/:id/pin`).
+
+---
+
+## Scheduled Messages
+
+Source: `packages/api/src/routes/v2/scheduled-messages.ts`
+
+Deferred sends. The server picks the delivery mode from the channel's
+`canScheduleMessage` capability: platform-native scheduling where the channel
+supports it (Slack, text-only), otherwise Omni's local sweeper (15s cron).
+Callers do not choose the mode.
+
+```yaml
+POST   /api/v2/scheduled-messages             # Schedule a message for later
+  Body: { instanceId, chatId, content, sendAt, threadId?, isThreadBroadcast? }
+  Note: `content` is OutgoingContent (e.g. { type: 'text', text: '...' });
+        `sendAt` is an ISO-8601 datetime
+
+GET    /api/v2/scheduled-messages             # List pending scheduled messages
+  Query: instanceId, limit (1-500, default 100)
+  Note: Only messages scheduled through Omni are listed
+
+GET    /api/v2/scheduled-messages/:id         # Get scheduled message
+
+DELETE /api/v2/scheduled-messages/:id         # Cancel a pending scheduled message
 ```
 
 ---
@@ -373,8 +436,74 @@ POST   /api/v2/events/search                  # Search events
 
 GET    /api/v2/events/:id                     # Get event by ID
 
+GET    /api/v2/events/:id/trace               # Walk the causality chain around an event
+  Response: { event, ancestors[], descendants[{ event, depth }], truncated }
+  Note: Walks causation_id ancestors up to the root ingress event, then
+        breadth-first through descendants (children = events whose
+        causation_id is this id). Instance access is gated on the focus event.
+
 GET    /api/v2/events/by-sender/:senderId     # Events by sender
   Query: limit?, instanceId?
+```
+
+---
+
+## Event Schemas
+
+Source: `packages/api/src/routes/v2/event-schemas.ts`
+
+Registry of draft-07 JSON Schemas per event type. Global (not tenant-scoped).
+Validation is enforced at the publish gates — webhook ingress and the
+automation `emit_event` action. Unregistered types pass through unless the
+webhook source sets `strictSchemas` (failures dead-letter as
+`schema_not_registered`) or `OMNI_STRICT_EMIT_EVENT_SCHEMAS=true` is set for
+`emit_event`.
+
+> Runbook examples: [[../runbooks/github-webhook-source|GitHub webhook source]],
+> [[../runbooks/clickup-webhook-source|ClickUp webhook source]]
+
+```yaml
+GET    /api/v2/events/schemas                 # List registered schemas
+  Query: enabled?
+
+GET    /api/v2/events/schemas/:eventType      # Get schema for an event type
+
+POST   /api/v2/events/schemas                 # Register or revise a schema
+  Body: { eventType, schema, description?, enabled? }
+  Note: Revising an existing type bumps `version`. Revisions must be
+        additive-optional; an incompatible replacement is refused with 409.
+```
+
+---
+
+## Durable Event Consumers
+
+Source: `packages/api/src/routes/v2/event-consumers.ts`
+
+Named pull consumers over the Postgres event journal — cursors over
+`omni_events.journal_seq`, delivered at-least-once. These are **not** NATS
+JetStream consumers. `lag` = journal head − cursor.
+
+> Runbook: [[../runbooks/durable-consumers|Durable consumers]]
+
+```yaml
+GET    /api/v2/events/consumers               # List consumers (filter, cursor, live lag)
+
+POST   /api/v2/events/consumers               # Register a consumer
+  Note: Initial cursor 'now' = journal head (default), 'beginning' = full replay
+
+GET    /api/v2/events/consumers/:name         # Get consumer + cursor position + lag
+
+DELETE /api/v2/events/consumers/:name         # Delete registration + cursor (journal untouched)
+
+POST   /api/v2/events/consumers/:name/pull    # Pull events after the stored cursor
+  Query: limit (1-500, default 100), waitMs (0-30000; long-poll wait for new events)
+  Note: Returns events in journal_seq order plus the highest SCANNED
+        journal_seq as `cursor` (not the last matching event's seq)
+
+POST   /api/v2/events/consumers/:name/ack     # Advance the cursor (monotonic)
+  Body: { cursor }
+  Note: Equal cursor = no-op; lower than stored = 400
 ```
 
 ---
@@ -540,6 +669,28 @@ GET    /api/v2/providers/:id/workflows        # List workflows
 
 ---
 
+## Agent Manifests
+
+Source: `packages/api/src/routes/v2/agents.ts`
+
+An agent's event manifest declares what it consumes and publishes:
+`{ accepts: [{ event, filter? }], publishes: [{ event }] }` — exact event
+types only, no globs. `publishes` is enforced at emit time (violations are
+dead-lettered as `publish_not_declared`); `accepts` compiles into managed
+automations.
+
+> Runbook: [[../runbooks/agent-publish-governance|Agent publish governance]]
+
+```yaml
+GET    /api/v2/agents/:id/manifest            # Get the agent's event manifest
+
+PUT    /api/v2/agents/:id/manifest            # Replace the manifest (full replacement)
+  Body: { accepts: [{ event, filter? }], publishes: [{ event }] }
+  Note: Publishes system.agent.manifest.updated
+```
+
+---
+
 ## Automations
 
 Source: `packages/api/src/routes/v2/automations.ts`
@@ -551,8 +702,12 @@ GET    /api/v2/automations                    # List automations
 GET    /api/v2/automations/:id                # Get automation
 
 POST   /api/v2/automations                    # Create automation
+  Note: Body accepts `transactionalEmissions` (default false) — buffer the
+        run's emit_event publishes and flush them in order only when every
+        action succeeded; a failed run publishes zero events.
 
 PATCH  /api/v2/automations/:id                # Update automation
+  Body: (same as create, all optional — including transactionalEmissions)
 
 DELETE /api/v2/automations/:id                # Delete automation
 
@@ -573,6 +728,9 @@ GET    /api/v2/automation-metrics              # Get automation metrics
 
 Source: `packages/api/src/routes/v2/webhooks.ts`
 
+> Runbook examples: [[../runbooks/github-webhook-source|GitHub webhook source]],
+> [[../runbooks/clickup-webhook-source|ClickUp webhook source]]
+
 ### Webhook Sources (Inbound)
 
 ```yaml
@@ -582,8 +740,23 @@ GET    /api/v2/webhook-sources                # List webhook sources
 GET    /api/v2/webhook-sources/:id            # Get source details
 
 POST   /api/v2/webhook-sources                # Create webhook source
+  Body: name, description?, enabled?,
+        signatureConfig?      # { algorithm: hmac-sha256|hmac-sha1|token-match, header, prefix? }
+        signatureSecret?      # Write-only — never echoed back (responses expose hasSignatureSecret)
+        idempotencyKeyTemplate?  # Default "{source}:{sha256(body)}"
+        eventTypeMapping?     # { source: "header", header } or { source: "body", path }
+        strictSchemas?        # Require a registered schema; else dead-letter schema_not_registered
+        expectedIntervalSeconds?  # Declared connector cadence for liveness detection
 
-PATCH  /api/v2/webhook-sources/:id            # Update source
+  Note: `idempotencyKeyTemplate` placeholders — {source}, {sha256(body)},
+        {headers.<name>}, {payload.<dot.path>} (dot paths support numeric
+        array indices). Dedup runs via a unique idempotency key on
+        omni_events; a duplicate delivery returns 200 { duplicate: true }.
+  Note: `eventTypeMapping` derives the published type as custom.<source>.<event>.
+  Note: `signatureConfig` and `signatureSecret` are paired — a config without
+        a stored secret is rejected (400).
+
+PATCH  /api/v2/webhook-sources/:id            # Update source (same fields as create)
 
 DELETE /api/v2/webhook-sources/:id            # Delete source
 ```
@@ -591,13 +764,28 @@ DELETE /api/v2/webhook-sources/:id            # Delete source
 ### Inbound Webhooks
 
 ```yaml
-POST   /api/v2/webhooks/:source               # Receive webhook event
+POST   /api/v2/webhooks/ingress/:source       # Public ingress (auth-exempt)
+  Note: Verified EXCLUSIVELY by the source's signature config — signature
+        verification is required. Unknown source, disabled source, and bad
+        signature all collapse to 401 (no oracle for probing source names).
+
+POST   /api/v2/webhooks/:source               # Receive webhook event (authenticated)
+  Note: Same body contract as the public ingress: empty body → {}; a
+        non-empty body that is not a JSON object is a 400. Unknown source is
+        a 404 unless OMNI_WEBHOOK_AUTOCREATE=true.
+
+POST   /api/v2/webhooks/:source/heartbeat     # Connector liveness heartbeat (authenticated, no body)
+  Note: Resets the liveness window for sources declaring
+        expectedIntervalSeconds. A missed window emits
+        system.connector.stalled; recovery emits system.connector.recovered.
+        Heartbeats themselves are not journaled — only the transitions are.
 ```
 
 ### Event Triggering
 
 ```yaml
 POST   /api/v2/events/trigger                 # Trigger a custom event
+  Body: { eventType (custom.*), payload, correlationId?, instanceId? }
 ```
 
 ---
@@ -675,4 +863,48 @@ Source: `packages/api/src/routes/v2/metrics.ts`
 
 ```yaml
 GET    /api/v2/metrics                        # System metrics (Prometheus format)
+```
+
+---
+
+## Platform Tenants
+
+Source: `packages/api/src/routes/v2/platform-tenants.ts`
+
+Mounted at `/api/v2/platform` **only when `OMNI_MULTITENANCY_ENABLED=true`**
+(otherwise the whole surface 404s). Every route requires a PLATFORM-class
+credential with explicit `platform:*` scopes — tenant credentials and normal
+data-plane keys are denied. Mutations take a `reason` in the body; audited
+reads take an `x-platform-reason` header. Every state change writes an
+append-only platform audit row.
+
+There are intentionally **no DELETE routes** — hard tenant delete is
+unavailable; `archive` is the terminal state.
+
+```yaml
+POST   /api/v2/platform/tenants                    # Create tenant
+GET    /api/v2/platform/tenants                    # List tenants
+  Header: x-platform-reason
+GET    /api/v2/platform/tenants/:id                # Get tenant
+  Header: x-platform-reason
+
+POST   /api/v2/platform/tenants/:id/suspend        # Suspend tenant
+  Body: { reason }
+POST   /api/v2/platform/tenants/:id/archive        # Archive tenant (terminal)
+  Body: { reason }
+
+GET    /api/v2/platform/tenants/:id/memberships    # List memberships
+  Header: x-platform-reason
+POST   /api/v2/platform/tenants/:id/memberships    # Attach membership
+  Body: { principalId, role, reason }
+
+POST   /api/v2/platform/tenants/:tenantId/memberships/:id/disable  # Disable membership
+  Body: { reason }
+POST   /api/v2/platform/tenants/:tenantId/memberships/:id/status   # Set membership status
+  Body: { status: active|disabled, reason }
+POST   /api/v2/platform/tenants/:tenantId/memberships/:id/role     # Change membership role
+  Body: { role, reason }
+
+POST   /api/v2/platform/tenants/:id/keys/root      # Issue tenant root API key
+  Note: The plaintext key is returned exactly once in the 201 body
 ```

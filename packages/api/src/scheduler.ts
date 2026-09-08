@@ -163,6 +163,32 @@ async function withCronMonitor(
 }
 
 /**
+ * Construct the scheduled-message sweeper with its auth-plane connection wired.
+ *
+ * Extracted so the wiring is unit-testable: unlike other sweepers this one is
+ * built HERE (it needs the channel registry, which only exists at scheduler
+ * setup) rather than in `services/index.ts`, so it is easy to forget the
+ * `setAuthPlane` call that every tenant-scoped sweep depends on. Without it,
+ * `sweep()` finds `authPlaneDb` undefined under multitenancy and silently
+ * skips every tenant's rows.
+ */
+export function createScheduledMessageSweeper(
+  services: Services,
+  channelRegistry: ChannelRegistry,
+): ScheduledMessageService {
+  const sweeper = new ScheduledMessageService(
+    services.db,
+    createPluginResolver(services.db, (channel) => channelRegistry.get(channel as ChannelType) ?? undefined),
+  );
+  // Every tenant-scoped sweep reads the active-tenant list through the
+  // auth-plane connection; without this the tenant world is skipped and
+  // tenant-scoped scheduled messages silently never send. Mirrors how
+  // followUpSweeper is wired in services/index.ts.
+  sweeper.setAuthPlane(services.authPlane.db);
+  return sweeper;
+}
+
+/**
  * Setup and start the scheduler with all jobs
  */
 export function setupScheduler(services: Services, channelRegistry?: ChannelRegistry | null): void {
@@ -317,6 +343,33 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
     },
   });
 
+  // Connector liveness sweeper — every 30 seconds (#961).
+  //
+  // Supervises the connector CONTRACT (are events/heartbeats arriving as
+  // declared), never the connector process. Guarded transitions in the repo
+  // make each system.connector.stalled/recovered event fire exactly once per
+  // transition, so a 30s tick only bounds detection latency, not event volume.
+  scheduler.register({
+    name: 'connector-liveness-sweeper',
+    cron: '*/30 * * * * *',
+    runOnStart: false,
+    handler: async () => {
+      await withCronMonitor('connector-liveness-sweeper', '*/30 * * * * *', 1, 1, async () => {
+        const startTime = Date.now();
+        try {
+          const stats = await services.webhooks.sweepLiveness({ deadLetters: services.deadLetters });
+          recordScheduledJob('connector-liveness-sweeper', 'success', (Date.now() - startTime) / 1000);
+          if (stats.stalled > 0 || stats.recovered > 0) {
+            log.info('Connector liveness sweep tick', { ...stats });
+          }
+        } catch (err) {
+          recordScheduledJob('connector-liveness-sweeper', 'failure', (Date.now() - startTime) / 1000);
+          throw err;
+        }
+      });
+    },
+  });
+
   // Scheduled-message sweeper — every 15 seconds (#889).
   //
   // Only local-mode rows are swept: platform-mode messages are held by the
@@ -324,10 +377,7 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
   // double-post. Needs the registry to reach plugin.sendMessage, so it stays
   // unregistered when there is none.
   if (channelRegistry) {
-    const scheduledMessages = new ScheduledMessageService(
-      services.db,
-      createPluginResolver(services.db, (channel) => channelRegistry.get(channel as ChannelType) ?? undefined),
-    );
+    const scheduledMessages = createScheduledMessageSweeper(services, channelRegistry);
 
     scheduler.register({
       name: 'scheduled-message-sweeper',

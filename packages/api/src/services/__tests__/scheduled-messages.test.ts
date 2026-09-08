@@ -90,7 +90,14 @@ function makeDb(state: { rows: Partial<ScheduledMessage>[] }, capture?: { insert
       }),
     }),
     delete: () => ({ where: () => ({ returning: async () => [] }) }),
-    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({ select: () => chain(state.rows) }),
+    // The sweeper CLAIMS rows: it selects+locks them, then flips them to
+    // 'sending' via an UPDATE … RETURNING inside the SAME transaction. The
+    // claimed rows the delivery loop iterates are that update's RETURNING.
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn({
+        select: () => chain(state.rows),
+        update: () => ({ set: () => ({ where: () => ({ returning: async () => state.rows }) }) }),
+      }),
   } as unknown as Database;
 }
 
@@ -180,6 +187,36 @@ describe('ScheduledMessageService.schedule', () => {
       sendAt: IN_ONE_HOUR(),
     });
     await expect(call).rejects.toThrow(/without a 'type' discriminant/);
+  });
+
+  test('cancels the orphaned native schedule when the row insert fails (#4)', async () => {
+    // Native scheduling happens BEFORE the row insert. If the insert then
+    // throws, a platform message is left scheduled with no row to hold its
+    // externalScheduledId — uncancelable, and a retry double-schedules. The
+    // schedule() call must roll the platform message back.
+    const calls: PluginCalls = {};
+    const db = {
+      ...makeDb({ rows: [] }),
+      insert: () => ({
+        values: () => ({
+          returning: async () => {
+            throw new Error('insert boom');
+          },
+        }),
+      }),
+    } as unknown as Database;
+
+    const svc = new ScheduledMessageService(
+      db,
+      async () => makePlugin({ canSchedule: true, scheduleResult: 'Q123' }, calls),
+      noopLogger,
+    );
+
+    const call = svc.schedule({ instanceId: 'i1', chatExternalId: 'C1', content: TEXT, sendAt: IN_ONE_HOUR() });
+    await expect(call).rejects.toThrow(/insert boom/);
+
+    // The platform message must have been canceled — no orphan left behind.
+    expect(calls.canceled).toEqual({ chatId: 'C1', scheduledId: 'Q123' });
   });
 });
 

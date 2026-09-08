@@ -49,9 +49,36 @@ function tenantCtx() {
   };
 }
 
+/**
+ * A realistic issued-root-key shape. `keyHash` is present exactly because the
+ * real lineage row never carries one — the credential index does — so a route
+ * that spreads whatever the service returns instead of projecting explicit
+ * fields is caught leaking it.
+ */
+const issuedRootLineage = {
+  id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+  tenantId: '11111111-1111-1111-1111-111111111111',
+  principalId: '22222222-2222-2222-2222-222222222222',
+  membershipId: '33333333-3333-3333-3333-333333333333',
+  actorRole: 'tenant-admin',
+  name: 'bootstrap root',
+  keyPrefix: 'abcd1234',
+  scopes: ['tenant:*', 'keys:delegate'],
+  resourceConstraints: {},
+  status: 'active',
+  parentKeyId: null,
+  rootKeyId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+  depth: 0,
+  expiresAt: new Date('2027-01-01T00:00:00.000Z'),
+  rateLimit: 100,
+  budget: 1000,
+  keyHash: 'deadbeef'.repeat(8),
+};
+
 function buildApp(
   authResult: AuthResult,
   controlPlaneOverrides: Record<string, unknown> = {},
+  tenantKeyOverrides: Record<string, unknown> = {},
 ): { app: Hono; spy: Spy } {
   const spy: Spy = { calls: [] };
   const record =
@@ -75,9 +102,15 @@ function buildApp(
     ...controlPlaneOverrides,
   };
 
+  const tenantKeys = {
+    issueRootKey: record('issueRootKey', { lineage: issuedRootLineage, plainTextKey: 'omni_tk_rootPlaintextOnce' }),
+    ...tenantKeyOverrides,
+  };
+
   const services = {
     authBootstrap: { lookupBySecret: async () => authResult },
     tenantControlPlane,
+    tenantKeys,
   };
 
   const app = new Hono<{ Variables: AppVariables }>();
@@ -339,6 +372,178 @@ describe('tenant lifecycle — platform positive paths', () => {
       body: JSON.stringify({ reason: 'must not select globally' }),
     });
     expect([404, 405]).toContain(oldGlobalPath.status);
+  });
+});
+
+describe('root key issuance — POST /tenants/:id/keys/root (#979)', () => {
+  const TENANT_ID = '11111111-1111-1111-1111-111111111111';
+  const ISSUE_SCOPES = ['platform:tenant-keys:write', 'platform:tenants:write'];
+  const validBody = {
+    principalId: '22222222-2222-2222-2222-222222222222',
+    membershipId: '33333333-3333-3333-3333-333333333333',
+    role: 'tenant-admin',
+    name: 'bootstrap root',
+    scopes: ['tenant:*', 'keys:delegate'],
+    expiresAt: '2027-01-01T00:00:00.000Z',
+    rateLimit: 100,
+    budget: 1000,
+    reason: 'bootstrap issuance OPS-1',
+  };
+  const issue = (app: Hono, body: unknown = validBody, tenantId = TENANT_ID) =>
+    app.request(`/api/v2/platform/tenants/${tenantId}/keys/root`, {
+      method: 'POST',
+      ...AUTH,
+      body: JSON.stringify(body),
+    });
+  const throwing = (message: string) => ({
+    issueRootKey: async () => {
+      throw new Error(message);
+    },
+  });
+
+  test('happy path: 201, actor bound to the action and the path tenant, plaintext returned once', async () => {
+    const { app, spy } = buildApp({ ok: true, context: platformCtx(ISSUE_SCOPES) });
+    const res = await issue(app);
+    expect(res.status).toBe(201);
+
+    const call = spy.calls.find((c) => c.method === 'issueRootKey');
+    expect(call).toBeDefined();
+    const options = call?.args[0] as {
+      actor: { platformAction: string; targetTenantId: string | null };
+      tenantId: string;
+      actorRole: string;
+      scopes: string[];
+      reason: string;
+      expiresAt: Date;
+    };
+    expect(options.actor.platformAction).toBe('tenant_key.issue_root');
+    expect(options.actor.targetTenantId).toBe(TENANT_ID);
+    expect(options.tenantId).toBe(TENANT_ID);
+    expect(options.actorRole).toBe('tenant-admin');
+    expect(options.scopes).toEqual(['tenant:*', 'keys:delegate']);
+    expect(options.reason).toBe('bootstrap issuance OPS-1');
+    expect(options.expiresAt).toBeInstanceOf(Date);
+
+    const text = await res.text();
+    const { data } = JSON.parse(text) as { data: Record<string, unknown> };
+    expect(data.plainTextKey).toBe('omni_tk_rootPlaintextOnce');
+    // Exactly once in the whole payload.
+    expect(text.split('omni_tk_rootPlaintextOnce').length - 1).toBe(1);
+    expect(data.delegationDepth).toBe(0);
+    expect(data.tenantId).toBe(TENANT_ID);
+    // The credential-index material never leaves the service.
+    expect(data.keyHash).toBeUndefined();
+    expect(data.keyPrefix).toBeUndefined();
+    expect(text).not.toContain('deadbeef');
+  });
+
+  test('unauthenticated (no credential) → 401', async () => {
+    const { app, spy } = buildApp({ ok: true, context: platformCtx(ISSUE_SCOPES) });
+    const res = await app.request(`/api/v2/platform/tenants/${TENANT_ID}/keys/root`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(validBody),
+    });
+    expect(res.status).toBe(401);
+    expect(spy.calls.find((c) => c.method === 'issueRootKey')).toBeUndefined();
+  });
+
+  test('legacy/unknown credential (not in the auth index) → uniform 401', async () => {
+    const { app, spy } = buildApp({ ok: false, reason: 'not_found' });
+    expect((await issue(app)).status).toBe(401);
+    expect(spy.calls.find((c) => c.method === 'issueRootKey')).toBeUndefined();
+  });
+
+  test('tenant-class credential → 403, service never reached', async () => {
+    const { app, spy } = buildApp({ ok: true, context: tenantCtx() });
+    expect((await issue(app)).status).toBe(403);
+    expect(spy.calls.find((c) => c.method === 'issueRootKey')).toBeUndefined();
+  });
+
+  test('platform credential without platform:tenant-keys:write → 403, service never reached', async () => {
+    const { app, spy } = buildApp({
+      ok: true,
+      context: platformCtx(['platform:tenants:write', 'platform:memberships:write']),
+    });
+    expect((await issue(app)).status).toBe(403);
+    expect(spy.calls.find((c) => c.method === 'issueRootKey')).toBeUndefined();
+  });
+
+  test('missing reason → 400, service never reached', async () => {
+    const { app, spy } = buildApp({ ok: true, context: platformCtx(ISSUE_SCOPES) });
+    const { reason: _omitted, ...withoutReason } = validBody;
+    expect((await issue(app, withoutReason)).status).toBe(400);
+    expect(spy.calls.find((c) => c.method === 'issueRootKey')).toBeUndefined();
+  });
+
+  test('empty scopes → 400 before the service is reached', async () => {
+    const { app, spy } = buildApp({ ok: true, context: platformCtx(ISSUE_SCOPES) });
+    expect((await issue(app, { ...validBody, scopes: [] })).status).toBe(400);
+    expect(spy.calls.find((c) => c.method === 'issueRootKey')).toBeUndefined();
+  });
+
+  test('wildcard/platform scopes fail closed as 400', async () => {
+    const { app } = buildApp(
+      { ok: true, context: platformCtx(ISSUE_SCOPES) },
+      {},
+      throwing('invalid root key request: scope "*" grants platform/wildcard authority'),
+    );
+    const res = await issue(app, { ...validBody, scopes: ['*'] });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  test('unknown tenant and cross-tenant subject are the SAME bare 404 — no membership oracle', async () => {
+    const { app: unknownTenant } = buildApp(
+      { ok: true, context: platformCtx(ISSUE_SCOPES) },
+      {},
+      throwing('tenant not found'),
+    );
+    const { app: foreignSubject } = buildApp(
+      { ok: true, context: platformCtx(ISSUE_SCOPES) },
+      {},
+      throwing('invalid root key subject: membership not found'),
+    );
+    const a = await issue(unknownTenant);
+    const b = await issue(foreignSubject);
+    expect(a.status).toBe(404);
+    expect(b.status).toBe(404);
+    expect(await a.text()).toBe(await b.text());
+  });
+
+  test('inactive tenant → 409 without echoing the lifecycle state', async () => {
+    const { app } = buildApp({ ok: true, context: platformCtx(ISSUE_SCOPES) }, {}, throwing('tenant is suspended'));
+    const res = await issue(app);
+    expect(res.status).toBe(409);
+    expect(await res.text()).not.toContain('suspended');
+  });
+
+  test('tenant policy ceiling violation → 403', async () => {
+    const { app } = buildApp(
+      { ok: true, context: platformCtx(ISSUE_SCOPES) },
+      {},
+      throwing('root key exceeds tenant policy: rate limit exceeds tenant policy'),
+    );
+    expect((await issue(app)).status).toBe(403);
+  });
+
+  test('a stale/underprivileged issuer is a 403, not a 500', async () => {
+    const { app } = buildApp(
+      { ok: true, context: platformCtx(ISSUE_SCOPES) },
+      {},
+      throwing('unauthorized root key issuer: platform credential is revoked'),
+    );
+    expect((await issue(app)).status).toBe(403);
+  });
+
+  test('an issuer lacking platform:tenants:write is refused by the service and mapped to 403', async () => {
+    const { app } = buildApp(
+      { ok: true, context: platformCtx(['platform:tenant-keys:write']) },
+      {},
+      throwing('root key issuance requires platform:tenants:write'),
+    );
+    expect((await issue(app)).status).toBe(403);
   });
 });
 

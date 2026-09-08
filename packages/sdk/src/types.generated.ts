@@ -56,6 +56,30 @@ export interface paths {
         patch: operations["updateAgent"];
         trace?: never;
     };
+    "/agents/{id}/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get agent event manifest
+         * @description Read the agent's declarative accepts/publishes event manifest (RFC #925 G4a). Returns null when the agent has never declared one.
+         */
+        get: operations["getAgentManifest"];
+        /**
+         * Replace agent event manifest
+         * @description Replace the agent's declarative accepts/publishes event manifest (full replacement, apply semantics). Event types must be core types or namespaced custom.*\/system.* tokens. Storage only in this slice: accepts is compiled into automations by G4b, publishes enforced by G4c.
+         */
+        put: operations["updateAgentManifest"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/validate": {
         parameters: {
             query?: never;
@@ -748,6 +772,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events/{id}/trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trace the causality chain around an event
+         * @description Walks UP via causationId to the root ingress event and DOWN breadth-first through fan-out (children are events whose causationId equals this id). correlationId groups the flow; causationId gives the tree.
+         */
+        get: operations["traceEvent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events/by-sender/{senderId}": {
         parameters: {
             query?: never;
@@ -971,9 +1015,49 @@ export interface paths {
         put?: never;
         /**
          * Receive webhook
-         * @description Receive webhook from external system. Creates a custom event.
+         * @description Receive webhook from external system. Creates a custom event. An empty body is accepted as an empty payload; a non-empty body that is not a JSON object (malformed, array, scalar) is rejected.
          */
         post: operations["receiveWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/{source}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connector heartbeat
+         * @description Record a connector heartbeat: "I ran, zero events found". Resets the liveness window of a supervised source (one declaring expectedIntervalSeconds) so silence-beyond-window detection can tell quiet from dead. Creates NO journal event — only the stalled/recovered transitions are journaled. No request body.
+         */
+        post: operations["heartbeatWebhookSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/ingress/{source}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Public webhook ingress
+         * @description Auth-exempt receiver for third-party webhook senders. Requires the source to have a signature configuration; the request is verified against it (HMAC over the raw body, or token match) before any event is published. Unknown, disabled, unconfigured, or badly signed requests all return the same 401. A non-empty body that is not a JSON object (malformed, array, scalar) is rejected with 400.
+         */
+        post: operations["receiveWebhookIngress"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1554,6 +1638,138 @@ export interface paths {
          * @description Manually trigger scheduled operations.
          */
         post: operations["runScheduledOps"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/schemas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List registered event schemas
+         * @description Get every event type with a registered payload schema. The registry is opt-in per type.
+         */
+        get: operations["listEventSchemas"];
+        put?: never;
+        /**
+         * Register or revise an event schema
+         * @description Register a JSON Schema for an event type. Once registered, the webhook ingress and automation emit_event validate payloads of this type before publishing; invalid payloads are dead-lettered with reason schema_validation_failed. Unregistered types pass through unless the emitter is strict (webhook_sources.strictSchemas, or OMNI_STRICT_EMIT_EVENT_SCHEMAS for emit_event), in which case they are dead-lettered with reason schema_not_registered. Revising an existing registration must be additive-optional (the evolution rule) — an incompatible change is refused with 409 and must ship as a new versioned event type (e.g. custom.github.push.v2).
+         */
+        post: operations["registerEventSchema"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/schemas/{eventType}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a registered event schema
+         * @description Get the stored JSON Schema artifact for one event type.
+         */
+        get: operations["getEventSchema"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/consumers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List durable event consumers
+         * @description Every registered durable consumer with its filter, cursor, and live lag (journal head minus cursor).
+         */
+        get: operations["listEventConsumers"];
+        put?: never;
+        /**
+         * Register a durable event consumer
+         * @description Registers a named consumer over the event journal: a type filter (trailing-* prefix glob, the events-wait contract) plus optional payload conditions (the automation-trigger matcher), and a stored cursor. startFrom 'now' (default) begins at the journal head; 'beginning' replays the full journal (projections).
+         */
+        post: operations["createEventConsumer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/consumers/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Inspect a durable event consumer
+         * @description The consumer registration plus its live cursor position and lag.
+         */
+        get: operations["getEventConsumer"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a durable event consumer
+         * @description Removes the registration and its cursor. The journal itself is untouched.
+         */
+        delete: operations["deleteEventConsumer"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/consumers/{name}/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pull journal events from the stored cursor
+         * @description Pages journal events strictly after the stored cursor, in journal_seq order, pre-filtered by the type glob and payload conditions. Does NOT advance the cursor — ack the returned cursor to commit progress (at-least-once: a client that crashes mid-page re-pulls the same page). waitMs long-polls when no rows are available.
+         */
+        post: operations["pullEventConsumer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/consumers/{name}/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Advance the consumer cursor (monotonic)
+         * @description Commits progress up to a pull result's cursor. Monotonic: an ack equal to the stored cursor is an idempotent no-op, an ack behind it is refused with 400 — a durable cursor never moves backwards.
+         */
+        post: operations["ackEventConsumer"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2308,6 +2524,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/channels/harness/{instanceId}/say": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drive an inbound turn
+         * @description Injects an inbound message on a harness instance exactly as a real channel webhook would (message.received → dispatcher → agent: the production path).
+         */
+        post: operations["harnessSay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/harness/{instanceId}/tap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Simulate a component tap
+         * @description Converts a button/list row of a component the agent actually sent into the inbound a real tap produces (text = the option title).
+         */
+        post: operations["harnessTap"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/harness/{instanceId}/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a chat transcript
+         * @description Ordered verbatim capture of one chat: every OutgoingMessage handed to sendMessage() (refused sends included, with violations) plus the injected inbounds, and the enforced capability profile.
+         */
+        get: operations["harnessGetTranscript"];
+        put?: never;
+        post?: never;
+        /**
+         * Reset transcripts
+         * @description Drops one chat transcript, or every transcript of the instance when chatId is omitted.
+         */
+        delete: operations["harnessResetTranscript"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/platform/tenants": {
         parameters: {
             query?: never;
@@ -2386,6 +2666,26 @@ export interface paths {
          * @description Archive a tenant. Archived is TERMINAL — there is no un-archive and no hard delete anywhere on this surface. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:tenants:write`.
          */
         post: operations["archivePlatformTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform/tenants/{id}/keys/root": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a tenant root key
+         * @description Issue the initial tenant-class ROOT key (delegation depth 0) for an active membership of the tenant. All invariants are enforced transactionally: the principal/membership must belong to the tenant and match the requested role, the tenant must be active, expiry/rate-limit/budget must fit the tenant policy ceilings, and platform/wildcard scopes are refused. The plaintext key is returned exactly once and is never retrievable again. Platform control plane. Mounted only when `OMNI_MULTITENANCY_ENABLED=true`; when the flag is off the entire surface returns 404. Requires a PLATFORM-class credential with the listed scope — tenant and legacy data-plane keys are denied. Every state change requires a reason and writes an append-only platform audit row. Scope: `platform:tenant-keys:write` (the credential must also carry `platform:tenants:write`).
+         */
+        post: operations["issuePlatformTenantRootKey"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2526,6 +2826,35 @@ export interface components {
             agentCard: {
                 [key: string]: unknown;
             } | null;
+            /** @description Declarative accepts/publishes event manifest (RFC #925 G4a) */
+            eventManifest?: {
+                /**
+                 * @description Event types this agent consumes
+                 * @default []
+                 */
+                accepts: {
+                    /**
+                     * @description Event type consumed (core type, custom.*, or system.*)
+                     * @example custom.clickup.task.status_changed
+                     */
+                    event: string;
+                    /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                    filter?: {
+                        [key: string]: unknown;
+                    };
+                }[];
+                /**
+                 * @description Event types this agent declares it may emit
+                 * @default []
+                 */
+                publishes: {
+                    /**
+                     * @description Event type this agent may emit
+                     * @example custom.review.parecer.ready
+                     */
+                    event: string;
+                }[];
+            } | null;
             /**
              * Format: date-time
              * @description Creation timestamp
@@ -2588,6 +2917,34 @@ export interface components {
             agentCard?: {
                 [key: string]: unknown;
             };
+        };
+        AgentEventManifest: {
+            /**
+             * @description Event types this agent consumes
+             * @default []
+             */
+            accepts: {
+                /**
+                 * @description Event type consumed (core type, custom.*, or system.*)
+                 * @example custom.clickup.task.status_changed
+                 */
+                event: string;
+                /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                filter?: {
+                    [key: string]: unknown;
+                };
+            }[];
+            /**
+             * @description Event types this agent declares it may emit
+             * @default []
+             */
+            publishes: {
+                /**
+                 * @description Event type this agent may emit
+                 * @example custom.review.parecer.ready
+                 */
+                event: string;
+            }[];
         };
         Error: {
             error: {
@@ -2670,6 +3027,18 @@ export interface components {
                     expiresAt: string | null;
                     /** @description Delegation depth: 0 = root key, 1 = child key */
                     delegationDepth: number;
+                };
+                /** @description Deployment tenancy posture; absent only on servers that predate it */
+                server: {
+                    /** @description OMNI_MULTITENANCY_ENABLED flag state (exact-string "true" semantics) */
+                    multitenancyEnabled: boolean;
+                    /** @description Whether the /api/v2/platform control plane is mounted on this server */
+                    controlPlaneMounted: boolean;
+                    /**
+                     * @description Database enforcement posture. "enforced" means forced row-level security is installed; "legacy" with multitenancy enabled means the tenant boundary is advisory only (migration state).
+                     * @enum {string}
+                     */
+                    dbEnforcement: "legacy" | "enforced";
                 };
             };
         };
@@ -2771,7 +3140,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -2816,7 +3185,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -2841,6 +3210,87 @@ export interface components {
             isDefault: boolean;
             /** @description Bot token for Discord instances */
             token?: string;
+            /**
+             * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
+             * @example {
+             *       "defaultFields": {
+             *         "queue": "SALES"
+             *       },
+             *       "fieldsByPhonePrefix": [
+             *         {
+             *           "prefixes": [
+             *             "5511",
+             *             "5521"
+             *           ],
+             *           "fields": {
+             *             "queue": "SALES-SOUTHEAST"
+             *           }
+             *         }
+             *       ],
+             *       "customerFields": [
+             *         {
+             *           "apiKey": "Queue",
+             *           "from": "queue"
+             *         },
+             *         {
+             *           "apiKey": "Handled By",
+             *           "value": "assistant"
+             *         }
+             *       ]
+             *     }
+             */
+            gupshupHandoffOptions?: {
+                /**
+                 * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
+                 * @example {
+                 *       "queue": "SALES"
+                 *     }
+                 */
+                defaultFields?: {
+                    [key: string]: string;
+                };
+                /** @description Prefix rules layered over defaultFields; the first matching rule wins */
+                fieldsByPhonePrefix?: {
+                    /**
+                     * @description Digit-only phone prefixes (country code first, no +)
+                     * @example [
+                     *       "5511",
+                     *       "5521"
+                     *     ]
+                     */
+                    prefixes: string[];
+                    /**
+                     * @description Routing fields applied when the customer phone starts with one of the prefixes
+                     * @example {
+                     *       "queue": "SALES-SOUTHEAST"
+                     *     }
+                     */
+                    fields: {
+                        [key: string]: string;
+                    };
+                }[];
+                /**
+                 * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
+                 * @example [
+                 *       {
+                 *         "apiKey": "Queue",
+                 *         "from": "queue"
+                 *       },
+                 *       {
+                 *         "apiKey": "Handled By",
+                 *         "value": "assistant"
+                 *       }
+                 *     ]
+                 */
+                customerFields?: {
+                    /** @description customerFields apiKey your Gupshup Journey reads */
+                    apiKey: string;
+                    /** @description Literal value to send; mutually exclusive with `from` */
+                    value?: string;
+                    /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
+                    from?: string;
+                }[];
+            } | null;
         };
         InstanceStatus: {
             /**
@@ -2913,7 +3363,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -3000,6 +3450,11 @@ export interface components {
             to?: string;
             /** @description Media type if applicable */
             mediaType?: string;
+            /**
+             * Format: uuid
+             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+             */
+            senderAgentId?: string | null;
         };
         SendTextRequest: {
             /**
@@ -3038,6 +3493,11 @@ export interface components {
             };
             /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
             requestLocation?: boolean;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         TTSVoice: {
             /** @description ElevenLabs voice ID */
@@ -3075,6 +3535,11 @@ export interface components {
             similarityBoost?: number;
             /** @description Recording presence duration in ms */
             presenceDelay?: number;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         TtsResponse: {
             /** @description Internal message ID */
@@ -3094,6 +3559,11 @@ export interface components {
             audioSizeKb: number;
             /** @description Audio duration in ms */
             durationMs: number;
+            /**
+             * Format: uuid
+             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+             */
+            senderAgentId?: string | null;
         };
         SendMediaRequest: {
             /**
@@ -3121,6 +3591,11 @@ export interface components {
             caption?: string;
             /** @description Send audio as voice note */
             voiceNote?: boolean;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendReactionRequest: {
             /**
@@ -3150,6 +3625,11 @@ export interface components {
             url?: string;
             /** @description Base64 encoded sticker */
             base64?: string;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendContactRequest: {
             /**
@@ -3172,6 +3652,11 @@ export interface components {
                 /** @description Organization */
                 organization?: string;
             };
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendLocationRequest: {
             /**
@@ -3189,6 +3674,11 @@ export interface components {
             name?: string;
             /** @description Address */
             address?: string;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
         };
         SendPresenceRequest: {
             /**
@@ -3333,6 +3823,11 @@ export interface components {
              * @description When event was processed
              */
             processedAt: string | null;
+            /**
+             * Format: uuid
+             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+             */
+            causationId: string | null;
         };
         EventSummary: {
             /**
@@ -3443,6 +3938,203 @@ export interface components {
              * @default 50
              */
             limit: number;
+        };
+        EventTrace: {
+            /** @description The event the trace was requested for */
+            event: {
+                /**
+                 * Format: uuid
+                 * @description Event UUID
+                 */
+                id: string;
+                /** @description Event type */
+                eventType: string;
+                /** @description Content type */
+                contentType: string | null;
+                /**
+                 * Format: uuid
+                 * @description Instance UUID
+                 */
+                instanceId: string;
+                /**
+                 * Format: uuid
+                 * @description Person UUID
+                 */
+                personId: string | null;
+                /**
+                 * @description Message direction
+                 * @enum {string}
+                 */
+                direction: "inbound" | "outbound";
+                /** @description Text content */
+                textContent: string | null;
+                /** @description Audio transcription */
+                transcription: string | null;
+                /** @description Image description */
+                imageDescription: string | null;
+                /**
+                 * Format: uuid
+                 * @description Chat UUID (FK → chats.id)
+                 */
+                chatUuid: string | null;
+                /**
+                 * Format: uuid
+                 * @description Agent UUID (FK → agents.id)
+                 */
+                agentId: string | null;
+                /**
+                 * Format: uuid
+                 * @description Conversation UUID (FK → conversations.id)
+                 */
+                conversationId: string | null;
+                /**
+                 * Format: date-time
+                 * @description When event was received
+                 */
+                receivedAt: string;
+                /**
+                 * Format: date-time
+                 * @description When event was processed
+                 */
+                processedAt: string | null;
+                /**
+                 * Format: uuid
+                 * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                 */
+                causationId: string | null;
+            };
+            /** @description Chain above the event via causationId, root first, ending at the immediate parent */
+            ancestors: {
+                /**
+                 * Format: uuid
+                 * @description Event UUID
+                 */
+                id: string;
+                /** @description Event type */
+                eventType: string;
+                /** @description Content type */
+                contentType: string | null;
+                /**
+                 * Format: uuid
+                 * @description Instance UUID
+                 */
+                instanceId: string;
+                /**
+                 * Format: uuid
+                 * @description Person UUID
+                 */
+                personId: string | null;
+                /**
+                 * @description Message direction
+                 * @enum {string}
+                 */
+                direction: "inbound" | "outbound";
+                /** @description Text content */
+                textContent: string | null;
+                /** @description Audio transcription */
+                transcription: string | null;
+                /** @description Image description */
+                imageDescription: string | null;
+                /**
+                 * Format: uuid
+                 * @description Chat UUID (FK → chats.id)
+                 */
+                chatUuid: string | null;
+                /**
+                 * Format: uuid
+                 * @description Agent UUID (FK → agents.id)
+                 */
+                agentId: string | null;
+                /**
+                 * Format: uuid
+                 * @description Conversation UUID (FK → conversations.id)
+                 */
+                conversationId: string | null;
+                /**
+                 * Format: date-time
+                 * @description When event was received
+                 */
+                receivedAt: string;
+                /**
+                 * Format: date-time
+                 * @description When event was processed
+                 */
+                processedAt: string | null;
+                /**
+                 * Format: uuid
+                 * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                 */
+                causationId: string | null;
+            }[];
+            /** @description Fan-out below the event, breadth-first */
+            descendants: {
+                event: {
+                    /**
+                     * Format: uuid
+                     * @description Event UUID
+                     */
+                    id: string;
+                    /** @description Event type */
+                    eventType: string;
+                    /** @description Content type */
+                    contentType: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Instance UUID
+                     */
+                    instanceId: string;
+                    /**
+                     * Format: uuid
+                     * @description Person UUID
+                     */
+                    personId: string | null;
+                    /**
+                     * @description Message direction
+                     * @enum {string}
+                     */
+                    direction: "inbound" | "outbound";
+                    /** @description Text content */
+                    textContent: string | null;
+                    /** @description Audio transcription */
+                    transcription: string | null;
+                    /** @description Image description */
+                    imageDescription: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Chat UUID (FK → chats.id)
+                     */
+                    chatUuid: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Agent UUID (FK → agents.id)
+                     */
+                    agentId: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Conversation UUID (FK → conversations.id)
+                     */
+                    conversationId: string | null;
+                    /**
+                     * Format: date-time
+                     * @description When event was received
+                     */
+                    receivedAt: string;
+                    /**
+                     * Format: date-time
+                     * @description When event was processed
+                     */
+                    processedAt: string | null;
+                    /**
+                     * Format: uuid
+                     * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                     */
+                    causationId: string | null;
+                };
+                /** @description Distance below the focus event (1 = direct child) */
+                depth: number;
+            }[];
+            /** @description True when a depth/node cap cut the walk short */
+            truncated: boolean;
         };
         Identity: {
             /**
@@ -3642,6 +4334,34 @@ export interface components {
             /** @description Reason for merge */
             reason?: string;
         };
+        WebhookSignatureConfig: {
+            /**
+             * @description How to verify: HMAC over the raw request body, or direct token match
+             * @enum {string}
+             */
+            algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+            /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+            header: string;
+            /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+            prefix?: string;
+        };
+        WebhookEventTypeMapping: {
+            /**
+             * @description Read the semantic event name from a request header
+             * @enum {string}
+             */
+            source: "header";
+            /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+            header: string;
+        } | {
+            /**
+             * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+             * @enum {string}
+             */
+            source: "body";
+            /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+            path: string;
+        };
         WebhookSource: {
             /**
              * Format: uuid
@@ -3656,8 +4376,87 @@ export interface components {
             expectedHeaders: {
                 [key: string]: boolean;
             } | null;
+            /** @description Signature verification config */
+            signatureConfig: {
+                /**
+                 * @description How to verify: HMAC over the raw request body, or direct token match
+                 * @enum {string}
+                 */
+                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                header: string;
+                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                prefix?: string;
+            } | null;
+            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+            eventTypeMapping: {
+                /**
+                 * @description Read the semantic event name from a request header
+                 * @enum {string}
+                 */
+                source: "header";
+                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                header: string;
+            } | {
+                /**
+                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                 * @enum {string}
+                 */
+                source: "body";
+                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                path: string;
+            } | unknown;
+            /** @description Whether a signature secret is stored (secret is write-only) */
+            hasSignatureSecret: boolean;
+            /** @description Idempotency key derivation template */
+            idempotencyKeyTemplate: string;
+            /** @description Redeliveries acked without creating a second event */
+            totalDuplicates: number;
+            /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
+            strictSchemas: boolean;
             /** @description Whether enabled */
             enabled: boolean;
+            /**
+             * Format: date-time
+             * @description When the last webhook was received
+             */
+            lastReceivedAt: string | null;
+            /** @description Total webhooks received */
+            totalReceived: number;
+            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+            expectedIntervalSeconds: number | null;
+            /**
+             * Format: date-time
+             * @description Last heartbeat ("ran, zero events")
+             */
+            lastHeartbeatAt: string | null;
+            /** @description Total heartbeats received */
+            heartbeatCount: number;
+            /**
+             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+             * @enum {string|null}
+             */
+            livenessStatus: "healthy" | "stalled" | null;
+            /**
+             * Format: date-time
+             * @description When the cadence was (re)declared
+             */
+            livenessArmedAt: string | null;
+            /**
+             * Format: date-time
+             * @description When the current stall began
+             */
+            stalledAt: string | null;
+            /**
+             * @description Declared window semantics; null = undeclared
+             * @enum {string|null}
+             */
+            windowSemantics: "future_only" | "includes_in_progress" | null;
+            /**
+             * @description Declared upstream-mutation re-emit policy; null = undeclared
+             * @enum {string|null}
+             */
+            mutationPolicy: "same_id" | "new_id" | null;
             /**
              * Format: date-time
              * @description Creation timestamp
@@ -3670,7 +4469,7 @@ export interface components {
             updatedAt: string;
         };
         CreateWebhookSourceRequest: {
-            /** @description Unique source name */
+            /** @description Unique source name (e.g., github, stripe, agno) */
             name: string;
             /** @description Description */
             description?: string;
@@ -3678,11 +4477,59 @@ export interface components {
             expectedHeaders?: {
                 [key: string]: boolean;
             };
+            /** @description Signature verification config; required for the source to be reachable on the public ingress. Always paired with signatureSecret: a config without a stored secret is rejected (400), and clearing the config (null) also clears the stored secret. */
+            signatureConfig?: {
+                /**
+                 * @description How to verify: HMAC over the raw request body, or direct token match
+                 * @enum {string}
+                 */
+                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                header: string;
+                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                prefix?: string;
+            } | null;
+            /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
+            signatureSecret?: string | null;
+            /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
+            idempotencyKeyTemplate?: string;
+            /** @description Strict schema mode (RFC #925 G1 policy switch): when true, a delivery resolving to an event type with no enabled registered schema is refused and dead-lettered with reason schema_not_registered (manual retry only) instead of passing through. Defaults to false (opt-in pass-through). Recommended true for NEW sources — they have no legacy emitters to grandfather. */
+            strictSchemas?: boolean;
+            /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
+            eventTypeMapping?: {
+                /**
+                 * @description Read the semantic event name from a request header
+                 * @enum {string}
+                 */
+                source: "header";
+                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                header: string;
+            } | {
+                /**
+                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                 * @enum {string}
+                 */
+                source: "body";
+                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                path: string;
+            } | unknown;
             /**
              * @description Whether enabled
              * @default true
              */
             enabled: boolean;
+            /** @description Declared cadence: the connector promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it arms liveness supervision (silence beyond the window emits system.connector.stalled and marks the source unhealthy); null disarms it. */
+            expectedIntervalSeconds?: number | null;
+            /**
+             * @description Declared time-window semantics: 'future_only' (only not-yet-started items) or 'includes_in_progress'. Informational contract for consumers; null = undeclared.
+             * @enum {string|null}
+             */
+            windowSemantics?: "future_only" | "includes_in_progress" | null;
+            /**
+             * @description How the source re-emits a changed upstream item: 'same_id' (reschedule case — consumers must key on id+content) or 'new_id'. Feeds the idempotency key template choice; null = undeclared.
+             * @enum {string|null}
+             */
+            mutationPolicy?: "same_id" | "new_id" | null;
         };
         TriggerEventRequest: {
             /** @description Event type (must start with custom.) */
@@ -3702,13 +4549,36 @@ export interface components {
         WebhookReceiveResponse: {
             /**
              * Format: uuid
-             * @description Created event ID
+             * @description Created event ID (the ORIGINAL event on a duplicate)
              */
             eventId: string;
             /** @description Webhook source name */
             source: string;
             /** @description Event type */
             eventType: string;
+            /** @description True when the delivery was a redelivery: acked, but no second event was created */
+            duplicate?: boolean;
+        };
+        WebhookHeartbeatResponse: {
+            /**
+             * @description Heartbeat recorded
+             * @enum {boolean}
+             */
+            ok: true;
+            /** @description Webhook source name */
+            source: string;
+            /**
+             * Format: date-time
+             * @description When the heartbeat was recorded
+             */
+            heartbeatAt: string;
+            /**
+             * @description Status before this heartbeat (a stalled source recovers on the next sweep tick)
+             * @enum {string|null}
+             */
+            livenessStatus: "healthy" | "stalled" | null;
+            /** @description Declared cadence, if any */
+            expectedIntervalSeconds: number | null;
         };
         AccessRule: {
             /**
@@ -4653,6 +5523,123 @@ export interface components {
                 deleted: number;
             };
         };
+        EventSchema: {
+            /**
+             * Format: uuid
+             * @description Registration UUID
+             */
+            id: string;
+            /** @description Event type the schema governs (e.g. custom.github.push) */
+            eventType: string;
+            /** @description Revision counter; bumps on each compatible replacement */
+            version: number;
+            /** @description JSON Schema (draft-07) artifact, stored as-is */
+            schema: {
+                [key: string]: unknown;
+            };
+            /** @description Description */
+            description: string | null;
+            /** @description Whether the validation gate is active for this type */
+            enabled: boolean;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last update timestamp
+             */
+            updatedAt: string;
+        };
+        RegisterEventSchemaRequest: {
+            /** @description Event type to register the schema for (e.g. custom.github.push) */
+            eventType: string;
+            /** @description JSON Schema (draft-07) the payload must satisfy. Stored as-is */
+            schema: {
+                [key: string]: unknown;
+            };
+            /** @description Description */
+            description?: string;
+            /** @description Whether the validation gate is active (default true) */
+            enabled?: boolean;
+        };
+        DurableConsumer: {
+            /**
+             * Format: uuid
+             * @description Consumer UUID
+             */
+            id: string;
+            /** @description Unique consumer name (the follow/ack handle) */
+            name: string;
+            /** @description Type filter: exact event type or trailing-* prefix glob */
+            eventType: string;
+            /** @description Payload conditions (AND), or null */
+            filters: {
+                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                field: string;
+                /**
+                 * @description Comparison operator (same matcher as automation trigger conditions)
+                 * @enum {string}
+                 */
+                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                value?: unknown;
+            }[] | null;
+            /** @description Last acked journal_seq; delivery resumes strictly after it */
+            cursor: number;
+            /** @description Highest journal_seq currently in the journal */
+            head: number;
+            /** @description head - cursor (all journal rows past the cursor, not only matches) */
+            lag: number;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last cursor/registry update timestamp
+             */
+            updatedAt: string;
+        };
+        CreateConsumerRequest: {
+            /** @description Unique consumer name (e.g. deploy-tracker) */
+            name: string;
+            /** @description Type filter: exact event type, or trailing-* prefix glob (e.g. custom.github.*) */
+            eventType: string;
+            /** @description Payload conditions (AND) — same matcher as events wait --filter */
+            filters?: {
+                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                field: string;
+                /**
+                 * @description Comparison operator (same matcher as automation trigger conditions)
+                 * @enum {string}
+                 */
+                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                value?: unknown;
+            }[];
+            /**
+             * @description Initial cursor: 'now' = journal head (default), 'beginning' = full replay
+             * @enum {string}
+             */
+            startFrom?: "now" | "beginning";
+        };
+        ConsumerPullResult: {
+            /** @description Consumer name */
+            consumer: string;
+            /** @description Matching journal rows, ascending journal_seq */
+            items: {
+                [key: string]: unknown;
+            }[];
+            /** @description Highest journal_seq SCANNED (not merely matched) — ack this value to advance past filtered-out rows */
+            cursor: number;
+            /** @description Journal head at pull time */
+            head: number;
+            /** @description True when the scan filled the page — more rows are already waiting */
+            hasMore: boolean;
+        };
         Automation: {
             /**
              * Format: uuid
@@ -4703,6 +5690,8 @@ export interface components {
                     /** @default 30000 */
                     timeoutMs: number;
                     responseAs?: string;
+                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                    includeEnvelope?: boolean;
                 };
             } | {
                 /** @enum {string} */
@@ -4770,6 +5759,13 @@ export interface components {
             enabled: boolean;
             /** @description Priority */
             priority: number;
+            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+            transactionalEmissions: boolean;
+            /**
+             * Format: uuid
+             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+             */
+            managedByAgentId: string | null;
             /**
              * Format: date-time
              * @description Creation timestamp
@@ -4827,6 +5823,8 @@ export interface components {
                     /** @default 30000 */
                     timeoutMs: number;
                     responseAs?: string;
+                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                    includeEnvelope?: boolean;
                 };
             } | {
                 /** @enum {string} */
@@ -4900,6 +5898,11 @@ export interface components {
              * @default 0
              */
             priority: number;
+            /**
+             * @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero. Default false = immediate publishing
+             * @default false
+             */
+            transactionalEmissions: boolean;
         };
         AutomationLog: {
             /**
@@ -5373,6 +6376,92 @@ export interface components {
              */
             flowAction?: "navigate" | "data_exchange";
         };
+        /** @description What the simulated platform renders, per instance. Configured via profileMetadata.harnessProfile on the instance and enforced by the plugin sendMessage(). */
+        HarnessCapabilityProfile: {
+            canSendText: boolean;
+            canSendMedia: boolean;
+            canSendButtons: boolean;
+            canSendList: boolean;
+            maxButtons: number;
+            maxListRows: number;
+            /** @description 0 = unlimited */
+            maxMessageLength: number;
+        };
+        HarnessTranscript: {
+            chatId: string;
+            /** @description What the simulated platform renders, per instance. Configured via profileMetadata.harnessProfile on the instance and enforced by the plugin sendMessage(). */
+            profile: {
+                canSendText: boolean;
+                canSendMedia: boolean;
+                canSendButtons: boolean;
+                canSendList: boolean;
+                maxButtons: number;
+                maxListRows: number;
+                /** @description 0 = unlimited */
+                maxMessageLength: number;
+            };
+            entries: ({
+                /** @description Position in the chat transcript (1-based, per chat) */
+                seq: number;
+                /** @enum {string} */
+                direction: "inbound";
+                /** @description Unix ms timestamp */
+                at: number;
+                /** @enum {string} */
+                kind: "say" | "tap";
+                externalId: string;
+                from: string;
+                content: {
+                    type: string;
+                    text?: string;
+                };
+                /** @description Present on kind 'tap' */
+                tap?: {
+                    /** @description seq of the outbound whose component was tapped */
+                    sourceSeq: number;
+                    /** @description 1-based index into that outbound buttons */
+                    optionIndex: number;
+                    /** @description button.data when set */
+                    optionId?: string;
+                    /** @description button.text — what comes back as the inbound text */
+                    optionText: string;
+                };
+            } | {
+                seq: number;
+                /** @enum {string} */
+                direction: "outbound";
+                at: number;
+                /** @description Absent when the send was refused by the profile */
+                externalId?: string;
+                /** @description The FULL OutgoingMessage verbatim — buttons, list, media, metadata included */
+                message: {
+                    [key: string]: unknown;
+                };
+                /** @description Capability-profile violations; empty when it rendered */
+                violations: string[];
+                result: {
+                    success: boolean;
+                    error?: string;
+                };
+            })[];
+            /** @description Oldest entries evicted by the per-chat bound (1000) */
+            droppedEntries: number;
+        };
+        HarnessSayRequest: {
+            /** @description Free-form conversation id — N chats run in parallel */
+            chatId: string;
+            text: string;
+            /** @description Sender id; defaults to user:<chatId> */
+            from?: string;
+            senderName?: string;
+        };
+        HarnessTapRequest: {
+            chatId: string;
+            /** @description 1-based button index, or a string matched against button.data then button.text */
+            option: number | string;
+            /** @description Outbound seq to tap; defaults to the latest rendered outbound with a component */
+            messageSeq?: number;
+        };
         PlatformTenant: {
             /**
              * Format: uuid
@@ -5511,6 +6600,93 @@ export interface components {
              */
             reason: string;
         };
+        IssueRootKeyRequest: {
+            /**
+             * Format: uuid
+             * @description Principal the key acts as; must hold the membership
+             */
+            principalId: string;
+            /**
+             * Format: uuid
+             * @description Active membership binding the principal to the tenant
+             */
+            membershipId: string;
+            /**
+             * @description Tenant role
+             * @enum {string}
+             */
+            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+            /** @description Human-readable key name */
+            name: string;
+            /** @description Explicit tenant scopes. Platform and wildcard scopes are refused. */
+            scopes: string[];
+            /**
+             * Format: date-time
+             * @description Expiry (ISO 8601). Must be in the future and within the tenant TTL ceiling
+             */
+            expiresAt: string;
+            /** @description Rate limit; capped by the tenant policy ceiling */
+            rateLimit: number;
+            /** @description Budget; capped by the tenant policy ceiling */
+            budget: number;
+            /** @description Optional resource allowlists (e.g. instanceAllowlist) */
+            resourceConstraints?: {
+                [key: string]: string[];
+            };
+            /**
+             * @description Audited justification for the change
+             * @example onboarding request OPS-1421
+             */
+            reason: string;
+        };
+        IssuedRootKey: {
+            /**
+             * Format: uuid
+             * @description Key lineage id
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Tenant the key is bound to
+             */
+            tenantId: string;
+            /**
+             * Format: uuid
+             * @description Bound principal
+             */
+            principalId: string | null;
+            /**
+             * Format: uuid
+             * @description Bound membership
+             */
+            membershipId: string | null;
+            /** @description Human-readable key name */
+            name: string;
+            /**
+             * @description Tenant role
+             * @enum {string}
+             */
+            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+            /** @description Granted tenant scopes */
+            scopes: string[];
+            /** @description Effective resource constraints */
+            constraints: {
+                [key: string]: string[];
+            };
+            /** @description Always 0 for a root key */
+            delegationDepth: number;
+            /**
+             * Format: date-time
+             * @description Expiry timestamp
+             */
+            expiresAt: string;
+            /** @description Granted rate limit */
+            rateLimit: number;
+            /** @description Granted budget */
+            budget: number;
+            /** @description The plaintext credential. Returned exactly ONCE; it can never be retrieved again. */
+            plainTextKey: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -5586,6 +6762,35 @@ export interface operations {
                             /** @description A2A Agent Card overrides */
                             agentCard: {
                                 [key: string]: unknown;
+                            } | null;
+                            /** @description Declarative accepts/publishes event manifest (RFC #925 G4a) */
+                            eventManifest?: {
+                                /**
+                                 * @description Event types this agent consumes
+                                 * @default []
+                                 */
+                                accepts: {
+                                    /**
+                                     * @description Event type consumed (core type, custom.*, or system.*)
+                                     * @example custom.clickup.task.status_changed
+                                     */
+                                    event: string;
+                                    /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                    filter?: {
+                                        [key: string]: unknown;
+                                    };
+                                }[];
+                                /**
+                                 * @description Event types this agent declares it may emit
+                                 * @default []
+                                 */
+                                publishes: {
+                                    /**
+                                     * @description Event type this agent may emit
+                                     * @example custom.review.parecer.ready
+                                     */
+                                    event: string;
+                                }[];
                             } | null;
                             /**
                              * Format: date-time
@@ -5720,6 +6925,35 @@ export interface operations {
                             agentCard: {
                                 [key: string]: unknown;
                             } | null;
+                            /** @description Declarative accepts/publishes event manifest (RFC #925 G4a) */
+                            eventManifest?: {
+                                /**
+                                 * @description Event types this agent consumes
+                                 * @default []
+                                 */
+                                accepts: {
+                                    /**
+                                     * @description Event type consumed (core type, custom.*, or system.*)
+                                     * @example custom.clickup.task.status_changed
+                                     */
+                                    event: string;
+                                    /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                    filter?: {
+                                        [key: string]: unknown;
+                                    };
+                                }[];
+                                /**
+                                 * @description Event types this agent declares it may emit
+                                 * @default []
+                                 */
+                                publishes: {
+                                    /**
+                                     * @description Event type this agent may emit
+                                     * @example custom.review.parecer.ready
+                                     */
+                                    event: string;
+                                }[];
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -5820,6 +7054,35 @@ export interface operations {
                             /** @description A2A Agent Card overrides */
                             agentCard: {
                                 [key: string]: unknown;
+                            } | null;
+                            /** @description Declarative accepts/publishes event manifest (RFC #925 G4a) */
+                            eventManifest?: {
+                                /**
+                                 * @description Event types this agent consumes
+                                 * @default []
+                                 */
+                                accepts: {
+                                    /**
+                                     * @description Event type consumed (core type, custom.*, or system.*)
+                                     * @example custom.clickup.task.status_changed
+                                     */
+                                    event: string;
+                                    /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                    filter?: {
+                                        [key: string]: unknown;
+                                    };
+                                }[];
+                                /**
+                                 * @description Event types this agent declares it may emit
+                                 * @default []
+                                 */
+                                publishes: {
+                                    /**
+                                     * @description Event type this agent may emit
+                                     * @example custom.review.parecer.ready
+                                     */
+                                    event: string;
+                                }[];
                             } | null;
                             /**
                              * Format: date-time
@@ -6025,6 +7288,35 @@ export interface operations {
                             agentCard: {
                                 [key: string]: unknown;
                             } | null;
+                            /** @description Declarative accepts/publishes event manifest (RFC #925 G4a) */
+                            eventManifest?: {
+                                /**
+                                 * @description Event types this agent consumes
+                                 * @default []
+                                 */
+                                accepts: {
+                                    /**
+                                     * @description Event type consumed (core type, custom.*, or system.*)
+                                     * @example custom.clickup.task.status_changed
+                                     */
+                                    event: string;
+                                    /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                    filter?: {
+                                        [key: string]: unknown;
+                                    };
+                                }[];
+                                /**
+                                 * @description Event types this agent declares it may emit
+                                 * @default []
+                                 */
+                                publishes: {
+                                    /**
+                                     * @description Event type this agent may emit
+                                     * @example custom.review.parecer.ready
+                                     */
+                                    event: string;
+                                }[];
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -6035,6 +7327,202 @@ export interface operations {
                              * @description Last update timestamp
                              */
                             updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getAgentManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Agent event manifest (null when undeclared) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * @description Event types this agent consumes
+                             * @default []
+                             */
+                            accepts: {
+                                /**
+                                 * @description Event type consumed (core type, custom.*, or system.*)
+                                 * @example custom.clickup.task.status_changed
+                                 */
+                                event: string;
+                                /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                filter?: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                            /**
+                             * @description Event types this agent declares it may emit
+                             * @default []
+                             */
+                            publishes: {
+                                /**
+                                 * @description Event type this agent may emit
+                                 * @example custom.review.parecer.ready
+                                 */
+                                event: string;
+                            }[];
+                        } | null;
+                    };
+                };
+            };
+            /** @description Agent not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    updateAgentManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Event types this agent consumes
+                     * @default []
+                     */
+                    accepts?: {
+                        /**
+                         * @description Event type consumed (core type, custom.*, or system.*)
+                         * @example custom.clickup.task.status_changed
+                         */
+                        event: string;
+                        /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                        filter?: {
+                            [key: string]: unknown;
+                        };
+                    }[];
+                    /**
+                     * @description Event types this agent declares it may emit
+                     * @default []
+                     */
+                    publishes?: {
+                        /**
+                         * @description Event type this agent may emit
+                         * @example custom.review.parecer.ready
+                         */
+                        event: string;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Stored manifest after replacement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * @description Event types this agent consumes
+                             * @default []
+                             */
+                            accepts: {
+                                /**
+                                 * @description Event type consumed (core type, custom.*, or system.*)
+                                 * @example custom.clickup.task.status_changed
+                                 */
+                                event: string;
+                                /** @description Payload filter: dot-notation payload path → expected value (equals semantics, shared with automation conditions). All entries must match. */
+                                filter?: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                            /**
+                             * @description Event types this agent declares it may emit
+                             * @default []
+                             */
+                            publishes: {
+                                /**
+                                 * @description Event type this agent may emit
+                                 * @example custom.review.parecer.ready
+                                 */
+                                event: string;
+                            }[];
+                        } | null;
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
                         };
                     };
                 };
@@ -6133,6 +7621,18 @@ export interface operations {
                                 expiresAt: string | null;
                                 /** @description Delegation depth: 0 = root key, 1 = child key */
                                 delegationDepth: number;
+                            };
+                            /** @description Deployment tenancy posture; absent only on servers that predate it */
+                            server: {
+                                /** @description OMNI_MULTITENANCY_ENABLED flag state (exact-string "true" semantics) */
+                                multitenancyEnabled: boolean;
+                                /** @description Whether the /api/v2/platform control plane is mounted on this server */
+                                controlPlaneMounted: boolean;
+                                /**
+                                 * @description Database enforcement posture. "enforced" means forced row-level security is installed; "legacy" with multitenancy enabled means the tenant boundary is advisory only (migration state).
+                                 * @enum {string}
+                                 */
+                                dbEnforcement: "legacy" | "enforced";
                             };
                         };
                     };
@@ -6371,7 +7871,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6436,7 +7936,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -6461,6 +7961,87 @@ export interface operations {
                     isDefault?: boolean;
                     /** @description Bot token for Discord instances */
                     token?: string;
+                    /**
+                     * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
+                     * @example {
+                     *       "defaultFields": {
+                     *         "queue": "SALES"
+                     *       },
+                     *       "fieldsByPhonePrefix": [
+                     *         {
+                     *           "prefixes": [
+                     *             "5511",
+                     *             "5521"
+                     *           ],
+                     *           "fields": {
+                     *             "queue": "SALES-SOUTHEAST"
+                     *           }
+                     *         }
+                     *       ],
+                     *       "customerFields": [
+                     *         {
+                     *           "apiKey": "Queue",
+                     *           "from": "queue"
+                     *         },
+                     *         {
+                     *           "apiKey": "Handled By",
+                     *           "value": "assistant"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    gupshupHandoffOptions?: {
+                        /**
+                         * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
+                         * @example {
+                         *       "queue": "SALES"
+                         *     }
+                         */
+                        defaultFields?: {
+                            [key: string]: string;
+                        };
+                        /** @description Prefix rules layered over defaultFields; the first matching rule wins */
+                        fieldsByPhonePrefix?: {
+                            /**
+                             * @description Digit-only phone prefixes (country code first, no +)
+                             * @example [
+                             *       "5511",
+                             *       "5521"
+                             *     ]
+                             */
+                            prefixes: string[];
+                            /**
+                             * @description Routing fields applied when the customer phone starts with one of the prefixes
+                             * @example {
+                             *       "queue": "SALES-SOUTHEAST"
+                             *     }
+                             */
+                            fields: {
+                                [key: string]: string;
+                            };
+                        }[];
+                        /**
+                         * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
+                         * @example [
+                         *       {
+                         *         "apiKey": "Queue",
+                         *         "from": "queue"
+                         *       },
+                         *       {
+                         *         "apiKey": "Handled By",
+                         *         "value": "assistant"
+                         *       }
+                         *     ]
+                         */
+                        customerFields?: {
+                            /** @description customerFields apiKey your Gupshup Journey reads */
+                            apiKey: string;
+                            /** @description Literal value to send; mutually exclusive with `from` */
+                            value?: string;
+                            /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
+                            from?: string;
+                        }[];
+                    } | null;
                 };
             };
         };
@@ -6484,7 +8065,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6569,7 +8150,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -6618,7 +8199,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -6748,7 +8329,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -6773,6 +8354,87 @@ export interface operations {
                     isDefault?: boolean;
                     /** @description Bot token for Discord instances */
                     token?: string;
+                    /**
+                     * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
+                     * @example {
+                     *       "defaultFields": {
+                     *         "queue": "SALES"
+                     *       },
+                     *       "fieldsByPhonePrefix": [
+                     *         {
+                     *           "prefixes": [
+                     *             "5511",
+                     *             "5521"
+                     *           ],
+                     *           "fields": {
+                     *             "queue": "SALES-SOUTHEAST"
+                     *           }
+                     *         }
+                     *       ],
+                     *       "customerFields": [
+                     *         {
+                     *           "apiKey": "Queue",
+                     *           "from": "queue"
+                     *         },
+                     *         {
+                     *           "apiKey": "Handled By",
+                     *           "value": "assistant"
+                     *         }
+                     *       ]
+                     *     }
+                     */
+                    gupshupHandoffOptions?: {
+                        /**
+                         * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
+                         * @example {
+                         *       "queue": "SALES"
+                         *     }
+                         */
+                        defaultFields?: {
+                            [key: string]: string;
+                        };
+                        /** @description Prefix rules layered over defaultFields; the first matching rule wins */
+                        fieldsByPhonePrefix?: {
+                            /**
+                             * @description Digit-only phone prefixes (country code first, no +)
+                             * @example [
+                             *       "5511",
+                             *       "5521"
+                             *     ]
+                             */
+                            prefixes: string[];
+                            /**
+                             * @description Routing fields applied when the customer phone starts with one of the prefixes
+                             * @example {
+                             *       "queue": "SALES-SOUTHEAST"
+                             *     }
+                             */
+                            fields: {
+                                [key: string]: string;
+                            };
+                        }[];
+                        /**
+                         * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
+                         * @example [
+                         *       {
+                         *         "apiKey": "Queue",
+                         *         "from": "queue"
+                         *       },
+                         *       {
+                         *         "apiKey": "Handled By",
+                         *         "value": "assistant"
+                         *       }
+                         *     ]
+                         */
+                        customerFields?: {
+                            /** @description customerFields apiKey your Gupshup Journey reads */
+                            apiKey: string;
+                            /** @description Literal value to send; mutually exclusive with `from` */
+                            value?: string;
+                            /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
+                            from?: string;
+                        }[];
+                    } | null;
                 };
             };
         };
@@ -6796,7 +8458,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "twilio-whatsapp" | "internal";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -7726,6 +9388,11 @@ export interface operations {
                     };
                     /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
                     requestLocation?: boolean;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -7753,6 +9420,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -7836,6 +9508,11 @@ export interface operations {
                     caption?: string;
                     /** @description Send audio as voice note */
                     voiceNote?: boolean;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -7863,6 +9540,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8018,6 +9700,11 @@ export interface operations {
                     url?: string;
                     /** @description Base64 encoded sticker */
                     base64?: string;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -8045,6 +9732,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8123,6 +9815,11 @@ export interface operations {
                         /** @description Organization */
                         organization?: string;
                     };
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -8150,6 +9847,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8223,6 +9925,11 @@ export interface operations {
                     name?: string;
                     /** @description Address */
                     address?: string;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -8250,6 +9957,11 @@ export interface operations {
                             to?: string;
                             /** @description Media type if applicable */
                             mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8776,6 +10488,11 @@ export interface operations {
                     similarityBoost?: number;
                     /** @description Recording presence duration in ms */
                     presenceDelay?: number;
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
                 };
             };
         };
@@ -8805,6 +10522,11 @@ export interface operations {
                             audioSizeKb: number;
                             /** @description Audio duration in ms */
                             durationMs: number;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
                         };
                     };
                 };
@@ -8937,6 +10659,11 @@ export interface operations {
                              * @description When event was processed
                              */
                             processedAt: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                             */
+                            causationId: string | null;
                         }[];
                         meta: {
                             /** @description Whether there are more items */
@@ -9101,6 +10828,11 @@ export interface operations {
                              * @description When event was processed
                              */
                             processedAt: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                             */
+                            causationId: string | null;
                         }[];
                         meta: {
                             /** @description Whether there are more items */
@@ -9236,6 +10968,11 @@ export interface operations {
                              * @description When event was processed
                              */
                             processedAt: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                             */
+                            causationId: string | null;
                         }[];
                         meta: {
                             /** @description Whether there are more items */
@@ -9324,6 +11061,252 @@ export interface operations {
                              * @description When event was processed
                              */
                             processedAt: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                             */
+                            causationId: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Event not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    traceEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Causality trace */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description The event the trace was requested for */
+                            event: {
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                id: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /** @description Content type */
+                                contentType: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /**
+                                 * @description Message direction
+                                 * @enum {string}
+                                 */
+                                direction: "inbound" | "outbound";
+                                /** @description Text content */
+                                textContent: string | null;
+                                /** @description Audio transcription */
+                                transcription: string | null;
+                                /** @description Image description */
+                                imageDescription: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Chat UUID (FK → chats.id)
+                                 */
+                                chatUuid: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Agent UUID (FK → agents.id)
+                                 */
+                                agentId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Conversation UUID (FK → conversations.id)
+                                 */
+                                conversationId: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was received
+                                 */
+                                receivedAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was processed
+                                 */
+                                processedAt: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                                 */
+                                causationId: string | null;
+                            };
+                            /** @description Chain above the event via causationId, root first, ending at the immediate parent */
+                            ancestors: {
+                                /**
+                                 * Format: uuid
+                                 * @description Event UUID
+                                 */
+                                id: string;
+                                /** @description Event type */
+                                eventType: string;
+                                /** @description Content type */
+                                contentType: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Person UUID
+                                 */
+                                personId: string | null;
+                                /**
+                                 * @description Message direction
+                                 * @enum {string}
+                                 */
+                                direction: "inbound" | "outbound";
+                                /** @description Text content */
+                                textContent: string | null;
+                                /** @description Audio transcription */
+                                transcription: string | null;
+                                /** @description Image description */
+                                imageDescription: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Chat UUID (FK → chats.id)
+                                 */
+                                chatUuid: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Agent UUID (FK → agents.id)
+                                 */
+                                agentId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Conversation UUID (FK → conversations.id)
+                                 */
+                                conversationId: string | null;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was received
+                                 */
+                                receivedAt: string;
+                                /**
+                                 * Format: date-time
+                                 * @description When event was processed
+                                 */
+                                processedAt: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                                 */
+                                causationId: string | null;
+                            }[];
+                            /** @description Fan-out below the event, breadth-first */
+                            descendants: {
+                                event: {
+                                    /**
+                                     * Format: uuid
+                                     * @description Event UUID
+                                     */
+                                    id: string;
+                                    /** @description Event type */
+                                    eventType: string;
+                                    /** @description Content type */
+                                    contentType: string | null;
+                                    /**
+                                     * Format: uuid
+                                     * @description Instance UUID
+                                     */
+                                    instanceId: string;
+                                    /**
+                                     * Format: uuid
+                                     * @description Person UUID
+                                     */
+                                    personId: string | null;
+                                    /**
+                                     * @description Message direction
+                                     * @enum {string}
+                                     */
+                                    direction: "inbound" | "outbound";
+                                    /** @description Text content */
+                                    textContent: string | null;
+                                    /** @description Audio transcription */
+                                    transcription: string | null;
+                                    /** @description Image description */
+                                    imageDescription: string | null;
+                                    /**
+                                     * Format: uuid
+                                     * @description Chat UUID (FK → chats.id)
+                                     */
+                                    chatUuid: string | null;
+                                    /**
+                                     * Format: uuid
+                                     * @description Agent UUID (FK → agents.id)
+                                     */
+                                    agentId: string | null;
+                                    /**
+                                     * Format: uuid
+                                     * @description Conversation UUID (FK → conversations.id)
+                                     */
+                                    conversationId: string | null;
+                                    /**
+                                     * Format: date-time
+                                     * @description When event was received
+                                     */
+                                    receivedAt: string;
+                                    /**
+                                     * Format: date-time
+                                     * @description When event was processed
+                                     */
+                                    processedAt: string | null;
+                                    /**
+                                     * Format: uuid
+                                     * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                                     */
+                                    causationId: string | null;
+                                };
+                                /** @description Distance below the focus event (1 = direct child) */
+                                depth: number;
+                            }[];
+                            /** @description True when a depth/node cap cut the walk short */
+                            truncated: boolean;
                         };
                     };
                 };
@@ -9428,6 +11411,11 @@ export interface operations {
                              * @description When event was processed
                              */
                             processedAt: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Id of the immediate parent event (null for roots and pre-#957 rows)
+                             */
+                            causationId: string | null;
                         }[];
                         meta: {
                             total: number;
@@ -10062,8 +12050,87 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Read the semantic event name from a request header
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | {
+                                /**
+                                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                                 * @enum {string}
+                                 */
+                                source: "body";
+                                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                                path: string;
+                            } | unknown;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
+                            /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
+                            strictSchemas: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -10090,7 +12157,7 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    /** @description Unique source name */
+                    /** @description Unique source name (e.g., github, stripe, agno) */
                     name: string;
                     /** @description Description */
                     description?: string;
@@ -10098,11 +12165,59 @@ export interface operations {
                     expectedHeaders?: {
                         [key: string]: boolean;
                     };
+                    /** @description Signature verification config; required for the source to be reachable on the public ingress. Always paired with signatureSecret: a config without a stored secret is rejected (400), and clearing the config (null) also clears the stored secret. */
+                    signatureConfig?: {
+                        /**
+                         * @description How to verify: HMAC over the raw request body, or direct token match
+                         * @enum {string}
+                         */
+                        algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                        /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                        header: string;
+                        /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                        prefix?: string;
+                    } | null;
+                    /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
+                    signatureSecret?: string | null;
+                    /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
+                    idempotencyKeyTemplate?: string;
+                    /** @description Strict schema mode (RFC #925 G1 policy switch): when true, a delivery resolving to an event type with no enabled registered schema is refused and dead-lettered with reason schema_not_registered (manual retry only) instead of passing through. Defaults to false (opt-in pass-through). Recommended true for NEW sources — they have no legacy emitters to grandfather. */
+                    strictSchemas?: boolean;
+                    /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
+                    eventTypeMapping?: {
+                        /**
+                         * @description Read the semantic event name from a request header
+                         * @enum {string}
+                         */
+                        source: "header";
+                        /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                        header: string;
+                    } | {
+                        /**
+                         * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                         * @enum {string}
+                         */
+                        source: "body";
+                        /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                        path: string;
+                    } | unknown;
                     /**
                      * @description Whether enabled
                      * @default true
                      */
                     enabled?: boolean;
+                    /** @description Declared cadence: the connector promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it arms liveness supervision (silence beyond the window emits system.connector.stalled and marks the source unhealthy); null disarms it. */
+                    expectedIntervalSeconds?: number | null;
+                    /**
+                     * @description Declared time-window semantics: 'future_only' (only not-yet-started items) or 'includes_in_progress'. Informational contract for consumers; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    windowSemantics?: "future_only" | "includes_in_progress" | null;
+                    /**
+                     * @description How the source re-emits a changed upstream item: 'same_id' (reschedule case — consumers must key on id+content) or 'new_id'. Feeds the idempotency key template choice; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    mutationPolicy?: "same_id" | "new_id" | null;
                 };
             };
         };
@@ -10128,8 +12243,87 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Read the semantic event name from a request header
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | {
+                                /**
+                                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                                 * @enum {string}
+                                 */
+                                source: "body";
+                                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                                path: string;
+                            } | unknown;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
+                            /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
+                            strictSchemas: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -10199,8 +12393,87 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Read the semantic event name from a request header
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | {
+                                /**
+                                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                                 * @enum {string}
+                                 */
+                                source: "body";
+                                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                                path: string;
+                            } | unknown;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
+                            /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
+                            strictSchemas: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -10298,7 +12571,7 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    /** @description Unique source name */
+                    /** @description Unique source name (e.g., github, stripe, agno) */
                     name?: string;
                     /** @description Description */
                     description?: string;
@@ -10306,11 +12579,59 @@ export interface operations {
                     expectedHeaders?: {
                         [key: string]: boolean;
                     };
+                    /** @description Signature verification config; required for the source to be reachable on the public ingress. Always paired with signatureSecret: a config without a stored secret is rejected (400), and clearing the config (null) also clears the stored secret. */
+                    signatureConfig?: {
+                        /**
+                         * @description How to verify: HMAC over the raw request body, or direct token match
+                         * @enum {string}
+                         */
+                        algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                        /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                        header: string;
+                        /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                        prefix?: string;
+                    } | null;
+                    /** @description Shared secret used by signatureConfig (write-only, never returned; 8-512 characters). Cannot be set without a signatureConfig (given in the same request, or already stored on update); null clears it. */
+                    signatureSecret?: string | null;
+                    /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
+                    idempotencyKeyTemplate?: string;
+                    /** @description Strict schema mode (RFC #925 G1 policy switch): when true, a delivery resolving to an event type with no enabled registered schema is refused and dead-lettered with reason schema_not_registered (manual retry only) instead of passing through. Defaults to false (opt-in pass-through). Recommended true for NEW sources — they have no legacy emitters to grandfather. */
+                    strictSchemas?: boolean;
+                    /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
+                    eventTypeMapping?: {
+                        /**
+                         * @description Read the semantic event name from a request header
+                         * @enum {string}
+                         */
+                        source: "header";
+                        /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                        header: string;
+                    } | {
+                        /**
+                         * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                         * @enum {string}
+                         */
+                        source: "body";
+                        /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                        path: string;
+                    } | unknown;
                     /**
                      * @description Whether enabled
                      * @default true
                      */
                     enabled?: boolean;
+                    /** @description Declared cadence: the connector promises >=1 event or heartbeat per N seconds (1s-30d). Declaring it arms liveness supervision (silence beyond the window emits system.connector.stalled and marks the source unhealthy); null disarms it. */
+                    expectedIntervalSeconds?: number | null;
+                    /**
+                     * @description Declared time-window semantics: 'future_only' (only not-yet-started items) or 'includes_in_progress'. Informational contract for consumers; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    windowSemantics?: "future_only" | "includes_in_progress" | null;
+                    /**
+                     * @description How the source re-emits a changed upstream item: 'same_id' (reschedule case — consumers must key on id+content) or 'new_id'. Feeds the idempotency key template choice; null = undeclared.
+                     * @enum {string|null}
+                     */
+                    mutationPolicy?: "same_id" | "new_id" | null;
                 };
             };
         };
@@ -10336,8 +12657,87 @@ export interface operations {
                             expectedHeaders: {
                                 [key: string]: boolean;
                             } | null;
+                            /** @description Signature verification config */
+                            signatureConfig: {
+                                /**
+                                 * @description How to verify: HMAC over the raw request body, or direct token match
+                                 * @enum {string}
+                                 */
+                                algorithm: "hmac-sha256" | "hmac-sha1" | "token-match";
+                                /** @description Header carrying the signature/token (e.g. X-Hub-Signature-256). 1-200 characters */
+                                header: string;
+                                /** @description Prefix before the hex digest (e.g. "sha256="), at most 50 characters. HMAC algorithms only — rejected with token-match */
+                                prefix?: string;
+                            } | null;
+                            /** @description Semantic event-type extraction: a mapped source emits custom.{source}.{event} instead of the collapsed custom.webhook.{source} */
+                            eventTypeMapping: {
+                                /**
+                                 * @description Read the semantic event name from a request header
+                                 * @enum {string}
+                                 */
+                                source: "header";
+                                /** @description Header carrying the semantic event name (e.g. X-GitHub-Event). 1-200 characters */
+                                header: string;
+                            } | {
+                                /**
+                                 * @description Read the semantic event name from the JSON body (body-first providers like ClickUp, #984)
+                                 * @enum {string}
+                                 */
+                                source: "body";
+                                /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
+                                path: string;
+                            } | unknown;
+                            /** @description Whether a signature secret is stored (secret is write-only) */
+                            hasSignatureSecret: boolean;
+                            /** @description Idempotency key derivation template */
+                            idempotencyKeyTemplate: string;
+                            /** @description Redeliveries acked without creating a second event */
+                            totalDuplicates: number;
+                            /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
+                            strictSchemas: boolean;
                             /** @description Whether enabled */
                             enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description When the last webhook was received
+                             */
+                            lastReceivedAt: string | null;
+                            /** @description Total webhooks received */
+                            totalReceived: number;
+                            /** @description Declared cadence: >=1 event or heartbeat per N seconds. Null = unsupervised */
+                            expectedIntervalSeconds: number | null;
+                            /**
+                             * Format: date-time
+                             * @description Last heartbeat ("ran, zero events")
+                             */
+                            lastHeartbeatAt: string | null;
+                            /** @description Total heartbeats received */
+                            heartbeatCount: number;
+                            /**
+                             * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
+                             * @enum {string|null}
+                             */
+                            livenessStatus: "healthy" | "stalled" | null;
+                            /**
+                             * Format: date-time
+                             * @description When the cadence was (re)declared
+                             */
+                            livenessArmedAt: string | null;
+                            /**
+                             * Format: date-time
+                             * @description When the current stall began
+                             */
+                            stalledAt: string | null;
+                            /**
+                             * @description Declared window semantics; null = undeclared
+                             * @enum {string|null}
+                             */
+                            windowSemantics: "future_only" | "includes_in_progress" | null;
+                            /**
+                             * @description Declared upstream-mutation re-emit policy; null = undeclared
+                             * @enum {string|null}
+                             */
+                            mutationPolicy: "same_id" | "new_id" | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -10401,13 +12801,202 @@ export interface operations {
                     "application/json": {
                         /**
                          * Format: uuid
-                         * @description Created event ID
+                         * @description Created event ID (the ORIGINAL event on a duplicate)
                          */
                         eventId: string;
                         /** @description Webhook source name */
                         source: string;
                         /** @description Event type */
                         eventType: string;
+                        /** @description True when the delivery was a redelivery: acked, but no second event was created */
+                        duplicate?: boolean;
+                    };
+                };
+            };
+            /** @description Body is not a JSON object */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    heartbeatWebhookSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Heartbeat recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Heartbeat recorded
+                         * @enum {boolean}
+                         */
+                        ok: true;
+                        /** @description Webhook source name */
+                        source: string;
+                        /**
+                         * Format: date-time
+                         * @description When the heartbeat was recorded
+                         */
+                        heartbeatAt: string;
+                        /**
+                         * @description Status before this heartbeat (a stalled source recovers on the next sweep tick)
+                         * @enum {string|null}
+                         */
+                        livenessStatus: "healthy" | "stalled" | null;
+                        /** @description Declared cadence, if any */
+                        expectedIntervalSeconds: number | null;
+                    };
+                };
+            };
+            /** @description Source disabled */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Source not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    receiveWebhookIngress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Webhook received */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Created event ID (the ORIGINAL event on a duplicate)
+                         */
+                        eventId: string;
+                        /** @description Webhook source name */
+                        source: string;
+                        /** @description Event type */
+                        eventType: string;
+                        /** @description True when the delivery was a redelivery: acked, but no second event was created */
+                        duplicate?: boolean;
+                    };
+                };
+            };
+            /** @description Body is not a JSON object */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Verification failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
                     };
                 };
             };
@@ -10449,13 +13038,15 @@ export interface operations {
                     "application/json": {
                         /**
                          * Format: uuid
-                         * @description Created event ID
+                         * @description Created event ID (the ORIGINAL event on a duplicate)
                          */
                         eventId: string;
                         /** @description Webhook source name */
                         source: string;
                         /** @description Event type */
                         eventType: string;
+                        /** @description True when the delivery was a redelivery: acked, but no second event was created */
+                        duplicate?: boolean;
                     };
                 };
             };
@@ -14209,6 +16800,703 @@ export interface operations {
             };
         };
     };
+    listEventSchemas: {
+        parameters: {
+            query?: {
+                enabled?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description List of registered schemas */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /**
+                             * Format: uuid
+                             * @description Registration UUID
+                             */
+                            id: string;
+                            /** @description Event type the schema governs (e.g. custom.github.push) */
+                            eventType: string;
+                            /** @description Revision counter; bumps on each compatible replacement */
+                            version: number;
+                            /** @description JSON Schema (draft-07) artifact, stored as-is */
+                            schema: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Description */
+                            description: string | null;
+                            /** @description Whether the validation gate is active for this type */
+                            enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    registerEventSchema: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Event type to register the schema for (e.g. custom.github.push) */
+                    eventType: string;
+                    /** @description JSON Schema (draft-07) the payload must satisfy. Stored as-is */
+                    schema: {
+                        [key: string]: unknown;
+                    };
+                    /** @description Description */
+                    description?: string;
+                    /** @description Whether the validation gate is active (default true) */
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Schema registered (or compatibly revised) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Registration UUID
+                             */
+                            id: string;
+                            /** @description Event type the schema governs (e.g. custom.github.push) */
+                            eventType: string;
+                            /** @description Revision counter; bumps on each compatible replacement */
+                            version: number;
+                            /** @description JSON Schema (draft-07) artifact, stored as-is */
+                            schema: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Description */
+                            description: string | null;
+                            /** @description Whether the validation gate is active for this type */
+                            enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Not a valid JSON Schema */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Incompatible schema change refused (evolution rule) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getEventSchema: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eventType: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered schema */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Registration UUID
+                             */
+                            id: string;
+                            /** @description Event type the schema governs (e.g. custom.github.push) */
+                            eventType: string;
+                            /** @description Revision counter; bumps on each compatible replacement */
+                            version: number;
+                            /** @description JSON Schema (draft-07) artifact, stored as-is */
+                            schema: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Description */
+                            description: string | null;
+                            /** @description Whether the validation gate is active for this type */
+                            enabled: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description No schema registered for this type */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listEventConsumers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered consumers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /**
+                             * Format: uuid
+                             * @description Consumer UUID
+                             */
+                            id: string;
+                            /** @description Unique consumer name (the follow/ack handle) */
+                            name: string;
+                            /** @description Type filter: exact event type or trailing-* prefix glob */
+                            eventType: string;
+                            /** @description Payload conditions (AND), or null */
+                            filters: {
+                                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                                field: string;
+                                /**
+                                 * @description Comparison operator (same matcher as automation trigger conditions)
+                                 * @enum {string}
+                                 */
+                                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                                value?: unknown;
+                            }[] | null;
+                            /** @description Last acked journal_seq; delivery resumes strictly after it */
+                            cursor: number;
+                            /** @description Highest journal_seq currently in the journal */
+                            head: number;
+                            /** @description head - cursor (all journal rows past the cursor, not only matches) */
+                            lag: number;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last cursor/registry update timestamp
+                             */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    createEventConsumer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Unique consumer name (e.g. deploy-tracker) */
+                    name: string;
+                    /** @description Type filter: exact event type, or trailing-* prefix glob (e.g. custom.github.*) */
+                    eventType: string;
+                    /** @description Payload conditions (AND) — same matcher as events wait --filter */
+                    filters?: {
+                        /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                        field: string;
+                        /**
+                         * @description Comparison operator (same matcher as automation trigger conditions)
+                         * @enum {string}
+                         */
+                        operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                        /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                        value?: unknown;
+                    }[];
+                    /**
+                     * @description Initial cursor: 'now' = journal head (default), 'beginning' = full replay
+                     * @enum {string}
+                     */
+                    startFrom?: "now" | "beginning";
+                };
+            };
+        };
+        responses: {
+            /** @description Consumer registered */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Consumer UUID
+                             */
+                            id: string;
+                            /** @description Unique consumer name (the follow/ack handle) */
+                            name: string;
+                            /** @description Type filter: exact event type or trailing-* prefix glob */
+                            eventType: string;
+                            /** @description Payload conditions (AND), or null */
+                            filters: {
+                                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                                field: string;
+                                /**
+                                 * @description Comparison operator (same matcher as automation trigger conditions)
+                                 * @enum {string}
+                                 */
+                                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                                value?: unknown;
+                            }[] | null;
+                            /** @description Last acked journal_seq; delivery resumes strictly after it */
+                            cursor: number;
+                            /** @description Highest journal_seq currently in the journal */
+                            head: number;
+                            /** @description head - cursor (all journal rows past the cursor, not only matches) */
+                            lag: number;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last cursor/registry update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description A consumer with this name already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getEventConsumer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Consumer with live lag */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Consumer UUID
+                             */
+                            id: string;
+                            /** @description Unique consumer name (the follow/ack handle) */
+                            name: string;
+                            /** @description Type filter: exact event type or trailing-* prefix glob */
+                            eventType: string;
+                            /** @description Payload conditions (AND), or null */
+                            filters: {
+                                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                                field: string;
+                                /**
+                                 * @description Comparison operator (same matcher as automation trigger conditions)
+                                 * @enum {string}
+                                 */
+                                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                                value?: unknown;
+                            }[] | null;
+                            /** @description Last acked journal_seq; delivery resumes strictly after it */
+                            cursor: number;
+                            /** @description Highest journal_seq currently in the journal */
+                            head: number;
+                            /** @description head - cursor (all journal rows past the cursor, not only matches) */
+                            lag: number;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last cursor/registry update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description No such consumer */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    deleteEventConsumer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success: boolean;
+                    };
+                };
+            };
+            /** @description No such consumer */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    pullEventConsumer: {
+        parameters: {
+            query?: {
+                limit?: number;
+                waitMs?: number | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Consumer name */
+                        consumer: string;
+                        /** @description Matching journal rows, ascending journal_seq */
+                        items: {
+                            [key: string]: unknown;
+                        }[];
+                        /** @description Highest journal_seq SCANNED (not merely matched) — ack this value to advance past filtered-out rows */
+                        cursor: number;
+                        /** @description Journal head at pull time */
+                        head: number;
+                        /** @description True when the scan filled the page — more rows are already waiting */
+                        hasMore: boolean;
+                    };
+                };
+            };
+            /** @description No such consumer */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    ackEventConsumer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description The journal_seq to advance to (a pull result's "cursor"). Monotonic: equal = no-op, lower = 400 */
+                    cursor: number | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Cursor advanced (or already there) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Consumer UUID
+                             */
+                            id: string;
+                            /** @description Unique consumer name (the follow/ack handle) */
+                            name: string;
+                            /** @description Type filter: exact event type or trailing-* prefix glob */
+                            eventType: string;
+                            /** @description Payload conditions (AND), or null */
+                            filters: {
+                                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                                field: string;
+                                /**
+                                 * @description Comparison operator (same matcher as automation trigger conditions)
+                                 * @enum {string}
+                                 */
+                                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                                value?: unknown;
+                            }[] | null;
+                            /** @description Last acked journal_seq; delivery resumes strictly after it */
+                            cursor: number;
+                            /** @description Highest journal_seq currently in the journal */
+                            head: number;
+                            /** @description head - cursor (all journal rows past the cursor, not only matches) */
+                            lag: number;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last cursor/registry update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Ack behind the stored cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description No such consumer */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
     getMetrics: {
         parameters: {
             query?: never;
@@ -14308,6 +17596,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -14375,6 +17665,13 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
+                            /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -14446,6 +17743,8 @@ export interface operations {
                             /** @default 30000 */
                             timeoutMs?: number;
                             responseAs?: string;
+                            /** @description Send the full OmniEvent envelope as the default body (default true) */
+                            includeEnvelope?: boolean;
                         };
                     } | {
                         /** @enum {string} */
@@ -14519,6 +17818,11 @@ export interface operations {
                      * @default 0
                      */
                     priority?: number;
+                    /**
+                     * @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero. Default false = immediate publishing
+                     * @default false
+                     */
+                    transactionalEmissions?: boolean;
                 };
             };
         };
@@ -14580,6 +17884,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -14647,6 +17953,13 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
+                            /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -14752,6 +18065,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -14819,6 +18134,13 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
+                            /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -14961,6 +18283,8 @@ export interface operations {
                             /** @default 30000 */
                             timeoutMs?: number;
                             responseAs?: string;
+                            /** @description Send the full OmniEvent envelope as the default body (default true) */
+                            includeEnvelope?: boolean;
                         };
                     } | {
                         /** @enum {string} */
@@ -15034,6 +18358,11 @@ export interface operations {
                      * @default 0
                      */
                     priority?: number;
+                    /**
+                     * @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero. Default false = immediate publishing
+                     * @default false
+                     */
+                    transactionalEmissions?: boolean;
                 };
             };
         };
@@ -15095,6 +18424,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -15162,6 +18493,13 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
+                            /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -15267,6 +18605,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -15334,6 +18674,13 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
+                            /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -15439,6 +18786,8 @@ export interface operations {
                                     /** @default 30000 */
                                     timeoutMs: number;
                                     responseAs?: string;
+                                    /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                    includeEnvelope?: boolean;
                                 };
                             } | {
                                 /** @enum {string} */
@@ -15506,6 +18855,13 @@ export interface operations {
                             enabled: boolean;
                             /** @description Priority */
                             priority: number;
+                            /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
+                            transactionalEmissions: boolean;
+                            /**
+                             * Format: uuid
+                             * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
+                             */
+                            managedByAgentId: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -15609,6 +18965,8 @@ export interface operations {
                                 /** @default 30000 */
                                 timeoutMs: number;
                                 responseAs?: string;
+                                /** @description Send the full OmniEvent envelope as the default body (default true) */
+                                includeEnvelope?: boolean;
                             };
                         } | {
                             /** @enum {string} */
@@ -18477,6 +21835,347 @@ export interface operations {
             };
         };
     };
+    harnessSay: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Free-form conversation id — N chats run in parallel */
+                    chatId: string;
+                    text: string;
+                    /** @description Sender id; defaults to user:<chatId> */
+                    from?: string;
+                    senderName?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Inbound injected */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Position in the chat transcript (1-based, per chat) */
+                            seq: number;
+                            /** @enum {string} */
+                            direction: "inbound";
+                            /** @description Unix ms timestamp */
+                            at: number;
+                            /** @enum {string} */
+                            kind: "say" | "tap";
+                            externalId: string;
+                            from: string;
+                            content: {
+                                type: string;
+                                text?: string;
+                            };
+                            /** @description Present on kind 'tap' */
+                            tap?: {
+                                /** @description seq of the outbound whose component was tapped */
+                                sourceSeq: number;
+                                /** @description 1-based index into that outbound buttons */
+                                optionIndex: number;
+                                /** @description button.data when set */
+                                optionId?: string;
+                                /** @description button.text — what comes back as the inbound text */
+                                optionText: string;
+                            };
+                        };
+                    };
+                };
+            };
+            /** @description Not a harness instance */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    harnessTap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    chatId: string;
+                    /** @description 1-based button index, or a string matched against button.data then button.text */
+                    option: number | string;
+                    /** @description Outbound seq to tap; defaults to the latest rendered outbound with a component */
+                    messageSeq?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Tap injected */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Position in the chat transcript (1-based, per chat) */
+                            seq: number;
+                            /** @enum {string} */
+                            direction: "inbound";
+                            /** @description Unix ms timestamp */
+                            at: number;
+                            /** @enum {string} */
+                            kind: "say" | "tap";
+                            externalId: string;
+                            from: string;
+                            content: {
+                                type: string;
+                                text?: string;
+                            };
+                            /** @description Present on kind 'tap' */
+                            tap?: {
+                                /** @description seq of the outbound whose component was tapped */
+                                sourceSeq: number;
+                                /** @description 1-based index into that outbound buttons */
+                                optionIndex: number;
+                                /** @description button.data when set */
+                                optionId?: string;
+                                /** @description button.text — what comes back as the inbound text */
+                                optionText: string;
+                            };
+                        };
+                    };
+                };
+            };
+            /** @description No rendered component / option not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Targeted outbound was refused by the profile — it never rendered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    harnessGetTranscript: {
+        parameters: {
+            query: {
+                chatId: string;
+            };
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Transcript (empty entries for an unknown chatId) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            chatId: string;
+                            /** @description What the simulated platform renders, per instance. Configured via profileMetadata.harnessProfile on the instance and enforced by the plugin sendMessage(). */
+                            profile: {
+                                canSendText: boolean;
+                                canSendMedia: boolean;
+                                canSendButtons: boolean;
+                                canSendList: boolean;
+                                maxButtons: number;
+                                maxListRows: number;
+                                /** @description 0 = unlimited */
+                                maxMessageLength: number;
+                            };
+                            entries: ({
+                                /** @description Position in the chat transcript (1-based, per chat) */
+                                seq: number;
+                                /** @enum {string} */
+                                direction: "inbound";
+                                /** @description Unix ms timestamp */
+                                at: number;
+                                /** @enum {string} */
+                                kind: "say" | "tap";
+                                externalId: string;
+                                from: string;
+                                content: {
+                                    type: string;
+                                    text?: string;
+                                };
+                                /** @description Present on kind 'tap' */
+                                tap?: {
+                                    /** @description seq of the outbound whose component was tapped */
+                                    sourceSeq: number;
+                                    /** @description 1-based index into that outbound buttons */
+                                    optionIndex: number;
+                                    /** @description button.data when set */
+                                    optionId?: string;
+                                    /** @description button.text — what comes back as the inbound text */
+                                    optionText: string;
+                                };
+                            } | {
+                                seq: number;
+                                /** @enum {string} */
+                                direction: "outbound";
+                                at: number;
+                                /** @description Absent when the send was refused by the profile */
+                                externalId?: string;
+                                /** @description The FULL OutgoingMessage verbatim — buttons, list, media, metadata included */
+                                message: {
+                                    [key: string]: unknown;
+                                };
+                                /** @description Capability-profile violations; empty when it rendered */
+                                violations: string[];
+                                result: {
+                                    success: boolean;
+                                    error?: string;
+                                };
+                            })[];
+                            /** @description Oldest entries evicted by the per-chat bound (1000) */
+                            droppedEntries: number;
+                        };
+                    };
+                };
+            };
+            /** @description Not a harness instance */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    harnessResetTranscript: {
+        parameters: {
+            query?: {
+                chatId?: string;
+            };
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reset done */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            reset: boolean;
+                            chatId?: string;
+                            scope?: string;
+                        };
+                    };
+                };
+            };
+            /** @description Not a harness instance */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
     listPlatformTenants: {
         parameters: {
             query?: never;
@@ -19094,6 +22793,224 @@ export interface operations {
             };
             /** @description Missing, non-platform, or insufficiently scoped credential */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found. Non-enumerating: an unknown id yields a bare 404 with no metadata. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Lifecycle conflict (e.g. duplicate slug, or a transition out of the terminal archived state) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    issuePlatformTenantRootKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description Principal the key acts as; must hold the membership
+                     */
+                    principalId: string;
+                    /**
+                     * Format: uuid
+                     * @description Active membership binding the principal to the tenant
+                     */
+                    membershipId: string;
+                    /**
+                     * @description Tenant role
+                     * @enum {string}
+                     */
+                    role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+                    /** @description Human-readable key name */
+                    name: string;
+                    /** @description Explicit tenant scopes. Platform and wildcard scopes are refused. */
+                    scopes: string[];
+                    /**
+                     * Format: date-time
+                     * @description Expiry (ISO 8601). Must be in the future and within the tenant TTL ceiling
+                     */
+                    expiresAt: string;
+                    /** @description Rate limit; capped by the tenant policy ceiling */
+                    rateLimit: number;
+                    /** @description Budget; capped by the tenant policy ceiling */
+                    budget: number;
+                    /** @description Optional resource allowlists (e.g. instanceAllowlist) */
+                    resourceConstraints?: {
+                        [key: string]: string[];
+                    };
+                    /**
+                     * @description Audited justification for the change
+                     * @example onboarding request OPS-1421
+                     */
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Root key issued. `plainTextKey` is returned once and never again. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Key lineage id
+                             */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description Tenant the key is bound to
+                             */
+                            tenantId: string;
+                            /**
+                             * Format: uuid
+                             * @description Bound principal
+                             */
+                            principalId: string | null;
+                            /**
+                             * Format: uuid
+                             * @description Bound membership
+                             */
+                            membershipId: string | null;
+                            /** @description Human-readable key name */
+                            name: string;
+                            /**
+                             * @description Tenant role
+                             * @enum {string}
+                             */
+                            role: "tenant-owner" | "tenant-admin" | "tenant-operator" | "tenant-viewer";
+                            /** @description Granted tenant scopes */
+                            scopes: string[];
+                            /** @description Effective resource constraints */
+                            constraints: {
+                                [key: string]: string[];
+                            };
+                            /** @description Always 0 for a root key */
+                            delegationDepth: number;
+                            /**
+                             * Format: date-time
+                             * @description Expiry timestamp
+                             */
+                            expiresAt: string;
+                            /** @description Granted rate limit */
+                            rateLimit: number;
+                            /** @description Granted budget */
+                            budget: number;
+                            /** @description The plaintext credential. Returned exactly ONCE; it can never be retrieved again. */
+                            plainTextKey: string;
+                        };
+                    };
+                };
+            };
+            /** @description Request violates root-key invariants (wildcard/platform scope, past expiry, bad limits) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Missing, non-platform, or insufficiently scoped credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Insufficient platform scope, or the request exceeds the tenant key policy ceiling */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

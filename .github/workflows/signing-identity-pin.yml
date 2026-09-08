@@ -34,6 +34,9 @@ concurrency:
   group: signing-identity-pin-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   check-pin:
     name: check-fingerprint-pinning (four-channel byte-identity)
@@ -42,7 +45,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Assert signing-identity pin agrees across all four witnesses
         run: bash scripts/check-fingerprint-pinning.sh

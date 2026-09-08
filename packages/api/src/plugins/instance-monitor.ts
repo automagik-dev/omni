@@ -38,10 +38,11 @@
  */
 
 import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
-import type { Database } from '@omni/db';
+import type { Database, GupshupHandoffOptions } from '@omni/db';
 import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 
+import { applyWhatsAppBusinessConnectionOptions } from '../lib/whatsapp-business-connection';
 import { lookupInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { runForEachActiveTenantRow } from '../tenancy/periodic-tenant-work';
 import { scopedHandle } from '../tenancy/tenant-scope';
@@ -180,6 +181,7 @@ function buildInstanceConnectOptions(instance: {
   gupshupCallbackUrl?: string | null;
   gupshupAuthToken?: string | null;
   gupshupEventId?: string | null;
+  gupshupHandoffOptions?: GupshupHandoffOptions | null;
   webhookVerifyToken?: string | null;
   twilioAccountSid?: string | null;
   twilioAuthToken?: string | null;
@@ -201,6 +203,14 @@ function buildInstanceConnectOptions(instance: {
   hermesPassword?: string | null;
   hermesMediaId?: string | null;
   hermesTemplateNamespace?: string | null;
+  ascBaseUrl?: string | null;
+  ascToken?: string | null;
+  ascOriginador?: string | null;
+  ascFlowBaseUrl?: string | null;
+  ascFlowLogin?: string | null;
+  ascFlowChave?: string | null;
+  ascFlowHandoffMode?: string | null;
+  ascFlowHandoffServico?: number | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
@@ -219,12 +229,58 @@ function buildInstanceConnectOptions(instance: {
     applyTwilioWhatsAppOptions(options, instance);
   }
   if (instance.channel === 'whatsapp-business') {
-    applyWhatsAppBusinessOptions(options, instance);
+    applyWhatsAppBusinessConnectionOptions(options, instance);
   }
   if (instance.channel === 'hermes') {
     applyHermesOptions(options, instance);
   }
+  if (instance.channel === 'asc') {
+    applyAscOptions(options, instance);
+  }
+  if (instance.channel === 'asc-flow') {
+    applyAscFlowOptions(options, instance);
+  }
+  if (instance.channel === 'harness') {
+    applyHarnessMetadata(options, instance.profileMetadata);
+  }
   return options;
+}
+
+/**
+ * Harness capability profile — lives in profileMetadata.harnessProfile
+ * (#953, the Slack profileMetadata precedent; generic jsonb, no migration).
+ * The plugin's connect() Zod-parses it.
+ */
+function applyHarnessMetadata(
+  options: Record<string, unknown>,
+  metadata: Record<string, unknown> | null | undefined,
+): void {
+  if (metadata?.harnessProfile) options.harnessProfile = metadata.harnessProfile;
+}
+
+/**
+ * asc-flow reconnect credentials — the plugin's `connect()` reads these from
+ * `config.options` (same keys as `config.credentials` in the manual connect
+ * route). Persisted on `instances` by the create/connect/PATCH routes. The
+ * optional webhook verify token reuses the shared webhookVerifyToken column.
+ */
+function applyAscFlowOptions(
+  options: Record<string, unknown>,
+  instance: {
+    ascFlowBaseUrl?: string | null;
+    ascFlowLogin?: string | null;
+    ascFlowChave?: string | null;
+    ascFlowHandoffMode?: string | null;
+    ascFlowHandoffServico?: number | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (instance.ascFlowBaseUrl) options.ascFlowBaseUrl = instance.ascFlowBaseUrl;
+  if (instance.ascFlowLogin) options.ascFlowLogin = instance.ascFlowLogin;
+  if (instance.ascFlowChave) options.ascFlowChave = instance.ascFlowChave;
+  if (instance.ascFlowHandoffMode) options.ascFlowHandoffMode = instance.ascFlowHandoffMode;
+  if (instance.ascFlowHandoffServico != null) options.ascFlowHandoffServico = instance.ascFlowHandoffServico;
+  if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 
 /**
@@ -250,31 +306,24 @@ function applyHermesOptions(
 }
 
 /**
- * whatsapp-business reconnect credentials — the plugin's `connect()` reads these
- * from `config.options` (same keys as `config.credentials` in the manual
- * connect route). Persisted on `instances` by the connect/oauth routes.
+ * asc reconnect credentials — the plugin's `connect()` reads these from
+ * `config.options` (same keys as `config.credentials` in the manual connect
+ * route). Persisted on `instances` by the create/connect/PATCH routes. The
+ * webhook verify token reuses the shared webhookVerifyToken column.
  */
-function applyWhatsAppBusinessOptions(
+function applyAscOptions(
   options: Record<string, unknown>,
   instance: {
-    metaAccessToken?: string | null;
-    metaPhoneNumberId?: string | null;
-    metaWabaId?: string | null;
-    metaAppId?: string | null;
-    metaBusinessId?: string | null;
-    metaApiVersion?: string | null;
-    metaDisplayPhoneNumber?: string | null;
-    metaConnectionMethod?: string | null;
+    ascBaseUrl?: string | null;
+    ascToken?: string | null;
+    ascOriginador?: string | null;
+    webhookVerifyToken?: string | null;
   },
 ): void {
-  if (instance.metaAccessToken) options.metaAccessToken = instance.metaAccessToken;
-  if (instance.metaPhoneNumberId) options.metaPhoneNumberId = instance.metaPhoneNumberId;
-  if (instance.metaWabaId) options.metaWabaId = instance.metaWabaId;
-  if (instance.metaAppId) options.metaAppId = instance.metaAppId;
-  if (instance.metaBusinessId) options.metaBusinessId = instance.metaBusinessId;
-  if (instance.metaApiVersion) options.metaApiVersion = instance.metaApiVersion;
-  if (instance.metaDisplayPhoneNumber) options.metaDisplayPhoneNumber = instance.metaDisplayPhoneNumber;
-  if (instance.metaConnectionMethod) options.metaConnectionMethod = instance.metaConnectionMethod;
+  if (instance.ascBaseUrl) options.ascBaseUrl = instance.ascBaseUrl;
+  if (instance.ascToken) options.ascToken = instance.ascToken;
+  if (instance.ascOriginador) options.ascOriginador = instance.ascOriginador;
+  if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 
 function applyGupshupOptions(
@@ -283,6 +332,7 @@ function applyGupshupOptions(
     gupshupCallbackUrl?: string | null;
     gupshupAuthToken?: string | null;
     gupshupEventId?: string | null;
+    gupshupHandoffOptions?: GupshupHandoffOptions | null;
     gupshupApiKey?: string | null;
     gupshupAppName?: string | null;
     gupshupSourcePhone?: string | null;
@@ -292,6 +342,7 @@ function applyGupshupOptions(
   if (instance.gupshupCallbackUrl) options.gupshupCallbackUrl = instance.gupshupCallbackUrl;
   if (instance.gupshupAuthToken) options.gupshupAuthToken = instance.gupshupAuthToken;
   if (instance.gupshupEventId) options.gupshupEventId = instance.gupshupEventId;
+  if (instance.gupshupHandoffOptions) options.gupshupHandoffOptions = instance.gupshupHandoffOptions;
   if (instance.gupshupApiKey) options.gupshupApiKey = instance.gupshupApiKey;
   if (instance.gupshupAppName) options.gupshupAppName = instance.gupshupAppName;
   if (instance.gupshupSourcePhone) options.gupshupSourcePhone = instance.gupshupSourcePhone;
@@ -343,6 +394,7 @@ async function connectInstance(
     gupshupCallbackUrl?: string | null;
     gupshupAuthToken?: string | null;
     gupshupEventId?: string | null;
+    gupshupHandoffOptions?: GupshupHandoffOptions | null;
     webhookVerifyToken?: string | null;
     twilioAccountSid?: string | null;
     twilioAuthToken?: string | null;
@@ -790,6 +842,7 @@ export class InstanceMonitor {
     gupshupCallbackUrl?: string | null;
     gupshupAuthToken?: string | null;
     gupshupEventId?: string | null;
+    gupshupHandoffOptions?: GupshupHandoffOptions | null;
     webhookVerifyToken?: string | null;
     twilioAccountSid?: string | null;
     twilioAuthToken?: string | null;
