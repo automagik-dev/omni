@@ -231,7 +231,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   // agent's COMPILED automations through the compiler (a direct service call,
   // not a bus subscription — apply + compile share the request's transaction).
   const automationsService = new AutomationService(db, eventBus);
-  const manifestCompiler = new ManifestCompilerService(db, eventBus, automationsService);
+  const manifestCompiler = new ManifestCompilerService(eventBus, automationsService);
   const agentsService = new AgentService(db, eventBus);
   agentsService.setManifestReconciler(manifestCompiler);
 

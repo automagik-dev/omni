@@ -88,7 +88,7 @@ postgresDescribe('manifest compilation + reconciliation (real PostgreSQL)', () =
     const bus = recordingBus(journal);
     automationService = new AutomationService(db, bus);
     agentService = new AgentService(db, bus);
-    agentService.setManifestReconciler(new ManifestCompilerService(db, bus, automationService));
+    agentService.setManifestReconciler(new ManifestCompilerService(bus, automationService));
   });
 
   afterAll(async () => {

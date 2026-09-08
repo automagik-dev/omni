@@ -11,8 +11,9 @@
  * Compiled rows carry `managed_by_agent_id` (migration 0063): the manifest is
  * the source of truth and the `automations` table is the compiled plan, not
  * the source of truth. Manual CRUD of managed rows is rejected by
- * `AutomationService`; this service is the ONLY writer, and it writes through
- * the raw scoped handle (the internal path) rather than the service CRUD.
+ * `AutomationService`; this service is the ONLY legitimate writer and goes
+ * through `AutomationService.applyCompiledDiff` — the internal path that
+ * bypasses the managed-row guards.
  *
  * Reconciliation mirrors the automation engine's subscription reconciler
  * (engine.ts `doReconcileSubscriptions`): diff desired vs existing, create the
@@ -23,10 +24,7 @@
 import { createHash } from 'node:crypto';
 import type { AgentEventManifest, AutomationAction, AutomationCondition, EventBus } from '@omni/core';
 import { createLogger } from '@omni/core';
-import type { Database } from '@omni/db';
-import { type Automation, automations } from '@omni/db';
-import { eq } from 'drizzle-orm';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import type { Automation } from '@omni/db';
 import type { AutomationService } from './automations';
 
 const logger = createLogger('api:manifest-compiler');
@@ -207,22 +205,14 @@ export function diffCompiledAutomations(desired: DesiredCompiledAutomation[], ex
 }
 
 export class ManifestCompilerService {
-  /**
-   * The handle every query uses — the request's tenant-stamped transaction
-   * inside a tenant scope, the ambient pool otherwise (same contract as every
-   * other service; see `tenancy/tenant-scope.ts`).
-   */
-  private get db(): Database {
-    return scopedHandle(this.pool);
-  }
-
   constructor(
-    private readonly pool: Database,
     private readonly eventBus: EventBus | null,
     /**
-     * The compiler bypasses AutomationService CRUD (managed rows reject it)
-     * but still needs `reloadEngine()` so a converged plan is picked up by
-     * the running engine, exactly as hand-made CRUD does.
+     * All database access goes through AutomationService's INTERNAL compiler
+     * path (`listCompiledForAgent` / `applyCompiledDiff`) — the one deliberate
+     * bypass of the managed-row CRUD guards, which also keeps every write to
+     * the `automations` tenant table inside the registered writer
+     * (tenancy-writer-coverage.ts) and reloads the engine exactly once.
      */
     private readonly automations: AutomationService,
   ) {}
@@ -237,7 +227,7 @@ export class ManifestCompilerService {
    */
   async reconcileAgent(agent: CompiledAgentRef, manifest: AgentEventManifest | null): Promise<ReconcileResult> {
     const desired = compileManifest(agent, manifest);
-    const existing = await this.db.select().from(automations).where(eq(automations.managedByAgentId, agent.id));
+    const existing = await this.automations.listCompiledForAgent(agent.id);
     const { toCreate, toUpdate, toDelete } = diffCompiledAutomations(desired, existing);
 
     const result: ReconcileResult = {
@@ -249,20 +239,11 @@ export class ManifestCompilerService {
       return result;
     }
 
-    for (const row of toCreate) {
-      await this.db.insert(automations).values(row);
-    }
-    for (const { id, desired: want } of toUpdate) {
-      await this.db
-        .update(automations)
-        .set({ ...want, updatedAt: new Date() })
-        .where(eq(automations.id, id));
-    }
-    for (const { id } of toDelete) {
-      await this.db.delete(automations).where(eq(automations.id, id));
-    }
-
-    await this.automations.reloadEngine();
+    await this.automations.applyCompiledDiff({
+      create: toCreate,
+      update: toUpdate.map(({ id, desired: data }) => ({ id, data })),
+      deleteIds: toDelete.map(({ id }) => id),
+    });
 
     logger.info('Reconciled compiled automations from agent manifest', { agentId: agent.id, ...result });
 

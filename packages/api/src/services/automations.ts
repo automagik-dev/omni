@@ -252,6 +252,44 @@ export class AutomationService {
   }
 
   /**
+   * INTERNAL compiler read path (RFC #925 G4b, #986): the compiled rows an
+   * agent's manifest currently materializes. Used by the manifest compiler to
+   * diff desired vs existing; not exposed as a route.
+   */
+  async listCompiledForAgent(agentId: string): Promise<Automation[]> {
+    return this.db.select().from(automations).where(eq(automations.managedByAgentId, agentId));
+  }
+
+  /**
+   * INTERNAL compiler write path (RFC #925 G4b, #986). Applies a reconciled
+   * diff of COMPILED rows in one pass and reloads the engine once. This is
+   * the deliberate bypass of `assertNotManaged`/`assertNoProvenance`: the
+   * manifest compiler is the sole legitimate writer of managed rows, and it
+   * must be able to stamp `managedByAgentId` and mutate/delete what the
+   * public CRUD refuses to touch. Only `ManifestCompilerService` calls this;
+   * it is not reachable from any route.
+   */
+  async applyCompiledDiff(diff: {
+    create: NewAutomation[];
+    update: Array<{ id: string; data: Partial<NewAutomation> }>;
+    deleteIds: string[];
+  }): Promise<void> {
+    for (const row of diff.create) {
+      await this.db.insert(automations).values(row);
+    }
+    for (const { id, data } of diff.update) {
+      await this.db
+        .update(automations)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(automations.id, id));
+    }
+    for (const id of diff.deleteIds) {
+      await this.db.delete(automations).where(eq(automations.id, id));
+    }
+    await this.reloadEngine();
+  }
+
+  /**
    * Enable an automation
    */
   async enable(id: string): Promise<Automation> {
