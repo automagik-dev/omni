@@ -174,13 +174,14 @@ export class DeadLetterService {
   }
 
   /**
-   * Dead-letter a payload refused by a schema-registry validation gate
-   * (issue #959). The refused event never entered the journal — this row IS
-   * its only record, with `error` starting with `schema_validation_failed`
-   * (or, for a strict gate refusing an unregistered type — issue #1000 — the
-   * caller-supplied `schema_not_registered`).
+   * Dead-letter a payload refused by an emission/ingress governance gate.
+   * The refused event never entered the journal — this row IS its only
+   * record, with `error` starting with the refusing reason token:
+   * `schema_validation_failed` (issue #959, the default), the strict gate's
+   * `schema_not_registered` (issue #1000), or the publish-allowlist gate's
+   * `publish_not_declared` (RFC #925 G4c, issue #987).
    *
-   * `nextAutoRetryAt` stays null: retrying an unchanged invalid payload can
+   * `nextAutoRetryAt` stays null: retrying an unchanged refused payload can
    * never succeed, so these rows are manual-intervention only.
    */
   async createSchemaValidationFailure(input: {
@@ -189,7 +190,11 @@ export class DeadLetterService {
     subject: string;
     payload: Record<string, unknown>;
     errors: string[];
-    /** DLQ reason token prefixing `error`; defaults to `schema_validation_failed`. */
+    /**
+     * DLQ reason token prefixing `error`; defaults to
+     * `schema_validation_failed` (`SCHEMA_NOT_REGISTERED` and
+     * `PUBLISH_NOT_DECLARED` are the caller-supplied siblings).
+     */
     reason?: string;
   }): Promise<DeadLetterEntry> {
     const [result] = await this.db

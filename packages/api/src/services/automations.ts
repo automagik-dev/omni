@@ -84,12 +84,15 @@ export class AutomationService {
       trustedTenantId?: string | null,
     ) => Promise<boolean>;
     releaseEmittedEventClaim?: (eventId: string) => Promise<void>;
-    // Schema-registry gate for emit_event (issue #959) — see automation-actions.ts.
+    // Emission gates for emit_event: the publish allowlist (issue #987, keyed
+    // by the emitting automation's managing agent) and the schema registry
+    // (issue #959) — see automation-actions.ts.
     validateEmitEvent?: (
       eventType: string,
       payload: Record<string, unknown>,
       trustedTenantId?: string | null,
-    ) => Promise<{ valid: boolean; errors?: string[] }>;
+      emitterAgentId?: string | null,
+    ) => Promise<{ valid: boolean; errors?: string[]; reason?: string }>;
   }): Promise<void> {
     if (!this.eventBus) {
       return;

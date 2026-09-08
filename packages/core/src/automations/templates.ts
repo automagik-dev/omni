@@ -101,8 +101,14 @@ export interface TemplateContext {
   followUp?: TemplateFollowUpContext;
   /** Envelope of the triggering event — threaded by the engine, see TemplateEventContext. */
   event?: TemplateEventContext;
-  /** The automation being executed — threaded by the engine (delivery-id derivation, #960). */
-  automation?: { id: string };
+  /**
+   * The automation being executed — threaded by the engine (delivery-id
+   * derivation, #960). `managedByAgentId` is the agent whose manifest governs
+   * this automation's emissions (RFC #925 G4c, #987): stamped by the G4b
+   * compiler (#986) on compiled automations, `null`/absent for hand-authored
+   * ones — with no emitter agent the publish-allowlist gate is inert.
+   */
+  automation?: { id: string; managedByAgentId?: string | null };
 }
 
 /**
@@ -329,7 +335,7 @@ export function createTemplateContext(
     debounce?: TemplateContext['debounce'];
     followUp?: TemplateFollowUpContext;
     event?: TemplateEventContext;
-    automation?: { id: string };
+    automation?: TemplateContext['automation'];
   } = {},
 ): TemplateContext {
   const followUp = options.followUp ?? deriveFollowUpFromPayload(payload);

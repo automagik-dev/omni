@@ -441,3 +441,72 @@ describe('emit_event derived-key idempotency (#958)', () => {
     expect(claimedKeys.size).toBe(0);
   });
 });
+
+/**
+ * emit_event publish-allowlist threading (RFC #925 G4c, #987): the engine
+ * stamps `context.automation.managedByAgentId` (from the #986 compiler) and
+ * the emit path must hand it to the `validateEmitEvent` gate, whose refusal
+ * fails the action with the gate's reason prefix and publishes nothing.
+ */
+describe('emit_event publish-allowlist gate threading (#987)', () => {
+  const emitAction = { type: 'emit_event', config: { eventType: 'custom.review.parecer.ready' } } as Parameters<
+    typeof executeAction
+  >[0];
+
+  function makeBus(published: string[]) {
+    return {
+      publishGeneric: mock(async (type: string) => {
+        published.push(type);
+        return { id: 'evt-1', type, timestamp: Date.now(), metadata: {}, payload: {} };
+      }),
+    } as never;
+  }
+
+  test('threads context.automation.managedByAgentId as the gate emitterAgentId', async () => {
+    const published: string[] = [];
+    const validateEmitEvent = mock(
+      async (_type: string, _payload: Record<string, unknown>, _tenant?: string | null, _agent?: string | null) => ({
+        valid: true,
+      }),
+    );
+
+    const context = makeContext({ automation: { id: 'auto-1', managedByAgentId: 'agent-42' } });
+    const result = await executeAction(emitAction, context, { eventBus: makeBus(published), validateEmitEvent });
+
+    expect(result.status).toBe('success');
+    expect(validateEmitEvent).toHaveBeenCalledTimes(1);
+    expect(validateEmitEvent.mock.calls[0]![3]).toBe('agent-42');
+    expect(published).toEqual(['custom.review.parecer.ready']);
+  });
+
+  test('no managing agent (hand-authored automation) threads null', async () => {
+    const published: string[] = [];
+    const validateEmitEvent = mock(
+      async (_type: string, _payload: Record<string, unknown>, _tenant?: string | null, _agent?: string | null) => ({
+        valid: true,
+      }),
+    );
+
+    const context = makeContext({ automation: { id: 'auto-1' } });
+    await executeAction(emitAction, context, { eventBus: makeBus(published), validateEmitEvent });
+
+    expect(validateEmitEvent.mock.calls[0]![3]).toBeNull();
+  });
+
+  test('a publish_not_declared refusal fails the action and publishes nothing', async () => {
+    const published: string[] = [];
+    const validateEmitEvent = mock(async () => ({
+      valid: false,
+      errors: ["event type 'custom.review.parecer.ready' is not declared in the publishes manifest of agent agent-42"],
+      reason: 'publish_not_declared',
+    }));
+
+    const context = makeContext({ automation: { id: 'auto-1', managedByAgentId: 'agent-42' } });
+    const result = await executeAction(emitAction, context, { eventBus: makeBus(published), validateEmitEvent });
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toStartWith('publish_not_declared');
+    expect(result.error).toContain('not declared in the publishes manifest');
+    expect(published).toEqual([]);
+  });
+});
