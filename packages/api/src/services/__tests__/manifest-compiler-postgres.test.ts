@@ -27,14 +27,25 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { AgentEventManifest, Automation as CoreAutomation, EventBus, OmniEvent, Subscription } from '@omni/core';
+import type {
+  AgentEventManifest,
+  Automation as CoreAutomation,
+  EventBus,
+  IAgentClient,
+  OmniEvent,
+  ProviderRequest,
+  ProviderResponse,
+  Subscription,
+} from '@omni/core';
 import { ConflictError, createAutomationEngine } from '@omni/core';
-import { type Database, automations, createDbHandle } from '@omni/db';
+import { type Database, agentProviders, automations, createDbHandle } from '@omni/db';
 import { agents as agentsTable } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
+import { buildAutomationEngineDeps } from '../../plugins/automation-actions';
 import { AgentService } from '../agents';
 import { AutomationService } from '../automations';
+import { createServices } from '../index';
 import { ManifestCompilerService } from '../manifest-compiler';
 
 const superUrl = process.env.OMNI_G1_POSTGRES_URL ?? '';
@@ -293,6 +304,125 @@ postgresDescribe('manifest compilation + reconciliation (real PostgreSQL)', () =
       expect(agentCalls).toHaveLength(1);
       expect(agentCalls[0]?.configAgentId).toBe(agent.id);
       expect(agentCalls[0]?.agentId).toBe(agent.id);
+    } finally {
+      await engine.stop();
+    }
+  });
+
+  test('end to end (#1010): a CHAT-LESS external event fires the compiled call_agent — the provider receives the OmniEvent envelope', async () => {
+    // The full RFC #925 motivating scenario, neither #1009 nor #1010 could
+    // prove alone: manifest `accepts` entry for an external-shaped type →
+    // compiler emits the minimal `call_agent {agentId}` config → an event
+    // with NO chat fields (no instanceId, no chatId, no sender) arrives →
+    // chatless dispatch resolves the provider from the AGENT row and the
+    // (faked) provider receives the full envelope, session-scoped by
+    // `automation:{automationId}:{correlationId}`.
+
+    // A real provider row (FK for agents.agent_provider_id); the provider
+    // CLIENT is faked below at the agent-runner's client seam.
+    const [providerRow] = await db
+      .insert(agentProviders)
+      .values({ name: 'e2e-chatless-provider', schema: 'agno', baseUrl: 'http://localhost:1', apiKey: 'k' })
+      .returning({ id: agentProviders.id });
+    if (!providerRow) throw new Error('provider insert failed');
+
+    const agent = await agentService.create({
+      name: 'github-triage',
+      provider: 'claude',
+      agentProviderId: providerRow.id,
+    });
+    await agentService.updateManifest(agent.id, {
+      accepts: [{ event: 'custom.github.push', filter: { repository: 'automagik-dev/omni' } }],
+      publishes: [],
+    });
+
+    const compiled = (await automationService.list({ enabled: true })).filter(
+      (row) => row.managedByAgentId === agent.id,
+    );
+    expect(compiled).toHaveLength(1);
+    const automationId = compiled[0]?.id;
+
+    // REAL engine deps over REAL services — only the provider client is faked.
+    const services = createServices(db, recordingBus(journal));
+    const providerRequests: ProviderRequest[] = [];
+    const fakeClient: IAgentClient = {
+      run: async (request: ProviderRequest): Promise<ProviderResponse> => {
+        providerRequests.push(request);
+        return { content: 'triaged', runId: 'run-e2e', sessionId: request.sessionId ?? '', status: 'completed' };
+      },
+      stream: (): AsyncGenerator<never> => {
+        throw new Error('chatless dispatch is sync-only');
+      },
+    } as unknown as IAgentClient;
+    (
+      services.agentRunner as unknown as { getClient: () => Promise<{ client: IAgentClient; schema: string }> }
+    ).getClient = async () => ({ client: fakeClient, schema: 'agno' });
+    const deps = buildAutomationEngineDeps(services, db);
+
+    const handlers = new Map<string, (event: OmniEvent) => Promise<void>>();
+    const engineBus = {
+      publishGeneric: async () => ({ id: 'pub' }),
+      subscribePattern: async (pattern: string, handler: (event: OmniEvent) => Promise<void>) => {
+        handlers.set(pattern, handler);
+        return { unsubscribe: async () => {} } as Subscription;
+      },
+    } as unknown as EventBus;
+
+    const engine = createAutomationEngine({ defaultConcurrency: 1, reconcileIntervalMs: 0 });
+    engine.setLogger(async () => {});
+    await engine.start(engineBus, compiled as unknown as CoreAutomation[], deps);
+
+    try {
+      const handler = handlers.get('custom.github.push.>');
+      expect(handler).toBeDefined();
+      if (!handler) throw new Error('engine did not subscribe to the compiled trigger');
+
+      // A root external fact: NO chat fields anywhere in the payload.
+      const fire = (repository: string, correlationId: string, eventId: string) =>
+        handler({
+          id: eventId,
+          type: 'custom.github.push',
+          payload: { source: 'github', repository, ref: 'refs/heads/main', commits: [{ id: 'abc123' }] },
+          metadata: { correlationId },
+          timestamp: 1757100000000,
+        } as OmniEvent);
+
+      // Compiled filter mismatch: refused before any dispatch.
+      await fire('someone-else/repo', 'corr-x', 'evt-x');
+      expect(providerRequests).toHaveLength(0);
+
+      // Match: the provider receives the FULL envelope, chatless.
+      await fire('automagik-dev/omni', 'corr-gh-1', 'evt-gh-1');
+      expect(providerRequests).toHaveLength(1);
+      const request = providerRequests[0];
+      expect(request?.agentId).toBe('github-triage'); // provider-internal id: name fallback
+      expect(request?.sessionId).toBe(`automation:${automationId}:corr-gh-1`);
+      expect(request?.userId).toBe(`automation:${automationId}:corr-gh-1`);
+      expect(request?.platform).toBeUndefined();
+      expect(request?.chat).toBeUndefined();
+      const envelope = JSON.parse(request?.message ?? '{}');
+      expect(envelope).toEqual({
+        id: 'evt-gh-1',
+        type: 'custom.github.push',
+        payload: {
+          source: 'github',
+          repository: 'automagik-dev/omni',
+          ref: 'refs/heads/main',
+          commits: [{ id: 'abc123' }],
+        },
+        metadata: { correlationId: 'corr-gh-1' },
+        timestamp: 1757100000000,
+      });
+
+      // Session scoping: an unrelated event gets its own session…
+      await fire('automagik-dev/omni', 'corr-gh-2', 'evt-gh-2');
+      expect(providerRequests).toHaveLength(2);
+      expect(providerRequests[1]?.sessionId).toBe(`automation:${automationId}:corr-gh-2`);
+
+      // …while a causal chain (same correlationId) shares the first one.
+      await fire('automagik-dev/omni', 'corr-gh-1', 'evt-gh-3');
+      expect(providerRequests).toHaveLength(3);
+      expect(providerRequests[2]?.sessionId).toBe(`automation:${automationId}:corr-gh-1`);
     } finally {
       await engine.stop();
     }

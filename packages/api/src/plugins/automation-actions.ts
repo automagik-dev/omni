@@ -48,6 +48,82 @@ const log = createLogger('automation-actions');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** agents.agent_type (entity taxonomy) → provider dispatch type. */
+const AGENT_TYPE_MAP: Record<string, 'agent' | 'team' | 'workflow'> = {
+  assistant: 'agent',
+  tool: 'agent',
+  workflow: 'workflow',
+  team: 'team',
+};
+
+/**
+ * Chatless `call_agent` dispatch (#1010, RFC #925 G4 runtime half): the
+ * triggering event resolved no instance and no chat, so the provider is
+ * resolved from the AGENT row alone and the run is keyed by the core action's
+ * event-scoped `sessionKey`. Same discrete-read-block discipline as the
+ * chat-ful path: the `agents` lookup runs in its own short worker tenant
+ * scope, and the agent run executes strictly AFTER the scope closed.
+ *
+ * There is NO implicit reply: nothing is sent to any chat; the response only
+ * feeds `responseAs` variable chaining. The agent acts via its own tools.
+ */
+async function runChatlessCallAgent(
+  services: Services,
+  db: Database,
+  ctx: AgentCallContext,
+  cfg: CallAgentActionConfig,
+  trustedTenantId: string | null,
+): Promise<AgentRunResult> {
+  const agentFkId = ctx.agentId;
+  if (!agentFkId) throw new Error('chatless call_agent requires config.agentId');
+
+  // Discrete read block: the agents row (provider coordinates + persisted
+  // tenant ownership — the chatless analogue of `instance.tenantId`).
+  const [agentRow] = await runTenantWorkDb(db, trustedTenantId, () =>
+    scopedHandle(db)
+      .select({
+        name: agents.name,
+        agentProviderId: agents.agentProviderId,
+        agentType: agents.agentType,
+        metadata: agents.metadata,
+        configPath: agents.configPath,
+        tenantId: agents.tenantId,
+      })
+      .from(agents)
+      .where(eq(agents.id, agentFkId))
+      .limit(1),
+  );
+  if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
+  if (!agentRow.agentProviderId) {
+    throw new Error(`Agent ${agentFkId} has no agent provider configured (required for chatless call_agent)`);
+  }
+
+  const providerAgentId =
+    ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??
+    agentRow.configPath ??
+    agentRow.name;
+
+  // Agent run strictly OUTSIDE the resolution scope (the G4 leg-2 trap).
+  const result = await services.agentRunner.runChatless({
+    agentProviderId: agentRow.agentProviderId,
+    agentInternalId: providerAgentId,
+    agentType: cfg.agentType ?? AGENT_TYPE_MAP[agentRow.agentType] ?? 'agent',
+    tenantId: agentRow.tenantId ?? trustedTenantId ?? null,
+    sessionKey: ctx.sessionKey ?? ctx.chatId,
+    messages: ctx.messages,
+    timeoutSeconds: cfg.timeoutMs ? Math.ceil(cfg.timeoutMs / 1000) : undefined,
+  });
+  return {
+    parts: result.parts,
+    fullResponse: result.parts.join('\n'),
+    metadata: {
+      runId: result.metadata.runId,
+      sessionId: result.metadata.sessionId,
+      status: result.metadata.status,
+    },
+  };
+}
+
 /**
  * Resolve chat UUID → channel-native external_id for a call_agent invocation.
  *
@@ -237,6 +313,12 @@ export function buildAutomationEngineDeps(
     },
 
     callAgent: async (ctx, cfg, trustedTenantId = null) => {
+      // Chatless dispatch (#1010): no instance and no chat resolved from the
+      // triggering event — provider comes from the agent row instead.
+      if (ctx.chatless) {
+        return runChatlessCallAgent(services, db, ctx, cfg, trustedTenantId);
+      }
+
       // Discrete read block #1: the instance row.
       const instance = await runTenantWorkDb(db, trustedTenantId, () => services.instances.getById(ctx.instanceId));
       if (!instance) throw new Error(`Instance not found: ${ctx.instanceId}`);
@@ -274,12 +356,6 @@ export function buildAutomationEngineDeps(
       );
       if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
 
-      const typeMap: Record<string, 'agent' | 'team' | 'workflow'> = {
-        assistant: 'agent',
-        tool: 'agent',
-        workflow: 'workflow',
-        team: 'team',
-      };
       const providerAgentId =
         ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??
         agentRow.configPath ??
@@ -288,7 +364,7 @@ export function buildAutomationEngineDeps(
       const runInstance = {
         ...instance,
         agentProviderId: agentRow.agentProviderId ?? null,
-        agentType: cfg.agentType ?? typeMap[agentRow.agentType] ?? 'agent',
+        agentType: cfg.agentType ?? AGENT_TYPE_MAP[agentRow.agentType] ?? 'agent',
         agentInternalId: providerAgentId,
         agentSessionStrategy: cfg.sessionStrategy ?? instance.agentSessionStrategy,
         agentPrefixSenderName: cfg.prefixSenderName ?? instance.agentPrefixSenderName,

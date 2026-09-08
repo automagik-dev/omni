@@ -78,6 +78,38 @@ export interface AgentRunContext {
   files?: ProviderFile[];
 }
 
+/**
+ * Context for a chatless agent run (#1010, RFC #925 G4 runtime half): an
+ * event→agent dispatch with no instance, no chat, and no sender — only the
+ * agent's provider coordinates and an event-scoped session key.
+ */
+export interface ChatlessRunContext {
+  /** The agent's provider (from the agents row, not an instance). */
+  agentProviderId: string;
+  /** Provider-internal agent id (metadata.providerAgentId ?? configPath ?? name). */
+  agentInternalId: string;
+  /** Agent type — routes the provider client internally (default 'agent'). */
+  agentType?: 'agent' | 'team' | 'workflow';
+  /**
+   * Tenant the provider credential is opened (and the client cached) under —
+   * the agent row's persisted ownership, mirroring how the instance path
+   * threads `instance.tenantId`. Null in the legacy world.
+   */
+  tenantId?: string | null;
+  /**
+   * Event-scoped session key (`automation:{automationId}:{correlationId}`).
+   * HTTP providers receive it verbatim as `sessionId`/`userId`, so a causal
+   * chain shares one provider-side conversation and unrelated events never
+   * collide. claude-code only resumes UUID session ids, so every chatless
+   * claude-code run starts a FRESH provider session (see runChatless).
+   */
+  sessionKey: string;
+  /** The run's input — for the default chatless path, the OmniEvent envelope JSON. */
+  messages: string[];
+  /** Timeout in seconds (default 600). */
+  timeoutSeconds?: number | null;
+}
+
 export interface AgentRunResult {
   /** Response content (may be split into parts) */
   parts: string[];
@@ -670,6 +702,71 @@ export class AgentRunnerService {
       runId: response.runId,
       status: response.status,
       parts: parts.length,
+    });
+
+    return {
+      parts,
+      metadata: {
+        runId: response.runId,
+        sessionId: response.sessionId,
+        status: response.status,
+        metrics: response.metrics,
+      },
+    };
+  }
+
+  /**
+   * Run a CHATLESS agent call (#1010): dispatch an agent with only its
+   * provider coordinates and the triggering event — no instance, no chat.
+   *
+   * Deliberate differences from `run()` (all consequences of having no
+   * instance/chat, documented per issue #1010):
+   *   - no `platform`/`chat`/`sender` blocks on the provider request — there
+   *     is no channel identity to report;
+   *   - `sessionId` and `userId` are BOTH the event-scoped `sessionKey`
+   *     (`automation:{automationId}:{correlationId}`). HTTP/API-key providers
+   *     take the session id verbatim, so a causal chain shares one
+   *     conversation and unrelated events get separate ones. The claude-code
+   *     client only resumes valid UUID session ids (it ignores this key), so
+   *     every chatless claude-code run starts a fresh provider session — the
+   *     key→UUID mapping store (`agent_sessions`) requires an instances-row
+   *     FK that chatless runs do not have, and a fresh session is the safe
+   *     "no collision" default;
+   *   - always a sync run: there is no `instance.agentStreamMode` to honor;
+   *   - no response auto-split and no sender-name prefixing: the response is
+   *     not routed to a chat — there is NO implicit reply. The agent acts
+   *     through its own tools; the returned text only feeds `responseAs`
+   *     variable chaining.
+   */
+  async runChatless(context: ChatlessRunContext): Promise<AgentRunResult> {
+    const { client } = await this.getClient(context.agentProviderId, context.tenantId ?? null);
+
+    const combinedMessage = context.messages.join('\n---\n');
+
+    log.info('Running agent (chatless)', {
+      agentProviderId: context.agentProviderId,
+      agentInternalId: context.agentInternalId,
+      agentType: context.agentType ?? 'agent',
+      sessionKey: context.sessionKey,
+      messageCount: context.messages.length,
+    });
+
+    const response = await client.run({
+      message: combinedMessage,
+      agentId: context.agentInternalId,
+      agentType: context.agentType ?? 'agent',
+      stream: false,
+      sessionId: context.sessionKey,
+      userId: context.sessionKey,
+      timeoutMs: (context.timeoutSeconds ?? 600) * 1000,
+    });
+
+    const parts = [response.content.trim()].filter(Boolean);
+
+    log.info('Chatless agent run complete', {
+      runId: response.runId,
+      status: response.status,
+      sessionId: response.sessionId,
     });
 
     return {

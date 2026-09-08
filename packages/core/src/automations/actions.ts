@@ -71,6 +71,30 @@ export interface AgentCallContext {
     type: string;
     correlationId?: string;
   };
+  /**
+   * Chatless dispatch (#1010, RFC #925 G4 runtime half): the triggering event
+   * carried no resolvable chat context (no instanceId and/or no chatId), and
+   * `config.agentId` names the agent to wake anyway. In this mode:
+   *   - `instanceId` is the EMPTY STRING — there is no instance; the callAgent
+   *     implementation must resolve the provider from the agent row instead;
+   *   - `chatId`/`senderId` carry the synthesized `sessionKey` (stable
+   *     event-scoped identifiers, never channel-native ids);
+   *   - `messages` carries the full OmniEvent envelope as JSON (the #960
+   *     envelope-forwarding shape), or the rendered `promptOverride`;
+   *   - there is NO implicit reply — the agent acts through its own
+   *     tools/actions; any response routing is the agent's job.
+   */
+  chatless?: boolean;
+  /**
+   * Session scoping key for chatless runs: `automation:{automationId}:{scope}`
+   * where scope is the triggering envelope's correlationId (falling back to
+   * the event id, or a fresh id for envelope-less invocations). Consecutive
+   * unrelated events therefore never collide into one conversation; a causal
+   * chain (shared correlationId) hitting the same automation shares one key.
+   */
+  sessionKey?: string;
+  /** Id of the automation that dispatched this chatless run ('manual' when unthreaded). */
+  automationId?: string;
 }
 
 /**
@@ -715,6 +739,79 @@ function extractMessages(context: TemplateContext, promptOverride?: string): str
 }
 
 /**
+ * Messages for a chatless run: the rendered `promptOverride` when configured,
+ * otherwise the FULL OmniEvent envelope as JSON — the same shape the webhook
+ * action's default body sends (#960: id, type, payload, metadata, timestamp).
+ * Envelope-less invocations (route-side manual execute) fall back to the bare
+ * payload, mirroring `buildDefaultWebhookBody`.
+ */
+function buildChatlessMessages(context: TemplateContext, promptOverride?: string): string[] | { error: string } {
+  if (promptOverride !== undefined) {
+    const rendered = substituteTemplate(promptOverride, context);
+    if (!rendered) return { error: 'promptOverride rendered to an empty string' };
+    return [rendered];
+  }
+  if (context.event) {
+    return [
+      JSON.stringify({
+        id: context.event.id,
+        type: context.event.type,
+        payload: context.payload,
+        metadata: context.event.metadata,
+        timestamp: context.event.timestamp,
+      }),
+    ];
+  }
+  return [JSON.stringify(context.payload)];
+}
+
+/**
+ * Build the chatless AgentCallContext (#1010): dispatch with only an agent id
+ * plus the triggering event. The session scope is
+ * `automation:{automationId}:{correlationId}` — correlationId falls back to
+ * the event id, and to a freshly minted id for envelope-less invocations (each
+ * manual execute is its own conversation). Consequence: unrelated events get
+ * separate sessions by default; a causal chain (same correlationId) hitting
+ * the same automation shares one.
+ */
+function buildChatlessAgentCallContext(
+  config: CallAgentActionConfig,
+  context: TemplateContext,
+  agentId: string,
+): { context: AgentCallContext } | { error: string } {
+  const messagesResult = buildChatlessMessages(context, config.promptOverride);
+  if ('error' in messagesResult) return messagesResult;
+
+  const automationId = context.automation?.id ?? 'manual';
+  const scope = context.event?.metadata.correlationId ?? context.event?.id ?? generateId();
+  const sessionKey = `automation:${automationId}:${scope}`;
+
+  return {
+    context: {
+      chatless: true,
+      // No instance exists for a chatless run — the callAgent implementation
+      // resolves the provider from the agent row.
+      instanceId: '',
+      agentId,
+      sessionKey,
+      automationId,
+      // Stable synthesized identifiers (never channel-native ids) so
+      // downstream logging/session code has non-empty values to key on.
+      chatId: sessionKey,
+      senderId: sessionKey,
+      messages: messagesResult,
+      event: context.event
+        ? {
+            id: context.event.id,
+            type: context.event.type,
+            correlationId: context.event.metadata.correlationId,
+          }
+        : undefined,
+    },
+  };
+}
+
+/**
  * Extract agent call context from automation payload
  * Returns extracted context or error string
  */
@@ -727,10 +824,6 @@ function extractAgentCallContext(
     ? substituteTemplate(config.providerId, context)
     : (context.payload.instanceId as string);
 
-  if (!instanceId) {
-    return { error: 'instanceId is required (from payload or config.providerId template)' };
-  }
-
   // Extract chat and sender info from payload
   const fromObj = context.payload.from as { id?: string; name?: string } | undefined;
   const chatId = (context.payload.chatId as string) ?? fromObj?.id;
@@ -740,6 +833,20 @@ function extractAgentCallContext(
   const senderName =
     fromObj?.name ?? (context.payload.senderName as string) ?? (context.payload.chatName as string | undefined);
 
+  // Chatless fallback (#1010): a chat-less external event (custom.github.push
+  // et al.) resolves neither an instance nor a chat. When the config names an
+  // agent, dispatch it anyway with the event envelope as the run's input.
+  // Chat-ful events resolve both fields and take the unchanged path below.
+  if (!instanceId || !chatId) {
+    const chatlessAgentId = config.agentId ? substituteTemplate(config.agentId, context) : '';
+    if (chatlessAgentId) {
+      return buildChatlessAgentCallContext(config, context, chatlessAgentId);
+    }
+  }
+
+  if (!instanceId) {
+    return { error: 'instanceId is required (from payload or config.providerId template)' };
+  }
   if (!chatId) return { error: 'chatId not found in payload' };
   if (!senderId) return { error: 'senderId not found in payload' };
 
