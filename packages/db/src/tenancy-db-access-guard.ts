@@ -114,11 +114,29 @@ function isTestFile(path: string): boolean {
   return path.includes('/__tests__/') || /\.(test|spec)\.ts$/.test(path);
 }
 
+/**
+ * Sibling suites create and delete scratch sources inside the scanned tree
+ * while this scan runs (the egress guard's `__g5_egress_scratch__` under the
+ * parallel test runner), so any path listed by the walk may be gone by the
+ * time it is stat'ed or read. A vanished path has no call sites: skip it.
+ * Every other error still throws.
+ */
+function isEnoent(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
 function walk(dir: string, out: string[]): void {
   for (const entry of readdirSync(dir)) {
     if (SKIP_DIRS.has(entry)) continue;
     const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, out);
+    let isDirectory: boolean;
+    try {
+      isDirectory = statSync(full).isDirectory();
+    } catch (error) {
+      if (isEnoent(error)) continue;
+      throw error;
+    }
+    if (isDirectory) walk(full, out);
     else if (full.endsWith('.ts') && !isTestFile(full)) out.push(full);
   }
 }
@@ -203,7 +221,14 @@ export function scanDbAccessSites(packagesDir: string, repoRoot: string): DbAcce
   for (const file of files) {
     const rel = relative(repoRoot, file);
     if (SKIP_FILES.has(rel)) continue;
-    const source = stripComments(readFileSync(file, 'utf-8'));
+    let raw: string;
+    try {
+      raw = readFileSync(file, 'utf-8');
+    } catch (error) {
+      if (isEnoent(error)) continue;
+      throw error;
+    }
+    const source = stripComments(raw);
 
     for (const match of source.matchAll(builder)) {
       const table = RLS_DRIZZLE_TO_TABLE.get(match[1] as string);
