@@ -175,6 +175,12 @@ describe('db-access guard', () => {
       'packages/api/src/services/conversations.ts',
       'packages/api/src/services/routes.ts',
       'packages/api/src/services/events.ts',
+      // #989: durable consumers. The `omni_events` pull/head reads run through
+      // the service's `scopedHandle` getter — request transaction when scoped
+      // (RLS-policed pages), ambient for a legacy credential (the accepted
+      // dual world). The registry table itself (`durable_consumers`) is
+      // global, following the event_schemas precedent.
+      'packages/api/src/services/event-consumers.ts',
       'packages/api/src/services/agent-tasks.ts',
       'packages/api/src/services/agents.ts',
       // Route handlers that query directly; scoped by the edge rebinding
