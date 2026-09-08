@@ -2775,16 +2775,25 @@ export type ConnectorMutationPolicy = (typeof connectorMutationPolicies)[number]
  * Without a mapping every delivery from a source collapses into the fixed
  * `custom.webhook.{source}` type — GitHub push, PR, issue and release all
  * arrive indistinguishable. A mapping extracts the semantic event name from
- * the delivery (e.g. the `X-GitHub-Event` header) so the published type
+ * the delivery (e.g. the `X-GitHub-Event` header, or the `event` body field
+ * for body-first providers like ClickUp — issue #984) so the published type
  * becomes `custom.{source}.{event}` (`custom.github.push`). A delivery the
  * mapping cannot resolve falls back to the legacy collapsed type.
  */
-export interface WebhookEventTypeMapping {
-  /** Where the semantic event name is read from. Only headers for now. */
-  source: 'header';
-  /** Header carrying the semantic event name (e.g. 'X-GitHub-Event'). */
-  header: string;
-}
+// no-migration-needed: type-only widening of a jsonb column's TS shape (no DDL impact)
+export type WebhookEventTypeMapping =
+  | {
+      /** Read the semantic event name from a request header. */
+      source: 'header';
+      /** Header carrying the semantic event name (e.g. 'X-GitHub-Event'). */
+      header: string;
+    }
+  | {
+      /** Read the semantic event name from the JSON body (#984). */
+      source: 'body';
+      /** Dot-path to the event name (e.g. 'event'); numeric segments index arrays. */
+      path: string;
+    };
 
 /**
  * Webhook source configurations.

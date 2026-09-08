@@ -2,15 +2,18 @@
  * Source→semantic-type mapping for the generic webhook ingress (issue #959).
  *
  * A mapped source extracts the semantic event name from the delivery
- * (`X-GitHub-Event: push` → `custom.github.push`) instead of collapsing every
- * delivery into `custom.webhook.{source}`; anything the mapping cannot
- * resolve falls back to the collapsed legacy type.
+ * (`X-GitHub-Event: push` → `custom.github.push`, or — for body-first
+ * providers like ClickUp (#984) — the `event` body field:
+ * `taskStatusUpdated` → `custom.clickup.taskstatusupdated`) instead of
+ * collapsing every delivery into `custom.webhook.{source}`; anything the
+ * mapping cannot resolve falls back to the collapsed legacy type.
  */
 
 import { describe, expect, test } from 'bun:test';
 import { resolveWebhookEventType } from '../webhooks';
 
 const GITHUB_MAPPING = { source: 'header', header: 'X-GitHub-Event' } as const;
+const CLICKUP_MAPPING = { source: 'body', path: 'event' } as const;
 
 describe('resolveWebhookEventType', () => {
   test('a mapped source emits custom.{source}.{event} from the header', () => {
@@ -47,5 +50,29 @@ describe('resolveWebhookEventType', () => {
   test('an oversized header value is capped at 64 characters', () => {
     const eventType = resolveWebhookEventType('github', GITHUB_MAPPING, { 'x-github-event': 'x'.repeat(200) });
     expect(eventType).toBe(`custom.github.${'x'.repeat(64)}`);
+  });
+
+  test('a body-mapped source reads the event name from the payload (#984)', () => {
+    expect(resolveWebhookEventType('clickup', CLICKUP_MAPPING, {}, { event: 'taskStatusUpdated' })).toBe(
+      'custom.clickup.taskstatusupdated',
+    );
+    expect(resolveWebhookEventType('clickup', CLICKUP_MAPPING, {}, { event: 'taskCreated' })).toBe(
+      'custom.clickup.taskcreated',
+    );
+  });
+
+  test('a body mapping resolves nested dot-paths', () => {
+    const mapping = { source: 'body', path: 'meta.kind' } as const;
+    expect(resolveWebhookEventType('acme', mapping, {}, { meta: { kind: 'invoice_paid' } })).toBe(
+      'custom.acme.invoice_paid',
+    );
+  });
+
+  test('a delivery without the mapped body field falls back to the collapsed type', () => {
+    expect(resolveWebhookEventType('clickup', CLICKUP_MAPPING, {}, {})).toBe('custom.webhook.clickup');
+    expect(resolveWebhookEventType('clickup', CLICKUP_MAPPING, {}, { event: '' })).toBe('custom.webhook.clickup');
+    expect(resolveWebhookEventType('clickup', CLICKUP_MAPPING, {}, { event: { nested: true } })).toBe(
+      'custom.webhook.clickup',
+    );
   });
 });

@@ -59,6 +59,36 @@ describe('deriveIdempotencyKey', () => {
     expect(key).toBe('slack:T1:C9:1725.0001');
   });
 
+  test('numeric payload path segments index arrays (ClickUp history_items, #984)', () => {
+    const key = deriveIdempotencyKey({
+      ...base,
+      sourceName: 'clickup',
+      template: 'clickup:{payload.history_items.0.id}',
+      payload: { event: 'taskStatusUpdated', history_items: [{ id: '2800763136717140857' }] },
+    });
+    expect(key).toBe('clickup:2800763136717140857');
+  });
+
+  test('a non-numeric segment against an array falls back to the body-hash default', () => {
+    const key = deriveIdempotencyKey({
+      ...base,
+      sourceName: 'clickup',
+      template: 'clickup:{payload.history_items.id}',
+      payload: { history_items: [{ id: 'h1' }] },
+    });
+    expect(key).toBe(`clickup:${sha256(base.rawBody)}`);
+  });
+
+  test('an out-of-range array index falls back to the body-hash default', () => {
+    const key = deriveIdempotencyKey({
+      ...base,
+      sourceName: 'clickup',
+      template: 'clickup:{payload.history_items.3.id}',
+      payload: { history_items: [{ id: 'h1' }] },
+    });
+    expect(key).toBe(`clickup:${sha256(base.rawBody)}`);
+  });
+
   test('an unresolvable placeholder falls back to the body-hash default', () => {
     const key = deriveIdempotencyKey({ ...base, template: 'github:{headers.x-github-delivery}' });
     expect(key).toBe(`github:${sha256(base.rawBody)}`);
