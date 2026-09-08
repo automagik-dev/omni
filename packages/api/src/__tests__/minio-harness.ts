@@ -89,6 +89,11 @@ function dockerAvailable(): boolean {
  * 1.3.x).
  */
 export function minioIntegrationEnabled(): boolean {
+  // Explicit opt-out, honoured anywhere. A dev box whose Docker cannot publish
+  // ports (no bridge networking) starts the container fine and then waits out
+  // the full 120s readiness budget — once per suite. Six suites is ~12min of
+  // pre-push spent proving the same thing.
+  if (process.env.MINIO_INTEGRATION === '0') return false;
   if (!dockerAvailable()) return false;
   if (process.env.CI === 'true' && process.env.MINIO_INTEGRATION !== '1') return false;
   const enabled = process.env.MINIO_INTEGRATION === '1' || dockerCanPublishPorts();

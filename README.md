@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache 2.0 License" /></a>
   <img src="https://img.shields.io/badge/runtime-Bun-f9f1e1?style=flat-square&logo=bun" alt="Bun" />
   <img src="https://img.shields.io/badge/version-2.260908.13-8b5cf6?style=flat-square" alt="v2.260908.13" />
-  <img src="https://img.shields.io/badge/channels-10-25D366?style=flat-square" alt="10 channels" />
+  <img src="https://img.shields.io/badge/channels-11-25D366?style=flat-square" alt="11 channels" />
   <img src="https://img.shields.io/badge/event%20bus-NATS%20JetStream-27AAE1?style=flat-square" alt="NATS JetStream" />
 </p>
 
@@ -52,6 +52,7 @@ Think of Omni as a deep-sea octopus. Each **channel** is a tentacle reaching int
 | **A2A** | ✅ Available | Agent-to-agent channel integrations |
 | **Gupshup** | ✅ Available | Custom Integration webhook support |
 | **H3rmes** (Mutant) | ✅ Available | Brazilian WhatsApp gateway — JWT auth, media, templates, interactive, Pix-ready webhook shapes |
+| **ASC Brazil** | ✅ Available | Brazilian WhatsApp BSP — Cloud API mirror, Meta-format webhooks, typing indicator, templates, interactive |
 | **ASC Flow** | ✅ Available | Brazilian BSP via the ASC platform Flow — REST callbacks, URA buttons/lists, Genesys handoff |
 | **Twilio WhatsApp** | ✅ Available | Twilio sender, webhook, and signature validation support |
 
@@ -245,6 +246,7 @@ packages/
 ├── channel-hermes/          # H3rmes (Brazilian WhatsApp gateway)
 ├── channel-twilio-whatsapp/ # Twilio WhatsApp
 ├── channel-a2a/             # A2A channel
+├── channel-asc/             # ASC Brazil (ASCWhats GW, Cloud API mirror)
 ├── channel-asc-flow/        # ASC platform Flow (Brazilian BSP)
 ├── channel-harness/         # E2E agent-testing channel
 ├── channel-internal/        # In-process agent-to-agent routing

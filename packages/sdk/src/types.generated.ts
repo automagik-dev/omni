@@ -1688,6 +1688,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events/consumers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List durable event consumers
+         * @description Every registered durable consumer with its filter, cursor, and live lag (journal head minus cursor).
+         */
+        get: operations["listEventConsumers"];
+        put?: never;
+        /**
+         * Register a durable event consumer
+         * @description Registers a named consumer over the event journal: a type filter (trailing-* prefix glob, the events-wait contract) plus optional payload conditions (the automation-trigger matcher), and a stored cursor. startFrom 'now' (default) begins at the journal head; 'beginning' replays the full journal (projections).
+         */
+        post: operations["createEventConsumer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/consumers/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Inspect a durable event consumer
+         * @description The consumer registration plus its live cursor position and lag.
+         */
+        get: operations["getEventConsumer"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a durable event consumer
+         * @description Removes the registration and its cursor. The journal itself is untouched.
+         */
+        delete: operations["deleteEventConsumer"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/consumers/{name}/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pull journal events from the stored cursor
+         * @description Pages journal events strictly after the stored cursor, in journal_seq order, pre-filtered by the type glob and payload conditions. Does NOT advance the cursor — ack the returned cursor to commit progress (at-least-once: a client that crashes mid-page re-pulls the same page). waitMs long-polls when no rows are available.
+         */
+        post: operations["pullEventConsumer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/consumers/{name}/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Advance the consumer cursor (monotonic)
+         * @description Commits progress up to a pull result's cursor. Monotonic: an ack equal to the stored cursor is an idempotent no-op, an ack behind it is refused with 400 — a durable cursor never moves backwards.
+         */
+        post: operations["ackEventConsumer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
@@ -3052,7 +3140,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -3097,7 +3185,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -3275,7 +3363,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -5475,6 +5563,82 @@ export interface components {
             description?: string;
             /** @description Whether the validation gate is active (default true) */
             enabled?: boolean;
+        };
+        DurableConsumer: {
+            /**
+             * Format: uuid
+             * @description Consumer UUID
+             */
+            id: string;
+            /** @description Unique consumer name (the follow/ack handle) */
+            name: string;
+            /** @description Type filter: exact event type or trailing-* prefix glob */
+            eventType: string;
+            /** @description Payload conditions (AND), or null */
+            filters: {
+                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                field: string;
+                /**
+                 * @description Comparison operator (same matcher as automation trigger conditions)
+                 * @enum {string}
+                 */
+                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                value?: unknown;
+            }[] | null;
+            /** @description Last acked journal_seq; delivery resumes strictly after it */
+            cursor: number;
+            /** @description Highest journal_seq currently in the journal */
+            head: number;
+            /** @description head - cursor (all journal rows past the cursor, not only matches) */
+            lag: number;
+            /**
+             * Format: date-time
+             * @description Creation timestamp
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Last cursor/registry update timestamp
+             */
+            updatedAt: string;
+        };
+        CreateConsumerRequest: {
+            /** @description Unique consumer name (e.g. deploy-tracker) */
+            name: string;
+            /** @description Type filter: exact event type, or trailing-* prefix glob (e.g. custom.github.*) */
+            eventType: string;
+            /** @description Payload conditions (AND) — same matcher as events wait --filter */
+            filters?: {
+                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                field: string;
+                /**
+                 * @description Comparison operator (same matcher as automation trigger conditions)
+                 * @enum {string}
+                 */
+                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                value?: unknown;
+            }[];
+            /**
+             * @description Initial cursor: 'now' = journal head (default), 'beginning' = full replay
+             * @enum {string}
+             */
+            startFrom?: "now" | "beginning";
+        };
+        ConsumerPullResult: {
+            /** @description Consumer name */
+            consumer: string;
+            /** @description Matching journal rows, ascending journal_seq */
+            items: {
+                [key: string]: unknown;
+            }[];
+            /** @description Highest journal_seq SCANNED (not merely matched) — ack this value to advance past filtered-out rows */
+            cursor: number;
+            /** @description Journal head at pull time */
+            head: number;
+            /** @description True when the scan filled the page — more rows are already waiting */
+            hasMore: boolean;
         };
         Automation: {
             /**
@@ -7707,7 +7871,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -7772,7 +7936,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -7901,7 +8065,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -7986,7 +8150,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -8035,7 +8199,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -8165,7 +8329,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -8294,7 +8458,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -16846,6 +17010,471 @@ export interface operations {
                 };
             };
             /** @description No schema registered for this type */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listEventConsumers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered consumers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /**
+                             * Format: uuid
+                             * @description Consumer UUID
+                             */
+                            id: string;
+                            /** @description Unique consumer name (the follow/ack handle) */
+                            name: string;
+                            /** @description Type filter: exact event type or trailing-* prefix glob */
+                            eventType: string;
+                            /** @description Payload conditions (AND), or null */
+                            filters: {
+                                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                                field: string;
+                                /**
+                                 * @description Comparison operator (same matcher as automation trigger conditions)
+                                 * @enum {string}
+                                 */
+                                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                                value?: unknown;
+                            }[] | null;
+                            /** @description Last acked journal_seq; delivery resumes strictly after it */
+                            cursor: number;
+                            /** @description Highest journal_seq currently in the journal */
+                            head: number;
+                            /** @description head - cursor (all journal rows past the cursor, not only matches) */
+                            lag: number;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last cursor/registry update timestamp
+                             */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    createEventConsumer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Unique consumer name (e.g. deploy-tracker) */
+                    name: string;
+                    /** @description Type filter: exact event type, or trailing-* prefix glob (e.g. custom.github.*) */
+                    eventType: string;
+                    /** @description Payload conditions (AND) — same matcher as events wait --filter */
+                    filters?: {
+                        /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                        field: string;
+                        /**
+                         * @description Comparison operator (same matcher as automation trigger conditions)
+                         * @enum {string}
+                         */
+                        operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                        /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                        value?: unknown;
+                    }[];
+                    /**
+                     * @description Initial cursor: 'now' = journal head (default), 'beginning' = full replay
+                     * @enum {string}
+                     */
+                    startFrom?: "now" | "beginning";
+                };
+            };
+        };
+        responses: {
+            /** @description Consumer registered */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Consumer UUID
+                             */
+                            id: string;
+                            /** @description Unique consumer name (the follow/ack handle) */
+                            name: string;
+                            /** @description Type filter: exact event type or trailing-* prefix glob */
+                            eventType: string;
+                            /** @description Payload conditions (AND), or null */
+                            filters: {
+                                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                                field: string;
+                                /**
+                                 * @description Comparison operator (same matcher as automation trigger conditions)
+                                 * @enum {string}
+                                 */
+                                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                                value?: unknown;
+                            }[] | null;
+                            /** @description Last acked journal_seq; delivery resumes strictly after it */
+                            cursor: number;
+                            /** @description Highest journal_seq currently in the journal */
+                            head: number;
+                            /** @description head - cursor (all journal rows past the cursor, not only matches) */
+                            lag: number;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last cursor/registry update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description A consumer with this name already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getEventConsumer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Consumer with live lag */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Consumer UUID
+                             */
+                            id: string;
+                            /** @description Unique consumer name (the follow/ack handle) */
+                            name: string;
+                            /** @description Type filter: exact event type or trailing-* prefix glob */
+                            eventType: string;
+                            /** @description Payload conditions (AND), or null */
+                            filters: {
+                                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                                field: string;
+                                /**
+                                 * @description Comparison operator (same matcher as automation trigger conditions)
+                                 * @enum {string}
+                                 */
+                                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                                value?: unknown;
+                            }[] | null;
+                            /** @description Last acked journal_seq; delivery resumes strictly after it */
+                            cursor: number;
+                            /** @description Highest journal_seq currently in the journal */
+                            head: number;
+                            /** @description head - cursor (all journal rows past the cursor, not only matches) */
+                            lag: number;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last cursor/registry update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description No such consumer */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    deleteEventConsumer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success: boolean;
+                    };
+                };
+            };
+            /** @description No such consumer */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    pullEventConsumer: {
+        parameters: {
+            query?: {
+                limit?: number;
+                waitMs?: number | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Consumer name */
+                        consumer: string;
+                        /** @description Matching journal rows, ascending journal_seq */
+                        items: {
+                            [key: string]: unknown;
+                        }[];
+                        /** @description Highest journal_seq SCANNED (not merely matched) — ack this value to advance past filtered-out rows */
+                        cursor: number;
+                        /** @description Journal head at pull time */
+                        head: number;
+                        /** @description True when the scan filled the page — more rows are already waiting */
+                        hasMore: boolean;
+                    };
+                };
+            };
+            /** @description No such consumer */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    ackEventConsumer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description The journal_seq to advance to (a pull result's "cursor"). Monotonic: equal = no-op, lower = 400 */
+                    cursor: number | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Cursor advanced (or already there) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description Consumer UUID
+                             */
+                            id: string;
+                            /** @description Unique consumer name (the follow/ack handle) */
+                            name: string;
+                            /** @description Type filter: exact event type or trailing-* prefix glob */
+                            eventType: string;
+                            /** @description Payload conditions (AND), or null */
+                            filters: {
+                                /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
+                                field: string;
+                                /**
+                                 * @description Comparison operator (same matcher as automation trigger conditions)
+                                 * @enum {string}
+                                 */
+                                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
+                                /** @description Comparison value. Ignored for 'exists'/'not_exists' */
+                                value?: unknown;
+                            }[] | null;
+                            /** @description Last acked journal_seq; delivery resumes strictly after it */
+                            cursor: number;
+                            /** @description Highest journal_seq currently in the journal */
+                            head: number;
+                            /** @description head - cursor (all journal rows past the cursor, not only matches) */
+                            lag: number;
+                            /**
+                             * Format: date-time
+                             * @description Creation timestamp
+                             */
+                            createdAt: string;
+                            /**
+                             * Format: date-time
+                             * @description Last cursor/registry update timestamp
+                             */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Ack behind the stored cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description No such consumer */
             404: {
                 headers: {
                     [name: string]: unknown;
