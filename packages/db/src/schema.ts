@@ -16,6 +16,7 @@ import { relations, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
   bigint,
+  bigserial,
   boolean,
   check,
   foreignKey,
@@ -1827,6 +1828,15 @@ export const omniEvents = pgTable(
      * event that was never persisted or was pruned.
      */
     causationId: uuid('causation_id'),
+    /**
+     * Monotonic journal position (#989, RFC #925 G7). Assigned by a sequence
+     * at insert; the durable-consumer cursor is "last acked journal_seq" and
+     * delivery resumes strictly after it. This is the journal's total order —
+     * receivedAt carries the PUBLISHER's clock and can land out of order, so
+     * it cannot anchor an at-least-once cursor. Existing rows were backfilled
+     * in physical order when the column landed (they predate every consumer).
+     */
+    journalSeq: bigserial('journal_seq', { mode: 'number' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     /** G2 additive tenant ownership. Nullable through the additive phase. */
     tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
@@ -1834,6 +1844,8 @@ export const omniEvents = pgTable(
   (table) => ({
     /** Children lookup for `omni events trace` (descendants = causation_id = :id). */
     causationIdx: index('omni_events_causation_idx').on(table.causationId),
+    /** Cursor paging for durable consumers (#989): WHERE journal_seq > :cursor ORDER BY journal_seq. */
+    journalSeqUq: uniqueIndex('omni_events_journal_seq_uq').on(table.journalSeq),
     tenantIdx: index('omni_events_tenant_idx').on(table.tenantId),
     tenantIdUq: uniqueIndex('omni_events_tenant_id_uq').on(table.tenantId, table.id),
     // Global uniqueness through the additive phase (mirrors the
@@ -3218,6 +3230,57 @@ export const consumerOffsets = pgTable('consumer_offsets', {
 
 export type ConsumerOffset = typeof consumerOffsets.$inferSelect;
 export type NewConsumerOffset = typeof consumerOffsets.$inferInsert;
+
+// ============================================================================
+// DURABLE CONSUMERS (#989, RFC #925 G7 — named consumers with offsets)
+// ============================================================================
+
+/**
+ * Self-service durable event consumers: an external client registers a named
+ * consumer with a type filter (+ optional payload conditions), pulls journal
+ * events from its stored cursor, and acks to advance it — at-least-once with
+ * resume-after-disconnect.
+ *
+ * NOT `consumer_offsets`: that table is owned by the NATS subscription layer
+ * (gap detection over NATS stream sequences, keyed by internal consumer
+ * name). This registry has a different lifecycle (API-managed CRUD), a
+ * different sequence space (`omni_events.journal_seq` — the journal is the
+ * replay source, NATS is transport), and carries filters.
+ *
+ * TENANCY: registrations are global — no tenant_id column, following the
+ * event_schemas/scheduled_messages precedent (see 0056's header: the RLS
+ * coverage gate requires every tenant_id-bearing table to be in the frozen
+ * G0 manifest, the G1 tenant plane, or the runtime-denied exclusions).
+ * Event READS are still tenant-policed: `pull` goes through `scopedHandle`,
+ * so under RLS enforcement a tenant-scoped request only ever pages its own
+ * tenant's journal rows. Per-tenant consumer ownership joins additively in
+ * the G6+ ownership pass.
+ */
+export const durableConsumers = pgTable(
+  'durable_consumers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** User-facing handle (`omni events follow --consumer <name>`). */
+    name: varchar('name', { length: 100 }).notNull(),
+    /** Type filter: exact event type, or trailing-* prefix glob (#966 contract). */
+    eventType: varchar('event_type', { length: 255 }).notNull(),
+    /** Payload conditions — the SAME matcher as `events wait --filter` / automation triggers. */
+    filters: jsonb('filters').$type<AutomationCondition[]>(),
+    /**
+     * Last ACKED `omni_events.journal_seq`. Delivery resumes strictly after
+     * it; acks are monotonic (a lower ack is refused, an equal ack no-ops).
+     */
+    cursor: bigint('cursor', { mode: 'number' }).notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    nameUq: uniqueIndex('durable_consumers_name_uq').on(table.name),
+  }),
+);
+
+export type DurableConsumer = typeof durableConsumers.$inferSelect;
+export type NewDurableConsumer = typeof durableConsumers.$inferInsert;
 
 // Relations for webhook sources and automations
 export const automationsRelations = relations(automations, ({ many }) => ({

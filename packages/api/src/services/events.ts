@@ -9,7 +9,7 @@ import { and, desc, eq, gte, ilike, inArray, like, lte, or, sql } from 'drizzle-
 import { scopedHandle } from '../tenancy/tenant-scope';
 
 /** Escape LIKE wildcards so a glob prefix matches literally (backslash is postgres's default escape char). */
-function escapeLikePattern(value: string): string {
+export function escapeLikePattern(value: string): string {
   return value.replace(/([\\%_])/g, '\\$1');
 }
 

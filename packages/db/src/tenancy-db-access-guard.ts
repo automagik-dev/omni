@@ -1445,6 +1445,14 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'tenant-boundary',
   },
   {
+    // Durable consumers (#989): pull/head read the journal through
+    // `scopedHandle`, so a tenant-scoped request pages only its own tenant's
+    // rows under enforcement; legacy paths read ambient byte-identically.
+    file: 'packages/api/src/services/event-consumers.ts',
+    table: 'omni_events',
+    class: 'tenant-boundary',
+  },
+  {
     file: 'packages/api/src/services/events.ts',
     table: 'omni_events',
     class: 'tenant-boundary',
