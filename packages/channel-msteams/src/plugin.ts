@@ -112,14 +112,32 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
    *   - tenantId / msteamsTenantId (optional — required for SingleTenant)
    */
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
-    if (this.instanceStates.has(instanceId)) {
-      this.logger.warn('Instance already connected', { instanceId });
-      return;
+    // A repeat connect REBUILDS the adapter instead of no-opping: with the
+    // appPassword never at rest, POST /instances/:id/connect is the ONLY
+    // secret-rotation path — a no-op here would silently keep the revoked
+    // credential (hermes/asc rebuild unconditionally for the same reason).
+    // Conversation references and the dedupe cache are credential-agnostic
+    // and survive the rebuild.
+    const existing = this.instanceStates.get(instanceId);
+    if (existing) {
+      this.logger.info('Instance already connected — rebuilding the adapter with the supplied credentials', {
+        instanceId,
+      });
     }
 
     const credentials = readMsTeamsConfig(config);
 
     if (credentials.allowAnonymous) {
+      // Environment gate, not just documentation: an anonymous adapter behind
+      // the public webhook route disables ALL JWT validation, so the flag is
+      // only honored where the runtime says this is a dev process.
+      if (this.config.env !== 'development') {
+        throw new MsTeamsApiError(
+          MsTeamsErrorCode.INVALID_CONFIG,
+          `msteamsAllowAnonymous is a local-development flag and is refused in env "${this.config.env}" — supply real Azure Bot credentials instead`,
+          { operation: 'connect' },
+        );
+      }
       this.logger.warn(
         'Teams instance connecting in ANONYMOUS local-dev mode — the webhook will accept unsigned activities',
         { instanceId },
@@ -133,23 +151,25 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
 
     const adapter = this.createAdapter(credentials);
 
-    adapter.onTurnError = async (context, error) => {
+    adapter.onTurnError = async (_context, error) => {
       this.logger.error('Teams turn error', {
         instanceId,
         error: error instanceof Error ? error.message : String(error),
       });
-      try {
-        await context.sendActivity('The bot encountered an error.');
-      } catch {
-        // best effort — do not rethrow from error handler
-      }
+      // RETHROW — botbuilder's runMiddleware routes handler errors here and,
+      // if this callback returns normally, resolves the turn as successful:
+      // handleWebhook would ack 200 and Bot Framework would never redeliver
+      // a message we failed to emit (e.g. the event bus was briefly down).
+      // Propagating turns that into an honest 500. (No courtesy sendActivity
+      // either: the retry the 500 provokes would duplicate it.)
+      throw error;
     };
 
     this.instanceStates.set(instanceId, {
       adapter,
       appId: credentials.appId,
-      conversationRefs: new Map(),
-      dedupeCache: createInboundDedupeCache(),
+      conversationRefs: existing?.conversationRefs ?? new Map(),
+      dedupeCache: existing?.dedupeCache ?? createInboundDedupeCache(),
     });
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -334,15 +354,21 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
     const activity = parsed.data as unknown as Activity;
     const authHeader = request.headers.get('authorization') ?? '';
 
+    // Classify failures by PHASE, not by message text: the adapter validates
+    // the Bot Framework JWT before it ever invokes the turn logic, so an
+    // error with the logic never entered is an authentication rejection,
+    // and an error after it entered is an internal failure. (Matching on the
+    // message is unreliable — processActivityDirect wraps errors with the
+    // full stack, where auth-flavored words appear in unrelated crashes.)
+    let logicEntered = false;
     try {
       await state.adapter.processActivityDirect(authHeader, activity, async (context) => {
+        logicEntered = true;
         await this.handleIncomingActivity(instanceId, state, context);
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // The adapter throws on JWT validation failure — surface that as 401
-      // so Bot Framework's delivery report distinguishes auth from crashes.
-      if (/unauthorized|authentication|jwt|token/i.test(message)) {
+      if (!logicEntered) {
         this.logger.warn('Teams activity rejected: authentication failed', { instanceId, error: message });
         return new Response('Unauthorized', { status: 401 });
       }
@@ -356,7 +382,7 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
   private async handleIncomingActivity(instanceId: string, state: InstanceState, context: TurnContext): Promise<void> {
     const activity = context.activity;
     const reference = TurnContext.getConversationReference(activity);
-    const chatId = reference.conversation?.id ?? activity.conversation?.id ?? '';
+    const chatId = reference.conversation?.id ?? '';
 
     if (chatId) {
       this.rememberConversationReference(state, chatId, reference);
@@ -367,12 +393,20 @@ export class MsTeamsPlugin extends BaseChannelPlugin {
     }
 
     const externalId = activity.id ?? '';
+    // Marks-on-check (shared SDK cache semantics, same as every sibling
+    // channel): if the emit below fails and Bot Framework redelivers, the
+    // retry lands here as a "duplicate". Known repo-wide tradeoff.
     if (externalId && state.dedupeCache.isDuplicate(instanceId, externalId, 'msteams', this.logger)) {
       this.logger.debug('[msteams] duplicate inbound dropped', { instanceId, externalId });
       return;
     }
 
-    const rawText = TurnContext.removeRecipientMention(activity) ?? activity.text ?? '';
+    // removeRecipientMention dereferences activity.recipient.id unguarded
+    // (botbuilder-core turnContext.js) — a recipient-less message activity
+    // passes the boundary schema, so guard here or the turn handler throws.
+    const rawText = activity.recipient
+      ? (TurnContext.removeRecipientMention(activity) ?? activity.text ?? '')
+      : (activity.text ?? '');
     const sanitized = sanitizeMessage(rawText, this.logger, { instanceId, messageId: externalId });
     if (!sanitized.ok) {
       this.logger.warn('[msteams] inbound text rejected by sanitizer', {

@@ -1777,6 +1777,24 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: `No plugin for channel: ${instance.channel}` } }, 400);
   }
 
+  // Channels declaring requiresConnectTimeCredentials (msteams: the Azure Bot
+  // appPassword is never persisted) make restart destructive-by-construction:
+  // disconnect would drop the live in-memory state and the rebuild connect can
+  // only fail. Reject BEFORE any damage (#894 "restart bricks the instance"
+  // precedent) — the non-destructive path is POST /instances/:id/connect with
+  // the credentials, which rebuilds the connection in place.
+  if (plugin.capabilities?.requiresConnectTimeCredentials) {
+    return c.json(
+      {
+        error: {
+          code: 'RESTART_UNSUPPORTED',
+          message: `${instance.channel} instances cannot be restarted: their credentials are never persisted, so a restart would drop the live connection state with nothing to rebuild from. Use POST /instances/:id/connect with the channel credentials to re-credential the running instance instead.`,
+        },
+      },
+      400,
+    );
+  }
+
   // omni#906: operators expect restart to re-read config, but disconnect/connect
   // only recycles the channel connection — the dispatcher's cached agent
   // provider lives independently of the channel lifecycle, so evict it here.
@@ -1830,13 +1848,8 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     if (instance.channel === 'harness') {
       applyHarnessConnectionOptions(restartOptions, instance.profileMetadata);
     }
-    if (instance.channel === 'msteams') {
-      // Only the profileMetadata identifiers survive a restart — the
-      // appPassword is never persisted, so this connect fails loudly with the
-      // plugin's "appPassword is required" error and the operator re-supplies
-      // it via POST /instances/:id/connect.
-      applyMsTeamsConnectionOptions(restartOptions, instance);
-    }
+    // (No msteams branch: msteams restarts are rejected before the disconnect
+    // above — the appPassword is never persisted, so a restart cannot rebuild.)
     // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
     if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
       restartOptions.whatsapp = {

@@ -161,6 +161,21 @@ export interface ChannelCapabilities {
   canSearchMessages?: boolean;
 
   // ─────────────────────────────────────────────────────────────
+  // Credential posture
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Whether the channel's credentials are supplied at connect time only and
+   * never persisted at rest, so the platform cannot rebuild the connection on
+   * its own. The instance monitor skips auto-reconnect for such channels
+   * (retrying would only burn backoff and deactivate the instance) and the
+   * restart route rejects them up front — an operator must re-credential via
+   * POST /instances/:id/connect. msteams declares this while its Azure Bot
+   * appPassword has no sealed `instances` column.
+   */
+  requiresConnectTimeCredentials?: boolean;
+
+  // ─────────────────────────────────────────────────────────────
   // Messaging-window constraints (issue #404)
   // ─────────────────────────────────────────────────────────────
 

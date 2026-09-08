@@ -54,7 +54,7 @@ function createMockEventBus() {
   };
 }
 
-function createMockContext(eventBus = createMockEventBus()): PluginContext {
+function createMockContext(eventBus = createMockEventBus(), env = 'development'): PluginContext {
   return {
     eventBus: eventBus as unknown as PluginContext['eventBus'],
     logger: createMockLogger() as unknown as PluginContext['logger'],
@@ -66,11 +66,11 @@ function createMockContext(eventBus = createMockEventBus()): PluginContext {
       keys: mock(async () => []),
     },
     config: {
-      env: 'development',
+      env,
       apiBaseUrl: 'http://localhost:3000',
       webhookBaseUrl: 'http://localhost:3000',
       mediaStorage: { type: 'local', basePath: '/tmp' },
-    },
+    } as PluginContext['config'],
     db: {
       execute: mock(async () => []),
       getDrizzle: mock(() => null),
@@ -238,10 +238,47 @@ describe('MsTeamsPlugin', () => {
       expect(connected[0]?.payload.ownerIdentifier).toBe('anonymous-local');
     });
 
-    it('is a no-op warn when the instance is already connected', async () => {
+    it('refuses allowAnonymous outside the development environment', async () => {
+      const prodPlugin = new TestMsTeamsPlugin();
+      await prodPlugin.initialize(createMockContext(createMockEventBus(), 'production'));
+
+      const attempt = prodPlugin.connect(INSTANCE, {
+        instanceId: INSTANCE,
+        credentials: {},
+        options: { msteamsAllowAnonymous: true },
+      });
+
+      await expect(attempt).rejects.toBeInstanceOf(MsTeamsApiError);
+      await expect(attempt).rejects.toMatchObject({ channelCode: MsTeamsErrorCode.INVALID_CONFIG });
+      expect(prodPlugin.adapters).toHaveLength(0);
+    });
+
+    it('installs an onTurnError that RETHROWS so handler failures surface as webhook errors', async () => {
       await plugin.connect(INSTANCE, connectConfig());
+      const onTurnError = plugin.adapters[0]!.onTurnError;
+      expect(onTurnError).toBeDefined();
+      // With the real CloudAdapter, a swallowing onTurnError acks 200 and the
+      // message is lost forever; rethrow is what turns it into a 500.
+      const failure = new Error('event bus down');
+      await expect(onTurnError!({} as TurnContext, failure)).rejects.toBe(failure);
+    });
+
+    it('rebuilds the adapter on reconnect so a rotated appPassword takes effect', async () => {
       await plugin.connect(INSTANCE, connectConfig());
-      expect(plugin.adapters).toHaveLength(1);
+      // Capture a conversation, then rotate the secret via a second connect.
+      await plugin.handleWebhook(webhookRequest(inboundActivity()));
+      await plugin.connect(INSTANCE, connectConfig({ msteamsAppPassword: 'rotated-secret' }));
+
+      // A NEW adapter was built from the new credential bag…
+      expect(plugin.adapters).toHaveLength(2);
+      expect(plugin.credentialBags[1]?.appPassword).toBe('rotated-secret');
+
+      // …and the credential-agnostic state survived: the captured
+      // ConversationReference still routes sends, through the NEW adapter.
+      const result = await plugin.sendMessage(INSTANCE, { to: 'conv-1', content: { type: 'text', text: 'hi' } });
+      expect(result.success).toBe(true);
+      expect(plugin.adapters[0]!.continueCalls).toHaveLength(0);
+      expect(plugin.adapters[1]!.continueCalls).toHaveLength(1);
     });
   });
 
@@ -275,6 +312,16 @@ describe('MsTeamsPlugin', () => {
       expect(eventsOfType('message.received')).toHaveLength(0);
     });
 
+    it('500s — not 401 — when the handler fails AFTER authentication, even if the error mentions tokens', async () => {
+      // Classification is by phase (did the turn logic start?), not by
+      // grepping the error text — this message would fool a token/auth regex.
+      eventBus.publish.mockImplementationOnce(async () => {
+        throw new Error('failed to acquire token: authentication backend unavailable');
+      });
+      const res = await plugin.handleWebhook(webhookRequest(inboundActivity({ id: 'act-buserr' })));
+      expect(res.status).toBe(500);
+    });
+
     it('emits message.received with the captured conversation, sender and timings', async () => {
       const res = await plugin.handleWebhook(webhookRequest(inboundActivity()));
       expect(res.status).toBe(200);
@@ -292,6 +339,19 @@ describe('MsTeamsPlugin', () => {
       const timings = metadata.timings as Record<string, number>;
       expect(timings.platformReceivedAt).toBe(Date.parse('2026-09-08T12:00:00.000Z'));
       expect(typeof timings.pluginReceivedAt).toBe('number');
+    });
+
+    it('handles a recipient-less message activity without throwing (mention stripping is skipped)', async () => {
+      // botbuilder's removeRecipientMention dereferences activity.recipient.id
+      // unguarded; the boundary schema does not require recipient, so the
+      // plugin must not feed such an activity into it.
+      const res = await plugin.handleWebhook(
+        webhookRequest(inboundActivity({ id: 'act-norecipient', recipient: undefined })),
+      );
+      expect(res.status).toBe(200);
+      const received = eventsOfType('message.received');
+      expect(received).toHaveLength(1);
+      expect((received[0]?.payload.content as { text?: string }).text).toBe('hello world');
     });
 
     it('drops a duplicate delivery of the same activity id', async () => {

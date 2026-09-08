@@ -23,9 +23,15 @@ The Azure Bot `appPassword` is accepted **at connect time only**
 (`POST /api/v2/instances/:id/connect` with `msteamsAppPassword`) and held in
 memory. There is no sealed `instances` column for it yet, so it is **never
 persisted** — after an API restart the instance stays disconnected until an
-operator reconnects with the secret, and the instance monitor deliberately
-skips auto-reconnect for `msteams`. Non-secret identifiers (`appId`,
-`appType`, `tenantId`) may be persisted under `profileMetadata.msteams`
+operator reconnects with the secret; the instance monitor deliberately skips
+auto-reconnect (warning on each health sweep), and
+`POST /instances/:id/restart` is rejected up front with `RESTART_UNSUPPORTED`
+(it would drop the live adapter and every conversation reference with nothing
+to rebuild from). **Secret rotation** is a repeat
+`POST /instances/:id/connect` with the new `msteamsAppPassword`: the adapter
+is rebuilt in place and captured conversation references survive. Non-secret
+identifiers (`appId`, `appType`, `tenantId`) may be persisted under
+`profileMetadata.msteams`
 (create/PATCH the instance with
 `{"profileMetadata": {"msteams": {"appId": "...", "appType": "...", "tenantId": "..."}}}`);
 never put the `appPassword` there — `profileMetadata` is returned by the API.
@@ -51,7 +57,8 @@ connect the instance in anonymous mode:
 1. Start omni locally (`make dev`) and create an instance:
    `omni instances create --name teams-local --channel msteams`
 2. Connect it anonymously (local dev ONLY — the webhook then trusts any caller
-   that knows the URL; never do this on an internet-reachable deployment):
+   that knows the URL; the plugin **refuses the flag unless the API runs with
+   `env=development`**, so it cannot be flipped on in staging/production):
 
    ```bash
    curl -X POST localhost:PORT/api/v2/instances/<id>/connect \

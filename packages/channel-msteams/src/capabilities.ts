@@ -22,6 +22,11 @@ export const MSTEAMS_CAPABILITIES: ChannelCapabilities = {
   canHandleDMs: true,
   canHandleGroups: true,
 
+  // The Azure Bot appPassword is accepted at connect time only and never
+  // persisted (no sealed column yet) — the platform cannot rebuild this
+  // connection on its own: no auto-reconnect, restart rejected up front.
+  requiresConnectTimeCredentials: true,
+
   // Teams caps a message at ~28 KB of content.
   maxMessageLength: 28_000,
   // Text-only scaffold: no media path yet (an empty list is the honest
