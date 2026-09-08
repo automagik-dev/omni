@@ -38,6 +38,7 @@ import { ChatService } from './chats';
 import { ConsumerOffsetService } from './consumer-offsets';
 import { ConversationService } from './conversations';
 import { DeadLetterService } from './dead-letters';
+import { EventConsumerService } from './event-consumers';
 import { EventOpsService } from './event-ops';
 import { EventSchemaService } from './event-schemas';
 import { EventService } from './events';
@@ -87,6 +88,11 @@ export interface Services {
    * by the webhook ingress and the automation emit_event gate before publish.
    */
   eventSchemas: EventSchemaService;
+  /**
+   * Durable event consumers (#989, RFC #925 G7): named consumers with their
+   * own journal cursors — register/pull/ack/lag behind /v2/events/consumers.
+   */
+  eventConsumers: EventConsumerService;
   webhooks: WebhookService;
   automations: AutomationService;
   /**
@@ -254,6 +260,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     payloadStore,
     eventOps,
     eventSchemas,
+    eventConsumers: new EventConsumerService(db, eventBus),
     webhooks: new WebhookService(db, eventBus, eventSchemas, deadLetters),
     automations: automationsService,
     manifestCompiler,
