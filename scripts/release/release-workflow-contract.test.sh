@@ -610,6 +610,30 @@ for gate in (
         errors.append(f"protected CI does not invoke {gate}")
 require(ci, r"actionlint[^\n]*\.github/workflows/\*\.yml", "protected CI does not actionlint every workflow")
 
+# The promotion pin gate: a stale candidate pin must fail ON the promotion PR
+# (base main), not after the merge — image-publish.yml only runs on push to
+# main, so without this gate build-input drift is discovered when main is
+# already red. The gate compares the pinned CANDIDATE_VERSION to the tree's
+# package version and binds the candidate to the PR merge commit with the
+# same verifier the post-merge workflow runs.
+require(ci, r"^  promotion-pin-gate:", "protected CI has no pre-merge promotion pin gate")
+require(
+    ci,
+    r"^  promotion-pin-gate:\n(?:(?:    [^\n]*)?\n)*?    if: github\.base_ref == 'main'\n",
+    "the promotion pin gate is not restricted to promotion PRs (base main)",
+)
+require(
+    ci,
+    r"^  promotion-pin-gate:\n(?:(?:    [^\n]*)?\n)*?\s+fetch-depth: 0\n\s+fetch-tags: true\n\s+persist-credentials: false\n",
+    "the promotion pin gate cannot resolve the candidate commit and immutable tag (full history, tags, no persisted credentials)",
+)
+require(ci, r"jq -r \.version packages/cli/package\.json", "the promotion pin gate does not compare the pin to the tree version")
+require(
+    ci,
+    r"verify-promotion-candidate\.sh \\\n\s+--candidate-sha \"\$\{candidate_sha\}\" \\\n\s+--final-sha \"\$\(git rev-parse 'HEAD\^\{commit\}'\)\"",
+    "the promotion pin gate does not bind the pinned candidate to the PR merge commit",
+)
+
 if errors:
     for error in errors:
         print(f"FAIL: {error}", file=sys.stderr)
