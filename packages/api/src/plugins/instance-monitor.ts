@@ -153,6 +153,16 @@ function wasAuthenticated(instance: InstanceInfo): boolean {
   return !!instance.ownerIdentifier;
 }
 
+/**
+ * Channels whose credentials are never at rest, so the monitor cannot
+ * rebuild their connection. msteams accepts the Azure Bot appPassword at
+ * connect time only (no sealed `instances` column yet — see
+ * applyMsTeamsConnectionOptions in routes/v2/instances.ts); auto-reconnect
+ * would just burn its backoff budget and deactivate the instance, so these
+ * are skipped and the operator reconnects via POST /instances/:id/connect.
+ */
+const NON_AUTORECONNECTABLE_CHANNELS: ReadonlySet<string> = new Set(['msteams']);
+
 /** Extract Slack-specific config from profileMetadata into connection options */
 function applySlackMetadata(
   options: Record<string, unknown>,
@@ -687,6 +697,16 @@ export class InstanceMonitor {
       return;
     }
 
+    if (NON_AUTORECONNECTABLE_CHANNELS.has(instance.channel)) {
+      logger.debug('Skipping reconnect — channel credentials are not persisted', {
+        instanceId: instance.id,
+        name: instance.name,
+        channel: instance.channel,
+        state,
+      });
+      return;
+    }
+
     logger.warn('Instance unhealthy', {
       instanceId: instance.id,
       name: instance.name,
@@ -703,6 +723,7 @@ export class InstanceMonitor {
    * Handle a health check error
    */
   private handleHealthCheckError(instance: InstanceInfo, error: string): void {
+    if (NON_AUTORECONNECTABLE_CHANNELS.has(instance.channel)) return;
     if (this.config.autoReconnect && wasAuthenticated(instance)) {
       this.scheduleReconnect(instance.id, instance.channel, error);
     }
@@ -966,9 +987,11 @@ export async function reconnectWithPool(
     return rows as Array<{ id: string; name: string; channel: string; tenantId: string | null }>;
   };
 
-  // LEGACY WORLD: one ambient scan, then the pre-G5 batching. Unchanged.
+  // LEGACY WORLD: one ambient scan, then the pre-G5 batching. Unchanged
+  // (except that channels with no at-rest credentials are excluded — their
+  // startup connect can only fail; see NON_AUTORECONNECTABLE_CHANNELS).
   if (!authPlaneDb) {
-    const activeInstances = await loadActive();
+    const activeInstances = (await loadActive()).filter((i) => !NON_AUTORECONNECTABLE_CHANNELS.has(i.channel));
     results.attempted = activeInstances.length;
     logger.info('Starting pooled reconnection', {
       instanceCount: activeInstances.length,
@@ -995,6 +1018,7 @@ export async function reconnectWithPool(
   await runForEachActiveTenantRow(
     { db, authPlaneDb, jobName: 'startup-reconnect', listActive: loadActive, env },
     async (instance) => {
+      if (NON_AUTORECONNECTABLE_CHANNELS.has(instance.channel)) return;
       pending.push(instance);
     },
   );

@@ -84,6 +84,7 @@
     "@omni/channel-discord": "workspace:*",
     "@omni/channel-gupshup": "workspace:*",
     "@omni/channel-hermes": "workspace:*",
+    "@omni/channel-msteams": "workspace:*",
     "@omni/channel-sdk": "workspace:*",
     "@omni/channel-slack": "workspace:*",
     "@omni/channel-telegram": "workspace:*",

@@ -360,6 +360,28 @@ export function createApp(
   app.post('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
   app.get('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
 
+  // Public Microsoft Teams (Bot Framework) webhook endpoint — auth-exempt at
+  // the middleware layer because Bot Framework's servers hold no omni
+  // credential, but NOT unauthenticated: every delivery carries a Bot
+  // Framework JWT in the Authorization header, and the plugin's CloudAdapter
+  // validates it against the instance's Azure Bot app credentials before any
+  // handler logic runs (invalid tokens get a 401).
+  // Must be mounted before protectedApp so Microsoft's servers can reach it.
+  app.post('/api/v2/channels/msteams/:instanceId/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('msteams');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Microsoft Teams plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Public WhatsApp Business API (Meta) webhook endpoint — auth-exempt, signed by Meta with HMAC-SHA256.
   // Unlike Gupshup/Twilio, the URL is GLOBAL (no :instanceId in path): instance resolution
   // happens inside the plugin via `metadata.phone_number_id` from the payload.

@@ -249,6 +249,7 @@ packages/
 ├── channel-asc/             # ASC Brazil (ASCWhats GW, Cloud API mirror)
 ├── channel-asc-flow/        # ASC platform Flow (Brazilian BSP)
 ├── channel-harness/         # E2E agent-testing channel
+├── channel-msteams/         # Microsoft Teams (Bot Framework)
 ├── channel-internal/        # In-process agent-to-agent routing
 ├── cli/                     # `omni` command
 ├── media-processing/        # Media sync and extraction
