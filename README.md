@@ -1,6 +1,6 @@
 <p align="center">
   <picture>
-    <img src=".github/assets/omni-header-2.png" alt="Omni — One API, Every Channel" width="800" />
+    <img src=".github/assets/omni-header-multichannel.png" alt="Omni — One API, Every Channel" width="800" />
   </picture>
 </p>
 
