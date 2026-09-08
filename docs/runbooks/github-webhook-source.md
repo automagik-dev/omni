@@ -75,8 +75,7 @@ Field by field:
 | `eventTypeMapping` | Reads `X-GitHub-Event` and emits `custom.github.{event}`: `push` → `custom.github.push`, `pull_request` → `custom.github.pull_request`, `issues` → `custom.github.issues`, `release` → `custom.github.release`. Deliveries without the header fall back to `custom.webhook.github`. |
 | `expectedIntervalSeconds` | Declared liveness cadence (#961): "≥1 event **or heartbeat** per 24 h". See step 4. |
 
-CLI alternative (everything except `eventTypeMapping`, which has no CLI flag
-yet — add it with the `PATCH` below):
+CLI alternative:
 
 ```bash
 omni webhooks create --name github \
@@ -86,8 +85,16 @@ omni webhooks create --name github \
   --signature-prefix sha256= \
   --signature-secret-env GITHUB_WEBHOOK_SECRET \
   --idempotency-key-template 'github:{headers.x-github-delivery}' \
+  --event-type-mapping '{"source":"header","header":"X-GitHub-Event"}' \
   --expected-interval 86400
+```
 
+The flag also takes `@path/to/mapping.json`, and `omni webhooks update <id>
+--event-type-mapping ...` retrofits an existing source
+(`--clear-event-type-mapping` removes the mapping). Raw-API fallback for the
+same retrofit:
+
+```bash
 curl -sS -X PATCH https://omni.example.com/api/v2/webhook-sources/<id> \
   -H "x-api-key: $OMNI_API_KEY" -H 'Content-Type: application/json' \
   -d '{"eventTypeMapping":{"source":"header","header":"X-GitHub-Event"}}'
@@ -220,7 +227,7 @@ omni webhooks get github                 # totalReceived vs totalDuplicates
 |---|---|
 | Every delivery 401 | Secret mismatch (omni row vs GitHub settings), or the source has no `signatureConfig`, or it is disabled. All collapse into the same 401 intentionally; the real reason is in the API log (`Webhook ingress rejected`). |
 | Delivery 400 `VALIDATION` | Content type is form-encoded (must be `application/json`), or the payload violates a registered schema — check `omni dead-letters list` for `schema_validation_failed`. |
-| Events land as `custom.webhook.github` | `eventTypeMapping` missing on the source row (the CLI cannot set it yet — use the `PATCH` from step 1). |
+| Events land as `custom.webhook.github` | `eventTypeMapping` missing on the source row — retrofit it with `omni webhooks update github --event-type-mapping '{"source":"header","header":"X-GitHub-Event"}'`. |
 | Duplicate events on redelivery | `idempotencyKeyTemplate` not set to `github:{headers.x-github-delivery}` (check `omni webhooks get github`). |
 | `system.connector.stalled` during a quiet week | Expected: that is the declared contract doing its job. Heartbeat (step 4) to distinguish quiet from dead, or lengthen/clear the cadence. |
 
