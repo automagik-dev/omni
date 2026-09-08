@@ -10,8 +10,10 @@ import {
   type AutomationAction,
   type AutomationEngine,
   type CallAgentActionConfig,
+  ConflictError,
   type Automation as CoreAutomation,
   NotFoundError,
+  ValidationError,
   createAutomationEngine,
   createTemplateContext,
   executeActions,
@@ -172,9 +174,35 @@ export class AutomationService {
   }
 
   /**
+   * Refuse manual mutation of a compiler-managed automation (RFC #925 G4b,
+   * #986). Rows with `managedByAgentId` set are the compiled plan of that
+   * agent's event manifest; the manifest is the source of truth, so edits
+   * must go through it — there is deliberately no force/override path. The
+   * compiler itself writes through the raw handle, never this service's CRUD.
+   */
+  private assertNotManaged(automation: Automation): void {
+    if (!automation.managedByAgentId) return;
+    throw new ConflictError(
+      'Automation',
+      `automation ${automation.id} is compiled from the event manifest of agent ${automation.managedByAgentId} and cannot be modified directly — update that agent's manifest instead (omni agents manifest apply)`,
+      { automationId: automation.id, managedByAgentId: automation.managedByAgentId },
+    );
+  }
+
+  /** Refuse caller-supplied provenance: `managedByAgentId` is compiler-owned. */
+  private assertNoProvenance(data: Partial<NewAutomation>): void {
+    if (data.managedByAgentId === undefined || data.managedByAgentId === null) return;
+    throw new ValidationError(
+      'managedByAgentId is compiler-owned: automations compiled from an agent manifest are ' +
+        "created by applying the agent's manifest (omni agents manifest apply), not through automation CRUD",
+    );
+  }
+
+  /**
    * Create a new automation
    */
   async create(data: NewAutomation): Promise<Automation> {
+    this.assertNoProvenance(data);
     const [created] = await this.db.insert(automations).values(data).returning();
 
     if (!created) {
@@ -188,9 +216,12 @@ export class AutomationService {
   }
 
   /**
-   * Update an automation
+   * Update an automation. Rejected (409) for compiler-managed rows — see
+   * `assertNotManaged`.
    */
   async update(id: string, data: Partial<NewAutomation>): Promise<Automation> {
+    this.assertNoProvenance(data);
+    this.assertNotManaged(await this.getById(id));
     const [updated] = await this.db
       .update(automations)
       .set({ ...data, updatedAt: new Date() })
@@ -208,9 +239,11 @@ export class AutomationService {
   }
 
   /**
-   * Delete an automation
+   * Delete an automation. Rejected (409) for compiler-managed rows: remove
+   * the `accepts` entry from the owning agent's manifest instead.
    */
   async delete(id: string): Promise<void> {
+    this.assertNotManaged(await this.getById(id));
     const result = await this.db.delete(automations).where(eq(automations.id, id)).returning();
 
     if (!result.length) {
@@ -218,6 +251,44 @@ export class AutomationService {
     }
 
     // Reload engine
+    await this.reloadEngine();
+  }
+
+  /**
+   * INTERNAL compiler read path (RFC #925 G4b, #986): the compiled rows an
+   * agent's manifest currently materializes. Used by the manifest compiler to
+   * diff desired vs existing; not exposed as a route.
+   */
+  async listCompiledForAgent(agentId: string): Promise<Automation[]> {
+    return this.db.select().from(automations).where(eq(automations.managedByAgentId, agentId));
+  }
+
+  /**
+   * INTERNAL compiler write path (RFC #925 G4b, #986). Applies a reconciled
+   * diff of COMPILED rows in one pass and reloads the engine once. This is
+   * the deliberate bypass of `assertNotManaged`/`assertNoProvenance`: the
+   * manifest compiler is the sole legitimate writer of managed rows, and it
+   * must be able to stamp `managedByAgentId` and mutate/delete what the
+   * public CRUD refuses to touch. Only `ManifestCompilerService` calls this;
+   * it is not reachable from any route.
+   */
+  async applyCompiledDiff(diff: {
+    create: NewAutomation[];
+    update: Array<{ id: string; data: Partial<NewAutomation> }>;
+    deleteIds: string[];
+  }): Promise<void> {
+    for (const row of diff.create) {
+      await this.db.insert(automations).values(row);
+    }
+    for (const { id, data } of diff.update) {
+      await this.db
+        .update(automations)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(automations.id, id));
+    }
+    for (const id of diff.deleteIds) {
+      await this.db.delete(automations).where(eq(automations.id, id));
+    }
     await this.reloadEngine();
   }
 

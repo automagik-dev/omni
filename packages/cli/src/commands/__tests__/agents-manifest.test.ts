@@ -10,8 +10,15 @@
 import { describe, expect, test } from 'bun:test';
 import { __testables } from '../agents';
 
-const { detectManifestFormat, parseManifestSource, validateManifestDocument, buildGraphRows, buildTypeRows } =
-  __testables;
+const {
+  detectManifestFormat,
+  parseManifestSource,
+  validateManifestDocument,
+  buildGraphRows,
+  buildTypeRows,
+  countManagedAutomations,
+  formatCompiledIndicator,
+} = __testables;
 
 const validManifest = {
   accepts: [{ event: 'custom.clickup.task.status_changed', filter: { list_id: '901300373349' } }],
@@ -70,10 +77,10 @@ describe('validateManifestDocument', () => {
 describe('buildGraphRows', () => {
   test('one row per declaring agent; undeclared agents are omitted', () => {
     const rows = buildGraphRows([
-      { name: 'reviewer', eventManifest: validManifest },
-      { name: 'silent', eventManifest: null },
-      { name: 'empty', eventManifest: { accepts: [], publishes: [] } },
-      { name: 'emitter', eventManifest: { publishes: [{ event: 'custom.alerts.raised' }] } },
+      { id: 'a-1', name: 'reviewer', eventManifest: validManifest },
+      { id: 'a-2', name: 'silent', eventManifest: null },
+      { id: 'a-3', name: 'empty', eventManifest: { accepts: [], publishes: [] } },
+      { id: 'a-4', name: 'emitter', eventManifest: { publishes: [{ event: 'custom.alerts.raised' }] } },
     ]);
 
     expect(rows).toEqual([
@@ -81,22 +88,66 @@ describe('buildGraphRows', () => {
         agent: 'reviewer',
         consumes: 'custom.clickup.task.status_changed (filtered)',
         produces: 'custom.review.parecer.ready',
+        compiled: 'unknown',
       },
-      { agent: 'emitter', consumes: '-', produces: 'custom.alerts.raised' },
+      { agent: 'emitter', consumes: '-', produces: 'custom.alerts.raised', compiled: '-' },
     ]);
   });
 
+  test('compiled column reports materialized vs declared accepts (#986)', () => {
+    const counts = new Map([['a-1', 1]]);
+    const rows = buildGraphRows(
+      [
+        { id: 'a-1', name: 'reviewer', eventManifest: validManifest },
+        {
+          id: 'a-5',
+          name: 'uncompiled',
+          eventManifest: { accepts: [{ event: 'message.received' }, { event: 'chat.archived' }] },
+        },
+      ],
+      counts,
+    );
+
+    expect(rows[0]?.compiled).toBe('1/1');
+    // Declared but not yet materialized — counts map present, agent absent.
+    expect(rows[1]?.compiled).toBe('0/2');
+  });
+
   test('unfiltered accepts render without the (filtered) marker', () => {
-    const rows = buildGraphRows([{ name: 'a', eventManifest: { accepts: [{ event: 'message.received' }] } }]);
+    const rows = buildGraphRows([
+      { id: 'a-1', name: 'a', eventManifest: { accepts: [{ event: 'message.received' }] } },
+    ]);
     expect(rows[0]?.consumes).toBe('message.received');
+  });
+});
+
+describe('countManagedAutomations / formatCompiledIndicator (#986)', () => {
+  test('counts only manifest-managed automations, grouped by owning agent', () => {
+    const counts = countManagedAutomations([
+      { managedByAgentId: 'a-1' },
+      { managedByAgentId: 'a-1' },
+      { managedByAgentId: 'a-2' },
+      { managedByAgentId: null },
+      {},
+    ]);
+    expect(counts.get('a-1')).toBe(2);
+    expect(counts.get('a-2')).toBe(1);
+    expect(counts.size).toBe(2);
+  });
+
+  test('indicator: dash when nothing declared, unknown without data, n/m otherwise', () => {
+    expect(formatCompiledIndicator(0, undefined)).toBe('-');
+    expect(formatCompiledIndicator(2, undefined)).toBe('unknown');
+    expect(formatCompiledIndicator(2, 2)).toBe('2/2');
+    expect(formatCompiledIndicator(2, 0)).toBe('0/2');
   });
 });
 
 describe('buildTypeRows', () => {
   const agents = [
-    { name: 'reviewer', eventManifest: validManifest },
-    { name: 'emitter', eventManifest: { publishes: [{ event: 'custom.clickup.task.status_changed' }] } },
-    { name: 'silent', eventManifest: null },
+    { id: 'a-1', name: 'reviewer', eventManifest: validManifest },
+    { id: 'a-2', name: 'emitter', eventManifest: { publishes: [{ event: 'custom.clickup.task.status_changed' }] } },
+    { id: 'a-3', name: 'silent', eventManifest: null },
   ];
 
   test('lists consumers (with their filter) and producers of the type', () => {

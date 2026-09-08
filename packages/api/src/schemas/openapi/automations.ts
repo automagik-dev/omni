@@ -113,6 +113,15 @@ export const AutomationSchema = z.object({
       "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
       'only when every action succeeded; a failed run publishes zero',
   }),
+  managedByAgentId: z
+    .string()
+    .uuid()
+    .nullable()
+    .openapi({
+      description:
+        'Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); ' +
+        'null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead',
+    }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
 });

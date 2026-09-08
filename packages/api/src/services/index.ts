@@ -45,6 +45,7 @@ import { FollowUpLifecycleService } from './follow-up-lifecycle';
 import { FollowUpSweeperService } from './follow-up-sweeper';
 import { GenieHostsService } from './genie-hosts';
 import { InstanceService } from './instances';
+import { ManifestCompilerService } from './manifest-compiler';
 import { MediaStorageService } from './media-storage';
 import { MessageService } from './messages';
 import { PayloadStoreService } from './payload-store';
@@ -88,6 +89,12 @@ export interface Services {
   eventSchemas: EventSchemaService;
   webhooks: WebhookService;
   automations: AutomationService;
+  /**
+   * G4b manifest compiler (RFC #925, #986): compiles `agents.event_manifest`
+   * `accepts` entries into MANAGED routing automations and reconciles them on
+   * manifest apply/update and agent deletion (wired into `agents` below).
+   */
+  manifestCompiler: ManifestCompilerService;
   chats: ChatService;
   messages: MessageService;
   syncJobs: SyncJobService;
@@ -220,8 +227,16 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   const agentRunner = new AgentRunnerService(db);
   providers.onProviderChanged((providerId) => agentRunner.clearCache(providerId));
 
+  // G4b (#986): manifest apply/update and agent deletion reconcile the
+  // agent's COMPILED automations through the compiler (a direct service call,
+  // not a bus subscription — apply + compile share the request's transaction).
+  const automationsService = new AutomationService(db, eventBus);
+  const manifestCompiler = new ManifestCompilerService(eventBus, automationsService);
+  const agentsService = new AgentService(db, eventBus);
+  agentsService.setManifestReconciler(manifestCompiler);
+
   return {
-    agents: new AgentService(db, eventBus),
+    agents: agentsService,
     agentState: new AgentStateService(eventBus),
     agentTasks: new AgentTaskService(db, eventBus),
     apiKeys,
@@ -240,7 +255,8 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     eventOps,
     eventSchemas,
     webhooks: new WebhookService(db, eventBus, eventSchemas, deadLetters),
-    automations: new AutomationService(db, eventBus),
+    automations: automationsService,
+    manifestCompiler,
     chats: new ChatService(db, eventBus),
     messages: new MessageService(db, eventBus),
     syncJobs: new SyncJobService(db, eventBus),

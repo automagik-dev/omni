@@ -204,6 +204,7 @@ function validateManifestDocument(raw: unknown): AgentEventManifest {
 
 /** Minimal agent shape the graph helpers need (matches SDK list output). */
 interface GraphAgentInput {
+  id: string;
   name: string;
   eventManifest?: {
     accepts?: { event: string; filter?: Record<string, unknown> }[];
@@ -215,6 +216,35 @@ interface GraphRow {
   agent: string;
   consumes: string;
   produces: string;
+  compiled: string;
+}
+
+/**
+ * Count compiled (manifest-managed) automations per owning agent (#986).
+ * Input is the SDK automations list; rows without `managedByAgentId` are
+ * hand-made and ignored.
+ */
+function countManagedAutomations(automations: Array<{ managedByAgentId?: string | null }>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const automation of automations) {
+    const agentId = automation.managedByAgentId;
+    if (!agentId) continue;
+    counts.set(agentId, (counts.get(agentId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Render the declared-vs-materialized indicator for one agent:
+ *   - `-` when nothing is declared (nothing to compile),
+ *   - `unknown` when the automations list was unavailable,
+ *   - `materialized/declared` otherwise (e.g. `2/2`; `0/2` = declared but
+ *     not yet compiled — the manifest predates the G4b compiler).
+ */
+function formatCompiledIndicator(declared: number, materialized: number | undefined): string {
+  if (declared === 0) return '-';
+  if (materialized === undefined) return 'unknown';
+  return `${materialized}/${declared}`;
 }
 
 /** Render one accepts entry for the graph table ("event (filtered)" when narrowed). */
@@ -226,8 +256,12 @@ function formatAcceptsEntry(entry: { event: string; filter?: Record<string, unkn
 /**
  * Build the producer/consumer table: one row per agent that declares at least
  * one accepts/publishes entry. Agents without a manifest are omitted.
+ *
+ * `managedCounts` (from `countManagedAutomations`, #986) drives the
+ * `compiled` column — declared vs materialized state; pass undefined when the
+ * automations list could not be fetched.
  */
-function buildGraphRows(agents: GraphAgentInput[]): GraphRow[] {
+function buildGraphRows(agents: GraphAgentInput[], managedCounts?: Map<string, number>): GraphRow[] {
   const rows: GraphRow[] = [];
   for (const agent of agents) {
     const manifest = agent.eventManifest;
@@ -238,6 +272,7 @@ function buildGraphRows(agents: GraphAgentInput[]): GraphRow[] {
       agent: agent.name,
       consumes: accepts.length > 0 ? accepts.map(formatAcceptsEntry).join(', ') : '-',
       produces: publishes.length > 0 ? publishes.map((entry) => entry.event).join(', ') : '-',
+      compiled: formatCompiledIndicator(accepts.length, managedCounts ? (managedCounts.get(agent.id) ?? 0) : undefined),
     });
   }
   return rows;
@@ -276,6 +311,8 @@ export const __testables = {
   validateManifestDocument,
   buildGraphRows,
   buildTypeRows,
+  countManagedAutomations,
+  formatCompiledIndicator,
 };
 
 export function createAgentsCommand(): Command {
@@ -518,7 +555,7 @@ export function createAgentsCommand(): Command {
 
   agents.addCommand(manifest);
 
-  // omni agents graph [--type <event>] — pure read over declared manifests
+  // omni agents graph [--type <event>] — declared manifests + compiled state
   agents
     .command('graph')
     .description('Show declared event producers/consumers across agents (living documentation)')
@@ -535,7 +572,17 @@ export function createAgentsCommand(): Command {
           return;
         }
 
-        const rows = buildGraphRows(items);
+        // Compiled indicator (#986): declared accepts vs materialized managed
+        // automations. Best-effort — an older server without the automations
+        // surface still renders the graph (compiled shows `unknown`).
+        let managedCounts: Map<string, number> | undefined;
+        try {
+          managedCounts = countManagedAutomations(await client.automations.list({}));
+        } catch {
+          managedCounts = undefined;
+        }
+
+        const rows = buildGraphRows(items, managedCounts);
         output.list(rows, { emptyMessage: 'No agent declares an event manifest.' });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';

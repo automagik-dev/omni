@@ -33,6 +33,20 @@ export interface ListAgentsOptions {
   isActive?: boolean;
 }
 
+/**
+ * The manifest-compiler seam (RFC #925 G4b, #986): converges the agent's
+ * compiled automations onto its manifest. Wired by `createServices` via
+ * `setManifestReconciler` — a structural interface (not the concrete
+ * `ManifestCompilerService`) so tests can inject a recorder and this module
+ * does not depend on the compiler implementation.
+ */
+export interface ManifestReconciler {
+  reconcileAgent(
+    agent: { id: string; name: string },
+    manifest: AgentEventManifest | null,
+  ): Promise<{ created: number; updated: number; deleted: number }>;
+}
+
 export class AgentService {
   /**
    * The handle every query in this service uses.
@@ -50,6 +64,13 @@ export class AgentService {
     private readonly pool: Database,
     private eventBus: EventBus | null,
   ) {}
+
+  private manifestReconciler: ManifestReconciler | null = null;
+
+  /** Wire the G4b manifest compiler (see `ManifestReconciler`). */
+  setManifestReconciler(reconciler: ManifestReconciler): void {
+    this.manifestReconciler = reconciler;
+  }
 
   /**
    * List agents with optional filters (paginated)
@@ -180,22 +201,38 @@ export class AgentService {
       });
     }
 
+    // G4b (#986): converge the compiled automations onto the new manifest in
+    // the same call (and, inside a tenant scope, the same transaction) as the
+    // manifest write — a direct call rather than a bus subscription so apply
+    // + compile succeed or fail together and cannot race a second apply. The
+    // compiler publishes `system.agent.manifest.compiled` when the plan
+    // actually changed.
+    await this.manifestReconciler?.reconcileAgent({ id: updated.id, name: updated.name }, manifest);
+
     return updated;
   }
 
   /**
-   * Delete an agent (soft delete — sets isActive = false)
+   * Delete an agent (soft delete — sets isActive = false).
+   *
+   * Also tears down the agent's COMPILED automations (G4b, #986): the row
+   * survives as inactive, so the `managed_by_agent_id` ON DELETE CASCADE
+   * never fires here — that FK only covers hard deletes at the DB level. A
+   * deactivated agent must stop being dispatched to, so its compiled plan is
+   * reconciled against a null manifest (= deleted).
    */
   async delete(id: string): Promise<void> {
     const [updated] = await this.db
       .update(agents)
       .set({ isActive: false, updatedAt: new Date() })
       .where(eq(agents.id, id))
-      .returning({ id: agents.id });
+      .returning({ id: agents.id, name: agents.name });
 
     if (!updated) {
       throw new NotFoundError('Agent', id);
     }
+
+    await this.manifestReconciler?.reconcileAgent({ id: updated.id, name: updated.name }, null);
   }
 
   /**
