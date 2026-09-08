@@ -48,7 +48,7 @@ projections); the default starts at the current head (like `events wait`).
 - **Cursor** = last acked `omni_events.journal_seq`, a monotonic journal
   position assigned at insert. (`receivedAt` carries the publisher's clock
   and can land out of order, so it cannot anchor an at-least-once cursor.)
-- **Pull** (`POST /v2/events/consumers/:name/pull`) pages rows strictly after
+- **Pull** (`POST /api/v2/events/consumers/:name/pull`) pages rows strictly after
   the cursor in `journal_seq` order, pre-filtered by the type glob (trailing
   `*` = prefix, the #966 contract) and payload conditions (the automation
   matcher — same as `events wait --filter`). It never moves the cursor.

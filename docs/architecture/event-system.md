@@ -1,8 +1,8 @@
 ---
 title: "Event System"
 created: 2025-01-29
-updated: 2026-02-09
-tags: [architecture, events, nats]
+updated: 2026-09-08
+tags: [architecture, events, nats, journal]
 status: current
 ---
 
@@ -10,7 +10,7 @@ status: current
 
 > The event system is the nervous system of Omni v2. Every action produces events, events trigger reactions, and events are persisted for audit and replay.
 
-> Related: [[overview|Architecture Overview]], [[plugin-system|Plugin System]]
+> Related: [[overview|Architecture Overview]], [[plugin-system|Plugin System]], [[connector-contract|Connector Contract]] · Runbooks: [Durable Consumers](../runbooks/durable-consumers.md), [Agent Publish Governance](../runbooks/agent-publish-governance.md), [GitHub Webhook Source](../runbooks/github-webhook-source.md), [ClickUp Webhook Source](../runbooks/clickup-webhook-source.md)
 
 ## Why Event-Driven?
 
@@ -37,13 +37,30 @@ POST /message  ──────►  Database     POST /message ─────
                                      Database Updated    Side Effects
 ```
 
+## The Journal Is the Source of Truth
+
+Since the event-backbone work (RFC #925), the **PostgreSQL journal — the
+`omni_events` table — is the durable record** of the event system. NATS
+JetStream is the transport that fans events out to live subscribers; the
+journal is what replay, causality tracing, and durable consumption read.
+This means NATS retention limits are a transport concern, not a data-loss
+concern.
+
+Three columns make `omni_events` a proper journal:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `journal_seq` | `bigserial`, unique index | Total order over journaled events; durable-consumer cursors page strictly after it |
+| `causation_id` | `uuid`, indexed | The event this event reacted to — the edge of the causality tree |
+| `idempotency_key` | `text`, unique index | At-most-once journaling for retried, replayed, or redelivered ingress |
+
 ## NATS JetStream
 
-We use NATS JetStream as our event bus:
+We use NATS JetStream as our event transport:
 
 - **Lightweight** - Single binary, <20MB memory
-- **Persistent** - Events survive restarts
-- **Exactly-once** - No duplicate processing
+- **Persistent** - Events survive restarts (within stream retention; the journal outlives it)
+- **Deduplicated publish** - Within NATS; end-to-end processing is at-least-once, with the journal's idempotency key as the dedup backstop
 - **Fast** - <1ms latency
 - **Built-in KV** - For session state
 
@@ -468,6 +485,28 @@ interface ChannelQrCodeEvent extends BaseEvent<'channel.qr_code', {
 }> {}
 ```
 
+### System & Custom Events
+
+The event-backbone wave added families beyond the channel pipeline:
+
+| Type | Emitted when |
+|------|--------------|
+| `custom.<source>.<event>` | Webhook ingress or an automation `emit_event` action publishes a custom event |
+| `system.connector.stalled` / `system.connector.recovered` | The connector-liveness sweeper detects a missed / resumed heartbeat |
+| `system.consumer.created` / `system.consumer.deleted` | A durable consumer is registered / removed |
+| `system.agent.manifest.updated` | An agent's event manifest changes |
+| `channel.alert` | A channel raises an operational alert |
+| `template.status_changed` | A message template's approval status changes |
+| `agent.run.cancel_requested` | Cancellation is requested for an in-flight agent run |
+
+Journaling rules differ by family:
+
+- **`custom.*` events are journaled by a dedicated forward-only consumer**
+  (recorded with channel `internal`). Custom events published before that
+  consumer first ran are not in the journal.
+- **`system.*` events are deliberately NOT journaled** — they are operational
+  signals on the bus, not part of the durable record.
+
 ## Publishing Events
 
 ```typescript
@@ -592,7 +631,8 @@ export class EventBus {
   }
 
   /**
-   * Subscribe with automatic JSON schema validation.
+   * Subscribe with in-process Zod validation (typing convenience —
+   * see the schema registry note below for the persisted contract layer).
    */
   async subscribeValidated<E extends OmniEvent>(
     pattern: string,
@@ -611,12 +651,19 @@ export class EventBus {
 }
 ```
 
+> **`subscribeValidated()` is in-process typing, not the platform's
+> validation story.** The subscriber hands in a Zod schema and gets a typed
+> event (or a thrown `ValidationError`) — a convenience for consumers. The
+> persisted contract layer is the [event schema registry](#event-schema-registry)
+> below, which gates specific ingress points with stored JSON Schemas.
+
 ## Event Handlers
 
 ### Example: Identity Resolution Handler
 
 ```typescript
-// packages/core/src/identity/handler.ts
+// Illustrative subscriber — the subscribe API lives in
+// packages/core/src/events/bus.ts
 
 export class IdentityEventHandler {
   constructor(
@@ -664,7 +711,8 @@ export class IdentityEventHandler {
 ### Example: Media Processing Handler
 
 ```typescript
-// packages/core/src/media/handler.ts
+// Illustrative subscriber — the subscribe API lives in
+// packages/core/src/events/bus.ts
 
 export class MediaEventHandler {
   constructor(
@@ -751,77 +799,192 @@ export class MediaEventHandler {
 
 ## Event Replay
 
-Events can be replayed for debugging or reprocessing:
+**Replay reads the journal, not a NATS stream.** `omni_events` outlives NATS
+retention and carries a total order (`journal_seq`), so a replay session
+selects journal rows by time/type/instance filters and re-publishes them to
+the bus; the journal's unique idempotency key keeps a replayed event from
+being journaled twice. Durable consumers (below) read the same journal for
+resumable consumption — see the
+[durable consumers runbook](../runbooks/durable-consumers.md).
+
+Replay primitives live in `packages/core/src/events/replay.ts`; the API
+drives sessions (one at a time, running in the background) via
+`/api/v2/event-ops/replay`:
 
 ```typescript
 // packages/core/src/events/replay.ts
 
-export class EventReplayer {
-  constructor(private eventBus: EventBus) {}
-
-  /**
-   * Replay events from a specific time range.
-   */
-  async replay(options: {
-    stream: string;
-    startTime: Date;
-    endTime?: Date;
-    filter?: (event: OmniEvent) => boolean;
-    handler: (event: OmniEvent) => Promise<void>;
-  }): Promise<ReplayResult> {
-    const { stream, startTime, endTime, filter, handler } = options;
-
-    let processed = 0;
-    let skipped = 0;
-    let errors = 0;
-
-    const consumer = await this.eventBus.getReplayConsumer(stream, startTime);
-
-    for await (const msg of consumer) {
-      const event = JSON.parse(msg.data) as OmniEvent;
-      const eventTime = new Date(event.timestamp);
-
-      // Check end time
-      if (endTime && eventTime > endTime) {
-        break;
-      }
-
-      // Apply filter
-      if (filter && !filter(event)) {
-        skipped++;
-        continue;
-      }
-
-      try {
-        await handler(event);
-        processed++;
-      } catch (error) {
-        console.error(`Replay error for event ${event.id}:`, error);
-        errors++;
-      }
-    }
-
-    return { processed, skipped, errors };
-  }
-
-  /**
-   * Replay a specific event by ID.
-   */
-  async replayEvent(eventId: string): Promise<void> {
-    const event = await this.eventBus.getEventById(eventId);
-    if (!event) {
-      throw new Error(`Event not found: ${eventId}`);
-    }
-
-    // Re-publish with original timestamp
-    await this.eventBus.publish({
-      ...event,
-      id: crypto.randomUUID(),  // New ID
-      replayOf: eventId,        // Link to original
-    });
-  }
+export interface ReplayOptions {
+  since: Date;               // Start timestamp (inclusive)
+  until?: Date;              // End timestamp (exclusive)
+  eventTypes?: string[];     // Event type filter
+  instanceId?: string;       // Instance filter
+  limit?: number;            // Max events to replay
+  speedMultiplier?: number;  // 1 = real-time, 0 = instant
+  skipProcessed?: boolean;   // Skip already-processed events
+  dryRun?: boolean;          // Count without publishing
 }
 ```
+
+```bash
+POST   /api/v2/event-ops/replay      # start a session (body: ReplayOptions)
+GET    /api/v2/event-ops/replay      # list sessions
+GET    /api/v2/event-ops/replay/:id  # session progress
+DELETE /api/v2/event-ops/replay/:id  # cancel
+```
+
+## Causality & Tracing
+
+Every published event can carry two lineage fields:
+
+- **`correlationId`** (metadata) — groups an entire flow; root events
+  self-reference.
+- **`causationId`** (journal column) — the id of the event this one reacted
+  to; the parent edge of the causality tree.
+
+Propagation is **ambient** via `AsyncLocalStorage`
+(`packages/core/src/events/causality.ts`). A consumer about to react wraps
+its reaction in `runWithEventCausality`; the publish factory falls back to
+the ambient context for whichever field the publish did not set explicitly:
+
+```typescript
+import { runWithEventCausality } from '@omni/core';
+
+// Wrapped around automation runs and agent dispatch:
+await runWithEventCausality(
+  { correlationId: event.metadata?.correlationId, causationId: event.id },
+  () => automationEngine.run(event),
+);
+```
+
+Because `AsyncLocalStorage` follows the whole await chain, every publish the
+reaction performs — however deep inside a channel plugin — is stamped without
+threading parameters through every signature. Precedence: **explicit metadata
+wins, then the ambient context, then self-reference** (roots).
+
+Tracing surfaces:
+
+- `GET /api/v2/events/:id/trace` — walks ancestors up to the root and
+  descendants breadth-first (cycle-guarded, truncation-capped).
+- `omni events trace <id>` — renders the same trace as an indented tree.
+
+## Event Schema Registry
+
+Payload contracts are persisted in the `event_schemas` table: `event_type`
+(unique), a draft-07 JSON Schema stored as jsonb, a version, and an enabled
+flag. The registry is **global**, not tenant-scoped.
+
+```bash
+# Register / revise a schema
+POST /api/v2/events/schemas
+omni events schema register custom.github.push --file schema.json
+```
+
+Revisions must be **additive-optional**: removing fields, tightening types,
+or adding new required fields is incompatible and rejected with 409.
+
+Enforcement runs at exactly **two gates**:
+
+1. **Webhook ingress / manual trigger** — an invalid payload is dead-lettered
+   with reason `schema_validation_failed` and the request fails with 400;
+   nothing is journaled. An unregistered type passes, unless the source sets
+   `strictSchemas` — then it is dead-lettered as `schema_not_registered`.
+2. **Automation `emit_event`** — validated after the agent
+   publishes-allowlist gate. Strict mode for unregistered types is opt-in via
+   `OMNI_STRICT_EMIT_EVENT_SCHEMAS=true` (default off).
+
+The bus itself is **ungated**: channel and core events are not schema-checked
+at publish time — Zod types them in-process at the boundary
+(`subscribeValidated()` above); the registry exists for payloads crossing in
+from outside.
+
+## Durable Named Consumers
+
+> Operational guide: [durable consumers runbook](../runbooks/durable-consumers.md)
+
+A durable consumer is a **Postgres-registered name with a cursor over the
+journal** — a row in `durable_consumers`: `name` (unique), an `event_type`
+filter (trailing-`*` prefix glob), `filters` jsonb (payload conditions), and
+a `cursor` bigint over `journal_seq`. These are **not NATS JetStream
+durables** — NATS offsets live in `consumer_offsets`, a different table used
+for gap detection.
+
+Semantics:
+
+- **At-least-once.** Pulls page strictly after the cursor, with optional
+  long-poll; a client that crashes mid-page re-pulls the same page.
+- **Ack is monotonic** — acking an older sequence never moves the cursor back.
+- **Lag** = journal head − cursor.
+- **One follower per name** — no consumer groups; fan out with more names.
+
+Surfaces:
+
+- REST: `/api/v2/events/consumers[...]`
+- CLI: `omni events consumers create|ls|inspect|rm`,
+  `omni events follow --consumer <name>` (tail + ack as you go), and the
+  one-shot `omni events wait` (ephemeral, no registration).
+
+### Filter Glob Semantics
+
+Event-type filters are a **trailing-`*` prefix glob only** —
+`custom.github.*` matches `custom.github.push`. This is not NATS wildcard
+syntax (`>` and mid-token `*` are not supported). The glob works in
+`events list`, `events stream`, `events wait`, and durable-consumer filters.
+It is **not** supported in automation triggers (exact type match) or agent
+event manifests (exact types only).
+
+## Webhook Event Sources (External Ingress)
+
+Rows in `webhook_sources` configure a public, auth-exempt endpoint:
+
+```
+POST /api/v2/webhooks/ingress/:source
+```
+
+Each source defines:
+
+- **Signature verification** over the raw body — `hmac-sha256`, `hmac-sha1`,
+  or `token-match`, with an optional signature prefix and a constant-time
+  compare. Every verification failure returns the same 401.
+- **Idempotency** via a per-source key template — default
+  `{source}:{sha256(body)}`, with `{headers.<name>}` and `{payload.<path>}`
+  placeholders. The key dedupes on the journal's unique idempotency index;
+  duplicates return 200 with `{"duplicate": true}`.
+- **Semantic typing** via `eventTypeMapping` — a header- or body-sourced
+  value becomes `custom.<source>.<event>`.
+- Optional **`strictSchemas`** (see the schema registry gates above).
+- A **connector-liveness contract** — `expectedIntervalSeconds` plus
+  `POST /api/v2/webhooks/:source/heartbeat`; a sweeper emits
+  `system.connector.stalled` / `system.connector.recovered`.
+
+GitHub and ClickUp are **config-only recipes** over this one generic
+mechanism — no channel plugin involved. See
+[[connector-contract|Connector Contract]],
+[GitHub webhook source](../runbooks/github-webhook-source.md), and
+[ClickUp webhook source](../runbooks/clickup-webhook-source.md).
+
+## Agent Event Manifests & Governance
+
+Agents declare their event surface in `agents.event_manifest` — `accepts`
+and `publishes` lists of **exact** event types (no globs).
+
+- **`publishes` is enforced at emit time**: an `emit_event` for an undeclared
+  type is dead-lettered with reason `publish_not_declared`.
+- **`accepts` is compiled into managed automations** (provenance tracked via
+  `managed_by_agent_id`), so the wiring is data, not code.
+- `omni agents graph` renders the resulting event topology.
+
+See the [agent publish governance runbook](../runbooks/agent-publish-governance.md).
+
+## Transactional Emissions on Automations
+
+Automations with the `transactional_emissions` flag buffer their
+`emit_event` actions per run and flush them **in order, only if the run
+finishes with zero failed actions**. Each emission claims its journal row
+with a deterministic idempotency key derived from
+`(event, automation, actionIndex)`, so retries and redeliveries of the same
+run skip already-journaled emissions. This is a journal-level claim, not a
+database outbox table.
 
 ## Event Payload Storage
 

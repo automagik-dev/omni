@@ -136,6 +136,12 @@ omni instances create --channel discord --name "my-discord" --discord-token "<BO
 omni instances create --channel slack --name "my-slack" --slack-app-token "<APP_TOKEN>" --slack-bot-token "<BOT_TOKEN>"
 ```
 
+Other supported channels: `whatsapp-business` (Meta Cloud API), `gupshup`,
+`hermes`, `asc-flow`, `twilio-whatsapp`, `a2a` (requires `A2A_ENABLED=true`),
+and `harness` (E2E agent-testing). List them with
+`omni channels list`, and see `omni instances create --help` for
+channel-specific flags.
+
 ## Post-Install: Connect an OpenClaw Agent
 
 ```bash
@@ -325,3 +331,9 @@ curl -fsSL https://bun.sh/install | bash \
 ```
 
 Requires: Linux or macOS, x64 or arm64, internet access.
+
+## Next Steps
+
+- Wire an external system in as an event source: [GitHub webhook source](../runbooks/github-webhook-source.md), [ClickUp webhook source](../runbooks/clickup-webhook-source.md)
+- Consume events durably: [durable consumers runbook](../runbooks/durable-consumers.md)
+- Run several isolated deployments on one host: [multi-instance guide](multi-instance.md)
