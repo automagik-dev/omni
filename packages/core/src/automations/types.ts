@@ -203,6 +203,15 @@ export interface Automation {
    * publishing.
    */
   transactionalEmissions?: boolean;
+  /**
+   * Agent whose event manifest governs this automation (RFC #925 G4).
+   * Stamped by the G4b compiler (#986) when the automation is compiled from a
+   * manifest's `accepts` entries; the engine threads it into the emit path so
+   * the G4c publish-allowlist gate (#987) enforces the agent's `publishes`
+   * declarations. Optional and absent/`null` for hand-authored automations —
+   * their emissions stay ungoverned.
+   */
+  managedByAgentId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
