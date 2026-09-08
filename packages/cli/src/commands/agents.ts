@@ -8,8 +8,14 @@
  * omni agents update <id> [--name <name>] [--model <model>] [--provider <provider>] [--agent-provider <id>] [--type <type>] [--active|--inactive]
  *                  [--provider-agent-id <id>] [--config-path <path>] [--metadata <json>]
  * omni agents delete <id>
+ * omni agents manifest get <id>
+ * omni agents manifest apply <id> --file <path>
+ * omni agents graph [--type <event>]
  */
 
+import { readFileSync } from 'node:fs';
+import type { AgentEventManifest } from '@omni/core';
+import { AgentEventManifestSchema } from '@omni/core';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
@@ -157,6 +163,120 @@ function buildUpdateAgentBody(options: UpdateAgentOptions): UpdateAgentBody {
 
   return body;
 }
+
+// ─── Event manifest helpers (RFC #925 G4a, #985) ────────────────────────────
+
+/** Detect the manifest file format from its extension (.yaml/.yml → YAML). */
+function detectManifestFormat(filePath: string): 'json' | 'yaml' {
+  return /\.ya?ml$/i.test(filePath) ? 'yaml' : 'json';
+}
+
+/**
+ * Parse a manifest file's contents. YAML is parsed with Bun's built-in
+ * `Bun.YAML` (no extra dependency); JSON with JSON.parse. Throws with a
+ * readable message on parse failure.
+ */
+function parseManifestSource(source: string, format: 'json' | 'yaml'): unknown {
+  if (format === 'yaml') {
+    const yaml = (globalThis.Bun as { YAML?: { parse(input: string): unknown } } | undefined)?.YAML;
+    if (!yaml) {
+      throw new Error('YAML manifests require Bun >= 1.2 (Bun.YAML). Convert the file to JSON or upgrade Bun.');
+    }
+    return yaml.parse(source);
+  }
+  return JSON.parse(source);
+}
+
+/**
+ * Validate a parsed manifest document against the shared Zod schema
+ * (client-side, before any network call). Throws with per-field messages.
+ */
+function validateManifestDocument(raw: unknown): AgentEventManifest {
+  const result = AgentEventManifestSchema.safeParse(raw);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`)
+      .join('\n');
+    throw new Error(`Manifest failed validation:\n${issues}`);
+  }
+  return result.data;
+}
+
+/** Minimal agent shape the graph helpers need (matches SDK list output). */
+interface GraphAgentInput {
+  name: string;
+  eventManifest?: {
+    accepts?: { event: string; filter?: Record<string, unknown> }[];
+    publishes?: { event: string }[];
+  } | null;
+}
+
+interface GraphRow {
+  agent: string;
+  consumes: string;
+  produces: string;
+}
+
+/** Render one accepts entry for the graph table ("event (filtered)" when narrowed). */
+function formatAcceptsEntry(entry: { event: string; filter?: Record<string, unknown> }): string {
+  const filtered = entry.filter !== undefined && Object.keys(entry.filter).length > 0;
+  return filtered ? `${entry.event} (filtered)` : entry.event;
+}
+
+/**
+ * Build the producer/consumer table: one row per agent that declares at least
+ * one accepts/publishes entry. Agents without a manifest are omitted.
+ */
+function buildGraphRows(agents: GraphAgentInput[]): GraphRow[] {
+  const rows: GraphRow[] = [];
+  for (const agent of agents) {
+    const manifest = agent.eventManifest;
+    const accepts = manifest?.accepts ?? [];
+    const publishes = manifest?.publishes ?? [];
+    if (accepts.length === 0 && publishes.length === 0) continue;
+    rows.push({
+      agent: agent.name,
+      consumes: accepts.length > 0 ? accepts.map(formatAcceptsEntry).join(', ') : '-',
+      produces: publishes.length > 0 ? publishes.map((entry) => entry.event).join(', ') : '-',
+    });
+  }
+  return rows;
+}
+
+interface TypeGraphRow {
+  agent: string;
+  role: 'consumes' | 'produces';
+  filter: string;
+}
+
+/**
+ * Answer "who listens to / who may emit this event type": one row per
+ * declaration matching the given type.
+ */
+function buildTypeRows(agents: GraphAgentInput[], eventType: string): TypeGraphRow[] {
+  const rows: TypeGraphRow[] = [];
+  for (const agent of agents) {
+    for (const entry of agent.eventManifest?.accepts ?? []) {
+      if (entry.event !== eventType) continue;
+      const hasFilter = entry.filter !== undefined && Object.keys(entry.filter).length > 0;
+      rows.push({ agent: agent.name, role: 'consumes', filter: hasFilter ? JSON.stringify(entry.filter) : '-' });
+    }
+    for (const entry of agent.eventManifest?.publishes ?? []) {
+      if (entry.event !== eventType) continue;
+      rows.push({ agent: agent.name, role: 'produces', filter: '-' });
+    }
+  }
+  return rows;
+}
+
+/** Exported for unit tests only. */
+export const __testables = {
+  detectManifestFormat,
+  parseManifestSource,
+  validateManifestDocument,
+  buildGraphRows,
+  buildTypeRows,
+};
 
 export function createAgentsCommand(): Command {
   const agents = new Command('agents').description('Manage AI agent entities');
@@ -336,6 +456,90 @@ export function createAgentsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to delete agent: ${message}`, undefined, 3);
+      }
+    });
+
+  // omni agents manifest get|apply — declarative accepts/publishes (RFC #925 G4a)
+  const manifest = new Command('manifest').description('Manage the agent event manifest (declared accepts/publishes)');
+
+  // omni agents manifest get <id>
+  manifest
+    .command('get <id>')
+    .description('Print the stored event manifest for an agent')
+    .action(async (id: string) => {
+      const resolvedId = await resolveAgentId(id);
+      const client = getClient();
+
+      try {
+        const stored = await client.agents.getManifest(resolvedId);
+        if (stored === null) {
+          if (output.getCurrentFormat() === 'json') {
+            output.data(null);
+          } else {
+            output.info('No event manifest declared for this agent.');
+          }
+          return;
+        }
+        output.data(stored);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to get agent manifest: ${message}`, undefined, 3);
+      }
+    });
+
+  // omni agents manifest apply <id> --file <path>
+  manifest
+    .command('apply <id>')
+    .description('Validate a manifest file (JSON or YAML) and apply it to an agent (full replacement)')
+    .requiredOption('--file <path>', 'Path to the manifest file (.json, .yaml, or .yml)')
+    .action(async (id: string, options: { file: string }) => {
+      let document: AgentEventManifest;
+      try {
+        const source = readFileSync(options.file, 'utf8');
+        const parsed = parseManifestSource(source, detectManifestFormat(options.file));
+        document = validateManifestDocument(parsed);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return output.error(`Cannot apply manifest from ${options.file}: ${message}`);
+      }
+
+      const resolvedId = await resolveAgentId(id);
+      const client = getClient();
+
+      try {
+        const stored = await client.agents.updateManifest(resolvedId, document);
+        output.success(`Manifest applied to agent ${resolvedId}.`);
+        output.data(stored);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to apply agent manifest: ${message}`, undefined, 3);
+      }
+    });
+
+  agents.addCommand(manifest);
+
+  // omni agents graph [--type <event>] — pure read over declared manifests
+  agents
+    .command('graph')
+    .description('Show declared event producers/consumers across agents (living documentation)')
+    .option('--type <event>', 'Only show who consumes / may produce this event type')
+    .action(async (options: { type?: string }) => {
+      const client = getClient();
+
+      try {
+        const { items } = await client.agents.list({ limit: 200 });
+
+        if (options.type !== undefined) {
+          const rows = buildTypeRows(items, options.type);
+          output.list(rows, { emptyMessage: `No agent declares ${options.type}.` });
+          return;
+        }
+
+        const rows = buildGraphRows(items);
+        output.list(rows, { emptyMessage: 'No agent declares an event manifest.' });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to build agent graph: ${message}`);
       }
     });
 
