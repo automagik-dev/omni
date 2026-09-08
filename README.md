@@ -246,6 +246,7 @@ packages/
 ├── channel-hermes/          # H3rmes (Brazilian WhatsApp gateway)
 ├── channel-twilio-whatsapp/ # Twilio WhatsApp
 ├── channel-a2a/             # A2A channel
+├── channel-asc/             # ASC Brazil (ASCWhats GW, Cloud API mirror)
 ├── channel-asc-flow/        # ASC platform Flow (Brazilian BSP)
 ├── channel-harness/         # E2E agent-testing channel
 ├── channel-internal/        # In-process agent-to-agent routing
