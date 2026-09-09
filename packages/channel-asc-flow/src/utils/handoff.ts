@@ -20,10 +20,23 @@ import type { Logger } from '@omni/core';
 
 /**
  * The queue code the Genesys component reads. No domain exists yet (the
- * de-para is a known pendency on the Hapvida side), so this only enforces a
- * conservative SHAPE — enough to keep junk out of `u_cod_transf`.
+ * de-para is a known pendency on the Hapvida side), so this enforces the
+ * CHARACTER SET and nothing else — enough to keep junk out of `u_cod_transf`.
+ *
+ * The length cap left on 2026-09-09. It never had a source: it was written
+ * here on 03/09 as a "conservative shape", mirrored into hv-scheduling the
+ * next day, and the very comment that introduced it said the domain was
+ * unknown. The HANDOFF-GENESYS.md it cited does not exist in any repo.
+ *
+ * The operation's real queue is `VQ_WPP_PF_NTX_AGENDAR_CONSULTAS_HV` — 34
+ * characters. Under the cap EVERY handoff in `flow` mode was refused, and
+ * silently as far as the person could tell. A guessed bound protects nothing;
+ * it only rejects the legitimate value once reality outgrows the guess.
+ *
+ * Length becomes a check again when Hapvida gives the real limit — with the
+ * source cited here, the way the rest of this module does it.
  */
-const FILA_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
+const FILA_PATTERN = /^[A-Za-z0-9_.-]+$/;
 
 /** `u_bot_motivo_transf` is free text; cap it so a runaway prompt cannot flood it. */
 const MOTIVO_MAX_LENGTH = 255;

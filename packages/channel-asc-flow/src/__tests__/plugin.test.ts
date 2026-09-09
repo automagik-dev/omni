@@ -355,6 +355,20 @@ describe('outbound turn', () => {
     expect(of('/transferirHumano')).toHaveLength(0);
   });
 
+  // The operation's real queue is 34 characters. A length cap invented on
+  // 2026-09-03 (no source, and the comment that added it said the domain was
+  // unknown) refused EVERY flow-mode handoff on it, silently for the person.
+  it('accepts the real 34-character queue of the operation', async () => {
+    await boot();
+    const fila = 'VQ_WPP_PF_NTX_AGENDAR_CONSULTAS_HV';
+    expect(fila).toHaveLength(34);
+
+    const result = await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: fila });
+
+    expect(result.success).toBe(true);
+    expect(ready('42')).toMatchObject({ hand_off: 'sim', fila_vq: fila });
+  });
+
   it('sends the Genesys fields EMPTY when the turn does not hand off', async () => {
     await boot();
     await send({ type: 'text', text: 'ok' }, { handoffQueue: 'VQ_X' });
