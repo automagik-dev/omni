@@ -95,6 +95,7 @@ export type Channel =
   | 'gupshup'
   | 'twilio-whatsapp'
   | 'hermes'
+  | 'asc'
   | 'asc-flow'
   | 'internal'
   | 'harness';

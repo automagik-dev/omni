@@ -26,6 +26,7 @@ const VALID_CHANNELS: Channel[] = [
   'telegram',
   'twilio-whatsapp',
   'hermes',
+  'asc',
   'asc-flow',
   'harness',
 ];

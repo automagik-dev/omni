@@ -568,3 +568,69 @@ jobs:
             echo "Expected 1 process on port 8882, found $PROC_COUNT"
             exit 1
           fi
+
+  promotion-pin-gate:
+    name: Promotion Pin Gate (dev → main)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+
+    # A promotion PR (base main) must carry a candidate pin that matches the
+    # tree being merged. The read-only promotion verifier (image-publish.yml)
+    # only runs on push to main, so before this job a stale pin — dev moved
+    # on and nobody re-minted — was discovered AFTER the merge, leaving main
+    # red with "final image build-input drift" (the two promotions after
+    # v2.260902.5 both did exactly this). This job runs the same binding
+    # check, verify-promotion-candidate.sh, on the PR's merge commit so the
+    # stale pin blocks the merge with the same message instead.
+    #
+    # github.base_ref is non-empty only on pull_request events (merge_group
+    # and push leave it blank), so every non-promotion event skips this job;
+    # a skipped required check passes, which is correct — the pin is only a
+    # claim about main.
+    if: github.base_ref == 'main'
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history + tags: the verifier resolves the candidate commit,
+          # the immutable v<version> tag, and the ancestor walk up to the PR
+          # merge commit that this checkout puts at HEAD.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Bind the pinned candidate to the promotion merge commit
+        run: |
+          set -euo pipefail
+          pin_file=".github/workflows/image-publish.yml"
+          candidate_version=$(sed -n 's/^[[:space:]]*CANDIDATE_VERSION:[[:space:]]*//p' "${pin_file}")
+          candidate_sha=$(sed -n 's/^[[:space:]]*CANDIDATE_SHA:[[:space:]]*//p' "${pin_file}")
+          candidate_digest=$(sed -n 's/^[[:space:]]*CANDIDATE_DIGEST:[[:space:]]*//p' "${pin_file}")
+          for value in "${candidate_version}" "${candidate_sha}" "${candidate_digest}"; do
+            if [[ -z "${value}" || "${value}" == *$'\n'* ]]; then
+              echo "::error::could not parse exactly one CANDIDATE_VERSION/CANDIDATE_SHA/CANDIDATE_DIGEST triple from ${pin_file}"
+              exit 1
+            fi
+          done
+
+          # The cheap staleness check first, with the recovery procedure in
+          # the error: a promotion whose tree version outran the pin means
+          # nobody minted a candidate for what is about to become main.
+          tree_version=$(jq -r .version packages/cli/package.json)
+          if [[ "${candidate_version}" != "${tree_version}" ]]; then
+            echo "::error::stale promotion pin: ${pin_file} pins CANDIDATE_VERSION=${candidate_version} but this tree is version ${tree_version}. Mint a fresh candidate first (gh workflow run version.yml --ref dev -f candidate=true, then gh workflow run image-build.yml --ref refs/tags/v<version> -f version=<version>), then paste the CANDIDATE_* values from its receipt into image-publish.yml, .well-known/{latest,dev}.json, deploy/helm/omni/values.yaml image.tag, the contract test pins, and the upgrade runbook in a reviewed commit on dev, and reopen the promotion."
+            exit 1
+          fi
+
+          # The full binding image-publish.yml will re-run on main: candidate
+          # commit exists, is an ancestor, the immutable tag resolves to it,
+          # the package version matches, and no protected image build input
+          # drifted between the candidate and this merge commit.
+          scripts/release/verify-promotion-candidate.sh \
+            --candidate-sha "${candidate_sha}" \
+            --final-sha "$(git rev-parse 'HEAD^{commit}')" \
+            --version "${candidate_version}" \
+            --digest "${candidate_digest}" || {
+            echo "::error::the pinned candidate does not bind to this promotion tree (see the verifier output above). Re-mint a candidate for the current dev tip and update the pin files instead of merging."
+            exit 1
+          }
