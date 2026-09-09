@@ -1,16 +1,16 @@
 # Public launch readiness
 
 This change preserves the release candidate already published as
-`v2.260908.20` and turns the public main-branch path into verification only.
+`v2.260909.5` and turns the public main-branch path into verification only.
 Production deployment authority and the canonical production digest are not
 owned by this public repository.
 
 ## Immutable candidate
 
-- Source commit: `609ff119c3607bfdcf8a85c8e18955552ca1f4b4`
-- Version tag: `v2.260908.20` (the tag resolves to the source commit above)
-- OCI index: `ghcr.io/automagik-dev/omni-api@sha256:f7a97198d5cc2bbb126985f7f4d1fa362dddc9cfa91c656d14ccf13a835e443d`
-- Public release timestamp: `2026-09-08T22:49:49Z`
+- Source commit: `a116f1cdaf0ffbe247d4584ec7cf4d8265950626`
+- Version tag: `v2.260909.5` (the tag resolves to the source commit above)
+- OCI index: `ghcr.io/automagik-dev/omni-api@sha256:57d9e43c4f82e926ece698fe0f864e7c439232566f534dead707a93ffb56aa4b`
+- Public release timestamp: `2026-09-09T20:27:15Z`
 - Protected image build inputs: `deploy/Dockerfile`,
   `deploy/Dockerfile.dockerignore`, root `package.json`, `bun.lock`,
   `packages/**`, and `apps/**` (the list in
@@ -165,8 +165,8 @@ identified four additional blockers. They are closed as follows:
 
 - The final `main` checkout remains the root control tree, while
   `image-publish.yml` creates a second `release-candidate` checkout pinned to
-  the candidate SHA (`609ff119c3607bfdcf8a85c8e18955552ca1f4b4` for
-  `v2.260908.20`; `b8c1bf20cd42b1e30974fc8d67f2b7d0fb620031` when this
+  the candidate SHA (`a116f1cdaf0ffbe247d4584ec7cf4d8265950626` for
+  `v2.260909.5`; `b8c1bf20cd42b1e30974fc8d67f2b7d0fb620031` when this
   remediation landed for `v2.260830.2`). The root-owned OCI verifier now
   requires an explicit source directory and changes into that historical
   checkout before checking `HEAD`, the immutable tag, package/chart versions,
@@ -221,9 +221,9 @@ The final worktree passed the following local, non-mutating gates:
   is exempt by design
 - `bun scripts/verify-versions.ts` — every tracked version field agrees with
   `packages/cli/package.json`. The value itself follows each dev bump (it was
-  `2.260830.2` when this document was written and is `2.260908.20` at the
-  2026-09-08 candidate revision), so it is not a fixed claim of this
-  document; the immutable candidate above is `v2.260908.20`
+  `2.260830.2` when this document was written and is `2.260909.5` at the
+  2026-09-09 candidate revision), so it is not a fixed claim of this
+  document; the immutable candidate above is `v2.260909.5`
 - every `scripts/release/*.test.sh`
 - `scripts/ci/test-helm-image-digest.sh` with Helm `v3.16.4` pinned to the
   repository's CI checksum
@@ -237,5 +237,5 @@ The final worktree passed the following local, non-mutating gates:
 
 The build gate's generated rewrite was discarded. A final Git comparison
 confirms that every protected image build input is byte-identical to
-`609ff119c3607bfdcf8a85c8e18955552ca1f4b4`, and the legacy HML runtime paths
+`a116f1cdaf0ffbe247d4584ec7cf4d8265950626`, and the legacy HML runtime paths
 are byte-identical to the merged baseline.

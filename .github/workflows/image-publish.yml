@@ -20,14 +20,14 @@ permissions:
 
 jobs:
   verify-promotion:
-    name: Verify immutable v2.260908.20 candidate
+    name: Verify immutable v2.260909.5 candidate
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
-      CANDIDATE_VERSION: 2.260908.20
-      CANDIDATE_SHA: 609ff119c3607bfdcf8a85c8e18955552ca1f4b4
-      CANDIDATE_DIGEST: sha256:f7a97198d5cc2bbb126985f7f4d1fa362dddc9cfa91c656d14ccf13a835e443d
+      CANDIDATE_VERSION: 2.260909.5
+      CANDIDATE_SHA: a116f1cdaf0ffbe247d4584ec7cf4d8265950626
+      CANDIDATE_DIGEST: sha256:57d9e43c4f82e926ece698fe0f864e7c439232566f534dead707a93ffb56aa4b
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
