@@ -39,7 +39,7 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { createServices } from '../../services';
 import { buildAutomationEngineDeps } from '../automation-actions';
 
@@ -188,7 +188,7 @@ postgresDescribe('two-tenant automation-actions containment (real PostgreSQL)', 
     // the transaction rather than silently matching rows. Flag-off
     // byte-identity for the legacy world is asserted by the unit worker-scope
     // probes; under enforcement a scope-less read cannot succeed.
-    await expect(deps.sendMessage(INSTANCE_A, CHAT_A, 'legacy', undefined)).rejects.toThrow(
+    await expect(driverRejection(deps.sendMessage(INSTANCE_A, CHAT_A, 'legacy', undefined))).rejects.toThrow(
       /app\.tenant_id is not set|not found/i,
     );
     expect(sent).toEqual([]);

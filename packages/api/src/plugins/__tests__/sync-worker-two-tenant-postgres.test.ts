@@ -29,7 +29,7 @@ import {
   createDbHandle,
   omniGroups,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { scopedHandle } from '../../tenancy/tenant-scope';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
@@ -183,11 +183,13 @@ postgresDescribe('two-tenant sync-worker containment (real PostgreSQL)', () => {
     // belongs to A, so B's insert is rejected outright rather than landing a
     // stray B-row. (In the live consumer `onGroup` swallows this and continues.)
     await expect(
-      runInWorkerTenantScope(runtimeDb, TENANT_B, () =>
-        syncWorkerTest.upsertSyncedGroup(runtimeDb, INSTANCE_A, 'whatsapp-baileys', {
-          externalId: 'group-a@g.us',
-          name: 'B overwrite attempt',
-        }),
+      driverRejection(
+        runInWorkerTenantScope(runtimeDb, TENANT_B, () =>
+          syncWorkerTest.upsertSyncedGroup(runtimeDb, INSTANCE_A, 'whatsapp-baileys', {
+            externalId: 'group-a@g.us',
+            name: 'B overwrite attempt',
+          }),
+        ),
       ),
     ).rejects.toThrow(/row-level security/i);
 

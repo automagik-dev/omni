@@ -36,7 +36,7 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { AgentRunnerService } from '../../services/agent-runner';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
 import { __test__ as sessionCleanerTest } from '../session-cleaner';
@@ -213,7 +213,7 @@ postgresDescribe('two-tenant session/dispatch-backend containment (real PostgreS
 
     // A write under B for A's instance cannot land: `agent_sessions` derives its
     // tenant from the required `instances` parent, so the WITH CHECK refuses it.
-    await expect(storeB.upsertSession(INSTANCE_A, 'stolen-key', 'sid-forged', null)).rejects.toThrow(
+    await expect(driverRejection(storeB.upsertSession(INSTANCE_A, 'stolen-key', 'sid-forged', null))).rejects.toThrow(
       /row-level security/i,
     );
 
@@ -233,6 +233,6 @@ postgresDescribe('two-tenant session/dispatch-backend containment (real PostgreS
     // LOUD — which is the proof that the converted path above is what carries
     // the tenant, not some incidental ambient visibility.
     const legacyStore = createSessionStorage(runtimeDb, 'p1');
-    await expect(legacyStore.getSession(INSTANCE_A, 'shared-key')).rejects.toThrow(/tenant/i);
+    await expect(driverRejection(legacyStore.getSession(INSTANCE_A, 'shared-key'))).rejects.toThrow(/tenant/i);
   });
 });

@@ -17,6 +17,9 @@ export { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle
 export { createDb, createDbHandle, createPostgresClient, getDb, closeDb, getDefaultDatabaseUrl } from './client';
 export type { Database, DbConfig } from './client';
 
+// Driver-error unwrapping (drizzle >= 0.44 wraps driver errors in DrizzleQueryError)
+export { unwrapDbError } from './errors';
+
 // Migration exports
 export { applyMigrations, assertOnlineDdlPreflight, BLOCKING_INDEX_OVERRIDE_ENV_VAR } from './migrate';
 export type { ApplyMigrationsOptions } from './migrate';

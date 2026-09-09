@@ -38,7 +38,7 @@ import {
   createDbHandle,
   instances,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { MULTITENANCY_FLAG_ENV } from '../../tenancy/feature-flag';
 import { __resetInstanceOwnerRegistry, rememberInstanceOwners } from '../../tenancy/instance-owner-registry';
@@ -165,7 +165,7 @@ postgresDescribe('instance-monitor sweeps under real RLS enforcement', () => {
     // Awaited inside an async thunk: a drizzle query builder is thenable but not
     // a Promise, and `expect(...).rejects` requires a real one.
     await expect(
-      (async () => runtimeDb.select().from(instances).where(eq(instances.isActive, true)))(),
+      driverRejection((async () => runtimeDb.select().from(instances).where(eq(instances.isActive, true)))()),
     ).rejects.toThrow(/app\.tenant_id/);
   });
 
@@ -220,6 +220,6 @@ postgresDescribe('instance-monitor sweeps under real RLS enforcement', () => {
     const monitor = new InstanceMonitor(runtimeDb, makeRegistry([], []));
     monitor.setAuthPlane(authPlaneDb, ENFORCED_ENV);
 
-    await expect(monitor.forceReconnect(INSTANCE_B)).rejects.toThrow(/app\.tenant_id/);
+    await expect(driverRejection(monitor.forceReconnect(INSTANCE_B))).rejects.toThrow(/app\.tenant_id/);
   });
 });
