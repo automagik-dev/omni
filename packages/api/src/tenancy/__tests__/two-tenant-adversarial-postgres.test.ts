@@ -42,7 +42,7 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { ChatService } from '../../services/chats';
 import { ConversationService } from '../../services/conversations';
 import { InstanceService } from '../../services/instances';
@@ -375,7 +375,7 @@ postgresDescribe('two-tenant adversarial containment (real PostgreSQL)', () => {
       // No scope is active here, so the service reaches the ambient pool and
       // the forced RLS policy denies it — the connection carries no leftover
       // tenant from the request that just finished.
-      await expect(instances.list()).rejects.toThrow(/app\.tenant_id is not set/);
+      await expect(driverRejection(instances.list())).rejects.toThrow(/app\.tenant_id is not set/);
     });
   });
 });

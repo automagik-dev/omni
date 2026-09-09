@@ -18,6 +18,7 @@ import {
   chatParticipants,
   chats,
   omniGroups,
+  unwrapDbError,
 } from '@omni/db';
 import { and, asc, desc, eq, gt, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
@@ -101,7 +102,8 @@ export class ChatService {
     private eventBus: EventBus | null,
   ) {}
 
-  private isCanonicalUniqueViolation(error: unknown): boolean {
+  private isCanonicalUniqueViolation(rawError: unknown): boolean {
+    const error = unwrapDbError(rawError);
     if (!error || typeof error !== 'object') return false;
     if (!('code' in error) || (error as { code?: unknown }).code !== '23505') return false;
 

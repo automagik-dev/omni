@@ -24,7 +24,7 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { sql } from 'drizzle-orm';
 import { type PlatformAuthContext, type TenantAuthContext, freezeContext } from '../auth-context';
 import { withPlatformTargetTenant } from '../platform-target-tenant';
@@ -190,9 +190,11 @@ postgresDescribe('tenant boundary end-to-end (real PostgreSQL)', () => {
       // Drizzle's `execute` returns a thenable builder, not a Promise, so it is
       // awaited inside an async wrapper before the rejection is asserted.
       await expect(
-        (async () => {
-          await runtimeDb.execute(sql`SELECT id FROM instances`);
-        })(),
+        driverRejection(
+          (async () => {
+            await runtimeDb.execute(sql`SELECT id FROM instances`);
+          })(),
+        ),
       ).rejects.toThrow(/app\.tenant_id is not set/);
     });
 
@@ -237,16 +239,20 @@ postgresDescribe('tenant boundary end-to-end (real PostgreSQL)', () => {
 
     test('an insert carrying another tenant id is rejected by WITH CHECK', async () => {
       await expect(
-        withTenantTransaction(runtimeDb, tenantContext(TENANT_A), (tx) =>
-          TenantInstanceRepository.create(tx, { name: 'cross', channel: 'whatsapp-baileys', tenantId: TENANT_B }),
+        driverRejection(
+          withTenantTransaction(runtimeDb, tenantContext(TENANT_A), (tx) =>
+            TenantInstanceRepository.create(tx, { name: 'cross', channel: 'whatsapp-baileys', tenantId: TENANT_B }),
+          ),
         ),
       ).rejects.toThrow(/row-level security policy/i);
     });
 
     test('re-tenanting an own row is rejected by WITH CHECK', async () => {
       await expect(
-        withTenantTransaction(runtimeDb, tenantContext(TENANT_A), (tx) =>
-          TenantInstanceRepository.setTenant(tx, INSTANCE_A, TENANT_B),
+        driverRejection(
+          withTenantTransaction(runtimeDb, tenantContext(TENANT_A), (tx) =>
+            TenantInstanceRepository.setTenant(tx, INSTANCE_A, TENANT_B),
+          ),
         ),
       ).rejects.toThrow(/row-level security policy/i);
     });

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "channel": "stable",
-  "version": "2.260908.20",
-  "released_at": "2026-09-08T22:49:49Z",
-  "tarball_base": "https://github.com/automagik-dev/omni/releases/download/v2.260908.20",
+  "version": "2.260909.5",
+  "released_at": "2026-09-09T20:27:15Z",
+  "tarball_base": "https://github.com/automagik-dev/omni/releases/download/v2.260909.5",
   "platforms": ["linux-x64-glibc", "linux-x64-musl", "linux-arm64", "darwin-arm64"]
 }

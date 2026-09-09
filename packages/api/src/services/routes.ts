@@ -5,7 +5,7 @@
 import { ConflictError, NotFoundError } from '@omni/core';
 import type { CreateAgentRoute, ListAgentRoutesQuery, UpdateAgentRoute } from '@omni/core';
 import type { Database } from '@omni/db';
-import { type AgentRoute, type NewAgentRoute, agentRoutes } from '@omni/db';
+import { type AgentRoute, type NewAgentRoute, agentRoutes, unwrapDbError } from '@omni/db';
 import { and, desc, eq } from 'drizzle-orm';
 import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
 import { runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
@@ -113,8 +113,10 @@ export class RouteService {
       }
 
       created = result;
-    } catch (error) {
-      // Check for unique constraint violation (PostgreSQL error code 23505)
+    } catch (rawError) {
+      // Check for unique constraint violation (PostgreSQL error code 23505);
+      // drizzle >= 0.44 wraps the driver error, so classify the unwrapped one
+      const error = unwrapDbError(rawError);
       if (error && typeof error === 'object' && 'code' in error && error.code === '23505') {
         const constraint = 'constraint' in error && typeof error.constraint === 'string' ? error.constraint : 'unknown';
 
@@ -137,7 +139,7 @@ export class RouteService {
         throw new ConflictError('AgentRoute', 'Route already exists', { constraint });
       }
 
-      throw error;
+      throw rawError;
     }
 
     // Best-effort cache invalidation outside try-catch

@@ -1,6 +1,6 @@
 {
   "name": "@omni/db",
-  "version": "2.260908.20",
+  "version": "2.260909.5",
   "type": "module",
   "exports": {
     ".": {
@@ -32,7 +32,7 @@
   },
   "dependencies": {
     "@omni/core": "workspace:*",
-    "drizzle-orm": "^0.38.4",
+    "drizzle-orm": "^0.45.2",
     "postgres": "^3.4.5"
   },
   "devDependencies": {

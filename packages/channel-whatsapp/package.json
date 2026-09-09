@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-whatsapp",
-  "version": "2.260908.20",
+  "version": "2.260909.5",
   "description": "WhatsApp channel plugin for Omni using Baileys",
   "type": "module",
   "main": "src/index.ts",
@@ -21,7 +21,7 @@
     "baileys": "file:vendor/baileys-v7.0.0-rc10.tgz",
     "node-cache": "^5.1.2",
     "pino": "^9.6.0",
-    "sharp": "^0.34.5"
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",
