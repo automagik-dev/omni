@@ -3,6 +3,7 @@
  */
 
 import { ConflictError, ERROR_CODES, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
+import { unwrapDbError } from '@omni/db';
 import * as Sentry from '@sentry/bun';
 import type { Context, ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -354,9 +355,11 @@ function routeError(c: Context, error: unknown): Response {
     const channelResult = handleChannelError(c, error as Error & { code?: string; retryable?: boolean });
     if (channelResult) return channelResult;
   }
-  // PostgreSQL errors (unique constraint, foreign key, etc.) — duck-typed by numeric code
-  if (error instanceof Error && 'code' in error) {
-    const dbResult = handleDatabaseError(c, error as Error & { code?: string; detail?: string; constraint?: string });
+  // PostgreSQL errors (unique constraint, foreign key, etc.) — duck-typed by numeric
+  // code on the driver error, which drizzle >= 0.44 hides behind DrizzleQueryError
+  const dbError = unwrapDbError(error);
+  if (dbError instanceof Error && 'code' in dbError) {
+    const dbResult = handleDatabaseError(c, dbError as Error & { code?: string; detail?: string; constraint?: string });
     if (dbResult) return dbResult;
   }
   return handleUnknownError(c, error);
@@ -389,9 +392,11 @@ function isClientError(error: unknown): boolean {
     const status = ERROR_STATUS_MAP[error.code] ?? 500;
     return status < 500;
   }
-  // Duck-typed errors with a string code (channel plugins, PostgreSQL)
-  if (error instanceof Error && 'code' in error && typeof (error as { code: unknown }).code === 'string') {
-    return isCodeClientError((error as { code: string }).code);
+  // Duck-typed errors with a string code (channel plugins, PostgreSQL — the
+  // latter arrives drizzle-wrapped since 0.44, so classify the driver error)
+  const cause = unwrapDbError(error);
+  if (cause instanceof Error && 'code' in cause && typeof (cause as { code: unknown }).code === 'string') {
+    return isCodeClientError((cause as { code: string }).code);
   }
   return false;
 }

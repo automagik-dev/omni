@@ -31,6 +31,7 @@ import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { unwrapDbError } from './errors';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const drizzleDir = join(here, '..', 'drizzle');
@@ -166,3 +167,14 @@ export function provisionMigratedDatabase(access: PgSuperAccess, database: strin
   ensureSqlTemplate(access, templateName, chain.sql);
   createDatabaseFromTemplate(access, database, templateName);
 }
+
+/**
+ * drizzle >= 0.44 wraps driver errors in DrizzleQueryError; the server's
+ * refusal message (RLS policy, missing tenant GUC, WITH CHECK) lives on the
+ * PostgresError beneath. Wrap a rejecting promise in this so
+ * `expect(...).rejects.toThrow(pattern)` keeps matching the driver's message.
+ */
+export const driverRejection = <T>(p: Promise<T>): Promise<T> =>
+  p.catch((error) => {
+    throw unwrapDbError(error);
+  });

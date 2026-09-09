@@ -35,7 +35,7 @@ import {
   durableConsumers,
   omniEvents,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { setupEventPersistence } from '../plugins/event-persistence';
 import { EventConsumerService } from '../services/event-consumers';
 import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
@@ -377,7 +377,9 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
     test('a scope-less pull on the enforced runtime role fails closed rather than leaking', async () => {
       // No tenant GUC: the omni_events SELECT policy's context reader RAISES,
       // so the read errors instead of silently returning another tenant's rows.
-      await expect(runtimeService.pull('iso', { limit: 100 })).rejects.toThrow(/app\.tenant_id|insufficient/i);
+      await expect(driverRejection(runtimeService.pull('iso', { limit: 100 }))).rejects.toThrow(
+        /app\.tenant_id|insufficient/i,
+      );
     });
   });
 });
