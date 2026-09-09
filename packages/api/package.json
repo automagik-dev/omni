@@ -47,7 +47,7 @@
     "@opentelemetry/semantic-conventions": "^1.30.0",
     "@sentry/bun": "^10.43.0",
     "@trpc/server": "^11.0.0-rc.608",
-    "drizzle-orm": "^0.38.4",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.6.17",
     "lru-cache": "^11.2.6",
     "nats": "^2.29.3",

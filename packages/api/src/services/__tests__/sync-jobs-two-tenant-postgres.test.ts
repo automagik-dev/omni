@@ -41,7 +41,7 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { SyncJobService } from '../sync-jobs';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -171,12 +171,14 @@ postgresDescribe('two-tenant sync-job containment (real PostgreSQL)', () => {
 
   test('a job for ANOTHER tenant’s instance is refused by RLS, not silently mis-stamped', async () => {
     await expect(
-      service.create({
-        instanceId: INSTANCE_A,
-        channelType: 'whatsapp-baileys',
-        type: 'groups',
-        tenantId: TENANT_B,
-      }),
+      driverRejection(
+        service.create({
+          instanceId: INSTANCE_A,
+          channelType: 'whatsapp-baileys',
+          type: 'groups',
+          tenantId: TENANT_B,
+        }),
+      ),
     ).rejects.toThrow(/row-level security/i);
   });
 
