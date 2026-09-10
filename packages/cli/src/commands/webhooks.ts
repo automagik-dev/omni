@@ -52,7 +52,7 @@ async function readSecretFromStdin(): Promise<string> {
  * on conflicting flags, a missing/empty env var, empty stdin, or a value
  * outside the API's bounds — the CLI fails before any request is sent.
  */
-async function resolveSignatureSecret(
+export async function resolveSignatureSecret(
   options: SignatureSecretOptions,
   readStdin: () => Promise<string> = readSecretFromStdin,
 ): Promise<string | undefined> {

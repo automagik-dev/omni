@@ -193,6 +193,8 @@ Every state change lands in a total-ordered PostgreSQL journal and is published 
 
 ```bash
 omni events list --type "message.*" --since 2h        # trailing-* glob type filters
+omni events types --since 7d                          # what's flowing: volume, schema status, subscribers
+omni events stream --pretty --exclude "custom.chat.*" # live tail, one line per event, minus the noise
 omni events trace <event-id>                          # causation chain, rendered as a tree
 omni events wait --type "custom.github.*" --timeout 60  # block until a matching event arrives
 
@@ -350,7 +352,7 @@ Schemas: `agno` · `webhook` · `openclaw` · `ag-ui` · `claude-code` · `a2a` 
 omni automations create --name "Auto-reply" --trigger "message.received" \
   --action send_message --action-config '{"text":"Got it!"}'
 omni automations list --enabled
-omni automations test <id>
+omni automations test <id> --event <event-id>   # dry-run against a real journaled event: condition verdicts, no side effects
 ```
 
 Actions: `webhook` · `send_message` · `emit_event` · `log` · `call_agent`
@@ -414,6 +416,8 @@ omni doctor --fix                               # repair safe runtime drift in-p
 omni auth login --api-key <your-api-key>        # authenticate
 omni config set defaultInstance <id>            # CLI settings
 omni events list --type "message.*" --since 2h  # event history (trailing-* globs)
+omni events types                               # observed event types: volume, schema, subscribers
+omni events stream --pretty                     # live tail, one colored line per event
 omni events trace <event-id>                    # causation chain
 omni events wait --type "custom.x.*" --timeout 60  # block until a matching event
 omni events schema register <type> --file s.json   # register a payload schema

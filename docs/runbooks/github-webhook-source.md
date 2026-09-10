@@ -29,6 +29,21 @@ Every delivery GitHub sends to `POST /api/v2/webhooks/ingress/github` is:
    `system.connector.stalled` on the bus instead of failing silently
    (issue #961, see [[../architecture/connector-contract|Connector Lifecycle Contract]]).
 
+## One command (issue #1074)
+
+Steps 1–3 below collapse into:
+
+```bash
+omni sources add github --repo OWNER/NAME [--events push,pull_request] \
+  [--public-url https://omni.example.com] [--secret-env VAR] [--no-provider-webhook]
+```
+
+It generates the secret (or reuses `--secret-env`), creates or updates the
+`github` source with the preset signature/idempotency/mapping values, registers
+the bundled schemas, and creates or updates the repo webhook via `gh` (or
+`GITHUB_TOKEN`). Re-runs update in place; a failing step reports which steps
+completed. The manual ritual that follows is what the command performs.
+
 ## Prerequisites
 
 - An omni API reachable from github.com (public URL or tunnel), called
@@ -193,11 +208,28 @@ omni automations create \
   --name "GitHub push notifier" \
   --trigger custom.github.push \
   --action send_message \
-  --config '{
+  --action-config '{
     "instanceId": "<instance uuid>",
     "chatId": "<chat id>",
     "message": "push to {{payload.repository.full_name}} ({{payload.ref}}) by {{payload.sender.login}}"
   }'
+```
+
+`--action` / `--action-config` repeat for an ordered multi-action automation,
+and `{{payload_json}}` / `{{event_json}}` render the whole payload or event as
+compact JSON — handy for forwarding the delivery to an agent or another hook:
+
+```bash
+omni automations create \
+  --name "GitHub push notifier + agent" \
+  --trigger custom.github.push \
+  --action send_message \
+  --action-config '{"instanceId":"<instance uuid>","chatId":"<chat id>","message":"push by {{payload.sender.login}}"}' \
+  --action call_agent --agent-id <agent id> \
+  --action-config '{"promptOverride":"Summarize this GitHub push: {{payload_json}}"}'
+
+# Dry-run against a real delivery before enabling (verdicts, no side effects):
+omni automations test <automation id> --event <event id>
 ```
 
 Because redelivery dedup happens **before** publish, a GitHub redelivery can

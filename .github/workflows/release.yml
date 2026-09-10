@@ -250,9 +250,13 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.pkg.outputs.tag }}
           PREVIOUS_TAG: ${{ steps.prev.outputs.tag }}
+          # stable: the generator anchors the range at the last release tag
+          # reachable from origin/main (the last promoted release) instead of
+          # PREVIOUS_TAG, which on dev is a bump-only commit (#1097).
+          CHANNEL: ${{ inputs.channel || 'stable' }}
         run: |
           set -euo pipefail
-          args=(--to "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --output /tmp/release-notes.md)
+          args=(--to "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --channel "${CHANNEL}" --output /tmp/release-notes.md)
           if [[ -n "${PREVIOUS_TAG}" ]]; then
             args+=(--from "${PREVIOUS_TAG}")
           fi

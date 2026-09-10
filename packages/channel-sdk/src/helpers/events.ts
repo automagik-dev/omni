@@ -290,6 +290,9 @@ export interface EmitReactionRemovedParams {
 
   /** Whether emoji is platform-custom */
   isCustomEmoji?: boolean;
+
+  /** Raw platform payload */
+  rawPayload?: Record<string, unknown>;
 }
 
 /**
