@@ -13,6 +13,47 @@ import {
 describe('substituteTemplate', () => {
   const baseContext = createTemplateContext({ name: 'Alice', age: 30, email: 'alice@example.com' });
 
+  describe('whole-object JSON placeholders (#1071)', () => {
+    const payload = { pull_request: { title: 'Fix', user: { login: 'octo' } }, action: 'opened' };
+    const event = { id: 'evt_1', type: 'github.pr', timestamp: 1700000000000, metadata: { correlationId: 'c1' } };
+
+    test('{{payload_json}} renders the full payload as compact JSON', () => {
+      const out = substituteTemplate('PR: {{payload_json}}', createTemplateContext(payload));
+      expect(out).toBe(`PR: ${JSON.stringify(payload)}`);
+      expect(JSON.parse(out.slice(4))).toEqual(payload);
+    });
+
+    test('{{event_json}} renders envelope + payload, including the event id', () => {
+      const out = substituteTemplate('{{event_json}}', createTemplateContext(payload, { event }));
+      expect(out).toBe(JSON.stringify({ ...event, payload }));
+      expect(JSON.parse(out).id).toBe('evt_1');
+    });
+
+    test('{{event_json}} renders null envelope fields when no event was threaded', () => {
+      const out = JSON.parse(substituteTemplate('{{event_json}}', createTemplateContext(payload)));
+      expect(out).toEqual({ id: null, type: null, timestamp: null, metadata: null, payload });
+    });
+
+    test('output is deterministic and compact', () => {
+      const ctx = createTemplateContext(payload, { event });
+      const a = substituteTemplate('{{payload_json}}|{{event_json}}', ctx);
+      const b = substituteTemplate('{{payload_json}}|{{event_json}}', ctx);
+      expect(a).toBe(b);
+      expect(a).not.toMatch(/\n| {2}/);
+    });
+
+    test('are not shadowed by stored variables', () => {
+      const ctx = createTemplateContext(payload, { variables: { payload_json: 'nope', event_json: 'nope' } });
+      expect(substituteTemplate('{{payload_json}}', ctx)).toBe(JSON.stringify(payload));
+      expect(substituteTemplate('{{event_json}}', ctx)).not.toBe('nope');
+    });
+
+    test('work inside substituteTemplateObject (action configs)', () => {
+      const cfg = substituteTemplateObject({ promptOverride: 'ctx={{payload_json}}' }, createTemplateContext(payload));
+      expect(cfg.promptOverride).toBe(`ctx=${JSON.stringify(payload)}`);
+    });
+  });
+
   test('substitutes simple payload fields', () => {
     expect(substituteTemplate('Hello {{payload.name}}!', baseContext)).toBe('Hello Alice!');
   });
