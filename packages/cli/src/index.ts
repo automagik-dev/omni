@@ -59,6 +59,7 @@ import { createServerCommand } from './commands/server.js';
 import { createSettingsCommand } from './commands/settings.js';
 import { createTopLevelSetupCommand } from './commands/setup.js';
 import { createSlackCommand } from './commands/slack.js';
+import { createSourcesCommand } from './commands/sources.js';
 import { createSpeakCommand } from './commands/speak.js';
 import { createStartCommand } from './commands/start.js';
 import { createStatusCommand } from './commands/status.js';
@@ -382,6 +383,12 @@ const COMMANDS: CommandDef[] = [
     category: 'advanced',
     helpGroup: 'Management',
     helpDescription: 'Webhook management',
+  },
+  {
+    create: createSourcesCommand,
+    category: 'advanced',
+    helpGroup: 'Management',
+    helpDescription: 'One-command external source onboarding (github, ...)',
   },
   {
     create: createTurnsCommand,
