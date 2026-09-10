@@ -82,6 +82,37 @@ describeWithDb('Event Persistence Handler', () => {
     });
   });
 
+  describe('system.connector.> handler (#1063)', () => {
+    test('journals a connector stall alert so it is listable and traceable', async () => {
+      await setupEventPersistence(mockEventBus, db);
+      expect(subscriptions.has('system.connector.>')).toBe(true);
+
+      const eventId = randomUUID();
+      await emitEvent('system.connector.>', {
+        id: eventId,
+        type: 'system.connector.stalled',
+        payload: {
+          sourceId: randomUUID(),
+          sourceName: 'gmail-purchases',
+          expectedIntervalSeconds: 60,
+          lastReceivedAt: null,
+          lastHeartbeatAt: null,
+          silentForSeconds: 90,
+          stalledAt: Date.now(),
+        },
+        timestamp: Date.now(),
+        metadata: { correlationId: eventId, source: 'connector-liveness' },
+      });
+
+      const [row] = await db.select().from(omniEvents).where(eq(omniEvents.id, eventId));
+      await db.delete(omniEvents).where(eq(omniEvents.id, eventId));
+      expect(row?.eventType).toBe('system.connector.stalled');
+      expect(row?.channel).toBe('internal');
+      expect(row?.direction).toBe('internal');
+      expect((row?.rawPayload as { sourceName?: string })?.sourceName).toBe('gmail-purchases');
+    });
+  });
+
   describe('message.received handler', () => {
     test('persists message.received event to database', async () => {
       await setupEventPersistence(mockEventBus, db);

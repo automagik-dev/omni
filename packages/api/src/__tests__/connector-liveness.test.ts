@@ -2,11 +2,10 @@
  * Connector liveness integration test (#961) — real PostgreSQL, short windows.
  *
  * Proves the acceptance flow end to end on the actual service + schema:
- *   declare a 1s cadence → go silent → sweep marks the source stalled, emits
- *   `system.connector.stalled` ONCE, files a manual-resolution DLQ entry →
+ *   declare a 1s cadence → go silent → sweep marks the source stalled and
+ *   emits `system.connector.stalled` ONCE on the bus (never the DLQ, #1063) →
  *   further sweeps stay silent → a heartbeat resets the window → the next
- *   sweep emits `system.connector.recovered` once and auto-resolves the DLQ
- *   entry.
+ *   sweep emits `system.connector.recovered` once.
  *
  * Uses the `describeWithDb` harness (follow-up sweeper precedent): skips
  * cleanly unless ENABLE_DB_TESTS=true and the test database is reachable.
@@ -110,15 +109,15 @@ describeWithDb('Connector liveness (integration, short windows)', () => {
   });
 
   test('a sweep within the window changes nothing', async () => {
-    await service.sweepLiveness({ deadLetters });
+    await service.sweepLiveness();
     expect(oursStalled()).toHaveLength(0);
     expect((await service.getById(source.id)).livenessStatus).toBe('healthy');
   });
 
-  test('silence beyond the window stalls once: event + unhealthy state + DLQ entry', async () => {
+  test('silence beyond the window stalls once: bus event + unhealthy state, no DLQ entry', async () => {
     await sleep(1300);
 
-    await service.sweepLiveness({ deadLetters });
+    await service.sweepLiveness();
 
     expect(oursStalled()).toHaveLength(1);
     const payload = oursStalled()[0]?.payload as { silentForSeconds: number; expectedIntervalSeconds: number };
@@ -129,20 +128,16 @@ describeWithDb('Connector liveness (integration, short windows)', () => {
     expect(row.livenessStatus).toBe('stalled');
     expect(row.stalledAt).toBeInstanceOf(Date);
 
-    // Zero-emission dead-letter: pending, manual-resolution only.
-    const entries = await ourDlqEntries();
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.status).toBe('pending');
-    expect(entries[0]?.nextAutoRetryAt).toBeNull();
-    expect(entries[0]?.error).toContain(SOURCE_NAME);
+    // #1063: a stall is an alert on the bus, not a delivery failure.
+    expect(oursStalled()[0]?.metadata?.source).toBe('connector-liveness');
+    expect(await ourDlqEntries()).toHaveLength(0);
   });
 
   test('further sweeps while still silent do not re-announce', async () => {
-    await service.sweepLiveness({ deadLetters });
-    await service.sweepLiveness({ deadLetters });
+    await service.sweepLiveness();
+    await service.sweepLiveness();
 
     expect(oursStalled()).toHaveLength(1);
-    expect(await ourDlqEntries()).toHaveLength(1);
   });
 
   test('a heartbeat resets the window without publishing anything', async () => {
@@ -158,8 +153,8 @@ describeWithDb('Connector liveness (integration, short windows)', () => {
     expect(row.heartbeatCount).toBe(1);
   });
 
-  test('the next sweep recovers once and auto-resolves the DLQ entry', async () => {
-    await service.sweepLiveness({ deadLetters });
+  test('the next sweep recovers once', async () => {
+    await service.sweepLiveness();
 
     expect(oursRecovered()).toHaveLength(1);
     const payload = oursRecovered()[0]?.payload as { recoveredBy: string };
@@ -169,11 +164,10 @@ describeWithDb('Connector liveness (integration, short windows)', () => {
     expect(row.livenessStatus).toBe('healthy');
     expect(row.stalledAt).toBeNull();
 
-    const entries = await ourDlqEntries();
-    expect(entries[0]?.status).toBe('resolved');
+    expect(await ourDlqEntries()).toHaveLength(0);
 
     // Recovered is emitted once too.
-    await service.sweepLiveness({ deadLetters });
+    await service.sweepLiveness();
     expect(oursRecovered()).toHaveLength(1);
   });
 });

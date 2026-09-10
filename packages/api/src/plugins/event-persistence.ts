@@ -19,7 +19,13 @@
  * BEFORE INSERT derivation trigger, so no column is added here.
  */
 
-import type { EventBus, MessageReceivedPayload, MessageSentPayload, ReactionReceivedPayload } from '@omni/core';
+import type {
+  EventBus,
+  MessageReceivedPayload,
+  MessageSentPayload,
+  OmniEvent,
+  ReactionReceivedPayload,
+} from '@omni/core';
 import { JOURNEY_STAGES, createLogger, getJourneyTracker, isValidUuid } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
 import { type ChannelType, type ContentType, channelTypes, chats, contentTypes, omniEvents, persons } from '@omni/db';
@@ -522,74 +528,89 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
     // the column). chatUuid and personId are mapped best-effort from the
     // envelope metadata / payload (see the inline comment) so the CLI's
     // --chat-id / --person-id filters can match custom events too.
-    await eventBus.subscribePattern(
-      'custom.>',
-      async (event) => {
-        const metadata = event.metadata;
-        try {
-          await runConsumerInTenantContext(db, event, async () => {
-            const sdb = scopedHandle(db);
-            const payload =
-              typeof event.payload === 'object' && event.payload !== null
-                ? (event.payload as Record<string, unknown>)
-                : {};
-            const instanceId = metadata.instanceId && isValidUuid(metadata.instanceId) ? metadata.instanceId : null;
-            const payloadChatId = typeof payload.chatId === 'string' ? payload.chatId : undefined;
-
-            // #966: best-effort identity mapping so --chat-id/--person-id
-            // filters can match custom events. personId: metadata.personId
-            // (publisher claim) first, then payload.personId — either must
-            // reference an existing persons row (FK safety). chatUuid:
-            // payload.chatUuid (a chats.id UUID) first, then payload.chatId
-            // (a platform JID) resolved against the instance like the
-            // message subscribers do.
-            const personId =
-              (await resolvePersonId(sdb, metadata.personId)) ?? (await resolvePersonId(sdb, payload.personId));
-            const chatUuid = await resolveChatUuidById(sdb, payload.chatUuid);
-            const chatLink = chatUuid
-              ? { chatUuid, canonicalChatId: null }
-              : await resolveChatLink(sdb, instanceId ?? undefined, payloadChatId);
-
-            const newEvent: NewOmniEvent = {
-              ...eventIdInsert(event.id),
-              channel: 'internal',
-              instanceId,
-              personId,
-              eventType: event.type.slice(0, 255) as NewOmniEvent['eventType'],
-              direction: 'internal',
-              status: 'completed',
-              receivedAt: new Date(event.timestamp),
-              rawPayload: deepSanitize(payload),
-              metadata: {
-                correlationId: metadata.correlationId,
-                source: metadata.source,
-                fullEventType: event.type,
-              },
-              causationId: metadata.causationId ?? null,
-              conversationId: null,
-              chatId: payloadChatId,
-              ...chatLink,
-            };
-            await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
-          });
-        } catch (error) {
-          log.error('Failed to persist custom event', {
-            eventType: event.type,
-            eventId: event.id,
-            error: String(error),
-          });
-        }
-      },
-      // startFrom 'new', unlike the message subscribers: #957 is explicitly
-      // forward-only — replaying the whole CUSTOM stream retention on first
-      // deploy would journal thousands of historical events that can never
-      // carry a causation parent.
-      { ...CONSUMER_OPTIONS, durable: 'event-persistence-custom', startFrom: 'new' },
-    );
+    // #1063: connector liveness transitions (system.connector.stalled /
+    // recovered) are alerts, not delivery failures — journal them the same way
+    // so `omni events list --type 'system.connector.*'`, trace, and wait can see
+    // them instead of only the DLQ.
+    //
+    // startFrom 'new', unlike the message subscribers: #957 is explicitly
+    // forward-only — replaying the whole CUSTOM stream retention on first
+    // deploy would journal thousands of historical events that can never
+    // carry a causation parent.
+    await eventBus.subscribePattern('custom.>', (event) => journalInternalEvent(db, event), {
+      ...CONSUMER_OPTIONS,
+      durable: 'event-persistence-custom',
+      startFrom: 'new',
+    });
+    await eventBus.subscribePattern('system.connector.>', (event) => journalInternalEvent(db, event), {
+      ...CONSUMER_OPTIONS,
+      durable: 'event-persistence-connector',
+      startFrom: 'new',
+    });
 
     log.info('Event persistence initialized - listening for message events');
   } catch (error) {
     log.error('Failed to set up event persistence', { error: String(error) });
     throw error;
+  }
+}
+
+/**
+ * Journal a bus event that carries no channel-side fact (custom.> and
+ * system.connector.>) as a minimal `omni_events` row: identity, causality,
+ * payload. Shared by the pattern subscribers in `setupEventPersistence`.
+ */
+async function journalInternalEvent(db: Database, event: OmniEvent): Promise<void> {
+  const metadata = event.metadata;
+  try {
+    await runConsumerInTenantContext(db, event, async () => {
+      const sdb = scopedHandle(db);
+      const payload =
+        typeof event.payload === 'object' && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
+      const instanceId = metadata.instanceId && isValidUuid(metadata.instanceId) ? metadata.instanceId : null;
+      const payloadChatId = typeof payload.chatId === 'string' ? payload.chatId : undefined;
+
+      // #966: best-effort identity mapping so --chat-id/--person-id
+      // filters can match custom events. personId: metadata.personId
+      // (publisher claim) first, then payload.personId — either must
+      // reference an existing persons row (FK safety). chatUuid:
+      // payload.chatUuid (a chats.id UUID) first, then payload.chatId
+      // (a platform JID) resolved against the instance like the
+      // message subscribers do.
+      const personId =
+        (await resolvePersonId(sdb, metadata.personId)) ?? (await resolvePersonId(sdb, payload.personId));
+      const chatUuid = await resolveChatUuidById(sdb, payload.chatUuid);
+      const chatLink = chatUuid
+        ? { chatUuid, canonicalChatId: null }
+        : await resolveChatLink(sdb, instanceId ?? undefined, payloadChatId);
+
+      const newEvent: NewOmniEvent = {
+        ...eventIdInsert(event.id),
+        channel: 'internal',
+        instanceId,
+        personId,
+        eventType: event.type.slice(0, 255) as NewOmniEvent['eventType'],
+        direction: 'internal',
+        status: 'completed',
+        receivedAt: new Date(event.timestamp),
+        rawPayload: deepSanitize(payload),
+        metadata: {
+          correlationId: metadata.correlationId,
+          source: metadata.source,
+          fullEventType: event.type,
+        },
+        causationId: metadata.causationId ?? null,
+        conversationId: null,
+        chatId: payloadChatId,
+        ...chatLink,
+      };
+      await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
+    });
+  } catch (error) {
+    log.error('Failed to persist custom event', {
+      eventType: event.type,
+      eventId: event.id,
+      error: String(error),
+    });
   }
 }

@@ -14,13 +14,11 @@ import {
   sweepConnectorLiveness,
 } from '@omni/core';
 import type {
-  ConnectorLivenessDeps,
   ConnectorLivenessRepo,
   ConnectorLivenessRow,
   ConnectorLivenessSweepStats,
   CustomEventType,
   EventBus,
-  OmniEvent,
 } from '@omni/core';
 import { generateId } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -685,28 +683,12 @@ export class WebhookService {
    * One liveness sweep tick (#961) — called by the scheduler. Lives on
    * WebhookService because this is the one file sanctioned to touch
    * `webhook_sources` (tenancy-db-access-guard); the transition semantics
-   * live in `@omni/core` (`sweepConnectorLiveness`).
-   *
-   * When a `DeadLetterService` is provided, a stalled transition also files a
-   * manual-resolution DLQ entry (the "zero-emission dead-letter" ops surface)
-   * and recovery auto-resolves it.
+   * live in `@omni/core` (`sweepConnectorLiveness`). Stalled/recovered
+   * transitions are ordinary bus events (#1063) — the DLQ stays reserved
+   * for genuine delivery failures.
    */
-  async sweepLiveness(options: { deadLetters?: DeadLetterService } = {}): Promise<ConnectorLivenessSweepStats> {
-    const { deadLetters } = options;
-    const hooks: Pick<ConnectorLivenessDeps, 'onStalled' | 'onRecovered'> = deadLetters
-      ? {
-          onStalled: (row, payload, publishedEventId) =>
-            fileStallDeadLetter(deadLetters, row, payload, publishedEventId),
-          onRecovered: (row) => resolveStallDeadLetters(deadLetters, row),
-        }
-      : {};
-
-    return sweepConnectorLiveness({
-      repo: this.livenessRepo(),
-      eventBus: this.eventBus,
-      logger: log,
-      ...hooks,
-    });
+  async sweepLiveness(): Promise<ConnectorLivenessSweepStats> {
+    return sweepConnectorLiveness({ repo: this.livenessRepo(), eventBus: this.eventBus, logger: log });
   }
 
   /**
@@ -755,51 +737,5 @@ export class WebhookService {
         return res.length > 0;
       },
     };
-  }
-}
-
-/**
- * File the stalled transition into the DLQ so a dead connector surfaces on
- * the ops surface, not only in a log (#961). Manual resolution only
- * (`autoRetry: false`): auto-retry would republish the stalled event and
- * break its emitted-once contract — recovery resolves the entry instead.
- */
-async function fileStallDeadLetter(
-  deadLetters: DeadLetterService,
-  row: ConnectorLivenessRow,
-  payload: Parameters<NonNullable<ConnectorLivenessDeps['onStalled']>>[1],
-  publishedEventId: string | null,
-): Promise<void> {
-  const event: OmniEvent = {
-    id: publishedEventId ?? generateId(),
-    type: 'system.connector.stalled',
-    payload: { ...payload },
-    metadata: {
-      correlationId: generateId(),
-      source: 'connector-liveness',
-      ...(row.tenantId ? { tenantId: row.tenantId } : {}),
-    },
-    timestamp: payload.stalledAt,
-  };
-  await deadLetters.create({
-    event,
-    subject: 'system.connector.stalled.internal.global',
-    error: new Error(
-      `Connector '${row.name}' declared >=1 event or heartbeat per ${row.expectedIntervalSeconds}s ` +
-        `but has been silent for ${payload.silentForSeconds}s`,
-    ),
-    retryCount: 0,
-    autoRetry: false,
-  });
-}
-
-/** Recovery auto-resolves the pending stall entries this sweeper filed for the source. */
-async function resolveStallDeadLetters(deadLetters: DeadLetterService, row: ConnectorLivenessRow): Promise<void> {
-  const { items } = await deadLetters.list({ status: ['pending'], eventType: ['system.connector.stalled'] });
-  for (const entry of items) {
-    const stored = entry.payload as { payload?: { sourceId?: unknown } };
-    if (stored.payload?.sourceId === row.id) {
-      await deadLetters.resolve(entry.id, 'connector-liveness: recovered');
-    }
   }
 }
