@@ -103,6 +103,7 @@ fi
 # The pre-merge promotion gate derives version and SHA from the tree and has no
 # registry access, so the digest is optional; the binding checks still run.
 (
+  unset GITHUB_OUTPUT
   cd "${repo}"
   "${SCRIPT}" \
     --candidate-sha "${candidate}" \
