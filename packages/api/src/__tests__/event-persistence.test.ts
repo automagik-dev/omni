@@ -77,6 +77,39 @@ describeWithDb('Event Persistence Handler', () => {
       expect(subscriptions.has('message.delivered')).toBe(true);
       expect(subscriptions.has('message.read')).toBe(true);
       expect(subscriptions.has('message.failed')).toBe(true);
+      expect(subscriptions.has('reaction.received')).toBe(true);
+      expect(subscriptions.has('reaction.removed')).toBe(true);
+    });
+  });
+
+  describe('system.connector.> handler (#1063)', () => {
+    test('journals a connector stall alert so it is listable and traceable', async () => {
+      await setupEventPersistence(mockEventBus, db);
+      expect(subscriptions.has('system.connector.>')).toBe(true);
+
+      const eventId = randomUUID();
+      await emitEvent('system.connector.>', {
+        id: eventId,
+        type: 'system.connector.stalled',
+        payload: {
+          sourceId: randomUUID(),
+          sourceName: 'gmail-purchases',
+          expectedIntervalSeconds: 60,
+          lastReceivedAt: null,
+          lastHeartbeatAt: null,
+          silentForSeconds: 90,
+          stalledAt: Date.now(),
+        },
+        timestamp: Date.now(),
+        metadata: { correlationId: eventId, source: 'connector-liveness' },
+      });
+
+      const [row] = await db.select().from(omniEvents).where(eq(omniEvents.id, eventId));
+      await db.delete(omniEvents).where(eq(omniEvents.id, eventId));
+      expect(row?.eventType).toBe('system.connector.stalled');
+      expect(row?.channel).toBe('internal');
+      expect(row?.direction).toBe('internal');
+      expect((row?.rawPayload as { sourceName?: string })?.sourceName).toBe('gmail-purchases');
     });
   });
 
@@ -162,6 +195,42 @@ describeWithDb('Event Persistence Handler', () => {
         expect(persisted?.canonicalChatId).toBe(phoneJid);
       } finally {
         await db.delete(omniEvents).where(eq(omniEvents.externalId, 'ext-lid-001'));
+        await db.delete(instances).where(eq(instances.id, instance.id));
+      }
+    });
+
+    test('resolves replyToExternalId to the referenced journal event on the same instance (#1091)', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const [instance] = await db
+        .insert(instances)
+        .values({ name: `test-ep-reply-${Date.now()}`, channel: 'whatsapp-baileys' })
+        .returning();
+      if (!instance) throw new Error('Failed to create test instance');
+      const base = (externalId: string, replyToId: string | null) => ({
+        id: randomUUID(),
+        type: 'message.received',
+        timestamp: Date.now(),
+        payload: { externalId, chatId: 'chat-reply', from: 'user-1', content: { type: 'text', text: 'x' }, replyToId },
+        metadata: { correlationId: 'corr-reply', instanceId: instance.id, channelType: 'whatsapp' },
+      });
+      try {
+        await emitEvent('message.received', base('ext-reply-root', null));
+        await emitEvent('message.received', base('ext-reply-child', 'ext-reply-root'));
+        // Reply to a message that never reached the journal — stays null, no back-fill.
+        await emitEvent('message.received', base('ext-reply-orphan', 'ext-reply-missing'));
+
+        const byExt = async (externalId: string) =>
+          (await db.select().from(omniEvents).where(eq(omniEvents.externalId, externalId)).limit(1))[0];
+        const root = await byExt('ext-reply-root');
+        const child = await byExt('ext-reply-child');
+        const orphan = await byExt('ext-reply-orphan');
+        expect(child?.replyToExternalId).toBe('ext-reply-root');
+        expect(child?.replyToEventId).toBe(root?.id);
+        expect(orphan?.replyToExternalId).toBe('ext-reply-missing');
+        expect(orphan?.replyToEventId).toBeNull();
+      } finally {
+        await db.delete(omniEvents).where(eq(omniEvents.instanceId, instance.id));
         await db.delete(instances).where(eq(instances.id, instance.id));
       }
     });
@@ -542,6 +611,38 @@ describeWithDb('Event Persistence Handler', () => {
 
       expect(created).toBeDefined();
       expect(created?.eventType).toBe('message.delivered');
+    });
+  });
+
+  // #1059: reactions live on the REACTION stream; after #1045 dropped the
+  // message.received dual-emit they were never journaled at all.
+  describe('reaction handlers', () => {
+    test.each(['reaction.received', 'reaction.removed'] as const)('journals %s as an omni_events row', async (type) => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const eventId = randomUUID();
+      await emitEvent(type, {
+        id: eventId,
+        type,
+        timestamp: Date.now(),
+        payload: {
+          messageId: `ext-reaction-target-${type}`,
+          chatId: 'chat-123',
+          from: 'user-456',
+          emoji: type === 'reaction.received' ? '👍' : '',
+          rawPayload: { externalId: 'ext-reaction-msg', isFromMe: false },
+        },
+        metadata: { correlationId: 'corr-reaction', instanceId: null, channelType: 'whatsapp-baileys' },
+      });
+
+      const [persisted] = await db.select().from(omniEvents).where(eq(omniEvents.id, eventId)).limit(1);
+      expect(persisted).toBeDefined();
+      expect(persisted?.eventType).toBe(type);
+      expect(persisted?.externalId).toBe(`ext-reaction-target-${type}`);
+      expect(persisted?.contentType).toBe('reaction');
+      expect(persisted?.direction).toBe('inbound');
+      expect(persisted?.chatId).toBe('chat-123');
+      expect(persisted?.metadata).toMatchObject({ from: 'user-456' });
     });
   });
 

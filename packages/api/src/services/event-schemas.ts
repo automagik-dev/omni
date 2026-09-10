@@ -52,6 +52,16 @@ export interface EventSchemaGateVerdict {
   errors: string[];
 }
 
+/** Read-only verdict for `validatePayload` (issue #1076): no event, no DLQ row. */
+export interface EventSchemaDryRunVerdict {
+  eventType: string;
+  version: number;
+  enabled: boolean;
+  valid: boolean;
+  /** Same `instancePath: message` lines the ingress gate dead-letters with. */
+  errors: string[];
+}
+
 export class EventSchemaService {
   /**
    * The handle every query in this service uses.
@@ -178,6 +188,18 @@ export class EventSchemaService {
     }
     const verdict = validateEventPayload(row.schema, payload);
     return { registered: true, valid: verdict.valid, errors: verdict.errors };
+  }
+
+  /**
+   * Dry-run validation (issue #1076): the ingress gate's engine and error
+   * strings, without publishing, dead-lettering, or the gate cache. Throws
+   * 404 for an unregistered type (a dry run against nothing is a mistake,
+   * not a pass-through); a disabled schema is still checked and reported.
+   */
+  async validatePayload(eventType: string, payload: unknown): Promise<EventSchemaDryRunVerdict> {
+    const row = await this.getByTypeOrThrow(eventType);
+    const verdict = validateEventPayload(row.schema, payload);
+    return { eventType: row.eventType, version: row.version, enabled: row.enabled, ...verdict };
   }
 
   private async lookupForGate(eventType: string): Promise<EventSchemaRow | null> {

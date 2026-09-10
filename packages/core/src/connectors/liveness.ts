@@ -103,18 +103,6 @@ export interface ConnectorLivenessDeps {
   logger: Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>;
   /** Override the wall clock — used in tests. */
   now?: () => Date;
-  /**
-   * Ops surfacing hook, invoked after a stalled transition is persisted and
-   * published (the API layer files the DLQ entry here). `publishedEventId` is
-   * null when there is no bus. Hook failures are logged, never fatal.
-   */
-  onStalled?: (
-    row: ConnectorLivenessRow,
-    payload: ConnectorStalledPayload,
-    publishedEventId: string | null,
-  ) => Promise<void>;
-  /** Counterpart of `onStalled` — the API layer resolves the DLQ entry here. */
-  onRecovered?: (row: ConnectorLivenessRow, payload: ConnectorRecoveredPayload) => Promise<void>;
 }
 
 export interface ConnectorLivenessSweepStats {
@@ -199,9 +187,8 @@ async function processRow(
       silentForSeconds,
       stalledAt: now.getTime(),
     };
-    const eventId = await publishTransition(deps, 'system.connector.stalled', { ...payload }, row);
+    await publishTransition(deps, 'system.connector.stalled', { ...payload }, row);
     stats.stalled += 1;
-    await runHook(deps.logger, 'onStalled', row, () => deps.onStalled?.(row, payload, eventId));
     return;
   }
 
@@ -219,7 +206,6 @@ async function processRow(
     };
     await publishTransition(deps, 'system.connector.recovered', { ...payload }, row);
     stats.recovered += 1;
-    await runHook(deps.logger, 'onRecovered', row, () => deps.onRecovered?.(row, payload));
   }
 }
 
@@ -228,34 +214,16 @@ async function publishTransition(
   type: 'system.connector.stalled' | 'system.connector.recovered',
   payload: Record<string, unknown>,
   row: ConnectorLivenessRow,
-): Promise<string | null> {
+): Promise<void> {
   if (!deps.eventBus) {
     deps.logger.warn('connector liveness: no event bus, transition persisted without event', {
       type,
       sourceName: row.name,
     });
-    return null;
+    return;
   }
-  const result = await deps.eventBus.publishGeneric(type, payload, {
+  await deps.eventBus.publishGeneric(type, payload, {
     source: 'connector-liveness',
     ...(row.tenantId ? { tenantId: row.tenantId } : {}),
   });
-  return result.id;
-}
-
-async function runHook(
-  logger: ConnectorLivenessDeps['logger'],
-  name: string,
-  row: ConnectorLivenessRow,
-  hook: () => Promise<void> | undefined,
-): Promise<void> {
-  try {
-    await hook();
-  } catch (err) {
-    logger.error(`connector liveness: ${name} hook failed`, {
-      sourceId: row.id,
-      sourceName: row.name,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 }

@@ -2,6 +2,14 @@
 # GHCR, npm, GitHub Releases, aliases, or deployment state. Production
 # deployment authority lives outside this public repository; this workflow
 # emits only a verification receipt for the protected dev-to-main promotion.
+#
+# The candidate is derived from the main tree, never hand-pinned (#1057):
+# version from packages/cli/package.json, source SHA from the immutable
+# refs/tags/v<version> (ruleset-protected, update/delete blocked), and the OCI
+# digest from the registry alias for that tag. The digest is then bound by
+# GitHub provenance to that exact source SHA and to image-build.yml as the
+# signer, so a moved alias or a foreign image fails exactly as a wrong pasted
+# digest used to; every other immutability check is unchanged.
 name: Verify Production Promotion
 
 on:
@@ -20,14 +28,11 @@ permissions:
 
 jobs:
   verify-promotion:
-    name: Verify immutable v2.260910.4 candidate
+    name: Verify immutable candidate
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
-      CANDIDATE_VERSION: 2.260910.4
-      CANDIDATE_SHA: b86db34fbb0ed55cb215e273d073464fa4690b19
-      CANDIDATE_DIGEST: sha256:508c625b124f2beac560dd48a2885ef2f8c4b2e5237099f69542a70f1e18e42f
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -35,6 +40,32 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
+
+      - name: Derive the candidate from the main tree
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_REF}" == "refs/heads/main" ]] || {
+            echo "::error::production promotion verification is restricted to main"
+            exit 1
+          }
+          candidate_version=$(jq -r .version packages/cli/package.json)
+          [[ "${candidate_version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "::error::packages/cli/package.json version '${candidate_version}' is not a canonical dotted version"
+            exit 1
+          }
+          candidate_sha=$(git rev-parse "refs/tags/v${candidate_version}^{commit}" 2>/dev/null) || {
+            echo "::error::no immutable tag v${candidate_version}: main carries a version that was never cut as a candidate (cut it with version.yml candidate=true, then mint it with image-build.yml at refs/tags/v<version>)"
+            exit 1
+          }
+          [[ "${candidate_sha}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq -r .version .well-known/latest.json)" == "${candidate_version}" ]] || {
+            echo "::error::.well-known/latest.json is not pinned to ${candidate_version}; pin-candidate.yml did not land on dev before this promotion"
+            exit 1
+          }
+          {
+            echo "CANDIDATE_VERSION=${candidate_version}"
+            echo "CANDIDATE_SHA=${candidate_sha}"
+          } >> "${GITHUB_ENV}"
 
       - name: Checkout immutable candidate source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -50,10 +81,6 @@ jobs:
           FINAL_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          [[ "${GITHUB_REF}" == "refs/heads/main" ]] || {
-            echo "::error::production promotion verification is restricted to main"
-            exit 1
-          }
           [[ "$(git rev-parse 'HEAD^{commit}')" == "${FINAL_SHA}" ]]
           git fetch --no-tags origin \
             '+refs/heads/main:refs/remotes/origin/main'
@@ -64,11 +91,23 @@ jobs:
           scripts/release/verify-promotion-candidate.sh \
             --candidate-sha "${CANDIDATE_SHA}" \
             --final-sha "${FINAL_SHA}" \
-            --version "${CANDIDATE_VERSION}" \
-            --digest "${CANDIDATE_DIGEST}"
+            --version "${CANDIDATE_VERSION}"
 
       - name: Set up Buildx for read-only OCI inspection
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      # The alias is what image-build.yml pushed exactly once; the provenance
+      # check below is what makes reading it back safe (digest ↔ source SHA ↔
+      # signer workflow), so a retagged alias cannot pass.
+      - name: Resolve the candidate digest from the immutable alias
+        run: |
+          set -euo pipefail
+          candidate_digest=$(docker buildx imagetools inspect "${IMAGE}:v${CANDIDATE_VERSION}" --format '{{.Manifest.Digest}}')
+          [[ "${candidate_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::${IMAGE}:v${CANDIDATE_VERSION} has no valid OCI index digest; the candidate was never minted"
+            exit 1
+          }
+          echo "CANDIDATE_DIGEST=${candidate_digest}" >> "${GITHUB_ENV}"
 
       - name: Verify exact OCI alias, index, and GitHub provenance
         env:

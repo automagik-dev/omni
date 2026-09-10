@@ -91,6 +91,18 @@ interface ExtractedContent {
 type MessageContent = proto.IMessage;
 type ContentExtractor = (message: MessageContent) => ExtractedContent | null;
 
+/** New text of an edit: body of a text message, or the caption of a media message. */
+function extractEditedText(edited: MessageContent | null | undefined): string | undefined {
+  return (
+    edited?.conversation ||
+    edited?.extendedTextMessage?.text ||
+    edited?.imageMessage?.caption ||
+    edited?.videoMessage?.caption ||
+    edited?.documentMessage?.caption ||
+    undefined
+  );
+}
+
 /** Join non-empty, trimmed parts with newlines; undefined when nothing survives. */
 function joinLines(...parts: Array<string | null | undefined>): string | undefined {
   const text = parts.filter((p): p is string => typeof p === 'string' && p.trim().length > 0).join('\n');
@@ -386,8 +398,7 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
         return {
           type: 'edit' as ContentType,
           targetMessageId: proto?.key?.id ?? undefined,
-          editedText:
-            proto?.editedMessage?.conversation || proto?.editedMessage?.extendedTextMessage?.text || undefined,
+          editedText: extractEditedText(proto?.editedMessage),
         };
       }
 
@@ -503,6 +514,23 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
       return null; // Can't extract inner content
     },
   },
+  // Edited message (FutureProofMessage wrapper). Baileys delivers an incoming edit as
+  // `editedMessage.message.protocolMessage` (type 14); without this unwrap it fell through
+  // to extractUnknownContent and the new text was lost (#1061).
+  {
+    check: (m) => !!m.editedMessage,
+    extract: (m) => {
+      const innerMsg = m.editedMessage?.message as MessageContent | undefined;
+      if (innerMsg) {
+        for (const { check, extract } of contentExtractors.slice(0, -1)) {
+          if (check(innerMsg)) {
+            return extract(innerMsg);
+          }
+        }
+      }
+      return null;
+    },
+  },
   // Ephemeral message (disappearing messages wrapper - FutureProofMessage)
   {
     check: (m) => !!m.ephemeralMessage,
@@ -611,6 +639,34 @@ function extractPhoneFromVcard(vcard: string): string | undefined {
 function getReplyToId(msg: WAMessage): string | undefined {
   const contextInfo = getMessageContextInfo(msg);
   return contextInfo?.stanzaId || undefined;
+}
+
+/**
+ * Quoted-message context of a reply, lifted out of `contextInfo` (#1090).
+ *
+ * Baileys nests the quoted stanza under `message.<type>.contextInfo.quotedMessage`;
+ * persistence and the agent plugins read a top-level `rawPayload.quotedMessage`
+ * with `conversation` / `participant` / `pushName`, so this is the bridge.
+ */
+export interface QuotedContext {
+  stanzaId?: string;
+  participant?: string;
+  type: ContentType;
+  /** Text, caption, or a `[type]` placeholder for media / non-text quotes. */
+  conversation?: string;
+}
+
+export function extractQuotedContext(msg: WAMessage): QuotedContext | undefined {
+  const contextInfo = getMessageContextInfo(msg);
+  if (!contextInfo?.quotedMessage) return undefined;
+  const content = extractContent({ key: msg.key, message: contextInfo.quotedMessage } as WAMessage);
+  const type = content?.type ?? ('unknown' as ContentType);
+  return {
+    stanzaId: contextInfo.stanzaId || undefined,
+    participant: contextInfo.participant || undefined,
+    type,
+    conversation: content?.text || content?.caption || `[${type}]`,
+  };
 }
 
 // Note: replaceMentionsWithNames removed - mention replacement now handled in
@@ -807,6 +863,7 @@ async function handleSpecialMessage(
       content.targetMessageId,
       chatId,
       content.editedText || content.text || '',
+      isFromMe(msg),
     );
     return true;
   }
@@ -1157,20 +1214,8 @@ export function setupMessageHandlers(
         await processStatusUpdate(plugin, instanceId, update.key, update.update.status);
       }
 
-      // Handle message edits
-      if (update.update.message) {
-        const editedContent = update.update.message;
-        const newText =
-          editedContent.conversation ||
-          editedContent.extendedTextMessage?.text ||
-          editedContent.imageMessage?.caption ||
-          editedContent.videoMessage?.caption ||
-          null;
-
-        if (newText) {
-          await plugin.handleMessageEdited(instanceId, update.key.id || '', update.key.remoteJid || '', newText);
-        }
-      }
+      // Message edits are NOT handled here: the same edit also arrives via messages.upsert
+      // as an `editedMessage` envelope, which extractContent unwraps (#1061).
     }
   });
 

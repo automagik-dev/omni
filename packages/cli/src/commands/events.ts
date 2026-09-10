@@ -11,12 +11,14 @@
 import type { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { type AutomationCondition, evaluateConditions } from '@omni/core';
-import type { Event, OmniClient } from '@omni/sdk';
+import type { Event, EventTypeInventoryRow, OmniClient } from '@omni/sdk';
+import { Chalk } from 'chalk';
 import { Command } from 'commander';
 import { z } from 'zod';
 import { getClient } from '../client.js';
 import { getOutputFormat, loadConfig } from '../config.js';
 import * as output from '../output.js';
+import { areColorsEnabled } from '../output.js';
 import { resolveChatId, resolveInstanceId } from '../resolve.js';
 
 /** Replay command options */
@@ -128,6 +130,7 @@ interface AnalyticsData {
   successRate: number;
   avgProcessingTimeMs: number | null;
   avgAgentTimeMs: number | null;
+  totalCostUsd?: number;
   messageTypes: Record<string, number>;
   errorStages: Record<string, number>;
   instances: Record<string, number>;
@@ -162,6 +165,18 @@ async function fetchAnalytics(options: {
   return (await resp.json()) as AnalyticsData;
 }
 
+/** One table row for `omni events types` (JSON output keeps the raw API row). */
+export function summarizeEventTypeRow(row: EventTypeInventoryRow): Record<string, unknown> {
+  return {
+    type: row.eventType,
+    count: row.count,
+    lastSeen: row.lastSeen,
+    schema: row.schemaVersion === null ? 'none' : `v${row.schemaVersion}${row.schemaEnabled ? '' : ' (disabled)'}`,
+    consumers: row.consumers.join(',') || '-',
+    automations: row.automations.join(',') || '-',
+  };
+}
+
 /** Display analytics data */
 function displayAnalytics(data: AnalyticsData): void {
   const format = getOutputFormat();
@@ -175,6 +190,7 @@ function displayAnalytics(data: AnalyticsData): void {
       successRate: data.successRate,
       avgProcessingMs: data.avgProcessingTimeMs,
       avgAgentMs: data.avgAgentTimeMs,
+      totalCostUsd: data.totalCostUsd ?? 0,
       messageTypes: data.messageTypes,
       instances: data.instances,
       errorStages: data.errorStages,
@@ -189,6 +205,7 @@ function displayAnalytics(data: AnalyticsData): void {
       successRate: `${data.successRate.toFixed(1)}%`,
       avgProcessingMs: data.avgProcessingTimeMs ?? '-',
       avgAgentMs: data.avgAgentTimeMs ?? '-',
+      totalCostUsd: `$${(data.totalCostUsd ?? 0).toFixed(4)}`,
     });
 
     displayRecordBreakdown('Message Types', data.messageTypes, 'type');
@@ -343,6 +360,23 @@ function loadSchemaArtifact(options: { file?: string; schema?: string }): Record
   return parsed as Record<string, unknown>;
 }
 
+/** Load the payload to validate from --file or inline --payload (exactly one); any JSON value. */
+function loadPayload(options: { file?: string; payload?: string }): unknown {
+  if ((options.file ? 1 : 0) + (options.payload ? 1 : 0) !== 1) {
+    throw new Error('Provide the payload via exactly one of --file <path> or --payload <json>');
+  }
+  return JSON.parse(options.file ? readFileSync(options.file, 'utf-8') : (options.payload as string)) as unknown;
+}
+
+/** Verdict of the dry-run validate endpoint (issue #1076). */
+interface PayloadValidation {
+  eventType: string;
+  version: number;
+  enabled: boolean;
+  valid: boolean;
+  errors: string[];
+}
+
 function summarizeSchemaRow(row: EventSchemaData): Record<string, unknown> {
   return {
     eventType: row.eventType,
@@ -421,11 +455,43 @@ function createSchemaCommand(): Command {
       }
     });
 
+  schema
+    .command('validate <eventType>')
+    .description('Validate a payload against the registered schema without emitting an event (exit 1 on violations)')
+    .option('--file <path>', 'Path to a JSON payload file')
+    .option('--payload <json>', 'Inline JSON payload')
+    .action(async (eventType: string, options: { file?: string; payload?: string }) => {
+      let result: PayloadValidation;
+      try {
+        const payload = loadPayload(options);
+        const res = await schemaApiRequest<{ data: PayloadValidation }>(`/${encodeURIComponent(eventType)}/validate`, {
+          method: 'POST',
+          body: JSON.stringify({ payload }),
+        });
+        result = res.data;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to validate payload: ${message}`, undefined, 2);
+      }
+
+      if (result.valid) {
+        output.success(`Payload is valid for ${result.eventType} (schema version ${result.version})`, result);
+        return;
+      }
+      if (output.getCurrentFormat() === 'human') {
+        for (const line of result.errors) output.raw(`  - ${line}`);
+      }
+      output.error(
+        `Payload violates the schema for ${result.eventType} (schema version ${result.version}): ${result.errors.length} issue(s)`,
+        output.getCurrentFormat() === 'json' ? result : undefined,
+      );
+    });
+
   return schema;
 }
 
 export { schemaApiRequest };
-export const __testables = { schemaApiRequest, loadSchemaArtifact, summarizeSchemaRow };
+export const __testables = { schemaApiRequest, loadSchemaArtifact, loadPayload, summarizeSchemaRow };
 
 /**
  * Table projection for list-shaped event commands. Human-readable output only:
@@ -480,11 +546,22 @@ export function matchesEventTypeFilter(eventType: string, filter: string): boole
   return filter.endsWith('*') ? eventType.startsWith(filter.slice(0, -1)) : eventType === filter;
 }
 
+/**
+ * Include/exclude type sieve (#1078): the event must match `type` (when set)
+ * and must NOT match any `exclude` glob. Exclusion wins over inclusion.
+ */
+export function passesEventTypeFilters(eventType: string, type?: string, exclude?: readonly string[]): boolean {
+  if (type && !matchesEventTypeFilter(eventType, type)) return false;
+  return !exclude?.some((glob) => matchesEventTypeFilter(eventType, glob));
+}
+
 /** Filter predicate matrix for `omni events stream`. Exported for unit tests. */
 export interface StreamFilterOptions {
   instanceId?: string;
   channel?: string;
   type?: string;
+  /** Type globs to drop; exclusion wins over `type` (#1078). */
+  exclude?: string[];
   chatId?: string;
   personId?: string;
   errorsOnly?: boolean;
@@ -499,7 +576,7 @@ export interface StreamFilterOptions {
  */
 export function passesStreamFilters(event: Event, options: StreamFilterOptions): boolean {
   if (options.instanceId && event.instanceId !== options.instanceId) return false;
-  if (options.type && !matchesEventTypeFilter(event.eventType, options.type)) return false;
+  if (!passesEventTypeFilters(event.eventType, options.type, options.exclude)) return false;
   if (options.chatId && event.chatUuid !== options.chatId) return false;
   if (options.personId && event.personId !== options.personId) return false;
   if (options.errorsOnly && !isErrorEvent(event.eventType)) return false;
@@ -531,6 +608,10 @@ export interface FormatLineOptions {
   /** Print raw uuid8 ids even when a name is known (#1036 ask 2, `--ids`). */
   ids?: boolean;
   names?: StreamNames;
+  /** `--pretty` (#1079): compact colored `time type who: text` line. */
+  pretty?: boolean;
+  /** Force ANSI on/off (tests); defaults to `areColorsEnabled()`. */
+  color?: boolean;
 }
 
 function labelFor(id: string | null | undefined, names: Map<string, string | null> | undefined, ids: boolean): string {
@@ -560,6 +641,47 @@ export function formatEventLine(event: StreamEventRow, options: FormatLineOption
     cols.push(fromMe ? 'me' : '  ', (event.contentType ?? '-').padEnd(8), senderLabel(event, options.names).padEnd(16));
   }
   return `${cols.join('  ')}  ${trimmed}`.trimEnd();
+}
+
+/**
+ * `--pretty` content column (#1079): message text first, then the webhook
+ * body fields humans grep for (github: action #number title; purchase: subject).
+ * ponytail: one generic key list instead of per-family formatters; add a
+ * per-family switch when a family needs a shape this cannot express.
+ */
+export function prettyContent(event: StreamEventRow): string {
+  const text = event.textContent ?? event.transcription ?? event.imageDescription;
+  if (text) return text;
+  const p = (event.rawPayload ?? {}) as Record<string, unknown>;
+  const nested = (p.pull_request ?? p.issue ?? {}) as Record<string, unknown>;
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+  const number = p.number ?? nested.number;
+  const title = ['title', 'subject', 'text', 'message', 'body'].map((k) => str(p[k]) ?? str(nested[k])).find(Boolean);
+  return [str(p.action), number === undefined ? undefined : `#${String(number)}`, title].filter(Boolean).join(' ');
+}
+
+// Forced-level instance so the on/off decision is ours (TTY, --no-color, NO_COLOR), not chalk's autodetect.
+const chalk = new Chalk({ level: 1 });
+const paint = (on: boolean, fn: (s: string) => string, s: string): string => (on && s ? fn(s) : s);
+
+/**
+ * `--pretty` (#1079): one compact `time type who: text` line, colored when
+ * stdout is a TTY and NO_COLOR / --no-color are unset. Sender resolution is
+ * the `--verbose` one (`senderLabel`), not a second copy.
+ */
+export function formatPrettyLine(event: StreamEventRow, options: FormatLineOptions = {}): string {
+  const color = options.color ?? (areColorsEnabled() && !process.env.NO_COLOR);
+  const time = new Date(event.receivedAt).toISOString().slice(11, 19);
+  const typeColor = isErrorEvent(event.eventType)
+    ? chalk.red
+    : event.direction === 'outbound'
+      ? chalk.magenta
+      : chalk.cyan;
+  const who = event.direction === 'outbound' && !event.rawPayload?.pushName ? 'me' : senderLabel(event, options.names);
+  const content = prettyContent(event);
+  const head = `${paint(color, chalk.dim, time)} ${paint(color, typeColor, event.eventType)}`;
+  const tail = [paint(color, chalk.bold, who), content].filter(Boolean).join(': ');
+  return `${head}  ${tail}`.trimEnd();
 }
 
 /**
@@ -595,7 +717,7 @@ function emitStreamEvent(event: StreamEventRow, ndjson: boolean, format: FormatL
   if (ndjson) {
     output.raw(JSON.stringify(event));
   } else {
-    output.raw(formatEventLine(event, format));
+    output.raw(format.pretty ? formatPrettyLine(event, format) : formatEventLine(event, format));
   }
 }
 
@@ -603,6 +725,7 @@ interface StreamOptions {
   instance?: string;
   channel?: string;
   type?: string;
+  exclude?: string[];
   chatId?: string;
   personId?: string;
   since?: string;
@@ -611,6 +734,7 @@ interface StreamOptions {
   ndjson?: boolean;
   verbose?: boolean;
   ids?: boolean;
+  pretty?: boolean;
   pollMs?: number;
 }
 
@@ -640,6 +764,8 @@ async function fetchStreamBatch(
       instanceId: filters.instanceId,
       channel,
       eventType: type,
+      chatId: filters.chatId,
+      excludeEventType: filters.exclude?.length ? filters.exclude.join(',') : undefined,
       since: sinceIso,
       limit: 100,
     });
@@ -692,6 +818,7 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
     instanceId,
     channel: options.channel,
     type: options.type,
+    exclude: options.exclude,
     chatId,
     personId: options.personId,
     errorsOnly: options.errorsOnly,
@@ -700,6 +827,7 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
   const format: FormatLineOptions = {
     verbose: options.verbose,
     ids: options.ids,
+    pretty: options.pretty,
     names: { instances: new Map(), chats: new Map(), persons: new Map() },
   };
 
@@ -838,6 +966,7 @@ interface ConsumerData {
   id: string;
   name: string;
   eventType: string;
+  excludeTypes?: string[] | null;
   filters: AutomationCondition[] | null;
   cursor: number;
   head: number;
@@ -881,6 +1010,7 @@ export function summarizeConsumerRow(row: ConsumerData): Record<string, unknown>
   return {
     name: row.name,
     eventType: row.eventType,
+    excludeTypes: row.excludeTypes?.length ? row.excludeTypes.join(', ') : '-',
     filters: row.filters?.length
       ? row.filters.map((f) => `${f.field} ${f.operator} ${JSON.stringify(f.value)}`).join(' AND ')
       : '-',
@@ -904,6 +1034,8 @@ export interface FollowParams {
   isStopped?: () => boolean;
   /** Line sink — defaults to output.raw (stdout). Injected by tests. */
   emit?: (line: string) => void;
+  /** `--pretty` (#1079): print formatPrettyLine instead of JSON lines; names resolved via `client`. */
+  pretty?: { client: OmniClient; format: FormatLineOptions };
   /** Consecutive transport failures tolerated before giving up (default 5). */
   maxRetries?: number;
   /** First backoff delay; doubles per retry up to 30s (default 1000). */
@@ -938,6 +1070,19 @@ async function pullWithRetry(params: FollowParams): Promise<ConsumerPullPage> {
   }
 }
 
+/** Print one pulled page: JSON lines by default, `--pretty` lines (names warmed) when asked. */
+async function emitFollowPage(
+  params: FollowParams,
+  items: WaitEventRow[],
+  emit: (line: string) => void,
+): Promise<void> {
+  const pretty = params.pretty;
+  if (pretty?.format.names && !pretty.format.ids) await warmStreamNames(pretty.client, pretty.format.names, items);
+  for (const item of items) {
+    emit(pretty ? formatPrettyLine(item, pretty.format) : JSON.stringify(item));
+  }
+}
+
 /**
  * The `omni events follow` loop: pull a page from the stored cursor, print
  * each event as a JSON line, ack the SCANNED cursor (so filtered-out rows are
@@ -955,10 +1100,7 @@ export async function followConsumer(params: FollowParams): Promise<void> {
     if (params.isStopped?.()) return;
 
     const page = await pullWithRetry(params);
-
-    for (const item of page.items) {
-      emit(JSON.stringify(item));
-    }
+    await emitFollowPage(params, page.items, emit);
 
     if (!params.ack) {
       await output.flushStdout();
@@ -1003,34 +1145,43 @@ function createConsumersCommand(): Command {
     .description('Register a durable consumer')
     .requiredOption('--type <type>', 'Event type filter (trailing * = prefix glob, e.g. custom.github.*)')
     .option(
+      '--exclude <glob>',
+      'Drop event types matching this glob, repeatable; wins over --type (e.g. --exclude custom.chat.*)',
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .option(
       '--filter <k=v>',
       'Payload condition, repeatable (dot paths + JSON values — same matcher as events wait)',
       (value: string, previous: string[]) => [...previous, value],
       [] as string[],
     )
     .option('--from-beginning', 'Start the cursor at 0 (replay the full journal) instead of the current head')
-    .action(async (name: string, options: { type: string; filter: string[]; fromBeginning?: boolean }) => {
-      try {
-        const filters = parseWaitFilters(WaitOptionsSchema.shape.filter.parse(options.filter));
-        const result = await consumersApiRequest<{ data: ConsumerData }>('', {
-          method: 'POST',
-          body: JSON.stringify({
-            name,
-            eventType: options.type,
-            filters: filters.length ? filters : undefined,
-            startFrom: options.fromBeginning ? 'beginning' : undefined,
-          }),
-        });
-        output.success(`Consumer registered: ${result.data.name} (cursor ${result.data.cursor})`, {
-          name: result.data.name,
-          eventType: result.data.eventType,
-          cursor: result.data.cursor,
-          lag: result.data.lag,
-        });
-      } catch (err) {
-        output.error(`Failed to create consumer: ${errorMessage(err)}`);
-      }
-    });
+    .action(
+      async (name: string, options: { type: string; exclude: string[]; filter: string[]; fromBeginning?: boolean }) => {
+        try {
+          const filters = parseWaitFilters(WaitOptionsSchema.shape.filter.parse(options.filter));
+          const result = await consumersApiRequest<{ data: ConsumerData }>('', {
+            method: 'POST',
+            body: JSON.stringify({
+              name,
+              eventType: options.type,
+              excludeTypes: options.exclude.length ? options.exclude : undefined,
+              filters: filters.length ? filters : undefined,
+              startFrom: options.fromBeginning ? 'beginning' : undefined,
+            }),
+          });
+          output.success(`Consumer registered: ${result.data.name} (cursor ${result.data.cursor})`, {
+            name: result.data.name,
+            eventType: result.data.eventType,
+            cursor: result.data.cursor,
+            lag: result.data.lag,
+          });
+        } catch (err) {
+          output.error(`Failed to create consumer: ${errorMessage(err)}`);
+        }
+      },
+    );
 
   consumers
     .command('ls')
@@ -1110,17 +1261,13 @@ export function createEventsCommand(): Command {
 
         try {
           const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
-          // Note: chatId resolution added, but SDK doesn't support it yet
-          // This will be a no-op until the SDK is updated
-          if (options.chatId) {
-            await resolveChatId(options.chatId);
-          }
+          const chatId = options.chatId ? await resolveChatId(options.chatId) : undefined;
 
           const result = await client.events.list({
             instanceId,
             channel: options.channel,
             eventType: options.type,
-            // chatId parameter not yet supported by SDK
+            chatId,
             since: options.since ? parseSinceTime(options.since) : undefined,
             until: options.until,
             limit: options.limit,
@@ -1141,6 +1288,12 @@ export function createEventsCommand(): Command {
     .option('--instance <id>', 'Filter by instance ID')
     .option('--channel <type>', 'Filter by channel type')
     .option('--type <type>', 'Filter by event type (trailing * = prefix glob, e.g. custom.*)')
+    .option(
+      '--exclude <glob>',
+      'Drop event types matching this glob, repeatable; wins over --type (e.g. --exclude custom.chat.*)',
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
     .option('--chat-id <id>', 'Filter by chat ID')
     .option('--person-id <id>', 'Filter by person ID')
     .option('--since <time>', 'Start cursor (e.g., 5min, 24h, 7d, or ISO timestamp)')
@@ -1149,12 +1302,14 @@ export function createEventsCommand(): Command {
     .option('--ndjson', 'Emit JSON Lines (one event per line) — same as global --json in stream mode')
     .option('-v, --verbose', 'Add sender, fromMe marker and contentType columns')
     .option('--ids', 'Print raw ids instead of resolved instance/chat names')
+    .option('--pretty', 'One colored `time type who: text` line per event (no ANSI when piped or NO_COLOR)')
     .option('--poll-ms <n>', 'Polling interval in milliseconds', (v) => Number.parseInt(v, 10), 2000)
     .action(
       async (options: {
         instance?: string;
         channel?: string;
         type?: string;
+        exclude: string[];
         chatId?: string;
         personId?: string;
         since?: string;
@@ -1163,6 +1318,7 @@ export function createEventsCommand(): Command {
         ndjson?: boolean;
         verbose?: boolean;
         ids?: boolean;
+        pretty?: boolean;
         pollMs?: number;
       }) => {
         const client = getClient();
@@ -1182,6 +1338,12 @@ export function createEventsCommand(): Command {
     .option('--instance <id>', 'Filter by instance ID')
     .option('--channel <type>', 'Filter by channel type')
     .option('--type <type>', 'Filter by event type (trailing * = prefix glob, e.g. custom.*)')
+    .option(
+      '--exclude <glob>',
+      'Drop event types matching this glob, repeatable; wins over --type (e.g. --exclude custom.chat.*)',
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
     .option('--chat-id <id>', 'Filter by chat ID')
     .option('--person-id <id>', 'Filter by person ID')
     .option(
@@ -1198,6 +1360,7 @@ export function createEventsCommand(): Command {
         instance?: string;
         channel?: string;
         type?: string;
+        exclude: string[];
         chatId?: string;
         personId?: string;
         filter: string[];
@@ -1222,6 +1385,7 @@ export function createEventsCommand(): Command {
               instanceId,
               channel: options.channel,
               type: options.type,
+              exclude: options.exclude,
               chatId,
               personId: options.personId,
               all: true,
@@ -1266,33 +1430,53 @@ export function createEventsCommand(): Command {
     )
     .option('--no-ack', 'Peek: print one page without advancing the cursor, then exit')
     .option('--until-idle', 'Exit 0 once caught up with the journal instead of tailing forever')
-    .option('--ndjson', 'Accepted for symmetry with `events stream` — follow always emits JSON Lines')
-    .action(async (options: { consumer: string; limit: number; waitMs: number; ack: boolean; untilIdle?: boolean }) => {
-      let stopped = false;
-      const shutdown = (): void => {
-        stopped = true;
-      };
-      const processEvents: EventEmitter = process;
-      processEvents.on('SIGINT', shutdown);
-      processEvents.on('SIGTERM', shutdown);
-      try {
-        await followConsumer({
-          consumer: options.consumer,
-          limit: Math.min(Math.max(options.limit, 1), 500),
-          waitMs: Math.min(Math.max(options.waitMs, 0), 30000),
-          ack: options.ack,
-          untilIdle: options.untilIdle === true,
-          isStopped: () => stopped,
-        });
-      } catch (err) {
-        output.error(`Failed to follow consumer: ${errorMessage(err)}`);
-        process.exitCode = 1;
-      } finally {
-        processEvents.off('SIGINT', shutdown);
-        processEvents.off('SIGTERM', shutdown);
-        await output.flushStdout();
-      }
-    });
+    .option('--ndjson', 'Accepted for symmetry with `events stream` — follow emits JSON Lines unless --pretty')
+    .option('--pretty', 'One colored `time type who: text` line per event (no ANSI when piped or NO_COLOR)')
+    .option('--ids', 'With --pretty: print raw ids instead of resolved names')
+    .action(
+      async (options: {
+        consumer: string;
+        limit: number;
+        waitMs: number;
+        ack: boolean;
+        untilIdle?: boolean;
+        ndjson?: boolean;
+        pretty?: boolean;
+        ids?: boolean;
+      }) => {
+        let stopped = false;
+        const shutdown = (): void => {
+          stopped = true;
+        };
+        const processEvents: EventEmitter = process;
+        processEvents.on('SIGINT', shutdown);
+        processEvents.on('SIGTERM', shutdown);
+        try {
+          await followConsumer({
+            consumer: options.consumer,
+            limit: Math.min(Math.max(options.limit, 1), 500),
+            waitMs: Math.min(Math.max(options.waitMs, 0), 30000),
+            ack: options.ack,
+            untilIdle: options.untilIdle === true,
+            isStopped: () => stopped,
+            pretty:
+              options.pretty && !options.ndjson && getOutputFormat() !== 'json'
+                ? {
+                    client: getClient(),
+                    format: { ids: options.ids, names: { instances: new Map(), chats: new Map(), persons: new Map() } },
+                  }
+                : undefined,
+          });
+        } catch (err) {
+          output.error(`Failed to follow consumer: ${errorMessage(err)}`);
+          process.exitCode = 1;
+        } finally {
+          processEvents.off('SIGINT', shutdown);
+          processEvents.off('SIGTERM', shutdown);
+          await output.flushStdout();
+        }
+      },
+    );
 
   // omni events get <id>
   events
@@ -1390,6 +1574,22 @@ export function createEventsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get metrics: ${message}`);
+      }
+    });
+
+  // omni events types (#1075)
+  events
+    .command('types')
+    .description('Inventory of observed event types: volume, schema status, subscribers')
+    .option('--since <time>', 'Only count events since (e.g., 24h, 7d, or ISO timestamp)')
+    .action(async (options: { since?: string }) => {
+      const client = getClient();
+      try {
+        const rows = await client.events.types({ since: options.since ? parseSinceTime(options.since) : undefined });
+        output.list(rows.map(summarizeEventTypeRow), { emptyMessage: 'No events observed.', rawData: rows });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to list event types: ${message}`);
       }
     });
 

@@ -42,7 +42,7 @@ import {
   seedAuthenticated,
   setupConnectionHandlers,
 } from './handlers/connection';
-import { setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
+import { extractQuotedContext, setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
 import { fromJid, isGroupJid, isLidJid, isUserJid, toGroupJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { computeWaid } from './senders/contact';
@@ -3146,6 +3146,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       }
     }
 
+    await this.enrichPayloadWithQuotedMessage(extendedPayload, instanceId, chatId, rawMessage);
+
     // Add structured extended fields if present
     if (content.poll) extendedPayload.poll = content.poll;
     if (content.pollVotes) extendedPayload.pollVotes = content.pollVotes;
@@ -3270,7 +3272,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle message edited
    * @internal
    */
-  async handleMessageEdited(instanceId: string, externalId: string, chatId: string, newText: string): Promise<void> {
+  async handleMessageEdited(
+    instanceId: string,
+    externalId: string,
+    chatId: string,
+    newText: string,
+    fromMe = false,
+  ): Promise<void> {
     // Emit as a special message.received event with type 'edit'
     await this.emitMessageReceived({
       instanceId,
@@ -3285,6 +3293,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         editedMessageId: externalId,
         newText,
         editedAt: Date.now(),
+        // #1062: persistence journals rawPayload.isFromMe=true echoes as outbound.
+        isFromMe: fromMe,
       },
     });
 
@@ -3308,6 +3318,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         deletedMessageId: externalId,
         deletedAt: Date.now(),
         deletedByMe: fromMe,
+        // #1062: persistence journals rawPayload.isFromMe=true echoes as outbound.
+        isFromMe: fromMe,
       },
     });
 
@@ -4093,6 +4105,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       };
       if (content.localPath) rawPayload.mediaLocalPath = content.localPath;
       this.enrichPayloadWithChatName(rawPayload, instanceId, chatId);
+      await this.enrichPayloadWithQuotedMessage(rawPayload, instanceId, chatId, msg);
 
       const historySenderName = (msg as { pushName?: string | null }).pushName ?? undefined;
 
@@ -4113,6 +4126,24 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         isHistorySync: true,
       });
     }
+  }
+
+  /**
+   * Lift the quoted stanza of a reply to `rawPayload.quotedMessage` and resolve
+   * the quoted sender's name the same way mentions are resolved (#1090).
+   */
+  private async enrichPayloadWithQuotedMessage(
+    rawPayload: Record<string, unknown>,
+    instanceId: string,
+    chatId: string,
+    msg: WAMessage,
+  ): Promise<void> {
+    const quoted = extractQuotedContext(msg);
+    if (!quoted) return;
+    const pushName = quoted.participant
+      ? (await this.getContactInfo(instanceId, quoted.participant, chatId))?.name
+      : undefined;
+    rawPayload.quotedMessage = { ...quoted, pushName };
   }
 
   /**

@@ -30,6 +30,10 @@ export const DurableConsumerSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Consumer UUID' }),
   name: z.string().openapi({ description: 'Unique consumer name (the follow/ack handle)' }),
   eventType: z.string().openapi({ description: 'Type filter: exact event type or trailing-* prefix glob' }),
+  excludeTypes: z
+    .array(z.string())
+    .nullable()
+    .openapi({ description: 'Type globs dropped from the stream (exclusion wins over eventType), or null' }),
   filters: z.array(ConsumerConditionSchema).nullable().openapi({ description: 'Payload conditions (AND), or null' }),
   cursor: z.number().int().openapi({ description: 'Last acked journal_seq; delivery resumes strictly after it' }),
   head: z.number().int().openapi({ description: 'Highest journal_seq currently in the journal' }),
@@ -50,6 +54,11 @@ export const CreateConsumerSchema = z.object({
     .min(1)
     .max(255)
     .openapi({ description: 'Type filter: exact event type, or trailing-* prefix glob (e.g. custom.github.*)' }),
+  excludeTypes: z
+    .array(z.string().min(1).max(255))
+    .max(20)
+    .optional()
+    .openapi({ description: 'Type globs to drop (same syntax as eventType); exclusion wins over inclusion' }),
   filters: z
     .array(ConsumerConditionSchema)
     .max(20)

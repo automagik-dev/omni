@@ -630,6 +630,26 @@ function resolveSenderDisplayName(
   );
 }
 
+/**
+ * Quoted sender name (#1090): the channel's contact lookup first, then the
+ * chat participant row the quoted sender already has from their own messages.
+ */
+async function resolveQuotedSenderName(
+  services: Services,
+  chatId: string,
+  quotedMessage: Record<string, unknown> | undefined,
+): Promise<string | undefined> {
+  const pushName = truncate(quotedMessage?.pushName as string | undefined, 255);
+  if (pushName) return pushName;
+  const participant = quotedMessage?.participant as string | undefined;
+  if (!participant) return undefined;
+  // ponytail: phone-jid only; an @lid quoted participant won't match a phone-keyed row.
+  const platformUserId = participant.split('@')[0]?.split(':')[0];
+  if (!platformUserId) return undefined;
+  const existing = await services.chats.findParticipant(chatId, platformUserId);
+  return truncate(existing?.displayName ?? undefined, 255);
+}
+
 async function maybeFindOrCreateParticipant(
   services: Services,
   chatId: string,
@@ -649,21 +669,39 @@ async function maybeFindOrCreateParticipant(
   });
 }
 
-async function maybeRecordMessageEdit(
+export async function maybeRecordMessageEdit(
   services: Services,
   created: boolean,
   rawPayload: Record<string, unknown> | undefined,
+  chatId: string,
   messageId: string,
+  contentType: string,
   newText: string | undefined,
   platformTimestamp: Date,
   from: string | undefined,
 ): Promise<void> {
+  const editedBy = truncate(from, 255) ?? undefined;
+
+  // WhatsApp/Discord: a `content.type === 'edit'` event under a fresh externalId that
+  // names the original in rawPayload.editedMessageId (#1061).
+  if (contentType === 'edit') {
+    const targetExternalId = rawPayload?.editedMessageId;
+    if (typeof targetExternalId !== 'string') return;
+    const target = await services.messages.getByExternalId(chatId, targetExternalId);
+    if (!target) return;
+    const editedAtMs = rawPayload?.editedAt;
+    const editedAt = new Date(typeof editedAtMs === 'number' ? editedAtMs : platformTimestamp.getTime());
+    await services.messages.recordEdit(target.id, newText ?? '', editedAt, editedBy);
+    return;
+  }
+
+  // Telegram: the edit re-uses the original externalId and flags rawPayload.isEdited.
   if (created) return;
   if (rawPayload?.isEdited !== true) return;
 
   const editedAtMs = rawPayload.editDate;
   const editedAt = new Date(typeof editedAtMs === 'number' ? editedAtMs : platformTimestamp.getTime());
-  await services.messages.recordEdit(messageId, newText ?? '', editedAt, truncate(from, 255) ?? undefined);
+  await services.messages.recordEdit(messageId, newText ?? '', editedAt, editedBy);
 }
 
 async function maybeRecordParticipantActivity(
@@ -686,7 +724,7 @@ function maybeUpdateRecency(
   trustedTenantId: string | null,
 ): void {
   // Edits should not bump recency.
-  if (rawPayload?.isEdited === true) return;
+  if (rawPayload?.isEdited === true || payload.content.type === 'edit') return;
 
   const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
   const isFromMe = rawPayload?.isFromMe === true;
@@ -961,7 +999,7 @@ async function handleMessageReceived(
     mediaLocalPath: rawPayload?.mediaLocalPath as string | undefined,
     replyToExternalId: truncate(payload.replyToId, 255),
     quotedText: quotedMessage?.conversation as string | undefined,
-    quotedSenderName: truncate(quotedMessage?.pushName as string | undefined, 255),
+    quotedSenderName: await resolveQuotedSenderName(services, chat.id, quotedMessage),
     // Thread (#889) — previously dropped: threadId rode along in the payload
     // for per_thread session routing and was never persisted.
     threadExternalId: truncate(payload.threadId, 255),
@@ -976,7 +1014,9 @@ async function handleMessageReceived(
     services,
     created,
     rawPayload,
+    chat.id,
     message.id,
+    payload.content.type,
     sanitizeText(payload.content.text) ?? undefined,
     platformTimestamp ?? new Date(eventTimestamp),
     payload.from,

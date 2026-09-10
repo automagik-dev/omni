@@ -196,6 +196,7 @@ describe('omni events consumers + follow', () => {
       {
         name: 'deploy-tracker',
         eventType: 'custom.deploy.*',
+        excludeTypes: '-',
         filters: '-',
         cursor: 0,
         lag: 0,

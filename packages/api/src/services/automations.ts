@@ -12,11 +12,14 @@ import {
   type CallAgentActionConfig,
   ConflictError,
   type Automation as CoreAutomation,
+  type EventMetadata,
   NotFoundError,
   ValidationError,
   createAutomationEngine,
   createTemplateContext,
+  evaluateConditionsWithDetails,
   executeActions,
+  substituteTemplateObject,
 } from '@omni/core';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -31,10 +34,38 @@ import {
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
+/**
+ * An event to test/execute an automation against. Either hand-written (the
+ * legacy `test` body) or a REAL journaled `omni_events` row mapped by the
+ * route (#1073) — then `id`, `metadata` and `timestamp` are the row's.
+ */
+export interface AutomationTestEvent {
+  type: string;
+  payload: Record<string, unknown>;
+  id?: string;
+  metadata?: Record<string, unknown>;
+  timestamp?: number;
+}
+
 export interface AutomationTestResult {
+  /** triggerMatched && conditionsMatched */
   matched: boolean;
-  conditions: Array<{ field: string; operator: string; matched: boolean }>;
-  actions: Array<{ type: string; wouldExecute: boolean }>;
+  /** Event type equals the automation's trigger (the engine never delivers anything else). */
+  triggerMatched: boolean;
+  conditionsMatched: boolean;
+  conditionLogic: 'and' | 'or';
+  /** Per-condition verdicts (#1030 wording): `resolved: false` = the dot path found nothing. */
+  conditions: Array<{
+    field: string;
+    operator: string;
+    expected: unknown;
+    actual: unknown;
+    resolved: boolean;
+    matched: boolean;
+  }>;
+  /** Actions with their templates rendered against the event — never executed. */
+  actions: Array<{ type: string; wouldExecute: boolean; config: Record<string, unknown> }>;
+  eventId: string | null;
   dryRun: true;
 }
 
@@ -309,26 +340,54 @@ export class AutomationService {
   }
 
   /**
-   * Test an automation against a sample event (dry run)
+   * Dry-run an automation against an event (#1073): trigger match, condition
+   * verdicts and rendered action templates. Mirrors the engine's evaluation
+   * (metadata merged under the payload for conditions) but executes nothing
+   * and writes no execution log.
    */
-  async test(id: string, event: { type: string; payload: Record<string, unknown> }): Promise<AutomationTestResult> {
+  async test(id: string, event: AutomationTestEvent): Promise<AutomationTestResult> {
     const automation = await this.getById(id);
+    const triggerMatched = automation.triggerEventType === event.type;
+    const conditionLogic = automation.conditionLogic ?? 'and';
 
-    if (this.engine) {
-      return this.engine.testAutomation(automation as CoreAutomation, event);
-    }
+    const conditionResult = evaluateConditionsWithDetails(
+      automation.triggerConditions as Parameters<typeof evaluateConditionsWithDetails>[0],
+      { ...(event.metadata ?? {}), ...event.payload },
+      conditionLogic,
+    );
+    const matched = triggerMatched && conditionResult.matched;
 
-    // Manual test if engine not running
-    // Just check conditions
-    const matched = automation.triggerEventType === event.type;
+    const context = createTemplateContext(event.payload, {
+      event: event.id
+        ? {
+            id: event.id,
+            type: event.type,
+            timestamp: event.timestamp ?? Date.now(),
+            metadata: (event.metadata ?? {}) as unknown as EventMetadata,
+          }
+        : undefined,
+      automation: { id: automation.id, managedByAgentId: automation.managedByAgentId },
+    });
 
     return {
       matched,
-      conditions: [],
-      actions: (automation.actions as Array<{ type: string }>).map((a) => ({
+      triggerMatched,
+      conditionsMatched: conditionResult.matched,
+      conditionLogic,
+      conditions: conditionResult.conditions.map((c) => ({
+        field: c.field,
+        operator: c.operator,
+        expected: c.expectedValue,
+        actual: c.actualValue,
+        resolved: c.actualValue !== undefined,
+        matched: c.matched,
+      })),
+      actions: (automation.actions as AutomationAction[]).map((a) => ({
         type: a.type,
         wouldExecute: matched,
+        config: substituteTemplateObject((a.config ?? {}) as unknown as Record<string, unknown>, context),
       })),
+      eventId: event.id ?? null,
       dryRun: true,
     };
   }
@@ -339,7 +398,7 @@ export class AutomationService {
    */
   async execute(
     id: string,
-    event: { type: string; payload: Record<string, unknown> },
+    event: AutomationTestEvent,
     deps?: ActionDependencies,
   ): Promise<{
     automationId: string;
@@ -357,8 +416,8 @@ export class AutomationService {
       };
     }
 
-    // Build context from event
-    const correlationId = crypto.randomUUID();
+    // Build context from event. A journaled event (#1073) keeps its own id in the log row.
+    const correlationId = event.id ?? crypto.randomUUID();
     const context = createTemplateContext(event.payload);
 
     // Default dependencies (eventBus from service, others empty)

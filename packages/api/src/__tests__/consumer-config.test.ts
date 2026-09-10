@@ -115,7 +115,7 @@ describe('Consumer startFrom Configuration', () => {
     expect(main?.value).toBe('new');
   });
 
-  test('event-persistence: message consumers use startFrom: first; custom journal consumer is forward-only', () => {
+  test('event-persistence: message consumers use startFrom: first; journal-only consumers are forward-only', () => {
     const values = extractStartFromValues(join(PLUGINS_DIR, 'event-persistence.ts'));
 
     expect(values.length).toBeGreaterThanOrEqual(1);
@@ -124,12 +124,16 @@ describe('Consumer startFrom Configuration', () => {
     // forward-only, and a 'first' durable would replay the entire CUSTOM
     // stream retention as journal rows that can never carry a causation
     // parent.
-    const custom = values.find((v) => v.context === 'event-persistence-custom');
-    expect(custom).toBeDefined();
-    expect(custom?.value).toBe('new');
+    // The connector liveness journal consumer (#1063) follows the same rule.
+    const forwardOnly = ['event-persistence-custom', 'event-persistence-connector'];
+    for (const context of forwardOnly) {
+      const entry = values.find((v) => v.context === context);
+      expect(entry).toBeDefined();
+      expect(entry?.value).toBe('new');
+    }
 
     for (const entry of values) {
-      if (entry.context === 'event-persistence-custom') continue;
+      if (forwardOnly.includes(entry.context)) continue;
       expect(entry.value).toBe('first');
     }
   });

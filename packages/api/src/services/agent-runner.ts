@@ -12,6 +12,7 @@ import {
   type IAgentClient,
   ProviderError,
   type ProviderFile,
+  type ProviderMetrics,
   type ProviderSchema,
   type SessionStorage,
   type StreamChunk,
@@ -118,11 +119,9 @@ export interface AgentRunResult {
     runId: string;
     sessionId: string;
     status: 'completed' | 'failed';
-    metrics?: {
-      inputTokens: number;
-      outputTokens: number;
-      durationMs: number;
-    };
+    /** agent_providers.id the run went through (#1064 usage stamping). */
+    providerId: string;
+    metrics?: ProviderMetrics;
   };
 }
 
@@ -710,6 +709,7 @@ export class AgentRunnerService {
         runId: response.runId,
         sessionId: response.sessionId,
         status: response.status,
+        providerId: instance.agentProviderId,
         metrics: response.metrics,
       },
     };
@@ -775,6 +775,7 @@ export class AgentRunnerService {
         runId: response.runId,
         sessionId: response.sessionId,
         status: response.status,
+        providerId: context.agentProviderId,
         metrics: response.metrics,
       },
     };
@@ -809,6 +810,7 @@ export class AgentRunnerService {
         runId: crypto.randomUUID(),
         sessionId,
         status: 'completed',
+        providerId: context.instance.agentProviderId ?? '',
       },
     };
   }

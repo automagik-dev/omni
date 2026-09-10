@@ -196,53 +196,6 @@ describe('sweepConnectorLiveness — recovery', () => {
 });
 
 describe('sweepConnectorLiveness — hooks and resilience', () => {
-  test('onStalled receives the payload and the published event id', async () => {
-    const seen: Array<{ payload: ConnectorStalledPayload; eventId: string | null }> = [];
-    const { deps, published } = makeDeps([makeRow()]);
-
-    await sweepConnectorLiveness({
-      ...deps,
-      now: () => at(120),
-      onStalled: async (_row, payload, eventId) => {
-        seen.push({ payload, eventId });
-      },
-    });
-
-    expect(seen).toHaveLength(1);
-    expect(seen[0]?.eventId).toBe('evt-1');
-    expect(seen[0]?.payload.sourceName).toBe('gmail-purchases');
-    expect(published).toHaveLength(1);
-  });
-
-  test('onRecovered fires after a recovery transition', async () => {
-    const recovered: ConnectorRecoveredPayload[] = [];
-    const { deps } = makeDeps([makeRow({ livenessStatus: 'stalled', stalledAt: at(100), lastHeartbeatAt: at(195) })]);
-
-    await sweepConnectorLiveness({
-      ...deps,
-      now: () => at(200),
-      onRecovered: async (_row, payload) => {
-        recovered.push(payload);
-      },
-    });
-
-    expect(recovered).toHaveLength(1);
-    expect(recovered[0]?.recoveredBy).toBe('heartbeat');
-  });
-
-  test('a throwing hook does not fail the sweep and the event is still published', async () => {
-    const { deps, published } = makeDeps([makeRow()]);
-    const stats = await sweepConnectorLiveness({
-      ...deps,
-      now: () => at(120),
-      onStalled: async () => {
-        throw new Error('dlq down');
-      },
-    });
-    expect(stats).toEqual({ scanned: 1, stalled: 1, recovered: 0, errors: 0 });
-    expect(published).toHaveLength(1);
-  });
-
   test('without an event bus the transition is still persisted', async () => {
     const { deps, repo } = makeDeps([makeRow()]);
     const stats = await sweepConnectorLiveness({ ...deps, eventBus: null, now: () => at(120) });

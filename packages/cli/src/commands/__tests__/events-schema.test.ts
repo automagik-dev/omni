@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { __testables } from '../events';
 
-const { schemaApiRequest, loadSchemaArtifact, summarizeSchemaRow } = __testables;
+const { schemaApiRequest, loadSchemaArtifact, loadPayload, summarizeSchemaRow } = __testables;
 
 // The round-trip talks to a REAL in-process server, so it needs the REAL
 // fetch. `bun test` runs every package's files in ONE process, and a file
@@ -46,6 +46,43 @@ interface StoredSchema {
   updatedAt: string;
 }
 
+/** Stand-in for POST /events/schemas: insert at v1, bump on re-register. */
+function registerRow(rows: Map<string, StoredSchema>, body: unknown): Response {
+  const input = body as { eventType: string; schema: Record<string, unknown>; description?: string };
+  const existing = rows.get(input.eventType);
+  const row: StoredSchema = {
+    id: '22222222-2222-4222-8222-222222222222',
+    eventType: input.eventType,
+    version: existing ? existing.version + 1 : 1,
+    schema: input.schema,
+    description: input.description ?? null,
+    enabled: true,
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  rows.set(input.eventType, row);
+  return Response.json({ data: row }, { status: 201 });
+}
+
+/** Stand-in for POST /events/schemas/:type/validate: required-key check, same error shape as the gate. */
+function dryRunValidate(rows: Map<string, StoredSchema>, eventType: string, body: unknown): Response {
+  const row = rows.get(eventType);
+  if (!row) {
+    return Response.json(
+      { error: { code: 'NOT_FOUND', message: `EventSchema not found: ${eventType}` } },
+      { status: 404 },
+    );
+  }
+  const { payload } = body as { payload: unknown };
+  const required = (row.schema.required as string[] | undefined) ?? [];
+  const errors = required
+    .filter((key) => typeof payload !== 'object' || payload === null || !(key in payload))
+    .map((key) => `/: must have required property '${key}'`);
+  return Response.json({
+    data: { eventType, version: row.version, enabled: row.enabled, valid: errors.length === 0, errors },
+  });
+}
+
 /** In-memory registry speaking the /api/v2/events/schemas contract. */
 function startRegistryServer() {
   const rows = new Map<string, StoredSchema>();
@@ -61,20 +98,10 @@ function startRegistryServer() {
       const rest = decodeURIComponent(url.pathname.slice(prefix.length).replace(/^\//, ''));
 
       if (req.method === 'POST' && rest === '') {
-        const body = (await req.json()) as { eventType: string; schema: Record<string, unknown>; description?: string };
-        const existing = rows.get(body.eventType);
-        const row: StoredSchema = {
-          id: '22222222-2222-4222-8222-222222222222',
-          eventType: body.eventType,
-          version: existing ? existing.version + 1 : 1,
-          schema: body.schema,
-          description: body.description ?? null,
-          enabled: true,
-          createdAt: existing?.createdAt ?? new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        rows.set(body.eventType, row);
-        return Response.json({ data: row }, { status: 201 });
+        return registerRow(rows, await req.json());
+      }
+      if (req.method === 'POST' && rest.endsWith('/validate')) {
+        return dryRunValidate(rows, rest.slice(0, -'/validate'.length), await req.json());
       }
       if (req.method === 'GET' && rest === '') {
         return Response.json({ items: [...rows.values()] });
@@ -135,6 +162,29 @@ describe('omni events schema round-trip', () => {
     expect(fetched.data.schema).toEqual(artifact);
   });
 
+  test('validate dry-runs a payload through the API without touching the registry', async () => {
+    const path = `/${encodeURIComponent('custom.github.push')}/validate`;
+    const versionBefore = rows.get('custom.github.push')?.version;
+
+    const bad = await schemaApiRequest<{ data: { valid: boolean; errors: string[] } }>(path, {
+      method: 'POST',
+      body: JSON.stringify({ payload: { commits: [] } }),
+    });
+    expect(bad.data.valid).toBe(false);
+    expect(bad.data.errors).toEqual(["/: must have required property 'ref'"]);
+
+    const good = await schemaApiRequest<{ data: { valid: boolean; errors: string[] } }>(path, {
+      method: 'POST',
+      body: JSON.stringify({ payload: { ref: 'refs/heads/main' } }),
+    });
+    expect(good.data).toMatchObject({ valid: true, errors: [] });
+
+    expect(rows.get('custom.github.push')?.version).toBe(versionBefore);
+    await expect(
+      schemaApiRequest('/custom.not.registered/validate', { method: 'POST', body: JSON.stringify({ payload: {} }) }),
+    ).rejects.toThrow(/API returned 404/);
+  });
+
   test('a non-2xx response surfaces the API status and body', async () => {
     await expect(schemaApiRequest('/custom.not.registered')).rejects.toThrow(/API returned 404/);
   });
@@ -165,5 +215,25 @@ describe('loadSchemaArtifact', () => {
   test('refuses a non-object artifact', () => {
     expect(() => loadSchemaArtifact({ schema: '[1,2]' })).toThrow(/JSON object/);
     expect(() => loadSchemaArtifact({ schema: '"str"' })).toThrow(/JSON object/);
+  });
+});
+
+describe('loadPayload', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'omni-cli-payload-'));
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('reads any JSON value from --file or --payload', () => {
+    const file = join(dir, 'payload.json');
+    writeFileSync(file, JSON.stringify({ ref: 'x' }));
+    expect(loadPayload({ file })).toEqual({ ref: 'x' });
+    expect(loadPayload({ payload: '[1,2]' })).toEqual([1, 2]);
+  });
+
+  test('requires exactly one source', () => {
+    expect(() => loadPayload({})).toThrow(/exactly one/);
+    expect(() => loadPayload({ file: 'x.json', payload: '{}' })).toThrow(/exactly one/);
   });
 });

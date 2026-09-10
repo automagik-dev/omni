@@ -20,6 +20,13 @@
  * - {{event.metadata.correlationId}} - Envelope: correlation of the flow
  *   (any `event.metadata.*` field resolves; absent for envelope-less
  *   invocations, where `{{event.*}}` renders empty)
+ * - {{payload_json}} - Whole payload as compact JSON (#1071)
+ * - {{event_json}} - Whole event (envelope + payload) as compact JSON (#1071);
+ *   `{ id, type, timestamp, metadata, payload }` — the envelope fields render
+ *   `null` when no envelope was threaded. Output is compact (no whitespace)
+ *   because it is pasted into prompts/bodies inline; key order is fixed for
+ *   the envelope and insertion order for the payload, so equal inputs render
+ *   byte-identical strings.
  */
 
 import type { EventMetadata } from '../events/types';
@@ -191,6 +198,14 @@ function resolveTemplatePath(path: string, context: TemplateContext): unknown {
 
   const specialValue = resolveSpecialValue(trimmed, root, rest, context);
   if (specialValue !== undefined) return specialValue;
+
+  // Whole-object JSON placeholders (#1071) — pre-serialized so they never
+  // collide with a stored variable and always render as compact JSON.
+  if (trimmed === 'payload_json') return JSON.stringify(context.payload);
+  if (trimmed === 'event_json') {
+    const { id = null, type = null, timestamp = null, metadata = null } = context.event ?? {};
+    return JSON.stringify({ id, type, timestamp, metadata, payload: context.payload });
+  }
 
   // Handle payload access
   if (root === 'payload') return rest ? getNestedValue(context.payload, rest) : context.payload;

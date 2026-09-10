@@ -712,6 +712,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events/types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List observed event types
+         * @description Inventory of event types observed in the journal: volume and last seen in the window, registered schema version, and subscribed durable consumers / enabled automations.
+         */
+        get: operations["listEventTypes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events/timeline/{personId}": {
         parameters: {
             query?: never;
@@ -1898,8 +1918,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Test automation
-         * @description Test automation against a sample event (dry run).
+         * Test automation (dry run)
+         * @description Dry-run an automation against a hand-written event or a REAL journaled event (`eventId`, #1073): trigger match, per-condition verdicts and rendered action templates. Executes nothing, writes no execution log.
          */
         post: operations["testAutomation"];
         delete?: never;
@@ -1919,7 +1939,7 @@ export interface paths {
         put?: never;
         /**
          * Execute automation
-         * @description Execute automation with a provided event payload. Actually runs the actions (not a dry run).
+         * @description Execute automation with a provided event payload or a journaled event (`eventId`). Actually runs the actions (not a dry run).
          */
         post: operations["executeAutomation"];
         delete?: never;
@@ -3860,6 +3880,8 @@ export interface components {
             avgProcessingTimeMs: number | null;
             /** @description Average agent time (ms) */
             avgAgentTimeMs: number | null;
+            /** @description Sum of agent run cost (USD) stamped on events in range */
+            totalCostUsd: number;
             /** @description Count by content type */
             messageTypes: {
                 [key: string]: number;
@@ -4540,6 +4562,11 @@ export interface components {
             };
             /** @description Correlation ID */
             correlationId?: string;
+            /**
+             * Format: uuid
+             * @description Parent event ID; stamps causationId so the emission is parented in the causality tree
+             */
+            causationId?: string;
             /**
              * Format: uuid
              * @description Instance ID for context
@@ -5574,6 +5601,8 @@ export interface components {
             name: string;
             /** @description Type filter: exact event type or trailing-* prefix glob */
             eventType: string;
+            /** @description Type globs dropped from the stream (exclusion wins over eventType), or null */
+            excludeTypes: string[] | null;
             /** @description Payload conditions (AND), or null */
             filters: {
                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -5608,6 +5637,8 @@ export interface components {
             name: string;
             /** @description Type filter: exact event type, or trailing-* prefix glob (e.g. custom.github.*) */
             eventType: string;
+            /** @description Type globs to drop (same syntax as eventType); exclusion wins over inclusion */
+            excludeTypes?: string[];
             /** @description Payload conditions (AND) — same matcher as events wait --filter */
             filters?: {
                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -5938,7 +5969,8 @@ export interface components {
             durationMs: number;
         };
         TestAutomationRequest: {
-            event: {
+            /** @description Hand-written event. Exactly one of event / eventId is required */
+            event?: {
                 /** @description Event type */
                 type: string;
                 /** @description Event payload */
@@ -5946,6 +5978,44 @@ export interface components {
                     [key: string]: unknown;
                 };
             };
+            /**
+             * Format: uuid
+             * @description Id of a REAL journaled event (omni_events) to run against (#1073): its rawPayload is the payload, its envelope metadata is merged for conditions. Exactly one of event / eventId is required
+             */
+            eventId?: string;
+        };
+        AutomationTestResult: {
+            /** @description triggerMatched AND conditionsMatched */
+            matched: boolean;
+            /** @description Event type equals the automation trigger */
+            triggerMatched: boolean;
+            /** @description Condition set verdict under conditionLogic */
+            conditionsMatched: boolean;
+            /** @enum {string} */
+            conditionLogic: "and" | "or";
+            /** @description Per-condition verdicts */
+            conditions: {
+                field: string;
+                operator: string;
+                expected?: unknown;
+                actual?: unknown;
+                /** @description false = the dot path resolved to nothing in the payload */
+                resolved: boolean;
+                matched: boolean;
+            }[];
+            /** @description Rendered actions — never executed */
+            actions: {
+                type: string;
+                wouldExecute: boolean;
+                /** @description Action config with templates rendered */
+                config: {
+                    [key: string]: unknown;
+                };
+            }[];
+            /** Format: uuid */
+            eventId: string | null;
+            /** @enum {boolean} */
+            dryRun: true;
         };
         AutomationMetrics: {
             /** @description Engine running */
@@ -6686,6 +6756,25 @@ export interface components {
             budget: number;
             /** @description The plaintext credential. Returned exactly ONCE; it can never be retrieved again. */
             plainTextKey: string;
+        };
+        EventTypeInventoryRow: {
+            /** @description Event type */
+            eventType: string;
+            /** @description Events observed in the window */
+            count: number;
+            /**
+             * Format: date-time
+             * @description Most recent receivedAt in the window
+             */
+            lastSeen: string;
+            /** @description Registered schema version (null = unregistered) */
+            schemaVersion: number | null;
+            /** @description Whether the registered schema gate is enabled */
+            schemaEnabled: boolean | null;
+            /** @description Durable consumer names subscribed to this type */
+            consumers: string[];
+            /** @description Enabled automations triggered by this type */
+            automations: string[];
         };
     };
     responses: never;
@@ -10581,7 +10670,9 @@ export interface operations {
                 channel?: string;
                 instanceId?: string;
                 personId?: string;
+                chatId?: string;
                 eventType?: string;
+                excludeEventType?: string;
                 contentType?: string;
                 direction?: "inbound" | "outbound";
                 since?: string;
@@ -10711,6 +10802,8 @@ export interface operations {
                         avgProcessingTimeMs: number | null;
                         /** @description Average agent time (ms) */
                         avgAgentTimeMs: number | null;
+                        /** @description Sum of agent run cost (USD) stamped on events in range */
+                        totalCostUsd: number;
                         /** @description Count by content type */
                         messageTypes: {
                             [key: string]: number;
@@ -10741,6 +10834,34 @@ export interface operations {
                             /** @description Event count in bucket */
                             count: number;
                         }[];
+                    };
+                };
+            };
+        };
+    };
+    listEventTypes: {
+        parameters: {
+            query?: {
+                since?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Event type inventory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["EventTypeInventoryRow"][];
+                        meta: {
+                            /** Format: date-time */
+                            since: string | null;
+                        };
                     };
                 };
             };
@@ -13020,6 +13141,11 @@ export interface operations {
                     };
                     /** @description Correlation ID */
                     correlationId?: string;
+                    /**
+                     * Format: uuid
+                     * @description Parent event ID; stamps causationId so the emission is parented in the causality tree
+                     */
+                    causationId?: string;
                     /**
                      * Format: uuid
                      * @description Instance ID for context
@@ -17058,6 +17184,8 @@ export interface operations {
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
                             eventType: string;
+                            /** @description Type globs dropped from the stream (exclusion wins over eventType), or null */
+                            excludeTypes: string[] | null;
                             /** @description Payload conditions (AND), or null */
                             filters: {
                                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -17106,6 +17234,8 @@ export interface operations {
                     name: string;
                     /** @description Type filter: exact event type, or trailing-* prefix glob (e.g. custom.github.*) */
                     eventType: string;
+                    /** @description Type globs to drop (same syntax as eventType); exclusion wins over inclusion */
+                    excludeTypes?: string[];
                     /** @description Payload conditions (AND) — same matcher as events wait --filter */
                     filters?: {
                         /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -17144,6 +17274,8 @@ export interface operations {
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
                             eventType: string;
+                            /** @description Type globs dropped from the stream (exclusion wins over eventType), or null */
+                            excludeTypes: string[] | null;
                             /** @description Payload conditions (AND), or null */
                             filters: {
                                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -17227,6 +17359,8 @@ export interface operations {
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
                             eventType: string;
+                            /** @description Type globs dropped from the stream (exclusion wins over eventType), or null */
+                            excludeTypes: string[] | null;
                             /** @description Payload conditions (AND), or null */
                             filters: {
                                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -17421,6 +17555,8 @@ export interface operations {
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
                             eventType: string;
+                            /** @description Type globs dropped from the stream (exclusion wins over eventType), or null */
+                            excludeTypes: string[] | null;
                             /** @description Payload conditions (AND), or null */
                             filters: {
                                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -18911,7 +19047,8 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    event: {
+                    /** @description Hand-written event. Exactly one of event / eventId is required */
+                    event?: {
                         /** @description Event type */
                         type: string;
                         /** @description Event payload */
@@ -18919,106 +19056,53 @@ export interface operations {
                             [key: string]: unknown;
                         };
                     };
+                    /**
+                     * Format: uuid
+                     * @description Id of a REAL journaled event (omni_events) to run against (#1073): its rawPayload is the payload, its envelope metadata is merged for conditions. Exactly one of event / eventId is required
+                     */
+                    eventId?: string;
                 };
             };
         };
         responses: {
-            /** @description Test result */
+            /** @description Dry-run result */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
+                        /** @description triggerMatched AND conditionsMatched */
                         matched: boolean;
-                        conditionResults?: {
-                            condition: {
-                                /** @description Dot notation field path */
-                                field: string;
-                                /**
-                                 * @description Operator
-                                 * @enum {string}
-                                 */
-                                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
-                                /** @description Value to compare */
-                                value?: unknown;
-                            };
-                            passed: boolean;
+                        /** @description Event type equals the automation trigger */
+                        triggerMatched: boolean;
+                        /** @description Condition set verdict under conditionLogic */
+                        conditionsMatched: boolean;
+                        /** @enum {string} */
+                        conditionLogic: "and" | "or";
+                        /** @description Per-condition verdicts */
+                        conditions: {
+                            field: string;
+                            operator: string;
+                            expected?: unknown;
+                            actual?: unknown;
+                            /** @description false = the dot path resolved to nothing in the payload */
+                            resolved: boolean;
+                            matched: boolean;
                         }[];
-                        wouldExecute?: ({
-                            /** @enum {string} */
-                            type: "webhook";
+                        /** @description Rendered actions — never executed */
+                        actions: {
+                            type: string;
+                            wouldExecute: boolean;
+                            /** @description Action config with templates rendered */
                             config: {
-                                /** @description Webhook URL */
-                                url: string;
-                                /**
-                                 * @default POST
-                                 * @enum {string}
-                                 */
-                                method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-                                headers?: {
-                                    [key: string]: string;
-                                };
-                                bodyTemplate?: string;
-                                /** @default false */
-                                waitForResponse: boolean;
-                                /** @default 30000 */
-                                timeoutMs: number;
-                                responseAs?: string;
-                                /** @description Send the full OmniEvent envelope as the default body (default true) */
-                                includeEnvelope?: boolean;
+                                [key: string]: unknown;
                             };
-                        } | {
-                            /** @enum {string} */
-                            type: "send_message";
-                            config: {
-                                instanceId?: string;
-                                to?: string;
-                                contentTemplate: string;
-                            };
-                        } | {
-                            /** @enum {string} */
-                            type: "emit_event";
-                            config: {
-                                eventType: string;
-                                payloadTemplate?: {
-                                    [key: string]: unknown;
-                                };
-                            };
-                        } | {
-                            /** @enum {string} */
-                            type: "log";
-                            config: {
-                                /** @enum {string} */
-                                level: "debug" | "info" | "warn" | "error";
-                                message: string;
-                            };
-                        } | {
-                            /** @enum {string} */
-                            type: "call_agent";
-                            config: {
-                                /** @description Provider ID (template: {{instance.agentProviderId}}) */
-                                providerId?: string;
-                                /** @description Agent ID (required or template) */
-                                agentId: string;
-                                /**
-                                 * @description Agent type
-                                 * @enum {string}
-                                 */
-                                agentType?: "agent" | "team" | "workflow";
-                                /**
-                                 * @description Session strategy for agent memory
-                                 * @enum {string}
-                                 */
-                                sessionStrategy?: "per_user" | "per_chat" | "per_thread";
-                                /** @description Prefix messages with sender name */
-                                prefixSenderName?: boolean;
-                                /** @description Timeout in milliseconds */
-                                timeoutMs?: number;
-                                /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
-                                responseAs?: string;
-                            };
-                        })[];
+                        }[];
+                        /** Format: uuid */
+                        eventId: string | null;
+                        /** @enum {boolean} */
+                        dryRun: true;
                     };
                 };
             };
@@ -19057,7 +19141,8 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    event: {
+                    /** @description Hand-written event. Exactly one of event / eventId is required */
+                    event?: {
                         /** @description Event type */
                         type: string;
                         /** @description Event payload */
@@ -19065,6 +19150,11 @@ export interface operations {
                             [key: string]: unknown;
                         };
                     };
+                    /**
+                     * Format: uuid
+                     * @description Id of a REAL journaled event (omni_events) to run against (#1073): its rawPayload is the payload, its envelope metadata is merged for conditions. Exactly one of event / eventId is required
+                     */
+                    eventId?: string;
                 };
             };
         };

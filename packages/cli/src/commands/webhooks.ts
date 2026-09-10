@@ -558,34 +558,44 @@ export function createWebhooksCommand(): Command {
     .requiredOption('--payload <json>', 'Event payload as JSON')
     .option('--instance <id>', 'Instance ID')
     .option('--correlation-id <id>', 'Correlation ID')
-    .action(async (options: { type: string; payload: string; instance?: string; correlationId?: string }) => {
-      const client = getClient();
+    .option('--causation-id <event-id>', 'Parent event ID (keeps the causality tree for mid-flow emissions, #1072)')
+    .action(
+      async (options: {
+        type: string;
+        payload: string;
+        instance?: string;
+        correlationId?: string;
+        causationId?: string;
+      }) => {
+        const client = getClient();
 
-      try {
-        let payload: Record<string, unknown>;
         try {
-          payload = JSON.parse(options.payload);
-        } catch {
-          output.error('Invalid JSON for --payload');
-          return;
+          let payload: Record<string, unknown>;
+          try {
+            payload = JSON.parse(options.payload);
+          } catch {
+            output.error('Invalid JSON for --payload');
+            return;
+          }
+
+          const result = await client.webhooks.trigger({
+            eventType: options.type,
+            payload,
+            instanceId: options.instance,
+            correlationId: options.correlationId,
+            causationId: options.causationId,
+          });
+
+          output.success(`Event triggered: ${result.eventId}`, {
+            eventId: result.eventId,
+            eventType: result.eventType,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to trigger event: ${message}`);
         }
-
-        const result = await client.webhooks.trigger({
-          eventType: options.type,
-          payload,
-          instanceId: options.instance,
-          correlationId: options.correlationId,
-        });
-
-        output.success(`Event triggered: ${result.eventId}`, {
-          eventId: result.eventId,
-          eventType: result.eventType,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to trigger event: ${message}`);
-      }
-    });
+      },
+    );
 
   // omni webhooks heartbeat <source-name>
   webhooks

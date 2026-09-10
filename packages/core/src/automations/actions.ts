@@ -11,6 +11,7 @@ import { SCHEMA_VALIDATION_FAILED } from '../events/schema-registry';
 import type { CustomEventType, GenericEventPayload } from '../events/types';
 import { generateId } from '../ids';
 import { createLogger } from '../logger';
+import type { AgentUsage } from '../schemas/agent-usage';
 import { type TemplateContext, substituteTemplate, substituteTemplateObject } from './templates';
 import type {
   ActionExecutionResult,
@@ -37,6 +38,8 @@ export interface AgentRunResult {
     runId: string;
     sessionId: string;
     status: 'completed' | 'failed';
+    /** Cost/usage the provider reported (#1064), when any. */
+    usage?: AgentUsage;
   };
 }
 

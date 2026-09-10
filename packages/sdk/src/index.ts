@@ -90,6 +90,7 @@ export type {
   ListAutomationsParams,
   CreateAutomationBody,
   TestAutomationBody,
+  AutomationTestResult,
   ListAutomationLogsParams,
   // Dead letter types
   DeadLetter,
@@ -112,6 +113,7 @@ export type {
   StartReplayBody,
   EventMetrics,
   EventAnalytics,
+  EventTypeInventoryRow,
   // Log types
   LogEntry,
   ListLogsParams,

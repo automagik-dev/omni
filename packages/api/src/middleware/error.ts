@@ -5,6 +5,7 @@
 import { ConflictError, ERROR_CODES, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
 import { unwrapDbError } from '@omni/db';
 import * as Sentry from '@sentry/bun';
+import { DrizzleQueryError } from 'drizzle-orm';
 import type { Context, ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { ZodError } from 'zod';
@@ -311,19 +312,88 @@ function handleDatabaseError(
 }
 
 /**
- * Handle unknown errors
+ * postgres-js socket/connection failure codes (string, not SQLSTATE) plus the
+ * SQLSTATE class 08 prefix. Anything else from the driver is a query failure.
  */
-function handleUnknownError(c: Context, error: unknown): Response {
-  const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+const PG_CONNECTION_CODES = new Set([
+  'CONNECT_TIMEOUT',
+  'CONNECTION_CLOSED',
+  'CONNECTION_DESTROYED',
+  'CONNECTION_ENDED',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  'EPIPE',
+]);
+
+interface DbErrorInfo {
+  code: typeof ERROR_CODES.DB_QUERY_FAILED | typeof ERROR_CODES.DB_CONNECTION_FAILED;
+  /** Failed SQL text (no bound parameters) — server log only. */
+  query?: string;
+  driverCode?: string;
+  driverMessage: string;
+}
+
+/**
+ * Classify a database failure. Returns null for anything that is not a
+ * drizzle/postgres-js error. The result deliberately carries the SQL but
+ * NEVER the bound parameters: the api_keys lookup binds the caller's key_hash
+ * (#1069), so params must not reach logs, Sentry, or responses.
+ */
+export function describeDbError(error: unknown): DbErrorInfo | null {
+  const driver = unwrapDbError(error);
+  const rawCode = driver instanceof Error ? (driver as { code?: unknown }).code : undefined;
+  const driverCode = typeof rawCode === 'string' ? rawCode : undefined;
+  const isDriverError =
+    driver instanceof Error &&
+    (driver.name === 'PostgresError' || (driverCode !== undefined && PG_CONNECTION_CODES.has(driverCode)));
+  if (!(error instanceof DrizzleQueryError) && !isDriverError) return null;
+
+  const connection = driverCode !== undefined && (PG_CONNECTION_CODES.has(driverCode) || driverCode.startsWith('08'));
+  return {
+    code: connection ? ERROR_CODES.DB_CONNECTION_FAILED : ERROR_CODES.DB_QUERY_FAILED,
+    query: error instanceof DrizzleQueryError ? error.query : undefined,
+    driverCode,
+    driverMessage: driver instanceof Error ? driver.message : String(driver),
+  };
+}
+
+/**
+ * Client-safe message for an arbitrary caught error. Database errors reduce
+ * to a generic string; everything else keeps its message. Use this at every
+ * route-level catch that serializes an error message into a response.
+ */
+export function safeErrorMessage(error: unknown, fallback = 'Unknown error'): string {
+  const db = describeDbError(error);
+  if (db) return db.code === ERROR_CODES.DB_CONNECTION_FAILED ? 'Database unavailable' : 'Database query failed';
+  return error instanceof Error ? error.message : fallback;
+}
+
+/**
+ * Handle generic database failures (anything not mapped to a 4xx above).
+ * Clients get a code and a generic message; the SQL stays in the server log.
+ */
+function handleGenericDbError(c: Context, info: DbErrorInfo): Response {
   return c.json(
     {
       error: {
-        code: 'INTERNAL_ERROR',
-        message: process.env.NODE_ENV === 'production' ? 'Internal server error' : message,
+        code: info.code,
+        message: info.code === ERROR_CODES.DB_CONNECTION_FAILED ? 'Database unavailable' : 'Database query failed',
+        retryable: true,
       },
     },
-    500,
+    ERROR_STATUS_MAP[info.code],
   );
+}
+
+/**
+ * Handle unknown errors. The raw message is never echoed, in any NODE_ENV:
+ * unknown errors are exactly the ones whose messages were not written for
+ * clients (driver output, stack-adjacent detail, internal hostnames).
+ */
+function handleUnknownError(c: Context): Response {
+  return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } }, 500);
 }
 
 /**
@@ -362,7 +432,9 @@ function routeError(c: Context, error: unknown): Response {
     const dbResult = handleDatabaseError(c, dbError as Error & { code?: string; detail?: string; constraint?: string });
     if (dbResult) return dbResult;
   }
-  return handleUnknownError(c, error);
+  const dbInfo = describeDbError(error);
+  if (dbInfo) return handleGenericDbError(c, dbInfo);
+  return handleUnknownError(c);
 }
 
 /** PostgreSQL error codes that represent client mistakes (not server errors) */
@@ -415,10 +487,19 @@ export const errorHandler: ErrorHandler<{ Variables: AppVariables }> = (error, c
       error: error instanceof Error ? error.message : String(error),
     });
   } else {
-    // Server errors (5xx) - log at error level with stack trace
+    // Server errors (5xx) - log at error level with stack trace.
+    // DB errors are logged from the classified shape (SQL + driver code), never
+    // from the drizzle wrapper message, which embeds the bound parameters.
+    const dbInfo = describeDbError(error);
     log.error('Server error', {
       requestId,
-      error: error instanceof Error ? error.message : String(error),
+      error: dbInfo
+        ? `${dbInfo.code}: ${dbInfo.driverMessage}`
+        : error instanceof Error
+          ? error.message
+          : String(error),
+      dbCode: dbInfo?.driverCode,
+      query: dbInfo?.query,
       stack: error instanceof Error ? error.stack : undefined,
     });
 
@@ -438,7 +519,14 @@ export const errorHandler: ErrorHandler<{ Variables: AppVariables }> = (error, c
         }
       }
 
-      Sentry.captureException(error);
+      if (dbInfo) {
+        scope.setTag('error.code', dbInfo.code);
+        scope.setExtra('db.query', dbInfo.query);
+        // Report the driver error, not the drizzle wrapper (its message carries params)
+        Sentry.captureException(unwrapDbError(error));
+      } else {
+        Sentry.captureException(error);
+      }
     });
   }
 
