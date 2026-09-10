@@ -10,6 +10,9 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   type ParsedCommit,
   type RawCommit,
@@ -314,6 +317,69 @@ describe('renderReleaseNotes', () => {
     });
     expect(body).toContain('- Sofia');
     expect(body).not.toContain('github-actions[bot]');
+  });
+});
+
+describe('candidate range (#1097)', () => {
+  const script = join(import.meta.dir, 'generate-release-notes.ts');
+
+  /**
+   * main: feat A → v1.0.0 (promoted). dev, off main: feat B (#5), bump → v1.0.1,
+   * fix C (#6), bump → v1.0.2 (the candidate). The previous tag v1.0.1 is a
+   * bump-only commit, so previous-tag notes for v1.0.2 would list only fix C.
+   */
+  function fixtureRepo(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'release-notes-'));
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(['git', ...args], { cwd: dir });
+      if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+    };
+    const commit = (subject: string) => {
+      writeFileSync(join(dir, 'f'), subject);
+      git('add', 'f');
+      git('-c', 'user.name=Alice', '-c', 'user.email=a@x', 'commit', '-q', '-m', subject);
+    };
+    git('init', '-q', '-b', 'main');
+    commit('feat(api): A');
+    git('tag', 'v1.0.0');
+    git('checkout', '-q', '-b', 'dev');
+    commit('feat(cli): B (#5)');
+    commit('chore(version): bump to 1.0.1');
+    git('tag', 'v1.0.1');
+    commit('fix(api): C (#6)');
+    commit('chore(version): bump to 1.0.2');
+    git('tag', 'v1.0.2');
+    return dir;
+  }
+
+  function run(dir: string, ...args: string[]): string {
+    const result = Bun.spawnSync(['bun', script, '--to', 'v1.0.2', '--repo', 'o/r', ...args], { cwd: dir });
+    expect(result.exitCode).toBe(0);
+    return result.stdout.toString();
+  }
+
+  test('stable compares against the last tag reachable from main, not the bump-only previous tag', () => {
+    const body = run(fixtureRepo(), '--from', 'v1.0.1', '--channel', 'stable', '--main-ref', 'main');
+    expect(body).toContain('### 🚀 Features');
+    expect(body).toContain('- **cli:** B ([#5](https://github.com/o/r/pull/5))');
+    expect(body).toContain('- **api:** C ([#6](https://github.com/o/r/pull/6))');
+    expect(body).not.toContain('feat(api): A');
+    expect(body).toContain('[v1.0.0...v1.0.2](https://github.com/o/r/compare/v1.0.0...v1.0.2)');
+    expect(body).toContain('### 🔐 Verifying release assets');
+  });
+
+  test('dev keeps the previous-tag range', () => {
+    const body = run(fixtureRepo(), '--from', 'v1.0.1', '--channel', 'dev');
+    expect(body).not.toContain('Features');
+    expect(body).toContain('- **api:** C ([#6](https://github.com/o/r/pull/6))');
+    expect(body).toContain('[v1.0.1...v1.0.2]');
+  });
+
+  test('stable falls back to --from when main has no release tag', () => {
+    const dir = fixtureRepo();
+    Bun.spawnSync(['git', 'tag', '-d', 'v1.0.0'], { cwd: dir });
+    const body = run(dir, '--from', 'v1.0.1', '--channel', 'stable', '--main-ref', 'main');
+    expect(body).toContain('[v1.0.1...v1.0.2]');
   });
 });
 
