@@ -15,7 +15,7 @@ import type { EventType, GenericEventPayload, OmniEvent } from '../events/types'
 import { generateId } from '../ids';
 import { createLogger } from '../logger';
 import { type ActionDependencies, executeActions } from './actions';
-import { evaluateConditionsWithDetails } from './conditions';
+import { describeUnmatchedConditions, evaluateConditionsWithDetails } from './conditions';
 import {
   type ConversationKey,
   type DebounceEnvelopeStamp,
@@ -737,6 +737,8 @@ export class AutomationEngine {
       );
 
       if (!conditionResult.matched) {
+        // Surface WHY in the log row (#1030): which condition failed and what
+        // its field resolved to, so a mis-rooted dot path is not a silent skip.
         const result: ExecutionResult = {
           automationId: automation.id,
           automationName: automation.name,
@@ -744,6 +746,7 @@ export class AutomationEngine {
           status: 'skipped',
           conditionsMatched: false,
           actionsExecuted: [],
+          error: describeUnmatchedConditions(conditionResult),
           executionTimeMs: Date.now() - start,
         };
 
