@@ -18,6 +18,8 @@ export interface ListEventsOptions {
   instanceId?: string;
   instanceIds?: string[];
   personId?: string;
+  /** Chat UUID (omni_events.chat_uuid), not the platform chat id. */
+  chatId?: string;
   eventType?: EventType[];
   contentType?: ContentType[];
   direction?: 'inbound' | 'outbound';
@@ -93,6 +95,7 @@ export class EventService {
       channel,
       instanceId,
       personId,
+      chatId,
       eventType,
       contentType,
       direction,
@@ -117,6 +120,11 @@ export class EventService {
 
     if (personId) {
       conditions.push(eq(omniEvents.personId, personId));
+    }
+
+    if (chatId) {
+      // #1055: filter on the chats FK, not the raw platform chatId column.
+      conditions.push(eq(omniEvents.chatUuid, chatId));
     }
 
     if (eventType?.length) {

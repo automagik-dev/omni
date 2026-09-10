@@ -639,6 +639,7 @@ async function fetchStreamBatch(
       instanceId: filters.instanceId,
       channel,
       eventType: type,
+      chatId: filters.chatId,
       since: sinceIso,
       limit: 100,
     });
@@ -1109,17 +1110,13 @@ export function createEventsCommand(): Command {
 
         try {
           const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
-          // Note: chatId resolution added, but SDK doesn't support it yet
-          // This will be a no-op until the SDK is updated
-          if (options.chatId) {
-            await resolveChatId(options.chatId);
-          }
+          const chatId = options.chatId ? await resolveChatId(options.chatId) : undefined;
 
           const result = await client.events.list({
             instanceId,
             channel: options.channel,
             eventType: options.type,
-            // chatId parameter not yet supported by SDK
+            chatId,
             since: options.since ? parseSinceTime(options.since) : undefined,
             until: options.until,
             limit: options.limit,
