@@ -112,8 +112,12 @@ case "${action}" in
   *) fail "unexpected state action ${action}" ;;
 esac
 
+# npm propagation after a publish has taken 5-10 minutes in practice (#1057);
+# the readback polls for roughly 15 minutes before declaring non-convergence.
+# A fixed delay list, not a wall-clock deadline: the contract test mocks sleep.
+converge_delays=(0 5 10 20 40 60 60 60 60 60 60 60 60 60 60 60 60 60 60)
 final_state=""
-for delay in 0 1 2 4 8; do
+for delay in "${converge_delays[@]}"; do
   [[ "${delay}" -eq 0 ]] || sleep "${delay}"
   published_after="$(read_published "${error_file}")"
   latest_after="$(read_latest "${latest_error_file}")"
@@ -134,8 +138,18 @@ expected_url="https://registry.npmjs.org/@automagik/omni/-/omni-${expected}.tgz"
 [[ -n "${integrity}" && "${resolved}" == "${expected_url}" ]] || \
   fail "registry metadata is missing an approved npm tarball URL"
 registry_tarball="${pack_dir}/registry-omni-${expected}.tgz"
-curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-connrefused \
-  -o "${registry_tarball}" "${resolved}"
+# The tarball URL can still 404 for minutes after the packument converged
+# (CDN propagation); curl --retry does not cover 404, so poll it the same way.
+tarball_fetched=false
+for delay in "${converge_delays[@]}"; do
+  [[ "${delay}" -eq 0 ]] || sleep "${delay}"
+  if curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-connrefused \
+    -o "${registry_tarball}" "${resolved}"; then
+    tarball_fetched=true
+    break
+  fi
+done
+[[ "${tarball_fetched}" == "true" ]] || fail "registry tarball ${resolved} did not become downloadable"
 curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-connrefused \
   -o "${keys_file}" "https://registry.npmjs.org/-/npm/v1/keys"
 curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-connrefused \
