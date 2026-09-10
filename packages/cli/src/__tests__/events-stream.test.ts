@@ -153,4 +153,35 @@ describe('events stream formatter', () => {
     const blank = formatEventLine(makeEvent({ textContent: null, transcription: null, imageDescription: null }));
     expect(blank).toContain('message.received');
   });
+
+  test('formatEventLine prints resolved names, --ids forces raw ids (#1036)', () => {
+    const names = {
+      instances: new Map([['00000000-0000-0000-0000-0000000000aa', 'work-phone']]),
+      chats: new Map([['00000000-0000-0000-0000-0000000000cc', 'Family']]),
+      persons: new Map(),
+    };
+    expect(formatEventLine(makeEvent(), { names })).toContain('work-phone/Family');
+    expect(formatEventLine(makeEvent(), { names, ids: true })).toContain('00000000/00000000');
+  });
+
+  test('formatEventLine falls back to the raw platform chat id for unlinked chats (#1036)', () => {
+    const line = formatEventLine({ ...makeEvent({ chatUuid: null }), chatId: '5511999@s.whatsapp.net' });
+    expect(line).toContain('00000000/5511999@s.whatsapp.net');
+    expect(line).not.toContain('--------');
+  });
+
+  test('formatEventLine --verbose adds fromMe, contentType and sender (#1036)', () => {
+    const ev = {
+      ...makeEvent({ contentType: 'reaction', textContent: '👍', personId: '00000000-0000-0000-0000-0000000000pp' }),
+      rawPayload: { pushName: 'Ana', key: { fromMe: false } },
+    };
+    const names = { instances: new Map(), chats: new Map(), persons: new Map([[ev.personId as string, 'Ana Silva']]) };
+    const line = formatEventLine(ev, { verbose: true, names });
+    expect(line).toContain('reaction');
+    expect(line).toContain('Ana Silva');
+    expect(line).not.toMatch(/\bme\b/);
+    expect(formatEventLine(ev, { verbose: true })).toContain('Ana');
+    expect(formatEventLine({ ...ev, direction: 'outbound' }, { verbose: true })).toMatch(/\bme\b/);
+    expect(formatEventLine(ev)).not.toContain('reaction');
+  });
 });
