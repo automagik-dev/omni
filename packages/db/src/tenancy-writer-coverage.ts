@@ -177,6 +177,7 @@ export const REGISTERED_WRITERS: readonly RegisteredWriter[] = [
   { file: 'packages/api/src/services/access.ts', table: 'access_rules', coverage: 'db-derived' },
   { file: 'packages/api/src/services/agent-replay.ts', table: 'instances', coverage: 'trusted-root' },
   { file: 'packages/api/src/services/agent-tasks.ts', table: 'agent_tasks', coverage: 'db-derived' },
+  { file: 'packages/api/src/services/agent-usage.ts', table: 'omni_events', coverage: 'db-derived' },
   { file: 'packages/api/src/services/agents.ts', table: 'agents', coverage: 'db-derived' },
   { file: 'packages/api/src/services/automations.ts', table: 'automation_logs', coverage: 'db-derived' },
   { file: 'packages/api/src/services/automations.ts', table: 'automations', coverage: 'db-unowned' },

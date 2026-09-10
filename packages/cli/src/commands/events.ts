@@ -128,6 +128,7 @@ interface AnalyticsData {
   successRate: number;
   avgProcessingTimeMs: number | null;
   avgAgentTimeMs: number | null;
+  totalCostUsd?: number;
   messageTypes: Record<string, number>;
   errorStages: Record<string, number>;
   instances: Record<string, number>;
@@ -175,6 +176,7 @@ function displayAnalytics(data: AnalyticsData): void {
       successRate: data.successRate,
       avgProcessingMs: data.avgProcessingTimeMs,
       avgAgentMs: data.avgAgentTimeMs,
+      totalCostUsd: data.totalCostUsd ?? 0,
       messageTypes: data.messageTypes,
       instances: data.instances,
       errorStages: data.errorStages,
@@ -189,6 +191,7 @@ function displayAnalytics(data: AnalyticsData): void {
       successRate: `${data.successRate.toFixed(1)}%`,
       avgProcessingMs: data.avgProcessingTimeMs ?? '-',
       avgAgentMs: data.avgAgentTimeMs ?? '-',
+      totalCostUsd: `$${(data.totalCostUsd ?? 0).toFixed(4)}`,
     });
 
     displayRecordBreakdown('Message Types', data.messageTypes, 'type');

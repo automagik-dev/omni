@@ -128,6 +128,10 @@ export interface ProviderMetrics {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  /** Run cost in USD when the provider reports it (claude-code `total_cost_usd`). */
+  costUsd?: number;
+  /** Model that produced the response when the provider reports it. */
+  model?: string;
 }
 
 /**
@@ -522,6 +526,8 @@ export interface AgentTriggerResult {
     cost?: {
       inputTokens?: number;
       outputTokens?: number;
+      costUsd?: number;
+      model?: string;
     };
     /**
      * True when the response text was replaced by the customer-safe error

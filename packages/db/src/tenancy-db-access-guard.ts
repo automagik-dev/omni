@@ -1020,6 +1020,16 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'tenant-boundary',
   },
   {
+    // #1064: the agent-usage stamp (cost/tokens/model onto the triggering
+    // event's journal row). Runs through `scopedHandle(db)` inside the
+    // caller's worker tenant scope — `runDispatchDb` from the dispatcher,
+    // `runTenantWorkDb` from the call_agent action — the same ADR-0008 seam
+    // as the message-persistence back-link below. Consumer-only callers.
+    file: 'packages/api/src/services/agent-usage.ts',
+    table: 'omni_events',
+    class: 'tenant-boundary',
+  },
+  {
     // #1035: the message.received consumer back-links the journal row's
     // chatUuid/personId after chat resolution. The update runs inside
     // `runConsumerInTenantContext` through `scopedHandle(db)` — the same

@@ -35,6 +35,7 @@ import {
   AgUiAgentProvider,
   type AgentRunCancelRequestedPayload,
   type AgentTrigger,
+  type AgentTriggerResult,
   type AgentTriggerType,
   AgnoAgentProvider,
   type BeforeAgentStartContext,
@@ -58,6 +59,7 @@ import {
   type SessionResetConfig,
   type StreamDelta,
   WebhookAgentProvider,
+  agentUsageFromResult,
   checkSessionReset,
   classifyEnvelope,
   createLogger,
@@ -89,6 +91,7 @@ import {
   shouldAgentReply,
 } from '../services/agent-runner';
 import { resolveKhalSessionId } from '../services/agent-session-identity';
+import { stampAgentUsage } from '../services/agent-usage';
 import type { MediaStorageService } from '../services/media-storage';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
 import type { ResolvedRoute } from '../services/route-resolver';
@@ -2782,6 +2785,25 @@ async function buildContextMessages(
   }
 }
 
+/**
+ * #1064: cost/usage lands on the journal row of the message that woke the
+ * agent (the LAST buffered message — the causation root of the reply).
+ * Best-effort and off the reply's critical path.
+ */
+function stampDispatchUsage(
+  db: Database,
+  messages: BufferedMessage[],
+  result: AgentTriggerResult | null | undefined,
+  latencyMs: number,
+): void {
+  const usage = result ? agentUsageFromResult(result.metadata) : null;
+  if (!usage) return;
+  const lastMsg = messages[messages.length - 1];
+  runDispatchDb(db, lastMsg?.metadata.trustedTenantId, () =>
+    stampAgentUsage(db, lastMsg?.metadata.eventId, { usage, latencyMs }),
+  ).catch((error) => log.warn('Agent usage stamp scope failed', { error: String(error) }));
+}
+
 /** Record a journey checkpoint when tracking is active for this correlationId. */
 function recordJourneyCheckpoint(correlationId: string | undefined, stage: string, stageName: string): void {
   if (!correlationId) return;
@@ -3191,6 +3213,8 @@ async function dispatchViaProvider(
       if (!triggerOutcome) return true;
       const { result, cancelled: runCancelled } = triggerOutcome;
       const dispatchDurationMs = Date.now() - dispatchStart;
+
+      stampDispatchUsage(db, messages, result, dispatchDurationMs);
 
       // Sentry metrics: agent dispatch count and latency
       if (sentryEnabled()) {
