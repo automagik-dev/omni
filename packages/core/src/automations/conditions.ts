@@ -219,3 +219,23 @@ export function evaluateConditionsWithDetails(
     conditions: results,
   };
 }
+
+/**
+ * One-line, log-friendly explanation of why a condition set did not match
+ * (#1030). Names every failing condition with the value the payload actually
+ * resolved to; a field that resolved to nothing is tagged
+ * `condition_field_unresolved` so a typo'd or mis-rooted dot path is visible
+ * in the automation log instead of a silent `conditionsMatched: false`.
+ */
+export function describeUnmatchedConditions(result: ConditionEvaluationResult): string {
+  const failed = result.conditions
+    .filter((c) => !c.matched)
+    .map((c) => {
+      const expected =
+        c.operator === 'exists' || c.operator === 'not_exists' ? '' : ` ${JSON.stringify(c.expectedValue)}`;
+      const actual =
+        c.actualValue === undefined ? 'condition_field_unresolved' : `actual: ${JSON.stringify(c.actualValue)}`;
+      return `${c.field} ${c.operator}${expected} (${actual})`;
+    });
+  return `conditions_not_matched: ${failed.join('; ')}`;
+}
