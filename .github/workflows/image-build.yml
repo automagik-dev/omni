@@ -23,9 +23,13 @@
 #     provenance; require the active v* tag ruleset; wait for any running
 #     release.yml run at the tag, refuse a dev prerelease at the tag; dispatch
 #     release.yml (channel=stable) and version.yml (stable_publish_only=true)
-#     at the same tag and wait for both; print the CANDIDATE_* values that the
-#     reviewed promotion pins (image-publish.yml, .well-known/*.json, Helm
-#     values, contract tests, upgrade runbook) are updated to.
+#     at the same tag and wait for both; write the candidate receipt as soon
+#     as the stable release exists (before the npm step, so a registry race
+#     never hides the digest); dispatch pin-candidate.yml, which commits the
+#     public channel pins (.well-known/*.json, Helm image.tag) to dev.
+#     image-publish.yml and the CI promotion gate derive the candidate from
+#     the tree (package version → v<version> tag → attested alias); nothing is
+#     hand-pasted.
 #
 # Recovery: if finalize fails after build-push succeeded (ruleset check,
 # run-resolution timeout, concurrent dispatch, a failed release.yml run), a
@@ -104,6 +108,37 @@ jobs:
             exit 1
           }
           [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]
+
+      # A tag that already carries a public dev prerelease (a merged-PR bump,
+      # or a dispatch without candidate=true) can never become stable: its
+      # channel classification is immutable. finalize re-checks this after
+      # waiting for in-flight release.yml runs; refusing here saves the full
+      # multi-arch build and attestation when the answer is already known.
+      - name: Refuse a tag that already carries a dev prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          lookup_status=$(curl -sS -o "${RUNNER_TEMP}/release.json" -w '%{http_code}' \
+            --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/v${VERSION}")
+          case "${lookup_status}" in
+            404) echo "no release at v${VERSION} yet; the tag is mintable" ;;
+            200)
+              release_state=$(jq -r '[.draft,.prerelease] | @tsv' "${RUNNER_TEMP}/release.json")
+              [[ "${release_state}" != $'false\ttrue' ]] || {
+                echo "::error::a dev prerelease already exists at v${VERSION}; this tag cannot become stable — cut a fresh candidate with \`gh workflow run version.yml --ref dev -f candidate=true\` and mint that tag instead"
+                exit 1
+              }
+              ;;
+            *)
+              echo "::error::release lookup for v${VERSION} returned HTTP ${lookup_status}; refusing to guess"
+              exit 1
+              ;;
+          esac
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -327,16 +362,11 @@ jobs:
             --remote origin --version "${VERSION}" --mode exact --expected-sha "${SOURCE_SHA}"
           echo "Verified remote tag target before publication"
 
-      # The dispatching identity must stay github.token: release.yml's stable
-      # authorize job and version.yml's publish-stable job both require the
-      # actor to be github-actions[bot] and re-verify this run by id.
-      - name: Verify or publish the stable release, then publish stable npm
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # The run-resolution helpers are shared by the release and npm steps
+      # below; sourced per step because each `run:` is its own shell.
+      - name: Stage dispatch helpers
         run: |
-          set -euo pipefail
-          tag="v${VERSION}"
-
+          cat > "${RUNNER_TEMP}/dispatch-helpers.sh" <<'SH'
           # `gh workflow run` prints no run id. Snapshot the workflow's
           # dispatch runs on this tag before dispatching, then poll for
           # exactly one NEW run whose head SHA is the verified source.
@@ -367,6 +397,19 @@ jobs:
               exit 1
             }
           }
+          SH
+
+      # The dispatching identity must stay github.token: release.yml's stable
+      # authorize job and version.yml's publish-stable job both require the
+      # actor to be github-actions[bot] and re-verify this run by id.
+      - name: Verify or publish the stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          # shellcheck disable=SC1091
+          source "${RUNNER_TEMP}/dispatch-helpers.sh"
 
           # A release.yml run still in flight at this tag (a dev prerelease
           # cut without candidate=true, or a stable run from a re-run of this
@@ -473,6 +516,45 @@ jobs:
             --remote origin --version "${VERSION}" --mode exact --expected-sha "${SOURCE_SHA}"
           echo "Verified remote tag target after publication"
 
+      # Written BEFORE the npm step: the stable release and the attested image
+      # are final at this point, and an npm registry race must never hide the
+      # digest (#1057). Re-running failed jobs re-emits the same receipt.
+      - name: Write candidate receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          published_at=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v${VERSION}" --jq .published_at)
+          [[ "${published_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || {
+            echo "::error::stable release v${VERSION} has no published_at timestamp"
+            exit 1
+          }
+          {
+            echo "### Omni release candidate v${VERSION}"
+            echo "- source: \`${SOURCE_SHA}\`"
+            echo "- version: \`${VERSION}\`"
+            echo "- OCI digest: \`${DIGEST}\`"
+            echo "- release published at: \`${published_at}\`"
+            echo "- next: pin-candidate.yml commits the public channel pins to dev once"
+            echo "  the stable npm step below succeeds; then open the dev → main promotion."
+            echo "  image-publish.yml and the CI promotion gate derive the candidate from"
+            echo "  the tree, so nothing is pasted by hand."
+            echo "- mutation boundary: no tag, branch, production pin, or cluster write"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "CANDIDATE_VERSION=${VERSION}"
+          echo "CANDIDATE_SHA=${SOURCE_SHA}"
+          echo "CANDIDATE_DIGEST=${DIGEST}"
+          echo "RELEASE_PUBLISHED_AT=${published_at}"
+
+      - name: Publish stable npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          # shellcheck disable=SC1091
+          source "${RUNNER_TEMP}/dispatch-helpers.sh"
+
           # Always dispatch the hardened npm reconciler — even when version and
           # latest already look correct — so existing package bytes, registry
           # signatures, and available provenance attestations are reverified.
@@ -500,29 +582,19 @@ jobs:
           scripts/release/verify-oci-alias.sh \
             --image "${IMAGE}" --version "${VERSION}" --expected-digest "${DIGEST}"
 
-      - name: Write candidate receipt
+      # The pin is a dev branch write, so it lives in its own workflow with its
+      # own credential; this job stays unable to move a Git ref. The dispatch
+      # resolves pin-candidate.yml on the default branch, so until the first
+      # promotion carrying that file lands it 404s: warn with the manual
+      # command instead of failing an otherwise complete mint.
+      - name: Dispatch the candidate pin to dev
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          published_at=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v${VERSION}" --jq .published_at)
-          [[ "${published_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || {
-            echo "::error::stable release v${VERSION} has no published_at timestamp"
-            exit 1
+          gh workflow run pin-candidate.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref dev \
+            --field version="${VERSION}" || {
+            echo "::warning::could not dispatch pin-candidate.yml (not on the default branch yet?); run: gh workflow run pin-candidate.yml --ref dev -f version=${VERSION}"
           }
-          {
-            echo "### Omni release candidate v${VERSION}"
-            echo "- source: \`${SOURCE_SHA}\`"
-            echo "- version: \`${VERSION}\`"
-            echo "- OCI digest: \`${DIGEST}\`"
-            echo "- release published at: \`${published_at}\`"
-            echo "- next: paste the CANDIDATE_* values below into image-publish.yml,"
-            echo "  .well-known/{latest,dev}.json, deploy/helm/omni/values.yaml image.tag,"
-            echo "  the contract test pins, and the upgrade runbook in a reviewed commit,"
-            echo "  then open the dev → main promotion."
-            echo "- mutation boundary: no tag, branch, production pin, or cluster write"
-          } >> "${GITHUB_STEP_SUMMARY}"
-          echo "CANDIDATE_VERSION=${VERSION}"
-          echo "CANDIDATE_SHA=${SOURCE_SHA}"
-          echo "CANDIDATE_DIGEST=${DIGEST}"
-          echo "RELEASE_PUBLISHED_AT=${published_at}"

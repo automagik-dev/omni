@@ -340,6 +340,9 @@ export interface SendMessageBody {
 export interface ListEventsParams {
   channel?: string;
   instanceId?: string;
+  personId?: string;
+  /** Chat UUID */
+  chatId?: string;
   eventType?: string;
   since?: string;
   until?: string;

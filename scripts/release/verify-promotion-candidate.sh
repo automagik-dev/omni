@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'Usage: verify-promotion-candidate.sh --candidate-sha FULL_SHA --final-sha FULL_SHA --version VERSION --digest sha256:...\n' >&2
+  printf 'Usage: verify-promotion-candidate.sh --candidate-sha FULL_SHA --final-sha FULL_SHA --version VERSION [--digest sha256:...]\n' >&2
   exit 2
 }
 
@@ -28,7 +28,12 @@ done
 [[ "${candidate_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "candidate SHA must be 40 lowercase hexadecimal characters"
 [[ "${final_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "final SHA must be 40 lowercase hexadecimal characters"
 [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must be numeric dotted form"
-[[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "digest must be lowercase sha256 with 64 hexadecimal characters"
+# The digest is optional: the pre-merge promotion gate binds the tree to its
+# tag without touching the registry, and the post-merge verifier resolves the
+# digest from the attested alias itself. When given, it is validated and echoed.
+if [[ -n "${digest}" ]]; then
+  [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "digest must be lowercase sha256 with 64 hexadecimal characters"
+fi
 
 git cat-file -e "${candidate_sha}^{commit}" 2>/dev/null || fail "candidate commit does not exist"
 git cat-file -e "${final_sha}^{commit}" 2>/dev/null || fail "final commit does not exist"
@@ -66,5 +71,5 @@ output="${GITHUB_OUTPUT:-/dev/stdout}"
   printf 'candidate_sha=%s\n' "${candidate_sha}"
   printf 'final_sha=%s\n' "${final_sha}"
   printf 'version=%s\n' "${version}"
-  printf 'digest=%s\n' "${digest}"
+  [[ -z "${digest}" ]] || printf 'digest=%s\n' "${digest}"
 } >>"${output}"

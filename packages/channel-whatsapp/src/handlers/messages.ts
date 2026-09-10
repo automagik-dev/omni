@@ -835,6 +835,7 @@ async function handleSpecialMessage(
       content.targetMessageId,
       chatId,
       content.editedText || content.text || '',
+      isFromMe(msg),
     );
     return true;
   }
