@@ -747,21 +747,28 @@ export class MessageService {
   }
 
   /**
-   * Remove a reaction from a message
+   * Remove a reaction from a message.
+   *
+   * An empty `emoji` removes every reaction by that user — WhatsApp reports a
+   * removal without saying which emoji went away.
    */
   async removeReaction(id: string, platformUserId: string, emoji: string, latestEventId?: string): Promise<Message> {
     const message = await this.getById(id);
 
     const currentReactions = (message.reactions as ReactionInfo[]) ?? [];
-    const newReactions = currentReactions.filter((r) => !(r.platformUserId === platformUserId && r.emoji === emoji));
+    const newReactions = currentReactions.filter(
+      (r) => !(r.platformUserId === platformUserId && (emoji === '' || r.emoji === emoji)),
+    );
 
     // Update reaction counts
     const currentCounts = (message.reactionCounts as Record<string, number>) ?? {};
     const newCounts = { ...currentCounts };
-    if (newCounts[emoji]) {
-      newCounts[emoji] = Math.max(0, newCounts[emoji] - 1);
-      if (newCounts[emoji] === 0) {
-        delete newCounts[emoji];
+    for (const removed of currentReactions.filter((r) => !newReactions.includes(r))) {
+      const count = (newCounts[removed.emoji] ?? 0) - 1;
+      if (count > 0) {
+        newCounts[removed.emoji] = count;
+      } else {
+        delete newCounts[removed.emoji];
       }
     }
 

@@ -29,7 +29,14 @@ import type {
   InstanceConnectedMetadata,
 } from '../helpers/events';
 import type { ChannelCapabilities } from '../types/capabilities';
-import type { GlobalConfig, Logger, PluginContext, PluginDatabase, PluginStorage } from '../types/context';
+import type {
+  GlobalConfig,
+  IngressClaim,
+  Logger,
+  PluginContext,
+  PluginDatabase,
+  PluginStorage,
+} from '../types/context';
 import type { ConnectionStatus, InstanceConfig } from '../types/instance';
 import type { OutgoingMessage, SendResult } from '../types/messaging';
 import type { ChannelPlugin, HealthCheck, HealthStatus } from '../types/plugin';
@@ -48,6 +55,7 @@ const NO_ACTIVITY_EVENTS = new Set<string>([
 interface PublishEventInternalOptions {
   timings?: Record<string, number>;
   ingestMode?: 'realtime' | 'history-sync';
+  publishEventId?: string;
 }
 
 /**
@@ -95,6 +103,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
   // ─────────────────────────────────────────────────────────────
 
   protected eventBus!: EventBus;
+  protected ingressClaim?: IngressClaim;
   protected logger!: Logger;
   protected storage!: PluginStorage;
   protected config!: GlobalConfig;
@@ -120,6 +129,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
     this.storage = context.storage;
     this.config = context.config;
     this.db = context.db;
+    this.ingressClaim = context.ingressClaim;
 
     await this.onInitialize(context);
   }
@@ -375,10 +385,40 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    */
   protected async emitMessageReceived(params: EmitMessageReceivedParams): Promise<string> {
     const { instanceId, timings, isHistorySync, ...payload } = params;
-    return this.publishEventInternal('message.received', payload, instanceId, {
+    const options: PublishEventInternalOptions = {
       timings,
       ingestMode: isHistorySync ? 'history-sync' : 'realtime',
-    });
+    };
+
+    // Ingress idempotency (#1032): claim `{channel}:{instance}:{externalId}:{kind}`
+    // before publishing. The kind is part of the key because a platform can
+    // reuse a message id for a different fact (a WhatsApp deletion carries
+    // the deleted message's id). A duplicate claim skips the publish.
+    if (this.ingressClaim) {
+      const idempotencyKey = `${this.id}:${instanceId}:${payload.externalId}:${payload.content.type}`;
+      const eventId = await this.ingressClaim.claim({
+        idempotencyKey,
+        instanceId,
+        channelType: this.id,
+        externalId: payload.externalId,
+      });
+      if (eventId === null) {
+        this.logger.info('Skipping duplicate inbound message (idempotency key already journaled)', {
+          instanceId,
+          idempotencyKey,
+        });
+        return generateCorrelationId('evt');
+      }
+      options.publishEventId = eventId;
+      try {
+        return await this.publishEventInternal('message.received', payload, instanceId, options);
+      } catch (error) {
+        await this.ingressClaim.release(eventId).catch(() => {});
+        throw error;
+      }
+    }
+
+    return this.publishEventInternal('message.received', payload, instanceId, options);
   }
 
   /**

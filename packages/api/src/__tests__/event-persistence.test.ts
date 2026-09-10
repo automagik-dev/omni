@@ -9,7 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'b
 import { randomUUID } from 'node:crypto';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
-import { omniEvents } from '@omni/db';
+import { chatIdMappings, chats, instances, omniEvents } from '@omni/db';
 import { eq, sql } from 'drizzle-orm';
 import { setupEventPersistence } from '../plugins/event-persistence';
 import { describeWithDb, getTestDb } from './db-helper';
@@ -125,6 +125,80 @@ describeWithDb('Event Persistence Handler', () => {
       expect(persisted?.rawPayload).toEqual({ foo: 'bar' });
     });
 
+    test('links a @lid-addressed message.received to the phone-form chat via chat_id_mappings (#1035)', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const [instance] = await db
+        .insert(instances)
+        .values({ name: `test-ep-lid-${Date.now()}`, channel: 'whatsapp-baileys' })
+        .returning();
+      if (!instance) throw new Error('Failed to create test instance');
+      const lidJid = '123456789012345@lid';
+      const phoneJid = '5511999999999@s.whatsapp.net';
+      try {
+        const [chat] = await db
+          .insert(chats)
+          .values({
+            instanceId: instance.id,
+            externalId: phoneJid,
+            canonicalId: phoneJid,
+            chatType: 'dm',
+            channel: 'whatsapp-baileys',
+          })
+          .returning();
+        await db.insert(chatIdMappings).values({ instanceId: instance.id, lidId: lidJid, phoneId: phoneJid });
+
+        await emitEvent('message.received', {
+          id: randomUUID(),
+          type: 'message.received',
+          timestamp: Date.now(),
+          payload: { externalId: 'ext-lid-001', chatId: lidJid, from: lidJid, content: { type: 'text', text: 'hi' } },
+          metadata: { correlationId: 'corr-lid', instanceId: instance.id, channelType: 'whatsapp' },
+        });
+
+        const [persisted] = await db.select().from(omniEvents).where(eq(omniEvents.externalId, 'ext-lid-001')).limit(1);
+        expect(persisted?.chatId).toBe(lidJid);
+        expect(persisted?.chatUuid).toBe(chat?.id);
+        expect(persisted?.canonicalChatId).toBe(phoneJid);
+      } finally {
+        await db.delete(omniEvents).where(eq(omniEvents.externalId, 'ext-lid-001'));
+        await db.delete(instances).where(eq(instances.id, instance.id));
+      }
+    });
+
+    test('journals own-device echo (rawPayload.isFromMe=true) as outbound (#1034)', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      await emitEvent('message.received', {
+        id: randomUUID(),
+        type: 'message.received',
+        timestamp: Date.now(),
+        payload: {
+          externalId: 'ext-recv-echo-001',
+          chatId: 'chat-123',
+          from: 'me',
+          content: { type: 'text', text: 'typed on my phone' },
+          replyToId: null,
+          rawPayload: { isFromMe: true },
+        },
+        metadata: {
+          correlationId: 'corr-echo',
+          instanceId: null,
+          channelType: 'whatsapp',
+          personId: null,
+          platformIdentityId: null,
+        },
+      });
+
+      const [persisted] = await db
+        .select()
+        .from(omniEvents)
+        .where(eq(omniEvents.externalId, 'ext-recv-echo-001'))
+        .limit(1);
+      expect(persisted?.eventType).toBe('message.received');
+      expect(persisted?.direction).toBe('outbound');
+    });
+
     test('uses UUID event id as persisted omni_events primary key', async () => {
       await setupEventPersistence(mockEventBus, db);
 
@@ -197,6 +271,43 @@ describeWithDb('Event Persistence Handler', () => {
 
       expect(persisted).toHaveLength(1);
       expect(persisted[0]?.externalId).toBe('ext-recv-redelivery');
+    });
+
+    test('fills in the ingress idempotency claim row instead of leaving a skeleton (#1032)', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const eventId = randomUUID();
+      // The claim row `createIngressClaim` inserts before the plugin publishes.
+      await db.insert(omniEvents).values({
+        id: eventId,
+        externalId: 'ext-recv-claim',
+        channel: 'whatsapp-baileys',
+        eventType: 'message.received',
+        direction: 'inbound',
+        status: 'received',
+        idempotencyKey: `whatsapp-baileys:test:ext-recv-claim:text:${eventId}`,
+        receivedAt: new Date(),
+      });
+
+      await emitEvent('message.received', {
+        id: eventId,
+        type: 'message.received',
+        timestamp: Date.now(),
+        payload: {
+          externalId: 'ext-recv-claim',
+          chatId: 'chat-123',
+          from: 'user-456',
+          content: { type: 'text', text: 'claimed then journaled' },
+        },
+        metadata: { correlationId: eventId, instanceId: null, channelType: 'whatsapp-baileys' },
+      });
+
+      const rows = await db.select().from(omniEvents).where(eq(omniEvents.externalId, 'ext-recv-claim'));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).toBe(eventId);
+      expect(rows[0]?.textContent).toBe('claimed then journaled');
+      expect(rows[0]?.contentType).toBe('text');
+      expect(rows[0]?.idempotencyKey).toBe(`whatsapp-baileys:test:ext-recv-claim:text:${eventId}`);
     });
 
     test('handles image content type', async () => {

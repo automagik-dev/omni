@@ -576,7 +576,14 @@ export const PENDING_G4_CEILING = 7;
  *     `access.ts::access_rules` joined this group in run15: its two consumer
  *     callers were converted, and the caller trace then found the tRPC edge.
  */
-export const PENDING_G5_CEILING = 12;
+// 13 after #1031: the automation engine's per-(event, automation) execution
+// claim is a genuinely new `processed_events` write in
+// `automation-actions.ts` — the same G6 gate as `idempotency.ts`, not a
+// relabelling.
+// 14 after #1032: the channel ingress idempotency claim in `plugins/context.ts`
+// is a genuinely new `omni_events` write reached from a channel socket
+// callback on the ambient pool — the same G6 gate as `idempotency.ts`.
+export const PENDING_G5_CEILING = 14;
 
 /**
  * Ceiling on `pending-G4-conversion` + `pending-G5-conversion` combined.
@@ -645,7 +652,11 @@ export const PENDING_G5_CEILING = 12;
 // pending-G4 site (a bare getDb() in a credential-less webhook path — see its
 // registry entry). Nothing was reclassified; the raise is a real new site in
 // a new package, not movement between pending classes.
-export const TOTAL_PENDING_CEILING = 19;
+// 20 after #1031 (6 + 13): ONE new G6-gated `processed_events` claim site in
+// `automation-actions.ts` (see PENDING_G5_CEILING). Nothing was reclassified.
+// 21 after #1032 (6 + 14): ONE new G6-gated `omni_events` claim site in
+// `plugins/context.ts` (see PENDING_G5_CEILING). Nothing was reclassified.
+export const TOTAL_PENDING_CEILING = 21;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -890,6 +901,33 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'tenant-boundary',
   },
   {
+    // #1032: channel ingress idempotency claim (`ingressClaim.claim` /
+    // `release`): the `omni_events` insert IS the dedup claim, reached from a
+    // channel plugin's socket callback which has no HTTP request and therefore
+    // no credential to open a tenant scope. Runs on the ambient pool; row
+    // ownership is the 0041 derivation trigger's job (db-derived). Flips to
+    // tenant-boundary when G6 lands, same gate as `idempotency.ts`.
+    file: 'packages/api/src/plugins/context.ts',
+    table: 'omni_events',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from a channel plugin socket consumer callback (the Baileys/Discord/Telegram inbound listener), ' +
+      'which has no HTTP request and therefore no credential to open an ADR-0008 tenant scope; the journal row is ' +
+      'the idempotency claim itself and its ownership is db-derived.',
+  },
+  {
+    // #1031: execution claim against the same `processed_events` PK that
+    // `idempotency.ts` uses, reached from the engine's NATS consumer callback.
+    // Same G6 gate as that site: the table derives through a G2-unowned root.
+    file: 'packages/api/src/plugins/automation-actions.ts',
+    table: 'processed_events',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from the automation engine NATS consumer callback (no HTTP request, no credential). Same ' +
+      'processed_events claim and same G6 gate as packages/api/src/lib/idempotency.ts; the async mechanism is the ' +
+      'ADR-0008 consumer context.',
+  },
+  {
     file: 'packages/api/src/plugins/automation-actions.ts',
     table: 'agents',
     class: 'pending-G5-conversion',
@@ -979,6 +1017,15 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     // worker tenant scope. Consumer-only callers.
     file: 'packages/api/src/plugins/event-persistence.ts',
     table: 'persons',
+    class: 'tenant-boundary',
+  },
+  {
+    // #1035: the message.received consumer back-links the journal row's
+    // chatUuid/personId after chat resolution. The update runs inside
+    // `runConsumerInTenantContext` through `scopedHandle(db)` — the same
+    // ADR-0008 worker-scope seam as the event-persistence.ts siblings above.
+    file: 'packages/api/src/plugins/message-persistence.ts',
+    table: 'omni_events',
     class: 'tenant-boundary',
   },
   {

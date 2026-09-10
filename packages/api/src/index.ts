@@ -280,6 +280,10 @@ function startBunServer(app: App) {
   return Bun.serve<{ params: ReturnType<typeof parseVoiceStreamParams> }>({
     port: PORT,
     hostname: HOST,
+    // Bun's default idleTimeout is 10s, which cut the socket under an idle
+    // `POST /events/consumers/:name/pull?waitMs=10000` long-poll (issue #1029).
+    // Must exceed PULL_MAX_WAIT_MS (30s) in services/event-consumers.ts.
+    idleTimeout: 60,
     fetch(req, server) {
       const url = new URL(req.url);
 

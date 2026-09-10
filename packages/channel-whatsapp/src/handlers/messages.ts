@@ -567,13 +567,12 @@ function extractUnknownContent(message: MessageContent): ExtractedContent | null
     return null;
   }
 
-  // Log unknown types at debug level for future investigation
+  // Log unknown types at debug level for future investigation. The keys stay in
+  // the log + rawPayload only — never in `text`, which downstream consumers
+  // (agents, FTS) treat as user speech (#1041).
   log.debug('Unknown message type', { keys: messageKeys });
 
-  return {
-    type: 'unknown' as ContentType,
-    text: `Unknown message type: ${messageKeys.join(', ')}`,
-  };
+  return { type: 'unknown' as ContentType };
 }
 
 /**

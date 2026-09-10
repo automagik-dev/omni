@@ -3,7 +3,13 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { evaluateCondition, evaluateConditions, getNestedValue } from '../conditions';
+import {
+  describeUnmatchedConditions,
+  evaluateCondition,
+  evaluateConditions,
+  evaluateConditionsWithDetails,
+  getNestedValue,
+} from '../conditions';
 import type { AutomationCondition } from '../types';
 
 describe('getNestedValue', () => {
@@ -347,5 +353,28 @@ describe('evaluateConditions', () => {
       // With OR, should pass since a matches
       expect(evaluateConditions(conditions, { a: 1, b: 3 }, 'or')).toBe(true);
     });
+  });
+});
+
+describe('describeUnmatchedConditions (#1030)', () => {
+  test('names the failing condition and tags an unresolved dot path', () => {
+    const conditions: AutomationCondition[] = [
+      { field: 'action', operator: 'eq', value: 'closed' },
+      { field: 'pull_request.merged', operator: 'eq', value: true },
+    ];
+    const result = evaluateConditionsWithDetails(conditions, { action: 'closed', pull_request: {} });
+    expect(result.matched).toBe(false);
+    expect(describeUnmatchedConditions(result)).toBe(
+      'conditions_not_matched: pull_request.merged eq true (condition_field_unresolved)',
+    );
+  });
+
+  test('reports the resolved value when the field exists but differs', () => {
+    const result = evaluateConditionsWithDetails([{ field: 'pull_request.merged', operator: 'eq', value: true }], {
+      pull_request: { merged: false },
+    });
+    expect(describeUnmatchedConditions(result)).toBe(
+      'conditions_not_matched: pull_request.merged eq true (actual: false)',
+    );
   });
 });

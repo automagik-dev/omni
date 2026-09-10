@@ -1596,26 +1596,6 @@ export class DiscordPlugin extends BaseChannelPlugin {
         isCustomEmoji: false,
       });
     }
-
-    // Dual-emit as message.received for backward compatibility
-    // Remove this once all consumers migrate to reaction.* events
-    if (process.env.OMNI_DUAL_EMIT_REACTIONS !== 'false') {
-      await this.emitMessageReceived({
-        instanceId,
-        externalId: `${messageId}-reaction-${Date.now()}`,
-        chatId,
-        from: userId,
-        content: {
-          type: 'reaction',
-          text: emoji,
-        },
-        rawPayload: {
-          targetMessageId: messageId,
-          action,
-          emoji,
-        },
-      });
-    }
   }
 
   /**
@@ -1652,10 +1632,8 @@ export class DiscordPlugin extends BaseChannelPlugin {
       externalId: `${messageId}-delete-${Date.now()}`,
       chatId,
       from: chatId,
-      content: {
-        type: 'delete',
-        text: fromMe ? 'Message deleted by bot' : 'Message deleted',
-      },
+      // No placeholder text: it is not user speech (#1041). Semantics live in rawPayload.
+      content: { type: 'delete' },
       rawPayload: {
         deletedMessageId: messageId,
         deletedAt: Date.now(),

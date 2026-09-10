@@ -15,7 +15,10 @@ const automationsRoutes = new Hono<{ Variables: AppVariables }>();
 
 // Condition schema
 const conditionSchema = z.object({
-  field: z.string().min(1).describe('Dot notation field path (e.g., payload.content.type)'),
+  field: z
+    .string()
+    .min(1)
+    .describe('Dot notation path into the event payload (e.g., content.type, pull_request.merged)'),
   operator: z
     .enum(['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'contains', 'not_contains', 'exists', 'not_exists', 'regex'])
     .describe('Comparison operator'),
