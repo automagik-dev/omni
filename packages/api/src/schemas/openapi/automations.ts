@@ -164,10 +164,53 @@ export const AutomationLogSchema = z.object({
 
 // Test automation request
 export const TestAutomationSchema = z.object({
-  event: z.object({
-    type: z.string().min(1).openapi({ description: 'Event type' }),
-    payload: z.record(z.string(), z.unknown()).openapi({ description: 'Event payload' }),
-  }),
+  event: z
+    .object({
+      type: z.string().min(1).openapi({ description: 'Event type' }),
+      payload: z.record(z.string(), z.unknown()).openapi({ description: 'Event payload' }),
+    })
+    .optional()
+    .openapi({ description: 'Hand-written event. Exactly one of event / eventId is required' }),
+  eventId: z
+    .string()
+    .uuid()
+    .optional()
+    .openapi({
+      description:
+        'Id of a REAL journaled event (omni_events) to run against (#1073): its rawPayload is the payload, ' +
+        'its envelope metadata is merged for conditions. Exactly one of event / eventId is required',
+    }),
+});
+
+// Dry-run result (#1073)
+export const AutomationTestResultSchema = z.object({
+  matched: z.boolean().openapi({ description: 'triggerMatched AND conditionsMatched' }),
+  triggerMatched: z.boolean().openapi({ description: 'Event type equals the automation trigger' }),
+  conditionsMatched: z.boolean().openapi({ description: 'Condition set verdict under conditionLogic' }),
+  conditionLogic: z.enum(['and', 'or']),
+  conditions: z
+    .array(
+      z.object({
+        field: z.string(),
+        operator: z.string(),
+        expected: z.unknown().optional(),
+        actual: z.unknown().optional(),
+        resolved: z.boolean().openapi({ description: 'false = the dot path resolved to nothing in the payload' }),
+        matched: z.boolean(),
+      }),
+    )
+    .openapi({ description: 'Per-condition verdicts' }),
+  actions: z
+    .array(
+      z.object({
+        type: z.string(),
+        wouldExecute: z.boolean(),
+        config: z.record(z.string(), z.unknown()).openapi({ description: 'Action config with templates rendered' }),
+      }),
+    )
+    .openapi({ description: 'Rendered actions — never executed' }),
+  eventId: z.string().uuid().nullable(),
+  dryRun: z.literal(true),
 });
 
 // Automation metrics
@@ -195,6 +238,7 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
   registry.register('CreateAutomationRequest', CreateAutomationSchema);
   registry.register('AutomationLog', AutomationLogSchema);
   registry.register('TestAutomationRequest', TestAutomationSchema);
+  registry.register('AutomationTestResult', AutomationTestResultSchema);
   registry.register('AutomationMetrics', AutomationMetricsSchema);
 
   registry.registerPath({
@@ -320,24 +364,18 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
     path: '/automations/{id}/test',
     operationId: 'testAutomation',
     tags: ['Automations'],
-    summary: 'Test automation',
-    description: 'Test automation against a sample event (dry run).',
+    summary: 'Test automation (dry run)',
+    description:
+      'Dry-run an automation against a hand-written event or a REAL journaled event (`eventId`, #1073): ' +
+      'trigger match, per-condition verdicts and rendered action templates. Executes nothing, writes no execution log.',
     request: {
       params: z.object({ id: z.string().uuid().openapi({ description: 'Automation UUID' }) }),
       body: { content: { 'application/json': { schema: TestAutomationSchema } } },
     },
     responses: {
       200: {
-        description: 'Test result',
-        content: {
-          'application/json': {
-            schema: z.object({
-              matched: z.boolean(),
-              conditionResults: z.array(z.object({ condition: ConditionSchema, passed: z.boolean() })).optional(),
-              wouldExecute: z.array(ActionSchema).optional(),
-            }),
-          },
-        },
+        description: 'Dry-run result',
+        content: { 'application/json': { schema: AutomationTestResultSchema } },
       },
       404: { description: 'Not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
@@ -349,7 +387,8 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
     operationId: 'executeAutomation',
     tags: ['Automations'],
     summary: 'Execute automation',
-    description: 'Execute automation with a provided event payload. Actually runs the actions (not a dry run).',
+    description:
+      'Execute automation with a provided event payload or a journaled event (`eventId`). Actually runs the actions (not a dry run).',
     request: {
       params: z.object({ id: z.string().uuid().openapi({ description: 'Automation UUID' }) }),
       body: { content: { 'application/json': { schema: TestAutomationSchema } } },

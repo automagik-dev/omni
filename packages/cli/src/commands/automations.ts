@@ -29,10 +29,11 @@
  */
 
 import { readFileSync } from 'node:fs';
-import type { CreateAutomationBody } from '@omni/sdk';
+import type { CreateAutomationBody, OmniClient, TestAutomationBody } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
+import { getCurrentFormat } from '../output.js';
 import { resolveAutomationId } from '../resolve.js';
 
 // ============================================================================
@@ -188,7 +189,44 @@ function buildCreateBody(options: CreateOptions): CreateAutomationBody {
   return body as CreateAutomationBody;
 }
 
-export const __testables = { buildActions, buildDefinition, buildCreateBody, readDefinitionFile };
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * `--event` is either inline event JSON (legacy) or the id of a journaled
+ * event (#1073). Returns the API body, or undefined when it is neither.
+ */
+function parseEventOption(raw: string): TestAutomationBody | undefined {
+  const value = raw.trim();
+  if (UUID_RE.test(value)) return { eventId: value };
+  try {
+    const event = JSON.parse(value) as { type?: unknown; payload?: unknown };
+    if (typeof event.type !== 'string' || typeof event.payload !== 'object' || event.payload === null) return undefined;
+    return { event: event as TestAutomationBody['event'] };
+  } catch {
+    return undefined;
+  }
+}
+
+function reportExecution(result: Awaited<ReturnType<OmniClient['automations']['execute']>>): void {
+  if (!result.triggered) {
+    output.info('Automation not triggered (event type did not match)');
+    output.data({ triggered: false });
+    return;
+  }
+  const allSuccess = result.results.every((r) => r.status === 'success');
+  if (allSuccess) {
+    output.success('Automation executed successfully', {
+      automationId: result.automationId,
+      actionsExecuted: result.results.length,
+      results: result.results,
+    });
+  } else {
+    output.info('Automation executed with some failures');
+    output.data({ automationId: result.automationId, results: result.results });
+  }
+}
+
+export const __testables = { buildActions, buildDefinition, buildCreateBody, readDefinitionFile, parseEventOption };
 
 // ============================================================================
 // COMMANDS
@@ -398,36 +436,54 @@ export function createAutomationsCommand(): Command {
   // omni automations test <id>
   automations
     .command('test <id>')
-    .description('Test an automation with a mock event')
-    .requiredOption('--event <json>', 'Event JSON (e.g., \'{"type":"message.received","payload":{}}\')')
-    .action(async (id: string, options: { event: string }) => {
+    .description('Dry-run an automation against a mock event or a REAL journaled event: verdicts, no side effects')
+    .requiredOption(
+      '--event <json|event-id>',
+      'Event JSON (\'{"type":"message.received","payload":{}}\') or the id of a journaled event (omni events list)',
+    )
+    .option('--execute', 'Actually run the actions against the event (same as `execute`)', false)
+    .action(async (id: string, options: { event: string; execute: boolean }) => {
       const client = getClient();
 
       try {
         const automationId = await resolveAutomationId(id);
-        let event: { type: string; payload: Record<string, unknown> };
-        try {
-          event = JSON.parse(options.event);
-        } catch {
-          output.error('Invalid JSON for --event');
+        const body = parseEventOption(options.event);
+        if (!body) {
+          output.error('--event must be valid JSON with "type" and "payload" fields, or a journaled event UUID');
           return;
         }
 
-        if (!event.type || !event.payload) {
-          output.error('Event must have "type" and "payload" fields');
+        if (options.execute) {
+          reportExecution(await client.automations.execute(automationId, body));
+          return;
         }
 
-        const result = await client.automations.test(automationId, { event });
+        const result = await client.automations.test(automationId, body);
+        const verdicts = result.conditions.map((c) => ({
+          field: c.field,
+          operator: c.operator,
+          expected: c.expected === undefined ? '' : JSON.stringify(c.expected),
+          actual: c.resolved ? JSON.stringify(c.actual) : '(unresolved)',
+          matched: c.matched ? 'yes' : 'no',
+        }));
+        const summary = result.matched
+          ? 'Automation matched the event (dry run — nothing executed)'
+          : result.triggerMatched
+            ? `Conditions did not match (${result.conditionLogic})`
+            : 'Trigger did not match: event type differs from the automation trigger';
 
-        if (result.matched) {
-          output.success('Automation matched the event', {
-            matched: true,
-            wouldExecute: result.wouldExecute,
-          });
-        } else {
-          output.info('Automation did not match the event');
-          output.data({ matched: false });
+        if (result.matched) output.success(summary);
+        else output.info(summary);
+        if (getCurrentFormat() === 'json') {
+          output.data(result);
+          return;
         }
+        if (verdicts.length > 0) {
+          output.header('Conditions');
+          output.list(verdicts, { rawData: result.conditions });
+        }
+        output.header('Actions (templates rendered, not executed)');
+        output.data(result.actions);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to test automation: ${message}`);
@@ -437,47 +493,19 @@ export function createAutomationsCommand(): Command {
   // omni automations execute <id>
   automations
     .command('execute <id>')
-    .description('Execute an automation with a provided event (actually runs actions)')
-    .requiredOption('--event <json>', 'Event JSON (e.g., \'{"type":"message.received","payload":{...}}\')')
+    .description('Execute an automation with a provided or journaled event (actually runs actions)')
+    .requiredOption('--event <json|event-id>', 'Event JSON or the id of a journaled event')
     .action(async (id: string, options: { event: string }) => {
       const client = getClient();
 
       try {
         const automationId = await resolveAutomationId(id);
-        let event: { type: string; payload: Record<string, unknown> };
-        try {
-          event = JSON.parse(options.event);
-        } catch {
-          output.error('Invalid JSON for --event');
+        const body = parseEventOption(options.event);
+        if (!body) {
+          output.error('--event must be valid JSON with "type" and "payload" fields, or a journaled event UUID');
           return;
         }
-
-        if (!event.type || !event.payload) {
-          output.error('Event must have "type" and "payload" fields');
-          return;
-        }
-
-        const result = await client.automations.execute(automationId, { event });
-
-        if (result.triggered) {
-          const allSuccess = result.results.every((r: { status: string }) => r.status === 'success');
-          if (allSuccess) {
-            output.success('Automation executed successfully', {
-              automationId: result.automationId,
-              actionsExecuted: result.results.length,
-              results: result.results,
-            });
-          } else {
-            output.info('Automation executed with some failures');
-            output.data({
-              automationId: result.automationId,
-              results: result.results,
-            });
-          }
-        } else {
-          output.info('Automation not triggered (event type did not match)');
-          output.data({ triggered: false });
-        }
+        reportExecution(await client.automations.execute(automationId, body));
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to execute automation: ${message}`);

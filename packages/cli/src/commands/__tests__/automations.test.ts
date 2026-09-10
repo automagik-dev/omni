@@ -162,3 +162,25 @@ describe('buildCreateBody', () => {
     );
   });
 });
+
+describe('parseEventOption (#1073)', () => {
+  const { parseEventOption } = __testables;
+
+  test('a UUID is a journaled event id', () => {
+    expect(parseEventOption(' 77777777-7777-4777-8777-777777777777 ')).toEqual({
+      eventId: '77777777-7777-4777-8777-777777777777',
+    });
+  });
+
+  test('inline JSON keeps the legacy body', () => {
+    expect(parseEventOption('{"type":"message.received","payload":{"text":"hi"}}')).toEqual({
+      event: { type: 'message.received', payload: { text: 'hi' } },
+    });
+  });
+
+  test('rejects garbage and JSON without type/payload', () => {
+    expect(parseEventOption('not-json')).toBeUndefined();
+    expect(parseEventOption('{"type":"x"}')).toBeUndefined();
+    expect(parseEventOption('{"payload":{}}')).toBeUndefined();
+  });
+});
