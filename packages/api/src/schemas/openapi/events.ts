@@ -122,6 +122,7 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
         channel: z.string().optional().openapi({ description: 'Channel types (comma-separated)' }),
         instanceId: z.string().uuid().optional().openapi({ description: 'Filter by instance' }),
         personId: z.string().uuid().optional().openapi({ description: 'Filter by person' }),
+        chatId: z.string().uuid().optional().openapi({ description: 'Filter by chat UUID' }),
         eventType: z.string().optional().openapi({ description: 'Event types (comma-separated)' }),
         contentType: z.string().optional().openapi({ description: 'Content types (comma-separated)' }),
         direction: z.enum(['inbound', 'outbound']).optional().openapi({ description: 'Direction' }),
