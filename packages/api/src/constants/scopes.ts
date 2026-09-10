@@ -172,6 +172,7 @@ export const SCOPE_MAP: Record<string, string> = {
   // --- events ---
   'GET /events': 'events:read',
   'GET /events/analytics': 'events:read',
+  'GET /events/types': 'events:read',
   'GET /events/timeline/:personId': 'events:read',
   'POST /events/search': 'events:read',
   'GET /events/:id': 'events:read',

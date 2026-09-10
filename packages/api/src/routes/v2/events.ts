@@ -159,6 +159,17 @@ eventsRoutes.get('/analytics', zValidator('query', analyticsQuerySchema), async 
 });
 
 /**
+ * GET /events/types - Inventory of observed event types (#1075)
+ */
+eventsRoutes.get('/types', zValidator('query', z.object({ since: optionalDateParam('since') })), async (c) => {
+  const { since } = c.req.valid('query');
+  const services = c.get('services');
+  const automations = await services.automations.list({ enabled: true });
+  const items = await services.events.getTypes({ since, automations });
+  return c.json({ items, meta: { since: since?.toISOString() ?? null } });
+});
+
+/**
  * GET /events/timeline/:personId - Get timeline for a person
  */
 eventsRoutes.get('/timeline/:personId', zValidator('query', timelineQuerySchema), async (c) => {

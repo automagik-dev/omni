@@ -4,7 +4,15 @@
 
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
-import { type ChannelType, type ContentType, type EventType, type OmniEvent, omniEvents } from '@omni/db';
+import {
+  type ChannelType,
+  type ContentType,
+  type EventType,
+  type OmniEvent,
+  durableConsumers,
+  eventSchemas,
+  omniEvents,
+} from '@omni/db';
 import { and, desc, eq, gte, ilike, inArray, like, lte, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
@@ -67,6 +75,25 @@ export interface EventAnalytics {
   byChannel: Record<string, number>;
   byDirection: { inbound: number; outbound: number };
   timeline?: Array<{ bucket: string; count: number }>;
+}
+
+/** One row of the `GET /events/types` inventory (#1075). */
+export interface EventTypeInventoryRow {
+  eventType: string;
+  count: number;
+  lastSeen: string;
+  /** Registered schema version, or null when no `event_schemas` row exists. */
+  schemaVersion: number | null;
+  schemaEnabled: boolean | null;
+  /** Durable consumer names whose type filter (exact or trailing-* glob) matches. */
+  consumers: string[];
+  /** Enabled automations whose trigger is this exact type. */
+  automations: string[];
+}
+
+/** Durable-consumer type filter match: exact, or trailing-* prefix glob (#966 contract). */
+function consumerTypeMatches(filter: string, eventType: string): boolean {
+  return filter.endsWith('*') ? eventType.startsWith(filter.slice(0, -1)) : filter === eventType;
 }
 
 export class EventService {
@@ -468,5 +495,48 @@ export class EventService {
       },
       timeline,
     };
+  }
+
+  /**
+   * Inventory of observed event types (#1075): volume + last seen in the
+   * window (one indexed GROUP BY over `omni_events_type_idx`), joined in
+   * memory with the schema registry and the subscribers (durable consumers,
+   * plus the enabled automations the caller passes in — the route reads them
+   * through AutomationService so this service adds no `automations` db site).
+   */
+  async getTypes(
+    options: { since?: Date; automations?: Array<{ name: string; triggerEventType: string }> } = {},
+  ): Promise<EventTypeInventoryRow[]> {
+    const autos = options.automations ?? [];
+    const [observed, schemas, consumers] = await Promise.all([
+      this.db
+        .select({
+          eventType: omniEvents.eventType,
+          count: sql<number>`count(*)::int`,
+          lastSeen: sql<string>`max(${omniEvents.receivedAt})::text`,
+        })
+        .from(omniEvents)
+        .where(options.since ? gte(omniEvents.receivedAt, options.since) : undefined)
+        .groupBy(omniEvents.eventType)
+        .orderBy(desc(sql`count(*)`)),
+      this.db
+        .select({ eventType: eventSchemas.eventType, version: eventSchemas.version, enabled: eventSchemas.enabled })
+        .from(eventSchemas),
+      this.db.select({ name: durableConsumers.name, eventType: durableConsumers.eventType }).from(durableConsumers),
+    ]);
+
+    const schemaByType = new Map(schemas.map((s) => [s.eventType, s]));
+    return observed.map((row) => {
+      const schema = schemaByType.get(row.eventType);
+      return {
+        eventType: row.eventType,
+        count: row.count,
+        lastSeen: new Date(row.lastSeen).toISOString(),
+        schemaVersion: schema?.version ?? null,
+        schemaEnabled: schema?.enabled ?? null,
+        consumers: consumers.filter((c) => consumerTypeMatches(c.eventType, row.eventType)).map((c) => c.name),
+        automations: autos.filter((a) => a.triggerEventType === row.eventType).map((a) => a.name),
+      };
+    });
   }
 }

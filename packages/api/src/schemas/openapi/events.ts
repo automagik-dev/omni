@@ -29,6 +29,23 @@ export const EventSchema = z.object({
     .openapi({ description: 'Id of the immediate parent event (null for roots and pre-#957 rows)' }),
 });
 
+// Event type inventory row (#1075)
+export const EventTypeInventoryRowSchema = z
+  .object({
+    eventType: z.string().openapi({ description: 'Event type' }),
+    count: z.number().int().openapi({ description: 'Events observed in the window' }),
+    lastSeen: z.string().datetime().openapi({ description: 'Most recent receivedAt in the window' }),
+    schemaVersion: z
+      .number()
+      .int()
+      .nullable()
+      .openapi({ description: 'Registered schema version (null = unregistered)' }),
+    schemaEnabled: z.boolean().nullable().openapi({ description: 'Whether the registered schema gate is enabled' }),
+    consumers: z.array(z.string()).openapi({ description: 'Durable consumer names subscribed to this type' }),
+    automations: z.array(z.string()).openapi({ description: 'Enabled automations triggered by this type' }),
+  })
+  .openapi('EventTypeInventoryRow');
+
 // Event summary schema
 export const EventSummarySchema = z.object({
   id: z.string().uuid().openapi({ description: 'Event UUID' }),
@@ -170,6 +187,38 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
     },
     responses: {
       200: { description: 'Analytics data', content: { 'application/json': { schema: EventAnalyticsSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'get',
+    path: '/events/types',
+    operationId: 'listEventTypes',
+    tags: ['Events'],
+    summary: 'List observed event types',
+    description:
+      'Inventory of event types observed in the journal: volume and last seen in the window, registered schema version, and subscribed durable consumers / enabled automations.',
+    request: {
+      query: z.object({
+        since: z
+          .string()
+          .datetime()
+          .optional()
+          .openapi({ description: 'Only count events received at/after this time' }),
+      }),
+    },
+    responses: {
+      200: {
+        description: 'Event type inventory',
+        content: {
+          'application/json': {
+            schema: z.object({
+              items: z.array(EventTypeInventoryRowSchema),
+              meta: z.object({ since: z.string().datetime().nullable() }),
+            }),
+          },
+        },
+      },
     },
   });
 

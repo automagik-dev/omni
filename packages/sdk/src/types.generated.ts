@@ -712,6 +712,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events/types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List observed event types
+         * @description Inventory of event types observed in the journal: volume and last seen in the window, registered schema version, and subscribed durable consumers / enabled automations.
+         */
+        get: operations["listEventTypes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events/timeline/{personId}": {
         parameters: {
             query?: never;
@@ -6692,6 +6712,25 @@ export interface components {
             /** @description The plaintext credential. Returned exactly ONCE; it can never be retrieved again. */
             plainTextKey: string;
         };
+        EventTypeInventoryRow: {
+            /** @description Event type */
+            eventType: string;
+            /** @description Events observed in the window */
+            count: number;
+            /**
+             * Format: date-time
+             * @description Most recent receivedAt in the window
+             */
+            lastSeen: string;
+            /** @description Registered schema version (null = unregistered) */
+            schemaVersion: number | null;
+            /** @description Whether the registered schema gate is enabled */
+            schemaEnabled: boolean | null;
+            /** @description Durable consumer names subscribed to this type */
+            consumers: string[];
+            /** @description Enabled automations triggered by this type */
+            automations: string[];
+        };
     };
     responses: never;
     parameters: never;
@@ -10747,6 +10786,34 @@ export interface operations {
                             /** @description Event count in bucket */
                             count: number;
                         }[];
+                    };
+                };
+            };
+        };
+    };
+    listEventTypes: {
+        parameters: {
+            query?: {
+                since?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Event type inventory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["EventTypeInventoryRow"][];
+                        meta: {
+                            /** Format: date-time */
+                            since: string | null;
+                        };
                     };
                 };
             };

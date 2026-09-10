@@ -25,6 +25,7 @@ export type ReplaySession = components['schemas']['ReplaySession'];
 export type LogEntry = components['schemas']['LogEntry'];
 export type EventMetrics = components['schemas']['EventMetrics'];
 export type EventAnalytics = components['schemas']['EventAnalytics'];
+export type EventTypeInventoryRow = components['schemas']['EventTypeInventoryRow'];
 
 // Types that will be added after SDK regeneration
 // For now, use generic interfaces
@@ -2384,6 +2385,18 @@ export function createOmniClient(config: OmniClientConfig) {
         throwIfError(response, error);
         if (!data) throw new OmniApiError('Analytics data not found', 'NOT_FOUND', undefined, 404);
         return data as EventAnalytics;
+      },
+
+      /**
+       * Inventory of observed event types: volume, schema status, subscribers (#1075)
+       */
+      async types(params?: { since?: string }): Promise<EventTypeInventoryRow[]> {
+        const { data, error, response } = await client.GET('/events/types', {
+          params: { query: params },
+        });
+        throwIfError(response, error);
+        if (!data) throw new OmniApiError('Event types not found', 'NOT_FOUND', undefined, 404);
+        return data.items as EventTypeInventoryRow[];
       },
     },
 

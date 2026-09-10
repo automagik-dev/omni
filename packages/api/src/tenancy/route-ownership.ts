@@ -529,6 +529,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/events/schemas',
   'GET /api/v2/events/schemas/:eventType',
   'GET /api/v2/events/timeline/:personId',
+  'GET /api/v2/events/types',
   'GET /api/v2/follow-up/agents/:id',
   'GET /api/v2/follow-up/chats/:id',
   'GET /api/v2/follow-up/instances/:id',
