@@ -199,6 +199,42 @@ describeWithDb('Event Persistence Handler', () => {
       }
     });
 
+    test('resolves replyToExternalId to the referenced journal event on the same instance (#1091)', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const [instance] = await db
+        .insert(instances)
+        .values({ name: `test-ep-reply-${Date.now()}`, channel: 'whatsapp-baileys' })
+        .returning();
+      if (!instance) throw new Error('Failed to create test instance');
+      const base = (externalId: string, replyToId: string | null) => ({
+        id: randomUUID(),
+        type: 'message.received',
+        timestamp: Date.now(),
+        payload: { externalId, chatId: 'chat-reply', from: 'user-1', content: { type: 'text', text: 'x' }, replyToId },
+        metadata: { correlationId: 'corr-reply', instanceId: instance.id, channelType: 'whatsapp' },
+      });
+      try {
+        await emitEvent('message.received', base('ext-reply-root', null));
+        await emitEvent('message.received', base('ext-reply-child', 'ext-reply-root'));
+        // Reply to a message that never reached the journal — stays null, no back-fill.
+        await emitEvent('message.received', base('ext-reply-orphan', 'ext-reply-missing'));
+
+        const byExt = async (externalId: string) =>
+          (await db.select().from(omniEvents).where(eq(omniEvents.externalId, externalId)).limit(1))[0];
+        const root = await byExt('ext-reply-root');
+        const child = await byExt('ext-reply-child');
+        const orphan = await byExt('ext-reply-orphan');
+        expect(child?.replyToExternalId).toBe('ext-reply-root');
+        expect(child?.replyToEventId).toBe(root?.id);
+        expect(orphan?.replyToExternalId).toBe('ext-reply-missing');
+        expect(orphan?.replyToEventId).toBeNull();
+      } finally {
+        await db.delete(omniEvents).where(eq(omniEvents.instanceId, instance.id));
+        await db.delete(instances).where(eq(instances.id, instance.id));
+      }
+    });
+
     test('journals own-device echo (rawPayload.isFromMe=true) as outbound (#1034)', async () => {
       await setupEventPersistence(mockEventBus, db);
 
