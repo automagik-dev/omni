@@ -129,7 +129,30 @@ jobs:
         run: bun install
 
       - name: Verify version sync
-        run: bun scripts/verify-versions.ts
+        # On PRs / merge queues, tracked files that don't exist on the base
+        # are reported NEW and exempt (#1020): dev's auto-bump rewrites every
+        # pre-existing file into the merge ref, but a file the PR introduces
+        # (new channel package.json) can only carry the author's last sync,
+        # so it re-drifts on every merge to dev. The base is resolved exactly
+        # like the migration gate below: HEAD^1 of the test merge commit,
+        # falling back to the base-branch tip when the PR merged mid-run.
+        # Pushes to dev/main keep the strict full check.
+        env:
+          VERSION_BASE_BRANCH: ${{ github.base_ref || 'dev' }}
+        run: |
+          bun test scripts/verify-versions.test.ts
+          if [ "${{ github.event_name }}" = "push" ]; then
+            bun scripts/verify-versions.ts
+          else
+            git fetch --no-tags --deepen=1 origin
+            if BASE=$(git rev-parse --verify -q HEAD^1); then
+              bun scripts/verify-versions.ts --base "$BASE"
+            else
+              echo "::notice::HEAD^1 unresolvable (PR merged mid-run?) — falling back to origin/${VERSION_BASE_BRANCH}"
+              git fetch --no-tags --depth=1 origin "+refs/heads/${VERSION_BASE_BRANCH}:refs/remotes/origin/${VERSION_BASE_BRANCH}"
+              bun scripts/verify-versions.ts --base "origin/${VERSION_BASE_BRANCH}"
+            fi
+          fi
 
       - name: Migration contract gate
         # Static check of packages/db/drizzle/ (journal ↔ files bijection,

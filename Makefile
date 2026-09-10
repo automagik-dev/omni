@@ -3,7 +3,7 @@
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
         test test-sweep test-watch test-api test-db test-pg-gate test-pg-gate-warm pg-gate-warm-stop \
-        typecheck typecheck-ui lint lint-fix lint-ui format check check-all dead-code verify-migrations \
+        typecheck typecheck-ui lint lint-fix lint-ui format check check-all dead-code verify-migrations verify-versions \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -31,6 +31,7 @@ help:
 	@echo "  make check         Run all quality checks (typecheck + lint + dead-code + migrations + test)"
 	@echo "  make check-all     Run check AND the pg-gate concurrently (fastest full validation)"
 	@echo "  make verify-migrations  Static migration contract gate (journal/immutability/lint)"
+	@echo "  make verify-versions    Version sync gate (BASE=<ref> exempts files absent on ref)"
 	@echo "  make typecheck     TypeScript type checking"
 	@echo "  make lint          Run Biome linter"
 	@echo "  make lint-fix      Fix auto-fixable lint issues"
@@ -296,8 +297,14 @@ verify-migrations:
 	bun test scripts/verify-migration-contract.test.ts
 	bun scripts/verify-migration-contract.ts $(if $(BASE),--base $(BASE),)
 
+# Version sync gate: every tracked version field matches root package.json.
+# Pass BASE=<ref> to exempt files absent on that ref (what CI does on PRs, #1020).
+verify-versions:
+	bun test scripts/verify-versions.test.ts
+	bun scripts/verify-versions.ts $(if $(BASE),--base $(BASE),)
+
 # Run all quality checks
-check: typecheck lint dead-code verify-migrations test
+check: typecheck lint dead-code verify-migrations verify-versions test
 	@echo ""
 	@echo "All checks passed!"
 
