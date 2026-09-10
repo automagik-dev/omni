@@ -3205,23 +3205,6 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         emoji: '', // WhatsApp doesn't tell us which emoji was removed
       });
     }
-
-    // Dual-emit as message.received for backward compatibility
-    // Remove this once all consumers migrate to reaction.* events
-    // Skip dual-emit for bot's own reactions (isFromMe) to prevent dispatch loops (#336)
-    if (process.env.OMNI_DUAL_EMIT_REACTIONS !== 'false' && !isFromMe) {
-      await this.emitMessageReceived({
-        instanceId,
-        externalId,
-        chatId,
-        from,
-        content: {
-          type: 'reaction',
-          text: emoji,
-        },
-        rawPayload: { targetMessageId, isFromMe },
-      });
-    }
   }
 
   /**
