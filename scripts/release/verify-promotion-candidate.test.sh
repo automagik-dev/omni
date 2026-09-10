@@ -100,6 +100,23 @@ if (
   fail "invalid candidate digest was accepted"
 fi
 
+# The pre-merge promotion gate derives version and SHA from the tree and has no
+# registry access, so the digest is optional; the binding checks still run.
+(
+  unset GITHUB_OUTPUT
+  cd "${repo}"
+  "${SCRIPT}" \
+    --candidate-sha "${candidate}" \
+    --final-sha "${final}" \
+    --version 2.260830.2
+) >"${work}/no-digest.out" 2>"${work}/no-digest.err" || \
+  fail "digest-less binding was rejected"
+grep -q '^promotion_candidate_verified=true$' "${work}/no-digest.out" || \
+  fail "digest-less binding did not report success"
+if grep -q '^digest=' "${work}/no-digest.out"; then
+  fail "digest-less binding echoed a digest"
+fi
+
 # The root context has no .dockerignore; deploy/Dockerfile.dockerignore is the
 # Dockerfile-specific ignore file BuildKit honours for -f deploy/Dockerfile, so
 # it selects what enters the protected build context and must be drift-checked.

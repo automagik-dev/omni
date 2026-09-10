@@ -46,6 +46,7 @@ export const EventAnalyticsSchema = z.object({
   successRate: z.number().openapi({ description: 'Success rate (%)' }),
   avgProcessingTimeMs: z.number().nullable().openapi({ description: 'Average processing time (ms)' }),
   avgAgentTimeMs: z.number().nullable().openapi({ description: 'Average agent time (ms)' }),
+  totalCostUsd: z.number().openapi({ description: 'Sum of agent run cost (USD) stamped on events in range' }),
   messageTypes: z.record(z.string(), z.number()).openapi({ description: 'Count by content type' }),
   errorStages: z.record(z.string(), z.number()).openapi({ description: 'Count by error stage' }),
   instances: z.record(z.string(), z.number()).openapi({ description: 'Count by instance' }),
@@ -122,6 +123,7 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
         channel: z.string().optional().openapi({ description: 'Channel types (comma-separated)' }),
         instanceId: z.string().uuid().optional().openapi({ description: 'Filter by instance' }),
         personId: z.string().uuid().optional().openapi({ description: 'Filter by person' }),
+        chatId: z.string().uuid().optional().openapi({ description: 'Filter by chat UUID' }),
         eventType: z.string().optional().openapi({ description: 'Event types (comma-separated)' }),
         excludeEventType: z
           .string()

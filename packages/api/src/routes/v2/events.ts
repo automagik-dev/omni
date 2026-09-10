@@ -53,6 +53,7 @@ const listQuerySchema = z.object({
     .transform((v) => v?.split(',') as z.infer<typeof ChannelTypeSchema>[] | undefined),
   instanceId: z.string().uuid().optional(),
   personId: z.string().uuid().optional(),
+  chatId: z.string().uuid().optional(),
   eventType: z
     .string()
     .optional()

@@ -33,7 +33,7 @@ Every delivery ClickUp sends to `POST /api/v2/webhooks/ingress/clickup` is:
    the stable per-event history id, so a retry acks with `duplicate: true`
    and exactly ONE journal event (issue #958);
 5. **supervised** — a declared cadence means silence beyond the window emits
-   `system.connector.stalled` + a DLQ entry instead of failing silently
+   `system.connector.stalled` on the bus instead of failing silently
    (issue #961, see [[../architecture/connector-contract|Connector Lifecycle Contract]]).
 
 ## Prerequisites
@@ -194,8 +194,8 @@ omni webhooks heartbeat clickup
 ```
 
 Heartbeats create NO journal events — only the `system.connector.stalled` /
-`system.connector.recovered` **transitions** are journaled, once each, and a
-stall also files a manual-resolution dead-letter entry. Health is visible in
+`system.connector.recovered` **transitions** are journaled, once each
+(never as dead-letter entries — a stall is an alert, #1063). Health is visible in
 `omni webhooks list` / `omni webhooks get clickup` (`livenessStatus`). A
 stall is also your early warning that ClickUp auto-suspended the webhook
 (step 4).

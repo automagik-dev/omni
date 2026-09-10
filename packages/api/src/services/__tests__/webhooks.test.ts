@@ -818,6 +818,18 @@ describe('WebhookService', () => {
       expect(mockEventBus._publishedEvents[0]?.metadata.correlationId).toBe(correlationId);
     });
 
+    test('stamps a caller-supplied causationId (#1072)', async () => {
+      const eventType = 'custom.purchase.recorded' as CustomEventType;
+      const causationId = crypto.randomUUID();
+
+      const result = await service.trigger(eventType, {}, { causationId });
+
+      // The emission is parented to the given event; the returned id stays
+      // the published event's own id.
+      expect(result.eventId).not.toBe(causationId);
+      expect(mockEventBus._publishedEvents[0]?.metadata.causationId).toBe(causationId);
+    });
+
     test('passes instance ID to event metadata', async () => {
       const eventType = 'custom.instance.event' as CustomEventType;
       const instanceId = 'wa-123';

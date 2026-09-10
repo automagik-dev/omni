@@ -340,6 +340,9 @@ export interface SendMessageBody {
 export interface ListEventsParams {
   channel?: string;
   instanceId?: string;
+  personId?: string;
+  /** Chat UUID */
+  chatId?: string;
   eventType?: string;
   /** Comma-separated type globs to drop; exclusion wins over eventType. */
   excludeEventType?: string;
@@ -818,6 +821,8 @@ export interface TriggerEventBody {
   eventType: string;
   payload: Record<string, unknown>;
   correlationId?: string;
+  /** Parent event id — stamps `causationId` so `events trace` parents this emission (#1072). */
+  causationId?: string;
   instanceId?: string;
 }
 

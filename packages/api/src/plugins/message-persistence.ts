@@ -649,21 +649,39 @@ async function maybeFindOrCreateParticipant(
   });
 }
 
-async function maybeRecordMessageEdit(
+export async function maybeRecordMessageEdit(
   services: Services,
   created: boolean,
   rawPayload: Record<string, unknown> | undefined,
+  chatId: string,
   messageId: string,
+  contentType: string,
   newText: string | undefined,
   platformTimestamp: Date,
   from: string | undefined,
 ): Promise<void> {
+  const editedBy = truncate(from, 255) ?? undefined;
+
+  // WhatsApp/Discord: a `content.type === 'edit'` event under a fresh externalId that
+  // names the original in rawPayload.editedMessageId (#1061).
+  if (contentType === 'edit') {
+    const targetExternalId = rawPayload?.editedMessageId;
+    if (typeof targetExternalId !== 'string') return;
+    const target = await services.messages.getByExternalId(chatId, targetExternalId);
+    if (!target) return;
+    const editedAtMs = rawPayload?.editedAt;
+    const editedAt = new Date(typeof editedAtMs === 'number' ? editedAtMs : platformTimestamp.getTime());
+    await services.messages.recordEdit(target.id, newText ?? '', editedAt, editedBy);
+    return;
+  }
+
+  // Telegram: the edit re-uses the original externalId and flags rawPayload.isEdited.
   if (created) return;
   if (rawPayload?.isEdited !== true) return;
 
   const editedAtMs = rawPayload.editDate;
   const editedAt = new Date(typeof editedAtMs === 'number' ? editedAtMs : platformTimestamp.getTime());
-  await services.messages.recordEdit(messageId, newText ?? '', editedAt, truncate(from, 255) ?? undefined);
+  await services.messages.recordEdit(messageId, newText ?? '', editedAt, editedBy);
 }
 
 async function maybeRecordParticipantActivity(
@@ -686,7 +704,7 @@ function maybeUpdateRecency(
   trustedTenantId: string | null,
 ): void {
   // Edits should not bump recency.
-  if (rawPayload?.isEdited === true) return;
+  if (rawPayload?.isEdited === true || payload.content.type === 'edit') return;
 
   const preview = sanitizeText(buildChatPreview(payload, rawPayload)) ?? '';
   const isFromMe = rawPayload?.isFromMe === true;
@@ -976,7 +994,9 @@ async function handleMessageReceived(
     services,
     created,
     rawPayload,
+    chat.id,
     message.id,
+    payload.content.type,
     sanitizeText(payload.content.text) ?? undefined,
     platformTimestamp ?? new Date(eventTimestamp),
     payload.from,

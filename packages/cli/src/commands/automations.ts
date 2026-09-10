@@ -3,8 +3,9 @@
  *
  * omni automations list [--enabled]
  * omni automations get <id>
- * omni automations create --name <name> --trigger <event> --action <type> [--config <json>]
- * omni automations update <id> [--name <name>] [--enabled]
+ * omni automations create --name <name> --trigger <event> --action <type> [--action-config <json>]...
+ * omni automations create --file <definition.json> [flag overrides]
+ * omni automations update <id> [--name] [--trigger] [--condition] [--action ...] [--file <json>]
  * omni automations delete <id>
  * omni automations enable <id>
  * omni automations disable <id>
@@ -19,8 +20,16 @@
  *   --action call_agent \
  *   --agent-id support-agent \
  *   --response-as agentResponse
+ *
+ * Multi-action (#1077): repeat --action; the i-th --action-config pairs with
+ * the i-th --action. --file takes a full definition (the `get` output works
+ * as-is: id/timestamps are ignored) and explicit flags override its fields.
+ * `update` PATCHes in place, so the automation id and its execution logs
+ * survive — no delete+recreate.
  */
 
+import { readFileSync } from 'node:fs';
+import type { CreateAutomationBody } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
@@ -30,82 +39,156 @@ import { resolveAutomationId } from '../resolve.js';
 // HELPERS
 // ============================================================================
 
-interface CreateOptions {
-  name: string;
-  trigger: string;
-  action: string;
-  actionConfig?: string;
-  condition?: string;
-  conditionLogic?: string;
-  description?: string;
-  priority?: number;
-  disabled?: boolean;
-  // Transactional publication (G5, #988): true from --transactional-emissions,
-  // undefined when the flag is not given (server default false applies).
-  transactionalEmissions?: boolean;
+type ActionType = CreateAutomationBody['actions'][number]['type'];
+type Action = CreateAutomationBody['actions'][number];
+type Condition = NonNullable<CreateAutomationBody['triggerConditions']>[number];
+
+interface ActionOptions {
+  action?: string[];
+  actionConfig?: string[];
   agentId?: string;
   providerId?: string;
   responseAs?: string;
 }
 
-/** Parse JSON or return error message */
-function parseJson<T>(json: string, fieldName: string): { ok: true; value: T } | { ok: false; error: string } {
+interface DefinitionOptions extends ActionOptions {
+  file?: string;
+  name?: string;
+  trigger?: string;
+  condition?: string;
+  conditionLogic?: string;
+  description?: string;
+  priority?: number;
+  // Transactional publication (G5, #988): true from --transactional-emissions,
+  // undefined when the flag is not given (server default false applies).
+  transactionalEmissions?: boolean;
+}
+
+interface CreateOptions extends DefinitionOptions {
+  disabled?: boolean;
+}
+
+/** Commander accumulator for repeatable flags (--action a --action b). */
+function collectRepeated(value: string, previous: string[] | undefined): string[] {
+  return [...(previous ?? []), value];
+}
+
+/** Parse JSON; throws a flag-named error (caught by the command's error path). */
+function parseJson<T>(json: string, fieldName: string): T {
   try {
-    return { ok: true, value: JSON.parse(json) as T };
+    return JSON.parse(json) as T;
   } catch {
-    return { ok: false, error: `Invalid JSON for ${fieldName}` };
+    throw new Error(`Invalid JSON for ${fieldName}`);
   }
 }
 
-/** Build action config from options */
-function buildActionConfig(
-  options: CreateOptions,
-): { ok: true; config: Record<string, unknown> } | { ok: false; error: string } {
-  let config: Record<string, unknown> = {};
+/**
+ * Read a full definition from --file. Read-only/server-owned fields are
+ * dropped so `omni automations get <id> --json > a.json` round-trips
+ * straight into create/update.
+ */
+function readDefinitionFile(path: string): Partial<CreateAutomationBody> {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf-8');
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : 'Unknown error';
+    throw new Error(`Cannot read --file '${path}': ${reason}`);
+  }
+  const parsed = parseJson<unknown>(text, '--file');
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('--file must contain a JSON object');
+  }
+  const readOnly = new Set(['id', 'createdAt', 'updatedAt', 'managedByAgentId']);
+  // `get` renders unset fields as null; the API's PATCH schema wants them absent.
+  const body = Object.fromEntries(
+    Object.entries(parsed).filter(([key, value]) => !readOnly.has(key) && value !== null),
+  );
+  return body as Partial<CreateAutomationBody>;
+}
 
-  if (options.actionConfig) {
-    const result = parseJson<Record<string, unknown>>(options.actionConfig, '--action-config');
-    if (!result.ok) return result;
-    config = result.value;
+/** --agent-id / --provider-id / --response-as shortcuts, applied to one call_agent config. */
+function applyCallAgentShortcuts(config: Record<string, unknown>, options: ActionOptions): void {
+  if (options.agentId) config.agentId = options.agentId;
+  if (options.providerId) config.providerId = options.providerId;
+  if (options.responseAs) config.responseAs = options.responseAs;
+}
+
+/**
+ * Build the ordered actions array from repeatable --action / --action-config.
+ * Returns undefined when no --action was given (so --file actions stand).
+ */
+function buildActions(options: ActionOptions): Action[] | undefined {
+  const types = options.action ?? [];
+  const configs = options.actionConfig ?? [];
+  if (types.length === 0) {
+    if (configs.length > 0) throw new Error('--action-config requires a matching --action');
+    return undefined;
+  }
+  if (configs.length > types.length) {
+    throw new Error(`Got ${configs.length} --action-config for ${types.length} --action`);
   }
 
-  if (options.action === 'call_agent') {
-    if (options.agentId) config.agentId = options.agentId;
-    if (options.providerId) config.providerId = options.providerId;
-    if (options.responseAs) config.responseAs = options.responseAs;
+  const firstCallAgent = types.indexOf('call_agent');
+  return types.map((type, i) => {
+    const raw = configs[i];
+    const config: Record<string, unknown> = raw
+      ? parseJson<Record<string, unknown>>(raw, `--action-config #${i + 1}`)
+      : {};
 
-    if (!config.agentId) {
-      return { ok: false, error: 'call_agent action requires --agent-id or agentId in --action-config' };
+    if (type === 'call_agent') {
+      // Shortcut flags target the first call_agent action only.
+      if (i === firstCallAgent) applyCallAgentShortcuts(config, options);
+      if (!config.agentId) {
+        throw new Error('call_agent action requires --agent-id or agentId in --action-config');
+      }
     }
-  }
 
-  return { ok: true, config };
+    return { type: type as ActionType, config } as Action;
+  });
 }
 
-/** Parse and validate conditions */
-function parseConditions(
-  options: CreateOptions,
-):
-  | { ok: true; conditions?: Array<{ field: string; operator: string; value?: unknown }>; logic?: 'and' | 'or' }
-  | { ok: false; error: string } {
-  let conditions: Array<{ field: string; operator: string; value?: unknown }> | undefined;
-  let logic: 'and' | 'or' | undefined;
-
-  if (options.condition) {
-    const result = parseJson<typeof conditions>(options.condition, '--condition');
-    if (!result.ok) return result;
-    conditions = result.value;
-  }
-
-  if (options.conditionLogic) {
-    if (options.conditionLogic !== 'and' && options.conditionLogic !== 'or') {
-      return { ok: false, error: '--condition-logic must be "and" or "or"' };
-    }
-    logic = options.conditionLogic;
-  }
-
-  return { ok: true, conditions, logic };
+function parseConditionLogic(logic: string | undefined): 'and' | 'or' | undefined {
+  if (logic === undefined) return undefined;
+  if (logic !== 'and' && logic !== 'or') throw new Error('--condition-logic must be "and" or "or"');
+  return logic;
 }
+
+/**
+ * Merge --file (base) with explicit flags (override) into a PATCH/POST body.
+ * Only fields actually given are present, so `update` leaves the rest untouched.
+ */
+function buildDefinition(options: DefinitionOptions): Partial<CreateAutomationBody> {
+  const body: Partial<CreateAutomationBody> = options.file ? readDefinitionFile(options.file) : {};
+
+  const actions = buildActions(options);
+  if (actions) body.actions = actions;
+  if (options.name !== undefined) body.name = options.name;
+  if (options.description !== undefined) body.description = options.description;
+  if (options.trigger !== undefined) body.triggerEventType = options.trigger;
+  if (options.condition !== undefined)
+    body.triggerConditions = parseJson<Condition[]>(options.condition, '--condition');
+  const logic = parseConditionLogic(options.conditionLogic);
+  if (logic !== undefined) body.conditionLogic = logic;
+  if (options.priority !== undefined) body.priority = options.priority;
+  if (options.transactionalEmissions !== undefined) body.transactionalEmissions = options.transactionalEmissions;
+
+  return body;
+}
+
+/** Full create body: --file + flags, with the required fields enforced client-side. */
+function buildCreateBody(options: CreateOptions): CreateAutomationBody {
+  const body = buildDefinition(options);
+  if (!body.name) throw new Error('--name is required (or "name" in --file)');
+  if (!body.triggerEventType) throw new Error('--trigger is required (or "triggerEventType" in --file)');
+  if (!body.actions || body.actions.length === 0) {
+    throw new Error('At least one --action is required (or "actions" in --file)');
+  }
+  if (options.disabled) body.enabled = false;
+  return body as CreateAutomationBody;
+}
+
+export const __testables = { buildActions, buildDefinition, buildCreateBody, readDefinitionFile };
 
 // ============================================================================
 // COMMANDS
@@ -169,10 +252,15 @@ export function createAutomationsCommand(): Command {
   automations
     .command('create')
     .description('Create an automation')
-    .requiredOption('--name <name>', 'Automation name')
-    .requiredOption('--trigger <event>', 'Trigger event type (e.g., message.received)')
-    .requiredOption('--action <type>', 'Action type (webhook, send_message, emit_event, log, call_agent)')
-    .option('--action-config <json>', 'Action config as JSON')
+    .option('--file <path>', 'Full definition as JSON (the `get` output works as-is); explicit flags override it')
+    .option('--name <name>', 'Automation name')
+    .option('--trigger <event>', 'Trigger event type (e.g., message.received)')
+    .option(
+      '--action <type>',
+      'Action type (webhook, send_message, emit_event, log, call_agent); repeat for ordered multi-action',
+      collectRepeated,
+    )
+    .option('--action-config <json>', 'Action config as JSON; the i-th pairs with the i-th --action', collectRepeated)
     .option('--condition <json>', 'Trigger conditions as JSON array')
     .option('--condition-logic <logic>', 'Condition logic: "and" (all must match) or "or" (any must match)')
     .option('--description <desc>', 'Automation description')
@@ -184,48 +272,20 @@ export function createAutomationsCommand(): Command {
         'a failed run publishes zero (#988). Defaults to off (immediate publishing)',
     )
     // call_agent specific options
-    .option('--agent-id <id>', 'Agent ID (for call_agent action)')
-    .option('--provider-id <id>', 'Provider ID (for call_agent action)')
-    .option('--response-as <var>', 'Store agent response as variable (for call_agent action)')
+    .option('--agent-id <id>', 'Agent ID (for the first call_agent action)')
+    .option('--provider-id <id>', 'Provider ID (for the first call_agent action)')
+    .option('--response-as <var>', 'Store agent response as variable (for the first call_agent action)')
     .action(async (options: CreateOptions) => {
       const client = getClient();
 
       try {
-        const actionResult = buildActionConfig(options);
-        if (!actionResult.ok) {
-          output.error(actionResult.error);
-          return;
-        }
-
-        const conditionResult = parseConditions(options);
-        if (!conditionResult.ok) {
-          output.error(conditionResult.error);
-          return;
-        }
-
-        const automation = await client.automations.create({
-          name: options.name,
-          description: options.description,
-          triggerEventType: options.trigger,
-          triggerConditions: conditionResult.conditions as Parameters<
-            typeof client.automations.create
-          >[0]['triggerConditions'],
-          conditionLogic: conditionResult.logic,
-          actions: [
-            {
-              type: options.action as 'webhook' | 'send_message' | 'emit_event' | 'log' | 'call_agent',
-              config: actionResult.config,
-            },
-          ],
-          priority: options.priority,
-          enabled: !options.disabled,
-          transactionalEmissions: options.transactionalEmissions,
-        });
+        const automation = await client.automations.create(buildCreateBody(options));
 
         output.success(`Automation created: ${automation.id}`, {
           id: automation.id,
           name: automation.name,
           trigger: automation.triggerEventType,
+          actions: automation.actions.length,
           enabled: automation.enabled,
         });
       } catch (err) {
@@ -237,9 +297,15 @@ export function createAutomationsCommand(): Command {
   // omni automations update <id>
   automations
     .command('update <id>')
-    .description('Update an automation')
+    .description('Update an automation in place (id and execution logs are kept)')
+    .option('--file <path>', 'Full definition as JSON (the `get` output works as-is); explicit flags override it')
     .option('--name <name>', 'New name')
     .option('--description <desc>', 'New description')
+    .option('--trigger <event>', 'New trigger event type')
+    .option('--condition <json>', 'Replace trigger conditions (JSON array)')
+    .option('--condition-logic <logic>', 'Condition logic: "and" or "or"')
+    .option('--action <type>', 'Replace the actions list; repeat for ordered multi-action', collectRepeated)
+    .option('--action-config <json>', 'Action config as JSON; the i-th pairs with the i-th --action', collectRepeated)
     .option('--priority <n>', 'New priority', (v) => Number.parseInt(v, 10))
     .option(
       '--transactional-emissions',
@@ -247,36 +313,36 @@ export function createAutomationsCommand(): Command {
         'a failed run publishes zero (#988)',
     )
     .option('--no-transactional-emissions', 'Return the automation to immediate mid-sequence publishing')
-    .action(
-      async (
-        id: string,
-        // Commander negatable pair (#988, mirrors --strict-schemas from #1000):
-        // true from --transactional-emissions, false from
-        // --no-transactional-emissions, undefined when neither flag is given —
-        // the field is then omitted from the PATCH and stays untouched.
-        options: { name?: string; description?: string; priority?: number; transactionalEmissions?: boolean },
-      ) => {
-        const client = getClient();
+    .option('--agent-id <id>', 'Agent ID (for the first call_agent action)')
+    .option('--provider-id <id>', 'Provider ID (for the first call_agent action)')
+    .option('--response-as <var>', 'Store agent response as variable (for the first call_agent action)')
+    // Commander negatable pair (#988, mirrors --strict-schemas from #1000):
+    // true from --transactional-emissions, false from
+    // --no-transactional-emissions, undefined when neither flag is given —
+    // the field is then omitted from the PATCH and stays untouched.
+    .action(async (id: string, options: DefinitionOptions) => {
+      const client = getClient();
 
-        try {
-          const automationId = await resolveAutomationId(id);
-          const automation = await client.automations.update(automationId, {
-            name: options.name,
-            description: options.description,
-            priority: options.priority,
-            transactionalEmissions: options.transactionalEmissions,
-          });
-
-          output.success(`Automation updated: ${automation.id}`, {
-            id: automation.id,
-            name: automation.name,
-          });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          output.error(`Failed to update automation: ${message}`);
+      try {
+        const body = buildDefinition(options);
+        if (Object.keys(body).length === 0) {
+          output.error('Nothing to update: pass at least one field flag or --file');
+          return;
         }
-      },
-    );
+        const automationId = await resolveAutomationId(id);
+        const automation = await client.automations.update(automationId, body);
+
+        output.success(`Automation updated: ${automation.id}`, {
+          id: automation.id,
+          name: automation.name,
+          trigger: automation.triggerEventType,
+          actions: automation.actions.length,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to update automation: ${message}`);
+      }
+    });
 
   // omni automations delete <id>
   automations

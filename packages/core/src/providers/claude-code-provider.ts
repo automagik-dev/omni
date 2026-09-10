@@ -268,7 +268,12 @@ export class ClaudeCodeAgentProvider implements IAgentProvider {
         providerId: this.id,
         durationMs,
         cost: response.metrics
-          ? { inputTokens: response.metrics.inputTokens, outputTokens: response.metrics.outputTokens }
+          ? {
+              inputTokens: response.metrics.inputTokens,
+              outputTokens: response.metrics.outputTokens,
+              costUsd: response.metrics.costUsd,
+              model: response.metrics.model,
+            }
           : undefined,
       },
     };

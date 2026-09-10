@@ -128,6 +128,7 @@ interface AnalyticsData {
   successRate: number;
   avgProcessingTimeMs: number | null;
   avgAgentTimeMs: number | null;
+  totalCostUsd?: number;
   messageTypes: Record<string, number>;
   errorStages: Record<string, number>;
   instances: Record<string, number>;
@@ -175,6 +176,7 @@ function displayAnalytics(data: AnalyticsData): void {
       successRate: data.successRate,
       avgProcessingMs: data.avgProcessingTimeMs,
       avgAgentMs: data.avgAgentTimeMs,
+      totalCostUsd: data.totalCostUsd ?? 0,
       messageTypes: data.messageTypes,
       instances: data.instances,
       errorStages: data.errorStages,
@@ -189,6 +191,7 @@ function displayAnalytics(data: AnalyticsData): void {
       successRate: `${data.successRate.toFixed(1)}%`,
       avgProcessingMs: data.avgProcessingTimeMs ?? '-',
       avgAgentMs: data.avgAgentTimeMs ?? '-',
+      totalCostUsd: `$${(data.totalCostUsd ?? 0).toFixed(4)}`,
     });
 
     displayRecordBreakdown('Message Types', data.messageTypes, 'type');
@@ -651,6 +654,7 @@ async function fetchStreamBatch(
       instanceId: filters.instanceId,
       channel,
       eventType: type,
+      chatId: filters.chatId,
       excludeEventType: filters.exclude?.length ? filters.exclude.join(',') : undefined,
       since: sinceIso,
       limit: 100,
@@ -1134,17 +1138,13 @@ export function createEventsCommand(): Command {
 
         try {
           const instanceId = options.instance ? await resolveInstanceId(options.instance) : undefined;
-          // Note: chatId resolution added, but SDK doesn't support it yet
-          // This will be a no-op until the SDK is updated
-          if (options.chatId) {
-            await resolveChatId(options.chatId);
-          }
+          const chatId = options.chatId ? await resolveChatId(options.chatId) : undefined;
 
           const result = await client.events.list({
             instanceId,
             channel: options.channel,
             eventType: options.type,
-            // chatId parameter not yet supported by SDK
+            chatId,
             since: options.since ? parseSinceTime(options.since) : undefined,
             until: options.until,
             limit: options.limit,
