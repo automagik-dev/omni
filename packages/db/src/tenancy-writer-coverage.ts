@@ -158,6 +158,8 @@ export const REGISTERED_WRITERS: readonly RegisteredWriter[] = [
   { file: 'packages/api/src/plugins/agent-dispatcher.ts', table: 'agent_sessions', coverage: 'db-derived' },
   // #958: emit_event idempotency claim — the journal row IS the claim.
   { file: 'packages/api/src/plugins/automation-actions.ts', table: 'omni_events', coverage: 'db-derived' },
+  // #1032: channel ingress idempotency claim — the journal row IS the claim (parity with #958).
+  { file: 'packages/api/src/plugins/context.ts', table: 'omni_events', coverage: 'db-derived' },
   { file: 'packages/api/src/plugins/agent-dispatcher.ts', table: 'handoff_logs', coverage: 'db-derived' },
   { file: 'packages/api/src/plugins/event-listeners.ts', table: 'chat_id_mappings', coverage: 'db-derived' },
   { file: 'packages/api/src/plugins/event-listeners.ts', table: 'chats', coverage: 'db-derived' },
