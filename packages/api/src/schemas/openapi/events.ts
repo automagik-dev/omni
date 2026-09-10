@@ -46,6 +46,7 @@ export const EventAnalyticsSchema = z.object({
   successRate: z.number().openapi({ description: 'Success rate (%)' }),
   avgProcessingTimeMs: z.number().nullable().openapi({ description: 'Average processing time (ms)' }),
   avgAgentTimeMs: z.number().nullable().openapi({ description: 'Average agent time (ms)' }),
+  totalCostUsd: z.number().openapi({ description: 'Sum of agent run cost (USD) stamped on events in range' }),
   messageTypes: z.record(z.string(), z.number()).openapi({ description: 'Count by content type' }),
   errorStages: z.record(z.string(), z.number()).openapi({ description: 'Count by error stage' }),
   instances: z.record(z.string(), z.number()).openapi({ description: 'Count by instance' }),

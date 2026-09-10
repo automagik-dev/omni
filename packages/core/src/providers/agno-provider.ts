@@ -111,6 +111,8 @@ export class AgnoAgentProvider implements IAgentProvider {
           ? {
               inputTokens: response.metrics.inputTokens,
               outputTokens: response.metrics.outputTokens,
+              costUsd: response.metrics.costUsd,
+              model: response.metrics.model,
             }
           : undefined,
         customerErrorBlocked,

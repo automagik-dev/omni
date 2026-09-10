@@ -7,6 +7,7 @@ export * from './agent-manifest';
 export * from './agent-route';
 export * from './agent-state';
 export * from './agent-task';
+export * from './agent-usage';
 export * from './common';
 export * from './conversation';
 export * from './follow-up';
