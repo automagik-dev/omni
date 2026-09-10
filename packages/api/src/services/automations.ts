@@ -86,6 +86,8 @@ export class AutomationService {
       trustedTenantId?: string | null,
     ) => Promise<boolean>;
     releaseEmittedEventClaim?: (eventId: string) => Promise<void>;
+    // Execution claim per (event, automation) — redelivery dedup (#1031).
+    claimExecution?: (eventId: string, automationId: string, trustedTenantId?: string | null) => Promise<boolean>;
     // Emission gates for emit_event: the publish allowlist (issue #987, keyed
     // by the emitting automation's managing agent) and the schema registry
     // (issue #959) — see automation-actions.ts.

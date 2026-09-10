@@ -1073,6 +1073,54 @@ async function handleMessagePinState(
   }
 }
 
+/**
+ * Handle reaction.received / reaction.removed — attach the reaction to the
+ * target message's `reactions` column (#1033). Reactions are NOT messages and
+ * never arrive as message.received; this is the only persistence path for them.
+ */
+export async function handleReactionState(
+  services: Services,
+  event: TypedOmniEvent<'reaction.received' | 'reaction.removed'>,
+  added: boolean,
+): Promise<void> {
+  const payload = event.payload;
+  const metadata = event.metadata;
+  if (!metadata.instanceId) return;
+  const instanceId = metadata.instanceId;
+
+  try {
+    await runConsumerInTenantContext(services.db, event, async () => {
+      const chat = await services.chats.findByExternalIdSmart(instanceId, payload.chatId);
+      const message = chat ? await services.messages.getByExternalId(chat.id, payload.messageId) : null;
+      if (!message) {
+        log.debug('Target message not found for reaction', { chatId: payload.chatId, messageId: payload.messageId });
+        return;
+      }
+
+      if (added) {
+        await services.messages.addReaction(
+          message.id,
+          {
+            emoji: payload.emoji,
+            platformUserId: payload.from,
+            isCustomEmoji: payload.isCustomEmoji,
+            customEmojiId: payload.isCustomEmoji ? payload.emoji : undefined,
+          },
+          event.id,
+        );
+      } else {
+        await services.messages.removeReaction(message.id, payload.from, payload.emoji, event.id);
+      }
+      log.debug('Updated message reactions', { messageId: message.id, emoji: payload.emoji, added });
+    });
+  } catch (error) {
+    log.error('Failed to update message reactions', {
+      messageId: payload.messageId,
+      error: String(error),
+    });
+  }
+}
+
 // ============================================================================
 // Main Setup
 // ============================================================================
@@ -1404,6 +1452,25 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
 
     await eventBus.subscribe('message.unpinned', (event) => handleMessagePinState(services, event, false), {
       durable: 'message-persistence-unpinned',
+      queue: 'message-persistence',
+      maxRetries: 2,
+      retryDelayMs: 500,
+      startFrom: 'first',
+      concurrency: 10,
+    });
+
+    // Subscribe to reaction.received / reaction.removed — per-message reactions (#1033)
+    await eventBus.subscribe('reaction.received', (event) => handleReactionState(services, event, true), {
+      durable: 'message-persistence-reaction-received',
+      queue: 'message-persistence',
+      maxRetries: 2,
+      retryDelayMs: 500,
+      startFrom: 'first',
+      concurrency: 10,
+    });
+
+    await eventBus.subscribe('reaction.removed', (event) => handleReactionState(services, event, false), {
+      durable: 'message-persistence-reaction-removed',
       queue: 'message-persistence',
       maxRetries: 2,
       retryDelayMs: 500,

@@ -1,8 +1,9 @@
 /**
- * Tests for reaction echo prevention (#336).
+ * Tests for reaction event routing (#336, #1033).
  *
- * Verifies that the bot's own reactions (isFromMe=true) do NOT get
- * dual-emitted as message.received events, preventing dispatch loops.
+ * Reactions are published ONLY as reaction.received / reaction.removed —
+ * never as message.received — so message subscribers (agent dispatch,
+ * automations, `events wait`) never see a reaction as an inbound message.
  */
 
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
@@ -52,8 +53,6 @@ describe('Reaction echo prevention (#336)', () => {
   beforeEach(() => {
     eventBus = createMockEventBus();
     plugin = createPlugin(eventBus);
-    // Reset env
-    process.env.OMNI_DUAL_EMIT_REACTIONS = undefined;
   });
 
   describe('handleReactionReceived with isFromMe=true', () => {
@@ -91,7 +90,7 @@ describe('Reaction echo prevention (#336)', () => {
   });
 
   describe('handleReactionReceived with isFromMe=false', () => {
-    it('emits both reaction.received AND message.received (dual-emit)', async () => {
+    it('emits reaction.received only — never message.received (#1033)', async () => {
       await plugin.handleReactionReceived(
         'instance-1',
         'ext-123',
@@ -103,26 +102,7 @@ describe('Reaction echo prevention (#336)', () => {
       );
 
       const types = eventBus.published.map((e) => e.type);
-      expect(types).toContain('reaction.received');
-      expect(types).toContain('message.received');
-    });
-
-    it('skips message.received when OMNI_DUAL_EMIT_REACTIONS=false', async () => {
-      process.env.OMNI_DUAL_EMIT_REACTIONS = 'false';
-
-      await plugin.handleReactionReceived(
-        'instance-1',
-        'ext-123',
-        'chat-456@s.whatsapp.net',
-        '5511999999999',
-        '❤️',
-        'target-msg-789',
-        false,
-      );
-
-      const types = eventBus.published.map((e) => e.type);
-      expect(types).toContain('reaction.received');
-      expect(types).not.toContain('message.received');
+      expect(types).toEqual(['reaction.received']);
     });
   });
 
