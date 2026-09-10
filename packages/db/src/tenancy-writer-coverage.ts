@@ -153,6 +153,8 @@ export const REGISTERED_WRITERS: readonly RegisteredWriter[] = [
     coverage: 'db-derived',
   },
   { file: 'packages/api/src/lib/idempotency.ts', table: 'processed_events', coverage: 'db-unowned' },
+  // #1031: per-(event, automation) execution claim — same PK discipline as idempotency.ts.
+  { file: 'packages/api/src/plugins/automation-actions.ts', table: 'processed_events', coverage: 'db-unowned' },
   { file: 'packages/api/src/plugins/agent-dispatcher.ts', table: 'agent_sessions', coverage: 'db-derived' },
   // #958: emit_event idempotency claim — the journal row IS the claim.
   { file: 'packages/api/src/plugins/automation-actions.ts', table: 'omni_events', coverage: 'db-derived' },

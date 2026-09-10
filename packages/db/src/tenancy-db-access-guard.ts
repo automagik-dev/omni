@@ -576,7 +576,11 @@ export const PENDING_G4_CEILING = 7;
  *     `access.ts::access_rules` joined this group in run15: its two consumer
  *     callers were converted, and the caller trace then found the tRPC edge.
  */
-export const PENDING_G5_CEILING = 12;
+// 13 after #1031: the automation engine's per-(event, automation) execution
+// claim is a genuinely new `processed_events` write in
+// `automation-actions.ts` — the same G6 gate as `idempotency.ts`, not a
+// relabelling.
+export const PENDING_G5_CEILING = 13;
 
 /**
  * Ceiling on `pending-G4-conversion` + `pending-G5-conversion` combined.
@@ -645,7 +649,9 @@ export const PENDING_G5_CEILING = 12;
 // pending-G4 site (a bare getDb() in a credential-less webhook path — see its
 // registry entry). Nothing was reclassified; the raise is a real new site in
 // a new package, not movement between pending classes.
-export const TOTAL_PENDING_CEILING = 19;
+// 20 after #1031 (6 + 13): ONE new G6-gated `processed_events` claim site in
+// `automation-actions.ts` (see PENDING_G5_CEILING). Nothing was reclassified.
+export const TOTAL_PENDING_CEILING = 20;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -888,6 +894,18 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     file: 'packages/api/src/plugins/automation-actions.ts',
     table: 'omni_events',
     class: 'tenant-boundary',
+  },
+  {
+    // #1031: execution claim against the same `processed_events` PK that
+    // `idempotency.ts` uses, reached from the engine's NATS consumer callback.
+    // Same G6 gate as that site: the table derives through a G2-unowned root.
+    file: 'packages/api/src/plugins/automation-actions.ts',
+    table: 'processed_events',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from the automation engine NATS consumer callback (no HTTP request, no credential). Same ' +
+      'processed_events claim and same G6 gate as packages/api/src/lib/idempotency.ts; the async mechanism is the ' +
+      'ADR-0008 consumer context.',
   },
   {
     file: 'packages/api/src/plugins/automation-actions.ts',

@@ -242,6 +242,15 @@ function summarizeContent(content: Record<string, unknown>): Record<string, unkn
   return summary;
 }
 
+function getOrCreate<K, V>(outer: Map<K, Map<string, V>>, key: K): Map<string, V> {
+  let inner = outer.get(key);
+  if (!inner) {
+    inner = new Map();
+    outer.set(key, inner);
+  }
+  return inner;
+}
+
 export class WhatsAppPlugin extends BaseChannelPlugin {
   readonly id: ChannelType = 'whatsapp-baileys';
   readonly name = 'WhatsApp (Baileys)';
@@ -467,6 +476,10 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Populated from contacts.upsert (c.lid + c.id) and lid-mapping.update events.
    */
   private lidMappingCache = new Map<string, Map<string, string>>();
+  /** lid→phone pairs already announced via custom.lid-mapping.batch (per instance). */
+  private publishedLidMappings = new Map<string, Map<string, string>>();
+  /** jid→name pairs already announced via custom.contacts.names (per instance). */
+  private publishedContactNames = new Map<string, Map<string, string>>();
 
   /**
    * Short-lived cache of recent message keys (externalId → { participant, fromMe }).
@@ -1079,6 +1092,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.decryptTrackers.delete(instanceId);
     this.lidFirstEnabledMap.delete(instanceId);
     this.lidMappingCache.delete(instanceId);
+    this.publishedLidMappings.delete(instanceId);
+    this.publishedContactNames.delete(instanceId);
     this.lastActionTime.delete(instanceId);
     this.historyPushFetchCount.delete(instanceId);
     // Dispose and remove per-instance dedup cache
@@ -3205,23 +3220,6 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         emoji: '', // WhatsApp doesn't tell us which emoji was removed
       });
     }
-
-    // Dual-emit as message.received for backward compatibility
-    // Remove this once all consumers migrate to reaction.* events
-    // Skip dual-emit for bot's own reactions (isFromMe) to prevent dispatch loops (#336)
-    if (process.env.OMNI_DUAL_EMIT_REACTIONS !== 'false' && !isFromMe) {
-      await this.emitMessageReceived({
-        instanceId,
-        externalId,
-        chatId,
-        from,
-        content: {
-          type: 'reaction',
-          text: emoji,
-        },
-        rawPayload: { targetMessageId, isFromMe },
-      });
-    }
   }
 
   /**
@@ -3683,17 +3681,21 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Publish cached contact names for an instance to the event bus for chat name persistence
+   * Publish contact names not yet announced for an instance (issue #1040:
+   * only the delta — re-emitting the whole cache on every contacts.upsert
+   * flooded the journal with identical payloads).
    */
   private publishContactNames(instanceId: string): void {
     const contactCache = this.contactsCache.get(instanceId);
     if (!contactCache || contactCache.size === 0) return;
 
+    const published = getOrCreate(this.publishedContactNames, instanceId);
     const names: Array<{ jid: string; name: string }> = [];
     for (const [jid, contact] of contactCache) {
-      if (contact.name && !jid.includes('@g.us') && !jid.includes('@broadcast')) {
-        names.push({ jid, name: contact.name });
-      }
+      if (!contact.name || jid.includes('@g.us') || jid.includes('@broadcast')) continue;
+      if (published.get(jid) === contact.name) continue;
+      published.set(jid, contact.name);
+      names.push({ jid, name: contact.name });
     }
     if (names.length === 0) return;
 
@@ -3712,7 +3714,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Publish all cached LID mappings for an instance to the event bus for DB persistence
+   * Publish LID mappings not yet announced for an instance to the event bus
+   * for DB persistence. A `{lidJid, phoneJid}` pair is its own identity, so
+   * known pairs are skipped (issue #1040).
    */
   private publishLidMappings(instanceId: string): void {
     const lidCache = this.lidMappingCache.get(instanceId);
@@ -3720,9 +3724,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Cache stores both directions (lid→phone and phone→lid). Only the
     // lid-keyed direction belongs in DB persistence as the canonical mapping.
-    const mappings = Array.from(lidCache.entries())
-      .filter(([key]) => isLidJid(key))
-      .map(([lidJid, phoneJid]) => ({ lidJid, phoneJid }));
+    const published = getOrCreate(this.publishedLidMappings, instanceId);
+    const mappings: Array<{ lidJid: string; phoneJid: string }> = [];
+    for (const [lidJid, phoneJid] of lidCache) {
+      if (!isLidJid(lidJid) || published.get(lidJid) === phoneJid) continue;
+      published.set(lidJid, phoneJid);
+      mappings.push({ lidJid, phoneJid });
+    }
+    if (mappings.length === 0) return;
+
     this.eventBus
       .publishGeneric(
         'custom.lid-mapping.batch',

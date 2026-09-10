@@ -231,6 +231,25 @@ interface MessageReceivedEvent extends BaseEvent<'message.received', {
   rawPayload?: unknown;
 }> {}
 
+// Reactions are NOT messages. Inbound reactions never arrive as
+// message.received — they have their own semantic types (#1033), so
+// message subscribers (automations, agent dispatch, `events wait`) never
+// see a 👍 as a new message, and reaction flows are directly subscribable.
+interface ReactionReceivedEvent extends BaseEvent<'reaction.received', {
+  messageId: string;   // target message (platform external id)
+  chatId: string;
+  from: string;        // platform user id of the reactor
+  emoji: string;
+  isCustomEmoji?: boolean;
+}> {}
+
+interface ReactionRemovedEvent extends BaseEvent<'reaction.removed', {
+  messageId: string;
+  chatId: string;
+  from: string;
+  emoji: string;       // '' on WhatsApp (platform does not say which emoji was removed)
+}> {}
+
 interface MessageContent {
   type: ContentType;
   text?: string;
@@ -267,7 +286,7 @@ type ContentType =
   | 'video'
   | 'document'
   | 'sticker'
-  | 'reaction'
+  | 'reaction' // outbound only — inbound reactions are `reaction.received` / `reaction.removed`, never `message.received` (#1033)
   | 'poll'
   | 'location'
   | 'contact'
