@@ -357,7 +357,7 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
       await withCronMonitor('connector-liveness-sweeper', '*/30 * * * * *', 1, 1, async () => {
         const startTime = Date.now();
         try {
-          const stats = await services.webhooks.sweepLiveness({ deadLetters: services.deadLetters });
+          const stats = await services.webhooks.sweepLiveness();
           recordScheduledJob('connector-liveness-sweeper', 'success', (Date.now() - startTime) / 1000);
           if (stats.stalled > 0 || stats.recovered > 0) {
             log.info('Connector liveness sweep tick', { ...stats });

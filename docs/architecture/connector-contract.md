@@ -56,10 +56,10 @@ are persisted with guarded updates (`WHERE liveness_status = <previous>`), so:
   `send_message` action).
 - The unhealthy state is visible as `livenessStatus` in
   `GET /webhook-sources` / `omni webhooks list` (health column) and get/detail.
-- A stalled transition also files a **dead-letter entry** (manual-resolution
-  only, no auto-retry — retrying would republish the emitted-once event);
-  recovery auto-resolves it. This is the "zero-emission dead-letter": a dead
-  connector surfaces on the ops surface, not only in a log.
+- Both transitions are **journaled** like custom events (#1063), so
+  `omni events list --type 'system.connector.*'`, `omni events trace`, and
+  `omni events wait` see them. A stall is an alert, not a delivery failure —
+  it never lands in the dead-letter queue.
 
 Payloads are Zod-registered in `SystemEventSchemas`
 (`packages/core/src/events/nats/registry.ts`). `recoveredBy` on the recovered

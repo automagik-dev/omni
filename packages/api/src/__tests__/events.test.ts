@@ -11,7 +11,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
-import { durableConsumers, eventSchemas, omniEvents } from '@omni/db';
+import { chats, durableConsumers, eventSchemas, omniEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
@@ -399,6 +399,40 @@ describeWithDb('Events API Routes', () => {
   }
 
   describe('GET /events', () => {
+    test('filters by chatId (chat UUID) and returns no rows from other chats (#1055)', async () => {
+      const [wanted] = await db
+        .insert(chats)
+        .values({ externalId: `chat-a-${Date.now()}`, chatType: 'group', channel: 'discord' })
+        .returning();
+      const [other] = await db
+        .insert(chats)
+        .values({ externalId: `chat-b-${Date.now()}`, chatType: 'dm', channel: 'discord' })
+        .returning();
+      if (!wanted || !other) throw new Error('chat fixtures not inserted');
+      try {
+        await insertTestEvent(createTestEvent({ chatUuid: wanted.id, textContent: 'wanted-1' }));
+        await insertTestEvent(createTestEvent({ chatUuid: wanted.id, textContent: 'wanted-2' }));
+        await insertTestEvent(createTestEvent({ chatUuid: other.id, textContent: 'other' }));
+        await insertTestEvent(createTestEvent({ chatUuid: null, textContent: 'orphan' }));
+
+        const res = await app.request(`/events?chatId=${wanted.id}&limit=50`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { items: Array<{ chatUuid: string | null }> };
+        expect(body.items.length).toBe(2);
+        for (const event of body.items) {
+          expect(event.chatUuid).toBe(wanted.id);
+        }
+
+        const none = await app.request('/events?chatId=00000000-0000-4000-8000-000000000000&limit=50');
+        expect(((await none.json()) as { items: unknown[] }).items).toEqual([]);
+      } finally {
+        for (const id of insertedEventIds) await db.delete(omniEvents).where(eq(omniEvents.id, id));
+        insertedEventIds = [];
+        await db.delete(chats).where(eq(chats.id, wanted.id));
+        await db.delete(chats).where(eq(chats.id, other.id));
+      }
+    });
+
     test('returns events list', async () => {
       const res = await app.request('/events?limit=10');
       expect(res.status).toBe(200);

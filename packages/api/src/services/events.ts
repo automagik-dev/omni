@@ -26,6 +26,8 @@ export interface ListEventsOptions {
   instanceId?: string;
   instanceIds?: string[];
   personId?: string;
+  /** Chat UUID (omni_events.chat_uuid), not the platform chat id. */
+  chatId?: string;
   eventType?: EventType[];
   contentType?: ContentType[];
   direction?: 'inbound' | 'outbound';
@@ -65,6 +67,8 @@ export interface EventAnalytics {
   successRate: number;
   avgProcessingTimeMs: number | null;
   avgAgentTimeMs: number | null;
+  /** Sum of `metadata.agentUsage.costUsd` over the range (#1064). */
+  totalCostUsd: number;
   messageTypes: Record<string, number>;
   errorStages: Record<string, number>;
   instances: Record<string, number>;
@@ -120,6 +124,7 @@ export class EventService {
       channel,
       instanceId,
       personId,
+      chatId,
       eventType,
       contentType,
       direction,
@@ -144,6 +149,11 @@ export class EventService {
 
     if (personId) {
       conditions.push(eq(omniEvents.personId, personId));
+    }
+
+    if (chatId) {
+      // #1055: filter on the chats FK, not the raw platform chatId column.
+      conditions.push(eq(omniEvents.chatUuid, chatId));
     }
 
     if (eventType?.length) {
@@ -368,6 +378,8 @@ export class EventService {
         failed: sql<number>`count(*) filter (where ${omniEvents.status} = 'failed')::int`,
         avgProcessingTime: sql<number>`avg(${omniEvents.processingTimeMs})::int`,
         avgAgentTime: sql<number>`avg(${omniEvents.agentLatencyMs})::int`,
+        // #1064: cost stamped by the agent dispatcher in metadata.agentUsage
+        totalCostUsd: sql<number>`coalesce(sum((${omniEvents.metadata}->'agentUsage'->>'costUsd')::numeric), 0)::float`,
       })
       .from(omniEvents)
       .where(whereClause);
@@ -456,6 +468,7 @@ export class EventService {
       successRate: total > 0 ? (successful / total) * 100 : 0,
       avgProcessingTimeMs: counts?.avgProcessingTime ?? null,
       avgAgentTimeMs: counts?.avgAgentTime ?? null,
+      totalCostUsd: counts?.totalCostUsd ?? 0,
       messageTypes: Object.fromEntries(
         contentTypeCounts
           .filter((c): c is typeof c & { contentType: NonNullable<typeof c.contentType> } => c.contentType != null)

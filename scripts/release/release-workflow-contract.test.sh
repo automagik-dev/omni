@@ -109,19 +109,20 @@ def effective_job_permissions(text: str) -> dict[str, dict[str, str]]:
 
 require(image, r"branches:\s*\[main\]", "promotion verification is not bound to main")
 require(image, r"timeout-minutes:\s*[0-9]+", "promotion verification has no finite job timeout")
-for exact in (
-    "2.260910.4",
-    "b86db34fbb0ed55cb215e273d073464fa4690b19",
-    "sha256:508c625b124f2beac560dd48a2885ef2f8c4b2e5237099f69542a70f1e18e42f",
-):
-    if exact not in image:
-        errors.append(f"promotion workflow does not pin existing candidate identity {exact}")
+# The candidate is derived from the main tree, never hand-pinned (#1057):
+# version from the package, SHA from the immutable tag, digest from the alias
+# that provenance then binds to that SHA and to image-build.yml.
+forbid(image, r"^\s+CANDIDATE_(?:VERSION|SHA|DIGEST):\s*\S", "promotion workflow hand-pins a candidate version, SHA, or digest")
+require(image, r"candidate_version=\$\(jq -r \.version packages/cli/package\.json\)", "promotion workflow does not derive the candidate version from the tree")
+require(image, r"candidate_sha=\$\(git rev-parse \"refs/tags/v\$\{candidate_version\}\^\{commit\}\"", "promotion workflow does not derive the candidate SHA from the immutable tag")
+require(image, r"candidate_digest=\$\(docker buildx imagetools inspect \"\$\{IMAGE\}:v\$\{CANDIDATE_VERSION\}\" --format '\{\{\.Manifest\.Digest\}\}'\)", "promotion workflow does not derive the candidate digest from the immutable alias")
+require(image, r"jq -r \.version \.well-known/latest\.json\)\" == \"\$\{candidate_version\}\"", "promotion workflow does not require the public channel pin to match the promoted version")
 require(image, r"verify-promotion-candidate\.sh", "final image build inputs are not compared to the candidate")
 require(image, r"verify-oci-release\.sh", "existing immutable OCI alias is not checked")
 require(image, r"name:\s*Checkout immutable candidate source[\s\S]{0,500}path:\s*release-candidate", "immutable OCI verification has no separate candidate checkout")
 require(image, r"--source-dir\s+\"\$\{GITHUB_WORKSPACE\}/release-candidate\"", "immutable OCI verification does not use the candidate checkout")
 require(image, r"gh attestation verify\s+\"oci://\$\{IMAGE\}@\$\{CANDIDATE_DIGEST\}\"", "exact OCI digest provenance is not verified")
-require(image, r"--source-digest\s+\"\$\{CANDIDATE_SHA\}\"", "OCI provenance is not bound to b86db34f")
+require(image, r"--source-digest\s+\"\$\{CANDIDATE_SHA\}\"", "OCI provenance is not bound to the derived candidate SHA")
 require(image, r"--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", "OCI signer workflow identity is not constrained to the candidate minter")
 require(image, r"verify-release-assets\.py", "existing public release asset inventory is not verified read-only")
 require(image, r"cosign verify-blob", "existing release bundle signatures are not verified")
@@ -185,6 +186,28 @@ else:
     )
     forbid(image_build, r"--certificate-identity-regexp", "candidate minting accepts a regexp signer identity")
     require(image_build, r"echo \"CANDIDATE_VERSION=\$\{VERSION\}\"\n\s+echo \"CANDIDATE_SHA=\$\{SOURCE_SHA\}\"\n\s+echo \"CANDIDATE_DIGEST=\$\{DIGEST\}\"", "candidate minting does not print the exact promotion pin values")
+    # #1057: the receipt is written as soon as the stable release exists, BEFORE
+    # the npm publication, so a registry race can never hide the digest.
+    receipt_at = image_build.find("- name: Write candidate receipt")
+    npm_dispatch_at = image_build.find("--field stable_publish_only=true")
+    if receipt_at < 0 or npm_dispatch_at < 0 or receipt_at > npm_dispatch_at:
+        errors.append("candidate minting writes the receipt after the stable npm step instead of before it")
+    # #1057: a tag that already carries a dev prerelease is refused in the very
+    # first job step, before checkout and the multi-arch build.
+    first_checkout_at = image_build.find("- uses: actions/checkout@")
+    early_refusal_at = image_build.find("- name: Refuse a tag that already carries a dev prerelease")
+    if early_refusal_at < 0 or first_checkout_at < 0 or early_refusal_at > first_checkout_at:
+        errors.append("candidate minting does not refuse a dev-prerelease tag before its first checkout")
+    else:
+        early_refusal = image_build[early_refusal_at:first_checkout_at]
+        require(early_refusal, r"releases/tags/v\$\{VERSION\}", "the early prerelease refusal does not look up the release at the tag")
+        require(early_refusal, r"\[\[ \"\$\{release_state\}\" != \$'false\\ttrue' \]\] \|\| \{", "the early prerelease refusal does not test the dev-prerelease state")
+        require(early_refusal, r"candidate=true", "the early prerelease refusal does not name the candidate=true recovery")
+        require(early_refusal, r"refusing to guess", "the early prerelease refusal does not fail closed on lookup errors")
+    # #1057: the mint hands the public pin to pin-candidate.yml on dev instead
+    # of asking for a hand-paste; the dispatch must not fail a finished mint.
+    require(image_build, r"gh workflow run pin-candidate\.yml \\\n\s+--repo \"\$\{GITHUB_REPOSITORY\}\" \\\n\s+--ref dev \\\n\s+--field version=\"\$\{VERSION\}\" \|\| \{", "candidate minting does not dispatch pin-candidate.yml on dev without failing the mint")
+    forbid(image_build, r"paste the CANDIDATE_\* values", "candidate minting still asks for a hand-paste of the candidate pin")
     for pattern, message in (
         (r"values-prod-gitops|pin-production-image", "candidate minting still writes a public production pin"),
         (r"secrets:\s*inherit", "candidate minting inherits repository secrets"),
@@ -575,15 +598,20 @@ require(release, r"bare tag pushes do not release", "release workflow still miss
 
 latest = json.loads((root / ".well-known/latest.json").read_text(encoding="utf-8"))
 dev = json.loads((root / ".well-known/dev.json").read_text(encoding="utf-8"))
+# pin-candidate.yml writes both manifests from the verified release, so the
+# contract is structural and cross-checked, never a literal version (#1057).
 for channel, document in (("stable", latest), ("dev", dev)):
     if document.get("channel") != channel:
         errors.append(f"{channel} public manifest has the wrong channel")
-    if document.get("version") != "2.260910.4":
-        errors.append(f"{channel} public manifest is not reconciled to v2.260910.4")
-    if document.get("released_at") != "2026-09-10T17:31:13Z":
-        errors.append(f"{channel} public manifest does not use the authoritative release timestamp")
-    if not str(document.get("tarball_base", "")).endswith("/releases/download/v2.260910.4"):
-        errors.append(f"{channel} public manifest has the wrong immutable tarball base")
+    pinned_version = str(document.get("version", ""))
+    if re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", pinned_version) is None:
+        errors.append(f"{channel} public manifest version {pinned_version!r} is not a canonical dotted version")
+    if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", str(document.get("released_at", ""))) is None:
+        errors.append(f"{channel} public manifest does not carry the release's published_at timestamp")
+    if not str(document.get("tarball_base", "")).endswith(f"/releases/download/v{pinned_version}"):
+        errors.append(f"{channel} public manifest tarball base does not match its own pinned version")
+if latest.get("version") != dev.get("version") or latest.get("released_at") != dev.get("released_at"):
+    errors.append("stable and dev public manifests are pinned to different candidates")
 if (root / ".well-known/homolog.json").exists():
     errors.append("retired homolog public channel metadata still exists")
 
@@ -627,12 +655,64 @@ require(
     r"^  promotion-pin-gate:\n(?:(?:    [^\n]*)?\n)*?\s+fetch-depth: 0\n\s+fetch-tags: true\n\s+persist-credentials: false\n",
     "the promotion pin gate cannot resolve the candidate commit and immutable tag (full history, tags, no persisted credentials)",
 )
-require(ci, r"jq -r \.version packages/cli/package\.json", "the promotion pin gate does not compare the pin to the tree version")
+require(ci, r"candidate_version=\$\(jq -r \.version packages/cli/package\.json\)", "the promotion pin gate does not derive the candidate version from the tree")
+require(ci, r"candidate_sha=\$\(git rev-parse \"refs/tags/v\$\{candidate_version\}\^\{commit\}\"", "the promotion pin gate does not derive the candidate SHA from the immutable tag")
+forbid(ci, r"sed -n 's/\^\[\[:space:\]\]\*CANDIDATE_", "the promotion pin gate still parses a hand-pasted candidate pin")
 require(
     ci,
     r"verify-promotion-candidate\.sh \\\n\s+--candidate-sha \"\$\{candidate_sha\}\" \\\n\s+--final-sha \"\$\(git rev-parse 'HEAD\^\{commit\}'\)\"",
-    "the promotion pin gate does not bind the pinned candidate to the PR merge commit",
+    "the promotion pin gate does not bind the derived candidate to the PR merge commit",
 )
+require(
+    ci,
+    r"gh attestation verify \"oci://\$\{IMAGE\}:v\$\{candidate_version\}\" \\\n\s+--repo \"\$\{GITHUB_REPOSITORY\}\" \\\n\s+--source-digest \"\$\{candidate_sha\}\" \\\n\s+--signer-workflow \"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"",
+    "the promotion pin gate does not require the alias to be attested from the tag's source by the minter",
+)
+require(ci, r"pinned_version=\$\(jq -r \.version \.well-known/latest\.json\)", "the promotion pin gate does not require the public channel pin to match the promoted version")
+require(ci, r"candidate=true", "the promotion pin gate error text does not name the one true minting path")
+
+# pin-candidate.yml is the only writer of the public channel pins: it
+# re-verifies the candidate from public state (tag, attested alias, stable
+# release), writes exactly three files, and pushes to dev with the same
+# machine credential and concurrency group as version.yml's bump. Its
+# github.token stays read-only and it never builds, tags, or publishes.
+pin_candidate = workflows.get("pin-candidate.yml")
+if pin_candidate is None:
+    errors.append("candidate pin workflow pin-candidate.yml is missing")
+else:
+    require(pin_candidate, r"^on:\n  workflow_dispatch:\n    inputs:\n      version:", "candidate pin is not a dispatch-only workflow keyed by an exact version input")
+    forbid(pin_candidate, r"^  (?:push|pull_request(?:_target)?|workflow_run|schedule|release):", "candidate pin has a trigger other than workflow_dispatch")
+    require(pin_candidate, r"^permissions:\s*\{\s*\}\s*$", "candidate pin does not clear top-level token permissions")
+    require(pin_candidate, r"^concurrency:\n  group: version-dev\n  cancel-in-progress: false", "candidate pin does not serialize with the dev version writer under the version-dev group")
+    require(pin_candidate, r"timeout-minutes:\s*[0-9]+", "candidate pin has no finite job timeout")
+    require(pin_candidate, r"actions/checkout@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+ref: dev\n\s+fetch-depth: 0\n\s+fetch-tags: true\n\s+persist-credentials: false", "candidate pin does not check out dev with full history and tags and without persisted credentials")
+    require(pin_candidate, r"tree_version=\$\(jq -r \.version packages/cli/package\.json\)[\s\S]{0,120}\[\[ \"\$\{tree_version\}\" == \"\$\{VERSION\}\" \]\] \|\| \{", "candidate pin does not refuse a candidate dev has already moved past")
+    require(pin_candidate, r"candidate_sha=\$\(git rev-parse \"refs/tags/v\$\{VERSION\}\^\{commit\}\"", "candidate pin does not resolve the candidate from the immutable tag")
+    require(pin_candidate, r"verify-remote-tag\.sh[\s\S]{0,120}--mode exact", "candidate pin does not bind the remote tag to the candidate")
+    require(pin_candidate, r"gh attestation verify \"oci://\$\{IMAGE\}@\$\{digest\}\"[\s\S]{0,200}--source-digest \"\$\{candidate_sha\}\"[\s\S]{0,100}--signer-workflow \"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", "candidate pin does not require the alias to be attested from the candidate source by the minter")
+    require(pin_candidate, r"== \$'false\\tfalse' \]\] \|\| \{", "candidate pin does not require a public stable release at the tag")
+    require(pin_candidate, r"git add \.well-known/latest\.json \.well-known/dev\.json deploy/helm/omni/values\.yaml\n", "candidate pin does not commit exactly the three public channel pin files")
+    require(pin_candidate, r'git commit -m "chore\(release\): pin candidate v\$\{VERSION\}"', "candidate pin commit is not a conventional chore(release) commit")
+    require(pin_candidate, r"VERSION_WRITER_TOKEN\}@github\.com/\$\{GITHUB_REPOSITORY\}\.git\" \\\n\s+\"HEAD:refs/heads/dev\"", "candidate pin does not push to dev with the machine writer credential")
+    for pattern, message in (
+        (r"docker/build-push-action", "candidate pin can build an image"),
+        (r"(?:packages|actions|attestations|id-token|contents):\s*write", "candidate pin grants a mutating token permission"),
+        (r"\bgh\s+workflow\s+run\b", "candidate pin dispatches a publisher"),
+        (r"\bgh\s+release\b", "candidate pin touches a GitHub release"),
+        (r"\bnpm\s+(?:publish|dist-tag)\b", "candidate pin can publish or move an npm alias"),
+        (r"\bgit\s+tag\b", "candidate pin can create a tag"),
+        (r"\bgh\s+api\b[^\n]*(?:--method|-X)\s+(?:POST|PATCH|PUT|DELETE)", "candidate pin performs a mutating API call"),
+        (r"imagetools\s+create", "candidate pin can retag an OCI manifest"),
+        (r"refs/heads/main", "candidate pin can write main"),
+        (r"secrets:\s*inherit", "candidate pin inherits repository secrets"),
+        (r"persist-credentials:\s*true", "candidate pin persists checkout credentials"),
+        (r"\b(?:kubectl|helm\s+(?:upgrade|install)|docker\s+service\s+update|aws\s+)", "candidate pin can mutate infrastructure"),
+    ):
+        forbid(pin_candidate, pattern, message)
+    expected_pin_permissions = {"pin": {"contents": "read", "packages": "read", "attestations": "read"}}
+    pin_permissions = effective_job_permissions(pin_candidate)
+    if pin_permissions != expected_pin_permissions:
+        errors.append(f"candidate pin job permissions are {pin_permissions}, expected exactly {expected_pin_permissions}")
 
 if errors:
     for error in errors:

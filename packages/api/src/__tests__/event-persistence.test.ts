@@ -77,6 +77,39 @@ describeWithDb('Event Persistence Handler', () => {
       expect(subscriptions.has('message.delivered')).toBe(true);
       expect(subscriptions.has('message.read')).toBe(true);
       expect(subscriptions.has('message.failed')).toBe(true);
+      expect(subscriptions.has('reaction.received')).toBe(true);
+      expect(subscriptions.has('reaction.removed')).toBe(true);
+    });
+  });
+
+  describe('system.connector.> handler (#1063)', () => {
+    test('journals a connector stall alert so it is listable and traceable', async () => {
+      await setupEventPersistence(mockEventBus, db);
+      expect(subscriptions.has('system.connector.>')).toBe(true);
+
+      const eventId = randomUUID();
+      await emitEvent('system.connector.>', {
+        id: eventId,
+        type: 'system.connector.stalled',
+        payload: {
+          sourceId: randomUUID(),
+          sourceName: 'gmail-purchases',
+          expectedIntervalSeconds: 60,
+          lastReceivedAt: null,
+          lastHeartbeatAt: null,
+          silentForSeconds: 90,
+          stalledAt: Date.now(),
+        },
+        timestamp: Date.now(),
+        metadata: { correlationId: eventId, source: 'connector-liveness' },
+      });
+
+      const [row] = await db.select().from(omniEvents).where(eq(omniEvents.id, eventId));
+      await db.delete(omniEvents).where(eq(omniEvents.id, eventId));
+      expect(row?.eventType).toBe('system.connector.stalled');
+      expect(row?.channel).toBe('internal');
+      expect(row?.direction).toBe('internal');
+      expect((row?.rawPayload as { sourceName?: string })?.sourceName).toBe('gmail-purchases');
     });
   });
 
@@ -542,6 +575,38 @@ describeWithDb('Event Persistence Handler', () => {
 
       expect(created).toBeDefined();
       expect(created?.eventType).toBe('message.delivered');
+    });
+  });
+
+  // #1059: reactions live on the REACTION stream; after #1045 dropped the
+  // message.received dual-emit they were never journaled at all.
+  describe('reaction handlers', () => {
+    test.each(['reaction.received', 'reaction.removed'] as const)('journals %s as an omni_events row', async (type) => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const eventId = randomUUID();
+      await emitEvent(type, {
+        id: eventId,
+        type,
+        timestamp: Date.now(),
+        payload: {
+          messageId: `ext-reaction-target-${type}`,
+          chatId: 'chat-123',
+          from: 'user-456',
+          emoji: type === 'reaction.received' ? '👍' : '',
+          rawPayload: { externalId: 'ext-reaction-msg', isFromMe: false },
+        },
+        metadata: { correlationId: 'corr-reaction', instanceId: null, channelType: 'whatsapp-baileys' },
+      });
+
+      const [persisted] = await db.select().from(omniEvents).where(eq(omniEvents.id, eventId)).limit(1);
+      expect(persisted).toBeDefined();
+      expect(persisted?.eventType).toBe(type);
+      expect(persisted?.externalId).toBe(`ext-reaction-target-${type}`);
+      expect(persisted?.contentType).toBe('reaction');
+      expect(persisted?.direction).toBe('inbound');
+      expect(persisted?.chatId).toBe('chat-123');
+      expect(persisted?.metadata).toMatchObject({ from: 'user-456' });
     });
   });
 

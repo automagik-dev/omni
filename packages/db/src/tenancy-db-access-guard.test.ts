@@ -327,6 +327,11 @@ describe('db-access guard', () => {
       // their own pending entries.
       'packages/api/src/services/webhooks.ts',
       'packages/api/src/plugins/automation-actions.ts',
+      // #1064: the agent-usage stamp on `omni_events` — an UPDATE by event id
+      // through `scopedHandle` inside the caller's worker scope
+      // (`runDispatchDb` / `runTenantWorkDb`), the message-persistence
+      // back-link shape. Consumer-only callers.
+      'packages/api/src/services/agent-usage.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);
