@@ -345,3 +345,46 @@ describe('extractContent — bot-interactive messages (omni#902)', () => {
     expect(content?.text).toBeUndefined();
   });
 });
+
+describe('extractContent — envelope unwrapping (#1061 reopen)', () => {
+  const editProto = {
+    protocolMessage: {
+      key: { id: 'ORIG789', remoteJid: '120363000000000000@g.us', fromMe: true },
+      type: 14,
+      editedMessage: { extendedTextMessage: { text: 'edited in group' } },
+    },
+  };
+
+  it('own group edit synced from the phone: deviceSentMessage → editedMessage → protocolMessage', () => {
+    const content = extractContent(
+      wrap({
+        messageContextInfo: { deviceListMetadataVersion: 2 },
+        deviceSentMessage: {
+          destinationJid: '120363000000000000@g.us',
+          message: { editedMessage: { message: editProto } },
+        },
+      }),
+    );
+    expect(content?.type).toBe('edit');
+    expect(content?.targetMessageId).toBe('ORIG789');
+    expect(content?.editedText).toBe('edited in group');
+  });
+
+  it('bare protocolMessage edit (no envelope) still classifies as edit', () => {
+    const content = extractContent(wrap(editProto));
+    expect(content?.type).toBe('edit');
+    expect(content?.targetMessageId).toBe('ORIG789');
+  });
+
+  it('viewOnceMessageV2 envelope unwraps to the inner media instead of unknown', () => {
+    const content = extractContent(wrap({ viewOnceMessageV2: { message: { imageMessage: { caption: 'once' } } } }));
+    expect(content?.type).toBe('image');
+    expect(content?.text ?? content?.caption).toBe('once');
+  });
+
+  it('ephemeral text still extracts after the wrapper extractors were folded into unwrapEnvelopes', () => {
+    const content = extractContent(wrap({ ephemeralMessage: { message: { conversation: 'ttl' } } }));
+    expect(content?.type).toBe('text');
+    expect(content?.text).toBe('ttl');
+  });
+});

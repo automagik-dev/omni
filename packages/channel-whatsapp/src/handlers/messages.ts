@@ -14,6 +14,7 @@ import { createDownloadGuard, createInboundDedupeCache, createMediaBackend, sani
 import type { DedupeCache, MediaStorageBackend } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
+import { normalizeMessageContent } from 'baileys';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from 'baileys';
 import { fromJid, isLidJid, isUserJid, resolveCanonicalJid, resolveToPhoneJidLegacy } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
@@ -459,9 +460,6 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
     }),
   },
   // Bot-sent interactive list menu (issue #902) — flatten to a text transcript.
-  // Must stay BEFORE the trailing wrapper extractors so the slice(0, -N) offsets
-  // below keep pointing at the wrappers (and so deviceSent/ephemeral/viewOnce
-  // re-extraction reaches these interactive types).
   {
     check: (m) => !!m.listMessage,
     extract: (m) => ({
@@ -495,71 +493,6 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
   {
     check: (m) => !!(m as Record<string, unknown>).messageHistoryBundle,
     extract: () => null, // History sync, don't emit
-  },
-  // Device sent message (multi-device sync)
-  {
-    check: (m) => !!(m as Record<string, unknown>).deviceSentMessage,
-    extract: (m) => {
-      // Extract the actual message from the device sync wrapper
-      const deviceMsg = (m as Record<string, unknown>).deviceSentMessage as Record<string, unknown> | undefined;
-      const innerMsg = deviceMsg?.message as MessageContent | undefined;
-      if (innerMsg) {
-        // Re-run extraction on the inner message
-        for (const { check, extract } of contentExtractors.slice(0, -3)) {
-          if (check(innerMsg)) {
-            return extract(innerMsg);
-          }
-        }
-      }
-      return null; // Can't extract inner content
-    },
-  },
-  // Edited message (FutureProofMessage wrapper). Baileys delivers an incoming edit as
-  // `editedMessage.message.protocolMessage` (type 14); without this unwrap it fell through
-  // to extractUnknownContent and the new text was lost (#1061).
-  {
-    check: (m) => !!m.editedMessage,
-    extract: (m) => {
-      const innerMsg = m.editedMessage?.message as MessageContent | undefined;
-      if (innerMsg) {
-        for (const { check, extract } of contentExtractors.slice(0, -1)) {
-          if (check(innerMsg)) {
-            return extract(innerMsg);
-          }
-        }
-      }
-      return null;
-    },
-  },
-  // Ephemeral message (disappearing messages wrapper - FutureProofMessage)
-  {
-    check: (m) => !!m.ephemeralMessage,
-    extract: (m) => {
-      const innerMsg = m.ephemeralMessage?.message as MessageContent | undefined;
-      if (innerMsg) {
-        for (const { check, extract } of contentExtractors.slice(0, -1)) {
-          if (check(innerMsg)) {
-            return extract(innerMsg);
-          }
-        }
-      }
-      return null;
-    },
-  },
-  // View-once message (FutureProofMessage wrapper)
-  {
-    check: (m) => !!m.viewOnceMessage,
-    extract: (m) => {
-      const innerMsg = m.viewOnceMessage?.message as MessageContent | undefined;
-      if (innerMsg) {
-        for (const { check, extract } of contentExtractors.slice(0, -1)) {
-          if (check(innerMsg)) {
-            return extract(innerMsg);
-          }
-        }
-      }
-      return null;
-    },
   },
 ];
 
@@ -607,9 +540,40 @@ function extractUnknownContent(message: MessageContent): ExtractedContent | null
  * Extract content from a Baileys message using handler map
  * Falls back to 'unknown' type for unrecognized messages to ensure nothing is lost
  */
+/**
+ * FutureProofMessage envelopes WhatsApp wraps real content in. Mirrors Baileys'
+ * `normalizeMessageContent` list plus `deviceSentMessage` (own-device sync).
+ * Envelopes nest in any order (e.g. own edit from the phone:
+ * deviceSentMessage → editedMessage → protocolMessage), so unwrap iteratively
+ * instead of special-casing each wrapper (#1061).
+ */
+const ENVELOPE_KEYS = [
+  'deviceSentMessage',
+  'ephemeralMessage',
+  'viewOnceMessage',
+  'viewOnceMessageV2',
+  'viewOnceMessageV2Extension',
+  'editedMessage',
+  'documentWithCaptionMessage',
+  'associatedChildMessage',
+  'groupStatusMessage',
+  'groupStatusMessageV2',
+] as const;
+
+function unwrapEnvelopes(message: MessageContent): MessageContent {
+  let current = message;
+  for (let depth = 0; depth < 5; depth++) {
+    const record = current as Record<string, { message?: MessageContent | null } | null | undefined>;
+    const key = ENVELOPE_KEYS.find((k) => record[k]?.message);
+    if (!key) break;
+    current = record[key]?.message as MessageContent;
+  }
+  return current;
+}
+
 export function extractContent(msg: WAMessage): ExtractedContent | null {
-  const message = msg.message;
-  if (!message) return null;
+  if (!msg.message) return null;
+  const message = unwrapEnvelopes(msg.message);
 
   for (const { check, extract } of contentExtractors) {
     if (check(message)) {
@@ -857,14 +821,14 @@ async function handleSpecialMessage(
     return true;
   }
 
-  if (content.type === 'edit' && content.targetMessageId) {
-    await plugin.handleMessageEdited(
+  if (content.type === 'edit') {
+    // Edits are emitted from `messages.update`, where Baileys hands us the original
+    // key and the normalized new content regardless of envelope shape (#1061).
+    // Swallow the raw protocol message here so it is neither journaled nor double-emitted.
+    log.debug('Edit protocol message seen on upsert; awaiting messages.update', {
       instanceId,
-      content.targetMessageId,
-      chatId,
-      content.editedText || content.text || '',
-      isFromMe(msg),
-    );
+      targetMessageId: content.targetMessageId,
+    });
     return true;
   }
 
@@ -1214,8 +1178,14 @@ export function setupMessageHandlers(
         await processStatusUpdate(plugin, instanceId, update.key, update.update.status);
       }
 
-      // Message edits are NOT handled here: the same edit also arrives via messages.upsert
-      // as an `editedMessage` envelope, which extractContent unwraps (#1061).
+      // Message edits: Baileys re-emits every MESSAGE_EDIT protocol message here as
+      // `{ editedMessage: { message: <new content> } }` keyed by the ORIGINAL message id,
+      // after normalizing whatever envelope the edit arrived in (#1061).
+      const newText = extractEditedText(normalizeMessageContent(update.update.message));
+      if (newText) {
+        const { chatId } = resolveChatId(plugin, instanceId, { key: update.key } as WAMessage);
+        await plugin.handleMessageEdited(instanceId, update.key.id || '', chatId, newText, update.key.fromMe || false);
+      }
     }
   });
 
