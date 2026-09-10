@@ -17,8 +17,14 @@
  *
  * Usage:
  *   bun scripts/release/generate-release-notes.ts \
- *     --to v2.260908.12 [--from v2.260902.5] \
- *     [--repo automagik-dev/omni] [--output /tmp/release-notes.md]
+ *     --to v2.260908.12 [--from v2.260902.5] [--channel stable|dev] \
+ *     [--main-ref origin/main] [--repo automagik-dev/omni] [--output /tmp/release-notes.md]
+ *
+ * `--from` is the previous tag on dev, which is right for a dev prerelease
+ * (per-merge notes). For `--channel stable` (a promoted candidate) that tag is
+ * almost always a bare chore(version) bump, so the range is instead anchored at
+ * the last release tag reachable from `--main-ref` — the last promoted release
+ * (#1097). `--from` is only the fallback when main carries no release tag.
  *
  * The pure functions are exported for scripts/release/generate-release-notes.test.ts.
  */
@@ -448,6 +454,19 @@ function collectCommits(fromTag: string | null, toTag: string): ParsedCommit[] {
     .filter((commit): commit is ParsedCommit => commit !== null);
 }
 
+/**
+ * Last vX.Y.Z tag reachable from `mainRef` other than `toTag` itself — the
+ * previously promoted release. Null when main carries no release tag.
+ */
+function resolvePromotedBaseTag(mainRef: string, toTag: string): string | null {
+  try {
+    const tag = runGit(['describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*', '--exclude', toTag, mainRef]).trim();
+    return TAG_PATTERN.test(tag) ? tag : null;
+  } catch {
+    return null;
+  }
+}
+
 function collectMigrations(fromTag: string | null, toTag: string): MigrationEntry[] {
   if (!fromTag) return [];
   const diff = runGit(['diff', '--name-status', `${fromTag}..${toTag}`, '--', 'packages/db/drizzle']);
@@ -464,15 +483,33 @@ function main(): void {
       to: { type: 'string' },
       repo: { type: 'string' },
       output: { type: 'string' },
+      channel: { type: 'string' },
+      'main-ref': { type: 'string' },
     },
   });
   const toTag = values.to ?? '';
   if (!TAG_PATTERN.test(toTag)) {
     throw new Error(`--to must be a vX.Y.Z release tag, got: ${toTag || '(missing)'}`);
   }
-  const fromTag = values.from ?? null;
+  let fromTag = values.from ?? null;
   if (fromTag !== null && !TAG_PATTERN.test(fromTag)) {
     throw new Error(`--from must be a vX.Y.Z release tag, got: ${fromTag}`);
+  }
+  const channel = values.channel ?? 'dev';
+  if (channel !== 'stable' && channel !== 'dev') {
+    throw new Error(`--channel must be stable or dev, got: ${channel}`);
+  }
+  if (channel === 'stable') {
+    const mainRef = values['main-ref'] ?? 'origin/main';
+    const promoted = resolvePromotedBaseTag(mainRef, toTag);
+    if (promoted) {
+      console.error(`stable channel: comparing against ${promoted}, the last release tag reachable from ${mainRef}`);
+      fromTag = promoted;
+    } else {
+      console.error(
+        `stable channel: no release tag reachable from ${mainRef}; falling back to ${fromTag ?? 'full history'}`,
+      );
+    }
   }
   const repo = values.repo ?? process.env.GITHUB_REPOSITORY ?? 'automagik-dev/omni';
   if (!REPO_PATTERN.test(repo)) {
