@@ -139,9 +139,10 @@ jobs:
         # Pushes to dev/main keep the strict full check.
         env:
           VERSION_BASE_BRANCH: ${{ github.base_ref || 'dev' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           bun test scripts/verify-versions.test.ts
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${EVENT_NAME}" = "push" ]; then
             bun scripts/verify-versions.ts
           else
             git fetch --no-tags --deepen=1 origin
