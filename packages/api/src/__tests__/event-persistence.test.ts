@@ -125,6 +125,39 @@ describeWithDb('Event Persistence Handler', () => {
       expect(persisted?.rawPayload).toEqual({ foo: 'bar' });
     });
 
+    test('journals own-device echo (rawPayload.isFromMe=true) as outbound (#1034)', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      await emitEvent('message.received', {
+        id: randomUUID(),
+        type: 'message.received',
+        timestamp: Date.now(),
+        payload: {
+          externalId: 'ext-recv-echo-001',
+          chatId: 'chat-123',
+          from: 'me',
+          content: { type: 'text', text: 'typed on my phone' },
+          replyToId: null,
+          rawPayload: { isFromMe: true },
+        },
+        metadata: {
+          correlationId: 'corr-echo',
+          instanceId: null,
+          channelType: 'whatsapp',
+          personId: null,
+          platformIdentityId: null,
+        },
+      });
+
+      const [persisted] = await db
+        .select()
+        .from(omniEvents)
+        .where(eq(omniEvents.externalId, 'ext-recv-echo-001'))
+        .limit(1);
+      expect(persisted?.eventType).toBe('message.received');
+      expect(persisted?.direction).toBe('outbound');
+    });
+
     test('uses UUID event id as persisted omni_events primary key', async () => {
       await setupEventPersistence(mockEventBus, db);
 
