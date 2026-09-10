@@ -192,6 +192,9 @@ describe('db-access guard', () => {
       // any DB work. Its only callers are those consumers, so every caller is
       // now scoped.
       'packages/api/src/plugins/event-persistence.ts',
+      // #1035: the message-persistence consumer back-links the journal row
+      // inside `runConsumerInTenantContext` + `scopedHandle`. Consumer-only callers.
+      'packages/api/src/plugins/message-persistence.ts',
       // G5 leg B: the media-processor consumer threads its versioned envelope
       // into `processMessageMedia`, whose DB blocks run through
       // `runConsumerInTenantContext` + `scopedHandle`. Consumer-only callers.
