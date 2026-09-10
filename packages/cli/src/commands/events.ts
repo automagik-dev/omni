@@ -426,6 +426,21 @@ function createSchemaCommand(): Command {
 
 export const __testables = { schemaApiRequest, loadSchemaArtifact, summarizeSchemaRow };
 
+/**
+ * Table projection for list-shaped event commands. Human-readable output only:
+ * JSON mode emits the raw API rows via `rawData` so `eventType` (and every
+ * other field) survives intact (#1028).
+ */
+export function eventListRow(e: Event): {
+  id: string;
+  type: string;
+  instanceId: string;
+  direction: string;
+  receivedAt: string;
+} {
+  return { id: e.id, type: e.eventType, instanceId: e.instanceId, direction: e.direction, receivedAt: e.receivedAt };
+}
+
 // ============================================================================
 // STREAM
 // ============================================================================
@@ -992,15 +1007,7 @@ export function createEventsCommand(): Command {
             limit: options.limit,
           });
 
-          const items = result.items.map((e) => ({
-            id: e.id,
-            type: e.eventType,
-            instanceId: e.instanceId,
-            direction: e.direction,
-            receivedAt: e.receivedAt,
-          }));
-
-          output.list(items, { emptyMessage: 'No events found.' });
+          output.list(result.items.map(eventListRow), { emptyMessage: 'No events found.', rawData: result.items });
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
           output.error(`Failed to list events: ${message}`);
@@ -1208,15 +1215,10 @@ export function createEventsCommand(): Command {
           limit: options.limit,
         });
 
-        const items = result.items.map((e) => ({
-          id: e.id,
-          type: e.eventType,
-          instanceId: e.instanceId,
-          direction: e.direction,
-          receivedAt: e.receivedAt,
-        }));
-
-        output.list(items, { emptyMessage: 'No matching events found.' });
+        output.list(result.items.map(eventListRow), {
+          emptyMessage: 'No matching events found.',
+          rawData: result.items,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to search events: ${message}`);
@@ -1240,15 +1242,10 @@ export function createEventsCommand(): Command {
           limit: options.limit,
         });
 
-        const items = result.items.map((e) => ({
-          id: e.id,
-          type: e.eventType,
-          instanceId: e.instanceId,
-          direction: e.direction,
-          receivedAt: e.receivedAt,
-        }));
-
-        output.list(items, { emptyMessage: `No events found for person: ${personId}` });
+        output.list(result.items.map(eventListRow), {
+          emptyMessage: `No events found for person: ${personId}`,
+          rawData: result.items,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get timeline: ${message}`);

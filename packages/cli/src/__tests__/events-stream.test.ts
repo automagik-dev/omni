@@ -7,6 +7,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Event } from '@omni/sdk';
 import {
+  eventListRow,
   formatEventLine,
   isErrorEvent,
   isNoisyEvent,
@@ -152,5 +153,14 @@ describe('events stream formatter', () => {
     expect(image).toContain('a cat photo');
     const blank = formatEventLine(makeEvent({ textContent: null, transcription: null, imageDescription: null }));
     expect(blank).toContain('message.received');
+  });
+});
+
+describe('eventListRow (#1028)', () => {
+  test('table projection keeps the type column; raw rows keep eventType for JSON', () => {
+    const ev = makeEvent({ eventType: 'custom.repro.x' });
+    expect(eventListRow(ev).type).toBe('custom.repro.x');
+    // JSON mode must emit the raw row (via rawData), which carries eventType.
+    expect(ev.eventType).toBe('custom.repro.x');
   });
 });
