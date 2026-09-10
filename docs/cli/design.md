@@ -1,7 +1,7 @@
 ---
 title: "CLI Design"
 created: 2025-01-29
-updated: 2026-09-08
+updated: 2026-09-10
 tags: [cli, reference]
 status: current
 ---
@@ -287,16 +287,23 @@ omni events get <id>                       # Get one event
 omni events search "meeting"              # Search by content
 omni events timeline <person-id>          # Cross-channel timeline
 omni events metrics                       # Processing metrics
-omni events analytics                     # Aggregated analytics
+omni events analytics                     # Aggregated analytics (incl. totalCostUsd of agent runs)
+
+# Inventory of observed event types: volume, last seen, schema status, subscribers
+omni events types                          # Whole journal
+omni events types --since 7d               # Only count events in the window
 
 # Live tail (poll-based)
 omni events stream --type "message.*"      # Live tail
 omni events stream --ndjson --poll-ms 500  # NDJSON output, custom poll interval
 omni events stream -v                      # + sender, fromMe marker, contentType columns
 omni events stream --ids                   # raw uuid8 ids instead of instance/chat names
+omni events stream --pretty                # One colored `time type who: text` line per event
+omni events stream --type "custom.*" --exclude "custom.chat.*"  # Drop housekeeping types
 
 # One-shot blocking wait (exits non-zero on timeout)
 omni events wait --type message.received --filter instanceId=<id> --timeout 60
+omni events wait --type "custom.*" --exclude "custom.chat.*" --timeout 60
 
 # Causation tracing: walks the causationId chain up to the root and
 # breadth-first down, printed as an indented tree with corr= ids
@@ -308,6 +315,24 @@ omni events replay --status <id>           # Check a replay session
 omni events replay --cancel <id>           # Cancel a replay session
 ```
 
+`events types` flags:
+
+| Flag | Purpose |
+|------|---------|
+| `--since <time>` | Only count events since (`24h`, `7d`, or ISO timestamp); default whole journal |
+
+Each row reports `eventType`, `count`, `lastSeen`, the registered
+`schemaVersion` / `schemaEnabled` (null = unregistered), and the durable
+`consumers` and enabled `automations` subscribed to that type.
+
+`events stream` / `events wait` filter and rendering flags added recently:
+
+| Flag | Purpose |
+|------|---------|
+| `--exclude <glob>` | Drop event types matching this glob; repeatable; wins over `--type` (`stream`, `wait`, `consumers create`) |
+| `--pretty` | One colored `time type who: text` line per event; no ANSI when piped or `NO_COLOR` (`stream`, `follow`) |
+| `--ids` | Raw ids instead of resolved instance/chat names (`stream`; `follow` only with `--pretty`) |
+
 ### Durable consumers
 
 Named, resumable cursors for tailing the event store. These are **Postgres
@@ -318,6 +343,7 @@ follower (no consumer groups).
 ```bash
 omni events consumers create my-bot --type "message.*" --filter instanceId=<id>
 omni events consumers create audit --type "*" --from-beginning
+omni events consumers create app --type "custom.*" --exclude "custom.chat.*" --exclude "custom.lid-mapping.*"
 omni events consumers ls                   # List consumers
 omni events consumers inspect my-bot       # Cursor position, lag
 omni events consumers rm my-bot            # Delete
@@ -326,6 +352,7 @@ omni events consumers rm my-bot            # Delete
 omni events follow --consumer my-bot
 omni events follow --consumer my-bot --no-ack      # Peek one page, no ack
 omni events follow --consumer my-bot --until-idle  # Exit when caught up
+omni events follow --consumer my-bot --pretty      # Human one-liners instead of JSON lines
 ```
 
 ### Schema registry
@@ -352,20 +379,76 @@ omni events schema validate custom.deploy --file ./payload.json   # dry run: exi
 ```bash
 omni automations list                      # List automations
 omni automations get <id>                  # Get details
-omni automations create ...               # Create automation
-omni automations update <id> ...          # Update
+omni automations create --name <n> --trigger <event> --action <type> [--action-config <json>]
+omni automations create --file ./automation.json   # Full definition (get --json output works as-is)
+omni automations update <id> --name "New"          # PATCH: only given fields go on the wire
+omni automations update <id> --file ./automation.json
 omni automations delete <id>              # Delete
 omni automations enable <id>              # Enable
 omni automations disable <id>             # Disable
-omni automations test <id>               # Test with mock event
-omni automations execute <id>            # Execute with real event
+omni automations test <id> --event '{"type":"message.received","payload":{}}'  # Dry run, mock event
+omni automations test <id> --event <event-id>      # Dry run against a REAL journaled event
+omni automations test <id> --event <event-id> --execute  # Same as `execute`
+omni automations execute <id> --event <json|event-id>    # Actually runs the actions
 omni automations logs <id>               # Execution logs
 ```
 
-`create`/`update` support `--transactional-emissions`: `emit_event` actions are
-buffered and flushed in order only if the whole run succeeds. The `call_agent`
-action also works chatless — an event can dispatch an agent without any chat
-context.
+### Multi-action create and full update
+
+`--action` / `--action-config` are repeatable and ordered: the i-th config
+pairs with the i-th action. `update` accepts the same definition flags as
+`create` (`--trigger`, `--condition`, `--action`, …); passing `--action`
+replaces the whole actions list, and the id and execution logs are kept.
+
+```bash
+omni automations create --name "PR digest" --trigger custom.github.pull_request \
+  --action log --action-config '{"message":"{{payload.action}} #{{payload.number}}"}' \
+  --action webhook --action-config '{"url":"https://hooks.example.com/pr","bodyTemplate":"{{payload_json}}"}'
+```
+
+| Flag | Purpose |
+|------|---------|
+| `--file <path>` | Full definition as JSON; explicit flags override its fields. `id`, timestamps, `managedByAgentId` and null fields from `get --json` are dropped |
+| `--action <type>` | `webhook` \| `send_message` \| `emit_event` \| `log` \| `call_agent`; repeat for ordered multi-action (on `update`: replaces the list) |
+| `--action-config <json>` | Config for the matching `--action` (count must match) |
+| `--condition <json>` / `--condition-logic and\|or` | Trigger conditions (on `update`: replaces them) |
+| `--agent-id` / `--provider-id` / `--response-as` | Shortcuts that target the **first** `call_agent` action |
+| `--transactional-emissions` / `--no-transactional-emissions` | Buffer `emit_event` publishes and flush in order only if every action succeeded (`--no-…` is `update`-only) |
+
+### Dry run against a journaled event
+
+`test` never executes actions or writes an execution log. With an event id it
+loads the `omni_events` row (`rawPayload` as payload, envelope metadata merged
+for conditions) and prints the trigger match, a per-condition verdict table
+(`field`, `operator`, `expected`, `actual`, `resolved`, `matched` — `resolved:
+false` means the dot path found nothing) and each action's config with
+templates rendered. `--execute` flips it into a real run.
+
+| Flag | Purpose |
+|------|---------|
+| `--event <json\|event-id>` | Hand-written event JSON, or the id of a journaled event (`omni events list`) |
+| `--execute` | Actually run the actions (same as `execute`) |
+
+### Template placeholders
+
+Action configs are templates. Besides `{{payload.<dot.path>}}`,
+`{{event.<field>}}`, `{{env.<NAME>}}` and stored variables, two whole-object
+placeholders render compact JSON (no whitespace) for pasting into prompts and
+webhook bodies:
+
+| Placeholder | Renders |
+|-------------|---------|
+| `{{payload_json}}` | The whole payload as compact JSON |
+| `{{event_json}}` | `{ id, type, timestamp, metadata, payload }`; envelope fields are `null` when no envelope was threaded |
+
+```bash
+omni automations create --name "Forward to agent" --trigger custom.clickup.taskstatusupdated \
+  --action call_agent --agent-id <agent-id> \
+  --action-config '{"promptOverride":"A ClickUp task changed. Event: {{event_json}}"}'
+```
+
+The `call_agent` action also works chatless — an event can dispatch an agent
+without any chat context.
 
 ## Agents
 
@@ -412,6 +495,7 @@ omni webhooks list                         # List webhook sources
 omni webhooks get <id>                     # Get details
 omni webhooks delete <id>                 # Delete
 omni webhooks trigger --type custom.x --payload '{...}'  # Manual event emission
+omni webhooks trigger --type custom.x --payload '{...}' --causation-id <event-id>  # Parented mid-flow emission
 omni webhooks heartbeat <source>          # Connector liveness ping
 
 # Create with signature verification
@@ -441,6 +525,16 @@ Create flags:
 
 `update` adds the clearing flags `--clear-signature`, `--no-strict-schemas`,
 `--clear-event-type-mapping`, `--clear-cadence`.
+
+`trigger` flags:
+
+| Flag | Purpose |
+|------|---------|
+| `--type <type>` | Event type (`custom.*`) |
+| `--payload <json>` | Event payload |
+| `--instance <id>` | Instance context |
+| `--correlation-id <id>` | Group the emission with an existing flow |
+| `--causation-id <event-id>` | Parent event id; the emission lands under that event in `omni events trace` instead of becoming a root |
 
 > Recipes: [[../runbooks/github-webhook-source|GitHub webhook source]],
 > [[../runbooks/clickup-webhook-source|ClickUp webhook source]].

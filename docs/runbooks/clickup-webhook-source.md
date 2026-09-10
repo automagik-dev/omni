@@ -210,11 +210,27 @@ omni automations create \
   --name "ClickUp status change notifier" \
   --trigger custom.clickup.taskstatusupdated \
   --action send_message \
-  --config '{
+  --action-config '{
     "instanceId": "<instance uuid>",
     "chatId": "<chat id>",
     "message": "task {{payload.task_id}}: {{payload.history_items.0.before.status}} → {{payload.history_items.0.after.status}} (by {{payload.history_items.0.user.username}})"
   }'
+```
+
+To hand the whole delivery to an agent instead of picking fields, use the
+`{{payload_json}}` / `{{event_json}}` placeholders (compact JSON), and repeat
+`--action` for an ordered multi-action automation:
+
+```bash
+omni automations create \
+  --name "ClickUp status change → agent" \
+  --trigger custom.clickup.taskstatusupdated \
+  --action log --action-config '{"message":"clickup {{payload.task_id}}"}' \
+  --action call_agent --agent-id <agent id> \
+  --action-config '{"promptOverride":"A ClickUp task changed status. Event: {{event_json}}"}'
+
+# Dry-run against a real delivery before enabling (verdicts, no side effects):
+omni automations test <automation id> --event <event id>
 ```
 
 Because retry dedup happens **before** publish, a ClickUp retry can never

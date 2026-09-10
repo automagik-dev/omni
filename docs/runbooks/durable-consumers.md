@@ -41,7 +41,24 @@ omni events consumers rm deploy-tracker
 
 `--from-beginning` on create starts the cursor at 0 (full journal replay —
 projections); the default starts at the current head (like `events wait`).
-`--no-ack` on follow peeks one page without moving the cursor.
+`--no-ack` on follow peeks one page without moving the cursor. `--pretty` on
+follow prints one `time type who: text` line per event instead of JSON lines.
+
+### Excluding noisy types
+
+`--exclude <glob>` (repeatable, same trailing-`*` syntax as `--type`) drops
+types from the consumer's stream and **wins over `--type`**, so a broad
+subscription does not flood the follower with housekeeping events:
+
+```bash
+omni events consumers create app-events \
+  --type 'custom.*' \
+  --exclude 'custom.chat.*' --exclude 'custom.lid-mapping.*'
+```
+
+The globs are stored on the consumer (`excludeTypes`, shown by `ls` /
+`inspect`), so every follower of that name sees the same sieve. The same flag
+exists on `events stream` and `events wait`.
 
 ## The model
 
