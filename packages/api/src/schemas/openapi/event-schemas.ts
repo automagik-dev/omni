@@ -38,9 +38,30 @@ export const RegisterEventSchemaSchema = z.object({
   enabled: z.boolean().optional().openapi({ description: 'Whether the validation gate is active (default true)' }),
 });
 
+export const ValidateEventPayloadSchema = z
+  .object({
+    payload: z.unknown().openapi({ description: 'The event payload to validate (any JSON value)' }),
+  })
+  // z.unknown() makes the key optional; the dry run must not silently validate `undefined`.
+  .refine((body) => 'payload' in body, { message: 'payload is required', path: ['payload'] });
+
+export const EventPayloadValidationSchema = z.object({
+  eventType: z.string().openapi({ description: 'Event type the payload was checked against' }),
+  version: z.number().int().openapi({ description: 'Schema revision used' }),
+  enabled: z
+    .boolean()
+    .openapi({ description: 'Whether the gate is active for this type (a disabled schema is still checked)' }),
+  valid: z.boolean().openapi({ description: 'True when the payload satisfies the schema' }),
+  errors: z
+    .array(z.string())
+    .openapi({ description: 'Violations as `instancePath: message`, identical to the ingress gate; empty when valid' }),
+});
+
 export function registerEventSchemaSchemas(registry: OpenAPIRegistry): void {
   registry.register('EventSchema', EventSchemaSchema);
   registry.register('RegisterEventSchemaRequest', RegisterEventSchemaSchema);
+  registry.register('ValidateEventPayloadRequest', ValidateEventPayloadSchema);
+  registry.register('EventPayloadValidation', EventPayloadValidationSchema);
 
   registry.registerPath({
     method: 'get',
@@ -106,6 +127,32 @@ export function registerEventSchemaSchemas(registry: OpenAPIRegistry): void {
       400: { description: 'Not a valid JSON Schema', content: { 'application/json': { schema: ErrorSchema } } },
       409: {
         description: 'Incompatible schema change refused (evolution rule)',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
+    path: '/events/schemas/{eventType}/validate',
+    operationId: 'validateEventPayload',
+    tags: ['Events'],
+    summary: 'Validate a payload against a registered event schema (dry run)',
+    description:
+      'Check a payload against the registered schema with the same validator and error strings as the ' +
+      'webhook ingress and emit_event gates, without publishing an event or writing anything (no dead letter). ' +
+      'Returns 200 whether the payload is valid or not; read the `valid` flag and `errors`.',
+    request: {
+      params: z.object({ eventType: z.string().openapi({ description: 'Event type (e.g. custom.github.push)' }) }),
+      body: { content: { 'application/json': { schema: ValidateEventPayloadSchema } } },
+    },
+    responses: {
+      200: {
+        description: 'Validation verdict',
+        content: { 'application/json': { schema: z.object({ data: EventPayloadValidationSchema }) } },
+      },
+      404: {
+        description: 'No schema registered for this type',
         content: { 'application/json': { schema: ErrorSchema } },
       },
     },

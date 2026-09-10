@@ -22,6 +22,7 @@ interface RegisteredCall {
 
 function buildApp() {
   const registered: RegisteredCall[] = [];
+  const validated: { eventType: string; payload: unknown }[] = [];
   const row = {
     id: '11111111-1111-4111-8111-111111111111',
     eventType: 'custom.github.push',
@@ -41,6 +42,17 @@ function buildApp() {
       register: async (input: RegisteredCall) => {
         registered.push(input);
         return { ...row, eventType: input.eventType, schema: input.schema };
+      },
+      validatePayload: async (eventType: string, payload: unknown) => {
+        validated.push({ eventType, payload });
+        const valid = typeof payload === 'object' && payload !== null && 'ref' in payload;
+        return {
+          eventType,
+          version: 1,
+          enabled: true,
+          valid,
+          errors: valid ? [] : ["/: must have required property 'ref'"],
+        };
       },
     },
     // The events catch-all must never be reached by /events/schemas paths.
@@ -63,7 +75,7 @@ function buildApp() {
   // Production mount order (routes/v2/index.ts): registry first, then /events.
   app.route('/api/v2', eventSchemasRoutes);
   app.route('/api/v2/events', eventsRoutes);
-  return { app, registered };
+  return { app, registered, validated };
 }
 
 describe('event schema registry routes', () => {
@@ -121,5 +133,45 @@ describe('event schema registry routes', () => {
     });
     expect(res.status).toBe(400);
     expect(registered.length).toBe(0);
+  });
+
+  test('POST /events/schemas/:eventType/validate returns the verdict without registering anything', async () => {
+    const { app, registered, validated } = buildApp();
+    const res = await app.request('/api/v2/events/schemas/custom.github.push/validate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ payload: { commits: [] } }),
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { data: { valid: boolean; errors: string[] } };
+    expect(json.data.valid).toBe(false);
+    expect(json.data.errors).toEqual(["/: must have required property 'ref'"]);
+    expect(validated).toEqual([{ eventType: 'custom.github.push', payload: { commits: [] } }]);
+    expect(registered.length).toBe(0);
+  });
+
+  test('POST /events/schemas/:eventType/validate accepts a valid payload with 200 and no errors', async () => {
+    const { app } = buildApp();
+    const res = await app.request('/api/v2/events/schemas/custom.github.push/validate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ payload: { ref: 'refs/heads/main' } }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { data: { valid: boolean; errors: string[] } }).data).toMatchObject({
+      valid: true,
+      errors: [],
+    });
+  });
+
+  test('POST /events/schemas/:eventType/validate refuses a body without payload at the boundary', async () => {
+    const { app, validated } = buildApp();
+    const res = await app.request('/api/v2/events/schemas/custom.github.push/validate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ref: 'refs/heads/main' }),
+    });
+    expect(res.status).toBe(400);
+    expect(validated.length).toBe(0);
   });
 });
