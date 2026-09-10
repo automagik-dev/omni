@@ -807,6 +807,7 @@ async function handleSpecialMessage(
       content.targetMessageId,
       chatId,
       content.editedText || content.text || '',
+      isFromMe(msg),
     );
     return true;
   }
@@ -1168,7 +1169,13 @@ export function setupMessageHandlers(
           null;
 
         if (newText) {
-          await plugin.handleMessageEdited(instanceId, update.key.id || '', update.key.remoteJid || '', newText);
+          await plugin.handleMessageEdited(
+            instanceId,
+            update.key.id || '',
+            update.key.remoteJid || '',
+            newText,
+            update.key.fromMe || false,
+          );
         }
       }
     }
