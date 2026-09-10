@@ -147,7 +147,10 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               personId: metadata.personId,
               platformIdentityId: metadata.platformIdentityId,
               eventType: 'message.received',
-              direction: 'inbound',
+              // #1034: own-device echoes (owner typing on their phone) arrive as
+              // message.received with rawPayload.isFromMe=true. Journal them as
+              // outbound so `message.received` + `inbound` means "someone else wrote to us".
+              direction: payload.rawPayload?.isFromMe === true ? 'outbound' : 'inbound',
               contentType: mapContentType(payload.content.type),
               textContent: sanitizeText(payload.content.text),
               mediaUrl: payload.content.mediaUrl,

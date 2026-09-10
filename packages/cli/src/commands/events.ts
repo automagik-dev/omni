@@ -426,6 +426,21 @@ function createSchemaCommand(): Command {
 
 export const __testables = { schemaApiRequest, loadSchemaArtifact, summarizeSchemaRow };
 
+/**
+ * Table projection for list-shaped event commands. Human-readable output only:
+ * JSON mode emits the raw API rows via `rawData` so `eventType` (and every
+ * other field) survives intact (#1028).
+ */
+export function eventListRow(e: Event): {
+  id: string;
+  type: string;
+  instanceId: string;
+  direction: string;
+  receivedAt: string;
+} {
+  return { id: e.id, type: e.eventType, instanceId: e.instanceId, direction: e.direction, receivedAt: e.receivedAt };
+}
+
 // ============================================================================
 // STREAM
 // ============================================================================
@@ -491,22 +506,95 @@ export function passesStreamFilters(event: Event, options: StreamFilterOptions):
   return true;
 }
 
+/**
+ * The journal row as GET /events actually returns it (full omni_events row —
+ * the SDK `Event` type is a projection). `stream` reads the raw platform
+ * chat id (#1036 ask 3) and sender hints out of the extra columns.
+ */
+export type StreamEventRow = Event & {
+  chatId?: string | null;
+  metadata?: { from?: string } | null;
+  rawPayload?: { pushName?: string; key?: { fromMe?: boolean } } | null;
+};
+
+/** id → display name lookups for `stream` (null = looked up, nothing found). */
+export interface StreamNames {
+  instances: Map<string, string | null>;
+  chats: Map<string, string | null>;
+  persons: Map<string, string | null>;
+}
+
+export interface FormatLineOptions {
+  /** Add sender / fromMe / contentType columns (#1036 ask 1). */
+  verbose?: boolean;
+  /** Print raw uuid8 ids even when a name is known (#1036 ask 2, `--ids`). */
+  ids?: boolean;
+  names?: StreamNames;
+}
+
+function labelFor(id: string | null | undefined, names: Map<string, string | null> | undefined, ids: boolean): string {
+  if (!id) return '';
+  const name = ids ? undefined : names?.get(id);
+  return name ? name.slice(0, 16) : id.slice(0, 8);
+}
+
+/** Sender label: resolved person name, then channel push name, then raw `from`. */
+export function senderLabel(event: StreamEventRow, names?: StreamNames): string {
+  const person = event.personId ? names?.persons.get(event.personId) : undefined;
+  return person ?? event.rawPayload?.pushName ?? event.metadata?.from ?? '';
+}
+
 /** Format an event as a single human-readable line. */
-export function formatEventLine(event: Event): string {
+export function formatEventLine(event: StreamEventRow, options: FormatLineOptions = {}): string {
+  const ids = options.ids === true;
   const time = new Date(event.receivedAt).toISOString().slice(11, 19);
-  const instance = event.instanceId?.slice(0, 8) ?? '--------';
-  const chat = event.chatUuid?.slice(0, 8) ?? '--------';
+  const instance = labelFor(event.instanceId, options.names?.instances, ids) || '--------';
+  // Unlinked chats (chatUuid null) fall back to the raw platform chat id.
+  const chat = labelFor(event.chatUuid, options.names?.chats, ids) || event.chatId || '--------';
   const summary = event.textContent ?? event.transcription ?? event.imageDescription ?? '';
   const trimmed = summary.length > 80 ? `${summary.slice(0, 77)}...` : summary;
-  return `${time}  ${event.eventType.padEnd(28)}  ${instance}/${chat}  ${event.direction.padEnd(8)}  ${trimmed}`.trimEnd();
+  const cols = [time, event.eventType.padEnd(28), `${instance}/${chat}`, event.direction.padEnd(8)];
+  if (options.verbose) {
+    const fromMe = event.rawPayload?.key?.fromMe === true || event.direction === 'outbound';
+    cols.push(fromMe ? 'me' : '  ', (event.contentType ?? '-').padEnd(8), senderLabel(event, options.names).padEnd(16));
+  }
+  return `${cols.join('  ')}  ${trimmed}`.trimEnd();
+}
+
+/**
+ * Fill the name caches for every id in the batch that has not been looked up
+ * yet. Instances load once as a list; chats/persons are fetched per id and
+ * misses are cached as null so a dead id costs one request, not one per poll.
+ */
+async function warmStreamNames(client: OmniClient, names: StreamNames, events: StreamEventRow[]): Promise<void> {
+  const lookup = async (map: Map<string, string | null>, id: string, fetch: () => Promise<string | null>) => {
+    if (map.has(id)) return;
+    map.set(id, await fetch().catch(() => null));
+  };
+  if (names.instances.size === 0 && events.length > 0) {
+    const list = await client.instances.list({ limit: 100 }).catch(() => ({ items: [] }));
+    for (const i of list.items) names.instances.set(i.id, i.name);
+  }
+  for (const ev of events) {
+    if (ev.chatUuid) {
+      await lookup(names.chats, ev.chatUuid, async () => (await client.chats.get(ev.chatUuid as string)).name ?? null);
+    }
+    if (ev.personId) {
+      await lookup(
+        names.persons,
+        ev.personId,
+        async () => (await client.persons.get(ev.personId as string)).displayName,
+      );
+    }
+  }
 }
 
 /** Emit an event through the drain-safe stdout helper — never raw console.log. */
-function emitStreamEvent(event: Event, ndjson: boolean): void {
+function emitStreamEvent(event: StreamEventRow, ndjson: boolean, format: FormatLineOptions): void {
   if (ndjson) {
     output.raw(JSON.stringify(event));
   } else {
-    output.raw(formatEventLine(event));
+    output.raw(formatEventLine(event, format));
   }
 }
 
@@ -520,6 +608,8 @@ interface StreamOptions {
   errorsOnly?: boolean;
   all?: boolean;
   ndjson?: boolean;
+  verbose?: boolean;
+  ids?: boolean;
   pollMs?: number;
 }
 
@@ -560,13 +650,22 @@ async function fetchStreamBatch(
   }
 }
 
-function processStreamBatch(items: Event[], filters: StreamFilterOptions, state: StreamState, ndjson: boolean): void {
+async function processStreamBatch(
+  client: OmniClient,
+  items: StreamEventRow[],
+  filters: StreamFilterOptions,
+  state: StreamState,
+  ndjson: boolean,
+  format: FormatLineOptions,
+): Promise<void> {
   const ascending = [...items].sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
+  const fresh = ascending.filter((ev) => !state.seen.has(ev.id) && passesStreamFilters(ev, filters));
+  if (!ndjson && !format.ids && format.names) await warmStreamNames(client, format.names, fresh);
   for (const ev of ascending) {
     if (state.seen.has(ev.id)) continue;
     state.seen.add(ev.id);
     if (!passesStreamFilters(ev, filters)) continue;
-    emitStreamEvent(ev, ndjson);
+    emitStreamEvent(ev, ndjson, format);
     if (ev.receivedAt > state.sinceIso) state.sinceIso = ev.receivedAt;
   }
   // Bound the dedupe set — once the cursor moves past events we cannot
@@ -597,6 +696,11 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
     errorsOnly: options.errorsOnly,
     all: options.all,
   };
+  const format: FormatLineOptions = {
+    verbose: options.verbose,
+    ids: options.ids,
+    names: { instances: new Map(), chats: new Map(), persons: new Map() },
+  };
 
   let stopped = false;
   const shutdown = (): void => {
@@ -613,7 +717,7 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
   try {
     while (!stopped) {
       const items = await fetchStreamBatch(client, filters, options.channel, options.type, state.sinceIso);
-      processStreamBatch(items, filters, state, ndjson);
+      await processStreamBatch(client, items, filters, state, ndjson, format);
       if (stopped) break;
       await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
     }
@@ -992,15 +1096,7 @@ export function createEventsCommand(): Command {
             limit: options.limit,
           });
 
-          const items = result.items.map((e) => ({
-            id: e.id,
-            type: e.eventType,
-            instanceId: e.instanceId,
-            direction: e.direction,
-            receivedAt: e.receivedAt,
-          }));
-
-          output.list(items, { emptyMessage: 'No events found.' });
+          output.list(result.items.map(eventListRow), { emptyMessage: 'No events found.', rawData: result.items });
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';
           output.error(`Failed to list events: ${message}`);
@@ -1021,6 +1117,8 @@ export function createEventsCommand(): Command {
     .option('--errors-only', 'Show only error/failure events')
     .option('--all', 'Include noisy event types (presence, delivered, read, progress)')
     .option('--ndjson', 'Emit JSON Lines (one event per line) — same as global --json in stream mode')
+    .option('-v, --verbose', 'Add sender, fromMe marker and contentType columns')
+    .option('--ids', 'Print raw ids instead of resolved instance/chat names')
     .option('--poll-ms <n>', 'Polling interval in milliseconds', (v) => Number.parseInt(v, 10), 2000)
     .action(
       async (options: {
@@ -1033,6 +1131,8 @@ export function createEventsCommand(): Command {
         errorsOnly?: boolean;
         all?: boolean;
         ndjson?: boolean;
+        verbose?: boolean;
+        ids?: boolean;
         pollMs?: number;
       }) => {
         const client = getClient();
@@ -1136,6 +1236,7 @@ export function createEventsCommand(): Command {
     )
     .option('--no-ack', 'Peek: print one page without advancing the cursor, then exit')
     .option('--until-idle', 'Exit 0 once caught up with the journal instead of tailing forever')
+    .option('--ndjson', 'Accepted for symmetry with `events stream` — follow always emits JSON Lines')
     .action(async (options: { consumer: string; limit: number; waitMs: number; ack: boolean; untilIdle?: boolean }) => {
       let stopped = false;
       const shutdown = (): void => {
@@ -1208,15 +1309,10 @@ export function createEventsCommand(): Command {
           limit: options.limit,
         });
 
-        const items = result.items.map((e) => ({
-          id: e.id,
-          type: e.eventType,
-          instanceId: e.instanceId,
-          direction: e.direction,
-          receivedAt: e.receivedAt,
-        }));
-
-        output.list(items, { emptyMessage: 'No matching events found.' });
+        output.list(result.items.map(eventListRow), {
+          emptyMessage: 'No matching events found.',
+          rawData: result.items,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to search events: ${message}`);
@@ -1240,15 +1336,10 @@ export function createEventsCommand(): Command {
           limit: options.limit,
         });
 
-        const items = result.items.map((e) => ({
-          id: e.id,
-          type: e.eventType,
-          instanceId: e.instanceId,
-          direction: e.direction,
-          receivedAt: e.receivedAt,
-        }));
-
-        output.list(items, { emptyMessage: `No events found for person: ${personId}` });
+        output.list(result.items.map(eventListRow), {
+          emptyMessage: `No events found for person: ${personId}`,
+          rawData: result.items,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get timeline: ${message}`);
