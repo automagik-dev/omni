@@ -671,6 +671,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/events/consumers/:name/ack',
   'POST /api/v2/events/consumers/:name/pull',
   'POST /api/v2/events/schemas',
+  'POST /api/v2/events/schemas/:eventType/validate',
   'POST /api/v2/events/search',
   'POST /api/v2/events/trigger',
   'POST /api/v2/instances',
