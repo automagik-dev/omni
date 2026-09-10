@@ -543,11 +543,22 @@ export function matchesEventTypeFilter(eventType: string, filter: string): boole
   return filter.endsWith('*') ? eventType.startsWith(filter.slice(0, -1)) : eventType === filter;
 }
 
+/**
+ * Include/exclude type sieve (#1078): the event must match `type` (when set)
+ * and must NOT match any `exclude` glob. Exclusion wins over inclusion.
+ */
+export function passesEventTypeFilters(eventType: string, type?: string, exclude?: readonly string[]): boolean {
+  if (type && !matchesEventTypeFilter(eventType, type)) return false;
+  return !exclude?.some((glob) => matchesEventTypeFilter(eventType, glob));
+}
+
 /** Filter predicate matrix for `omni events stream`. Exported for unit tests. */
 export interface StreamFilterOptions {
   instanceId?: string;
   channel?: string;
   type?: string;
+  /** Type globs to drop; exclusion wins over `type` (#1078). */
+  exclude?: string[];
   chatId?: string;
   personId?: string;
   errorsOnly?: boolean;
@@ -562,7 +573,7 @@ export interface StreamFilterOptions {
  */
 export function passesStreamFilters(event: Event, options: StreamFilterOptions): boolean {
   if (options.instanceId && event.instanceId !== options.instanceId) return false;
-  if (options.type && !matchesEventTypeFilter(event.eventType, options.type)) return false;
+  if (!passesEventTypeFilters(event.eventType, options.type, options.exclude)) return false;
   if (options.chatId && event.chatUuid !== options.chatId) return false;
   if (options.personId && event.personId !== options.personId) return false;
   if (options.errorsOnly && !isErrorEvent(event.eventType)) return false;
@@ -666,6 +677,7 @@ interface StreamOptions {
   instance?: string;
   channel?: string;
   type?: string;
+  exclude?: string[];
   chatId?: string;
   personId?: string;
   since?: string;
@@ -704,6 +716,7 @@ async function fetchStreamBatch(
       channel,
       eventType: type,
       chatId: filters.chatId,
+      excludeEventType: filters.exclude?.length ? filters.exclude.join(',') : undefined,
       since: sinceIso,
       limit: 100,
     });
@@ -756,6 +769,7 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
     instanceId,
     channel: options.channel,
     type: options.type,
+    exclude: options.exclude,
     chatId,
     personId: options.personId,
     errorsOnly: options.errorsOnly,
@@ -902,6 +916,7 @@ interface ConsumerData {
   id: string;
   name: string;
   eventType: string;
+  excludeTypes?: string[] | null;
   filters: AutomationCondition[] | null;
   cursor: number;
   head: number;
@@ -945,6 +960,7 @@ export function summarizeConsumerRow(row: ConsumerData): Record<string, unknown>
   return {
     name: row.name,
     eventType: row.eventType,
+    excludeTypes: row.excludeTypes?.length ? row.excludeTypes.join(', ') : '-',
     filters: row.filters?.length
       ? row.filters.map((f) => `${f.field} ${f.operator} ${JSON.stringify(f.value)}`).join(' AND ')
       : '-',
@@ -1067,34 +1083,43 @@ function createConsumersCommand(): Command {
     .description('Register a durable consumer')
     .requiredOption('--type <type>', 'Event type filter (trailing * = prefix glob, e.g. custom.github.*)')
     .option(
+      '--exclude <glob>',
+      'Drop event types matching this glob, repeatable; wins over --type (e.g. --exclude custom.chat.*)',
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .option(
       '--filter <k=v>',
       'Payload condition, repeatable (dot paths + JSON values — same matcher as events wait)',
       (value: string, previous: string[]) => [...previous, value],
       [] as string[],
     )
     .option('--from-beginning', 'Start the cursor at 0 (replay the full journal) instead of the current head')
-    .action(async (name: string, options: { type: string; filter: string[]; fromBeginning?: boolean }) => {
-      try {
-        const filters = parseWaitFilters(WaitOptionsSchema.shape.filter.parse(options.filter));
-        const result = await consumersApiRequest<{ data: ConsumerData }>('', {
-          method: 'POST',
-          body: JSON.stringify({
-            name,
-            eventType: options.type,
-            filters: filters.length ? filters : undefined,
-            startFrom: options.fromBeginning ? 'beginning' : undefined,
-          }),
-        });
-        output.success(`Consumer registered: ${result.data.name} (cursor ${result.data.cursor})`, {
-          name: result.data.name,
-          eventType: result.data.eventType,
-          cursor: result.data.cursor,
-          lag: result.data.lag,
-        });
-      } catch (err) {
-        output.error(`Failed to create consumer: ${errorMessage(err)}`);
-      }
-    });
+    .action(
+      async (name: string, options: { type: string; exclude: string[]; filter: string[]; fromBeginning?: boolean }) => {
+        try {
+          const filters = parseWaitFilters(WaitOptionsSchema.shape.filter.parse(options.filter));
+          const result = await consumersApiRequest<{ data: ConsumerData }>('', {
+            method: 'POST',
+            body: JSON.stringify({
+              name,
+              eventType: options.type,
+              excludeTypes: options.exclude.length ? options.exclude : undefined,
+              filters: filters.length ? filters : undefined,
+              startFrom: options.fromBeginning ? 'beginning' : undefined,
+            }),
+          });
+          output.success(`Consumer registered: ${result.data.name} (cursor ${result.data.cursor})`, {
+            name: result.data.name,
+            eventType: result.data.eventType,
+            cursor: result.data.cursor,
+            lag: result.data.lag,
+          });
+        } catch (err) {
+          output.error(`Failed to create consumer: ${errorMessage(err)}`);
+        }
+      },
+    );
 
   consumers
     .command('ls')
@@ -1201,6 +1226,12 @@ export function createEventsCommand(): Command {
     .option('--instance <id>', 'Filter by instance ID')
     .option('--channel <type>', 'Filter by channel type')
     .option('--type <type>', 'Filter by event type (trailing * = prefix glob, e.g. custom.*)')
+    .option(
+      '--exclude <glob>',
+      'Drop event types matching this glob, repeatable; wins over --type (e.g. --exclude custom.chat.*)',
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
     .option('--chat-id <id>', 'Filter by chat ID')
     .option('--person-id <id>', 'Filter by person ID')
     .option('--since <time>', 'Start cursor (e.g., 5min, 24h, 7d, or ISO timestamp)')
@@ -1215,6 +1246,7 @@ export function createEventsCommand(): Command {
         instance?: string;
         channel?: string;
         type?: string;
+        exclude: string[];
         chatId?: string;
         personId?: string;
         since?: string;
@@ -1242,6 +1274,12 @@ export function createEventsCommand(): Command {
     .option('--instance <id>', 'Filter by instance ID')
     .option('--channel <type>', 'Filter by channel type')
     .option('--type <type>', 'Filter by event type (trailing * = prefix glob, e.g. custom.*)')
+    .option(
+      '--exclude <glob>',
+      'Drop event types matching this glob, repeatable; wins over --type (e.g. --exclude custom.chat.*)',
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
     .option('--chat-id <id>', 'Filter by chat ID')
     .option('--person-id <id>', 'Filter by person ID')
     .option(
@@ -1258,6 +1296,7 @@ export function createEventsCommand(): Command {
         instance?: string;
         channel?: string;
         type?: string;
+        exclude: string[];
         chatId?: string;
         personId?: string;
         filter: string[];
@@ -1282,6 +1321,7 @@ export function createEventsCommand(): Command {
               instanceId,
               channel: options.channel,
               type: options.type,
+              exclude: options.exclude,
               chatId,
               personId: options.personId,
               all: true,

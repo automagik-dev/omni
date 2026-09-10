@@ -345,6 +345,8 @@ export interface ListEventsParams {
   /** Chat UUID */
   chatId?: string;
   eventType?: string;
+  /** Comma-separated type globs to drop; exclusion wins over eventType. */
+  excludeEventType?: string;
   since?: string;
   until?: string;
   search?: string;

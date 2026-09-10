@@ -5601,6 +5601,8 @@ export interface components {
             name: string;
             /** @description Type filter: exact event type or trailing-* prefix glob */
             eventType: string;
+            /** @description Type globs dropped from the stream (exclusion wins over eventType), or null */
+            excludeTypes: string[] | null;
             /** @description Payload conditions (AND), or null */
             filters: {
                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -5635,6 +5637,8 @@ export interface components {
             name: string;
             /** @description Type filter: exact event type, or trailing-* prefix glob (e.g. custom.github.*) */
             eventType: string;
+            /** @description Type globs to drop (same syntax as eventType); exclusion wins over inclusion */
+            excludeTypes?: string[];
             /** @description Payload conditions (AND) — same matcher as events wait --filter */
             filters?: {
                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -10668,6 +10672,7 @@ export interface operations {
                 personId?: string;
                 chatId?: string;
                 eventType?: string;
+                excludeEventType?: string;
                 contentType?: string;
                 direction?: "inbound" | "outbound";
                 since?: string;
@@ -17179,6 +17184,8 @@ export interface operations {
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
                             eventType: string;
+                            /** @description Type globs dropped from the stream (exclusion wins over eventType), or null */
+                            excludeTypes: string[] | null;
                             /** @description Payload conditions (AND), or null */
                             filters: {
                                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -17227,6 +17234,8 @@ export interface operations {
                     name: string;
                     /** @description Type filter: exact event type, or trailing-* prefix glob (e.g. custom.github.*) */
                     eventType: string;
+                    /** @description Type globs to drop (same syntax as eventType); exclusion wins over inclusion */
+                    excludeTypes?: string[];
                     /** @description Payload conditions (AND) — same matcher as events wait --filter */
                     filters?: {
                         /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -17265,6 +17274,8 @@ export interface operations {
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
                             eventType: string;
+                            /** @description Type globs dropped from the stream (exclusion wins over eventType), or null */
+                            excludeTypes: string[] | null;
                             /** @description Payload conditions (AND), or null */
                             filters: {
                                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -17348,6 +17359,8 @@ export interface operations {
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
                             eventType: string;
+                            /** @description Type globs dropped from the stream (exclusion wins over eventType), or null */
+                            excludeTypes: string[] | null;
                             /** @description Payload conditions (AND), or null */
                             filters: {
                                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */
@@ -17542,6 +17555,8 @@ export interface operations {
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
                             eventType: string;
+                            /** @description Type globs dropped from the stream (exclusion wins over eventType), or null */
+                            excludeTypes: string[] | null;
                             /** @description Payload conditions (AND), or null */
                             filters: {
                                 /** @description Dot-notation path into the event's rawPayload (e.g. user.id) */

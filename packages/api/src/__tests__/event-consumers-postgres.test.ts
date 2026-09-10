@@ -233,6 +233,25 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       expect(page.items.map((e) => e.id)).toEqual([inGlob]);
     });
 
+    test('excludeTypes drop housekeeping from the stored filter; exclusion wins (#1078)', async () => {
+      await service.create({
+        name: 'excluder',
+        eventType: 'custom.dc1078.*',
+        excludeTypes: ['custom.dc1078.chat.*', 'custom.dc1078.lid-mapping.batch'],
+        startFrom: 'beginning',
+      });
+      const kept = await journal('custom.dc1078.github.push');
+      await journal('custom.dc1078.chat.unread-updated');
+      await journal('custom.dc1078.lid-mapping.batch');
+
+      const page = await service.pull('excluder', { limit: 100 });
+      expect(page.items.map((e) => e.id)).toEqual([kept]);
+      expect((await service.getByName('excluder')).excludeTypes).toEqual([
+        'custom.dc1078.chat.*',
+        'custom.dc1078.lid-mapping.batch',
+      ]);
+    });
+
     test('payload conditions use the events-wait matcher; the scanned cursor skips non-matches', async () => {
       await service.create({
         name: 'filtered',

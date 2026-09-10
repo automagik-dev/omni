@@ -58,6 +58,10 @@ const listQuerySchema = z.object({
     .string()
     .optional()
     .transform((v) => v?.split(',') as z.infer<typeof EventTypeSchema>[] | undefined),
+  excludeEventType: z
+    .string()
+    .optional()
+    .transform((v) => v?.split(',')),
   contentType: z
     .string()
     .optional()

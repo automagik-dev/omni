@@ -12,6 +12,7 @@ import {
   isErrorEvent,
   isNoisyEvent,
   matchesEventTypeFilter,
+  passesEventTypeFilters,
   passesStreamFilters,
 } from '../commands/events';
 
@@ -105,6 +106,21 @@ describe('matchesEventTypeFilter (#966)', () => {
 
   test('a bare * matches everything', () => {
     expect(matchesEventTypeFilter('message.received', '*')).toBe(true);
+  });
+});
+
+describe('passesEventTypeFilters (#1078 --exclude)', () => {
+  test('exclusion wins over inclusion', () => {
+    const exclude = ['custom.chat.*', 'custom.lid-mapping.batch'];
+    expect(passesEventTypeFilters('custom.chat.unread-updated', 'custom.*', exclude)).toBe(false);
+    expect(passesEventTypeFilters('custom.lid-mapping.batch', 'custom.*', exclude)).toBe(false);
+    expect(passesEventTypeFilters('custom.github.push', 'custom.*', exclude)).toBe(true);
+  });
+
+  test('exclude alone drops matches and keeps the rest; no filters passes everything', () => {
+    expect(passesEventTypeFilters('custom.contacts.names', undefined, ['custom.contacts.*'])).toBe(false);
+    expect(passesEventTypeFilters('message.received', undefined, ['custom.contacts.*'])).toBe(true);
+    expect(passesEventTypeFilters('message.received')).toBe(true);
   });
 });
 
