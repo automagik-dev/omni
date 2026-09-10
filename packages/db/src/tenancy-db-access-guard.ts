@@ -580,7 +580,10 @@ export const PENDING_G4_CEILING = 7;
 // claim is a genuinely new `processed_events` write in
 // `automation-actions.ts` — the same G6 gate as `idempotency.ts`, not a
 // relabelling.
-export const PENDING_G5_CEILING = 13;
+// 14 after #1032: the channel ingress idempotency claim in `plugins/context.ts`
+// is a genuinely new `omni_events` write reached from a channel socket
+// callback on the ambient pool — the same G6 gate as `idempotency.ts`.
+export const PENDING_G5_CEILING = 14;
 
 /**
  * Ceiling on `pending-G4-conversion` + `pending-G5-conversion` combined.
@@ -651,7 +654,9 @@ export const PENDING_G5_CEILING = 13;
 // a new package, not movement between pending classes.
 // 20 after #1031 (6 + 13): ONE new G6-gated `processed_events` claim site in
 // `automation-actions.ts` (see PENDING_G5_CEILING). Nothing was reclassified.
-export const TOTAL_PENDING_CEILING = 20;
+// 21 after #1032 (6 + 14): ONE new G6-gated `omni_events` claim site in
+// `plugins/context.ts` (see PENDING_G5_CEILING). Nothing was reclassified.
+export const TOTAL_PENDING_CEILING = 21;
 
 /**
  * Committed inventory of every database access site in the repository.
@@ -894,6 +899,21 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     file: 'packages/api/src/plugins/automation-actions.ts',
     table: 'omni_events',
     class: 'tenant-boundary',
+  },
+  {
+    // #1032: channel ingress idempotency claim (`ingressClaim.claim` /
+    // `release`): the `omni_events` insert IS the dedup claim, reached from a
+    // channel plugin's socket callback which has no HTTP request and therefore
+    // no credential to open a tenant scope. Runs on the ambient pool; row
+    // ownership is the 0041 derivation trigger's job (db-derived). Flips to
+    // tenant-boundary when G6 lands, same gate as `idempotency.ts`.
+    file: 'packages/api/src/plugins/context.ts',
+    table: 'omni_events',
+    class: 'pending-G5-conversion',
+    justification:
+      'Reached only from a channel plugin socket consumer callback (the Baileys/Discord/Telegram inbound listener), ' +
+      'which has no HTTP request and therefore no credential to open an ADR-0008 tenant scope; the journal row is ' +
+      'the idempotency claim itself and its ownership is db-derived.',
   },
   {
     // #1031: execution claim against the same `processed_events` PK that
