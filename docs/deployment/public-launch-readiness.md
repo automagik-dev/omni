@@ -1,16 +1,42 @@
 # Public launch readiness
 
-This change preserves the release candidate already published as
-`v2.260910.4` and turns the public main-branch path into verification only.
-Production deployment authority and the canonical production digest are not
-owned by this public repository.
+This change preserves the already-published release candidate and turns the
+public main-branch path into verification only. Production deployment
+authority and the canonical production digest are not owned by this public
+repository.
+
+## The one true promotion path
+
+```bash
+gh workflow run version.yml --ref dev -f candidate=true          # cuts v<version> on dev
+gh workflow run image-build.yml --ref refs/tags/v<version> -f version=<version>
+# image-build.yml mints, publishes, writes its receipt, and dispatches
+# pin-candidate.yml, which commits the public channel pins to dev.
+# Then open the dev → main promotion PR. Nothing is pasted by hand.
+```
+
+Nothing else mints. A merged-PR bump (or a `version.yml` dispatch without
+`candidate=true`) publishes a dev prerelease at its tag, and that tag can never
+become stable: `image-build.yml` refuses it in its first step with the
+`candidate=true` hint. Any merge to `dev` after the mint bumps the version
+past the candidate, so the Promotion Pin Gate goes red again with the same
+hint: cut and mint again, then refresh the promotion PR.
 
 ## Immutable candidate
 
-- Source commit: `b86db34fbb0ed55cb215e273d073464fa4690b19`
-- Version tag: `v2.260910.4` (the tag resolves to the source commit above)
-- OCI index: `ghcr.io/automagik-dev/omni-api@sha256:508c625b124f2beac560dd48a2885ef2f8c4b2e5237099f69542a70f1e18e42f`
-- Public release timestamp: `2026-09-10T17:31:13Z`
+The candidate is **derived from the tree**, never hand-pinned (#1057):
+
+- Version: `packages/cli/package.json` `version` on the promoted tree
+- Source commit: what the immutable `refs/tags/v<version>` resolves to
+  (the active `v*` tag ruleset blocks update and deletion)
+- OCI index: what `ghcr.io/automagik-dev/omni-api:v<version>` resolves to,
+  accepted only when GitHub provenance binds that digest to the source commit
+  above with `image-build.yml` as the signer
+- Public release timestamp: `published_at` of the stable GitHub Release at
+  the tag, written into `.well-known/latest.json` and `.well-known/dev.json`
+  by `pin-candidate.yml`
+- Current values: `jq -r .version .well-known/latest.json` is the pinned
+  public candidate; `git rev-parse refs/tags/v<version>` its source
 - Protected image build inputs: `deploy/Dockerfile`,
   `deploy/Dockerfile.dockerignore`, root `package.json`, `bun.lock`,
   `packages/**`, and `apps/**` (the list in
@@ -60,14 +86,32 @@ OCI attestation signed by `image-build.yml`.
    (`channel=stable`) and `version.yml` (`stable_publish_only=true`) at the
    same tag, and waits for both. It never creates or moves a tag, pushes a
    branch, or writes a production pin.
-3. The run prints `CANDIDATE_VERSION=`, `CANDIDATE_SHA=`, `CANDIDATE_DIGEST=`,
-   and `RELEASE_PUBLISHED_AT=`. A reviewed commit copies those values into
-   `image-publish.yml`, `.well-known/latest.json` and `.well-known/dev.json`,
-   `deploy/helm/omni/values.yaml` `image.tag`, the contract test pins
-   (`scripts/release/release-workflow-contract.test.sh`), and the upgrade
-   runbook/rehearsal.
-4. The `dev` → `main` promotion PR carries that commit; on merge,
-   `image-publish.yml` verifies the pinned candidate read-only.
+3. As soon as the stable release exists — before the stable npm step, so an
+   npm registry race never hides the digest — the run writes its receipt
+   (`CANDIDATE_VERSION=`, `CANDIDATE_SHA=`, `CANDIDATE_DIGEST=`,
+   `RELEASE_PUBLISHED_AT=`). The stable npm reconciler
+   (`scripts/release/reconcile-npm-stable.sh`) then polls the registry for
+   roughly 15 minutes of backoff before declaring non-convergence, because
+   npm propagation has taken 5-10 minutes in practice.
+4. After the npm step, the run dispatches `pin-candidate.yml` on `dev`. That
+   workflow re-verifies the candidate from public state alone (immutable tag,
+   attested alias, public stable release), refuses a candidate `dev` has
+   already moved past, and commits `chore(release): pin candidate v<version>`
+   directly to `dev` — `.well-known/latest.json`, `.well-known/dev.json`, and
+   `deploy/helm/omni/values.yaml` `image.tag` — with the same machine
+   credential and `version-dev` concurrency group as `version.yml`'s bump. A
+   direct push, not a PR: a merged PR would trigger the merged-PR bump and
+   move `dev` past the candidate again. Until the first promotion carrying
+   `pin-candidate.yml` reaches `main`, the dispatch 404s and the mint prints
+   the manual command (`gh workflow run pin-candidate.yml --ref dev -f
+   version=<version>`) as a warning instead of failing.
+5. Open the `dev` → `main` promotion PR. The Promotion Pin Gate derives the
+   candidate from the PR tree (package version → tag → attested alias), binds
+   it to the merge commit with `verify-promotion-candidate.sh`, and requires
+   `.well-known/latest.json` to pin the same version. On merge,
+   `image-publish.yml` derives the same identity from `main` and verifies it
+   read-only. No workflow, test, or document pins a version, SHA, or digest by
+   hand.
 
 Stranded mint recovery: if `finalize` fails after `build-push` succeeded (the
 ruleset check, a run-resolution timeout, a concurrent dispatch, or a failed
@@ -164,10 +208,10 @@ The independent final-head review of `0db5804e93b97afc67be570a40a37b631d71ee8b`
 identified four additional blockers. They are closed as follows:
 
 - The final `main` checkout remains the root control tree, while
-  `image-publish.yml` creates a second `release-candidate` checkout pinned to
-  the candidate SHA (`b86db34fbb0ed55cb215e273d073464fa4690b19` for
-  `v2.260910.4`; `b8c1bf20cd42b1e30974fc8d67f2b7d0fb620031` when this
-  remediation landed for `v2.260830.2`). The root-owned OCI verifier now
+  `image-publish.yml` creates a second `release-candidate` checkout at the
+  candidate SHA (derived from the tree's version tag since #1057;
+  `b8c1bf20cd42b1e30974fc8d67f2b7d0fb620031` when this remediation landed for
+  `v2.260830.2`). The root-owned OCI verifier now
   requires an explicit source directory and changes into that historical
   checkout before checking `HEAD`, the immutable tag, package/chart versions,
   and the registry alias. Its integration fixture executes final control code
@@ -220,10 +264,9 @@ The final worktree passed the following local, non-mutating gates:
   `run: |  ` block-scalar case of the run-expression matcher self-test), which
   is exempt by design
 - `bun scripts/verify-versions.ts` — every tracked version field agrees with
-  `packages/cli/package.json`. The value itself follows each dev bump (it was
-  `2.260830.2` when this document was written and is `2.260910.4` at the
-  2026-09-10 candidate revision), so it is not a fixed claim of this
-  document; the immutable candidate above is `v2.260910.4`
+  `packages/cli/package.json`. The value itself follows each dev bump, so it
+  is not a fixed claim of this document; the pinned public candidate is
+  whatever `.well-known/latest.json` names
 - every `scripts/release/*.test.sh`
 - `scripts/ci/test-helm-image-digest.sh` with Helm `v3.16.4` pinned to the
   repository's CI checksum
@@ -236,6 +279,6 @@ The final worktree passed the following local, non-mutating gates:
 - `bun run build`
 
 The build gate's generated rewrite was discarded. A final Git comparison
-confirms that every protected image build input is byte-identical to
-`b86db34fbb0ed55cb215e273d073464fa4690b19`, and the legacy HML runtime paths
-are byte-identical to the merged baseline.
+confirms that every protected image build input is byte-identical to the
+candidate source, and the legacy HML runtime paths are byte-identical to the
+merged baseline.
