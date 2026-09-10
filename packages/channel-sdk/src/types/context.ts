@@ -85,6 +85,26 @@ export interface PluginDatabase {
 }
 
 /**
+ * Ingress idempotency claim for inbound messages (#1032, parity with the
+ * webhook path from #958). The host claims the key by inserting the journal
+ * row BEFORE the plugin publishes; the `omni_events.idempotency_key` unique
+ * index is the dedup authority. A duplicate claim returns null and the
+ * publish is skipped, so a double-fired channel handler or a platform
+ * redelivery cannot fan the same message out twice.
+ */
+export interface IngressClaim {
+  /** Returns the claimed event id, or null when the key is already journaled. */
+  claim(params: {
+    idempotencyKey: string;
+    instanceId: string;
+    channelType: string;
+    externalId: string;
+  }): Promise<string | null>;
+  /** Release a claim whose publish failed, so the retry is not a "duplicate". */
+  release(eventId: string): Promise<void>;
+}
+
+/**
  * Context provided to channel plugins during initialization
  */
 export interface PluginContext {
@@ -102,4 +122,7 @@ export interface PluginContext {
 
   /** Database access (use sparingly - prefer storage) */
   db: PluginDatabase;
+
+  /** Optional inbound-message idempotency claim (#1032); absent = no dedup. */
+  ingressClaim?: IngressClaim;
 }

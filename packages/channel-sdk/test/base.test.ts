@@ -15,6 +15,7 @@ import {
 } from '../src';
 import type {
   ChannelCapabilities,
+  EmitMessageReceivedParams,
   HealthCheck,
   InstanceConfig,
   Logger,
@@ -121,6 +122,10 @@ class TestChannelPlugin extends BaseChannelPlugin {
   connectCalled = false;
   disconnectCalled = false;
 
+  receive(params: EmitMessageReceivedParams) {
+    return this.emitMessageReceived(params);
+  }
+
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
     this.connectCalled = true;
     await this.updateInstanceStatus(instanceId, config, {
@@ -174,6 +179,44 @@ describe('BaseChannelPlugin', () => {
       },
       db: { execute: async () => [], getDrizzle: () => null },
     };
+  });
+
+  it('should skip the publish when the ingress claim reports a duplicate (#1032)', async () => {
+    const keys: string[] = [];
+    let claims = 0;
+    context.ingressClaim = {
+      claim: async ({ idempotencyKey }) => {
+        keys.push(idempotencyKey);
+        claims += 1;
+        return claims === 1 ? 'a2b9c1d0-1111-4222-8333-444455556666' : null;
+      },
+      release: async () => {},
+    };
+    await plugin.initialize(context);
+
+    const message = {
+      instanceId: 'wa-001',
+      externalId: 'MSG-1',
+      chatId: 'chat-1',
+      from: 'user-1',
+      content: { type: 'text' as const, text: 'hi' },
+    };
+    await plugin.receive(message);
+    await plugin.receive(message);
+    // Same platform id, different semantic kind (a WhatsApp deletion reuses
+    // the deleted message's id) — must NOT collide.
+    await plugin.receive({ ...message, content: { type: 'delete' as const } });
+
+    expect(keys).toEqual([
+      'whatsapp-baileys:wa-001:MSG-1:text',
+      'whatsapp-baileys:wa-001:MSG-1:text',
+      'whatsapp-baileys:wa-001:MSG-1:delete',
+    ]);
+    const received = eventBus.published.filter((e) => e.type === 'message.received');
+    expect(received.length).toBe(1);
+    expect((received[0]?.metadata as { publishEventId?: string }).publishEventId).toBe(
+      'a2b9c1d0-1111-4222-8333-444455556666',
+    );
   });
 
   it('should initialize with context', async () => {

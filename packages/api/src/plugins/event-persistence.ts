@@ -140,8 +140,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
             const sdb = scopedHandle(db);
             const chatUuid = await resolveChatUuid(sdb, metadata.instanceId, payload.chatId);
 
-            const newEvent: NewOmniEvent = {
-              ...eventIdInsert(event.id),
+            const columns: Omit<NewOmniEvent, 'id'> = {
               externalId: payload.externalId,
               channel: mapChannelType(metadata.channelType),
               instanceId: metadata.instanceId,
@@ -168,7 +167,13 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               chatUuid,
             };
 
-            await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
+            // Upsert on id (#1032): the channel ingress claim (`createIngressClaim`)
+            // inserted a skeletal row under this id before the publish; fill it
+            // in here. A NATS redelivery rewrites identical values — still one row.
+            await sdb
+              .insert(omniEvents)
+              .values({ ...eventIdInsert(event.id), ...columns })
+              .onConflictDoUpdate({ target: omniEvents.id, set: columns });
           });
 
           // T4: Message stored in database — record journey checkpoint

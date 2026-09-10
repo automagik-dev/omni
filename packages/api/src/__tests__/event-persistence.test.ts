@@ -199,6 +199,43 @@ describeWithDb('Event Persistence Handler', () => {
       expect(persisted[0]?.externalId).toBe('ext-recv-redelivery');
     });
 
+    test('fills in the ingress idempotency claim row instead of leaving a skeleton (#1032)', async () => {
+      await setupEventPersistence(mockEventBus, db);
+
+      const eventId = randomUUID();
+      // The claim row `createIngressClaim` inserts before the plugin publishes.
+      await db.insert(omniEvents).values({
+        id: eventId,
+        externalId: 'ext-recv-claim',
+        channel: 'whatsapp-baileys',
+        eventType: 'message.received',
+        direction: 'inbound',
+        status: 'received',
+        idempotencyKey: `whatsapp-baileys:test:ext-recv-claim:text:${eventId}`,
+        receivedAt: new Date(),
+      });
+
+      await emitEvent('message.received', {
+        id: eventId,
+        type: 'message.received',
+        timestamp: Date.now(),
+        payload: {
+          externalId: 'ext-recv-claim',
+          chatId: 'chat-123',
+          from: 'user-456',
+          content: { type: 'text', text: 'claimed then journaled' },
+        },
+        metadata: { correlationId: eventId, instanceId: null, channelType: 'whatsapp-baileys' },
+      });
+
+      const rows = await db.select().from(omniEvents).where(eq(omniEvents.externalId, 'ext-recv-claim'));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).toBe(eventId);
+      expect(rows[0]?.textContent).toBe('claimed then journaled');
+      expect(rows[0]?.contentType).toBe('text');
+      expect(rows[0]?.idempotencyKey).toBe(`whatsapp-baileys:test:ext-recv-claim:text:${eventId}`);
+    });
+
     test('handles image content type', async () => {
       await setupEventPersistence(mockEventBus, db);
 
