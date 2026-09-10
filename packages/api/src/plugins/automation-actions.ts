@@ -36,7 +36,7 @@
 import type { AgentCallContext, AgentRunResult, CallAgentActionConfig } from '@omni/core';
 import { PUBLISH_NOT_DECLARED, SCHEMA_NOT_REGISTERED, checkPublishAllowed, createLogger, generateId } from '@omni/core';
 import type { Database, EventType } from '@omni/db';
-import { agents, omniEvents } from '@omni/db';
+import { agents, omniEvents, processedEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import type { Services } from '../services';
 import { releaseIdleTimeoutClaim } from '../services/follow-up-lifecycle';
@@ -257,6 +257,7 @@ export interface AutomationEngineDeps {
     trustedTenantId?: string | null,
   ) => Promise<boolean>;
   releaseEmittedEventClaim: (eventId: string) => Promise<void>;
+  claimExecution: (eventId: string, automationId: string, trustedTenantId?: string | null) => Promise<boolean>;
   validateEmitEvent: (
     eventType: string,
     payload: Record<string, unknown>,
@@ -424,6 +425,20 @@ export function buildAutomationEngineDeps(
     // journal consumer's insert lands here (ON CONFLICT (id) DO NOTHING) —
     // one row, carrying the causality fields `omni events trace` walks
     // (causation_id column + correlationId in the metadata jsonb).
+    // Per-(event, automation) execution claim (#1031) — the same
+    // `processed_events` PK `withIdempotency` uses for durable subscribers,
+    // with the automation id as the handler so sibling automations on one
+    // event each get their own slot. Never released: a failed run must not
+    // re-fire a side effect that may already have landed (see idempotency.ts).
+    claimExecution: async (eventId, automationId) => {
+      const claim = await db
+        .insert(processedEvents)
+        .values({ eventId, handler: `automation:${automationId}` })
+        .onConflictDoNothing()
+        .returning({ eventId: processedEvents.eventId });
+      return claim.length > 0;
+    },
+
     claimEmittedEvent: async (claim, trustedTenantId = null) => {
       const claimed = await runTenantWorkDb(db, trustedTenantId, () =>
         scopedHandle(db)

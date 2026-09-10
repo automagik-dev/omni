@@ -139,6 +139,7 @@ export class AutomationEngine {
       releaseIdleTimeoutClaim: deps.releaseIdleTimeoutClaim,
       claimEmittedEvent: deps.claimEmittedEvent,
       releaseEmittedEventClaim: deps.releaseEmittedEventClaim,
+      claimExecution: deps.claimExecution,
       // #959 gate — threaded here so engine executions validate too; without
       // this line the dep is provided by the API but silently dropped.
       validateEmitEvent: deps.validateEmitEvent,
@@ -286,6 +287,10 @@ export class AutomationEngine {
         startFrom: 'new',
         maxRetries: 3,
         retryDelayMs: 1000,
+        // Actions routinely run 1–3 min (call_agent → claude-code). The bus
+        // default of 30s redelivered mid-run and re-executed (#1031); the
+        // execution claim below is the guarantee, this just avoids the churn.
+        ackWaitMs: 5 * 60 * 1000,
       },
     );
     logger.info(`Subscribed to ${eventType}.*`, { durable });
@@ -747,6 +752,28 @@ export class AutomationEngine {
           executionTimeMs: Date.now() - start,
         };
 
+        await this.logExecution(result, trustedTenantId);
+        return result;
+      }
+
+      // Claim this (event, automation) execution before any side effect runs
+      // (#1031). A redelivery — the first run's action outlived the ack
+      // window — collides here, is logged as skipped, and acks normally.
+      if (this.deps.claimExecution && !(await this.deps.claimExecution(event.id, automation.id, trustedTenantId))) {
+        logger.info('Skipping redelivered event: execution already claimed', {
+          automationId: automation.id,
+          eventId: event.id,
+        });
+        const result: ExecutionResult = {
+          automationId: automation.id,
+          automationName: automation.name,
+          eventId: event.id,
+          status: 'skipped',
+          conditionsMatched: true,
+          actionsExecuted: [],
+          error: 'duplicate delivery: execution already claimed for this event',
+          executionTimeMs: Date.now() - start,
+        };
         await this.logExecution(result, trustedTenantId);
         return result;
       }

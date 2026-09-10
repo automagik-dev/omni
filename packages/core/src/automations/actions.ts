@@ -151,6 +151,16 @@ export interface ActionDependencies {
    * leaving it would suppress the retry's emission forever.
    */
   releaseEmittedEventClaim?: (eventId: string) => Promise<void>;
+  /**
+   * Claim the (eventId, automationId) execution slot BEFORE any action runs
+   * (#1031). Returns false when the slot is already claimed — a NATS
+   * redelivery of an event whose long-running action (call_agent, 1–3 min)
+   * outlived the ack window — and the engine skips the run instead of
+   * re-firing side effects. At-most-once per (event, automation), same
+   * discipline as `claimEmittedEvent`. Absent (tests, older wiring) ⇒ every
+   * delivery executes, as before.
+   */
+  claimExecution?: (eventId: string, automationId: string, trustedTenantId?: string | null) => Promise<boolean>;
   sendMessage?: (instanceId: string, to: string, content: string, trustedTenantId?: string | null) => Promise<void>;
   /**
    * Call an AI agent and return the response.
