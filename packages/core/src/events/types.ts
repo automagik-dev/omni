@@ -683,6 +683,8 @@ export interface ReactionRemovedPayload {
   emojiName?: string;
   /** Whether emoji is platform-custom */
   isCustomEmoji?: boolean;
+  /** Raw platform payload (carries the reaction's own external id where the platform has one) */
+  rawPayload?: Record<string, unknown>;
 }
 
 /**

@@ -11,6 +11,7 @@ import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatIdMappings, chats, instances, omniEvents } from '@omni/db';
 import { eq, sql } from 'drizzle-orm';
+import { createPluginContext } from '../plugins/context';
 import { setupEventPersistence } from '../plugins/event-persistence';
 import { describeWithDb, getTestDb } from './db-helper';
 
@@ -643,6 +644,57 @@ describeWithDb('Event Persistence Handler', () => {
       expect(persisted?.direction).toBe('inbound');
       expect(persisted?.chatId).toBe('chat-123');
       expect(persisted?.metadata).toMatchObject({ from: 'user-456' });
+    });
+
+    test('publishing the same reaction twice through the ingress claim journals one row with an idempotency key (#1096)', async () => {
+      await setupEventPersistence(mockEventBus, db);
+      const [instance] = await db
+        .insert(instances)
+        .values({ name: `test-ep-reaction-claim-${Date.now()}`, channel: 'whatsapp-baileys' })
+        .returning();
+      if (!instance) throw new Error('Failed to create test instance');
+      const claim = createPluginContext({ pluginId: 'whatsapp-baileys', eventBus: mockEventBus, db }).ingressClaim;
+      if (!claim) throw new Error('ingressClaim missing from plugin context');
+
+      const idempotencyKey = `whatsapp-baileys:${instance.id}:ext-reaction-claim:reaction.received:👍`;
+      const publish = async () => {
+        const eventId = await claim.claim({
+          idempotencyKey,
+          instanceId: instance.id,
+          channelType: 'whatsapp-baileys',
+          externalId: 'ext-reaction-claim',
+          eventType: 'reaction.received',
+        });
+        if (eventId === null) return; // duplicate: the plugin skips the publish
+        await emitEvent('reaction.received', {
+          id: eventId,
+          type: 'reaction.received',
+          timestamp: Date.now(),
+          payload: {
+            messageId: 'ext-reaction-claim-target',
+            chatId: 'chat-123',
+            from: 'user-456',
+            emoji: '👍',
+            rawPayload: { externalId: 'ext-reaction-claim', isFromMe: false },
+          },
+          metadata: { correlationId: eventId, instanceId: instance.id, channelType: 'whatsapp-baileys' },
+        });
+      };
+
+      try {
+        await publish();
+        await publish();
+        const rows = await db.select().from(omniEvents).where(eq(omniEvents.instanceId, instance.id));
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.idempotencyKey).toBe(idempotencyKey);
+        expect(rows[0]?.eventType).toBe('reaction.received');
+        expect(rows[0]?.contentType).toBe('reaction');
+        expect(rows[0]?.externalId).toBe('ext-reaction-claim-target');
+        expect(rows[0]?.textContent).toBe('👍');
+      } finally {
+        await db.delete(omniEvents).where(eq(omniEvents.instanceId, instance.id));
+        await db.delete(instances).where(eq(instances.id, instance.id));
+      }
     });
   });
 

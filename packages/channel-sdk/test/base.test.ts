@@ -16,6 +16,7 @@ import {
 import type {
   ChannelCapabilities,
   EmitMessageReceivedParams,
+  EmitReactionReceivedParams,
   HealthCheck,
   InstanceConfig,
   Logger,
@@ -126,6 +127,10 @@ class TestChannelPlugin extends BaseChannelPlugin {
     return this.emitMessageReceived(params);
   }
 
+  react(params: EmitReactionReceivedParams) {
+    return this.emitReactionReceived(params);
+  }
+
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
     this.connectCalled = true;
     await this.updateInstanceStatus(instanceId, config, {
@@ -216,6 +221,39 @@ describe('BaseChannelPlugin', () => {
     expect(received.length).toBe(1);
     expect((received[0]?.metadata as { publishEventId?: string }).publishEventId).toBe(
       'a2b9c1d0-1111-4222-8333-444455556666',
+    );
+  });
+
+  it('should claim an ingress key for reactions and skip the duplicate (#1096)', async () => {
+    const claims: { idempotencyKey: string; eventType?: string }[] = [];
+    context.ingressClaim = {
+      claim: async ({ idempotencyKey, eventType }) => {
+        claims.push({ idempotencyKey, eventType });
+        return claims.length === 1 ? 'b3c0d1e2-2222-4333-8444-555566667777' : null;
+      },
+      release: async () => {},
+    };
+    await plugin.initialize(context);
+
+    const reaction = {
+      instanceId: 'wa-001',
+      messageId: 'MSG-1',
+      chatId: 'chat-1',
+      from: 'user-1',
+      emoji: '👍',
+      rawPayload: { externalId: 'REACT-1', isFromMe: false },
+    };
+    await plugin.react(reaction);
+    await plugin.react(reaction);
+
+    expect(claims).toEqual([
+      { idempotencyKey: 'whatsapp-baileys:wa-001:REACT-1:reaction.received:👍', eventType: 'reaction.received' },
+      { idempotencyKey: 'whatsapp-baileys:wa-001:REACT-1:reaction.received:👍', eventType: 'reaction.received' },
+    ]);
+    const received = eventBus.published.filter((e) => e.type === 'reaction.received');
+    expect(received.length).toBe(1);
+    expect((received[0]?.metadata as { publishEventId?: string }).publishEventId).toBe(
+      'b3c0d1e2-2222-4333-8444-555566667777',
     );
   });
 

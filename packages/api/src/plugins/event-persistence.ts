@@ -516,8 +516,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               const sdb = scopedHandle(db);
               const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
               const personId = await resolvePersonId(sdb, metadata.personId);
-              const newEvent: NewOmniEvent = {
-                ...eventIdInsert(event.id),
+              const columns: Omit<NewOmniEvent, 'id'> = {
                 externalId: payload.messageId,
                 channel: mapChannelType(metadata.channelType),
                 instanceId: metadata.instanceId,
@@ -536,7 +535,14 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 conversationId: null,
                 ...chatLink,
               };
-              await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
+              // Upsert on id (#1096): the channel ingress claim inserted a skeletal
+              // row under this id before the publish (same discipline as
+              // message.received); fill it in here. A redelivery rewrites
+              // identical values — still one row.
+              await sdb
+                .insert(omniEvents)
+                .values({ ...eventIdInsert(event.id), ...columns })
+                .onConflictDoUpdate({ target: omniEvents.id, set: columns });
             });
             log.debug(`Persisted ${type}`, { messageId: payload.messageId, emoji: payload.emoji });
           } catch (error) {

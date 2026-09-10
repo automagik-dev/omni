@@ -92,6 +92,8 @@ export interface PluginDatabase {
  * publish is skipped, so a double-fired channel handler or a platform
  * redelivery cannot fan the same message out twice.
  */
+export type ClaimedEventType = 'message.received' | 'reaction.received' | 'reaction.removed';
+
 export interface IngressClaim {
   /** Returns the claimed event id, or null when the key is already journaled. */
   claim(params: {
@@ -99,6 +101,8 @@ export interface IngressClaim {
     instanceId: string;
     channelType: string;
     externalId: string;
+    /** Journal row type for the skeleton row; defaults to `message.received`. */
+    eventType?: ClaimedEventType;
   }): Promise<string | null>;
   /** Release a claim whose publish failed, so the retry is not a "duplicate". */
   release(eventId: string): Promise<void>;

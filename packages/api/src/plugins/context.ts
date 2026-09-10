@@ -35,17 +35,17 @@ function createPluginDatabase(db: Database): PluginDatabase {
 }
 
 /**
- * Inbound-message idempotency claim (#1032, parity with `WebhookService.
- * receive` from #958). The claim IS the journal row: inserting it makes the
+ * Inbound idempotency claim (#1032, parity with `WebhookService.receive`
+ * from #958; #1096 extends it to `reaction.received` / `reaction.removed`). The claim IS the journal row: inserting it makes the
  * `omni_events.idempotency_key` unique index the dedup authority. The plugin
- * then publishes UNDER this row's id, and the `message.received` persistence
- * consumer fills the row in (upsert on id). Fail-open: a claim that errors
+ * then publishes UNDER this row's id, and the persistence consumer for that
+ * event type fills the row in (upsert on id). Fail-open: a claim that errors
  * (e.g. the instance row is missing) mints an id and lets the publish proceed
  * undeduped rather than dropping a real message.
  */
 function createIngressClaim(db: Database): IngressClaim {
   return {
-    async claim({ idempotencyKey, instanceId, channelType, externalId }) {
+    async claim({ idempotencyKey, instanceId, channelType, externalId, eventType = 'message.received' }) {
       const id = randomUUID();
       try {
         const claimed = await db
@@ -57,7 +57,7 @@ function createIngressClaim(db: Database): IngressClaim {
               ? (channelType as ChannelType)
               : 'discord',
             instanceId,
-            eventType: 'message.received',
+            eventType,
             direction: 'inbound',
             status: 'received',
             idempotencyKey,

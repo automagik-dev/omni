@@ -3220,6 +3220,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         chatId,
         from,
         emoji: '', // WhatsApp doesn't tell us which emoji was removed
+        rawPayload: { externalId, isFromMe },
       });
     }
   }
