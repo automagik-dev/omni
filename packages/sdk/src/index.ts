@@ -90,6 +90,7 @@ export type {
   ListAutomationsParams,
   CreateAutomationBody,
   TestAutomationBody,
+  AutomationTestResult,
   ListAutomationLogsParams,
   // Dead letter types
   DeadLetter,

@@ -1898,8 +1898,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Test automation
-         * @description Test automation against a sample event (dry run).
+         * Test automation (dry run)
+         * @description Dry-run an automation against a hand-written event or a REAL journaled event (`eventId`, #1073): trigger match, per-condition verdicts and rendered action templates. Executes nothing, writes no execution log.
          */
         post: operations["testAutomation"];
         delete?: never;
@@ -1919,7 +1919,7 @@ export interface paths {
         put?: never;
         /**
          * Execute automation
-         * @description Execute automation with a provided event payload. Actually runs the actions (not a dry run).
+         * @description Execute automation with a provided event payload or a journaled event (`eventId`). Actually runs the actions (not a dry run).
          */
         post: operations["executeAutomation"];
         delete?: never;
@@ -3860,6 +3860,8 @@ export interface components {
             avgProcessingTimeMs: number | null;
             /** @description Average agent time (ms) */
             avgAgentTimeMs: number | null;
+            /** @description Sum of agent run cost (USD) stamped on events in range */
+            totalCostUsd: number;
             /** @description Count by content type */
             messageTypes: {
                 [key: string]: number;
@@ -5943,7 +5945,8 @@ export interface components {
             durationMs: number;
         };
         TestAutomationRequest: {
-            event: {
+            /** @description Hand-written event. Exactly one of event / eventId is required */
+            event?: {
                 /** @description Event type */
                 type: string;
                 /** @description Event payload */
@@ -5951,6 +5954,44 @@ export interface components {
                     [key: string]: unknown;
                 };
             };
+            /**
+             * Format: uuid
+             * @description Id of a REAL journaled event (omni_events) to run against (#1073): its rawPayload is the payload, its envelope metadata is merged for conditions. Exactly one of event / eventId is required
+             */
+            eventId?: string;
+        };
+        AutomationTestResult: {
+            /** @description triggerMatched AND conditionsMatched */
+            matched: boolean;
+            /** @description Event type equals the automation trigger */
+            triggerMatched: boolean;
+            /** @description Condition set verdict under conditionLogic */
+            conditionsMatched: boolean;
+            /** @enum {string} */
+            conditionLogic: "and" | "or";
+            /** @description Per-condition verdicts */
+            conditions: {
+                field: string;
+                operator: string;
+                expected?: unknown;
+                actual?: unknown;
+                /** @description false = the dot path resolved to nothing in the payload */
+                resolved: boolean;
+                matched: boolean;
+            }[];
+            /** @description Rendered actions — never executed */
+            actions: {
+                type: string;
+                wouldExecute: boolean;
+                /** @description Action config with templates rendered */
+                config: {
+                    [key: string]: unknown;
+                };
+            }[];
+            /** Format: uuid */
+            eventId: string | null;
+            /** @enum {boolean} */
+            dryRun: true;
         };
         AutomationMetrics: {
             /** @description Engine running */
@@ -10717,6 +10758,8 @@ export interface operations {
                         avgProcessingTimeMs: number | null;
                         /** @description Average agent time (ms) */
                         avgAgentTimeMs: number | null;
+                        /** @description Sum of agent run cost (USD) stamped on events in range */
+                        totalCostUsd: number;
                         /** @description Count by content type */
                         messageTypes: {
                             [key: string]: number;
@@ -18922,7 +18965,8 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    event: {
+                    /** @description Hand-written event. Exactly one of event / eventId is required */
+                    event?: {
                         /** @description Event type */
                         type: string;
                         /** @description Event payload */
@@ -18930,106 +18974,53 @@ export interface operations {
                             [key: string]: unknown;
                         };
                     };
+                    /**
+                     * Format: uuid
+                     * @description Id of a REAL journaled event (omni_events) to run against (#1073): its rawPayload is the payload, its envelope metadata is merged for conditions. Exactly one of event / eventId is required
+                     */
+                    eventId?: string;
                 };
             };
         };
         responses: {
-            /** @description Test result */
+            /** @description Dry-run result */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
+                        /** @description triggerMatched AND conditionsMatched */
                         matched: boolean;
-                        conditionResults?: {
-                            condition: {
-                                /** @description Dot notation field path */
-                                field: string;
-                                /**
-                                 * @description Operator
-                                 * @enum {string}
-                                 */
-                                operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "contains" | "not_contains" | "exists" | "not_exists" | "regex";
-                                /** @description Value to compare */
-                                value?: unknown;
-                            };
-                            passed: boolean;
+                        /** @description Event type equals the automation trigger */
+                        triggerMatched: boolean;
+                        /** @description Condition set verdict under conditionLogic */
+                        conditionsMatched: boolean;
+                        /** @enum {string} */
+                        conditionLogic: "and" | "or";
+                        /** @description Per-condition verdicts */
+                        conditions: {
+                            field: string;
+                            operator: string;
+                            expected?: unknown;
+                            actual?: unknown;
+                            /** @description false = the dot path resolved to nothing in the payload */
+                            resolved: boolean;
+                            matched: boolean;
                         }[];
-                        wouldExecute?: ({
-                            /** @enum {string} */
-                            type: "webhook";
+                        /** @description Rendered actions — never executed */
+                        actions: {
+                            type: string;
+                            wouldExecute: boolean;
+                            /** @description Action config with templates rendered */
                             config: {
-                                /** @description Webhook URL */
-                                url: string;
-                                /**
-                                 * @default POST
-                                 * @enum {string}
-                                 */
-                                method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-                                headers?: {
-                                    [key: string]: string;
-                                };
-                                bodyTemplate?: string;
-                                /** @default false */
-                                waitForResponse: boolean;
-                                /** @default 30000 */
-                                timeoutMs: number;
-                                responseAs?: string;
-                                /** @description Send the full OmniEvent envelope as the default body (default true) */
-                                includeEnvelope?: boolean;
+                                [key: string]: unknown;
                             };
-                        } | {
-                            /** @enum {string} */
-                            type: "send_message";
-                            config: {
-                                instanceId?: string;
-                                to?: string;
-                                contentTemplate: string;
-                            };
-                        } | {
-                            /** @enum {string} */
-                            type: "emit_event";
-                            config: {
-                                eventType: string;
-                                payloadTemplate?: {
-                                    [key: string]: unknown;
-                                };
-                            };
-                        } | {
-                            /** @enum {string} */
-                            type: "log";
-                            config: {
-                                /** @enum {string} */
-                                level: "debug" | "info" | "warn" | "error";
-                                message: string;
-                            };
-                        } | {
-                            /** @enum {string} */
-                            type: "call_agent";
-                            config: {
-                                /** @description Provider ID (template: {{instance.agentProviderId}}) */
-                                providerId?: string;
-                                /** @description Agent ID (required or template) */
-                                agentId: string;
-                                /**
-                                 * @description Agent type
-                                 * @enum {string}
-                                 */
-                                agentType?: "agent" | "team" | "workflow";
-                                /**
-                                 * @description Session strategy for agent memory
-                                 * @enum {string}
-                                 */
-                                sessionStrategy?: "per_user" | "per_chat" | "per_thread";
-                                /** @description Prefix messages with sender name */
-                                prefixSenderName?: boolean;
-                                /** @description Timeout in milliseconds */
-                                timeoutMs?: number;
-                                /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
-                                responseAs?: string;
-                            };
-                        })[];
+                        }[];
+                        /** Format: uuid */
+                        eventId: string | null;
+                        /** @enum {boolean} */
+                        dryRun: true;
                     };
                 };
             };
@@ -19068,7 +19059,8 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    event: {
+                    /** @description Hand-written event. Exactly one of event / eventId is required */
+                    event?: {
                         /** @description Event type */
                         type: string;
                         /** @description Event payload */
@@ -19076,6 +19068,11 @@ export interface operations {
                             [key: string]: unknown;
                         };
                     };
+                    /**
+                     * Format: uuid
+                     * @description Id of a REAL journaled event (omni_events) to run against (#1073): its rawPayload is the payload, its envelope metadata is merged for conditions. Exactly one of event / eventId is required
+                     */
+                    eventId?: string;
                 };
             };
         };

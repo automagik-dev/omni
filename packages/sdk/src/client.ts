@@ -693,11 +693,17 @@ export interface CreateAutomationBody {
  * Body for testing an automation
  */
 export interface TestAutomationBody {
-  event: {
+  /** Hand-written event. Exactly one of event / eventId. */
+  event?: {
     type: string;
     payload: Record<string, unknown>;
   };
+  /** Id of a REAL journaled event to run against (#1073). */
+  eventId?: string;
 }
+
+/** Dry-run result of `automations.test` (#1073). */
+export type AutomationTestResult = components['schemas']['AutomationTestResult'];
 
 /**
  * Query parameters for listing automation logs
@@ -3007,13 +3013,13 @@ export function createOmniClient(config: OmniClientConfig) {
       /**
        * Test an automation (dry run)
        */
-      async test(id: string, body: TestAutomationBody): Promise<{ matched: boolean; wouldExecute?: unknown[] }> {
+      async test(id: string, body: TestAutomationBody): Promise<AutomationTestResult> {
         const { data, error, response } = await client.POST('/automations/{id}/test', {
           params: { path: { id } },
           body,
         });
         throwIfError(response, error);
-        return data ?? { matched: false };
+        return data;
       },
 
       /**
