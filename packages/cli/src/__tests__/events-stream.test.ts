@@ -9,11 +9,13 @@ import type { Event } from '@omni/sdk';
 import {
   eventListRow,
   formatEventLine,
+  formatPrettyLine,
   isErrorEvent,
   isNoisyEvent,
   matchesEventTypeFilter,
   passesEventTypeFilters,
   passesStreamFilters,
+  prettyContent,
 } from '../commands/events';
 
 function makeEvent(overrides: Partial<Event> = {}): Event {
@@ -209,5 +211,52 @@ describe('eventListRow (#1028)', () => {
     expect(eventListRow(ev).type).toBe('custom.repro.x');
     // JSON mode must emit the raw row (via rawData), which carries eventType.
     expect(ev.eventType).toBe('custom.repro.x');
+  });
+});
+
+describe('formatPrettyLine (#1079 --pretty)', () => {
+  const ESC = String.fromCharCode(27);
+  const strip = (s: string): string => s.replaceAll(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '');
+  const names = { instances: new Map(), chats: new Map(), persons: new Map([['p1', 'Alice']]) };
+
+  test('message: time type who: text, no ANSI when color is off', () => {
+    const line = formatPrettyLine(makeEvent({ personId: 'p1' }), { names, color: false });
+    expect(line).toBe('10:00:00 message.received  Alice: hello world');
+  });
+
+  test('colors when color is on', () => {
+    const line = formatPrettyLine(makeEvent(), { color: true });
+    expect(line).toContain(ESC);
+    expect(strip(line)).toBe('10:00:00 message.received  hello world');
+  });
+
+  test('falls back to pushName (verbose resolution reused)', () => {
+    const ev = { ...makeEvent(), rawPayload: { pushName: 'Bob' } };
+    expect(formatPrettyLine(ev, { color: false })).toBe('10:00:00 message.received  Bob: hello world');
+  });
+
+  test('outbound without sender shows me', () => {
+    const line = formatPrettyLine(makeEvent({ direction: 'outbound', textContent: 'yo' }), { color: false });
+    expect(line).toBe('10:00:00 message.received  me: yo');
+  });
+
+  test('github family: action #number title', () => {
+    const ev = {
+      ...makeEvent({ eventType: 'custom.github.pull_request', textContent: null }),
+      rawPayload: { action: 'opened', pull_request: { number: 42, title: 'Add pretty' } },
+    };
+    expect(prettyContent(ev)).toBe('opened #42 Add pretty');
+  });
+
+  test('purchase family: subject', () => {
+    const ev = {
+      ...makeEvent({ eventType: 'custom.purchase.created', textContent: null }),
+      rawPayload: { subject: 'Order 7' },
+    };
+    expect(formatPrettyLine(ev, { color: false })).toBe('10:00:00 custom.purchase.created  Order 7');
+  });
+
+  test('nothing to say: line ends after the type', () => {
+    expect(formatPrettyLine(makeEvent({ textContent: null }), { color: false })).toBe('10:00:00 message.received');
   });
 });
