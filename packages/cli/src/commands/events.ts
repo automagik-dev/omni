@@ -799,6 +799,38 @@ export interface FollowParams {
   isStopped?: () => boolean;
   /** Line sink — defaults to output.raw (stdout). Injected by tests. */
   emit?: (line: string) => void;
+  /** Consecutive transport failures tolerated before giving up (default 5). */
+  maxRetries?: number;
+  /** First backoff delay; doubles per retry up to 30s (default 1000). */
+  retryBaseMs?: number;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** HTTP-level failures (4xx/5xx) are surfaced by consumersApiRequest as "API returned N"; everything else is transport. */
+const isTransportError = (err: unknown): boolean => !(err instanceof Error && err.message.startsWith('API returned '));
+
+/**
+ * Pull one page, reconnecting with exponential backoff when the long-poll
+ * socket drops (issue #1029). Safe to retry: the stored cursor only moves on
+ * ack, so a re-pull replays the same page at worst.
+ */
+async function pullWithRetry(params: FollowParams): Promise<ConsumerPullPage> {
+  const maxRetries = params.maxRetries ?? 5;
+  const baseMs = params.retryBaseMs ?? 1000;
+  const path = `/${encodeURIComponent(params.consumer)}/pull?limit=${params.limit}&waitMs=${params.waitMs}`;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await consumersApiRequest<ConsumerPullPage>(path, { method: 'POST' });
+    } catch (err) {
+      if (!isTransportError(err) || attempt >= maxRetries || params.isStopped?.()) throw err;
+      const delay = Math.min(baseMs * 2 ** attempt, 30000);
+      process.stderr.write(
+        `⚠ Pull failed (${errorMessage(err)}); reconnecting in ${delay}ms (${attempt + 1}/${maxRetries})\n`,
+      );
+      await sleep(delay);
+    }
+  }
 }
 
 /**
@@ -817,10 +849,7 @@ export async function followConsumer(params: FollowParams): Promise<void> {
   for (;;) {
     if (params.isStopped?.()) return;
 
-    const page = await consumersApiRequest<ConsumerPullPage>(
-      `/${encodeURIComponent(params.consumer)}/pull?limit=${params.limit}&waitMs=${params.waitMs}`,
-      { method: 'POST' },
-    );
+    const page = await pullWithRetry(params);
 
     for (const item of page.items) {
       emit(JSON.stringify(item));
@@ -854,7 +883,7 @@ export async function followConsumer(params: FollowParams): Promise<void> {
     // Idle pacing floor: the server long-poll (waitMs) is the primary pause,
     // but a short window must not turn an idle tail into a tight loop.
     if (!progressed && params.waitMs < 1000) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
     }
   }
 }
@@ -1136,6 +1165,7 @@ export function createEventsCommand(): Command {
     )
     .option('--no-ack', 'Peek: print one page without advancing the cursor, then exit')
     .option('--until-idle', 'Exit 0 once caught up with the journal instead of tailing forever')
+    .option('--ndjson', 'Accepted for symmetry with `events stream` (follow is always JSON Lines)')
     .action(async (options: { consumer: string; limit: number; waitMs: number; ack: boolean; untilIdle?: boolean }) => {
       let stopped = false;
       const shutdown = (): void => {
@@ -1155,6 +1185,7 @@ export function createEventsCommand(): Command {
         });
       } catch (err) {
         output.error(`Failed to follow consumer: ${errorMessage(err)}`);
+        process.exitCode = 1;
       } finally {
         processEvents.off('SIGINT', shutdown);
         processEvents.off('SIGTERM', shutdown);

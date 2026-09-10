@@ -270,6 +270,59 @@ describe('omni events consumers + follow', () => {
     expect(consumers.get('drainer')?.cursor).toBe(before as number);
   });
 
+  test('a dropped long-poll socket reconnects and resumes from the cursor (issue #1029)', async () => {
+    printed.length = 0;
+    const f = append('custom.drain.six');
+    const realFetch = globalThis.fetch;
+    let drops = 2;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (drops > 0 && String(input).includes('/pull?')) {
+        drops--;
+        return Promise.reject(new Error('The socket connection was closed unexpectedly.'));
+      }
+      return realFetch(input, init);
+    }) as typeof globalThis.fetch;
+    try {
+      await followConsumer({
+        consumer: 'drainer',
+        limit: 10,
+        waitMs: 0,
+        ack: true,
+        untilIdle: true,
+        retryBaseMs: 1,
+        emit: (line) => printed.push(line),
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(drops).toBe(0);
+    // Resumes from the stored cursor: the un-acked peek row (five) plus the new one, nothing re-delivered.
+    const ids = printed.map((line) => (JSON.parse(line) as { id: string }).id);
+    expect(ids[ids.length - 1]).toBe(f.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(consumers.get('drainer')?.cursor).toBe(f.seq);
+  });
+
+  test('exhausted reconnects rethrow the transport error', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (() => Promise.reject(new Error('socket closed'))) as typeof globalThis.fetch;
+    try {
+      await expect(
+        followConsumer({
+          consumer: 'drainer',
+          limit: 10,
+          waitMs: 0,
+          ack: true,
+          untilIdle: true,
+          maxRetries: 2,
+          retryBaseMs: 1,
+        }),
+      ).rejects.toThrow(/socket closed/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test('an unknown consumer surfaces the API 404', async () => {
     await expect(
       followConsumer({ consumer: 'ghost', limit: 10, waitMs: 0, ack: true, untilIdle: true }),
