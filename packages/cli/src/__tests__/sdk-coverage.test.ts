@@ -110,6 +110,7 @@ const CLI_COMMANDS: Record<string, string> = {
   'events.list': 'events list',
   'events.get': 'events get <id>',
   'events.analytics': 'events analytics',
+  'events.types': 'events types',
 
   // ============================================================================
   // PERSONS

@@ -11,7 +11,7 @@
 import type { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { type AutomationCondition, evaluateConditions } from '@omni/core';
-import type { Event, OmniClient } from '@omni/sdk';
+import type { Event, EventTypeInventoryRow, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { z } from 'zod';
 import { getClient } from '../client.js';
@@ -161,6 +161,18 @@ async function fetchAnalytics(options: {
   }
 
   return (await resp.json()) as AnalyticsData;
+}
+
+/** One table row for `omni events types` (JSON output keeps the raw API row). */
+export function summarizeEventTypeRow(row: EventTypeInventoryRow): Record<string, unknown> {
+  return {
+    type: row.eventType,
+    count: row.count,
+    lastSeen: row.lastSeen,
+    schema: row.schemaVersion === null ? 'none' : `v${row.schemaVersion}${row.schemaEnabled ? '' : ' (disabled)'}`,
+    consumers: row.consumers.join(',') || '-',
+    automations: row.automations.join(',') || '-',
+  };
 }
 
 /** Display analytics data */
@@ -346,6 +358,23 @@ function loadSchemaArtifact(options: { file?: string; schema?: string }): Record
   return parsed as Record<string, unknown>;
 }
 
+/** Load the payload to validate from --file or inline --payload (exactly one); any JSON value. */
+function loadPayload(options: { file?: string; payload?: string }): unknown {
+  if ((options.file ? 1 : 0) + (options.payload ? 1 : 0) !== 1) {
+    throw new Error('Provide the payload via exactly one of --file <path> or --payload <json>');
+  }
+  return JSON.parse(options.file ? readFileSync(options.file, 'utf-8') : (options.payload as string)) as unknown;
+}
+
+/** Verdict of the dry-run validate endpoint (issue #1076). */
+interface PayloadValidation {
+  eventType: string;
+  version: number;
+  enabled: boolean;
+  valid: boolean;
+  errors: string[];
+}
+
 function summarizeSchemaRow(row: EventSchemaData): Record<string, unknown> {
   return {
     eventType: row.eventType,
@@ -424,10 +453,42 @@ function createSchemaCommand(): Command {
       }
     });
 
+  schema
+    .command('validate <eventType>')
+    .description('Validate a payload against the registered schema without emitting an event (exit 1 on violations)')
+    .option('--file <path>', 'Path to a JSON payload file')
+    .option('--payload <json>', 'Inline JSON payload')
+    .action(async (eventType: string, options: { file?: string; payload?: string }) => {
+      let result: PayloadValidation;
+      try {
+        const payload = loadPayload(options);
+        const res = await schemaApiRequest<{ data: PayloadValidation }>(`/${encodeURIComponent(eventType)}/validate`, {
+          method: 'POST',
+          body: JSON.stringify({ payload }),
+        });
+        result = res.data;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to validate payload: ${message}`, undefined, 2);
+      }
+
+      if (result.valid) {
+        output.success(`Payload is valid for ${result.eventType} (schema version ${result.version})`, result);
+        return;
+      }
+      if (output.getCurrentFormat() === 'human') {
+        for (const line of result.errors) output.raw(`  - ${line}`);
+      }
+      output.error(
+        `Payload violates the schema for ${result.eventType} (schema version ${result.version}): ${result.errors.length} issue(s)`,
+        output.getCurrentFormat() === 'json' ? result : undefined,
+      );
+    });
+
   return schema;
 }
 
-export const __testables = { schemaApiRequest, loadSchemaArtifact, summarizeSchemaRow };
+export const __testables = { schemaApiRequest, loadSchemaArtifact, loadPayload, summarizeSchemaRow };
 
 /**
  * Table projection for list-shaped event commands. Human-readable output only:
@@ -1429,6 +1490,22 @@ export function createEventsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get metrics: ${message}`);
+      }
+    });
+
+  // omni events types (#1075)
+  events
+    .command('types')
+    .description('Inventory of observed event types: volume, schema status, subscribers')
+    .option('--since <time>', 'Only count events since (e.g., 24h, 7d, or ISO timestamp)')
+    .action(async (options: { since?: string }) => {
+      const client = getClient();
+      try {
+        const rows = await client.events.types({ since: options.since ? parseSinceTime(options.since) : undefined });
+        output.list(rows.map(summarizeEventTypeRow), { emptyMessage: 'No events observed.', rawData: rows });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to list event types: ${message}`);
       }
     });
 

@@ -14,7 +14,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { RegisterEventSchemaSchema } from '../../schemas/openapi/event-schemas';
+import { RegisterEventSchemaSchema, ValidateEventPayloadSchema } from '../../schemas/openapi/event-schemas';
 import type { AppVariables } from '../../types';
 
 const eventSchemasRoutes = new Hono<{ Variables: AppVariables }>();
@@ -58,5 +58,23 @@ eventSchemasRoutes.post('/events/schemas', zValidator('json', RegisterEventSchem
 
   return c.json({ data }, 201);
 });
+
+/**
+ * POST /events/schemas/:eventType/validate - Dry-run a payload against the
+ * registered schema (issue #1076). Read-only: nothing is published or written.
+ */
+eventSchemasRoutes.post(
+  '/events/schemas/:eventType/validate',
+  zValidator('json', ValidateEventPayloadSchema),
+  async (c) => {
+    const eventType = c.req.param('eventType');
+    const { payload } = c.req.valid('json');
+    const services = c.get('services');
+
+    const data = await services.eventSchemas.validatePayload(eventType, payload);
+
+    return c.json({ data });
+  },
+);
 
 export { eventSchemasRoutes };

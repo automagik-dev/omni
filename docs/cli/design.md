@@ -338,6 +338,7 @@ omni events schema register custom.deploy --file ./deploy.schema.json --descript
 omni events schema register custom.ping --schema '{"type":"object"}' --disabled
 omni events schema list
 omni events schema get custom.deploy
+omni events schema validate custom.deploy --file ./payload.json   # dry run: exit 1 + violations, no event emitted
 ```
 
 > [!note] Glob and emission caveats

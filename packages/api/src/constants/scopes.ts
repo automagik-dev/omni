@@ -162,6 +162,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /events/schemas': 'events:read',
   'GET /events/schemas/:eventType': 'events:read',
   'POST /events/schemas': 'events:write',
+  'POST /events/schemas/:eventType/validate': 'events:read', // dry run, read-only (#1076)
   'GET /events/consumers/:name': 'events:read',
   'POST /events/consumers': 'events:write',
   'DELETE /events/consumers/:name': 'events:write',
@@ -171,6 +172,7 @@ export const SCOPE_MAP: Record<string, string> = {
   // --- events ---
   'GET /events': 'events:read',
   'GET /events/analytics': 'events:read',
+  'GET /events/types': 'events:read',
   'GET /events/timeline/:personId': 'events:read',
   'POST /events/search': 'events:read',
   'GET /events/:id': 'events:read',
