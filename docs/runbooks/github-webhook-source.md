@@ -29,6 +29,21 @@ Every delivery GitHub sends to `POST /api/v2/webhooks/ingress/github` is:
    `system.connector.stalled` + a DLQ entry instead of failing silently
    (issue #961, see [[../architecture/connector-contract|Connector Lifecycle Contract]]).
 
+## One command (issue #1074)
+
+Steps 1–3 below collapse into:
+
+```bash
+omni sources add github --repo OWNER/NAME [--events push,pull_request] \
+  [--public-url https://omni.example.com] [--secret-env VAR] [--no-provider-webhook]
+```
+
+It generates the secret (or reuses `--secret-env`), creates or updates the
+`github` source with the preset signature/idempotency/mapping values, registers
+the bundled schemas, and creates or updates the repo webhook via `gh` (or
+`GITHUB_TOKEN`). Re-runs update in place; a failing step reports which steps
+completed. The manual ritual that follows is what the command performs.
+
 ## Prerequisites
 
 - An omni API reachable from github.com (public URL or tunnel), called

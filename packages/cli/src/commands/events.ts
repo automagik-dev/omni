@@ -424,6 +424,7 @@ function createSchemaCommand(): Command {
   return schema;
 }
 
+export { schemaApiRequest };
 export const __testables = { schemaApiRequest, loadSchemaArtifact, summarizeSchemaRow };
 
 /**
