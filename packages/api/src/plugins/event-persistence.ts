@@ -24,6 +24,7 @@ import { JOURNEY_STAGES, createLogger, getJourneyTracker, isValidUuid } from '@o
 import type { Database, NewOmniEvent } from '@omni/db';
 import { type ChannelType, type ContentType, channelTypes, chats, contentTypes, omniEvents, persons } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
+import { ChatService } from '../services/chats';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runConsumerInTenantContext } from '../tenancy/worker-tenant-context';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
@@ -57,26 +58,28 @@ function eventIdInsert(eventId: string | undefined): Partial<Pick<NewOmniEvent, 
   return eventId && isValidUuid(eventId) ? { id: eventId } : {};
 }
 
+type ChatLink = { chatUuid: string | null; canonicalChatId: string | null };
+const NO_CHAT_LINK: ChatLink = { chatUuid: null, canonicalChatId: null };
+
 /**
- * Resolve the chats.id UUID for a given instance + platform JID (chatId).
- * Best-effort: returns null if the chat doesn't exist yet or the lookup fails.
- * Never throws — event persistence must not fail because of this lookup.
+ * Resolve the chats row for a given instance + platform JID (chatId).
+ * Goes through ChatService.findByExternalIdSmart so a WhatsApp `@lid` chat id
+ * links to the phone-form chat the message pipeline routed it to (via
+ * canonicalId or chat_id_mappings) instead of journaling unlinked (#1035).
+ * Best-effort: returns an empty link if the chat doesn't exist yet or the
+ * lookup fails. Never throws — event persistence must not fail because of this.
  */
-async function resolveChatUuid(
+async function resolveChatLink(
   db: Database,
   instanceId: string | undefined,
   chatId: string | undefined,
-): Promise<string | null> {
-  if (!instanceId || !chatId) return null;
+): Promise<ChatLink> {
+  if (!instanceId || !chatId) return NO_CHAT_LINK;
   try {
-    const [chat] = await db
-      .select({ id: chats.id })
-      .from(chats)
-      .where(and(eq(chats.instanceId, instanceId), eq(chats.externalId, chatId)))
-      .limit(1);
-    return chat?.id ?? null;
+    const chat = await new ChatService(db, null).findByExternalIdSmart(instanceId, chatId);
+    return chat ? { chatUuid: chat.id, canonicalChatId: chat.canonicalId ?? null } : NO_CHAT_LINK;
   } catch {
-    return null; // best-effort — never fail event persistence because of this
+    return NO_CHAT_LINK; // best-effort — never fail event persistence because of this
   }
 }
 
@@ -138,7 +141,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         try {
           await runConsumerInTenantContext(db, event, async () => {
             const sdb = scopedHandle(db);
-            const chatUuid = await resolveChatUuid(sdb, metadata.instanceId, payload.chatId);
+            const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
 
             const newEvent: NewOmniEvent = {
               ...eventIdInsert(event.id),
@@ -165,7 +168,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               agentId: metadata.agentId ?? null,
               causationId: metadata.causationId ?? null,
               conversationId: null,
-              chatUuid,
+              ...chatLink,
             };
 
             await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
@@ -201,7 +204,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         try {
           await runConsumerInTenantContext(db, event, async () => {
             const sdb = scopedHandle(db);
-            const chatUuid = await resolveChatUuid(sdb, metadata.instanceId, payload.chatId);
+            const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
 
             const newEvent: NewOmniEvent = {
               ...eventIdInsert(event.id),
@@ -231,7 +234,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               agentId: metadata.agentId ?? null,
               causationId: metadata.causationId ?? null,
               conversationId: null,
-              chatUuid,
+              ...chatLink,
             };
 
             await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
@@ -272,7 +275,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
 
             if (updated.length === 0) {
               // No existing event found, create a new record
-              const chatUuid = await resolveChatUuid(sdb, metadata.instanceId, payload.chatId);
+              const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
               const newEvent: NewOmniEvent = {
                 ...eventIdInsert(event.id),
                 externalId: payload.externalId,
@@ -287,7 +290,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 agentId: metadata.agentId ?? null,
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
-                chatUuid,
+                ...chatLink,
               };
               await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
             }
@@ -326,7 +329,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
 
             if (updated.length === 0) {
               // No existing event found, create a new record
-              const chatUuid = await resolveChatUuid(sdb, metadata.instanceId, payload.chatId);
+              const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
               const newEvent: NewOmniEvent = {
                 ...eventIdInsert(event.id),
                 externalId: payload.externalId,
@@ -341,7 +344,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 agentId: metadata.agentId ?? null,
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
-                chatUuid,
+                ...chatLink,
               };
               await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
             }
@@ -406,7 +409,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               // Insert a fresh failed row, mirroring the message.read subscriber
               // pattern (eventIdInsert for replay-safe deterministic id +
               // onConflictDoNothing on id for idempotency).
-              const chatUuid = await resolveChatUuid(sdb, metadata.instanceId, payload.chatId);
+              const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
               const newEvent: NewOmniEvent = {
                 ...eventIdInsert(event.id),
                 externalId: payload.externalId,
@@ -427,7 +430,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 agentId: metadata.agentId ?? null,
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
-                chatUuid,
+                ...chatLink,
               };
               await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
             }
@@ -486,9 +489,10 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
             // message subscribers do.
             const personId =
               (await resolvePersonId(sdb, metadata.personId)) ?? (await resolvePersonId(sdb, payload.personId));
-            const chatUuid =
-              (await resolveChatUuidById(sdb, payload.chatUuid)) ??
-              (await resolveChatUuid(sdb, instanceId ?? undefined, payloadChatId));
+            const chatUuid = await resolveChatUuidById(sdb, payload.chatUuid);
+            const chatLink = chatUuid
+              ? { chatUuid, canonicalChatId: null }
+              : await resolveChatLink(sdb, instanceId ?? undefined, payloadChatId);
 
             const newEvent: NewOmniEvent = {
               ...eventIdInsert(event.id),
@@ -508,7 +512,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               causationId: metadata.causationId ?? null,
               conversationId: null,
               chatId: payloadChatId,
-              chatUuid,
+              ...chatLink,
             };
             await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
           });

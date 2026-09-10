@@ -57,11 +57,14 @@
  */
 
 import type { EventBus, MessageReceivedPayload, MessageSentPayload, TypedOmniEvent } from '@omni/core';
-import { classifyEnvelope, createLogger } from '@omni/core';
-import type { ChannelType, ChatType, MessageType } from '@omni/db';
+import { classifyEnvelope, createLogger, isValidUuid } from '@omni/core';
+import type { ChannelType, ChatType, Database, MessageType } from '@omni/db';
+import { omniEvents } from '@omni/db';
 import * as Sentry from '@sentry/bun';
+import { eq, sql } from 'drizzle-orm';
 import { sentryEnabled } from '../lib/sentry-scrub';
 import type { Services } from '../services';
+import { scopedHandle } from '../tenancy/tenant-scope';
 import {
   WorkerTenantContextError,
   runConsumerInTenantContext,
@@ -702,6 +705,26 @@ function maybeUpdateRecency(
   });
 }
 
+/** Chat/person linkage message-persistence resolved for an inbound event. */
+type JournalLink = { chatUuid: string; canonicalChatId: string | null; personId: string | null };
+
+/**
+ * Backfill chatUuid/canonicalChatId/personId onto the omni_events row for
+ * `eventId`. Idempotent; a no-op when the journal row does not exist yet
+ * (then event-persistence resolves the link itself at insert time).
+ */
+async function linkJournalRow(db: Database, eventId: string, link: JournalLink): Promise<void> {
+  if (!isValidUuid(eventId)) return;
+  await scopedHandle(db)
+    .update(omniEvents)
+    .set({
+      chatUuid: link.chatUuid,
+      canonicalChatId: link.canonicalChatId,
+      personId: sql`coalesce(${omniEvents.personId}, ${link.personId})`,
+    })
+    .where(eq(omniEvents.id, eventId));
+}
+
 /**
  * Find or create the chat for an inbound message.
  *
@@ -835,7 +858,7 @@ async function handleMessageReceived(
   eventTimestamp: number,
   trustedTenantId: string | null,
   identity: IdentityResult,
-): Promise<void> {
+): Promise<JournalLink | undefined> {
   const channel = (metadata.channelType ?? 'whatsapp') as ChannelType;
   const isHistorySync = metadata.ingestMode === 'history-sync';
 
@@ -986,6 +1009,7 @@ async function handleMessageReceived(
     platformTimestamp ?? new Date(eventTimestamp),
     trustedTenantId,
   );
+  return { chatUuid: chat.id, canonicalChatId: chat.canonicalId ?? null, personId: personId ?? null };
 }
 
 /**
@@ -1102,9 +1126,19 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
             (metadata.channelType ?? 'whatsapp') as ChannelType,
             trustedTenantId,
           );
-          await runConsumerInTenantContext(services.db, event, () =>
+          const journalLink = await runConsumerInTenantContext(services.db, event, () =>
             handleMessageReceived(services, payload, workMetadata, event.timestamp, trustedTenantId, identity),
           );
+          // After commit: the event-persistence consumer races this one, so its
+          // journal row may have been written before the chat/person existed
+          // (#1035). Own work scope, never the handler's transaction.
+          if (journalLink) {
+            await runTenantWorkDb(services.db, trustedTenantId, () =>
+              linkJournalRow(services.db, event.id, journalLink),
+            ).catch((err) => {
+              log.debug('Failed to link journal row (non-critical)', { eventId: event.id, error: String(err) });
+            });
+          }
           // Sentry metric: message received count by channel
           if (sentryEnabled()) {
             Sentry.metrics.count('messages.received', 1, {
