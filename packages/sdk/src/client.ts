@@ -341,6 +341,8 @@ export interface ListEventsParams {
   channel?: string;
   instanceId?: string;
   eventType?: string;
+  /** Comma-separated type globs to drop; exclusion wins over eventType. */
+  excludeEventType?: string;
   since?: string;
   until?: string;
   search?: string;

@@ -5,12 +5,39 @@
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type ChannelType, type ContentType, type EventType, type OmniEvent, omniEvents } from '@omni/db';
-import { and, desc, eq, gte, ilike, inArray, like, lte, or, sql } from 'drizzle-orm';
+import { type SQL, and, desc, eq, gte, ilike, inArray, like, lte, not, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
 /** Escape LIKE wildcards so a glob prefix matches literally (backslash is postgres's default escape char). */
-export function escapeLikePattern(value: string): string {
+function escapeLikePattern(value: string): string {
   return value.replace(/([\\%_])/g, '\\$1');
+}
+
+/**
+ * SQL clause for "event_type matches ANY of these globs" (#966 contract, shared
+ * by EventService.list and the durable-consumer scan — #1078): a trailing-*
+ * entry is a prefix glob (`custom.*`), everything else is exact-match; the
+ * entries are ORed. Returns undefined for an empty list. The CLI-side sieve
+ * (`matchesEventTypeFilter` in packages/cli) implements the same contract.
+ */
+export function eventTypeGlobClause(globs: readonly string[]): SQL | undefined {
+  const exact = globs.filter((t) => !t.endsWith('*'));
+  const prefixes = globs.filter((t) => t.endsWith('*')).map((t) => t.slice(0, -1));
+  const clauses = [
+    ...(exact.length ? [inArray(omniEvents.eventType, exact as OmniEvent['eventType'][])] : []),
+    ...prefixes.map((p) => like(omniEvents.eventType, `${escapeLikePattern(p)}%`)),
+  ];
+  return clauses.length === 1 ? clauses[0] : or(...clauses);
+}
+
+/**
+ * Include/exclude type filters as ONE clause; exclusion wins over inclusion
+ * (`--type custom.* --exclude custom.chat.*` = every custom event except chat).
+ */
+export function eventTypeFilterClause(include?: readonly string[], exclude?: readonly string[]): SQL | undefined {
+  const inc = include?.length ? eventTypeGlobClause(include) : undefined;
+  const exc = exclude?.length ? eventTypeGlobClause(exclude) : undefined;
+  return and(inc, exc ? not(exc) : undefined);
 }
 
 export interface ListEventsOptions {
@@ -19,6 +46,8 @@ export interface ListEventsOptions {
   instanceIds?: string[];
   personId?: string;
   eventType?: EventType[];
+  /** Type globs to drop, same syntax as eventType; exclusion wins (#1078). */
+  excludeEventType?: string[];
   contentType?: ContentType[];
   direction?: 'inbound' | 'outbound';
   since?: Date;
@@ -94,6 +123,7 @@ export class EventService {
       instanceId,
       personId,
       eventType,
+      excludeEventType,
       contentType,
       direction,
       since,
@@ -119,20 +149,8 @@ export class EventService {
       conditions.push(eq(omniEvents.personId, personId));
     }
 
-    if (eventType?.length) {
-      // #966: a trailing-* entry is a prefix glob (`custom.*` matches every
-      // custom event); everything else stays exact-match. A mixed list ORs
-      // the two together. The CLI-side sieve (matchesEventTypeFilter in
-      // packages/cli) implements the same contract — keep them in sync.
-      const exact = eventType.filter((t) => !t.endsWith('*'));
-      const prefixes = eventType.filter((t) => t.endsWith('*')).map((t) => t.slice(0, -1));
-      const typeClauses = [
-        ...(exact.length ? [inArray(omniEvents.eventType, exact)] : []),
-        ...prefixes.map((p) => like(omniEvents.eventType, `${escapeLikePattern(p)}%`)),
-      ];
-      const combined = typeClauses.length === 1 ? typeClauses[0] : or(...typeClauses);
-      if (combined) conditions.push(combined);
-    }
+    const typeClause = eventTypeFilterClause(eventType, excludeEventType);
+    if (typeClause) conditions.push(typeClause);
 
     if (contentType?.length) {
       conditions.push(inArray(omniEvents.contentType, contentType));

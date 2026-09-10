@@ -123,6 +123,10 @@ export function registerEventSchemas(registry: OpenAPIRegistry): void {
         instanceId: z.string().uuid().optional().openapi({ description: 'Filter by instance' }),
         personId: z.string().uuid().optional().openapi({ description: 'Filter by person' }),
         eventType: z.string().optional().openapi({ description: 'Event types (comma-separated)' }),
+        excludeEventType: z
+          .string()
+          .optional()
+          .openapi({ description: 'Event type globs to drop (comma-separated); exclusion wins over eventType' }),
         contentType: z.string().optional().openapi({ description: 'Content types (comma-separated)' }),
         direction: z.enum(['inbound', 'outbound']).optional().openapi({ description: 'Direction' }),
         since: z.string().datetime().optional().openapi({ description: 'Start date' }),
