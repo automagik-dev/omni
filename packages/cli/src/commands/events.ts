@@ -12,11 +12,13 @@ import type { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { type AutomationCondition, evaluateConditions } from '@omni/core';
 import type { Event, EventTypeInventoryRow, OmniClient } from '@omni/sdk';
+import { Chalk } from 'chalk';
 import { Command } from 'commander';
 import { z } from 'zod';
 import { getClient } from '../client.js';
 import { getOutputFormat, loadConfig } from '../config.js';
 import * as output from '../output.js';
+import { areColorsEnabled } from '../output.js';
 import { resolveChatId, resolveInstanceId } from '../resolve.js';
 
 /** Replay command options */
@@ -605,6 +607,10 @@ export interface FormatLineOptions {
   /** Print raw uuid8 ids even when a name is known (#1036 ask 2, `--ids`). */
   ids?: boolean;
   names?: StreamNames;
+  /** `--pretty` (#1079): compact colored `time type who: text` line. */
+  pretty?: boolean;
+  /** Force ANSI on/off (tests); defaults to `areColorsEnabled()`. */
+  color?: boolean;
 }
 
 function labelFor(id: string | null | undefined, names: Map<string, string | null> | undefined, ids: boolean): string {
@@ -634,6 +640,47 @@ export function formatEventLine(event: StreamEventRow, options: FormatLineOption
     cols.push(fromMe ? 'me' : '  ', (event.contentType ?? '-').padEnd(8), senderLabel(event, options.names).padEnd(16));
   }
   return `${cols.join('  ')}  ${trimmed}`.trimEnd();
+}
+
+/**
+ * `--pretty` content column (#1079): message text first, then the webhook
+ * body fields humans grep for (github: action #number title; purchase: subject).
+ * ponytail: one generic key list instead of per-family formatters; add a
+ * per-family switch when a family needs a shape this cannot express.
+ */
+export function prettyContent(event: StreamEventRow): string {
+  const text = event.textContent ?? event.transcription ?? event.imageDescription;
+  if (text) return text;
+  const p = (event.rawPayload ?? {}) as Record<string, unknown>;
+  const nested = (p.pull_request ?? p.issue ?? {}) as Record<string, unknown>;
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+  const number = p.number ?? nested.number;
+  const title = ['title', 'subject', 'text', 'message', 'body'].map((k) => str(p[k]) ?? str(nested[k])).find(Boolean);
+  return [str(p.action), number === undefined ? undefined : `#${String(number)}`, title].filter(Boolean).join(' ');
+}
+
+// Forced-level instance so the on/off decision is ours (TTY, --no-color, NO_COLOR), not chalk's autodetect.
+const chalk = new Chalk({ level: 1 });
+const paint = (on: boolean, fn: (s: string) => string, s: string): string => (on && s ? fn(s) : s);
+
+/**
+ * `--pretty` (#1079): one compact `time type who: text` line, colored when
+ * stdout is a TTY and NO_COLOR / --no-color are unset. Sender resolution is
+ * the `--verbose` one (`senderLabel`), not a second copy.
+ */
+export function formatPrettyLine(event: StreamEventRow, options: FormatLineOptions = {}): string {
+  const color = options.color ?? (areColorsEnabled() && !process.env.NO_COLOR);
+  const time = new Date(event.receivedAt).toISOString().slice(11, 19);
+  const typeColor = isErrorEvent(event.eventType)
+    ? chalk.red
+    : event.direction === 'outbound'
+      ? chalk.magenta
+      : chalk.cyan;
+  const who = event.direction === 'outbound' && !event.rawPayload?.pushName ? 'me' : senderLabel(event, options.names);
+  const content = prettyContent(event);
+  const head = `${paint(color, chalk.dim, time)} ${paint(color, typeColor, event.eventType)}`;
+  const tail = [paint(color, chalk.bold, who), content].filter(Boolean).join(': ');
+  return `${head}  ${tail}`.trimEnd();
 }
 
 /**
@@ -669,7 +716,7 @@ function emitStreamEvent(event: StreamEventRow, ndjson: boolean, format: FormatL
   if (ndjson) {
     output.raw(JSON.stringify(event));
   } else {
-    output.raw(formatEventLine(event, format));
+    output.raw(format.pretty ? formatPrettyLine(event, format) : formatEventLine(event, format));
   }
 }
 
@@ -686,6 +733,7 @@ interface StreamOptions {
   ndjson?: boolean;
   verbose?: boolean;
   ids?: boolean;
+  pretty?: boolean;
   pollMs?: number;
 }
 
@@ -778,6 +826,7 @@ async function streamEvents(client: OmniClient, options: StreamOptions): Promise
   const format: FormatLineOptions = {
     verbose: options.verbose,
     ids: options.ids,
+    pretty: options.pretty,
     names: { instances: new Map(), chats: new Map(), persons: new Map() },
   };
 
@@ -984,6 +1033,8 @@ export interface FollowParams {
   isStopped?: () => boolean;
   /** Line sink — defaults to output.raw (stdout). Injected by tests. */
   emit?: (line: string) => void;
+  /** `--pretty` (#1079): print formatPrettyLine instead of JSON lines; names resolved via `client`. */
+  pretty?: { client: OmniClient; format: FormatLineOptions };
   /** Consecutive transport failures tolerated before giving up (default 5). */
   maxRetries?: number;
   /** First backoff delay; doubles per retry up to 30s (default 1000). */
@@ -1018,6 +1069,19 @@ async function pullWithRetry(params: FollowParams): Promise<ConsumerPullPage> {
   }
 }
 
+/** Print one pulled page: JSON lines by default, `--pretty` lines (names warmed) when asked. */
+async function emitFollowPage(
+  params: FollowParams,
+  items: WaitEventRow[],
+  emit: (line: string) => void,
+): Promise<void> {
+  const pretty = params.pretty;
+  if (pretty?.format.names && !pretty.format.ids) await warmStreamNames(pretty.client, pretty.format.names, items);
+  for (const item of items) {
+    emit(pretty ? formatPrettyLine(item, pretty.format) : JSON.stringify(item));
+  }
+}
+
 /**
  * The `omni events follow` loop: pull a page from the stored cursor, print
  * each event as a JSON line, ack the SCANNED cursor (so filtered-out rows are
@@ -1035,10 +1099,7 @@ export async function followConsumer(params: FollowParams): Promise<void> {
     if (params.isStopped?.()) return;
 
     const page = await pullWithRetry(params);
-
-    for (const item of page.items) {
-      emit(JSON.stringify(item));
-    }
+    await emitFollowPage(params, page.items, emit);
 
     if (!params.ack) {
       await output.flushStdout();
@@ -1240,6 +1301,7 @@ export function createEventsCommand(): Command {
     .option('--ndjson', 'Emit JSON Lines (one event per line) — same as global --json in stream mode')
     .option('-v, --verbose', 'Add sender, fromMe marker and contentType columns')
     .option('--ids', 'Print raw ids instead of resolved instance/chat names')
+    .option('--pretty', 'One colored `time type who: text` line per event (no ANSI when piped or NO_COLOR)')
     .option('--poll-ms <n>', 'Polling interval in milliseconds', (v) => Number.parseInt(v, 10), 2000)
     .action(
       async (options: {
@@ -1255,6 +1317,7 @@ export function createEventsCommand(): Command {
         ndjson?: boolean;
         verbose?: boolean;
         ids?: boolean;
+        pretty?: boolean;
         pollMs?: number;
       }) => {
         const client = getClient();
@@ -1366,33 +1429,53 @@ export function createEventsCommand(): Command {
     )
     .option('--no-ack', 'Peek: print one page without advancing the cursor, then exit')
     .option('--until-idle', 'Exit 0 once caught up with the journal instead of tailing forever')
-    .option('--ndjson', 'Accepted for symmetry with `events stream` — follow always emits JSON Lines')
-    .action(async (options: { consumer: string; limit: number; waitMs: number; ack: boolean; untilIdle?: boolean }) => {
-      let stopped = false;
-      const shutdown = (): void => {
-        stopped = true;
-      };
-      const processEvents: EventEmitter = process;
-      processEvents.on('SIGINT', shutdown);
-      processEvents.on('SIGTERM', shutdown);
-      try {
-        await followConsumer({
-          consumer: options.consumer,
-          limit: Math.min(Math.max(options.limit, 1), 500),
-          waitMs: Math.min(Math.max(options.waitMs, 0), 30000),
-          ack: options.ack,
-          untilIdle: options.untilIdle === true,
-          isStopped: () => stopped,
-        });
-      } catch (err) {
-        output.error(`Failed to follow consumer: ${errorMessage(err)}`);
-        process.exitCode = 1;
-      } finally {
-        processEvents.off('SIGINT', shutdown);
-        processEvents.off('SIGTERM', shutdown);
-        await output.flushStdout();
-      }
-    });
+    .option('--ndjson', 'Accepted for symmetry with `events stream` — follow emits JSON Lines unless --pretty')
+    .option('--pretty', 'One colored `time type who: text` line per event (no ANSI when piped or NO_COLOR)')
+    .option('--ids', 'With --pretty: print raw ids instead of resolved names')
+    .action(
+      async (options: {
+        consumer: string;
+        limit: number;
+        waitMs: number;
+        ack: boolean;
+        untilIdle?: boolean;
+        ndjson?: boolean;
+        pretty?: boolean;
+        ids?: boolean;
+      }) => {
+        let stopped = false;
+        const shutdown = (): void => {
+          stopped = true;
+        };
+        const processEvents: EventEmitter = process;
+        processEvents.on('SIGINT', shutdown);
+        processEvents.on('SIGTERM', shutdown);
+        try {
+          await followConsumer({
+            consumer: options.consumer,
+            limit: Math.min(Math.max(options.limit, 1), 500),
+            waitMs: Math.min(Math.max(options.waitMs, 0), 30000),
+            ack: options.ack,
+            untilIdle: options.untilIdle === true,
+            isStopped: () => stopped,
+            pretty:
+              options.pretty && !options.ndjson && getOutputFormat() !== 'json'
+                ? {
+                    client: getClient(),
+                    format: { ids: options.ids, names: { instances: new Map(), chats: new Map(), persons: new Map() } },
+                  }
+                : undefined,
+          });
+        } catch (err) {
+          output.error(`Failed to follow consumer: ${errorMessage(err)}`);
+          process.exitCode = 1;
+        } finally {
+          processEvents.off('SIGINT', shutdown);
+          processEvents.off('SIGTERM', shutdown);
+          await output.flushStdout();
+        }
+      },
+    );
 
   // omni events get <id>
   events
