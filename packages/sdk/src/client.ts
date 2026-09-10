@@ -819,6 +819,8 @@ export interface TriggerEventBody {
   eventType: string;
   payload: Record<string, unknown>;
   correlationId?: string;
+  /** Parent event id — stamps `causationId` so `events trace` parents this emission (#1072). */
+  causationId?: string;
   instanceId?: string;
 }
 

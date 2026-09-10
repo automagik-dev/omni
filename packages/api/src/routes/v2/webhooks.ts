@@ -173,6 +173,7 @@ const triggerEventSchema = z.object({
     .describe('Event type (must be custom.*)'),
   payload: z.record(z.string(), z.unknown()).describe('Event payload'),
   correlationId: z.string().optional().describe('Optional correlation ID'),
+  causationId: z.string().uuid().optional().describe('Optional parent event ID (causality tree, #1072)'),
   instanceId: z.string().uuid().optional().describe('Optional instance ID for context'),
 });
 
@@ -180,7 +181,7 @@ const triggerEventSchema = z.object({
  * POST /events/trigger - Manually trigger a custom event
  */
 webhooksRoutes.post('/events/trigger', zValidator('json', triggerEventSchema), async (c) => {
-  const { eventType, payload, correlationId, instanceId } = c.req.valid('json');
+  const { eventType, payload, correlationId, causationId, instanceId } = c.req.valid('json');
   const services = c.get('services');
   const apiKey = c.get('apiKey');
 
@@ -191,6 +192,7 @@ webhooksRoutes.post('/events/trigger', zValidator('json', triggerEventSchema), a
 
   const result = await services.webhooks.trigger(eventType as CustomEventType, payload, {
     correlationId,
+    causationId,
     instanceId,
   });
 

@@ -4542,6 +4542,11 @@ export interface components {
             correlationId?: string;
             /**
              * Format: uuid
+             * @description Parent event ID; stamps causationId so the emission is parented in the causality tree
+             */
+            causationId?: string;
+            /**
+             * Format: uuid
              * @description Instance ID for context
              */
             instanceId?: string;
@@ -13021,6 +13026,11 @@ export interface operations {
                     };
                     /** @description Correlation ID */
                     correlationId?: string;
+                    /**
+                     * Format: uuid
+                     * @description Parent event ID; stamps causationId so the emission is parented in the causality tree
+                     */
+                    causationId?: string;
                     /**
                      * Format: uuid
                      * @description Instance ID for context
