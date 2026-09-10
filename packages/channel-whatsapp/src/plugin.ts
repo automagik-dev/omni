@@ -3270,7 +3270,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle message edited
    * @internal
    */
-  async handleMessageEdited(instanceId: string, externalId: string, chatId: string, newText: string): Promise<void> {
+  async handleMessageEdited(
+    instanceId: string,
+    externalId: string,
+    chatId: string,
+    newText: string,
+    fromMe = false,
+  ): Promise<void> {
     // Emit as a special message.received event with type 'edit'
     await this.emitMessageReceived({
       instanceId,
@@ -3285,6 +3291,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         editedMessageId: externalId,
         newText,
         editedAt: Date.now(),
+        // #1062: persistence journals rawPayload.isFromMe=true echoes as outbound.
+        isFromMe: fromMe,
       },
     });
 
@@ -3308,6 +3316,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         deletedMessageId: externalId,
         deletedAt: Date.now(),
         deletedByMe: fromMe,
+        // #1062: persistence journals rawPayload.isFromMe=true echoes as outbound.
+        isFromMe: fromMe,
       },
     });
 
