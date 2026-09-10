@@ -301,4 +301,10 @@ describe('extractContent — bot-interactive messages (omni#902)', () => {
     expect(content?.mediaUrl).toBeUndefined();
     expect(content?.text).toBe('Sem mídia\n[Ok]');
   });
+
+  it('unknown payloads carry no placeholder text (#1041)', () => {
+    const content = extractContent(wrap({ secretEncryptedMessage: { encIv: 'x' } }));
+    expect(content?.type).toBe('unknown');
+    expect(content?.text).toBeUndefined();
+  });
 });

@@ -1632,10 +1632,8 @@ export class DiscordPlugin extends BaseChannelPlugin {
       externalId: `${messageId}-delete-${Date.now()}`,
       chatId,
       from: chatId,
-      content: {
-        type: 'delete',
-        text: fromMe ? 'Message deleted by bot' : 'Message deleted',
-      },
+      // No placeholder text: it is not user speech (#1041). Semantics live in rawPayload.
+      content: { type: 'delete' },
       rawPayload: {
         deletedMessageId: messageId,
         deletedAt: Date.now(),
