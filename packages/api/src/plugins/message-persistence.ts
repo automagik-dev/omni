@@ -630,6 +630,26 @@ function resolveSenderDisplayName(
   );
 }
 
+/**
+ * Quoted sender name (#1090): the channel's contact lookup first, then the
+ * chat participant row the quoted sender already has from their own messages.
+ */
+async function resolveQuotedSenderName(
+  services: Services,
+  chatId: string,
+  quotedMessage: Record<string, unknown> | undefined,
+): Promise<string | undefined> {
+  const pushName = truncate(quotedMessage?.pushName as string | undefined, 255);
+  if (pushName) return pushName;
+  const participant = quotedMessage?.participant as string | undefined;
+  if (!participant) return undefined;
+  // ponytail: phone-jid only; an @lid quoted participant won't match a phone-keyed row.
+  const platformUserId = participant.split('@')[0]?.split(':')[0];
+  if (!platformUserId) return undefined;
+  const existing = await services.chats.findParticipant(chatId, platformUserId);
+  return truncate(existing?.displayName ?? undefined, 255);
+}
+
 async function maybeFindOrCreateParticipant(
   services: Services,
   chatId: string,
@@ -961,7 +981,7 @@ async function handleMessageReceived(
     mediaLocalPath: rawPayload?.mediaLocalPath as string | undefined,
     replyToExternalId: truncate(payload.replyToId, 255),
     quotedText: quotedMessage?.conversation as string | undefined,
-    quotedSenderName: truncate(quotedMessage?.pushName as string | undefined, 255),
+    quotedSenderName: await resolveQuotedSenderName(services, chat.id, quotedMessage),
     // Thread (#889) — previously dropped: threadId rode along in the payload
     // for per_thread session routing and was never persisted.
     threadExternalId: truncate(payload.threadId, 255),

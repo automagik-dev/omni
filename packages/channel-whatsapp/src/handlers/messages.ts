@@ -613,6 +613,34 @@ function getReplyToId(msg: WAMessage): string | undefined {
   return contextInfo?.stanzaId || undefined;
 }
 
+/**
+ * Quoted-message context of a reply, lifted out of `contextInfo` (#1090).
+ *
+ * Baileys nests the quoted stanza under `message.<type>.contextInfo.quotedMessage`;
+ * persistence and the agent plugins read a top-level `rawPayload.quotedMessage`
+ * with `conversation` / `participant` / `pushName`, so this is the bridge.
+ */
+export interface QuotedContext {
+  stanzaId?: string;
+  participant?: string;
+  type: ContentType;
+  /** Text, caption, or a `[type]` placeholder for media / non-text quotes. */
+  conversation?: string;
+}
+
+export function extractQuotedContext(msg: WAMessage): QuotedContext | undefined {
+  const contextInfo = getMessageContextInfo(msg);
+  if (!contextInfo?.quotedMessage) return undefined;
+  const content = extractContent({ key: msg.key, message: contextInfo.quotedMessage } as WAMessage);
+  const type = content?.type ?? ('unknown' as ContentType);
+  return {
+    stanzaId: contextInfo.stanzaId || undefined,
+    participant: contextInfo.participant || undefined,
+    type,
+    conversation: content?.text || content?.caption || `[${type}]`,
+  };
+}
+
 // Note: replaceMentionsWithNames removed - mention replacement now handled in
 // agent-dispatcher with database lookup for better reliability across API restarts
 
