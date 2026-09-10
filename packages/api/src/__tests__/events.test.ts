@@ -11,7 +11,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
-import { omniEvents } from '@omni/db';
+import { durableConsumers, eventSchemas, omniEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
@@ -261,6 +261,53 @@ describeWithDb('Events Service', () => {
 
     test('throws NotFoundError for non-existent ID', async () => {
       await expect(services.events.getById('00000000-0000-0000-0000-000000000000')).rejects.toThrow();
+    });
+  });
+
+  describe('getTypes() (#1075)', () => {
+    test('inventories observed types with volume, schema status and subscribers', async () => {
+      const typeA = 'custom.webhook.types-a' as NewOmniEvent['eventType'];
+      const typeB = 'custom.webhook.types-b' as NewOmniEvent['eventType'];
+      const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      await insertTestEvent(createTestEvent({ eventType: typeA }));
+      await insertTestEvent(createTestEvent({ eventType: typeA }));
+      await insertTestEvent(createTestEvent({ eventType: typeA, receivedAt: old }));
+      await insertTestEvent(createTestEvent({ eventType: typeB }));
+      const [schema] = await db
+        .insert(eventSchemas)
+        .values({ eventType: typeA, version: 3, schema: { type: 'object' } })
+        .returning();
+      const [consumer] = await db
+        .insert(durableConsumers)
+        .values({ name: `types-test-${Date.now()}`, eventType: 'custom.webhook.types-*' })
+        .returning();
+
+      try {
+        const all = await services.events.getTypes({ automations: [{ name: 'auto-a', triggerEventType: typeA }] });
+        const a = all.find((r) => r.eventType === typeA);
+        const b = all.find((r) => r.eventType === typeB);
+        expect(a).toMatchObject({
+          count: 3,
+          schemaVersion: 3,
+          schemaEnabled: true,
+          consumers: [consumer?.name],
+          automations: ['auto-a'],
+        });
+        expect(b).toMatchObject({
+          count: 1,
+          schemaVersion: null,
+          schemaEnabled: null,
+          consumers: [consumer?.name],
+          automations: [],
+        });
+        expect(new Date(a?.lastSeen ?? 0).getTime()).toBeGreaterThan(old.getTime());
+
+        const recent = await services.events.getTypes({ since: new Date(Date.now() - 60 * 60 * 1000) });
+        expect(recent.find((r) => r.eventType === typeA)?.count).toBe(2);
+      } finally {
+        if (schema) await db.delete(eventSchemas).where(eq(eventSchemas.id, schema.id));
+        if (consumer) await db.delete(durableConsumers).where(eq(durableConsumers.id, consumer.id));
+      }
     });
   });
 

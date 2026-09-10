@@ -11,7 +11,7 @@
 import type { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { type AutomationCondition, evaluateConditions } from '@omni/core';
-import type { Event, OmniClient } from '@omni/sdk';
+import type { Event, EventTypeInventoryRow, OmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { z } from 'zod';
 import { getClient } from '../client.js';
@@ -160,6 +160,18 @@ async function fetchAnalytics(options: {
   }
 
   return (await resp.json()) as AnalyticsData;
+}
+
+/** One table row for `omni events types` (JSON output keeps the raw API row). */
+export function summarizeEventTypeRow(row: EventTypeInventoryRow): Record<string, unknown> {
+  return {
+    type: row.eventType,
+    count: row.count,
+    lastSeen: row.lastSeen,
+    schema: row.schemaVersion === null ? 'none' : `v${row.schemaVersion}${row.schemaEnabled ? '' : ' (disabled)'}`,
+    consumers: row.consumers.join(',') || '-',
+    automations: row.automations.join(',') || '-',
+  };
 }
 
 /** Display analytics data */
@@ -1389,6 +1401,22 @@ export function createEventsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get metrics: ${message}`);
+      }
+    });
+
+  // omni events types (#1075)
+  events
+    .command('types')
+    .description('Inventory of observed event types: volume, schema status, subscribers')
+    .option('--since <time>', 'Only count events since (e.g., 24h, 7d, or ISO timestamp)')
+    .action(async (options: { since?: string }) => {
+      const client = getClient();
+      try {
+        const rows = await client.events.types({ since: options.since ? parseSinceTime(options.since) : undefined });
+        output.list(rows.map(summarizeEventTypeRow), { emptyMessage: 'No events observed.', rawData: rows });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to list event types: ${message}`);
       }
     });
 
