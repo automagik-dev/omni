@@ -84,6 +84,34 @@ async function resolveChatLink(
 }
 
 /**
+ * Resolve `replyToExternalId` → `replyToEventId` at persist time (#1091): the
+ * journal row of the quoted message on the same instance, so `events trace`
+ * can walk reply chains as a causal edge. Same best-effort contract as
+ * resolveChatLink. Not back-filled: a reply to a pre-journal message (or one
+ * whose row lands later) legitimately stays null — the referenced event
+ * arriving AFTER its reply is a redelivery/replay edge case, not the ingest
+ * order, and `replyToExternalId` still carries the raw link for those rows.
+ */
+async function resolveReplyToEventId(
+  db: Database,
+  instanceId: string | undefined,
+  replyToExternalId: string | null | undefined,
+): Promise<string | null> {
+  if (!instanceId || !replyToExternalId) return null;
+  try {
+    const [row] = await db
+      .select({ id: omniEvents.id })
+      .from(omniEvents)
+      .where(and(eq(omniEvents.instanceId, instanceId), eq(omniEvents.externalId, replyToExternalId)))
+      .orderBy(omniEvents.receivedAt)
+      .limit(1);
+    return row?.id ?? null;
+  } catch {
+    return null; // best-effort — never fail event persistence because of this
+  }
+}
+
+/**
  * Best-effort person resolution for custom journal rows (#966): accept a
  * personId claim only when it is a valid UUID AND the persons row exists —
  * person_id carries an FK, and a bogus claim must not fail the whole insert.
@@ -142,6 +170,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
           await runConsumerInTenantContext(db, event, async () => {
             const sdb = scopedHandle(db);
             const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
+            const replyToEventId = await resolveReplyToEventId(sdb, metadata.instanceId, payload.replyToId);
 
             const columns: Omit<NewOmniEvent, 'id'> = {
               externalId: payload.externalId,
@@ -160,6 +189,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               mediaMimeType: payload.content.mimeType,
               chatId: payload.chatId,
               replyToExternalId: payload.replyToId,
+              replyToEventId,
               status: 'received',
               receivedAt: new Date(event.timestamp),
               rawPayload: payload.rawPayload ? deepSanitize(payload.rawPayload) : undefined,
@@ -213,6 +243,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
           await runConsumerInTenantContext(db, event, async () => {
             const sdb = scopedHandle(db);
             const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
+            const replyToEventId = await resolveReplyToEventId(sdb, metadata.instanceId, payload.replyToId);
 
             const newEvent: NewOmniEvent = {
               ...eventIdInsert(event.id),
@@ -229,6 +260,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               mediaMimeType: payload.content.mimeType,
               chatId: payload.chatId,
               replyToExternalId: payload.replyToId,
+              replyToEventId,
               status: 'completed',
               receivedAt: new Date(event.timestamp),
               processedAt: new Date(),
