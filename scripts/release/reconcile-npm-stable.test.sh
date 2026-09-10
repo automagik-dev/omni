@@ -208,6 +208,10 @@ no_converge="${work}/no-converge"
 if MOCK_NO_CONVERGE=true run_case "${no_converge}" >"${work}/no-converge.out" 2>"${work}/no-converge.err"; then
   fail "publish succeeded without exact post-mutation readback convergence"
 fi
+# npm propagation takes minutes (#1057): the readback must keep polling for
+# at least ten minutes of accumulated backoff before giving up.
+waited="$(awk '{ total += $1 } END { print total + 0 }' "${no_converge}/sleeps")"
+(( waited >= 600 )) || fail "non-convergence was declared after only ${waited}s of backoff"
 
 eventual="${work}/eventual"
 out="$(MOCK_STALE_READS=2 run_case "${eventual}")"
