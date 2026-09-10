@@ -33,9 +33,9 @@
  * unrelated edits do not churn them.
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { relative } from 'node:path';
 import { TENANT_OWNERSHIP_SPECS, getOwnershipSpec } from './tenancy-ownership';
+import { readSources } from './tenancy-scan-sources';
 
 /** Drizzle export name -> SQL table name, for the 29 tenant tables. @public */
 export const DRIZZLE_TO_TABLE: ReadonlyMap<string, string> = new Map(
@@ -61,22 +61,6 @@ export interface RegisteredWriter extends WriteSite {
   readonly coverage: WriterCoverage;
 }
 
-/** Directories excluded from the scan. */
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.turbo', '__tests__', 'coverage']);
-
-function isTestFile(path: string): boolean {
-  return path.includes('/__tests__/') || /\.(test|spec)\.ts$/.test(path);
-}
-
-function walk(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir)) {
-    if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, out);
-    else if (full.endsWith('.ts') && !isTestFile(full)) out.push(full);
-  }
-}
-
 /**
  * Scan `packagesDir` for Drizzle writes to any of the 29 tenant tables.
  *
@@ -85,8 +69,7 @@ function walk(dir: string, out: string[]): void {
  * use. Raw SQL writes are matched separately so a future one cannot slip past.
  */
 export function scanWriteSites(packagesDir: string, repoRoot: string): WriteSite[] {
-  const files: string[] = [];
-  walk(packagesDir, files);
+  const files = readSources(packagesDir);
 
   const sites = new Map<string, WriteSite>();
   const drizzleNames = [...DRIZZLE_TO_TABLE.keys()];
@@ -96,8 +79,7 @@ export function scanWriteSites(packagesDir: string, repoRoot: string): WriteSite
     'gi',
   );
 
-  for (const file of files) {
-    const source = readFileSync(file, 'utf-8');
+  for (const { file, source } of files) {
     const rel = relative(repoRoot, file);
 
     for (const match of source.matchAll(builder)) {
